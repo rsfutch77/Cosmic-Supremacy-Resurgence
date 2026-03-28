@@ -32,12 +32,16 @@ prototype/            Working prototype (patched client + stub server)
 ## Quick start
 
 1. Install Python 3.10+
-2. Start the local server for development:
+2. Install dependencies:
    ```
    cd prototype/server
+   pip install -r requirements.txt
+   ```
+3. Start the local server for development:
+   ```
    python cs_server.py
    ```
-3. Drag the .csgalaxy file onto the .EXE
+4. Drag the .csgalaxy file onto the .EXE
 
 ## Tech stack
 
