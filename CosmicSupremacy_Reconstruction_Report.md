@@ -190,7 +190,70 @@ PlanetSurfaceEffect
   └── EffectWrap
 ```
 
-## 6. Phase 1 Protocol Findings (Tutorial Run, March 2026)
+## 6. Client Patching (EXE Modifications)
+
+The original `CosmicSupremacy.exe` connects to the production server infrastructure which has been offline for years. To run the game locally, 54 bytes were modified across 5 patch sites — no code was added or removed, only existing values were overwritten in place.
+
+### Patch 1 — Validation bypass (1 byte)
+
+| Offset | Original | Patched | Effect |
+|---|---|---|---|
+| `0x0017926c` | `74` (JZ — jump if zero) | `EB` (JMP — unconditional jump) | Bypasses a server-validation branch so the client proceeds without a live connection check |
+
+### Patches 2–3 — Hostname redirect (38 bytes)
+
+Two null-terminated hostname strings in `.rdata` were overwritten to point to localhost:
+
+| Offset | Original | Patched |
+|---|---|---|
+| `0x003776e0` | `www.cosmicsupremacy.com` (23 bytes) | `127.0.0.1:8888` + null padding |
+| `0x003776f8` | `cosmicsupremacy.com` (19 bytes) | `127.0.0.1:8888` + null padding |
+
+### Patches 4–5 — IP address redirect (12 bytes)
+
+A hardcoded server IP in `.rdata` was overwritten:
+
+| Offset | Original | Patched |
+|---|---|---|
+| `0x00378b98` | `##.###.##.###` (14 bytes) | `127.0.0.1` + null padding |
+
+### Summary
+
+All patches redirect network traffic from the dead production servers (`www.cosmicsupremacy.com`, `cosmicsupremacy.com`) to `127.0.0.1:8888`, where the local stub server (`cs_server.py`) listens. The single code patch bypasses a connection-validation check that would otherwise reject the localhost response.
+
+---
+
+## 7. Galaxy Connection Token Format (`.csgalaxy` files)
+
+The client uses `.csgalaxy` files as connection tokens. Each file contains a single line of **base64-encoded text** that decodes to a space-separated string:
+
+```
+<TYPE> <SERVER_IP> <PORT_OFFSET> <PASSWORD> <PLAYER_NAME>
+```
+
+### Field breakdown
+
+| Field | Example | Purpose |
+|---|---|---|
+| TYPE | `DEMO`, `TUTO` | Galaxy type — determines client behaviour (e.g. tutorial vs. full game) |
+| SERVER_IP | `127.0.0.1` | Server address to connect to |
+| PORT_OFFSET | `0` | Port offset from the base port |
+| PASSWORD | `abcdef` | Auth token — sent as `pass=` in API calls |
+| PLAYER_NAME | `DemoPlayer` | Default player identity |
+
+### Token examples
+
+| File | Base64 | Decoded |
+|---|---|---|
+| DemoGalaxy.csgalaxy (original) | `REVNTyA4OC4xMTYuMzEuMTA3IDAgYWJjZGVmIERlbW9QbGF5ZXI=` | `DEMO 88.116.31.107 0 abcdef DemoPlayer` |
+| DemoGalaxy_local.csgalaxy | `REVNTyAxMjcuMC4wLjEgMCBhYmNkZWYgRGVtb1BsYXllcg==` | `DEMO 127.0.0.1 0 abcdef DemoPlayer` |
+| TutorialGalaxy_local.csgalaxy | `VFVUTyAxMjcuMC4wLjEgMCBhYmNkZWYgRGVtb1BsYXllcg==` | `TUTO 127.0.0.1 0 abcdef DemoPlayer` |
+
+The `_local` variants are identical to the originals except the server IP is changed to `127.0.0.1`. The `userid` sent in API calls (`userid=0`) is derived from the port offset field; the `pass` value comes directly from the password field.
+
+---
+
+## 8. Phase 1 Protocol Findings (Tutorial Run, March 2026)
 
 Key observations from running the patched EXE through the complete tutorial galaxy:
 
@@ -216,7 +279,7 @@ Key observations from running the patched EXE through the complete tutorial gala
 
 ---
 
-## 7. Known Server API Data Payloads
+## 9. Known Server API Data Payloads
 
 | Operation | POST Body |
 |---|---|
