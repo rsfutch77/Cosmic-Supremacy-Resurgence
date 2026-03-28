@@ -1,0 +1,11 @@
+# ── Runtime server artifacts ──────────────────────────────────────────────────
+cs_server.log
+save_game_*.dat
+save_gov_*.dat
+prototype/server/save_game_*.dat
+prototype/server/save_gov_*.dat
+
+# ── Prototype runtime ─────────────────────────────────────────────────────────
+prototype/server/*.sqlite3
+prototype/server/__pycache__/
+prototype/server/.venv/
