@@ -55,6 +55,131 @@ entertestbedgalaxy      — enter test bed galaxy
 getplayerfame           — retrieve player fame points
 ```
 
+### Save/Sync Data Format
+
+The `data=` field in `savegame` POST requests contains a **complete game state snapshot** encoded as:
+
+```
+base64( uint32_LE(decompressed_size) + zlib_deflate(structured_binary) )
+```
+
+**Encoding pipeline (client → server):**
+1. Client serializes game state into a structured binary blob (see section layout below)
+2. Blob is zlib-compressed (standard deflate, header `78 9C`)
+3. A 4-byte little-endian uint32 of the *decompressed* size is prepended
+4. The whole thing is base64-encoded into the `data=` POST parameter
+
+**Decoding pipeline (server → client on `loadgame`):**
+Reverse the above. The server returns the raw base64 string in the response body.
+
+#### Binary structure (decompressed)
+
+The decompressed blob is a **hierarchical section-based format**. Each section begins with a 4-byte ASCII marker tag. Sections do NOT use a uniform size prefix — each section type has its own fixed field layout known to the C++ client code.
+
+**Top-level layout:**
+```
+SAVE  — File header: uint16(decompressed_size - 8) + uint16(0x1000 version) + uint32(section_count)
+GSET  — Galaxy settings (key-value pairs, see below)
+GLOB  — Global game state (turn number, current player, credits, etc.)
+TMGX  — Timing / galaxy tick data
+RSMA  — Research / map data (20 bytes, zeroed in testbed)
+NWDB  — News database
+GLXY  — Galaxy metadata
+OWNR  — Player 1 block (contains all sub-sections below)
+  DATA  — Player data header
+  OWPR  — Owner properties (resources, flags, color, position)
+  KNPL  — Known planets
+  EXSY  — Explored systems (names, visibility)
+  HQAS  — HQ / assets
+  CVTR  — Civilization traits (tech levels per category)
+  SERV  — Server-side player data
+  DSGN  — Ship designs
+  SDPR  — Ship design properties (name, component slots)
+  GOVS  — Governor settings
+  ADMS  — Admiral settings
+  SPQS  — Ship production queues
+  USSE  — User settings / preferences
+OWNR  — Player 2 block (same sub-sections)
+  ...
+SOLA  — Solar system 1
+  SUN   — Star data (type, position, color, luminosity)
+  PLNT  — Planet 1
+    PLPR  — Planet properties (size, resources, habitability, color)
+    PROD  — Production state
+    WLTH  — Wealth / resource stockpiles
+    ENLI  — Enlisted / garrison data
+  PLNT  — Planet 2 ...
+  ...
+SOLA  — Solar system 2 ...
+  ...
+SHIP  — Ship instance (position, fleet, HP)
+  DYNO  — Dynamic object data
+  SHCO  — Ship components
+  SHPR  — Ship properties
+ROUT  — Fleet route / waypoints
+NEBU  — Nebula data (3 in testbed galaxy)
+```
+
+#### GSET key-value encoding
+
+The GSET section uses a typed key-value format:
+```
+uint32(section_size) + uint32(entry_count) + entries...
+```
+
+Each entry: `uint32(name_len) + ascii_name + uint32(type_code) + value`
+
+| Type | Value format | Example |
+|---|---|---|
+| 0 | `uint8(has_custom) + int32(value)` | `maxusers = 100` |
+| 1 | `uint8(has_custom) + int32(val1) + int32(val2)` | `rank = (0, 999)` |
+| 2 | `int16(value)` | `speed = 0` |
+| 3 | `uint32(str_len) + chars` | `name = ''` |
+| 4 | `uint8(has_custom) + uint32(count) + count × uint32` | `homeworld_properties = [300, 32, 30, 40, 7]` |
+
+Known GSET keys (from testbed galaxy):
+`name`, `speed`, `team`, `xp`, `sandbox`, `2d`, `rank`, `maxusers` (100),
+`turnlength` (3600s), `density`, `primetime`, `primetime_turnlength`,
+`startticks`, `sectorsize` (200), `homeworld_properties`, `juicyplanets`,
+`colonyships`, `planetspersystem`, `startcredits` (200),
+`regularplanet_properties`, `juicyplanet_properties`, `tech_multiplier` (800),
+`corruption_multiplier` (100), `reputation_multiplier` (100),
+`homeworld_changes` (30), `civilization_changes` (5), `premium` (1),
+`score_breakeven` (20), `colonymodule_multiplier` (100), `waronly`,
+`hse_multiplier` (100), `autoattack`
+
+#### GLOB section (variable length)
+
+At turn 0: 25 bytes — minimal header with no active player data.
+From turn 1 onward: 48 bytes — includes the name of the last player who acted
+(e.g. "BadGuy" for the AI opponent in testbed), suggesting a "last mover" or
+turn-ownership field.
+
+#### Key findings for multiplayer
+
+1. **The save blob is a COMPLETE game state snapshot** — it contains ALL players
+   (both OWNR blocks), ALL solar systems, ALL planets, ALL ships. Every player's
+   save contains the entire galaxy.
+
+2. **GSET is invariant** — galaxy settings are identical across all turns and all
+   saves within the same galaxy. They are set once at galaxy creation.
+
+3. **The server can treat save blobs as opaque store-and-return.** The client
+   handles all game logic, serialization, and deserialization. The server's role
+   is to store the canonical game state and distribute it to players on load.
+
+4. **For multiplayer turn reconciliation**, the likely original model was:
+   - All players download the same canonical state at the start of their turn
+   - Each player makes moves locally and saves back
+   - The server stores the latest save as the canonical state
+   - Turn advancement (tick) is server-controlled — the server decides when to
+     advance and which player's save becomes the new canonical state
+
+5. **The server does NOT need to parse save blob internals** for basic
+   multiplayer functionality. It only needs to manage which blob is current per
+   galaxy and control turn timing.
+
+---
 
 ## 3. Galaxy Types
 

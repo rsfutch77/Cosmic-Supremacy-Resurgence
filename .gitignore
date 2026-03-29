@@ -9,3 +9,4 @@ prototype/server/save_gov_*.dat
 prototype/server/*.sqlite3
 prototype/server/__pycache__/
 prototype/server/.venv/
+*.hex
