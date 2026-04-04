@@ -10,3 +10,5 @@ prototype/server/*.sqlite3
 prototype/server/__pycache__/
 prototype/server/.venv/
 *.hex
+*.dmp
+*.dat

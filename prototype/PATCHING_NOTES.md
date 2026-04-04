@@ -1,0 +1,477 @@
+# CosmicSupremacy_patched19.exe — Patching Notes
+
+## Goal
+Get the original 2006 Cosmic Supremacy client EXE connecting to a local Python server at `localhost:8888` for SAND (sandbox) galaxy type, using the binary TCP protocol (RQLG/SAVE).
+
+## Binary Layout Reference
+
+| Section | Raw Offset | Virtual Address | Delta (VA = raw + delta) |
+|---------|-----------|-----------------|--------------------------|
+| .text   | 0x000400  | 0x401000        | +0x400C00                |
+| .rdata  | 0x34C800  | 0x74E000        | +0x401800                |
+| .data   | 0x3F7C00  | 0x7FA000        | +0x402400                |
+
+Image base: 0x00400000
+
+## Key Winsock IAT Entries (in .rdata)
+
+| IAT Address | Function     | Ordinal |
+|-------------|-------------|---------|
+| 0x74E74C    | connect     | 4       |
+| 0x74E758    | htons       | 9       |
+| 0x74E770    | send        | 19      |
+| 0x74E774    | recv        | 16      |
+| 0x74E790    | closesocket | 3       |
+| 0x74E794    | socket      | 23      |
+
+## Architecture Discovery
+
+### Dual Protocol
+The game uses two protocols on the same port:
+- **HTTP POST** to `/clientinterface.php` — for savegame, login, testconnection, etc.
+- **Binary TCP** with 4-byte big-endian magic headers (RQLG, SAVE, LGIN, SUCC, FAIL)
+
+### Connection Flow (0x563310 → 0x562EA0)
+The wrapper at **VA 0x563310** (file 0x162710) orchestrates galaxy connection:
+
+```
+0x563310:
+  +0x08: store galaxy_type at [esi+0x434]
+  +0x0E: check [0x86EEF0] (online flag) and galaxy != 0x1A85
+  +0x23: call vtable[2]          ← PRE-CALL (ClientUpdateCheck in original)
+  +0x27: call 0x562EA0           ← THE CONNECT FUNCTION (our patch target)
+  +0x33: save return value in bl
+  +0x4A: call vtable[2]          ← POST-CALL
+  +0x50: ret 4 (callee cleanup, returns al=bl)
+```
+
+### Original 0x562EA0 (352 bytes, orchestrator)
+The original function was complex — not a simple connect:
+1. **vtable[3]** at +0x3C: validation (abort if [0x86EEF0]!=0 && galaxy!=0x1A85)
+2. **vtable[2]** at +0x5B: pre-connection step (ClientUpdateCheck)
+3. **0x5F1D50** at +0x66: creates raw socket via `socket(2,1,0)`, stores at [ecx+4]
+4. **String setup** at +0x6F: builds server info string at [esi+0x4AC]
+5. **0x5F3650** at +0x121: the actual TCP connect (thiscall, 2 stack args)
+6. **0x5E5B00** at +0x13D: stream reset (custom handle, NOT Winsock close)
+
+### Global Flags (BSS zone, set at runtime)
+- `[0x86EEF0]` — online mode flag (non-zero when online)
+- `[0x86EEF1]` — alternate server flag
+- `[0x86EEF4]` — alternate port value
+
+### Object Layout (esi = connection object)
+- `[esi+0x00]` — vtable pointer
+- `[esi+0x04]` — Winsock socket handle
+- `[esi+0x08]` — connected flag (byte)
+- `[esi+0x434]` — galaxy_type (dword)
+- `[esi+0x438]` — stream object pointer
+- `[esi+0x43C]` — custom stream handle (NOT a socket! closed via 0x672E90)
+- `[esi+0x4AC]` — server info string (std::string, MSVC SSO)
+- `[esi+0x4CC]` — flag byte (set to 0 on connect)
+- `[esi+0x4CD]` — flag byte (set to 1 on connect)
+
+---
+
+## Patches Applied
+
+### Patch A — Rewritten 0x562EA0 (file 0x1622A0, 150 bytes)
+Replaced the entire original 352-byte orchestrator with a minimal direct Winsock connect:
+
+```asm
+push ebx, esi, edi
+mov esi, ecx              ; this pointer
+; socket(AF_INET=2, SOCK_STREAM=1, 0)
+push 0, 1, 2
+call [0x74E794]           ; socket()
+cmp eax, -1
+je fail
+mov [esi+4], eax          ; store socket handle
+mov edi, eax              ; keep in edi for later use
+; Build sockaddr_in on stack
+sub esp, 16
+mov word [esp], 0x0002    ; AF_INET
+mov word [esp+2], 0xB822  ; port 8888 big-endian
+mov dword [esp+4], 0x0100007F  ; 127.0.0.1
+mov dword [esp+8], 0
+mov dword [esp+12], 0
+; connect(socket, &addr, 16)
+push 16
+lea eax, [esp+4]
+push eax
+push edi
+call [0x74E74C]           ; connect()
+add esp, 16               ; clean up sockaddr
+test eax, eax
+jne fail
+; Success path
+mov byte [esi+8], 1       ; connected = true
+mov byte [esi+0x4CC], 0
+mov byte [esi+0x4CD], 1
+mov al, 1
+pop edi, esi, ebx
+ret
+
+fail:
+xor al, al
+pop edi, esi, ebx
+ret
+```
+
+**Note**: Original function had `ret 8` (callee cleanup of 2 args). Our replacement uses plain `ret` because 0x563310 calls us with no stack args (just `mov ecx, esi; call 0x562EA0`).
+
+### Patch B — NOP at VA 0x563000 (file 0x162400)
+Single byte `C3` (ret) — disables whatever function was at 0x563000. Purpose from previous session; always preserved.
+
+### Patch C — NOP vtable[2] calls in 0x563310 (file 0x162710)
+Two 2-byte NOPs:
+- **Pre-call** at +0x23 (file 0x162733): `FF D2` → `90 90`
+- **Post-call** at +0x4A (file 0x16275A): `FF D2` → `90 90`
+
+**Why**: vtable[2] sends `ClientUpdateCheck V1.2\r\n<version>\r\n` on the socket at [esi+4]. In the original game, vtable[2] was called inside 0x562EA0 *before* socket creation, so it created its own connection. In our patched flow, the post-call uses our socket, sends ClientUpdateCheck, gets a response, then **closes the socket** — destroying the connection before RQLG can be sent.
+
+### Patch D — NOP DIAG send (file 0x162300, 24 bytes)
+NOPed the diagnostic `send("DIAG")` block that was used to verify socket+connect works. This was temporary instrumentation — confirmed the TCP connection succeeds, then removed.
+
+---
+
+## Bugs Found & Fixed
+
+### 1. Vtable Corruption Crash (0x65005200)
+**Cause**: Early version wrote IP bytes (127.0.0.1) to [esi+0..3], overwriting the vtable pointer with 0x0100007F.
+**Fix**: Removed those writes; IP goes on the stack-based sockaddr_in instead.
+
+### 2. ClientUpdateCheck Popup ("SUCC")
+**Cause**: Server responded with SUCC magic bytes to the text-based ClientUpdateCheck protocol.
+**Fix**: Server now responds with `\r\n` (empty line = no update needed). Game proceeds silently.
+
+### 3. Stream Handle Crash (0x672ED5, ESI=0x5D0)
+**Cause**: Wrote socket handle to [esi+0x43C] thinking it was the socket field. Actually it's a custom stream handle closed via 0x672E90 (not closesocket). Socket handle value was dereferenced as an object pointer.
+**Fix**: Removed all writes to [esi+0x43C] and [esi+0x444].
+
+### 4. Socket Killed by vtable[2] Post-Call
+**Cause**: After our function creates the socket, 0x563310's post-call vtable[2] sends ClientUpdateCheck on it, gets the response, then closes the connection. Game shows "failed to connect" because the socket is dead before RQLG.
+**Fix**: NOPed both vtable[2] calls in 0x563310 (Patch C above).
+
+---
+
+## Key Discoveries
+
+1. **DIAG test proved socket+connect works**: Sending 4 bytes immediately after connect() showed up on the server, confirming Winsock calls are functional.
+
+2. **vtable[2] reuses [esi+4] socket**: It doesn't create its own connection — it sends on whatever socket is at [esi+4]. The data stream was `DIAG` + `ClientUpdateCheck V1.2\r\n813186540\r\n` on one TCP connection.
+
+3. **Single TCP connection architecture**: The game uses ONE persistent TCP connection for both ClientUpdateCheck and binary protocol (RQLG/SAVE/etc.). In the original flow, ClientUpdateCheck happened on its own connection (before socket creation), then a new socket was created for binary protocol.
+
+4. **0x5E5B00 manages a custom stream abstraction**: The field at [esi+0x43C] is NOT a Winsock socket — it's a handle to an internal stream object closed via function 0x672E90.
+
+---
+
+## Session 2 — Deep Architecture Trace & Send Path Fix
+
+### The Send Path Mystery
+
+After the TCP connection worked (confirmed by DIAG test), the game still wasn't sending RQLG. Deep trace revealed why:
+
+#### Stream Wrapper Architecture
+The game uses a **stream wrapper** object (0x8C bytes, created by `0x562030→0x5611A0`) that sits between game logic and the connection object:
+
+| Offset | Field | Purpose |
+|--------|-------|---------|
+| `[sw+0x00]` | vtable | Stream wrapper vtable at 0x77839C |
+| `[sw+0x04]` | CRT fd | File descriptor for CRT `_write()` |
+| `[sw+0x0C]` | mode | 0=TCP, 1=HTTP |
+| `[sw+0x30]` | buffer ptr | Stream buffer base address |
+| `[sw+0x3C]` | data size | Current data size in buffer |
+| `[sw+0x78]` | conn obj | Connection object pointer |
+| `[sw+0x7C]` | header validated | Set by 0x561100 |
+| `[sw+0x7D]` | all data received | Set when recv completes |
+| `[sw+0x80]` | original magic | Saved first 4 bytes before CMND wrap |
+| `[sw+0x84]` | bytes sent | Running total for send loop |
+| `[sw+0x88]` | pending flag | Set to 1 when data prepared but not sent |
+| `[sw+0x89]` | process flag | **CRITICAL**: 0x561A00 skips if this is 0 |
+
+#### The [sw+0x89] Discovery
+`0x5611A0` (stream wrapper constructor) sets `[sw+0x89] = 1` **only when mode=0** (TCP). With mode=1 (HTTP), `[sw+0x89] = 0`, causing `0x561A00` to return immediately without processing the stream. This was the root cause.
+
+#### RQLG Send Code Path (0x57A6B0)
+```
+0x563310     → connect (our patched 0x562EA0)
+0x56DC30     → create stream wrapper (mode from 0x56208A)
+0x5E6260     → write RQLG header (magic + flags) to stream buffer
+0x5E5E10     → write galaxy_type (4 bytes) to stream buffer
+0x5E6320     → flush (no-op when CRT fd=0)
+0x561950(0)  → CMND wrap + conditional send (arg=0 = prepare only)
+0x56EBA0     → receive loop (calls 0x561A00 internally)
+0x561260     → check result
+```
+
+#### 0x561950 — The Send Gate
+Called with `arg=0` from all 56 call sites in the online game flow. The function:
+1. Calls `0x561350` (prep)
+2. Byte-swaps first 4 bytes, checks if already CMND
+3. If not CMND, calls `0x561710` to encrypt + wrap in CMND
+4. **Checks arg**: if arg=0, sets `[sw+0x88]=1` (pending) and returns **without sending**
+5. If arg≠0, calls `vtable[4]` to transmit via connection object
+
+In the original HTTP design, the send happens inside vtable[7] (0x563660 does a full HTTP POST round-trip containing the pending CMND data).
+
+#### 0x561A00 — The Receive Loop
+1. Checks `[sw+0x89]`: if 0, returns immediately (this was the block)
+2. Reads first 8 bytes via `vtable[7]` (stream header: magic + flags/size)
+3. Validates header via `0x561100` (checks 4 ASCII chars)
+4. Extracts payload size from flags/size dword (lower 26 bits)
+5. Reads remaining payload bytes via `vtable[7]`
+6. Calls `0x561310` to check if data is CMND-wrapped
+7. If CMND, calls `0x5617D0` to decrypt/unwrap
+8. If not CMND, skips unwrap — data used as-is
+
+#### Connection Object Vtable (0x7785B8)
+```
+[0x00] = 0x562DF0  destructor
+[0x04] = 0x5F1D50  socket creation
+[0x08] = 0x5F1DB0  ClientUpdateCheck
+[0x0C] = 0x5F1FA0  validation
+[0x10] = 0x5635F0  SEND (vtable[4]) — online: HTTP POST, offline: Winsock send()
+[0x14] = 0x563580  send variant
+[0x18] = 0x563C20  transfer
+[0x1C] = 0x563BC0  RECV (vtable[7]) — online: HTTP round-trip, offline: Winsock recv()
+[0x20] = 0x5F2E90  check
+[0x24] = 0x5F1FC0  connect+stream setup
+```
+
+**vtable[4] offline path** (`0x563636`): Calls `0x5F27E0` directly — pure Winsock `send()` on `[conn+4]`, sends in 64KB chunks.
+
+**vtable[7] offline path** (`0x563C02`): Calls `0x5F2D10` directly — pure Winsock `recv()` on `[conn+4]`.
+
+Both check `[0x86EEF0]` (online flag) at entry. Online flag is non-zero at runtime, so the online path is taken by default.
+
+#### CMND Protocol
+`0x561710` encrypts data via `0x5F5BF0` and wraps in CMND header. `0x5617D0` does the reverse on receive. Encryption key/algorithm unknown, but the wrapping can be bypassed entirely since `0x561310` (receive-side) already checks for CMND magic and skips unwrap if not present.
+
+### Patches Applied (Session 2)
+
+### Patch D2 — ~~Mode=0~~ REVERTED in patched19 at VA 0x56208A (file 0x16148A)
+~~`6A 01` → `6A 00` (push 1→push 0)~~
+**REVERTED to `6A 01` (mode=1/HTTP)** in patched19.exe. See Session 3 notes for why.
+Originally changed mode to TCP(0) to enable `[sw+0x89]=1`. Reverted because mode=0 prevents flush from fixing the placeholder payload size in the stream header (see Session 3).
+
+### Patch E — vtable[4] force offline at VA 0x5635FA (file 0x1629FA)
+`74` → `EB` (je→jmp)
+Forces vtable[4] to always take the offline path, which calls `0x5F27E0` (Winsock `send()`) directly instead of trying the HTTP POST path (which needs server URL strings that are empty).
+
+### Patch F — vtable[7] force offline at VA 0x563BCA (file 0x162FCA)
+`74` → `EB` (je→jmp)
+Forces vtable[7] to always take the offline path, which calls `0x5F2D10` (Winsock `recv()`) directly instead of trying the HTTP round-trip path.
+
+### Patch G — Force send in 0x561950 at VA 0x561995 (file 0x160D95)
+`74 4F` → `90 90` (je→NOP NOP)
+Removes the `arg==0` check that skips the vtable[4] send call. Now `0x561950` always sends via vtable[4] after CMND wrapping (or skipping it per Patch H).
+
+### Patch H — Skip CMND encryption at VA 0x561987 (file 0x160D87)
+`74 07` → `EB 07` (je→jmp)
+Always skips the CMND wrap call (`0x561710`). Raw stream-format data (e.g. RQLG header + galaxy_type) is sent directly, unencrypted. The receive side handles this naturally — `0x561310` detects non-CMND data and `0x5617D0` (decrypt) is skipped.
+
+### Patch I — Force [sw+0x89]=1 at VA 0x561214 (file 0x160614) *(Session 3)*
+`75 07` → `90 90` (jne→NOP NOP)
+Forces the stream wrapper process flag to 1 regardless of mode. Required because reverting D2 (mode=1 for flush fix) would otherwise leave `[sw+0x89]=0`, causing `0x561A00` (receive) to skip stream processing.
+
+### Patch J — vtable[5] force offline at VA 0x56358A (file 0x16298A) *(Session 3)*
+`74 4C` → `EB 4C` (je→jmp)
+Forces vtable[5] (`0x563580`) to always take the offline path. The online path calls `0x562EA0` (connect), creates a new socket, then sends data via HTTP POST (`0x563370`) — destroying our existing socket and sending unwanted ClientUpdateCheck data. Offline path calls `0x5F2790` for raw send.
+
+**Discovery**: vtable[5] has THREE callers of `0x562EA0` (Patch A) in the binary. The online paths of vtable[4] and vtable[5] both re-connect before sending. Patch E fixed vtable[4]; Patch J fixes vtable[5].
+
+### Patch K — Disable vtable[2] (ClientUpdateCheck) at VA 0x5F1DB0 (file 0x1F11B0) *(Session 3)*
+`55` → `C3` (push ebp → ret)
+Makes vtable[2] return immediately without doing anything. This is the nuclear option: even if vtable[2] is called from ANY location (not just the two we NOPed in 0x563310), it now does nothing.
+
+**Why**: DIAG diagnostic test revealed ClientUpdateCheck text was still being sent on our socket after Patches C1/C2. The raw text `ClientUpdateCheck V1.2\r\n<version>\r\n` arrived right after DIAG on the same TCP connection. Since all vtable[2] call sites in 0x563310 were already NOPed, the call must come from elsewhere. Disabling the function itself eliminates all possible callers.
+
+---
+
+## Stream Format
+
+With CMND bypass, messages use the raw stream format:
+
+| Offset | Size | Endianness | Description |
+|--------|------|------------|-------------|
+| 0 | 4 | **Big-endian** | Magic (ASCII, e.g. `RQLG`, `SAVE`) — byte-swapped by `0x5E6260` |
+| 4 | 4 | **Little-endian** | Flags/Size dword (native x86): upper 6 bits = flags, lower 26 bits = payload size |
+| 8 | N | native | Payload (N = payload size from above) |
+
+**IMPORTANT**: Mixed endianness! Magic is big-endian, flags/size is little-endian (native x86 dword).
+
+Header validation (`0x561100`): checks bytes 0-3 are uppercase letters, digits, or spaces.
+
+Size extraction: `total_message_size = 8 + (LE_dword[4:8] & 0x03FFFFFF)`.
+
+#### Placeholder Size Issue (Session 3 discovery)
+`0x5E6260` writes the header with **placeholder** payload_size = `0x3FFFFFF` (67M). The actual size is fixed later by the **flush function** (`0x5E6320`) — but **only in mode=1 (HTTP)**. Mode=0's flush path calls `0x5E5BE0` which is a no-op for fd=0.
+
+---
+
+---
+
+## Session 3 — Placeholder Size Bug & Endianness Fix
+
+### Root Cause: Why RQLG Never Arrived at Server
+
+Connection 61360 was accepted but the server saw no data. Investigation revealed TWO interlocking issues:
+
+#### Issue 1: Placeholder Payload Size (0x3FFFFFF)
+`0x5E6260` writes the 8-byte stream header with `payload_size = 0x3FFFFFF` (67,108,863 bytes) as a placeholder. The size is meant to be fixed by the **flush function** (`0x5E6320`):
+
+- **Mode 1 (HTTP) flush** → Reads `[sw+0x44]` linked list to find header offset, calculates actual `payload_size = [sw+0x40] - header_offset - 8`, writes it into the header. ✓
+- **Mode 0 (TCP) flush** → Calls `0x5E5BE0` (CRT write wrapper) which is a no-op when fd=0. Does NOT fix the size. ✗
+
+With Patch D2 (mode=0), the header was sent with the 67M placeholder. The server then waited for 67M bytes of payload that never came.
+
+#### Issue 2: Mixed Endianness
+- Magic (bytes 0-3): big-endian (byte-swapped by `0x5E6260`)
+- Flags/Size (bytes 4-7): **little-endian** (native x86 `mov dword`)
+
+The server was reading both as big-endian (`struct.unpack('>I', ...)`).
+
+### Fix Applied
+
+**Client**: Revert Patch D2 (mode back to 1/HTTP) so flush fixes the header. Add Patch I to force `[sw+0x89]=1` regardless of mode.
+
+**Server**: Changed `flags_size` parsing from `'>I'` (big-endian) to `'<I'` (little-endian). Also changed `build_stream_response` to write flags_size as little-endian. Added sanity check for unreasonably large payload sizes (>1MB).
+
+### Patch I — Force [sw+0x89]=1 at VA 0x561214 (file 0x160614)
+`75 07` → `90 90` (jne→NOP NOP)
+
+In the stream wrapper constructor (`0x5611A0`), `[sw+0x89]` is set to 1 **only when mode=0**:
+```
+0x561214: jne 0x56121D    ; if mode != 0, skip
+0x561216: mov byte [esi+0x89], 1
+```
+Patch I NOPs the jne, so `[sw+0x89]=1` is always set regardless of mode. This enables `0x561A00` (receive) to process the stream even with mode=1.
+
+Combined with D2 revert (mode=1): flush fixes the header AND receive still works.
+
+### Key Architecture Details Discovered
+
+#### 0x5E6260 (write stream header)
+1. Byte-swaps magic to big-endian
+2. Builds flags_size with placeholder `0x3FFFFFF`
+3. Writes 8 bytes to buffer via `0x5E5E10`
+4. Pushes current write offset to `[sw+0x44]` linked list (for later size fix by flush)
+
+#### 0x5E6320 (flush) — Mode-Dependent Behavior
+- **Mode 0**: Calls `0x5E5BE0(arg, 0)` → no-op for CRT fd=0. Does NOT fix header size.
+- **Mode 1**: Reads `[sw+0x44]` linked list for header offset. Calculates `actual_size = [sw+0x40] - offset - 8`. Writes corrected flags_size into header buffer in-place.
+
+#### Stream Manager → Stream Wrapper → Connection Object Chain
+```
+[0x86F198] = stream_manager (0x58 bytes, constructed by 0x562230)
+  [sm+0x3C] = connection_object = [0x86F194]
+
+[0x56DC30] → jmp 0x562030 → allocates 0x8C bytes → constructor 0x5611A0
+  [sw+0x78] = [sm+0x3C] = connection_object
+
+Confirmed: [sw+0x78] == [0x86F194] — same connection object used for connect AND send/recv.
+```
+
+---
+
+## Session 4 — ClientUpdateCheck Response Fix & vtable[6] Patch
+
+### Root Cause: Why Game Stayed on Connection Settings Popup
+
+After Patches J/K eliminated ClientUpdateCheck contamination on the binary socket, the game still wouldn't proceed past the connection settings popup. Investigation revealed TWO issues:
+
+#### Issue 1: Wrong ClientUpdateCheck Response
+The standalone ClientUpdateCheck function at **VA 0x56C770** (separate from vtable[2]) sends the check, receives the response, then compares it against specific keywords at VA 0x56C950+:
+
+```
+0x56C950: push 8; push "UpToDate"; push response; push 0; call compare
+0x56C96B: test eax, eax → if "UpToDate", set [0x86EFAD]=1, proceed
+0x56C978: compare response to "Corrupt" → error/update path
+0x56C98E: compare response to "Update" → update path
+0x56C9A4: compare response to "Patch" → patch path
+```
+
+String references confirmed:
+- `VA 0x778B8C`: `"UpToDate"` — success, proceed past popup
+- `VA 0x778B84`: `"Corrupt"` — error state
+- `VA 0x778B7C`: `"Update"` — triggers update
+- `VA 0x778B74`: `"Patch"` — triggers patching
+
+Our server was responding with `\r\n` (empty line), which doesn't match any keyword. Game stayed on popup.
+
+**Fix**: Server now responds with `UpToDate\r\n` for raw TCP and `UpToDate` for HTTP POST.
+
+#### Issue 2: vtable[6] (transfer) Not Patched
+The function at 0x56C770 uses **vtable[5]** (`0x563580`, Patch J forced offline) to SEND the ClientUpdateCheck data, and **vtable[6]** (`0x563C20`, "transfer") to RECEIVE the response.
+
+vtable[6] checks `[0x86EEF0]` (online flag) at entry, just like vtable[4]/[5]/[7]:
+```
+0x563C21: cmp byte [0x86EEF0], 0
+0x563C34: je 0x563C5E          ; offline path → direct to 0x5F2960
+          ; online path: call 0x563660 (HTTP round-trip) first, then 0x5F2960
+```
+
+Online path calls `0x563660` (complex HTTP transfer function) which would fail on our raw TCP socket. Since `[0x86EEF0]` is non-zero, the je is not taken.
+
+**Fix**: Patch L forces the offline path.
+
+### Patch L — vtable[6] force offline at VA 0x563C34 (file 0x163034) *(Session 4)*
+`74` → `EB` (je→jmp)
+Forces vtable[6] (`0x563C20`) to always take the offline path, which goes directly to `0x5F2960` (the actual receive) without calling `0x563660` (HTTP round-trip). Same pattern as Patches E, F, J.
+
+### Key Architecture Detail: Standalone ClientUpdateCheck (VA 0x56C770)
+This is a separate function from vtable[2] (`0x5F1DB0`). Flow:
+1. Creates connection object via `operator new(0x4D0)` at 0x56C82C
+2. Calls `0x563310` with galaxy_type=`0x1A85` (special value that skips vtable[2] calls inside 0x563310)
+3. `0x563310` → our patched `0x562EA0` → TCP connect to localhost:8888
+4. Builds "ClientUpdateCheck V1.2\r\n\<version>\r\n" message
+5. Sends via vtable[5] (offline path via Patch J) → `0x5F2790` → Winsock `send()`
+6. Receives via vtable[6] (offline path via Patch L) → `0x5F2960` → Winsock-based recv
+7. Compares response to "UpToDate" at 0x56C950
+8. If match: sets `[0x86EFAD]=1`, proceeds past connection popup
+9. If no match: stays on connection popup
+
+### Connection Object Vtable — Complete Offline Patch Set
+All four send/recv vtable entries now forced to offline:
+```
+[0x10] = vtable[4] 0x5635F0  SEND    — Patch E (0x5635FA: 74→EB)
+[0x14] = vtable[5] 0x563580  SEND    — Patch J (0x56358A: 74→EB)
+[0x18] = vtable[6] 0x563C20  RECV    — Patch L (0x563C34: 74→EB)
+[0x1C] = vtable[7] 0x563BC0  RECV    — Patch F (0x563BCA: 74→EB)
+```
+
+## Current Status
+- TCP connection to localhost:8888 confirmed working
+- ClientUpdateCheck protocol handled — responds "UpToDate"
+- vtable[2] interference eliminated (Patch K)
+- vtable[4]/[5]/[6]/[7] all forced to offline Winsock paths
+- CMND encryption bypassed (Patch H)
+- 0x561950 forced to always call send (Patch G)
+- Flush correctly fixes header payload size (mode=1)
+- [sw+0x89]=1 forced for receive processing (Patch I)
+- Server endianness fixed (magic=BE, flags_size=LE)
+- **Ready for RQLG→SAVE test**
+
+## Expected Test Flow
+1. Game connects → patched `0x562EA0` creates socket to localhost:8888
+2. Writes RQLG(4 BE) + flags/size(4 LE, with correct payload_size=4) + galaxy_type(4 bytes) = 12 bytes
+3. `0x5E6320` flush mode=1 → fixes placeholder size to actual 4
+4. `0x561950` sends via vtable[4] offline → `0x5F27E0` → `send()`
+5. Server receives RQLG (magic BE, flags_size LE), responds with SAVE in same format
+6. `0x561A00` receives via vtable[7] offline → `0x5F2D10` → `recv()`
+7. `0x561310` checks magic → not CMND → skip decrypt
+8. Buffer has raw SAVE → caller reads SAVE magic → proceeds
+
+## Server Protocol Handling (cs_server.py)
+The server auto-detects protocol by peeking first bytes:
+- `POST`/`GET` → HTTP handler
+- `ClientUpdateCheck` → responds with `\r\n`, then continues listening for binary
+- Stream-format messages → parses 8-byte header (magic=BE, flags_size=LE), extracts magic + payload, responds in same format
+
+## File Inventory
+- `CosmicSupremacy.exe` — original unmodified binary (reference for disassembly)
+- `CosmicSupremacy_patched18.exe` — previous patched binary (patches A-H, mode=0 bug)
+- `CosmicSupremacy_patched19.exe` — **current** patched binary (patches A-H, D2 reverted, +Patches I, J, K)
+- `cs_server.py` — dual-protocol Python server (HTTP + raw stream binary)
+- `SandboxGalaxy_local.csgalaxy` — galaxy pass file for SAND type
