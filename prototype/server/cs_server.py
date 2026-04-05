@@ -110,6 +110,7 @@ def _next_gameid(server_dir: str) -> int:
 MAGIC_RQLG = 0x52514C47  # "RQLG" - Request Galaxy (client → server)
 MAGIC_LGIN = 0x4C47494E  # "LGIN" - Login (client → server)
 MAGIC_STCO = 0x5354434F  # "STCO" - State/sync (client → server, periodic)
+MAGIC_RQTN = 0x5251544E  # "RQTN" - Request Turn/save (client → server, out-of-sync)
 MAGIC_SAVE = 0x53415645  # "SAVE" - Galaxy data response (server → client)
 MAGIC_SUCC = 0x53554343  # "SUCC" - Success (server → client)
 MAGIC_FAIL = 0x4641494C  # "FAIL" - Failure (server → client)
@@ -117,6 +118,7 @@ MAGIC_TOUR = 0x524F5554  # "TOUR" - Tutorial data (server → client)
 
 MAGIC_NAMES = {
     MAGIC_RQLG: 'RQLG', MAGIC_LGIN: 'LGIN', MAGIC_STCO: 'STCO',
+    MAGIC_RQTN: 'RQTN',
     MAGIC_SAVE: 'SAVE', MAGIC_SUCC: 'SUCC', MAGIC_FAIL: 'FAIL',
     MAGIC_TOUR: 'TOUR',
 }
@@ -495,30 +497,59 @@ def handle_binary_message(magic: int, payload: bytes, flags: int, addr) -> bytes
 
     if magic == MAGIC_RQLG:
         # Request Galaxy — sent by galaxy work function (VA 0x57A6B0)
-        # Payload: galaxy_type (4 bytes, big-endian)
-        galaxy_type = None
+        # Payload: 4 bytes — version/build number (matches ClientUpdateCheck version)
+        version = None
         if len(payload) >= 4:
-            galaxy_type = struct.unpack('>I', payload[:4])[0]
-        log(f'  RQLG: Request Galaxy — galaxy_type={galaxy_type} flags=0x{flags:02X}')
+            version = struct.unpack('<I', payload[:4])[0]
+        log(f'  RQLG: Request Galaxy — version={version} flags=0x{flags:02X}')
         log(f'  payload ({len(payload)} bytes): {payload.hex(" ") if payload else "(empty)"}')
         log(f'     *** RQLG RECEIVED — TCP BINARY PROTOCOL WORKING ***')
 
-        # Respond with SAVE in stream format.
-        # The game reads SAVE magic, then expects galaxy data as payload.
-        # For now, send a minimal payload. We can expand this later
-        # once we understand the galaxy data format.
-        # Use flags=1 to match what the client sends.
-        galaxy_data = b'\x00' * 4  # minimal placeholder
+        # Respond with SAVE containing galaxy selection data.
+        #
+        # Discovery (Session 5): The SAVE payload is parsed by OnInitDialog
+        # (VA 0x499DD0) which:
+        #   1. Splits the payload by "###" delimiter
+        #   2. Iterates key-value pairs (key=element[i], value=element[i+1])
+        #   3. Keys matching "1" identify galaxy entries
+        #   4. The value gets added to a list control at [parser+0x338]
+        #   5. Also processes "Player:" prefix fields via [parser+0xD58]
+        #
+        # However, with Patch M (skip dialog) and Patch N (NOP gate check),
+        # the exact payload format doesn't matter — the dialog is bypassed
+        # and LGIN proceeds regardless. We still use the ### format for
+        # future compatibility when dialog bypass isn't needed.
+        galaxy_info = '1###SAND###'
+        galaxy_data = galaxy_info.encode('latin-1')
         response = build_stream_response(MAGIC_SAVE, galaxy_data, flags=1)
-        log(f'  -> responding with SAVE ({len(response)} bytes)')
+        log(f'  -> responding with SAVE ({len(response)} bytes): {galaxy_info!r}')
         return response
 
     elif magic == MAGIC_LGIN:
         log(f'  LGIN: Login request')
         log(f'  payload ({len(payload)} bytes): {payload.hex(" ") if payload else "(empty)"}')
+        if payload:
+            try:
+                log(f'  payload text: {payload.decode("latin-1")!r}')
+            except Exception:
+                pass
 
+        # Game expects SUCC to proceed past "logging in..." to galaxy data retrieval
         response = build_stream_response(MAGIC_SUCC, b'', flags=0)
         log(f'  -> responding with SUCC')
+        return response
+
+    elif magic == MAGIC_RQTN:
+        # Request Turn/Save — sent when client is out-of-sync (VA 0x56E550)
+        # Payload: 4 bytes (some identifier)
+        log(f'  RQTN: Request Turn/Save ({len(payload)} bytes)')
+        log(f'  payload: {payload.hex(" ") if payload else "(empty)"}')
+
+        # Respond with SAVE containing minimal galaxy data
+        # This is the "galaxy data" that gets loaded after login
+        galaxy_save_data = b''  # Minimal/empty for now
+        response = build_stream_response(MAGIC_SAVE, galaxy_save_data, flags=1)
+        log(f'  -> responding with SAVE (galaxy data, {len(response)} bytes)')
         return response
 
     elif magic == MAGIC_STCO:

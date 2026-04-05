@@ -1,4 +1,4 @@
-# CosmicSupremacy_patched19.exe — Patching Notes
+# CosmicSupremacy_patched20.exe — Patching Notes
 
 ## Goal
 Get the original 2006 Cosmic Supremacy client EXE connecting to a local Python server at `localhost:8888` for SAND (sandbox) galaxy type, using the binary TCP protocol (RQLG/SAVE).
@@ -441,6 +441,137 @@ All four send/recv vtable entries now forced to offline:
 [0x1C] = vtable[7] 0x563BC0  RECV    — Patch F (0x563BCA: 74→EB)
 ```
 
+---
+
+## Session 5 — Galaxy Dialog Bypass & LGIN Unblocking
+
+### Root Cause: Why SAVE Response Didn't Lead to LGIN
+
+After receiving SAVE with "#Galaxy@Pass#abcdef" payload, the game never sent LGIN. The connection just timed out. Investigation revealed the SAVE payload processing involves a modal dialog:
+
+#### Discovery: SAVE Payload Processing Flow (VA 0x57A870-0x57A8F4)
+
+The galaxy work function processes the SAVE payload through a complex dialog-based UI system:
+
+```
+0x57A875: cmp [esp+0x4C], 0        ; check SAVE payload length
+0x57A879: je 0x57A8F4              ; if empty, skip to fallback
+0x57A87B: cmp [0x819628], 0         ; check global flag
+0x57A87D: jne 0x57A8F4             ; if non-zero, skip to fallback
+
+; Parser path:
+0x57A88C: call 0x499B40             ; create parser from SAVE payload
+0x57A8A0: call 0x65BA31             ; DoModal — show galaxy selection dialog
+0x57A8A5: cmp eax, 1                ; IDOK?
+0x57A8A8: jne 0x57A8DE             ; if not OK, skip extraction
+0x57A8B6: call 0x57A3E0             ; extract field from parser+0x1494
+0x57A8C8: call 0x4053B0             ; copy to local string
+
+; LGIN gate (both must be non-zero):
+0x57A909: cmp [esp+0xAC], 0         ; "#Galaxy@Pass#" string length (always 13) ✓
+0x57A916: cmp [esp+0x8C], 0         ; extracted field length (0 = blocked!) ✗
+0x57A91D: je 0x57AB50              ; if zero, SKIP LGIN entirely
+```
+
+#### 0x65BA31 — DoModal (Galaxy Selection Dialog)
+
+This function is vtable[83] of the parser object (vtable 0x761754). It:
+1. Loads Windows **dialog resource RT_DIALOG ID 201** (0xC9) via FindResourceA/LoadResource/LockResource
+2. Gets parent HWND from 0x65B5A7
+3. Creates modeless dialog via `CreateDialogIndirectParamA` (0x65B87B)
+4. Runs modal message loop via 0x6574F7
+5. Returns `[esi+0x44]` — the dialog result (IDOK=1 on success)
+
+**Dialog procedure** at 0x65B291: Handles WM_INITDIALOG (0x110) by calling vtable[84] = **0x499DD0 (OnInitDialog)**.
+
+#### 0x499DD0 — OnInitDialog (SAVE Payload Parsing)
+
+The OnInitDialog parses the SAVE payload:
+1. Splits `[parser+0x1474]` (the payload string) by **"###" delimiter** (string at 0x7618C0)
+2. Iterates through key-value pairs (each element is 0x20 bytes in the split array)
+3. For pairs where key starts with **"1"** (string at 0x756818): stores value to local
+4. Also processes **"Player:"** (string at 0x7618C4) fields via [parser+0xD58]
+5. Adds items to list control at [parser+0x338]
+6. The selected item value should end up at [parser+0x1494]
+
+**Expected SAVE payload format**: `1###galaxy_name###` (key-value pairs delimited by "###")
+
+#### 0x57A3E0 — Field Extraction
+
+Reads `[parser+0x1494]` and returns it. This is the field that must be non-empty for LGIN.
+
+#### Fallback Path (0x57A8F4)
+
+If `[0x819628] == 0x200`, uses global string at 0x819614 instead of dialog extraction. Both start at 0 in the EXE, so this path isn't taken normally.
+
+#### Why the Dialog Fails in Our Context
+
+The dialog (resource 201) is meant for user interaction — selecting a galaxy from a list. In our automated sandbox flow, the dialog either:
+- Fails to create properly (no valid parent HWND context)
+- Shows but waits for user input that never comes
+- Returns != 1 (IDCANCEL or error), causing extraction to be skipped
+
+Either way, [parser+0x1494] stays empty → [esp+0x8C] = 0 → LGIN is blocked.
+
+### Parser Object Structure (0x499B40, ~0x14B4 bytes)
+
+```
+[+0x00]    vtable = 0x761754 (final, after inheritance chain)
+[+0x54]    type ID (0xC9 = dialog resource 201)
+[+0x58]    type ID low 16 bits (0xC9)
+[+0x5C]    0 (zeroed, unused for dialog load)
+[+0x60]    0 (zeroed, unused for dialog load)
+[+0x68]    flag (0, from constructor arg chain)
+[+0xA0]    sub-object vtable = 0x76174C
+[+0x324]   sub-object vtable = 0x761740
+[+0x338]   list control (0x485EE0 init, items added by OnInitDialog)
+[+0x6F8]   sub-object (0x409000 init)
+[+0xA28]   sub-object (0x409000 init)
+[+0xD58]   player list (0x415510 init, "Player:" prefix)
+[+0x1474]  std::string: SAVE payload (arg1 of constructor)
+[+0x1494]  std::string: extracted field (populated by dialog, read by 0x57A3E0)
+```
+
+### Patch M — Skip dialog call at VA 0x57A8A0 (file 0x179CA0)
+`E8 8C 11 0E 00 83 F8 01 75 34` → `B8 01 00 00 00 90 90 90 90 90`
+(call 0x65BA31; cmp eax,1; jne → mov eax,1; NOPs)
+
+Replaces the 0x65BA31 DoModal call with `mov eax, 1` (force IDOK) and NOPs. The extraction at 0x57A3E0 still runs, reading an empty string from [parser+0x1494]. This alone doesn't unblock LGIN — Patch N is also needed.
+
+### Patch N — NOP LGIN gate check at VA 0x57A91D (file 0x179D1D)
+`0F 84 2D 02 00 00` → `90 90 90 90 90 90`
+(je 0x57AB50 → 6x NOP)
+
+Removes the check that skips LGIN when the extracted field string is empty. Combined with Patch M, this allows LGIN to proceed with "#Galaxy@Pass#" + empty extracted field + additional data.
+
+### SAVE Payload Format
+
+Updated server to send `1###SAND###` (key-value pairs, "###" delimited):
+- Key "1" → galaxy name "SAND" (matches OnInitDialog parsing)
+- Format: `key###value###` for future compatibility
+
+### Protocol Sequence (after Patches M+N)
+
+```
+Client → Server: RQLG (4-byte version payload)
+Server → Client: SAVE (payload: "1###SAND###")
+  [Patch M skips dialog, forces eax=1]
+  [Extraction reads empty string from parser+0x1494]
+  [Patch N bypasses empty-string gate check]
+Client → Server: LGIN ("#Galaxy@Pass#" + empty + additional_data)
+Server → Client: SUCC (empty payload)
+  Game shows "logged in successfully"
+  Game shows "retrieving galaxy-data from the server..."
+Client → Server: (new connection for galaxy data, may send RQTN)
+Server → Client: SAVE (galaxy data)
+```
+
+### New Binary Message: RQTN (0x5251544E)
+
+Discovered at VA 0x56E550: sent when game detects out-of-sync or out-of-date state.
+Payload: 4 bytes. Response: SAVE with galaxy data.
+Only sent when `[0x86F1A2] != 0` (out-of-sync flag).
+
 ## Current Status
 - TCP connection to localhost:8888 confirmed working
 - ClientUpdateCheck protocol handled — responds "UpToDate"
@@ -451,27 +582,116 @@ All four send/recv vtable entries now forced to offline:
 - Flush correctly fixes header payload size (mode=1)
 - [sw+0x89]=1 forced for receive processing (Patch I)
 - Server endianness fixed (magic=BE, flags_size=LE)
-- **Ready for RQLG→SAVE test**
+- RQLG→SAVE exchange confirmed working (Session 4)
+- **Patch M bypasses galaxy selection dialog**
+- **Patch N unblocks LGIN with empty extracted field**
+- **Ready for LGIN→SUCC test**
 
-## Expected Test Flow
-1. Game connects → patched `0x562EA0` creates socket to localhost:8888
-2. Writes RQLG(4 BE) + flags/size(4 LE, with correct payload_size=4) + galaxy_type(4 bytes) = 12 bytes
-3. `0x5E6320` flush mode=1 → fixes placeholder size to actual 4
-4. `0x561950` sends via vtable[4] offline → `0x5F27E0` → `send()`
-5. Server receives RQLG (magic BE, flags_size LE), responds with SAVE in same format
-6. `0x561A00` receives via vtable[7] offline → `0x5F2D10` → `recv()`
-7. `0x561310` checks magic → not CMND → skip decrypt
-8. Buffer has raw SAVE → caller reads SAVE magic → proceeds
+## Expected Test Flow (Updated)
+1. Game connects → ClientUpdateCheck → "UpToDate" → proceed
+2. Galaxy work function sends RQLG (version payload)
+3. Server responds SAVE ("1###SAND###")
+4. Patch M skips dialog, forces success
+5. Patch N bypasses empty-field gate check
+6. Game sends LGIN ("#Galaxy@Pass#" + "" + data)
+7. Server responds SUCC
+8. Game shows "logged in successfully"
+9. Game requests galaxy data (new connection, possibly RQTN)
+10. Server responds SAVE (galaxy data)
 
 ## Server Protocol Handling (cs_server.py)
 The server auto-detects protocol by peeking first bytes:
 - `POST`/`GET` → HTTP handler
-- `ClientUpdateCheck` → responds with `\r\n`, then continues listening for binary
+- `ClientUpdateCheck` → responds with `UpToDate\r\n`, then continues listening for binary
 - Stream-format messages → parses 8-byte header (magic=BE, flags_size=LE), extracts magic + payload, responds in same format
+- Handles: RQLG→SAVE, LGIN→SUCC, RQTN→SAVE, STCO→SUCC
+
+## Patch Summary (All 15 Patches in patched20.exe)
+
+| Patch | VA | File Offset | Original | New | Purpose |
+|-------|------|-----------|----------|-----|---------|
+| A | 0x562EA0 | 0x1622A0 | (130 bytes) | Custom Winsock connect | Direct TCP connect to 127.0.0.1:8888 |
+| B | 0x563000 | 0x162400 | Various | C3 (ret) | Disable original connect function |
+| C1 | 0x563333 | 0x162733 | FF D2 | 90 90 | NOP vtable[2] pre-connect |
+| C2 | 0x56335A | 0x16275A | FF D2 | 90 90 | NOP vtable[2] post-connect |
+| D2 | 0x56208A | 0x16148A | 6A 01 | 6A 01 | REVERTED (keep mode=HTTP) |
+| E | 0x5635FA | 0x1629FA | 74 | EB | vtable[4] force offline send |
+| F | 0x563BCA | 0x162FCA | 74 | EB | vtable[7] force offline recv |
+| G | 0x561995 | 0x160D95 | 74 4F | 90 90 | Force send in 0x561950 |
+| H | 0x561987 | 0x160D87 | 74 07 | EB 07 | Skip CMND encryption |
+| I | 0x561214 | 0x160614 | 75 07 | 90 90 | Force [sw+0x89]=1 |
+| J | 0x56358A | 0x16298A | 74 4C | EB 4C | vtable[5] force offline send |
+| K | 0x5F1DB0 | 0x1F11B0 | 55 | C3 | Disable vtable[2] entirely |
+| L | 0x563C34 | 0x163034 | 74 | EB | vtable[6] force offline recv |
+| M | 0x57A8A0 | 0x179CA0 | E8..75 34 | B8 01..NOPs | Skip galaxy dialog, force IDOK |
+| N | 0x57A91D | 0x179D1D | 0F 84 2D 02 | 90x6 | NOP empty-field LGIN gate |
+| O | 0x57A875 | 0x179C75 | 39 5C 24 4C 74 79 3B C3 75 75 | E9 A9 00 00 00 90x5 | Skip parser, jump to LGIN |
+
+### Patch O — Skip parser entirely at VA 0x57A875 (file 0x179C75) *(Session 6)*
+
+**Root cause analysis (Session 6):**
+The ESP stack offset theory from Session 5 was WRONG. Detailed `ret` instruction analysis showed:
+- 0x5E6260: `ret 8` (cleans 2 args) ✓
+- 0x5E5E10: `ret 8` (cleans 2 args) ✓
+- 0x5E6320: plain `ret` (no stack args) ✓
+- 0x561950: `ret 4` (cleans 1 arg) ✓
+- 0x561260: `ret 4` (cleans the `push ecx` at 0x57A7DF) ✓
+
+All RQLG send pushes are cleaned by callees. The `push ecx` at 0x57A7DF (string ptr for receive)
+is cleaned by 0x561260's `ret 4`. **ESP is balanced at 0 throughout.**
+
+The REAL problem: the parser constructor at 0x499B40 creates a ~0x14B4 byte MFC dialog object
+on the stack at [esp+0x100]. Even with DoModal skipped (Patch M), the constructor's base class
+chain (0x4BB1C0 → 0x4095E0 → 0x65B383) initializes window management structures that likely
+require a valid MFC context. The constructor crashes, the SEH handler at 0x71313C catches it,
+and the function shows the default error message "The server is currently down" (string at
+0x77A58C, initialized at 0x57A704 on first entry).
+
+**Fix:** Jump from 0x57A875 directly to 0x57A923 (the LGIN "logging in..." code), completely
+bypassing the parser block (0x57A87F–0x57A8F2), the [esp+0xAC] check, and the [esp+0x8C] check.
+
+All strings needed for LGIN are already initialized before 0x57A875:
+- ESP0+0x98: "#Galaxy@Pass#" string (constructed at 0x57A84A)
+- ESP0+0x78: empty extracted field string (initialized at 0x57A84F)
+- ESP0+0xB8: extra data (initialized at 0x57A936, inside LGIN code)
+
+**Patch (10 bytes at file 0x179C75):**
+```
+Original: 39 5C 24 4C 74 79 3B C3 75 75
+          cmp [esp+0x4C], ebx; je 0x57A8F4; cmp eax, ebx; jne 0x57A8F4
+New:      E9 A9 00 00 00 90 90 90 90 90
+          jmp 0x57A923; nop; nop; nop; nop; nop
+```
+
+**Note:** Patches M and N are now redundant (the parser block they patch is skipped entirely)
+but remain in the binary harmlessly.
+
+## ESP Analysis Reference (Session 6)
+
+Stack tracking through 0x57A79B–0x57A875 (ESP0 = ESP after function prologue):
+
+| Instruction | Operation | ESP Delta | Notes |
+|------------|-----------|-----------|-------|
+| 0x57A79B | push 1 | -4 | RQLG magic flag |
+| 0x57A79D | push 0x52514C47 | -8 | RQLG magic |
+| 0x57A7A4 | call 0x5E6260 | 0 | ret 8 cleans both |
+| 0x57A7A9 | push 4 | -4 | Version data size |
+| 0x57A7AF | push eax | -8 | Version data ptr |
+| 0x57A7B2 | call 0x5E5E10 | 0 | ret 8 cleans both |
+| 0x57A7B9 | call 0x5E6320 | 0 | Flush, plain ret |
+| 0x57A7BE | push ebx | -4 | Send finalize arg |
+| 0x57A7C1 | call 0x561950 | 0 | ret 4 cleans push |
+| 0x57A7DF | push ecx | -4 | String ptr for receive |
+| 0x57A7EB | call 0x56EBA0 | -4 | Plain ret, NO cleanup |
+| 0x57A7F2 | call 0x561260 | 0 | **ret 4 cleans the push ecx** |
+| 0x57A83E | push 0x77A54C | -4 | "#Galaxy@Pass#" literal |
+| 0x57A84A | call 0x404AB0 | 0 | ret 4 cleans push |
+| 0x57A875 | (check point) | **0** | ESP balanced ✓ |
 
 ## File Inventory
 - `CosmicSupremacy.exe` — original unmodified binary (reference for disassembly)
 - `CosmicSupremacy_patched18.exe` — previous patched binary (patches A-H, mode=0 bug)
-- `CosmicSupremacy_patched19.exe` — **current** patched binary (patches A-H, D2 reverted, +Patches I, J, K)
+- `CosmicSupremacy_patched19.exe` — previous patched binary (patches A-N)
+- `CosmicSupremacy_patched20.exe` — **current** patched binary (patches A-O)
 - `cs_server.py` — dual-protocol Python server (HTTP + raw stream binary)
 - `SandboxGalaxy_local.csgalaxy` — galaxy pass file for SAND type
