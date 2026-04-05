@@ -37,6 +37,8 @@ import os
 import sys
 import io
 
+from galaxy_generator import generate_empty_save_response
+
 PORT = int(os.environ.get('CSPORT', 8888))
 LOGFILE = os.path.join(os.path.dirname(__file__), 'cs_server.log')
 
@@ -252,8 +254,21 @@ def handle_action(action: str, params: dict) -> tuple:
             data_str   = data_bytes.decode('latin-1')
             log(f'  -> loadgame: gameid={gameid} returning {len(data_bytes)} bytes')
             return 200, 'text/plain', 'DONE#VER#000000#DATA#' + data_str
-        log(f'  -> loadgame: gameid={gameid} no save found')
-        return 200, 'text/plain', 'DONE#VER#000000#DATA#'
+        # No save found — generate a fresh sandbox galaxy
+        player_name = params.get('playername', ['Player1'])[0].strip("'")
+        log(f'  -> loadgame: gameid={gameid} no save found, generating fresh galaxy for {player_name!r}')
+        try:
+            response_body = generate_empty_save_response(
+                player_name=player_name,
+                galaxy_name='Sandbox',
+            )
+            log(f'  -> generated galaxy blob: {len(response_body)} chars')
+            return 200, 'text/plain', response_body
+        except Exception as e:
+            log(f'  -> galaxy generation FAILED: {e}')
+            import traceback
+            log(traceback.format_exc())
+            return 200, 'text/plain', 'DONE#VER#000000#DATA#'
 
     if action == 'savegov':
         govid    = params.get('govid',   ['0'])[0]
