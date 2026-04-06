@@ -688,10 +688,76 @@ Stack tracking through 0x57A79B–0x57A875 (ESP0 = ESP after function prologue):
 | 0x57A84A | call 0x404AB0 | 0 | ret 4 cleans push |
 | 0x57A875 | (check point) | **0** | ESP balanced ✓ |
 
+## Session 7 — Merged patched24 (patched20 + patched17 game-load bypass)
+
+### Problem
+patched20 (patches A-O) gets stuck at "logging in..." because LGIN data never reaches the server over binary TCP. Multiple attempts to fix this (Patches P, Q) all failed. Root cause unknown — possibly socket closed after RQLG processing, pointer invalidation, or SEH-caught exception.
+
+### Solution: Merge with patched17
+patched17 was an earlier binary that bypasses the entire login/galaxy-load sequence and jumps straight into a running galaxy with ticks. It has patches in the **game state loading area** (0x49xxxx, 0x56DBF0, 0x577C1A, etc.) that are completely non-overlapping with patched20's networking patches.
+
+**patched24 = patched20 (networking A-O) + patched17 (game-load bypass)**
+
+All 500 patched bytes verified — no conflicts between the two patch sets.
+
+### Patches from patched17 (game-load bypass, not in patched20)
+
+| File Offset | VA | Size | Original | New | Purpose |
+|-------------|------|------|----------|-----|---------|
+| 0x005519 | 0x406119 | 1 | 15 | 5C | Unknown (early init) |
+| 0x095C81 | 0x496881 | 6 | 0F 8D.. | E9 01.. | Force jump in galaxy init |
+| 0x0964E3 | 0x4970E3 | 6 | 0F 8D.. | E9 06.. | Force jump in galaxy init |
+| 0x096905 | 0x497505 | 6 | 0F 85.. | 90x6 | NOP conditional skip |
+| 0x096CCA | 0x4978CA | 2 | 74 6D | 90 90 | NOP conditional jump |
+| 0x09810B | 0x498D0B | 5 | CCx5 | E9 22 01.. | Code cave: jump to handler |
+| 0x098129 | 0x498D29 | 1 | 05 | E1 | Adjust offset/flag |
+| 0x098232 | 0x498E32 | 5 | CCx5 | 5F 5E 5D 5B C3 | Pop regs + ret (exit handler) |
+| 0x098278 | 0x498E78 | 1 | 74 | EB | Force jump (je→jmp) |
+| 0x0D4BC8 | 0x4D57C8 | 2 | 10 0E | 1E 00 | Data patch |
+| 0x16CFF0 | 0x56DBF0 | 7 | 80 7C.. | B0 01 C3 90x4 | Force return true + NOP |
+| 0x16D4EF | 0x56E0EF | 6 | 0F 85.. | 90x6 | NOP conditional skip |
+| 0x16D533 | 0x56E133 | 2 | 74 54 | 90 90 | NOP conditional jump |
+| 0x17701A | 0x577C1A | 3 | 51 7C 85 | A0 F1 86 | Load from [0x86F1A0] instead |
+| 0x17702A | 0x577C2A | 2 | 74 58 | 90 90 | NOP conditional jump |
+| 0x17902D | 0x579C2D | 2 | 74 0E | 90 90 | NOP conditional jump |
+| 0x377785 | 0x778F85 | 2 | 20 AC | 00 34 | String/data patch |
+
+These patches collectively bypass the game's login verification, galaxy selection dialog, and server authentication checks, allowing the game to load directly into a running galaxy without completing the LGIN handshake.
+
+### Patch R — Skip "Synchronizing Data..." wait at VA 0x405C8E (file 0x00508E)
+
+`75` → `EB` (jne→jmp)
+
+The game's main tick loop checks `[0x86F1A1]` — a sync flag that's 0 until the server confirms data sync via binary TCP (SAVE/SUCC responses set it to 1 at 0x56DD78/0x56E52A). When the flag is 0, the game shows "Synchronizing Data..." and loops without processing ticks.
+
+With the p17 game-load bypass (which skips the binary TCP RQLG/LGIN/SUCC handshake), no TCP connection gets established, so the flag never gets set. The game loads into the galaxy but hangs at "Synchronizing Data..." when the first turn tick completes.
+
+Fix: Force the sync check to always skip the wait, so the game proceeds with tick processing regardless of sync state. This is safe for single-player sandbox mode.
+
+**patched25.exe = patched24 + Patch R**
+
+### patched26 — Revert Patches G, H, I (forced send pipeline)
+
+With the p17 game-load bypass, no binary TCP connection gets established (p17 skips 0x563310 → 0x562EA0). Patches G/H/I from patched20 force the send pipeline to always send immediately via vtable[4], which tries to call Winsock `send()` on an invalid/dead socket — causing the game to hang (spinning wheel) whenever it tries to send data (e.g., ship movement commands).
+
+**Reverted patches:**
+- **G** (0x160D95): `90 90` → `74 4F` — restore original `je` in 0x561950, sends are deferred (set pending flag) instead of forced
+- **H** (0x160D87): `EB` → `74` — restore original `je` in 0x561950, CMND wrapping check is normal
+- **I** (0x160614): `90 90` → `75 07` — restore original `jne` in constructor, process flag set only for mode=0
+
+With these reverted, the send function behaves as in the original game: when called with arg=0, it sets `[sw+0x88]=1` (pending) and returns immediately without blocking. Since there's no TCP connection, the pending data is never sent, and the game continues normally. This is the same behavior as p17 standalone.
+
+**patched26.exe = patched25 minus G/H/I = p17 bypass + p20 connect/vtable/dialog + Patch R**
+
 ## File Inventory
 - `CosmicSupremacy.exe` — original unmodified binary (reference for disassembly)
-- `CosmicSupremacy_patched18.exe` — previous patched binary (patches A-H, mode=0 bug)
-- `CosmicSupremacy_patched19.exe` — previous patched binary (patches A-N)
-- `CosmicSupremacy_patched20.exe` — **current** patched binary (patches A-O)
+- `CosmicSupremacy_patched17.exe` — historical: first working login bypass (game-load patches only)
+- `CosmicSupremacy_patched20.exe` — historical: full networking stack (patches A-O, LGIN broken)
+- `CosmicSupremacy_patched24.exe` — superseded (merged p20 + p17, missing Patch R)
+- `CosmicSupremacy_patched25.exe` — superseded (hangs on ship commands due to forced send patches)
+- `CosmicSupremacy_patched26.exe` — **CURRENT canonical**: patched25 minus G/H/I (no forced sends)
 - `cs_server.py` — dual-protocol Python server (HTTP + raw stream binary)
+- `galaxy_generator.py` — generates fresh galaxy blobs from template for loadgame
+- `save_parser.py` — decodes/encodes save blob binary format
+- `template_sandbox_t0.dat` — reference turn-0 save blob used by galaxy_generator
 - `SandboxGalaxy_local.csgalaxy` — galaxy pass file for SAND type
