@@ -755,7 +755,8 @@ With these reverted, the send function behaves as in the original game: when cal
 - `CosmicSupremacy_patched20.exe` — historical: full networking stack (patches A-O, LGIN broken)
 - `CosmicSupremacy_patched24.exe` — superseded (merged p20 + p17, missing Patch R)
 - `CosmicSupremacy_patched25.exe` — superseded (hangs on ship commands due to forced send patches)
-- `CosmicSupremacy_patched26.exe` — **CURRENT canonical**: patched25 minus G/H/I (no forced sends)
+- `CosmicSupremacy_patched26.exe` — superseded (still hung on ship commands, vtable offline patches conflict)
+- `CosmicSupremacy_patched27.exe` — **CURRENT canonical**: p17 + Patch R (working single-player)
 - `cs_server.py` — dual-protocol Python server (HTTP + raw stream binary)
 - `galaxy_generator.py` — generates fresh galaxy blobs from template for loadgame
 - `save_parser.py` — decodes/encodes save blob binary format

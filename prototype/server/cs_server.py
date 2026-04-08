@@ -68,7 +68,7 @@ WEB_INDEX = """<!DOCTYPE html>
     <h1>Cosmic Supremacy</h1>
     <p>Dual-Protocol Local Server</p>
     <p style="margin-top:1em;">Choose a galaxy type, then drag the downloaded file
-    onto <strong>CosmicSupremacy_patched18.exe</strong>.</p>
+    onto <strong>CosmicSupremacy_patched27.exe</strong>.</p>
     <a class="btn" href="/enter-sandbox">Sandbox Galaxy</a>
     <a class="btn" href="/enter-testbed" style="background:#336;">TestBed Galaxy</a>
     <a class="btn" href="/enter-demo" style="background:#336;">Demo Galaxy</a>
@@ -84,14 +84,39 @@ DEMO_USERID   = 1
 DEMO_PASSHASH = 'abcdef'
 DEMO_GALAXY_ID = 0
 
-# ── In-memory civ state ──────────────────────────────────────────────────────
+# ── Persistent civ state ─────────────────────────────────────────────────────
+_CIV_STATE_PATH = os.path.join(os.path.dirname(__file__), 'civ_state.json')
 _civ_state: dict = {}
 
+def _load_civ_state():
+    global _civ_state
+    if os.path.exists(_CIV_STATE_PATH):
+        try:
+            with open(_CIV_STATE_PATH, 'r') as f:
+                _civ_state = json.load(f)
+        except Exception:
+            _civ_state = {}
+
+def _save_civ_state():
+    try:
+        with open(_CIV_STATE_PATH, 'w') as f:
+            json.dump(_civ_state, f, indent=2)
+    except Exception:
+        pass
+
 def _default_civ() -> dict:
-    return {'civname': 'DemoEmpire', 'coaid': '0'}
+    return {'civname': 'DemoEmpire', 'coaid': '1'}
 
 def _get_civ(userid: str) -> dict:
-    return _civ_state.get(userid, _default_civ())
+    civ = _civ_state.get(userid, _default_civ())
+    # Ensure coaid is never 0 — the game interprets 0 as "no COA" and
+    # shows the customization popup every turn
+    if str(civ.get('coaid', '0')) == '0':
+        civ['coaid'] = '1'
+        if userid in _civ_state:
+            _civ_state[userid]['coaid'] = '1'
+            _save_civ_state()
+    return civ
 
 def _next_gameid(server_dir: str) -> int:
     existing = set()
@@ -186,7 +211,8 @@ def handle_action(action: str, params: dict) -> tuple:
         if civname:
             civ = _civ_state.setdefault(userid, _default_civ())
             civ['civname'] = civname
-            log(f'  -> uploadcivname: userid={userid} civname={civname!r}')
+            _save_civ_state()
+            log(f'  -> uploadcivname: userid={userid} civname={civname!r} (saved)')
         return 200, 'text/plain', 'OK'
 
     if action == 'listcoa':
@@ -197,13 +223,44 @@ def handle_action(action: str, params: dict) -> tuple:
         return 200, 'text/plain', body
 
     if action == 'getcoa':
-        import base64
-        empty_png = base64.b64decode(
-            'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=='
+        coaid = params.get('coaid', ['0'])[0]
+        # Try requested coaid first, then fall back to coa_1.png (default)
+        server_dir = os.path.dirname(__file__)
+        for try_id in [coaid, '1']:
+            coa_path = os.path.join(server_dir, f'coa_{try_id}.png')
+            if os.path.exists(coa_path):
+                coa_data = open(coa_path, 'rb').read()
+                log(f'  -> getcoa: coaid={coaid} returning coa_{try_id}.png ({len(coa_data)} bytes)')
+                return 200, 'image/png', coa_data
+        # Last resort — generate a minimal 1x1 blue PNG
+        import base64 as _b64
+        placeholder = _b64.b64decode(
+            'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4'
+            'nGNgYPgPAAEDAQAIicLsAAAAAElFTkSuQmCC'
         )
-        return 200, 'image/png', empty_png
+        log(f'  -> getcoa: coaid={coaid} no file found, returning 1x1 placeholder')
+        return 200, 'image/png', placeholder
 
     if action == 'uploadcoa':
+        userid = params.get('userid', ['1'])[0]
+        coa_data = params.get('data', [''])[0].encode('latin-1') if 'data' in params else b''
+        civ = _civ_state.setdefault(userid, _default_civ())
+        # Assign a real coaid (minimum 1) if the user doesn't have one
+        coaid = civ.get('coaid', '1')
+        if str(coaid) == '0':
+            coaid = '1'
+        if coa_data:
+            coa_path = os.path.join(os.path.dirname(__file__), f'coa_{coaid}.png')
+            with open(coa_path, 'wb') as f:
+                f.write(coa_data)
+            civ['coaid'] = coaid
+            _save_civ_state()
+            log(f'  -> uploadcoa: userid={userid} coaid={coaid} {len(coa_data)} bytes saved')
+        else:
+            # Even with no data, ensure coaid is set
+            civ['coaid'] = coaid
+            _save_civ_state()
+            log(f'  -> uploadcoa: userid={userid} coaid={coaid} (no data)')
         return 200, 'text/plain', 'OK'
 
     if action == 'savegame':
@@ -855,9 +912,12 @@ if __name__ == '__main__':
     log(f'  Log:    {LOGFILE}')
     log(f'  Web:    http://127.0.0.1:{PORT}/')
     log(f'')
-    log(f'  Use CosmicSupremacy_patched18.exe with SandboxGalaxy_local.csgalaxy')
-    log(f'  (patched18 has rewritten direct TCP connection to localhost:8888)')
+    log(f'  Use CosmicSupremacy_patched27.exe with SandboxGalaxy_local.csgalaxy')
     log('=' * 60)
+
+    _load_civ_state()
+    if _civ_state:
+        log(f'Loaded civ state: {len(_civ_state)} user(s)')
 
     server = DualProtocolServer(('0.0.0.0', PORT), DualProtocolHandler)
 
