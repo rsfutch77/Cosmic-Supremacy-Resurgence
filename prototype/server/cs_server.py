@@ -2,8 +2,8 @@
 cs_server.py — Cosmic Supremacy local stub server
 ==================================================
 Replaces the original cosmicsupremacy.com backend so the patched EXE can run
-locally.  All requests are logged to cs_server.log so you can see exactly what
-the game sends and reverse-engineer the expected response format.
+locally.  Keeps the game open and responsive to its HTTP protocol so that the
+external memory-reader tools (ejbo_viewer.py) can inspect live game state.
 
 Usage (Windows, run as Administrator OR use port > 1024 and set CSPORT):
     python cs_server.py
@@ -16,22 +16,13 @@ Protocol notes (from binary analysis):
   • Content-Type: application/x-cosmicsupremacy
   • Body:  action=<name>&userid=<int>&passhash='<hash>'&...
   • Login: action=login&userid=<int>&pass=<password>
-  • Galaxy data is base64 or proprietary encoded (TBD — discover via logs)
-
-Savegame capture:
-  Each savegame POST writes two files:
-    save_game_<gameid>.dat     — raw binary blob (latest save)
-    save_game_<gameid>_t<turn>_<timestamp>.dat   — per-turn archive
-    save_game_<gameid>_t<turn>_<timestamp>.hex   — hex+ASCII dump for analysis
 """
 
 import http.server
 import urllib.parse
 import datetime
-import json
 import os
 import sys
-import textwrap
 
 PORT = int(os.environ.get('CSPORT', 8888))
 LOGFILE = os.path.join(os.path.dirname(__file__), 'cs_server.log')
@@ -170,117 +161,20 @@ def handle_action(action: str, params: dict) -> tuple[int, str, str]:
     if action == 'uploadcoa':
         return 200, 'text/plain', 'OK'
 
-    # ── Save / load game ──────────────────────────────────────────────────────
-    # Game sends: userid=...&passhash=...&gameid=...&gamename=...&turn=...&version=...&data=...
+    # ── Save / load game (stub) ─────────────────────────────────────────────
+    # Game state is now managed via external memory reading/writing, not save
+    # blobs.  These stubs keep the game happy when it tries to save/load.
     if action == 'savegame':
-        gameid   = params.get('gameid',   ['0'])[0]
-        gamename = params.get('gamename', ['unknown'])[0].strip("'")
-
-        # gameid=-1 is the game's "allocate a new slot" sentinel.
-        # If we store it as -1, the game receives -1 in savegamelist and
-        # likely treats negative IDs as invalid when loading.
-        # Instead, allocate the next available positive integer ID.
-        if gameid == '-1':
-            gameid = str(_next_gameid(os.path.dirname(__file__)))
-            log(f'  -> savegame: gameid=-1 (new slot) → allocated gameid={gameid}')
-        turn     = params.get('turn',     ['0'])[0]
-        # data= is URL-decoded by parse_qs; re-encode to bytes via latin-1
-        # (the game sends a binary blob percent-encoded; latin-1 is byte-for-byte)
-        data_str   = params.get('data', [''])[0]
-        data_bytes = data_str.encode('latin-1')
-
-        server_dir = os.path.dirname(__file__)
-        ts = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
-
-        # Latest save (overwritten each turn — used by loadgame)
-        latest_path = os.path.join(server_dir, f'save_game_{gameid}.dat')
-        with open(latest_path, 'wb') as f:
-            f.write(data_bytes)
-
-        # Per-turn archive + hex dump for analysis
-        archive_base = os.path.join(server_dir, f'save_game_{gameid}_t{turn}_{ts}')
-        with open(archive_base + '.dat', 'wb') as f:
-            f.write(data_bytes)
-        with open(archive_base + '.hex', 'w', encoding='utf-8') as f:
-            f.write(_hexdump(data_bytes, label=f'gameid={gameid} name={gamename} turn={turn}'))
-
-        log(f'  -> savegame: gameid={gameid} name={gamename} turn={turn} '
-            f'{len(data_bytes)} bytes')
-        log(f'     latest:  {latest_path}')
-        log(f'     hexdump: {archive_base}.hex')
-        # Binary analysis (0x0048b350 / 0x403f00) confirmed:
-        #   strncmp(response, "DONE", 4) == 0  → success (al=1 → no error dialog)
-        #   Any other response → al=0 → "Failed to save the Save-Game" dialog
-        # "OK", "OK|...", etc. all fail this check.
+        log(f'  -> savegame: accepted (stub, not persisted)')
         return 200, 'text/plain', 'DONE'
 
     if action == 'savegamelist':
-        # Response format (from binary analysis):
-        #   <gameid>#SPC#<gamename>#SPC#<turn>#NEXT#<gameid2>#SPC#...#NEXT#DONE
-        # An empty body (no "DONE") triggers "Failed to retrieve list of saved games".
-        # "DONE" alone = valid empty list.
-        # We always include at least one default slot so the user can save.
-        server_dir = os.path.dirname(__file__)
-        entries = []
-        for fname in sorted(os.listdir(server_dir)):
-            if fname.startswith('save_game_') and fname.endswith('.dat'):
-                core = fname[len('save_game_'):-len('.dat')]
-                # Only list non-negative integer IDs.
-                # gameid=-1 was the "new slot" sentinel; saves stored under -1
-                # are legacy artefacts from before server-side ID allocation was
-                # implemented.  The game treats negative IDs as invalid when
-                # loading, so we never advertise them in the list.
-                try:
-                    n = int(core)
-                    valid = (n >= 0)
-                except ValueError:
-                    valid = False
-                if valid:
-                    entries.append(f'{core}#SPC#TestBed Save {core}#SPC#0')
-        # Always add slot 0 if not already present (so user always has a place to save)
-        if not any(e.startswith('0#SPC#') for e in entries):
-            entries.insert(0, '0#SPC#TestBed Save 1#SPC#0')
-        result = '#NEXT#'.join(entries) + '#NEXT#DONE'
-        log(f'  -> savegamelist: {len(entries)} slot(s)')
-        return 200, 'text/plain', result
+        # Return valid empty list so game doesn't show error dialog
+        return 200, 'text/plain', '0#SPC#TestBed Save 1#SPC#0#NEXT#DONE'
 
     if action == 'loadgame':
-        gameid    = params.get('gameid', [str(DEMO_GALAXY_ID)])[0]
-        save_path = os.path.join(os.path.dirname(__file__), f'save_game_{gameid}.dat')
-        if os.path.exists(save_path):
-            data_bytes = open(save_path, 'rb').read()
-            data_str   = data_bytes.decode('latin-1')
-            log(f'  -> loadgame: gameid={gameid} returning {len(data_bytes)} bytes')
-            # Binary analysis (0x0048b5d0 / 0x403f00 + 0x40a640) confirmed response format:
-            #
-            #   DONE#VER#<6-char-version>#DATA#<base64-save-blob>
-            #
-            # The game:
-            #   1. strncmp(response, "DONE#VER#", 9) → must be 0 (success flag)
-            #   2. substr(response, 9, 6) → extracts 6-char version into a decoder object
-            #   3. find("#DATA#") in full response → position of data marker
-            #   4. substr from (pos_of_DATA + 6) to end → the raw base64 blob
-            #   5. base64-decode → strip 4-byte header → zlib-decompress → game state
-            #
-            # Version string decoder — 0x411110 (decoder factory/init):
-            #   Called as: 0x411110(decoder_obj_ptr, version_6chars)
-            #   - Checks decoder_obj_ptr[0x1c] == 0 (not yet initialized)
-            #   - malloc(0x88) for cipher state; sets vtables at [state], [state+8],
-            #     [state+0x54] → implementation pointers for cipher algorithm id=3,
-            #     mode=1 (looks like a stream cipher / XOR-based transform)
-            #   - Passes the 6-char version string as the KEY to 0x40f160 / 0x40c5a0
-            #     which key-schedules the internal state
-            #   - "000000" → all-zero key bytes → identity transform (XOR with 0x00
-            #     on each byte = no change), so the blob is returned as sent
-            #   - A non-zero version string would apply a byte-level cipher to the
-            #     data between #DATA# and end-of-response; the original server used
-            #     this to obfuscate turn data in transit.  For our local stub the
-            #     identity version "000000" is correct — saves are stored and served
-            #     raw with no transformation needed.
-            #
-            # We use "000000" as the 6-char version placeholder.
-            return 200, 'text/plain', 'DONE#VER#000000#DATA#' + data_str
-        log(f'  -> loadgame: gameid={gameid} no save found, returning empty')
+        gameid = params.get('gameid', ['0'])[0]
+        log(f'  -> loadgame: gameid={gameid} (stub, returning empty)')
         return 200, 'text/plain', 'DONE#VER#000000#DATA#'
 
     # ── Governor settings ─────────────────────────────────────────────────────
@@ -394,43 +288,6 @@ def _log_unknown_action(action: str, params: dict):
     log(f'  -> returning empty OK  (add handler in handle_action() if needed)')
     log(sep)
 
-
-# ── Gameid allocator ──────────────────────────────────────────────────────────
-def _next_gameid(server_dir: str) -> int:
-    """
-    Return the next available positive gameid.
-    Scans existing save_game_<n>.dat files for the highest non-negative
-    integer ID and returns max + 1 (minimum 1).
-    Called when the game sends gameid=-1 ("allocate a new slot").
-    """
-    max_id = 0
-    for fname in os.listdir(server_dir):
-        if fname.startswith('save_game_') and fname.endswith('.dat'):
-            core = fname[len('save_game_'):-len('.dat')]
-            try:
-                n = int(core)
-                if n >= 0 and n > max_id:
-                    max_id = n
-            except ValueError:
-                pass
-    return max_id + 1
-
-
-# ── Hex dump helper ───────────────────────────────────────────────────────────
-def _hexdump(data: bytes, label: str = '', width: int = 16) -> str:
-    """Return a classic hex+ASCII dump string for binary analysis."""
-    lines = []
-    if label:
-        lines.append(f'# {label}')
-        lines.append(f'# {len(data)} bytes total')
-        lines.append('')
-    for i in range(0, len(data), width):
-        chunk = data[i:i + width]
-        hex_part  = ' '.join(f'{b:02x}' for b in chunk)
-        hex_part  = f'{hex_part:<{width * 3 - 1}}'
-        ascii_part = ''.join(chr(b) if 32 <= b < 127 else '.' for b in chunk)
-        lines.append(f'{i:08x}  {hex_part}  |{ascii_part}|')
-    return '\n'.join(lines) + '\n'
 
 
 # ── Logging ───────────────────────────────────────────────────────────────────

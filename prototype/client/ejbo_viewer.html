@@ -1,0 +1,614 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>EJBO Viewer — Cosmic Supremacy</title>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: 'Consolas', 'Courier New', monospace; font-size: 13px;
+         background: #0a0e14; color: #c8d0d8; }
+
+  .header { background: #141a22; padding: 10px 16px; display: flex;
+            align-items: center; justify-content: space-between;
+            border-bottom: 1px solid #253040; position: sticky; top: 0; z-index: 100; }
+  .header h1 { font-size: 16px; color: #6fc3ff; }
+  .header .info { color: #7a8a9a; font-size: 12px; }
+  .header .btns button { background: #1e2a38; border: 1px solid #3a4a5a;
+            color: #8ac0ff; padding: 4px 12px; margin-left: 6px; cursor: pointer;
+            border-radius: 3px; font-family: inherit; font-size: 12px; }
+  .header .btns button:hover { background: #2a3a4a; }
+
+  .tabs { display: flex; background: #111820; border-bottom: 1px solid #253040;
+          position: sticky; top: 42px; z-index: 99; }
+  .tab  { padding: 8px 16px; cursor: pointer; color: #6a7a8a;
+          border-bottom: 2px solid transparent; }
+  .tab:hover { color: #aabbcc; }
+  .tab.active { color: #6fc3ff; border-bottom-color: #6fc3ff; }
+  .tab .count { background: #1e2a38; padding: 1px 6px; border-radius: 8px;
+                margin-left: 4px; font-size: 11px; }
+
+  .content { padding: 8px; overflow-x: auto; }
+
+  /* Comparison table: rows = offsets, columns = objects */
+  .comp-table { border-collapse: separate; border-spacing: 0; table-layout: fixed; }
+  .comp-table th, .comp-table td {
+    border: 1px solid #1e2a38; padding: 2px 6px; text-align: right;
+    white-space: nowrap; width: 105px; min-width: 105px; max-width: 105px;
+    overflow: hidden; text-overflow: ellipsis; }
+  .comp-table th { background: #141a22; position: sticky; top: 108px; z-index: 50;
+                   color: #6fc3ff; font-weight: normal; }
+  .comp-table th.offset-col { text-align: center; width: 55px; min-width: 55px; max-width: 55px;
+                              position: sticky; left: 0; z-index: 51; }
+  .comp-table th.ann-col { text-align: left; width: 150px; min-width: 150px; max-width: 150px;
+                            position: sticky; left: 55px; z-index: 51;
+                            border-right: 2px solid #3a4a5a; }
+  .comp-table td.offset-col { text-align: center; color: #7a8a9a; background: #0d1218;
+                               width: 55px; min-width: 55px; max-width: 55px;
+                               position: sticky; left: 0; z-index: 10; }
+  .comp-table td.ann-col { text-align: left; background: #0d1218;
+                            width: 150px; min-width: 150px; max-width: 150px;
+                            position: sticky; left: 55px; z-index: 10;
+                            border-right: 2px solid #3a4a5a; }
+  .comp-table td.changed { background: #3a2a10 !important; color: #ffcc44;
+                           transition: background 0.3s, color 0.3s; }
+  .comp-table tr:hover td { background: #151e28; }
+  .comp-table tr:hover td.changed { background: #4a3a18; }
+
+  .ann-input { background: transparent; border: none; color: #88cc88;
+               font-family: inherit; font-size: 12px; width: 100%;
+               outline: none; }
+  .ann-input:focus { background: #1a2a20; }
+  .ann-input::placeholder { color: #3a4a3a; }
+
+  .display-toggle { padding: 6px 8px; background: #0d1218; border-bottom: 1px solid #253040;
+                     position: sticky; top: 77px; z-index: 98; }
+  .display-toggle label { margin-right: 12px; color: #7a8a9a; cursor: pointer; }
+  .display-toggle input:checked + span { color: #6fc3ff; }
+
+  .obj-header { font-size: 11px; color: #7a8a9a; max-width: 90px;
+                overflow: hidden; text-overflow: ellipsis; }
+  .obj-name   { color: #ccddaa; font-size: 12px; }
+  .obj-id     { color: #7a8a9a; }
+
+  .status { padding: 6px 16px; color: #4a5a6a; font-size: 11px; }
+  .template-marker { color: #ff8844; font-size: 10px; }
+
+  /* Search */
+  .search-bar { display: flex; align-items: center; gap: 8px; }
+  .search-bar input { background: #0d1218; border: 1px solid #3a4a5a; color: #e0e8f0;
+                       padding: 4px 10px; font-family: inherit; font-size: 13px;
+                       border-radius: 3px; width: 220px; outline: none; }
+  .search-bar input:focus { border-color: #6fc3ff; }
+  .search-bar .search-hint { color: #4a5a6a; font-size: 11px; }
+  .search-clear { background: none; border: none; color: #6a7a8a; cursor: pointer;
+                  font-size: 14px; padding: 2px 6px; }
+  .search-clear:hover { color: #ff6666; }
+  .sr-table { border-collapse: collapse; width: 100%; }
+  .sr-table th, .sr-table td { border: 1px solid #1e2a38; padding: 3px 8px;
+                                text-align: left; white-space: nowrap; }
+  .sr-table th { background: #141a22; color: #6fc3ff; font-weight: normal;
+                 position: sticky; top: 108px; z-index: 50; }
+  .sr-table td { color: #c8d0d8; }
+  .sr-table tr.sr-click:hover td { background: #1e2a38; }
+  .sr-match { color: #ffcc44; font-weight: bold; }
+  .sr-type  { color: #88cc88; }
+  .sr-name  { color: #ccddaa; }
+  .sr-addr  { color: #7a8a9a; font-size: 12px; }
+  .sr-click { cursor: pointer; }
+
+  /* Changes tab */
+  .tab.changes-tab { color: #ffcc44; }
+  .tab.changes-tab .count { background: #3a2a10; color: #ffcc44; }
+  .tab.changes-tab.active { border-bottom-color: #ffcc44; }
+  .changes-toolbar { padding: 8px; display: flex; align-items: center; gap: 12px; }
+  .changes-toolbar button { background: #2a1a10; border: 1px solid #5a3a1a;
+    color: #ffcc44; padding: 5px 14px; cursor: pointer; border-radius: 3px;
+    font-family: inherit; font-size: 12px; }
+  .changes-toolbar button:hover { background: #3a2a18; }
+  .changes-toolbar .changes-info { color: #7a8a9a; font-size: 12px; }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div>
+    <h1>EJBO Viewer</h1>
+    <div class="info" id="info">Connecting...</div>
+  </div>
+  <div class="search-bar">
+    <input type="text" id="search-input" placeholder="Search value across all objects..."
+           oninput="onSearch(this.value)">
+    <button class="search-clear" id="search-clear" onclick="clearSearch()" style="display:none">&times;</button>
+    <span class="search-hint" id="search-hint">int, float, hex, or name</span>
+  </div>
+  <div class="btns">
+    <button onclick="rescan()">Re-scan</button>
+    <button onclick="location.href='/api/export.csv'">Export CSV</button>
+  </div>
+</div>
+
+<div class="tabs" id="tabs"></div>
+
+<div class="display-toggle">
+  <label><input type="radio" name="fmt" value="hex" checked><span> Hex</span></label>
+  <label><input type="radio" name="fmt" value="i32"><span> Int32</span></label>
+  <label><input type="radio" name="fmt" value="u32"><span> UInt32</span></label>
+  <label><input type="radio" name="fmt" value="f32"><span> Float</span></label>
+  <label><input type="radio" name="fmt" value="ascii"><span> ASCII</span></label>
+</div>
+
+<div class="content">
+  <div id="table-area"></div>
+</div>
+
+<div class="status" id="status"></div>
+
+<script>
+let data = null;
+let activeType = null;
+let displayFmt = 'hex';
+let refreshTimer = null;
+
+// Sticky change tracking: keys like "addr:offset" stay highlighted until clicked
+let stickyChanged = new Set();
+// Keys the user has dismissed — prevents re-adding until the server stops reporting changed
+let dismissedKeys = new Set();
+
+// ── Format toggle ──
+document.querySelectorAll('input[name="fmt"]').forEach(r => {
+  r.addEventListener('change', () => { displayFmt = r.value; render(); });
+});
+
+// ── Fetch data ──
+async function fetchData() {
+  try {
+    const resp = await fetch('/api/data');
+    data = await resp.json();
+    // Accumulate sticky changes from server-reported changes
+    for (const [typeName, objs] of Object.entries(data.groups)) {
+      for (const obj of objs) {
+        for (const f of obj.fields) {
+          const key = obj.addr + ':' + f.offset;
+          if (f.changed) {
+            if (!dismissedKeys.has(key)) {
+              stickyChanged.add(key);
+            }
+          } else {
+            // Change event ended — clear dismissed state so future changes highlight again
+            dismissedKeys.delete(key);
+          }
+        }
+      }
+    }
+    updateInfo();
+    updateTabs();
+    render();
+  } catch(e) {
+    document.getElementById('info').textContent = 'Connection lost — retrying...';
+  }
+}
+
+async function rescan() {
+  document.getElementById('info').textContent = 'Scanning...';
+  await fetch('/api/rescan');
+  await fetchData();
+}
+
+function updateInfo() {
+  const el = document.getElementById('info');
+  const t  = new Date(data.last_update * 1000).toLocaleTimeString();
+  el.textContent = `PID ${data.pid} (${data.proc}) — ${data.scan_count} objects — ${t}`;
+}
+
+function updateTabs() {
+  const el = document.getElementById('tabs');
+  const types = Object.keys(data.groups).sort((a,b) => {
+    // Put known types first
+    const order = {'Planet':0, 'Ship':1, 'Admiral':2, 'Unknown':9};
+    return (order[a]||5) - (order[b]||5);
+  });
+  if (!activeType || (!data.groups[activeType] && activeType !== '__changes__')) activeType = types[0];
+
+  // Count unique objects with sticky changes
+  const changedAddrs = new Set();
+  for (const key of stickyChanged) {
+    changedAddrs.add(key.split(':')[0]);
+  }
+  const changeCount = changedAddrs.size;
+
+  let html = types.map(t =>
+    `<div class="tab ${t===activeType?'active':''}" onclick="setTab('${t}')">
+       ${t}<span class="count">${data.groups[t].length}</span>
+     </div>`
+  ).join('');
+  // Append Changes tab
+  html += `<div class="tab changes-tab ${activeType==='__changes__'?'active':''}"
+               onclick="setTab('__changes__')">
+             Changes<span class="count">${changeCount}</span>
+           </div>`;
+  el.innerHTML = html;
+}
+
+function setTab(t) { activeType = t; updateTabs(); render(); }
+
+// ── Detect template objects (many 0xFFFFFFFF fields in the stat area) ──
+function isTemplate(obj) {
+  let ffCount = 0;
+  for (const f of obj.fields) {
+    if (f.offset >= 20 && f.offset <= 120 && f.u32 === 4294967295) ffCount++;
+  }
+  return ffCount >= 4;
+}
+
+// ── Update data cells in-place (preserves focused input) ──
+function updateCellsInPlace() {
+  if (!data || !activeType) return;
+  const objs = data.groups[activeType];
+  if (!objs || objs.length === 0) return;
+  const rows = document.querySelectorAll('#table-area .comp-table tbody tr');
+  rows.forEach((row, r) => {
+    // Update data cells (skip offset col 0 and annotation col 1)
+    const cells = row.querySelectorAll('td');
+    for (let c = 2; c < cells.length; c++) {
+      // Skip cell if it contains an active poke input
+      if (pokeOverlay && pokeOverlay.cell === cells[c]) continue;
+      const obj = objs[c - 2];
+      if (!obj) continue;
+      const f = obj.fields[r];
+      if (!f) continue;
+      const stickyKey = obj.addr + ':' + f.offset;
+      cells[c].className = stickyChanged.has(stickyKey) ? 'changed' : '';
+      let val;
+      switch (displayFmt) {
+        case 'hex':   val = f.hex; break;
+        case 'i32':   val = f.i32.toLocaleString(); break;
+        case 'u32':   val = f.u32.toLocaleString(); break;
+        case 'f32':   val = f.f32 || '—'; break;
+        case 'ascii': val = f.ascii; break;
+        default:      val = f.hex;
+      }
+      cells[c].textContent = val;
+      cells[c].title = `hex=${f.hex} i32=${f.i32} f32=${f.f32||'—'} ascii=${f.ascii}`;
+    }
+  });
+}
+
+// ── Poke (write to game memory) ──
+let pokeOverlay = null; // currently active poke input element
+
+function startPoke(cell, ejboAddr, offset) {
+  if (pokeOverlay) cancelPoke();
+  const old = cell.textContent;
+  const input = document.createElement('input');
+  input.type = 'text';
+  input.value = old;
+  input.style.cssText = 'width:100%;background:#1a2a10;border:1px solid #ffcc44;color:#ffee88;' +
+    'font-family:inherit;font-size:12px;text-align:right;padding:1px 4px;outline:none;box-sizing:border-box;';
+  input.addEventListener('keydown', e => {
+    if (e.key === 'Enter') { submitPoke(cell, input.value, ejboAddr, offset, old); }
+    if (e.key === 'Escape') { cancelPoke(); cell.textContent = old; }
+  });
+  input.addEventListener('blur', () => { cancelPoke(); cell.textContent = old; });
+  cell.textContent = '';
+  cell.appendChild(input);
+  input.select();
+  pokeOverlay = { cell, input, old };
+}
+
+function cancelPoke() { pokeOverlay = null; }
+
+async function submitPoke(cell, value, ejboAddr, offset, old) {
+  cancelPoke();
+  cell.textContent = '...';
+  cell.style.color = '#ffcc44';
+  try {
+    const resp = await fetch('/api/poke', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ ejbo_addr: ejboAddr, offset: offset, value: value, fmt: displayFmt === 'ascii' ? 'hex' : displayFmt })
+    });
+    const result = await resp.json();
+    if (result.ok) {
+      cell.textContent = value;
+      cell.style.color = '#44ff44';
+      setTimeout(() => { cell.style.color = ''; fetchData(); }, 600);
+    } else {
+      cell.textContent = old;
+      cell.style.color = '#ff4444';
+      alert('Poke failed: ' + result.msg);
+      setTimeout(() => { cell.style.color = ''; }, 1500);
+    }
+  } catch(e) {
+    cell.textContent = old;
+    cell.style.color = '#ff4444';
+    alert('Poke error: ' + e);
+    setTimeout(() => { cell.style.color = ''; }, 1500);
+  }
+}
+
+// ── Render comparison table ──
+function render() {
+  if (!data) return;
+  // If searching, show search results instead of the tab table
+  if (searchQuery) { renderSearch(); return; }
+  document.getElementById('search-hint').textContent = 'int, float, hex, or name';
+  if (!activeType) return;
+  // Changes tab has its own renderer
+  if (activeType === '__changes__') { renderChanges(); return; }
+  // Skip full re-render while user is typing in an annotation input or poke input
+  const focused = document.activeElement;
+  if (focused && (focused.classList.contains('ann-input') || focused.tagName === 'INPUT' && focused.parentElement.tagName === 'TD')) {
+    updateCellsInPlace();
+    return;
+  }
+
+  const objs = data.groups[activeType];
+  if (!objs || objs.length === 0) {
+    document.getElementById('table-area').innerHTML = '<div class="status">No objects of this type.</div>';
+    return;
+  }
+
+  // Build header
+  let html = '<table class="comp-table"><thead><tr>';
+  html += '<th class="offset-col">Offset</th>';
+  html += '<th class="ann-col">Annotation</th>';
+  for (const obj of objs) {
+    const tmpl = isTemplate(obj) ? ' <span class="template-marker">[TPL]</span>' : '';
+    html += `<th><div class="obj-header">
+      <span class="obj-id">#${obj.id}</span> ${tmpl}<br>
+      <span class="obj-name">${obj.name || '—'}</span><br>
+      <span class="sr-addr">${obj.addr_hex}</span>
+    </div></th>`;
+  }
+  html += '</tr></thead><tbody>';
+
+  // Rows = one per offset
+  const nFields = objs[0].fields.length;
+  for (let r = 0; r < nFields; r++) {
+    const offset = objs[0].fields[r].offset;
+    const annKey = activeType + ':' + offset;
+    const annVal = data.annotations[annKey] || '';
+    html += `<tr onclick="dismissRow(this, ${offset})" style="cursor:pointer">`;
+    // Offset column — highlight EJBO tag row
+    const offLabel = offset >= 0 ? `+${offset}` : `${offset}`;
+    const isEjbo = (offset === 0);
+    html += `<td class="offset-col" ${isEjbo ? 'style="color:#6fc3ff;font-weight:bold"' : ''}>${offLabel}</td>`;
+    // Annotation column
+    html += `<td class="ann-col"><input class="ann-input" placeholder="..." value="${annVal.replace(/"/g,'&quot;')}"
+              onchange="annotate('${activeType}',${offset},this.value)" onclick="event.stopPropagation()"></td>`;
+    // Data columns
+    for (const obj of objs) {
+      const f = obj.fields[r];
+      if (!f) { html += '<td>—</td>'; continue; }
+      const stickyKey = obj.addr + ':' + f.offset;
+      const cls = stickyChanged.has(stickyKey) ? 'changed' : '';
+      let val;
+      switch (displayFmt) {
+        case 'hex':   val = f.hex; break;
+        case 'i32':   val = f.i32.toLocaleString(); break;
+        case 'u32':   val = f.u32.toLocaleString(); break;
+        case 'f32':   val = f.f32 || '—'; break;
+        case 'ascii': val = f.ascii; break;
+        default:      val = f.hex;
+      }
+      html += `<td class="${cls}" title="hex=${f.hex} i32=${f.i32} f32=${f.f32||'—'} ascii=${f.ascii}"
+                ondblclick="startPoke(this, ${obj.addr}, ${f.offset})">${val}</td>`;
+    }
+    html += '</tr>';
+  }
+  html += '</tbody></table>';
+  document.getElementById('table-area').innerHTML = html;
+  document.getElementById('status').textContent =
+    `${objs.length} objects — ${nFields} fields each — double-click a value to poke`;
+}
+
+function annotate(type, offset, text) {
+  fetch('/api/annotate', {
+    method: 'POST',
+    headers: {'Content-Type':'application/json'},
+    body: JSON.stringify({type: type, offset: offset, text: text})
+  });
+}
+
+// Dismiss sticky highlights for a row across all objects in the active tab
+function dismissRow(trEl, offset) {
+  if (!data || !activeType) return;
+  const objs = data.groups[activeType];
+  if (!objs) return;
+  let hadChanges = false;
+  for (const obj of objs) {
+    const key = obj.addr + ':' + offset;
+    if (stickyChanged.delete(key)) {
+      dismissedKeys.add(key);
+      hadChanges = true;
+    }
+  }
+  if (hadChanges) {
+    // Remove .changed class from cells in this row immediately
+    trEl.querySelectorAll('td.changed').forEach(td => td.classList.remove('changed'));
+  }
+}
+
+// ── Changes tab ──
+function renderChanges() {
+  const area = document.getElementById('table-area');
+  if (stickyChanged.size === 0) {
+    area.innerHTML = '<div class="status">No changes to show.</div>';
+    document.getElementById('status').textContent = '';
+    return;
+  }
+
+  // Build a lookup: addr -> {obj, typeName}
+  const objLookup = {};
+  for (const [typeName, objs] of Object.entries(data.groups)) {
+    for (const obj of objs) {
+      objLookup[obj.addr] = { obj, typeName };
+    }
+  }
+
+  // Collect changed fields grouped by object
+  const changedByAddr = {};
+  for (const key of stickyChanged) {
+    const [addrStr, offStr] = key.split(':');
+    const addr = parseInt(addrStr);
+    const offset = parseInt(offStr);
+    if (!changedByAddr[addr]) changedByAddr[addr] = [];
+    changedByAddr[addr].push(offset);
+  }
+
+  let html = '<div class="changes-toolbar">';
+  html += `<button onclick="clearAllChanges()">Clear All</button>`;
+  html += `<span class="changes-info">${Object.keys(changedByAddr).length} objects with changes, ${stickyChanged.size} fields total</span>`;
+  html += '</div>';
+  html += '<table class="sr-table"><thead><tr>';
+  html += '<th>Type</th><th>Object</th><th>Offset</th><th>Annotation</th>';
+  html += '<th>Value</th>';
+  html += '</tr></thead><tbody>';
+
+  // Sort by type then object id
+  const sortedAddrs = Object.keys(changedByAddr).map(Number).sort((a, b) => {
+    const la = objLookup[a], lb = objLookup[b];
+    if (!la || !lb) return a - b;
+    if (la.typeName !== lb.typeName) return la.typeName.localeCompare(lb.typeName);
+    return la.obj.id - lb.obj.id;
+  });
+
+  for (const addr of sortedAddrs) {
+    const info = objLookup[addr];
+    if (!info) continue;
+    const { obj, typeName } = info;
+    const offsets = changedByAddr[addr].sort((a, b) => a - b);
+    for (const offset of offsets) {
+      const f = obj.fields.find(f => f.offset === offset);
+      if (!f) continue;
+      const offLabel = offset >= 0 ? `+${offset}` : `${offset}`;
+      const annKey = typeName + ':' + offset;
+      const ann = data.annotations[annKey] || '';
+      let val;
+      switch (displayFmt) {
+        case 'hex':   val = f.hex; break;
+        case 'i32':   val = f.i32.toLocaleString(); break;
+        case 'u32':   val = f.u32.toLocaleString(); break;
+        case 'f32':   val = f.f32 || '—'; break;
+        case 'ascii': val = f.ascii; break;
+        default:      val = f.hex;
+      }
+      html += `<tr class="sr-click" onclick="jumpToChanged('${typeName}', ${addr}, ${offset})">`;
+      html += `<td class="sr-type">${typeName}</td>`;
+      html += `<td><span class="sr-name">${obj.name || '—'}</span> #${obj.id} <span class="sr-addr">${obj.addr_hex}</span></td>`;
+      html += `<td>${offLabel}</td>`;
+      html += `<td style="color:#88cc88">${ann}</td>`;
+      html += `<td class="sr-match">${val}</td>`;
+      html += '</tr>';
+    }
+  }
+  html += '</tbody></table>';
+  area.innerHTML = html;
+  document.getElementById('status').textContent = 'Click a row to dismiss and jump to that object';
+}
+
+function clearAllChanges() {
+  // Move all sticky keys to dismissed
+  for (const key of stickyChanged) {
+    dismissedKeys.add(key);
+  }
+  stickyChanged.clear();
+  updateTabs();
+  render();
+}
+
+function jumpToChanged(typeName, addr, offset) {
+  // Dismiss this single field
+  const key = addr + ':' + offset;
+  stickyChanged.delete(key);
+  dismissedKeys.add(key);
+  // Switch to the object's type tab
+  setTab(typeName);
+}
+
+// ── Search ──
+let searchQuery = '';
+let searchTimeout = null;
+
+function onSearch(val) {
+  const clearBtn = document.getElementById('search-clear');
+  if (val.trim()) {
+    clearBtn.style.display = '';
+    searchQuery = val.trim();
+  } else {
+    clearBtn.style.display = 'none';
+    searchQuery = '';
+  }
+  clearTimeout(searchTimeout);
+  searchTimeout = setTimeout(() => render(), 200);
+}
+
+function clearSearch() {
+  document.getElementById('search-input').value = '';
+  document.getElementById('search-clear').style.display = 'none';
+  searchQuery = '';
+  render();
+}
+
+function renderSearch() {
+  if (!data) return;
+  const q = searchQuery.toLowerCase();
+  document.getElementById('search-hint').textContent = `Searching: "${searchQuery}"`;
+  let results = [];
+  for (const [typeName, objs] of Object.entries(data.groups)) {
+    for (const obj of objs) {
+      // Match on name
+      if (obj.name && obj.name.toLowerCase().includes(q)) {
+        results.push({ obj, type: typeName, match: 'name', detail: obj.name });
+        continue;
+      }
+      // Match on field values
+      for (const f of obj.fields) {
+        const annKey = typeName + ':' + f.offset;
+        const ann = data.annotations[annKey] || '';
+        if (ann.toLowerCase().includes(q) ||
+            f.hex.toLowerCase().includes(q) ||
+            String(f.i32).includes(q) ||
+            String(f.u32).includes(q) ||
+            (f.f32 && f.f32.includes(q))) {
+          results.push({ obj, type: typeName, match: 'field', field: f, ann });
+          if (results.length > 200) break;
+        }
+      }
+      if (results.length > 200) break;
+    }
+    if (results.length > 200) break;
+  }
+  if (results.length === 0) {
+    document.getElementById('table-area').innerHTML = '<div class="status">No matches.</div>';
+    return;
+  }
+  let html = '<table class="sr-table"><thead><tr><th>Type</th><th>Object</th><th>Offset</th><th>Value</th><th>Annotation</th></tr></thead><tbody>';
+  for (const r of results) {
+    const o = r.obj;
+    if (r.match === 'name') {
+      html += `<tr class="sr-click" onclick="setTab('${r.type}')">
+        <td class="sr-type">${r.type}</td><td><span class="sr-name">${o.name}</span> <span class="sr-addr">${o.addr_hex}</span></td>
+        <td>—</td><td class="sr-match">name match</td><td>—</td></tr>`;
+    } else {
+      const f = r.field;
+      const off = f.offset >= 0 ? `+${f.offset}` : `${f.offset}`;
+      html += `<tr class="sr-click" onclick="setTab('${r.type}')">
+        <td class="sr-type">${r.type}</td><td><span class="sr-name">${o.name||'—'}</span> #${o.id} <span class="sr-addr">${o.addr_hex}</span></td>
+        <td>${off}</td><td>hex=${f.hex} i32=${f.i32} f32=${f.f32||'—'}</td>
+        <td>${r.ann}</td></tr>`;
+    }
+  }
+  html += '</tbody></table>';
+  document.getElementById('table-area').innerHTML = html;
+}
+
+// ── Auto-refresh ──
+const REFRESH_MS = %%REFRESH_MS%%;
+fetchData();
+refreshTimer = setInterval(fetchData, REFRESH_MS);
+
+</script>
+</body>
+</html>
+
