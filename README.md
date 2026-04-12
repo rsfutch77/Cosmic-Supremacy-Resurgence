@@ -53,11 +53,15 @@ prototype/            Working prototype (patched client + stub server)
 
 ## Status
 
-The project is in early development.  The stub server handles enough of the
-protocol to complete the tutorial and load demo galaxies.  Save/load game data is captured in binary-safe format for further analysis.
+The project is in active development. The patched client and stub server support
+fully playable single-player sandbox gameplay — ships move, turns tick, saves
+round-trip correctly. The server handles all 15 game API actions with correct
+response formats confirmed by binary analysis. Customization (civ names, coat of
+arms) and save/load persistence are working. See the Development Plan for current
+progress and next steps.
 
-See `exploration/CosmicSupremacy_Reconstruction_Report.md` for the full
-reverse-engineering reference.
+See `CosmicSupremacy_Reconstruction_Report.md` for the full reverse-engineering
+reference.
 
 ## Contributing
 

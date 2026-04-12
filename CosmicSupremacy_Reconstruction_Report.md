@@ -436,13 +436,16 @@ Key observations from running the patched EXE with a `TEBE` type `.csgalaxy` tok
 
 **Testbed game loop**
 - After entering, the client immediately requests `savegamelist` to enumerate existing saves.
-- Saves are named `TestBed Save 1`, `TestBed Save -1`, etc. with `gameid=-1` for new saves.
+- Saves are named `TestBed Save 1`, `TestBed Save -1`, etc. with `gameid=-1` as the client's "allocate new slot" sentinel.
+- The server should allocate the next available positive integer ID when it receives `gameid=-1`, since the client treats negative IDs as invalid when loading from `savegamelist`.
 - Save/load cycle works identically to other galaxy types — the server stores and returns the binary blob opaquely.
 - Ticks advance client-side (same as tutorial), allowing immediate gameplay without server-driven tick scheduling.
 
 ---
 
 ## 10. Known Server API Data Payloads
+
+### Request formats
 
 | Operation | POST Body |
 |---|---|
@@ -454,6 +457,37 @@ Key observations from running the patched EXE with a `TEBE` type `.csgalaxy` tok
 | Get COA | `action=getcoa&coaid=%d` |
 | Upload COA | `action=uploadcoa` + image data |
 | Mark tutorial done | `action=passedtutorial&userid=%d&pass=%s` |
+
+### Response formats (confirmed by binary analysis, April 2026)
+
+The client uses `#SPC#` as the field delimiter and `#NEXT#` as the record delimiter in list responses. All list responses must end with `DONE` as the final record.
+
+| Action | Expected Response | Binary Reference | Notes |
+|---|---|---|---|
+| `testconnection` | `READY` | — | Any other string → "failed to connect" |
+| `savegame` | `DONE` | `0x0048b350` / `0x403f00`: `strncmp(response, "DONE", 4)` | `OK` or any other string → "Failed to save the Save-Game" dialog |
+| `savegamelist` | `<gameid>#SPC#<name>#SPC#<turn>#NEXT#...#NEXT#DONE` | — | Empty body → "Failed to retrieve list of saved games". `DONE` alone = valid empty list |
+| `loadgame` | `DONE#VER#<6-char-version>#DATA#<base64-blob>` | `0x0048b5d0` / `0x40a640` | Version `000000` = identity cipher (no transform). Non-zero version applies byte-level cipher to data. See below |
+| `savegov` | `DONE` | `0x4a0c3f` | Same `strncmp` pattern as `savegame` |
+| `govlist` | `DONE` | — | `DONE` alone = valid empty list |
+| `loadgov` | `DONE#VER#<6-char-version>#DATA#<base64-blob>` | — | Same format as `loadgame` |
+| `listcivnames` | `<civname>#SPC#<coaid>#NEXT#DONE` | `FUN_0x497f93` / `0x5e3de0` | If coaid is empty/null, the "Customize Your Home World" popup reappears every tick |
+| `listcoa` | `<coaid>#NEXT#DONE` | — | Empty response → no COA registered → some UI elements missing |
+| `uploadcivname` | `OK` | — | No response-body check in client |
+| `entertestbedgalaxy` | `OK` | — | Empty body or `OK` both work |
+| `passedtutorial` | `OK` | — | No response-body check in client |
+
+#### `loadgame` response parsing (detailed)
+
+The client parses `loadgame` responses as follows (from binary analysis at `0x0048b5d0`):
+
+1. `strncmp(response, "DONE#VER#", 9)` — must be 0 (success flag)
+2. `substr(response, 9, 6)` — extracts 6-char version string into a decoder object
+3. `find("#DATA#")` in full response — locates the data marker
+4. `substr(pos_of_DATA + 6, end)` — the raw base64 blob
+5. Base64-decode → strip 4-byte header → zlib-decompress → game state
+
+The 6-char version string is used as a key for a stream cipher (`0x411110` decoder factory). Version `000000` produces an all-zero key → identity transform (XOR with 0x00 = no change), so the blob passes through unmodified. The original server likely used non-zero version strings to obfuscate save data in transit.
 
 ---
 

@@ -79,6 +79,17 @@ DEMO_USERID   = 1
 DEMO_PASSHASH = 'abcdef'   # from DemoGalaxy_local.csgalaxy token
 DEMO_GALAXY_ID = 0
 
+# ── In-memory civ state (persists across ticks within a server session) ────────
+# Populated by uploadcivname; queried by listcivnames and listcoa.
+# Format: { userid_str: {'civname': str, 'coaid': str} }
+_civ_state: dict = {}
+
+def _default_civ() -> dict:
+    return {'civname': 'DemoEmpire', 'coaid': '0'}
+
+def _get_civ(userid: str) -> dict:
+    return _civ_state.get(userid, _default_civ())
+
 def handle_action(action: str, params: dict) -> tuple[int, str, str]:
     """
     Returns (http_status, content_type, body).
@@ -101,15 +112,52 @@ def handle_action(action: str, params: dict) -> tuple[int, str, str]:
         return 200, 'text/plain', '0'
 
     # ── Civ names ─────────────────────────────────────────────────────────────
+    # Binary analysis (FUN_0x497f93 / FUN_0x496830):
+    #   - FUN_0x496830 checks [esi+0x4988] each tick; if ≥ 0 and in range it
+    #     shows the "Customize Your Home World" popup.
+    #   - FUN_0x497f93 sends listcivnames, then parses the response with
+    #     0x5e3de0 using "#SPC#" as the field delimiter.
+    #   - Each parsed record is a 0x20-byte entry; [entry+0x14] is the coaid
+    #     field pointer.  If [entry+0x14] == 0 (null/empty), the game never
+    #     marks the civ "configured" → popup re-appears every tick.
+    #   - Correct format (mirrors savegamelist): civname#SPC#coaid#NEXT#DONE
+    #     With a non-empty coaid the game marks the civ configured and
+    #     clears the popup trigger.
     if action == 'listcivnames':
-        return 200, 'text/plain', 'DemoEmpire'
+        userid = params.get('userid', ['1'])[0]
+        civ = _get_civ(userid)
+        civname = civ['civname']
+        coaid   = civ['coaid']
+        body = f'{civname}#SPC#{coaid}#NEXT#DONE'
+        log(f'  -> listcivnames: userid={userid} civname={civname!r} coaid={coaid} ({len(body)} bytes)')
+        return 200, 'text/plain', body
 
     if action == 'uploadcivname':
+        # Game sends: action=uploadcivname&userid=<n>&passhash='<h>'&civname='<name>'
+        # No response-body check in the game (it cleans up and returns after sending).
+        # We persist the civname so listcivnames returns it correctly next tick.
+        userid  = params.get('userid', ['1'])[0]
+        civname = params.get('civname', [''])[0].strip("'")
+        if civname:
+            civ = _civ_state.setdefault(userid, _default_civ())
+            civ['civname'] = civname
+            log(f'  -> uploadcivname: userid={userid} civname={civname!r} (persisted)')
+        else:
+            log(f'  -> uploadcivname: userid={userid} (no civname param, ignored)')
         return 200, 'text/plain', 'OK'
 
     # ── Coat of arms ─────────────────────────────────────────────────────────
+    # Binary analysis: listcoa is parsed in parallel with listcivnames.
+    # Format mirrors listcivnames: coaid#NEXT#DONE  (one coaid per line).
+    # An empty response means no COA is registered → getcoa is never called
+    # → the default COA (coaid=0) is never fetched → some UI elements may be
+    # missing.  Return the player's coaid so the game can fetch it via getcoa.
     if action == 'listcoa':
-        return 200, 'text/plain', ''
+        userid = params.get('userid', ['1'])[0]
+        coaid  = _get_civ(userid)['coaid']
+        body   = f'{coaid}#NEXT#DONE'
+        log(f'  -> listcoa: userid={userid} coaid={coaid} ({len(body)} bytes)')
+        return 200, 'text/plain', body
 
     if action == 'getcoa':
         # Return empty 1x1 PNG as placeholder
@@ -127,6 +175,14 @@ def handle_action(action: str, params: dict) -> tuple[int, str, str]:
     if action == 'savegame':
         gameid   = params.get('gameid',   ['0'])[0]
         gamename = params.get('gamename', ['unknown'])[0].strip("'")
+
+        # gameid=-1 is the game's "allocate a new slot" sentinel.
+        # If we store it as -1, the game receives -1 in savegamelist and
+        # likely treats negative IDs as invalid when loading.
+        # Instead, allocate the next available positive integer ID.
+        if gameid == '-1':
+            gameid = str(_next_gameid(os.path.dirname(__file__)))
+            log(f'  -> savegame: gameid=-1 (new slot) → allocated gameid={gameid}')
         turn     = params.get('turn',     ['0'])[0]
         # data= is URL-decoded by parse_qs; re-encode to bytes via latin-1
         # (the game sends a binary blob percent-encoded; latin-1 is byte-for-byte)
@@ -152,19 +208,40 @@ def handle_action(action: str, params: dict) -> tuple[int, str, str]:
             f'{len(data_bytes)} bytes')
         log(f'     latest:  {latest_path}')
         log(f'     hexdump: {archive_base}.hex')
-        return 200, 'text/plain', 'OK'
+        # Binary analysis (0x0048b350 / 0x403f00) confirmed:
+        #   strncmp(response, "DONE", 4) == 0  → success (al=1 → no error dialog)
+        #   Any other response → al=0 → "Failed to save the Save-Game" dialog
+        # "OK", "OK|...", etc. all fail this check.
+        return 200, 'text/plain', 'DONE'
 
     if action == 'savegamelist':
-        # Scan for latest save files (save_game_<digits>.dat) and report them.
+        # Response format (from binary analysis):
+        #   <gameid>#SPC#<gamename>#SPC#<turn>#NEXT#<gameid2>#SPC#...#NEXT#DONE
+        # An empty body (no "DONE") triggers "Failed to retrieve list of saved games".
+        # "DONE" alone = valid empty list.
+        # We always include at least one default slot so the user can save.
         server_dir = os.path.dirname(__file__)
         entries = []
         for fname in sorted(os.listdir(server_dir)):
             if fname.startswith('save_game_') and fname.endswith('.dat'):
                 core = fname[len('save_game_'):-len('.dat')]
-                if core.isdigit():           # only "latest" files, not archives
-                    entries.append(f'{core} DemoGalaxy 0')
-        result = '\n'.join(entries) if entries else ''
-        log(f'  -> savegamelist: {len(entries)} saves')
+                # Only list non-negative integer IDs.
+                # gameid=-1 was the "new slot" sentinel; saves stored under -1
+                # are legacy artefacts from before server-side ID allocation was
+                # implemented.  The game treats negative IDs as invalid when
+                # loading, so we never advertise them in the list.
+                try:
+                    n = int(core)
+                    valid = (n >= 0)
+                except ValueError:
+                    valid = False
+                if valid:
+                    entries.append(f'{core}#SPC#TestBed Save {core}#SPC#0')
+        # Always add slot 0 if not already present (so user always has a place to save)
+        if not any(e.startswith('0#SPC#') for e in entries):
+            entries.insert(0, '0#SPC#TestBed Save 1#SPC#0')
+        result = '#NEXT#'.join(entries) + '#NEXT#DONE'
+        log(f'  -> savegamelist: {len(entries)} slot(s)')
         return 200, 'text/plain', result
 
     if action == 'loadgame':
@@ -172,10 +249,39 @@ def handle_action(action: str, params: dict) -> tuple[int, str, str]:
         save_path = os.path.join(os.path.dirname(__file__), f'save_game_{gameid}.dat')
         if os.path.exists(save_path):
             data_bytes = open(save_path, 'rb').read()
+            data_str   = data_bytes.decode('latin-1')
             log(f'  -> loadgame: gameid={gameid} returning {len(data_bytes)} bytes')
-            return 200, 'text/plain', data_bytes.decode('latin-1')
+            # Binary analysis (0x0048b5d0 / 0x403f00 + 0x40a640) confirmed response format:
+            #
+            #   DONE#VER#<6-char-version>#DATA#<base64-save-blob>
+            #
+            # The game:
+            #   1. strncmp(response, "DONE#VER#", 9) → must be 0 (success flag)
+            #   2. substr(response, 9, 6) → extracts 6-char version into a decoder object
+            #   3. find("#DATA#") in full response → position of data marker
+            #   4. substr from (pos_of_DATA + 6) to end → the raw base64 blob
+            #   5. base64-decode → strip 4-byte header → zlib-decompress → game state
+            #
+            # Version string decoder — 0x411110 (decoder factory/init):
+            #   Called as: 0x411110(decoder_obj_ptr, version_6chars)
+            #   - Checks decoder_obj_ptr[0x1c] == 0 (not yet initialized)
+            #   - malloc(0x88) for cipher state; sets vtables at [state], [state+8],
+            #     [state+0x54] → implementation pointers for cipher algorithm id=3,
+            #     mode=1 (looks like a stream cipher / XOR-based transform)
+            #   - Passes the 6-char version string as the KEY to 0x40f160 / 0x40c5a0
+            #     which key-schedules the internal state
+            #   - "000000" → all-zero key bytes → identity transform (XOR with 0x00
+            #     on each byte = no change), so the blob is returned as sent
+            #   - A non-zero version string would apply a byte-level cipher to the
+            #     data between #DATA# and end-of-response; the original server used
+            #     this to obfuscate turn data in transit.  For our local stub the
+            #     identity version "000000" is correct — saves are stored and served
+            #     raw with no transformation needed.
+            #
+            # We use "000000" as the 6-char version placeholder.
+            return 200, 'text/plain', 'DONE#VER#000000#DATA#' + data_str
         log(f'  -> loadgame: gameid={gameid} no save found, returning empty')
-        return 200, 'text/plain', ''
+        return 200, 'text/plain', 'DONE#VER#000000#DATA#'
 
     # ── Governor settings ─────────────────────────────────────────────────────
     if action == 'savegov':
@@ -186,17 +292,20 @@ def handle_action(action: str, params: dict) -> tuple[int, str, str]:
         with open(gov_path, 'wb') as f:
             f.write(data_str.encode('latin-1'))
         log(f'  -> savegov: govid={govid} name={govname} {len(data_str)} bytes')
-        return 200, 'text/plain', 'OK'
+        # Same DONE check pattern as savegame (confirmed by binary analysis at 0x4a0c3f)
+        return 200, 'text/plain', 'DONE'
 
     if action == 'govlist':
-        return 200, 'text/plain', ''
+        return 200, 'text/plain', 'DONE'
 
     if action == 'loadgov':
         govid    = params.get('govid', ['0'])[0]
         gov_path = os.path.join(os.path.dirname(__file__), f'save_gov_{govid}.dat')
         if os.path.exists(gov_path):
-            return 200, 'text/plain', open(gov_path, 'rb').read().decode('latin-1')
-        return 200, 'text/plain', ''
+            gov_data = open(gov_path, 'rb').read().decode('latin-1')
+            # Governor load likely uses same DONE#VER#<6>DATA# format as loadgame
+            return 200, 'text/plain', 'DONE#VER#000000#DATA#' + gov_data
+        return 200, 'text/plain', 'DONE#VER#000000#DATA#'
 
     # ── Tutorial / test-bed ───────────────────────────────────────────────────
     if action == 'passedtutorial':
@@ -209,13 +318,45 @@ def handle_action(action: str, params: dict) -> tuple[int, str, str]:
         # Each token decodes to: "TEBE <server_ip> <playerid> <hexpass> <playername>"
         # The 16 tokens correspond to the 16 player slots in the testbed galaxy.
         #
-        # We return 'OK' to acknowledge. The game displays this as a dialog;
-        # after the user clicks OK further requests may follow — watch the log.
+        # ── Why the response format matters (binary analysis) ────────────────────
+        # The game's entertestbedgalaxy handler (0x577c00+) consumes the response:
+        #   • strstr(response, "OK|") must be non-NULL — else response string is shown
+        #     as an error dialog and galaxy join fails.
+        #   • 0x576230 dequeues entries from the global pending-response queue at
+        #     0x8714b8 (vector of 32-byte entries placed there by the HTTP thread).
+        #   • For each entry, it extracts bytes starting at position 9 via 0x5e3a80
+        #     and compares them with the credential stored at [0x86f148] (derived from
+        #     the TEBE token during pass-file loading).  A credential match increments
+        #     the processed-player count.
+        #   • If count > 0 → normal testbed init: 0x577160 calls 0x537bf0(slot) to
+        #     insert galaxy-slot entries into the map at 0x857c7c; 0x56e7f0 fires;
+        #     [0x86f1a0] = 1 (testbed flag set); TLS tree populated.
+        #   • If count == 0 → fallback path at 0x577e26: reads [0x86f190] which
+        #     0x576230 set to -1 on empty/error response → calls 0x57e7b0 → sets
+        #     [0x86f1a0] = 1 WITHOUT populating the TLS tree.
+        #   • loadgame (0x56d700) then checks [0x86f1a0]: if set → testbed path →
+        #     calls 0x542850 → traverses (empty) TLS RB-tree → throws
+        #     "invalid vector<T> argument" → "Failed to load Save-Game".
+        #
+        # ── Fix: binary patch to CosmicSupremacy_patched.exe ────────────────────
+        # File offset 0x16ccfa (VA 0x56d8fa):
+        #   BEFORE: E8 51 4F FD FF   call 0x542850  (testbed TLS-tree init)
+        #   AFTER:  90 90 90 90 90   nop × 5
+        #
+        # The patch makes the testbed load-game path skip 0x542850 entirely and
+        # proceed directly to 0x541240 (the standard save loader), which works
+        # correctly regardless of TLS-tree state — matching the normal-mode path.
+        # With this patch, 'OK|0' is sufficient: the galaxy join succeeds and
+        # loadgame no longer throws.
+        #
+        # Without the binary patch, a correct server response would need to supply
+        # credential bytes matching [0x86f148] at offset 9+ of each queue entry so
+        # 0x576230 returns count > 0 — the full testbed session-setup protocol has
+        # not yet been reversed.
         import base64 as _b64
         userid   = params.get('userid', ['?'])[0]
         pass_raw = params.get('pass', [''])[0]
         # The pass field = .csgalaxy raw bytes × 16 (one copy per player slot).
-        # Figure out one token = pass_raw / 16.
         one_len  = len(pass_raw) // 16
         one_b64  = pass_raw[:one_len]
         try:
@@ -224,19 +365,55 @@ def handle_action(action: str, params: dict) -> tuple[int, str, str]:
             one_decoded = '(decode error)'
         log(f'  -> entertestbedgalaxy: userid={userid}, pass={len(pass_raw)} chars = 16×{one_len}')
         log(f'     one-token decoded ({len(one_decoded)} chars): {repr(one_decoded[:120])}')
-        # Binary analysis shows the game calls strstr(response, "OK|") to detect success.
-        # Returning plain "OK" (no pipe) → strstr returns NULL → game treats response as
-        # an error message string, displays it in a dialog, then closes.
-        #
-        # The correct format is "OK|<token>" where <token> is the data passed to the
-        # galaxy-init function (FUN_0058aafb). We try a minimal galaxy ID first.
-        # If the game makes follow-up requests (getgalaxydata, loadgame, etc.) after
-        # receiving this, those will appear in the log — keep the server running.
         return 200, 'text/plain', 'OK|0'
 
-    # ── Unknown action: log and return empty OK ───────────────────────────────
-    log(f'  [?] UNKNOWN action={action!r} - returning empty OK')
+    # ── Unknown action: log prominently and return empty OK ──────────────────
+    _log_unknown_action(action, params)
     return 200, 'text/plain', 'OK'
+
+
+# ── Unknown-action highlighter ────────────────────────────────────────────────
+def _log_unknown_action(action: str, params: dict):
+    """
+    Log an unrecognised action with a highly visible separator so it stands out
+    in the console / log file when scanning for new server interactions.
+
+    The separator line is a row of '!' characters — easy to grep for:
+        grep '!!!' cs_server.log
+    """
+    sep = '!' * 60
+    log(sep)
+    log(f'  [NEW ACTION?]  action={action!r}')
+    # Log any non-trivial parameters (skip userid / passhash noise)
+    interesting = {k: v for k, v in params.items()
+                   if k not in ('userid', 'passhash', 'action')}
+    if interesting:
+        for k, vs in interesting.items():
+            v0 = vs[0] if isinstance(vs, list) else str(vs)
+            log(f'    param {k!r} = {repr(v0[:120])}')
+    log(f'  -> returning empty OK  (add handler in handle_action() if needed)')
+    log(sep)
+
+
+# ── Gameid allocator ──────────────────────────────────────────────────────────
+def _next_gameid(server_dir: str) -> int:
+    """
+    Return the next available positive gameid.
+    Scans existing save_game_<n>.dat files for the highest non-negative
+    integer ID and returns max + 1 (minimum 1).
+    Called when the game sends gameid=-1 ("allocate a new slot").
+    """
+    max_id = 0
+    for fname in os.listdir(server_dir):
+        if fname.startswith('save_game_') and fname.endswith('.dat'):
+            core = fname[len('save_game_'):-len('.dat')]
+            try:
+                n = int(core)
+                if n >= 0 and n > max_id:
+                    max_id = n
+            except ValueError:
+                pass
+    return max_id + 1
 
 
 # ── Hex dump helper ───────────────────────────────────────────────────────────
