@@ -420,12 +420,33 @@ This proves that external memory manipulation is a viable approach for multiplay
 
 | Address | Type | Interpretation |
 |---|---|---|
+| `0x0080AA08` | int32 | **Turn countdown** (seconds remaining). Writing a small value triggers full turn resolution. |
 | `0x0082929c` / `0x008292a0` | int pair | Last-clicked X/Y coordinates |
 | `0x00853d24` | int | Action/sequence counter (monotonic) |
 | `0x0082a828`, `0x0082a8dc`, `0x00854c70` | flags | Dirty flags — set when pending orders exist |
 | `0x0082a900…0x0082a920` | ptr[] | Linked-list head/tail/sentinel of order records |
-| `0x008292c8` | ASCII | Countdown timer string (e.g. "59:3") |
+| `0x008292c8` | ASCII | Countdown timer string (display-only, overwritten by render loop) |
+| `0x0086F1A1` | byte | Sync flag — 0=paused, 1=running |
 | `0x00871430+` | mixed | Global serializer buffer (app context, file paths, UI config) |
+
+### Turn control (key discovery, April 2026)
+
+The turn countdown at `0x0080AA08` is the authoritative timer. Writing a small integer (e.g. `1`) causes the game to count down and fire a full turn resolution — ships move, resources tick, production advances, all handled client-side. The server does NOT need to reimplement any game logic.
+
+The address is stable across launches but shows `0xFFFFFFFF` before a galaxy is loaded (value comes from GSET `turnlength` at runtime, default 3600 = 60 minutes).
+
+**Turn patches T1–T5** (22 bytes total, from `patched17`) bypass server sync checks so turns fire without a real game server:
+
+| Patch | File offset | Effect |
+|---|---|---|
+| T1 | `0x0016CFF0` | Force turn-ready check → always TRUE |
+| T2 | `0x0016D4EF` | NOP turn guard JNZ |
+| T3 | `0x0016D533` | NOP turn guard JZ |
+| T4a | `0x0017701A` | Redirect write to sync flag at `0x86F1A0` |
+| T4b | `0x0017702A` | NOP turn guard JZ after sync flag write |
+| T5 | `0x0017902D` | NOP turn guard JZ |
+
+Other timer-related addresses (`0x008292C8` ASCII string, EJBO #160 offset −28 ones-complement timer) are display-only copies overwritten by the render loop — not useful for control.
 
 ### Tools
 
