@@ -227,11 +227,27 @@ Seven conditional branches in the save/load validation path (near `0x00175xxx`) 
 | `0x00175cf1` | `74` (JZ) | `EB` (JMP) | Bypasses save-permissions check |
 | `0x00175d20` | `75` (JNZ) | `EB` (JMP) | Forces load-validation success path |
 
+### Patches 12–17 — Turn pipeline bypasses (T1–T5, 22 bytes)
+
+Six patch sites bypass server sync checks in the turn pipeline so turns can fire without a real game server. These are applied only to the Resurgence EXE (not TestBed). See Section 11 for full patch table.
+
+**Side effect:** Applying T1–T5 removes the Next Turn button from the UI. This is intentional for the multiplayer build — turns are advanced externally via `fast_turns.py`, not by player clicks.
+
 ### Summary
 
 Patches 1–4 (54 bytes) redirect all network traffic from the dead production servers (`www.cosmicsupremacy.com`, `cosmicsupremacy.com`, and a hardcoded IP) to `127.0.0.1:8888`, where the local stub server (`cs_server.py`) listens. Patch 1 converts a conditional branch (JZ) to an unconditional jump (JMP), forcing the client to always take the "success" path past a connection-validation check.
 
 Patches 5–11 (13 bytes) bypass save/load validation checks in the game’s persistence code, which are needed for testbed galaxy saves to function against the local stub server.
+
+Patches 12–17 (22 bytes, T1–T5) bypass turn-pipeline sync checks, enabling external turn control. Applied only to the Resurgence EXE.
+
+### EXE Variants
+
+| EXE | Patches | Next Turn Button | Galaxy File | Purpose |
+|-----|---------|-----------------|-------------|---------|
+| `CosmicSupremacy.exe` | None | Yes | — | Unmodified original |
+| `CosmicSupremacy_TestBed.exe` | 1–11 | Yes | `TestBedGalaxy_local.csgalaxy` | Manual testing with interactive turn button |
+| `CosmicSupremacy_Resurgence.exe` | 1–17 (incl. T1–T5) | No | `SandboxGalaxy_local.csgalaxy` | Production multiplayer — turns controlled by `fast_turns.py` |
 
 ---
 

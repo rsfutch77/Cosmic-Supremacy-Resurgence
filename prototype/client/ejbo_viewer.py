@@ -127,6 +127,7 @@ KNOWN_TYPES = {
     0x00771df8: "ShipDesign",
     0x00771df0: "ShipDesign",  # secondary design type ptr
     0x00768B04: "Ship",        # actual ship instances (floats for HP/coords)
+    0x007707E0: "CivStats",    # civilization-level stats
 }
 
 # How many bytes to read before/after the EJBO tag

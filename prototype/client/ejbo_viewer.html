@@ -204,7 +204,7 @@ function updateTabs() {
   const el = document.getElementById('tabs');
   const types = Object.keys(data.groups).sort((a,b) => {
     // Put known types first
-    const order = {'Planet':0, 'Ship':1, 'Admiral':2, 'Unknown':9};
+    const order = {'Planet':0, 'Ship':1, 'Admiral':2, 'CivStats':3, 'Unknown':9};
     return (order[a]||5) - (order[b]||5);
   });
   if (!activeType || (!data.groups[activeType] && activeType !== '__changes__')) activeType = types[0];

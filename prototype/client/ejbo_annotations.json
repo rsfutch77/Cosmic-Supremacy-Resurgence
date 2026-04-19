@@ -35,5 +35,10 @@
   "ShipDesign:-4": "Obj ID",
   "ShipDesign:-8": "Obj Type",
   "Ship:144": "Obj Id",
-  "Ship:136": "Condition"
+  "Ship:136": "Condition",
+  "Unknown:-8": "Obj Type",
+  "Unknown:-4": "Obj Id",
+  "CivStats:12": "Current Research Progress",
+  "CivStats:-8": "Obj Type",
+  "CivStats:-4": "Obj ID"
 }
