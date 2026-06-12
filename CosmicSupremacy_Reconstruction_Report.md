@@ -464,6 +464,24 @@ The address is stable across launches but shows `0xFFFFFFFF` before a galaxy is 
 
 Other timer-related addresses (`0x008292C8` ASCII string, EJBO #160 offset −28 ones-complement timer) are display-only copies overwritten by the render loop — not useful for control.
 
+### Research/science accrual — TestBed “Next Turn” vs. full turn resolution (June 2026)
+
+**Symptom:** In a TestBed galaxy, the TestBed-only “Next Turn” button advances the human player's per-planet economy (food `Planet:112`, construction `Planet:120`) and advances AI empires' research, but the human player's research progress (`CivStats:12`) never increases — even with a technology selected and the science-topic field set.
+
+**Root cause:** The TestBed “Next Turn” button performs only a partial per-planet tick. The empire-level science→research accrual for the local player is part of the *full* turn resolution, which is fired by the turn countdown at `0x0080AA08` reaching a small value — NOT by the TestBed button. Triggering a real turn via `fast_turns.py` (which writes `0x0080AA08`) advances the human's research correctly. Confirmed in a non-TestBed game, June 2026.
+
+**Takeaway:** When authoritative/full resolution is required, drive turns via the `0x0080AA08` countdown (as `fast_turns.py` does), not the TestBed “Next Turn” button. The TestBed button is a partial-tick shortcut and should not be relied on for empire-level (CivStats) effects such as research.
+
+**CivStats runtime layout** (confirmed via constructor at `0x005459A0`; type pointer `0x007707E0`):
+
+| Runtime offset | EJBO offset | Field |
+|---|---|---|
+| `[civ+0x38]` | `CivStats:4` | Current science topic (tech id); `-1` = none (“No Research”) |
+| `[civ+0x40]` | `CivStats:12` | Current research progress |
+| `[civ+0x54]` / `[civ+0x58]` | `CivStats:32/36` | Science output / surplus (floats) |
+
+Research-topic display and the `No Research` branch are at `0x00554DE1` (`cmp [civ+0x38], -1`).
+
 ### Tools
 
 - **`ejbo_viewer.py`** — Web-based dashboard that scans for all EJBO objects, classifies by type, displays fields with annotations, supports double-click editing (poke) via WriteProcessMemory. Auto-reconnects when game restarts.
