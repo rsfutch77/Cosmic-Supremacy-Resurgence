@@ -56,5 +56,12 @@
   "Ship:32": "? int only present when ship visible, changes with camera angle and zoom",
   "CivStats:144": "Current Science Topic",
   "CivStats:152": "Selected Science Topic",
-  "CivStats:8": "Total Gold"
+  "CivStats:8": "Total Gold",
+  "CivStats:28": "Score",
+  "CivStats:24": "TurnX10",
+  "Unknown:128": "?updates when right clicking",
+  "Unknown:136": "?updates when right clicking",
+  "Unknown:140": "?updates on timer",
+  "Unknown:144": "?updates on timer",
+  "Unknown:148": "?updates on timer"
 }
