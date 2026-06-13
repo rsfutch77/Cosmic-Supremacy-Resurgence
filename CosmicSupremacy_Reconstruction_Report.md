@@ -491,6 +491,78 @@ Full memory research notes: `MEMORY_RESEARCH.md`
 
 ---
 
+## 12. Save/Load Capture & Automation (June 2026)
+
+### Save blob captured — format confirmed against real data
+A manual in-game **Save Game** (TestBed galaxy) produced the first real `savegame`
+POST ever captured:
+
+- Body (`Content-Length` 12,853): `userid=0&passhash='0'&gameid=-1&gamename='3'&turn=2&version=1&data=<…>`
+- `gameid=-1` is the "allocate new slot" sentinel (Section 9).
+- The `data=` field is URL-encoded for `x-www-form-urlencoded`: `+` → `%2B`, `/` left literal.
+
+Decoding confirms the historical format (Section 2) exactly:
+
+```
+data = base64( uint32_LE(decompressed_size) + zlib_deflate(state) )
+```
+
+- Leading bytes after base64-decode: `C6 92 00 00 78 9C` → size **37,574**, then the zlib magic `78 9C`.
+- The inflated blob is the documented hierarchical tag structure: `SAVE` → `GSET` with
+  readable field keys (`name, speed, team, xp, sandbox, 2d, rank, maxusers, turnlength,
+  density, primetime, primetime_turnlength, startticks, sectorsize, …`).
+- `loadgame` response version `000000` (identity cipher) round-trips the blob unchanged.
+
+**Tooling added:**
+- `save_codec.py` — decode/encode the `data=` field. `from-log <cs_server.log>` extracts
+  every savegame blob (handles the `body+` line-wrapping); `walk` dumps the section/tag tree.
+- `cs_server.py` — `savegame` now **persists** the blob (allocates a positive `gameid` from
+  the `-1` sentinel), `savegamelist` enumerates real saves, `loadgame` returns the stored blob.
+  Saves persist to `game_data/multiplayer_saves/` and hot-reload on each `savegamelist`/`loadgame`.
+
+### External save/load trigger — NOT achievable
+Automated multiplayer sync requires firing save (upload) and load (download) from outside the
+EXE on a schedule. Findings:
+
+- **No dedicated sync endpoint.** The complete client API is only `savegame` / `savegamelist` /
+  `loadgame` (plus civ / coa / gov / tutorial). There is no "submit orders" or "turn status"
+  call — all state sync rides on those three primitives and the client's internal
+  `out-of-sync` / `not up-to-date` check.
+
+- **Turn resolution does NOT upload a save.** Firing a full turn via the countdown write at
+  `0x0080AA08` (`game_controller.py fire-turn`, same mechanism as `fast_turns.py`) resolves the
+  turn client-side but produces **no `savegame` POST** in `cs_server.log`. Confirmed on the
+  TestBed build, which still carries the turn-pipeline sync checks that the Resurgence T1–T5
+  patches remove. This is consistent with the original observation that nothing crosses the
+  network during normal ticks.
+
+- **Manual Save Game is the only confirmed save trigger.** A `savegame` upload occurs only on an
+  explicit in-game **Save Game** menu action. No external/programmatic trigger was found.
+
+- **Load auto-trigger — implemented server-side, UNCONFIRMED on the client.** `cs_server.py` can
+  advertise a higher `turn` in `savegamelist` (`game_controller.py push` / `bump`), which is
+  expected to trip the client's out-of-sync check and cause an automatic `loadgame`. The server
+  side is verified (list advertises the bumped turn; `loadgame` serves the pushed blob, which
+  decodes back to the exact pushed state). Whether the **real client** actually auto-loads on the
+  bump was not confirmed.
+
+**Untried fallbacks (higher effort, not pursued):**
+- Win32 `PostMessage(WM_COMMAND, <Save-Game cmd id>)` to drive the Save menu headlessly
+  (`game_controller.py save-menu`; `CMD_SAVEGAME` is a TODO — find via Resource Hacker / Spy++).
+  Would still need to auto-confirm the `LoadSaveDlg` name/confirm dialog.
+- Direct save-routine call via `CreateRemoteThread` / thread hijack — fragile (calling
+  convention, `this` pointer, arguments).
+
+### Conclusion
+Save/load-blob sync (the "save → upload → load" approach) is **not viable for automated
+multiplayer**: there is no programmatic save trigger in the protocol, and the turn pipeline does
+not upload state. The save blob **format is now fully understood** and usable for **manual**
+snapshots, persistence, and host-migration, but not for unattended per-turn sync. **The primary
+path remains EJBO live-memory field sync (Section 11)** — it requires no in-game save/load and is
+already proven (memory writes produce immediate in-game effects; turns are driven via `0x0080AA08`).
+
+---
+
 ### What We Are NOT Doing
 
 - **OAuth / social login** — requires new UI windows in the EXE; not feasible via patching
