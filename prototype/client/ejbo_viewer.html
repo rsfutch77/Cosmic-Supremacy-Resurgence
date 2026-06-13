@@ -49,6 +49,10 @@
                             width: 150px; min-width: 150px; max-width: 150px;
                             position: sticky; left: 55px; z-index: 10;
                             border-right: 2px solid #3a4a5a; }
+  /* Binary mode needs wider data columns to fit all 32 bits */
+  .comp-table.bin-mode th:not(.offset-col):not(.ann-col),
+  .comp-table.bin-mode td:not(.offset-col):not(.ann-col) {
+    width: 270px; min-width: 270px; max-width: 270px; }
   .comp-table td.changed { background: #3a2a10 !important; color: #ffcc44;
                            transition: background 0.3s, color 0.3s; }
   .comp-table tr:hover td { background: #151e28; }
@@ -135,6 +139,7 @@
   <label><input type="radio" name="fmt" value="u32"><span> UInt32</span></label>
   <label><input type="radio" name="fmt" value="f32"><span> Float</span></label>
   <label><input type="radio" name="fmt" value="ascii"><span> ASCII</span></label>
+  <label><input type="radio" name="fmt" value="bin"><span> Binary</span></label>
 </div>
 
 <div class="content">
@@ -158,6 +163,11 @@ let dismissedKeys = new Set();
 document.querySelectorAll('input[name="fmt"]').forEach(r => {
   r.addEventListener('change', () => { displayFmt = r.value; render(); });
 });
+
+// Format a 32-bit value as binary, grouped by byte
+function binStr(u32) {
+  return (u32 >>> 0).toString(2).padStart(32, '0').match(/.{1,8}/g).join(' ');
+}
 
 // ── Fetch data ──
 async function fetchData() {
@@ -265,6 +275,7 @@ function updateCellsInPlace() {
         case 'u32':   val = f.u32.toLocaleString(); break;
         case 'f32':   val = f.f32 || '—'; break;
         case 'ascii': val = f.ascii; break;
+        case 'bin':   val = binStr(f.u32); break;
         default:      val = f.hex;
       }
       cells[c].textContent = val;
@@ -349,7 +360,8 @@ function render() {
   }
 
   // Build header
-  let html = '<table class="comp-table"><thead><tr>';
+  const tableCls = displayFmt === 'bin' ? 'comp-table bin-mode' : 'comp-table';
+  let html = `<table class="${tableCls}"><thead><tr>`;
   html += '<th class="offset-col">Offset</th>';
   html += '<th class="ann-col">Annotation</th>';
   for (const obj of objs) {
@@ -389,6 +401,7 @@ function render() {
         case 'u32':   val = f.u32.toLocaleString(); break;
         case 'f32':   val = f.f32 || '—'; break;
         case 'ascii': val = f.ascii; break;
+        case 'bin':   val = binStr(f.u32); break;
         default:      val = f.hex;
       }
       html += `<td class="${cls}" title="hex=${f.hex} i32=${f.i32} f32=${f.f32||'—'} ascii=${f.ascii}"
@@ -491,6 +504,7 @@ function renderChanges() {
         case 'u32':   val = f.u32.toLocaleString(); break;
         case 'f32':   val = f.f32 || '—'; break;
         case 'ascii': val = f.ascii; break;
+        case 'bin':   val = binStr(f.u32); break;
         default:      val = f.hex;
       }
       html += `<tr class="sr-click" onclick="jumpToChanged('${typeName}', ${addr}, ${offset})">`;
