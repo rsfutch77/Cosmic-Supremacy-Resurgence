@@ -76,6 +76,7 @@
 
   .status { padding: 6px 16px; color: #4a5a6a; font-size: 11px; }
   .template-marker { color: #ff8844; font-size: 10px; }
+  .static-marker   { color: #ff5555; font-size: 10px; font-weight: bold; }
 
   /* Search */
   .search-bar { display: flex; align-items: center; gap: 8px; }
@@ -140,6 +141,7 @@
   <label><input type="radio" name="fmt" value="f32"><span> Float</span></label>
   <label><input type="radio" name="fmt" value="ascii"><span> ASCII</span></label>
   <label><input type="radio" name="fmt" value="bin"><span> Binary</span></label>
+  <label><input type="radio" name="fmt" value="ptr"><span> Points to</span></label>
 </div>
 
 <div class="content">
@@ -154,6 +156,45 @@ let activeType = null;
 let displayFmt = 'hex';
 let refreshTimer = null;
 
+// ── Tab model ──
+// Tabs are not simply the RTTI class groups: Planet is split by ownership.
+// Roughly 500 of ~525 planets are uncolonised, and rebuilding that whole table
+// every refresh is what makes the tab crawl — the owned handful are the ones
+// being annotated, so they get a tab that stays fast. Annotations stay keyed by
+// the underlying class name, so both halves share one set of Planet:offset keys.
+let tabGroups = {};   // tab key -> { cls, objs }
+
+function buildTabGroups() {
+  tabGroups = {};
+  for (const [cls, objs] of Object.entries(data.groups)) {
+    if (cls === 'Planet' && objs.some(o => o.owned !== undefined)) {
+      tabGroups['Planet (owned)']   = { cls, objs: objs.filter(o => o.owned) };
+      tabGroups['Planet (unowned)'] = { cls, objs: objs.filter(o => !o.owned) };
+    } else {
+      tabGroups[cls] = { cls, objs };
+    }
+  }
+}
+
+// Which tab holds a given object — a class name alone no longer identifies one
+function tabKeyFor(cls, addr) {
+  for (const [key, g] of Object.entries(tabGroups)) {
+    if (g.cls === cls && g.objs.some(o => o.addr === addr)) return key;
+  }
+  return cls;
+}
+
+function activeObjs() {
+  const g = tabGroups[activeType];
+  return g ? g.objs : null;
+}
+
+// Class name to key annotations under for the active tab
+function activeCls() {
+  const g = tabGroups[activeType];
+  return g ? g.cls : activeType;
+}
+
 // Sticky change tracking: keys like "addr:offset" stay highlighted until clicked
 let stickyChanged = new Set();
 // Keys the user has dismissed — prevents re-adding until the server stops reporting changed
@@ -167,6 +208,25 @@ document.querySelectorAll('input[name="fmt"]').forEach(r => {
 // Format a 32-bit value as binary, grouped by byte
 function binStr(u32) {
   return (u32 >>> 0).toString(2).padStart(32, '0').match(/.{1,8}/g).join(' ');
+}
+
+// Render one field in the active display format
+function fmtVal(f) {
+  switch (displayFmt) {
+    case 'hex':   return f.hex;
+    case 'i32':   return f.i32.toLocaleString();
+    case 'u32':   return f.u32.toLocaleString();
+    case 'f32':   return f.f32 || '—';
+    case 'ascii': return f.ascii;
+    case 'bin':   return binStr(f.u32);
+    case 'ptr':   return f.ptr || '—';
+    default:      return f.hex;
+  }
+}
+
+function cellTitle(f) {
+  return `hex=${f.hex} i32=${f.i32} f32=${f.f32||'—'} ascii=${f.ascii}`
+       + (f.ptr ? `\n${f.ptr}` : '');
 }
 
 // ── Fetch data ──
@@ -191,6 +251,7 @@ async function fetchData() {
       }
     }
     updateInfo();
+    buildTabGroups();
     updateTabs();
     render();
   } catch(e) {
@@ -212,12 +273,17 @@ function updateInfo() {
 
 function updateTabs() {
   const el = document.getElementById('tabs');
-  const types = Object.keys(data.groups).sort((a,b) => {
-    // Put known types first
-    const order = {'Planet':0, 'Ship':1, 'Admiral':2, 'CivStats':3, 'Unknown':9};
-    return (order[a]||5) - (order[b]||5);
+  const types = Object.keys(tabGroups).sort((a,b) => {
+    // Put the classes we actively annotate first (names come from RTTI)
+    const order = {'Planet (owned)':0, 'Planet (unowned)':0.5, 'Planet':0,
+                   'Ship':1, 'Fleet':2, 'ShipDesign':3, 'Owner':4,
+                   'Admiral':5, 'Governor':6, 'Sun':7, 'SolarSystem':8,
+                   'Unknown':10};
+    const oa = order[a] !== undefined ? order[a] : 8;
+    const ob = order[b] !== undefined ? order[b] : 8;
+    return oa - ob || a.localeCompare(b);
   });
-  if (!activeType || (!data.groups[activeType] && activeType !== '__changes__')) activeType = types[0];
+  if (!activeType || (!tabGroups[activeType] && activeType !== '__changes__')) activeType = types[0];
 
   // Count unique objects with sticky changes
   const changedAddrs = new Set();
@@ -228,7 +294,7 @@ function updateTabs() {
 
   let html = types.map(t =>
     `<div class="tab ${t===activeType?'active':''}" onclick="setTab('${t}')">
-       ${t}<span class="count">${data.groups[t].length}</span>
+       ${t}<span class="count">${tabGroups[t].objs.length}</span>
      </div>`
   ).join('');
   // Append Changes tab
@@ -253,7 +319,7 @@ function isTemplate(obj) {
 // ── Update data cells in-place (preserves focused input) ──
 function updateCellsInPlace() {
   if (!data || !activeType) return;
-  const objs = data.groups[activeType];
+  const objs = activeObjs();
   if (!objs || objs.length === 0) return;
   const rows = document.querySelectorAll('#table-area .comp-table tbody tr');
   rows.forEach((row, r) => {
@@ -268,18 +334,8 @@ function updateCellsInPlace() {
       if (!f) continue;
       const stickyKey = obj.addr + ':' + f.offset;
       cells[c].className = stickyChanged.has(stickyKey) ? 'changed' : '';
-      let val;
-      switch (displayFmt) {
-        case 'hex':   val = f.hex; break;
-        case 'i32':   val = f.i32.toLocaleString(); break;
-        case 'u32':   val = f.u32.toLocaleString(); break;
-        case 'f32':   val = f.f32 || '—'; break;
-        case 'ascii': val = f.ascii; break;
-        case 'bin':   val = binStr(f.u32); break;
-        default:      val = f.hex;
-      }
-      cells[c].textContent = val;
-      cells[c].title = `hex=${f.hex} i32=${f.i32} f32=${f.f32||'—'} ascii=${f.ascii}`;
+      cells[c].textContent = fmtVal(f);
+      cells[c].title = cellTitle(f);
     }
   });
 }
@@ -353,9 +409,11 @@ function render() {
     return;
   }
 
-  const objs = data.groups[activeType];
+  const objs = activeObjs();
+  const annType = activeCls();
   if (!objs || objs.length === 0) {
     document.getElementById('table-area').innerHTML = '<div class="status">No objects of this type.</div>';
+    document.getElementById('status').textContent = '';
     return;
   }
 
@@ -366,8 +424,10 @@ function render() {
   html += '<th class="ann-col">Annotation</th>';
   for (const obj of objs) {
     const tmpl = isTemplate(obj) ? ' <span class="template-marker">[TPL]</span>' : '';
+    // Objects in the module image are dialog/static templates, not game entities
+    const stat = obj.static ? ' <span class="static-marker">[STATIC]</span>' : '';
     html += `<th><div class="obj-header">
-      <span class="obj-id">#${obj.id}</span> ${tmpl}<br>
+      <span class="obj-id">#${obj.id}</span> ${tmpl}${stat}<br>
       <span class="obj-name">${obj.name || '—'}</span><br>
       <span class="sr-addr">${obj.addr_hex}</span>
     </div></th>`;
@@ -378,7 +438,7 @@ function render() {
   const nFields = objs[0].fields.length;
   for (let r = 0; r < nFields; r++) {
     const offset = objs[0].fields[r].offset;
-    const annKey = activeType + ':' + offset;
+    const annKey = annType + ':' + offset;
     const annVal = data.annotations[annKey] || '';
     html += `<tr onclick="dismissRow(this, ${offset})" style="cursor:pointer">`;
     // Offset column — highlight EJBO tag row
@@ -387,32 +447,26 @@ function render() {
     html += `<td class="offset-col" ${isEjbo ? 'style="color:#6fc3ff;font-weight:bold"' : ''}>${offLabel}</td>`;
     // Annotation column
     html += `<td class="ann-col"><input class="ann-input" placeholder="..." value="${annVal.replace(/"/g,'&quot;')}"
-              onchange="annotate('${activeType}',${offset},this.value)" onclick="event.stopPropagation()"></td>`;
+              onchange="annotate('${annType}',${offset},this.value)" onclick="event.stopPropagation()"></td>`;
     // Data columns
     for (const obj of objs) {
       const f = obj.fields[r];
       if (!f) { html += '<td>—</td>'; continue; }
       const stickyKey = obj.addr + ':' + f.offset;
       const cls = stickyChanged.has(stickyKey) ? 'changed' : '';
-      let val;
-      switch (displayFmt) {
-        case 'hex':   val = f.hex; break;
-        case 'i32':   val = f.i32.toLocaleString(); break;
-        case 'u32':   val = f.u32.toLocaleString(); break;
-        case 'f32':   val = f.f32 || '—'; break;
-        case 'ascii': val = f.ascii; break;
-        case 'bin':   val = binStr(f.u32); break;
-        default:      val = f.hex;
-      }
-      html += `<td class="${cls}" title="hex=${f.hex} i32=${f.i32} f32=${f.f32||'—'} ascii=${f.ascii}"
-                ondblclick="startPoke(this, ${obj.addr}, ${f.offset})">${val}</td>`;
+      const esc = s => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
+      html += `<td class="${cls}" title="${esc(cellTitle(f))}"
+                ondblclick="startPoke(this, ${obj.addr}, ${f.offset})">${esc(fmtVal(f))}</td>`;
     }
     html += '</tr>';
   }
   html += '</tbody></table>';
   document.getElementById('table-area').innerHTML = html;
+  const ext = data.extents && data.extents[annType];
+  const extNote = ext !== undefined
+    ? ` — object extent ${ext} bytes after tag (measured from stride)` : '';
   document.getElementById('status').textContent =
-    `${objs.length} objects — ${nFields} fields each — double-click a value to poke`;
+    `${objs.length} objects — ${nFields} fields each${extNote} — double-click a value to poke`;
 }
 
 function annotate(type, offset, text) {
@@ -426,7 +480,7 @@ function annotate(type, offset, text) {
 // Dismiss sticky highlights for a row across all objects in the active tab
 function dismissRow(trEl, offset) {
   if (!data || !activeType) return;
-  const objs = data.groups[activeType];
+  const objs = activeObjs();
   if (!objs) return;
   let hadChanges = false;
   for (const obj of objs) {
@@ -497,16 +551,7 @@ function renderChanges() {
       const offLabel = offset >= 0 ? `+${offset}` : `${offset}`;
       const annKey = typeName + ':' + offset;
       const ann = data.annotations[annKey] || '';
-      let val;
-      switch (displayFmt) {
-        case 'hex':   val = f.hex; break;
-        case 'i32':   val = f.i32.toLocaleString(); break;
-        case 'u32':   val = f.u32.toLocaleString(); break;
-        case 'f32':   val = f.f32 || '—'; break;
-        case 'ascii': val = f.ascii; break;
-        case 'bin':   val = binStr(f.u32); break;
-        default:      val = f.hex;
-      }
+      const val = fmtVal(f);
       html += `<tr class="sr-click" onclick="jumpToChanged('${typeName}', ${addr}, ${offset})">`;
       html += `<td class="sr-type">${typeName}</td>`;
       html += `<td><span class="sr-name">${obj.name || '—'}</span> #${obj.id} <span class="sr-addr">${obj.addr_hex}</span></td>`;
@@ -536,8 +581,8 @@ function jumpToChanged(typeName, addr, offset) {
   const key = addr + ':' + offset;
   stickyChanged.delete(key);
   dismissedKeys.add(key);
-  // Switch to the object's type tab
-  setTab(typeName);
+  // Switch to the tab holding this object
+  setTab(tabKeyFor(typeName, addr));
 }
 
 // ── Search ──
@@ -584,6 +629,7 @@ function renderSearch() {
             f.hex.toLowerCase().includes(q) ||
             String(f.i32).includes(q) ||
             String(f.u32).includes(q) ||
+            (f.ptr && f.ptr.toLowerCase().includes(q)) ||
             (f.f32 && f.f32.includes(q))) {
           results.push({ obj, type: typeName, match: 'field', field: f, ann });
           if (results.length > 200) break;
@@ -601,13 +647,13 @@ function renderSearch() {
   for (const r of results) {
     const o = r.obj;
     if (r.match === 'name') {
-      html += `<tr class="sr-click" onclick="setTab('${r.type}')">
+      html += `<tr class="sr-click" onclick="setTab(tabKeyFor('${r.type}',${o.addr}))">
         <td class="sr-type">${r.type}</td><td><span class="sr-name">${o.name}</span> <span class="sr-addr">${o.addr_hex}</span></td>
         <td>—</td><td class="sr-match">name match</td><td>—</td></tr>`;
     } else {
       const f = r.field;
       const off = f.offset >= 0 ? `+${f.offset}` : `${f.offset}`;
-      html += `<tr class="sr-click" onclick="setTab('${r.type}')">
+      html += `<tr class="sr-click" onclick="setTab(tabKeyFor('${r.type}',${o.addr}))">
         <td class="sr-type">${r.type}</td><td><span class="sr-name">${o.name||'—'}</span> #${o.id} <span class="sr-addr">${o.addr_hex}</span></td>
         <td>${off}</td><td>hex=${f.hex} i32=${f.i32} f32=${f.f32||'—'}</td>
         <td>${r.ann}</td></tr>`;
