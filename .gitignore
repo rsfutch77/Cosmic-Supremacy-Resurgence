@@ -12,3 +12,4 @@ prototype/server/.venv/
 *.hex
 *.log
 *.dmp
+prototype/client/__pycache__

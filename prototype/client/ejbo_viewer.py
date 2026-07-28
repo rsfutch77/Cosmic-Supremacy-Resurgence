@@ -220,7 +220,10 @@ def read_object_fields(h, ejbo_addr):
     return fields, name
 
 # ── Annotations persistence ────────────────────────────────────────────────
-ANNOTATIONS_FILE = "ejbo_annotations.json"
+# Resolve next to this script, not the cwd — the viewer is often launched with
+# an absolute path from the repo root, which would silently load zero annotations.
+ANNOTATIONS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                "ejbo_annotations.json")
 
 def load_annotations():
     if os.path.exists(ANNOTATIONS_FILE):
