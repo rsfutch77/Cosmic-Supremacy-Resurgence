@@ -263,7 +263,10 @@ CLASS_EXTENTS = {
     "Ship":       152,   # last agreeing dword +148; +152 is heap metadata
     "Owner":     1344,   # agree to +1356, heap header at +1360; four
                          # std::strings line up at +368/+528/+1144/+1312
-    "ShipDesign": 192,   # AMBIGUOUS past ~190 — see report; left conservative
+    # Part-category vectors sit at a 24-byte stride: +128 chassis, +152 scanner,
+    # +176 engine, +200 weapon, and there is room for more above that. 192 cut the
+    # weapon vector off entirely, so the window must reach past it.
+    "ShipDesign": 320,
 }
 
 def scan_for_ejbo(h, regions):
@@ -432,13 +435,16 @@ ANNOTATIONS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
 
 def load_annotations():
     if os.path.exists(ANNOTATIONS_FILE):
-        with open(ANNOTATIONS_FILE, "r") as f:
+        # Encoding must be explicit: the file contains non-ASCII punctuation and
+        # Windows would otherwise decode it as cp1252, turning every em-dash into
+        # mojibake that the next save then escapes permanently.
+        with open(ANNOTATIONS_FILE, "r", encoding="utf-8") as f:
             return json.load(f)
     return {}
 
 def save_annotations(ann):
-    with open(ANNOTATIONS_FILE, "w") as f:
-        json.dump(ann, f, indent=2)
+    with open(ANNOTATIONS_FILE, "w", encoding="utf-8") as f:
+        json.dump(ann, f, indent=2, ensure_ascii=False)
 
 # ── Global state ───────────────────────────────────────────────────────────
 class ViewerState:

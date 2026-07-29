@@ -599,6 +599,306 @@ This is the field per-player state sync depends on, and it generalises: any EJBO
 descending from the same base can be attributed to a civilisation by reading one
 pointer and dereferencing it once.
 
+### Ships in orbit — `Ship:44`, and it is stored not derived (July 2026)
+
+Every orderless ship observed across three galaxies sat at **distance exactly 0.00** from a
+planet, while every ship with a Move or Scout order was 4–15 units off. That made "in orbit =
+co-located" the obvious hypothesis. **It is wrong.**
+
+Teleporting an orderless ship 15 units off its planet left the UI still listing it as in orbit.
+The relationship is held in **`Ship:44`**, a reference node pointing at the `Planet`:
+
+| Ship | orderType | `Ship:44` | Distance to that planet |
+|---|---|---|---|
+| #649 | none | **`Planet#225`** | **15.00** — displaced, still in orbit |
+| #654 | none | **`Planet#473`** | 0.00 |
+| #650 | Move | `null-node` | — |
+| #653 | Scout | `null-node` | — |
+
+So orbit is a stored reference that happens to *coincide* with co-location, because the game
+parks orbiting ships on the planet's coordinates. Position and orbit are independent: writing
+coordinates moves the ship without changing what it orbits, and the reference is what the UI reads.
+
+This is the **fourth** instance of the reference-node idiom — after `Planet:40`/`Ship:40` (owner),
+`Ship:80` (admiral) and `Planet:496` (governor). Setting a ship into orbit programmatically means
+writing the node pointer, not the coordinates.
+
+Also resolved in the same pass: **`Ship:108` is the ship-design link**, a reference node to the
+`ShipDesign` the ship was built from, with each civ's ships resolving to that civ's own design
+objects. And `Ship:56` is confirmed to be a reference-node slot that is null on every ship in
+every state observed, so it is none of owner, orbit, admiral or design.
+
+**Method note.** Three galaxies of circumstantial evidence pointed the wrong way, and the
+displacement test is what broke it — the ship kept its orbit while its coordinates said otherwise.
+A correlation that holds in every sample can still be a consequence rather than a cause.
+
+### Fleets absorb their ships — `Fleet` (July 2026)
+
+Creating a fleet named `f1` from two ships produced the **first live `Fleet` instance** in this
+project, and it is **EJBO-tagged** (vftable `0x00768904`). The memory note that `Fleet` "exists but
+has no instances yet" is now obsolete.
+
+**The ships stopped existing as `Ship` objects.** The scan went from 4 ships to 2 — both survivors
+belonging to the AI — and the two human ships `#649` and `#656` vanished. Their old addresses now
+read a recycled heap tag. They were folded into the fleet as **inline 44-byte records**:
+
+| Record offset | Content |
+|---|---|
+| `+0` | `ShipProperties` vftable `0x00768C3C` |
+| `+4` | `ShipDesign` reference node |
+| `+8` | pointer |
+| `+12`, `+16` | uninitialised (stale text bytes) |
+| `+20/+24/+28` | inner **crew vector** — 16-byte elements, same shape as `Planet:144` citizens |
+| `+32` | condition float |
+| `+36` | the **fleet's** object id |
+| `+40` | the **ship's** object id |
+
+A 2-ship fleet gave `Fleet:116` span 88 = 2 × 44, and the records reported ship ids **649 and 656** —
+exactly the two that disappeared. Record 0 carries 2 crew elements; record 1's crew vector is null,
+matching the uncrewed ship observed before the fleet was formed.
+
+`Fleet` shares the `SpaceObject` base layout with `Ship`: **`Fleet:40` is the owner link and
+`Fleet:44` the in-orbit planet, at the same offsets as on `Ship`**. `Fleet:56` and `Fleet:80` are the
+same null reference slots.
+
+**The fleet name is at `Fleet:132`** (length `+148`, capacity `+152`) — and notably *not* at the
+offsets every other named class uses: `Planet`/`Sun` at `+52`, `Admiral`/`Governor` at `+20`. The
+"name is always at a fixed base-class offset" pattern does not hold.
+
+**`Ship:56` is not the fleet link.** That was the prediction — a null reference slot on every ship,
+with no fleets in existence. It stayed null. There is no per-ship fleet pointer because a ship in a
+fleet is not a `Ship` object at all.
+
+**Consequence for state sync:** enumerating ships by scanning EJBO tags **misses every ship in a
+fleet**. Any ship inventory must walk `Fleet:116` records as well, and ship identity survives the
+transition (the object id is preserved inside the record), so ids remain usable as keys.
+
+### Ship orders: `Ship:48`, and ETA is derived (July 2026)
+
+A Move-ordered ship compared against an idle ship of the **same owner in the same orbit** differed
+in exactly three fields — `+48`, `+52` (order type) and `+76` (has orders). `Ship:48` is therefore
+the **order object** pointer, present only while an order exists.
+
+**The target is stored as coordinates, not as a pointer:**
+
+| Order object | Content |
+|---|---|
+| `+4/+8/+12` | origin XYZ — the ship's current position |
+| **`+16/+20/+24`** | **destination XYZ** — matched Planet #153's coordinates exactly |
+| `+80/+84/+88` | origin XYZ again |
+| `+92` | reference node to the **origin** planet |
+
+Its first dword is not a vftable, so this is a plain struct rather than one of the RTTI classes.
+That explains why every earlier scan for a `Planet` reference on `Ship` found only the orbit link at
+`+44`: there is no destination pointer to find.
+
+**ETA in turns is not stored.** It is `ceil(distance / speed)`: a UI ETA of `5` matched a distance of
+`61.219` between the order object's origin and destination divided by the design's speed of `13.5`,
+giving `4.535`. No `int32`, `float` or `uint16` equal to 5 exists anywhere on the `Ship` or in 256
+bytes of the order object. `ceil`, `round` and `floor+1` all give 5 at this value, so the rounding
+rule is not yet pinned — a case where the quotient falls below `.5` would separate them.
+
+That makes ETA the fourth displayed value confirmed to be computed rather than stored, after
+maximum population, military rank/experience, and loyalty/corruption's suspected derivation.
+
+**Two annotations falsified.** `Ship:88` was recorded as "only present when ship in motion" but reads
+exactly `100.0f` on **every** ship regardless of order state — a constant that looks like a percentage
+at full value. `Ship:92` and `Ship:96` read `0` on every ship sampled, so their motion readings remain
+unverified; no ship has yet been observed while genuinely under way, which is the state that would
+test them.
+
+**Move and Scout differ in what they target.** Retasking the same ship from Move to Scout changed
+`Ship:52` from `1` to `2` and changed the order object's destination from a planet to a **sun**:
+
+| Order | `Ship:52` | Destination XYZ matches |
+|---|---|---|
+| Move | 1 | exactly a `Planet` |
+| Scout | 2 | exactly a `Sun` — distance `0.0000` on two independent scouting ships, nearest planet 12.6 units away |
+| **Conquer** | **5** | exactly an **enemy-owned** `Planet` — `0.0000` on the rival homeworld, nearest sun 28.6 units away, issued from a design named `troopship` |
+| **Attack** | **4** | confirmed on a fleet — the order lives on `Fleet:52`, and every member record inherits it rather than carrying its own |
+
+So a scout targets a *system* while move and conquer target *planets*, and the destination's identity
+distinguishes the orders as reliably as the id does. Ids `6` and anything above `7` remain
+unaccounted for and should cover bio-bomb and create-wormhole.
+
+[ ] identify the bio-bomb and create-wormhole order ids in `Ship:52` — needs a bio ship and a wormhole ship
+
+**`Ship:76` is not simply "an order exists".** It reads `1` on the local player's ordered ships and `0`
+on the AI's, even when the AI ship carries a valid order type and a fully populated order object. It
+looks like a **pending/unsubmitted-orders flag for the local civ** — which would matter directly for
+turn submission in multiplayer. Two observations only. It also read a non-boolean `980156416` on a
+freshly built ship, so it may be uninitialised until an order is first set. Use `Ship:52` to ask
+whether an order exists.
+
+### Combat damage: condition is the only per-ship state (July 2026)
+
+A fleet attack on a defended planet produced a useful spread of outcomes, captured by snapshotting
+condition per **ship id** before and after so the diff survives ships being absorbed or deleted:
+
+| Ship | Design | Before | After |
+|---|---|---|---|
+| #684 | `invader2` | 1.0000 | **0.0056** |
+| #685 | `invader2` | 1.0000 | **0.6301** |
+| #683 | `invader2` | 1.0000 | **deleted** |
+| #674–#679 | `Scout` | 1.0000 | 1.0000 — untouched |
+| #672 | rival `Colony Ship` | 1.0000 | **deleted** |
+
+**`Ship:136` is a 0.0–1.0 damage fraction**, and it is the *only* per-ship damage state.
+`ShipDesign:72` shield and `ShipDesign:52/56` base/effective HP did not move — they are design-level
+constants, so a damaged ship does not track residual shielding separately. The same value sits at
+`+32` of each `Fleet:116` member record.
+
+**Destroyed ships are deleted, not flagged.** A killed ship's `Ship` object disappears entirely and
+its 44-byte fleet record is removed, dropping the fleet's record count from 8 to 7. There is no
+tombstone or zero-condition corpse, so any sync must treat a missing id as destruction rather than
+looking for a death flag.
+
+**Only the armed ships took damage.** All five zero-firepower `Scout` ships in the same fleet came
+through at exactly 1.0000 while every `invader2` was hit or destroyed. Whether that is because
+combat engages only armed ships or because it targets them first is not established from one battle.
+
+### Deleting a ship safely — what is and is not possible (July 2026)
+
+Needed for any layout or roster normalisation. The two cases are very different.
+
+**Fleet member record — removable, with a caveat.** `Fleet:116/120/124` is a `std::vector` of
+44-byte records, and the game's own deletion of a destroyed ship was an **erase, not a
+reallocation**: after losing one of eight ships the fleet read size 7 with **capacity 9**, so
+`begin` and `cap` were untouched and only `end` moved. That is reproducible from outside:
+
+```
+to erase record i of n:
+  memmove(begin + i*44, begin + (i+1)*44, (n-1-i)*44)   # shift the tail down
+  write end = end - 44                                   # shrink the size
+  leave begin and cap alone                              # capacity is unchanged
+```
+
+**Caveat — it leaks.** Each record's inner crew vector at `record+20/24/28` points at a *separate*
+heap allocation. Erasing the record drops the only pointer to it, and external code cannot call the
+game's allocator to free it. The leak is harmless within a session but is not clean. The design
+reference node at `record+4` may also be reference-counted; dropping it without decrementing is
+unverified.
+
+**Standalone `Ship` object — do not attempt.** Two blockers:
+
+1. **The heap allocation cannot be freed** from outside; there is no way to call the game's
+   `operator delete` through `WriteProcessMemory`.
+2. **The container the game enumerates ships from has not been located.** Nothing in `Owner`,
+   `Planet` or `Fleet` references a standalone `Ship` — no direct pointer, no reference node, and no
+   vector in any `Owner` or `Planet` contains one. So an unknown structure holds that reference.
+   Zeroing the `EJBO` tag would hide the ship from *our* scanner while the game kept walking it.
+
+**Recommended approach: let the game do the deleting.** The engine removes ships cleanly, including
+the fleet-record erase and the sub-allocation, so the safe path is to *drive* it rather than
+imitate it — write `Ship:136` condition to `0.0` (or the fleet record's `+32`) and let combat or turn
+resolution reap the ship. **Untested**, but it uses only a write we know is safe on a field we know
+the engine reads, and it delegates every structural change to the code that owns those structures.
+
+For unwanted ships that must merely be got out of the way, coordinates are writable and render live
+(see the layout section), so relocating is strictly safer than deleting.
+
+[ ] test whether writing condition 0.0 makes the engine reap a ship cleanly on the next turn
+[ ] test whether the engine frees a planet's citizen vector when a colony is captured or abandoned — if it does, a `VirtualAllocEx` buffer repointed into `Planet:144` would be freed by the game's allocator and crash; conquer one of our own colonies to find out
+
+### Ship designs: five part-category vectors at a 24-byte stride (July 2026)
+
+Two designs differing by **exactly one weapon** — both carrying one engine and the mandatory
+scanner, everything else empty — isolated the structure. A design does not hold one list of parts;
+it holds **one `std::vector` per part category**, 8 bytes per element, element `[0]` being the
+part's own vftable:
+
+| Offset | Category |
+|---|---|
+| `ShipDesign:128` | `ShipChassis` |
+| `ShipDesign:152` | `ShipScanner` |
+| `ShipDesign:176` | `ShipEngine` |
+| `ShipDesign:200` | `ShipWeapon` |
+| `ShipDesign:224` | `ShipModule` |
+
+The stride is exactly 24 bytes with no gaps, so `ShipShield` is almost certainly `+248` —
+unoccupied in every design observed so far.
+
+**`ShipDesign:176` was mislabelled.** It was recorded as "Ship Parts", because a 1/2/3-engine test
+gave spans of 8/16/24 and that looked like a parts list growing by one part. It is the **engine**
+vector; the earlier test varied only engines, so a per-category vector and a whole-parts list fit the
+data identically. The `s1`/`s2` pair separated them: adding a weapon left `+176` untouched at one
+element.
+
+**The weapon vector was outside the read window.** `ShipDesign`'s extent was the unmeasured default
+of 192, and `+200` sits past it, so weapons were structurally invisible — not missing from the object,
+just never read. Extent raised to 320, which also brought `ShipModule` at `+224` into view; a
+`Colony Ship` carries 3 engines and 1 module.
+
+**Corroboration:** `ShipScanner` at `+152` holds exactly one element on every design, matching the
+UI's rule that the scanner is mandatory but changeable.
+
+[ ] decode the individual part objects (`ShipEngine`, `ShipWeapon`, `ShipShield`, `ShipScanner`, `ShipModule`) — not needed for sync, which copies values between clients rather than interpreting them; the category vectors above are enough to replicate a design
+
+### Writing population — the state-restore blocker is solved (July 2026)
+
+Restoring a player's population is unavoidable for state sync, and population is a
+`std::vector` of 16-byte citizen records at `Planet:144`, so it initially looked to need a heap
+reallocation that external code cannot perform. It does not. Three cases, in increasing risk, all
+now implemented in `set_population.py`:
+
+| Case | Method | Risk |
+|---|---|---|
+| **Reduce** | shrink `end` | none — capacity retained, nothing leaked |
+| **Grow within capacity** | write records into spare capacity, advance `end` | none |
+| **Grow beyond capacity** | `VirtualAllocEx` a buffer, copy, repoint `begin`/`end`/`cap` | see below |
+
+The third case is made safe by **sizing the new buffer to the planet's hard maximum population**
+(`Planet:104` high half ÷ 10). Population cannot legally exceed that, so the engine never needs to
+grow the vector, never reallocates, and therefore never calls its own `free()` on a pointer its
+allocator did not hand out. The failure mode that normally makes `VirtualAllocEx` dangerous is
+designed out rather than hoped away.
+
+**Verified in game.** A homeworld was grown from 18 to 35 (its maximum) through the
+`VirtualAllocEx` path, allocating 560 bytes in-process, and the UI showed 35. The count mirror in
+the low half of `Planet:352` must be updated alongside the vector.
+
+**The UI does not repaint on its own.** The new population only appeared after alt-tabbing away and
+back. Memory is correct immediately; only the display lags. Same class of behaviour as the
+coordinate writes, and worth knowing before concluding that a write "did not work".
+
+**Cost:** the planet's original buffer leaks, one leak per beyond-capacity write. Harmless within a
+session.
+
+**Zero-risk alternative:** drive a planet to maximum population once with `advance_turns.py`.
+Capacity only ever grows, so afterwards every legal population is writable in-capacity forever, with
+no foreign allocation at all.
+
+### Staging enemy assets, and a limit on coordinate writes (July 2026)
+
+Testing a fleet scan needed a visible enemy target near our own space. Two attempts, and the
+first failed in an instructive way.
+
+**Coordinate writes do not stick on a ship with an active order.** Relocating an enemy ship from
+781 units away to 26 units from our homeworld read back correctly, but by the next observation the
+engine had put it back at d=781. That ship was under a Scout order, and turn resolution recomputes
+position along the route. The earlier finding that ship coordinates are authoritative came from
+relocating an **orderless** ship, and was generalised too far.
+
+**Consequence for layout injection:** any relocation pass must clear `Ship:52`/`Ship:76` first, or
+the engine silently undoes the move on the next turn.
+
+**Ownership is writable, and the game fully accepts it.** `Ship:40` is a reference node to an
+`Owner`; pointing it at the rival civ's owner-node — taken from one of *their* ships rather than
+fabricated — re-owns the ship. A ship flipped this way rendered as an enemy vessel parked in our
+home system and the UI offered enemy-only actions against it. Three writes, all reversible: clear
+the order, set the coordinates, repoint `+40`.
+
+That gives a way to stage arbitrary enemy assets without fabricating objects, which matters because
+**a `Fleet` cannot be fabricated**: it would have to be registered in whatever container the engine
+enumerates fleets from, and that container has never been located — the same gap that makes deleting
+a standalone `Ship` unsafe.
+
+**Scan targeting rules observed:** a fleet scan **cannot** run against a lone ship, only against an
+actual fleet. A route scan **can** target a ship, but shows little unless that ship has a route.
+The way to give an enemy ship a genuine route is to let the game create the order on one of our own
+ships first and flip ownership afterwards — `Ship:40` and `Ship:48` are independent, so the route
+survives the change of owner and no foreign allocation is involved.
+
 ### The reference-node idiom
 
 Ownership is one instance of a general pattern. An object-to-object reference is stored
@@ -610,8 +910,11 @@ as a pointer to a small **node**, whose first dword is the target's allocation s
 |---|---|---|
 | `Planet:40` | `Owner` | 157 of 160 planets |
 | `Ship:40` | `Owner` | — all 3 ships owned |
+| `Ship:44` | `Planet` in orbit of | ships under orders |
 | `Ship:80` | `Admiral` | 2 of 3 ships unassigned |
-| `Ship:56` | unknown | all 3 ships |
+| `Ship:108` | `ShipDesign` | — always set |
+| `Planet:496` | `Governor` | unassigned planets |
+| `Ship:56` | unknown | every ship, every state |
 
 `Admiral` carries **no** owner link — no field on it dereferences to an `Owner`, so it is
 not a `SpaceObject`. Its civilisation is presumably implied by the container it lives in.
@@ -1180,11 +1483,23 @@ but **no** pointer to a `Facility` anywhere in the object; p2's only `Facility` 
 three planets is empty. So completed facilities are stored some other way — most likely packed
 flags or counts rather than objects.
 
-**Lead:** `Planet:100` reads `0x3C646464` on p1 and `0x00646464` on **every other planet,
-including uncolonised ones**. Bytes 0–2 are `100/100/100`, matching a UI that shows loyalty at
-100% everywhere, so one of them is very likely loyalty. Byte 3 is `60` on p1 alone — the only
-clean p1-distinctive value found — making it the best candidate for the military base's effect.
-This is a single-planet correlation and needs a second planet with a military base to confirm.
+**Resolved — `Planet:100` byte 3 is the recruitment rate.** The field reads `0x3C646464` on the
+military-base planet and `0x00646464` on every other planet including uncolonised ones. Bytes 0–2
+are `100/100/100`, matching a UI showing loyalty at 100% everywhere, so one of them is still the
+leading loyalty candidate. **Byte 3 is the recruitment-rate percentage**, confirmed in a later game
+against a UI showing 0% (minimum), 20% and 40% (maximum) on three planets:
+
+| Planet | UI recruitment rate | `Planet:100` byte 3 |
+|---|---|---|
+| p1 | 0% (minimum) | **0** |
+| p2 | 20% | **20** |
+| p3 | 40% (maximum) | **40** |
+
+It was the only field in the object whose value set across those planets was `{0, 20, 40}`, and 532
+other planets read `0`. The earlier guess that byte 3 was "the military base's effect" was half
+right: the field is the recruitment rate, and the base plausibly raises its ceiling — the reading of
+`60` came from the one planet that had a military base, exceeding the `40` maximum observed without
+one. Suggestive, not proven.
 
 ### `Planet:208` counts distinct facility *types* (July 2026)
 
@@ -1268,6 +1583,99 @@ following pointers two levels deep and testing every offset against the known tr
 node turned up as a hit at 1-, 2- **and** 4-byte widths simultaneously, which is the signature of
 a small integer in a dword rather than a coincidental byte match.
 [ ] annotate the building-queue setting — not critical, players can play without it
+
+### Remaining `Planet` unknowns, and why a fresh save cannot settle them (July 2026)
+
+Four open fields were worked in a freshly started game. Only one resolved, and the reason the
+others did not is worth recording: **the two civilisations in a fresh galaxy are byte-for-byte
+symmetric** — both homeworlds read population 7, space 300, food 58/600 and 3 facility types. That
+is the same condition that made `Owner:24` undecidable for three sessions. Discriminating a field
+requires the observations to differ.
+
+**Resolved — `Planet:104` low 16 bits are not a companion to space.** They are zero on every
+colonised planet and non-zero on only 9 of 538, all uncolonised, always a multiple of 256
+(`0x3900`, `0x2300`, `0xF700`…). Those 9 are the same planets carrying the other appearance floats,
+so the low half belongs to that non-gameplay block. Only the high half is meaningful.
+
+**Strong evidence — `Planet:516` is view state.** It reads `92.16` on the human's homeworld, the
+planet being viewed, and `0.0` on the AI's, despite the two being otherwise identical in every
+gameplay field. Together with its values swapping between two planets over one turn, that settles
+it as animation or view state rather than game state.
+
+**Unresolved — `Planet:356/360/364`.** All three are zero on both colonised planets in a fresh
+save, while uncolonised planets hold float bit patterns there (`0x3EDB6DB8`), i.e. uninitialised
+memory shared with the appearance block. In an older, more developed save the group held packed
+`uint16` pairs alongside `Planet:352`.
+
+**Unresolved — `Planet:512`.** Populated for only 4 of 108 systems, and only the home system's
+value (`369`) is a plausible integer; the other three hold float patterns. 104 of 108 systems do
+carry a single uniform value across their planets, so the per-system reading holds, but the meaning
+does not follow from it.
+
+**Unresolved — the float in the `Planet:384` element.** It read `61.23 / 44.72 / 13.0` in a
+developed save and exactly `1.0` on both homeworlds in a fresh one, so it starts at 1.0 and grows:
+a progress value or multiplier rather than a static property.
+
+### Colonising a second system settled two of the three (July 2026)
+
+**`Planet:512` is per-civ, not per-system — reversing an earlier correction.** Founding a colony in a
+second system made that system's four planets carry the **identical** value as the home system's four
+(`1094` on all eight), while the rival's system read `0`. A genuinely per-system quantity could not be
+equal across two systems. The per-system reading only ever looked right because *uncolonised* planets
+inside an occupied system receive the value too, which is what made it look like a property of the
+system rather than of the occupier.
+
+It is a **monotonic counter on a minutes-scale cadence, independent of the turn number**: it rose
+`1094 → 1095 → 1096` across reads a few minutes apart while the turn counter stayed at `10`, and was
+completely stable across 14 seconds. Turns are an hour long (the on-screen timer counts down from
+59:59), so many increments fit inside a single turn. **The unit is not established** — elapsed
+minutes, a sub-turn tick, or something else. What is established is that it is neither a turn count
+nor a per-second timer. That also explains the erratic deltas recorded earlier (`+90`, `+4`, `+7`,
+`+227`): those observations were minutes apart in wall-clock time, not a fixed number of turns. It
+appears nowhere in `Owner`.
+
+**The `Planet:384` float is probably planet age in turns.** At turn 10 it read exactly `10.0` on both
+homeworlds (colonised turn 0) and exactly `0.0` on the colony founded that same turn:
+
+| Planet | colonised turn | age | float |
+|---|---|---|---|
+| #225 homeworld | 0 | 10 | **10.0** |
+| #473 rival homeworld | 0 | 10 | **10.0** |
+| #116 new colony | 10 | 0 | **0.0** |
+
+Not yet settled, because the developed save read `61.23 / 44.72 / 13.0` for ages `47 / 41 / 15`, which
+does not fit. Either that was a different quantity or the turn number assumed there was wrong.
+**Prediction to test:** after N further turns it should read `10+N / 10+N / N`.
+
+**`Planet:356/360/364` fill in as a planet develops.** On the 10-turn-old homeworld with population 7,
+this group *and* `Planet:352` all read `0x00070007` — the same packed `(pop, pop)`. On the colony
+founded that turn, population 2, the group is `0` and `Planet:352` reads `lo=2, hi=0`. So only
+`Planet:352`'s low half is live from the start, and the rest accumulate — population history or
+targets rather than a second live counter.
+
+### Both confirmed at turn 13 (July 2026)
+
+**The `Planet:384` float is planet age in turns — confirmed by pre-registered prediction.** At turn 10
+it read `10.0 / 10.0 / 0.0` for ages `10 / 10 / 0`. The prediction that three further turns would give
+`13.0 / 13.0 / 3.0` was then verified exactly on all three planets. Since the developed save's
+`61.23 / 44.72 / 13.0` does not fit ages computed as `47 / 41 / 15`, the turn number *derived* in that
+save was probably wrong rather than this reading — the turn counter had not been located at that point.
+
+**`Planet:352 … 364` is a population history ring.** Read as **eight `uint16` slots, newest first,
+one per turn, capped at 8 entries**. Bit `0x1000` marks any entry older than the current value:
+
+| Planet | slots (`*` = `0x1000` set) | live entries | age + 1 |
+|---|---|---|---|
+| #116, colonised t10, pop 3 | `3, 2*, 2*, 2*, 0, 0, 0, 0` | 4 | **4** ✓ |
+| #225, colonised t0, pop 8 | `8, 8, 8, 7*, 7*, 7*, 7*, 7*` | 8 | 14, capped at 8 |
+
+Slot 0 — the low half of `Planet:352` — is the current population and agrees with the `Planet:144`
+citizen-list element count. This explains why the group appeared to hold "packed `uint16` pairs with
+`lo == hi`" in earlier sessions: that is just two adjacent turns holding the same population.
+
+**`Planet:368` is not part of the ring.** It reads `8` on 537 planets and `4` only on the newest
+colony, so it is neither population nor the array. It remains unidentified, and the earlier
+falsification of it as an ownership flag stands.
 
 ### The turn counter — `0x008578E8` (July 2026)
 
