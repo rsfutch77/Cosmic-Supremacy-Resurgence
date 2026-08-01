@@ -895,6 +895,191 @@ The way to give an enemy ship a genuine route is to let the game create the orde
 ships first and flip ownership afterwards — `Ship:40` and `Ship:48` are independent, so the route
 survives the change of owner and no foreign allocation is involved.
 
+### Diplomacy: war is a heap `Treaty` object (August 2026)
+
+Declaring war from a peaceful start, diffed over a seconds-wide interval, produced exactly one
+meaningful change: **a new heap `Treaty` object**. **No `Owner` field changed at all.**
+
+| Offset | Content |
+|---|---|
+| `+4` | first party — reference node to the declaring civ's `Owner` |
+| `+8` | second party — the other civ's `Owner` |
+| `+12` | `1` |
+| `+16` | **treaty type — `3` for a declaration of war** |
+| `+20` | `-1`, plausibly "no expiry" |
+| `+24`, `+28` | **`50`, the exact turn war was declared** |
+
+Real data ends around `+32`; beyond that is unrelated UTF-16 UI text, so the object is roughly
+40 bytes rather than the 192 default window.
+
+**`Owner:1264 … 1300` is not diplomacy.** Those ten reference slots stayed null through the
+declaration, and were null in a separate game that was already at war. The earlier "per-rival
+diplomacy/treaty slots" reading is withdrawn.
+
+**A `.data` `Treaty` also exists** (`0x00852C54`, seen in a different game) and is a static template
+or dialog buffer. Check the address range before treating a `Treaty` instance as live — that
+static's presence carries no diplomatic meaning, which cost one wrong conclusion earlier.
+
+**Remaining diplomacy work**, all deferred — war was the piece that mattered for the prototype:
+
+[ ] record the other `Treaty:16` type values by proposing each treaty kind — only `3` (war) is known, and the ids may not be contiguous
+[ ] decode the propose-treaty flow: whether a proposal creates a `Treaty` immediately or only on acceptance, and what `Treaty:12` and `Treaty:20` mean once a treaty has a duration (RTTI has a `TreatyLength` class)
+[ ] find where "send message" state lives — RTTI has `SendMessageDlg` and `MessageListener`, so there is likely a message list per civ
+[ ] find the per-civ colour field behind "change color" — likely a plain value on `Owner`, and a cheap write test would confirm it
+[ ] locate the `Fleet` registry so a fabricated fleet can be registered — make a fleet, scan memory for pointers to it, then find the `.data` vector holding the array, exactly as the `Treaty` registry was found
+
+### `Owner` is a multiple-inheritance class — the civ name is in front of the tag (August 2026)
+
+**`Owner`'s allocation starts 52 bytes before its EJBO tag.** Every read window in this project
+began at `tag − 8`, so `Owner`'s first 52 bytes — including the **civilisation name** — were
+invisible for the entire investigation.
+
+| Offset | Content |
+|---|---|
+| `−52` | **primary vftable** `0x007707D0`, RTTI `Owner` — the allocation starts here |
+| `−48` | pointer to the shared galaxy welcome text (identical on both civs) |
+| `−44` | **civ name**, `std::string` SSO buffer — `'GoodGuy'` / `'BadGuy'` |
+| `−28` / `−24` | name `_Mysize` / `_Myres` (15, the SSO buffer size) |
+| `−20` … `−12` | unidentified; `−12` is pointer-shaped on the human civ only |
+| `−8` | **second vftable** `0x007707E0`, RTTI also `Owner` |
+| `−4` | object id |
+| `0` | `'EJBO'` |
+
+**Two different `Owner*` values point at the same object**, and both occur in practice:
+
+- the **reference-node idiom** stores `tag − 8` (the secondary base) — this is what
+  `Planet:40`, `Ship:40`, `Fleet:40` and the local-player global all resolve through;
+- the **known-players vector** stores `tag − 52` (the primary base).
+
+Any code resolving an `Owner*` must accept **either**, or it silently sees half the graph. This
+is not a curiosity: a full-memory sweep for `tag − 8` found **2** references to a civ, while the
+same sweep for `tag − 52` found **10**. The first sweep is what produced the earlier wrong
+conclusion that "nothing outside the `Treaty` references the rival civ".
+
+`ShipDesign` was already known to have a second vftable at `−12`, so this is the second
+multiple-inheritance class found and the pattern should now be *assumed* rather than discovered:
+**before trusting any class's field list, check whether a vftable sits further back than `−8`.**
+`measure_extents` already probes `tag − 12`; it does not probe deeper, so a class whose primary
+base is further back than that will still be truncated at the front.
+
+### Known players — a `.data` discovery vector (August 2026)
+
+The diplomacy page's "known players" box starts empty and fills when a rival is found. A static
+scan of an already-at-war game found nothing, because it searched for the wrong `Owner*` form
+(above). Forcing the transition settled it.
+
+**Method.** A fresh game, both civs mutually unaware, `Planet#142` "GoodGuy's HQ" at
+(345, 256, 102) and `Planet#320` "BadGuy's HQ" at (720, 124, 58). Rather than fly there over
+many turns, the human's **orderless** `Ship#637` was teleported to 25 units off the rival HQ by
+writing `Ship:4/8/12` — coordinates are authoritative on ships with no order. One turn was
+advanced *before* the teleport as a **control**, and one after, so ordinary turn churn could be
+subtracted. The control turn changed 33 `.data` words and created no objects; the discovery turn
+added exactly one structure that the control did not:
+
+```
+.data 0x0082AA28  [begin, end, cap]   0,0,0  ->  one 8-byte record
+    record[0]  civ = Owner#638 (tag-52)   where = Planet#320
+```
+
+So the record is **`{Owner* civ, Planet* whereFirstSeen}`** — who you met and where you met them.
+`cap == end`, so the vector was grown to hold exactly one entry.
+
+Two candidates from the same diff were **discarded**: `0x0082DED4/D8` points at a `Font` record
+holding `"Arial 12"` — a font cached because a new UI element rendered for the first time. It
+correlates perfectly with discovery and means nothing.
+
+The UI was confirmed to list the rival once the record existed. **The write test was started but
+not completed**: the vector was emptied and restored, but no reading of the box was taken while it
+was empty, so this remains a correlation. It is a strong one — a `.data` vector going from empty to
+one record on exactly the discovery turn, containing exactly the discovered civ — but `Owner:68`
+and `Owner:200` both cleared a comparable bar and were later falsified, so it is recorded as
+unconfirmed.
+
+[ ] finish the write test: empty `0x0082AA28`, read the box (alt-tab to force a repaint), restore
+[ ] check whether the box is *derived* from this vector or from the owners of known planets — a
+galaxy-wide "known planets" list may be the real primary structure
+
+#### Plan for loading known players: the ship shuffle
+
+There is **no slack to grow the list in place.** The array's heap block is exactly 8 bytes, with
+the next block's header immediately after it and `cap == end`:
+
+```
+0x0A551900  heap block header
+0x0A551908  [Owner#638, Planet#320]   <- 8 bytes, the whole allocation
+0x0A551910  next block's header
+```
+
+So writing a second record would corrupt the neighbouring block. That splits the problem:
+
+- **Rewriting existing slots is safe** — the array is engine-owned and correctly sized, and
+  changing which `Owner*`/`Planet*` occupies a slot involves no allocation.
+- **Adding slots needs a foreign allocation** — `VirtualAllocEx` plus repointing `begin/end/cap`,
+  which hands the engine a pointer its allocator does not own and will eventually `free()`. Same
+  unresolved risk as the citizen-vector buffer.
+
+**The chosen approach is therefore the ship shuffle, used as a one-time capacity bootstrap rather
+than as a fallback.** On loading a game, teleport an orderless ship to each rival's home planet so
+the engine itself discovers every player and allocates the array at full size; from then on the
+contents are rewritten by memory. This keeps the array engine-owned and never repoints the vector.
+Teleporting makes each contact immediate instead of a multi-turn flight (write `Ship:4/8/12` on a
+ship with no order, then advance one turn).
+
+One property still unmeasured, because this galaxy has only two players: **whether the engine grows
+this vector by exact reallocation or in doubling steps.** The 8-byte block with `cap == end`
+suggests exact. If so, the bootstrap has to run to the full player count in one pass, since any
+later natural discovery would reallocate and discard whatever we had written.
+
+[ ] **CRITICAL — create a third player.** Everything above is untestable beyond two civs, and any
+galaxy with more than two players needs civ fabrication anyway: a new `Owner` (multiple-inheritance
+layout, allocation starting 52 bytes before the tag, name string at `−44`), plus registration in
+the `Owner` registry, which has not been located yet. This gates multiplayer above 1v1 and it gates
+measuring the growth behaviour above.
+
+### The News tab — deferred in full (August 2026)
+
+Not investigated. Deferred deliberately: news is a *record of* events the prototype already syncs
+through other structures, so it is presentation rather than authoritative state, and nothing in the
+minimum playable loop depends on it.
+
+[ ] **investigate the News tab as a unit.** Expected shape, by analogy with what is already
+mapped: a per-civ `std::vector` of event records, most likely on `Owner` (compare `Owner:320`, the
+scan-report vector) or in a `.data` registry (compare the `Ship` and `Treaty` registries).
+Attackable by the method that worked for scan reports and for known players — take a snapshot, cause
+exactly one newsworthy event over a short interval, and diff, using a control turn to subtract
+ordinary churn. Wide-interval diffs produced two false candidates for scanning and must be avoided.
+Worth checking whether entries are localised strings or event ids with parameters, since that
+decides whether news can be synced at all or has to be regenerated per client.
+
+RTTI was checked first, and the result narrows the search before any memory is touched. The only
+matching class is **`NewsPage`** — a UI page, with siblings `BattleReportDlg`, `ShareBattleReports`,
+`PlanetaryScanReport`, `SendMessageDlg`, `MessageListener`. **There is no news *data* class at all.**
+Two readings fit: either news items are plain strings or POD structs with no vftable (hence no RTTI
+entry, and no EJBO tag either), or `NewsPage` composes its text at render time from objects that are
+already mapped. The second would mean there is nothing to sync — which is the outcome to test
+first, since it is cheap and would close the tab outright.
+
+There is also a **`Log`** class, and the game's log buffer is already known to this project: it is
+what overwrote `Admiral`'s tail past `+88` and forced that class's extent down from a stride of 288.
+If news is backed by that buffer, the same allocation is already partly characterised.
+
+### Registries are per class, not global (August 2026)
+
+`0x00854628` was recorded as "the object registry". It is not — it holds **only `Ship`s**. The war
+`Treaty` was referenced by nothing in any EJBO object, and scanning all writable memory for pointers
+to it found its own separate `.data` vector:
+
+| `.data` header | Registry | Observed contents |
+|---|---|---|
+| `0x00854628` | `Ship` | 5 entries, all ships |
+| `0x0086ED78` | `Treaty` | 1 entry, the war treaty |
+
+So the engine keeps **one `std::vector` registry per class**, each with a fixed `.data` header of
+`[begin, end, cap]`. That reframes object fabrication: registering a made-up `Fleet` needs the
+**`Fleet` registry**, not the ship one, and each class's registry must be located separately by the
+same technique — create one instance, scan memory for pointers to it, then find the `.data` vector
+pointing at the array that holds it.
+
 ### The object registry — `0x00854628` (July 2026)
 
 The blocker behind both "cannot safely delete a ship" and "cannot fabricate a fleet" was not knowing
@@ -1058,7 +1243,8 @@ With the extent raised from 192 to 1344 the class shows 345 fields instead of 57
 - **`Owner:1208/1212/1216`** — a float triple reading 740.47 / 337.23 / 702.13 on the AI and
   zero on the human, matching the X/Z/Y coordinate layout used elsewhere.
 - Four `std::string` members at `+368`, `+528`, `+1144`, `+1312`, **all empty on both civs**
-  — so the civilisation name is not among them in this save.
+  — the civilisation name is not among them. It is at **`Owner:-44`**, *in front* of the
+  tag; see the multiple-inheritance section below.
 
 Two existing annotations are now in doubt:
 
@@ -1164,7 +1350,14 @@ This proves that external memory manipulation is a viable approach for multiplay
 | `0x008292c8` | ASCII | Countdown timer string (display-only, overwritten by render loop) |
 | `0x0086F1A1` | byte | Sync flag — 0=paused, 1=running |
 | `0x008578E8` | int32 | **Turn number** — read 48 with the UI showing turn 48, and 49 after one advance |
+| `0x00857904` | ptr | **Local player** — reference node whose `node[0]` is the human civ's `Owner` at `tag − 8`. Confirmed across two independent games (`Owner#641`, then `Owner#634` = `'GoodGuy'`). This answers "which `Owner` am I" without needing a war to read `Treaty:4` |
+| `0x0082AA28` | vector | **Known players** — `[begin, end, cap]`; one 8-byte `{Owner*, Planet*}` record per discovered rival, empty until first contact. Write test still pending |
 | `0x00871430+` | mixed | Global serializer buffer (app context, file paths, UI config) |
+
+**`0x00844B68` is *not* the local player**, though it held the same reference node in the first
+game observed. In a second game it points at the static null node while `0x00857904` correctly
+tracks the human civ. A single game would have produced two "confirmed" globals, one of them
+wrong — the same trap as the `.data` `Treaty` static.
 
 ### Turn control (key discovery, April 2026)
 
@@ -1912,7 +2105,20 @@ Research-topic display and the `No Research` branch are at `0x00554DE1` (`cmp [c
 ### Tools
 
 - **`ejbo_viewer.py`** — Web-based dashboard that scans for all EJBO objects, names each one from the binary's RTTI, sizes the read window per class from measured object stride, displays fields with annotations, and supports double-click editing (poke) via WriteProcessMemory. Auto-reconnects when the game restarts. Extent decisions are printed at scan time as `[extent] …` lines.
-- **`ejbo_annotations.json`** — Persistent field labels keyed `<RTTI class>:<offset>`.
+- **`ejbo_annotations.json`** — Persistent field labels keyed `<RTTI class>:<offset>`. Offsets may
+  be **negative** for multiple-inheritance classes whose allocation starts before the tag
+  (`Owner:-44` is the civ name).
+
+Two file-level hazards, both of which have already destroyed annotations once:
+
+- **Encoding.** The file contains em-dashes. Read and write it with an explicit
+  `encoding="utf-8"`; Windows defaults to cp1252 and a single default-encoded save turns every
+  em-dash into mojibake across the whole file.
+- **Duplicate keys.** These are legal JSON and resolve silently to the **last** value, so the file
+  can carry two annotations for one offset while the viewer shows only one — and the next rewrite
+  deletes the hidden one permanently. `Planet:356/360/364` each sat duplicated for several
+  commits, with the *detailed* text shadowed by a terse stub. `load_annotations()` now warns on
+  duplicates at scan time.
 
 Full memory research notes: `MEMORY_RESEARCH.md`
 

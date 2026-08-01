@@ -269,6 +269,53 @@ CLASS_EXTENTS = {
     "ShipDesign": 320,
 }
 
+# How many bytes BEFORE the EJBO tag belong to the object. For a single-inheritance
+# class this is just the 8-byte header, and READ_BEFORE's 32 is generous. Multiple-
+# inheritance classes are different: the allocation starts at the PRIMARY vftable,
+# which sits well before the tag, and the fields in between are real object data.
+#
+# Owner was found this way — the .data vector at 0x0082AA28 holds Owner* values
+# pointing at tag-52, which is where Owner's primary vftable lives. The 52 bytes
+# in front of the tag hold the CIV NAME, so reading only from tag-8 hid it
+# completely. Note that the reference-node idiom points at tag-8 instead: under
+# multiple inheritance both are valid pointers to the same object, so anything
+# resolving an Owner* has to accept either.
+CLASS_FRONT = {
+    "Owner":      52,   # -52 vftable#1, -48 galaxy welcome text, -44 name string
+                        # (_Mysize -28, _Myres -24), -8 vftable#2, -4 object id
+    "ShipDesign": 12,   # second vftable at -12; measure_extents already knows
+}
+
+# Offset of the object's display-name std::string, relative to the EJBO tag. The
+# generic name sniffer looks for printable runs and mis-slices SSO buffers (it
+# read Owner 'GoodGuy' as 'Guy'), so classes whose name field is known are decoded
+# properly instead: 16-byte SSO buffer, then _Mysize, then _Myres.
+# Located by scanning each class's window for the SSO signature (_Myres == 15)
+# across every instance, rather than by guessing at printable runs.
+CLASS_NAME_STRING = {
+    "Owner":      -44,  # 'GoodGuy' / 'BadGuy'; Owner has four more strings at
+                        # +368/+528/+1144/+1312, all empty in a fresh galaxy
+    "Planet":      52,  # second Planet string at +428, purpose unknown
+    "ShipDesign":   8,  # 'Colony Ship'
+    "Sun":         52,
+    "Fleet":      132,
+}
+
+def read_std_string(raw, pos):
+    """Decode an MSVC std::string at raw[pos:]. Returns None if it is not one.
+    Only the SSO case is handled from the buffer; longer strings live off-heap
+    and the caller has to follow the pointer itself."""
+    if pos < 0 or pos + 24 > len(raw):
+        return None
+    size = struct.unpack_from("<I", raw, pos + 16)[0]
+    res  = struct.unpack_from("<I", raw, pos + 20)[0]
+    if res != 15 or size > 15:
+        return None
+    chunk = raw[pos:pos + size]
+    if not all(0x20 <= c < 0x7f for c in chunk):
+        return None
+    return chunk.decode("ascii")
+
 def scan_for_ejbo(h, regions):
     """Scan all writable regions for the EJBO tag. Returns list of absolute
     addresses where the tag starts."""
@@ -371,17 +418,20 @@ def measure_extents(h, addrs, class_of, rtti_cache):
         notes.append(f"{cls}: {basis} -> {extents[cls]}{capped}")
     return extents, notes
 
-def read_object_fields(h, ejbo_addr, read_after=DEFAULT_READ_AFTER):
-    """Read the raw bytes around an EJBO object and decode into field list."""
-    start = ejbo_addr - READ_BEFORE
-    total = READ_BEFORE + 4 + read_after   # before + EJBO tag + after
+def read_object_fields(h, ejbo_addr, read_after=DEFAULT_READ_AFTER,
+                       read_before=READ_BEFORE, cls=None):
+    """Read the raw bytes around an EJBO object and decode into field list.
+
+    read_before must be a multiple of 4 so field offsets stay dword-aligned."""
+    start = ejbo_addr - read_before
+    total = read_before + 4 + read_after   # before + EJBO tag + after
     raw   = read_bytes(h, start, total)
     if raw is None:
         return None, ""
     # Decode every 4-byte dword as multiple types
     fields = []
     for i in range(0, len(raw) - 3, 4):
-        offset = i - READ_BEFORE  # offset relative to EJBO
+        offset = i - read_before  # offset relative to EJBO
         b = raw[i:i+4]
         u32 = struct.unpack("<I", b)[0]
         i32 = struct.unpack("<i", b)[0]
@@ -405,10 +455,15 @@ def read_object_fields(h, ejbo_addr, read_after=DEFAULT_READ_AFTER):
         })
     # Try to extract a name string — search EJBO+4 through EJBO+16 for
     # the start of a printable ASCII run (name may be at different offsets
-    # depending on object type).
+    # depending on object type). Negative offsets are included for multiple-
+    # inheritance classes, whose fields start before the tag: Owner's civ name
+    # is at -44.
     name = ""
-    for name_off in (8, 12, 16, 4):
-        pos = READ_BEFORE + 4 + name_off
+    known = CLASS_NAME_STRING.get(cls)
+    if known is not None:
+        name = read_std_string(raw, read_before + known) or ""
+    for name_off in ([] if name else (8, 12, 16, 4)):
+        pos = read_before + 4 + name_off
         if pos + 4 > len(raw):
             continue
         name_bytes = raw[pos:pos+32]
@@ -439,7 +494,22 @@ def load_annotations():
         # Windows would otherwise decode it as cp1252, turning every em-dash into
         # mojibake that the next save then escapes permanently.
         with open(ANNOTATIONS_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
+            text = f.read()
+        # Duplicate keys are legal JSON and silently resolve to the LAST value,
+        # so a hand-edited file can carry two annotations for one offset while the
+        # viewer shows only one. The first rewrite then destroys the hidden one.
+        # Planet:356/360/364 each sat duplicated for several commits this way.
+        seen, dupes = set(), []
+        def _hook(pairs):
+            for k, _ in pairs:
+                (dupes.append(k) if k in seen else seen.add(k))
+            return dict(pairs)
+        ann = json.loads(text, object_pairs_hook=_hook)
+        if dupes:
+            print(f"[annotations] WARNING duplicate keys, only the last of each "
+                  f"is in effect and a save will drop the rest: "
+                  f"{sorted(set(dupes))}")
+        return ann
     return {}
 
 def save_annotations(ann):
@@ -534,7 +604,8 @@ class ViewerState:
                                                           self.rtti_cache)
             fields, name = read_object_fields(
                 self.handle, addr,
-                self.extents.get(type_name, DEFAULT_READ_AFTER))
+                self.extents.get(type_name, DEFAULT_READ_AFTER),
+                CLASS_FRONT.get(type_name, READ_BEFORE), type_name)
             if fields is None:
                 continue
             objs.append({
