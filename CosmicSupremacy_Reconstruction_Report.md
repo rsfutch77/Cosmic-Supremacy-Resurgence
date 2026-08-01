@@ -779,14 +779,10 @@ game's allocator to free it. The leak is harmless within a session but is not cl
 reference node at `record+4` may also be reference-counted; dropping it without decrementing is
 unverified.
 
-**Standalone `Ship` object — do not attempt.** Two blockers:
-
-1. **The heap allocation cannot be freed** from outside; there is no way to call the game's
-   `operator delete` through `WriteProcessMemory`.
-2. **The container the game enumerates ships from has not been located.** Nothing in `Owner`,
-   `Planet` or `Fleet` references a standalone `Ship` — no direct pointer, no reference node, and no
-   vector in any `Owner` or `Planet` contains one. So an unknown structure holds that reference.
-   Zeroing the `EJBO` tag would hide the ship from *our* scanner while the game kept walking it.
+**Standalone `Ship` object — the registry has now been found.** See the section below; the earlier
+blocker was that the container was unknown, and it is not any field of `Owner`, `Planet` or `Fleet`.
+The heap allocation still cannot be freed from outside, so removal means unregistering and accepting
+a leak.
 
 **Recommended approach: let the game do the deleting.** The engine removes ships cleanly, including
 the fleet-record erase and the sub-allocation, so the safe path is to *drive* it rather than
@@ -898,6 +894,88 @@ actual fleet. A route scan **can** target a ship, but shows little unless that s
 The way to give an enemy ship a genuine route is to let the game create the order on one of our own
 ships first and flip ownership afterwards — `Ship:40` and `Ship:48` are independent, so the route
 survives the change of owner and no foreign allocation is involved.
+
+### The object registry — `0x00854628` (July 2026)
+
+The blocker behind both "cannot safely delete a ship" and "cannot fabricate a fleet" was not knowing
+where the engine registers objects. It is a **`std::vector` of object pointers whose header lives at
+a fixed `.data` address**:
+
+```
+0x00854628   begin   -> the pointer array
+0x0085462C   end     -> one past the last entry
+0x00854630   cap
+```
+
+Observed with 9 live ships: `begin = 0x06515DA8`, `end = cap = 0x06515DCC`, i.e. size 9, capacity 9,
+and the array held all nine ship **object starts** (`EJBO − 8`) in order.
+
+**How it was found.** Earlier attempts only checked EJBO *fields* on `Owner`, `Planet` and `Fleet`
+and concluded no container existed. Scanning **all 596 MB of writable memory** for pointers to known
+ship objects instead produced a run of 9 references at stride 4 — a flat array — and a single
+pointer to that array's start, in `.data`. The lesson is that the earlier negative result was a
+consequence of searching only inside EJBO objects.
+
+**What this enables.**
+
+- **Unregistering** an object is a vector erase in the same shape as the fleet-record erase:
+  shift the tail down 4 bytes and decrement `end`. The object's own allocation still leaks, since
+  external code cannot call the engine's `operator delete`.
+- **Registering** a fabricated object means appending its `EJBO − 8` address and advancing `end`.
+  Capacity is currently equal to size, so an append needs the array relocated first — allocate a
+  larger array with `VirtualAllocEx`, copy, add the new entry, then repoint `begin`/`end`/`cap`.
+  The same reasoning that makes the population buffer safe applies: size the new array generously so
+  the engine never needs to grow it and therefore never frees a pointer it did not allocate.
+
+**Still to verify before relying on it:** whether this vector is the *only* registry (a fabricated
+object may also need to appear in per-owner or per-system structures), and whether the engine walks
+it for rendering as well as logic. Fabricating a `Fleet` also needs a correct 44-byte member-record
+array and a valid vftable, so the object itself is more work than the registration.
+
+[ ] verify the `0x00854628` registry is sufficient to make a fabricated object live — register a copy of an existing Ship and see whether the game renders and ticks it
+
+### The Scanning tab — reports located (August 2026)
+
+Staging a scannable enemy fleet (see the ownership-flip section) made the whole tab readable.
+
+**`Owner:320/324/328` is the scan-reports vector** — 4-byte pointers, one per completed scan. It grew
+from 1 to 2 elements the moment a fleet scan finished, in a seconds-wide diff.
+
+Each element points at a report object with a consistent layout:
+
+| Offset | Content |
+|---|---|
+| `+0` | vftable identifying the scan class — **`RouteScan` `0x007765B4`**, **`FleetScan` `0x0077613C`** |
+| `+4` | scan type id, matching the `Owner:200` descriptors: **2 = route, 3 = fleet** |
+| `+12` | **the turn the scan was taken** — read 488 and 508 with the game at turn 508 |
+| `+16/+20/+24` | the target's coordinates — the fleet scan's matched `Fleet #673` exactly |
+| `+28` | reference node to the **scanned civ's** `Owner` |
+| `+44/+48/+52` | results vector; its **first element points at the scanned object** (`Ship #669` for the route scan, `Fleet #673` for the fleet scan) |
+
+**Two type-descriptor vectors on `Owner`, not inventories.** `Owner:200` holds 8-byte
+`[vftable, typeId]` `Scan` descriptors and `Owner:172` holds the same shape for `Facility` — ids 0, 2,
+4, 6 matching the facilities the civ can build. Both are empty on a civ that has unlocked nothing.
+These describe what a civ **can** do, as distinct from what it **has** (the per-planet facility map at
+`Planet:204`).
+
+**Two falsifications, both caught by write tests.**
+
+- **`Owner:68` is not the available-scan count.** Writing 8 changed nothing in the UI. It does
+  increment `0 → 1 → 2` as scans are produced but did **not** decrement when one was used, so the best
+  remaining reading is a lifetime total. The earlier `CONFIRMED` label rested on two correlated
+  increments and no causal test.
+- **`Owner:200` is not the inventory either.** Setting both descriptor entries to the same type id did
+  not change what the scans tab offered.
+
+The lesson is specific and cheap: **a write test costs one command and settles direction of
+causation**, which two consistent correlations do not. Both fields had passed the correlation bar.
+
+The scan *inventory* — how many of each type are held — remains unlocated.
+
+[ ] locate the scan inventory: the count of each held scan type. `Owner:68` and the `Owner:200` descriptor vector are both excluded by write test; take a short-interval snapshot across producing or consuming a single scan
+[ ] run each remaining scan type and record its type id and report-object class — only route (2, `RouteScan`) and fleet (3, `FleetScan`) are known, and the ids are not contiguous so others may sit outside 2–3
+[ ] check whether each scan type's results vector at report`+44` has a different element layout — route and fleet both begin with a pointer to the scanned object, but the remainder differs in length (44 vs 52 bytes) and has not been decoded
+[ ] Recon tab — believed to have no backing state in memory; confirm by diffing across opening and using it, and record the negative result either way
 
 ### The reference-node idiom
 
