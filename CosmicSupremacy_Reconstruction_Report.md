@@ -1183,6 +1183,272 @@ tally, and note that the original game resolved this server-side, so the client 
 local vote and rely on a server response — which would make it unsyncable without the real server
 protocol and would close the item.
 
+### Audit sweep — closed items, and the Owner registry (August 2026)
+
+A pass over every annotated class, looking for unannotated fields adjacent to known
+structures and for annotations still carrying open questions.
+
+**Three things were closed rather than tracked.**
+
+*No class other than `Owner` and `ShipDesign` hides front matter.* Every class was tested for a
+same-class vftable further back than `−8`; only `Owner` (−52) and `ShipDesign` (−12) have one.
+`Planet`, `Ship` and `Sun` are single-inheritance, so their varying negative offsets are heap block
+headers and the preceding object's tail, not missed fields. Worth stating explicitly, because the
+civ name had just been found hiding 52 bytes in front of the tag and the same could plausibly have
+been true elsewhere. It is not. Recorded on each class's `−8` annotation so it is not reopened.
+
+*`Ship:20/24/28/32/36` are screen projection* — present only while the ship is on screen, changing
+with camera angle and zoom. Render state, recomputed per frame, never syncable. Closed.
+
+*The ~27 `Planet` "always zero" offsets are one finding, not 27 questions* — collapsed to a single
+shared annotation and one TODO below. The caveat matters: every save observed so far has been a
+young galaxy, so "always zero" is weak evidence for "unused".
+
+**`Owner:-16` is the key of an Owner registry.** Each civ's `−16` value is mirrored in a two-word
+node `[key, Owner*]`, and those nodes belong to an **MSVC `std::map` whose head is `0x02D48740`**.
+Walking it enumerates exactly the live civs, each node's key matching that civ's `−16` exactly:
+
+```
+head 0x02D48740   [_Left = leftmost, _Parent = root, _Right = rightmost]
+  node 0x0A525A80   key 0x2DB018D6 -> Owner#634 (GoodGuy)
+  node 0x0A5257A0   key 0x6C157D63 -> Owner#638 (BadGuy)
+```
+
+Same idiom as the `Planet:204` facility map. **This is the registry the "create a third player" item
+was blocked on** — though inserting into a red-black tree by hand is materially harder than
+appending to the `std::vector` registries used for `Ship` and `Treaty`, and the key looks like a
+hash whose derivation is unknown, so a fabricated civ needs a key that will not collide.
+
+**`Owner:-12` is a one-byte bool, and this one nearly became a wrong annotation.** It reads
+`0x02E44501` on the human civ, and `0x02E44500` genuinely *is* the address of a live `SolarSystem`
+object — a very convincing "tagged pointer to the home system". It is wrong: the AI civ reads
+`0x00000001`, a null pointer, and the AI certainly has a home system. MSVC writes a `bool` as one
+byte and leaves the adjacent three untouched, so the human's `45 E4 02` is residue from the previous
+occupant of that allocation. **Read only the low byte.** The general lesson: a plausible pointer in
+a struct can be three bytes of stale allocator residue behind a one-byte field, and the check that
+catches it is comparing the same offset across two instances.
+
+[ ] re-check the ~27 dormant `Planet` offsets in a developed save before treating them as unused
+[ ] identify `Owner:924` and `Owner:928` alongside the existing `Owner:920` item — one of the three
+is "anonymous scanning", which the UI renders as a checkbox rather than a number
+[ ] understand why the engine **zeroes** `Owner:932/936/940` on the next turn while accepting writes
+to every trait from 748 to 928; `932` is the dark-age-turns candidate, and a field the engine
+actively rejects is worth understanding before trying to load state into it
+[ ] identify `Ship:56` and `Fleet:56` — the same slot on both classes, holding the static null node
+on every instance ever observed including ships under orders and in fleets, so nothing has been seen
+to fill it
+[ ] identify `Owner:356`, a packed uint16 pair that moved `0x00000001 -> 0x00010001` when a
+technology completed
+[ ] identify `Owner:1208/1212/1216`, a float triple in X/Z/Y layout present only on the AI civ and
+zero on the human — plausibly an AI strategy target, in which case it is irrelevant to sync
+[ ] identify `Admiral:48` (1 on all admirals) and `Admiral:56` (1 on the admiral with a ship
+assigned, 0 on the others, tracking `Admiral:8`)
+[ ] decide whether `Sun` needs annotating at all — only 8 fields are known and `Sun:44/80/84/88`
+vary across all 108 suns, but the galaxy is client-generated from a seed, so suns may need no
+syncing whatsoever. Settle the question before spending effort on the fields
+[ ] settle `Planet:96`: 499 distinct values across 525 planets looks like real per-planet state, but
+both homeworlds share the identical pointer-shaped value `0x01278BE0`, which fits the appearance
+block already documented around `Planet:20-32`. Probably cosmetic; cheap to confirm
+
+### Ship designs: the full registry table, and two falsifications (August 2026)
+
+Tested against a game with four designs of known composition — `Colony Ship` (shuttle, 3 nuclear
+drives, colony module), `bomber` (shuttle, 1 drive, fusion bomb), `mass` (shuttle, fusion drive,
+magneto shield, mass driver), `corv` (**corvette**, 1 drive, large pilot cabin). One non-shuttle and
+one 3-engine design were enough to separate several fields at once.
+
+**Part records are `[vftable, subtypeId]` pairs, and the ids are now decoded.** Each of the five
+category vectors holds 8-byte records where the vftable is identical across every part in that
+category — so the vftable names the category and the second word identifies the part. RTTI resolves
+all five:
+
+| Offset | RTTI class | Subtype ids confirmed |
+|---|---|---|
+| `+128` | `ShipChassis` | `0` shuttle, `1` corvette |
+| `+152` | `ShipScanner` | `0` neutron scanner (on all five designs) |
+| `+176` | `ShipEngine` | `0` nuclear drive, `1` fusion drive |
+| `+200` | `ShipWeapon` | `0` mass driver, `10` fusion bomb — **not contiguous** |
+| `+224` | `ShipModule` | `0` colony module, `1` troop bay, `2` large pilot cabin |
+
+Element count is the part count: the Colony Ship holds three id-`0` engine records for its 3 nuclear
+drives. Absence of a category is an **empty vector**, not a sentinel. This largely closes the
+deferred "decode individual part objects" item — enough to copy a design between clients.
+
+**`ShipDesign:80` is NOT chassis size — that reading was wrong and is withdrawn.** It reads `7` on
+the corvette `corv` *and* on the **shuttle** `troop`, and `2` on the other three. I had concluded
+"chassis" from two designs that both read 7 and assumed they shared a hull; the user corrected that
+`troop` is a shuttle. What those two actually share is a **personnel module** — large pilot cabin
+(id 2) and troop bay (id 1) — against a base of `2` with no module or with a colony module. Leading
+reading is crew/unit capacity, which fits the "ship units bonus" trait at `Owner:792`. Untested.
+
+**The real chassis id is the second word of the `ShipDesign:128` vector** — `0` on four shuttles, `1`
+on the single corvette.
+
+**`ShipDesign:76` is a payload-delivery flag**, with three readings falsified along the way:
+
+| design | module fitted (id) | `:76` | `:80` |
+|---|---|---|---|
+| Colony Ship | colony module (0) | **2** | 2 |
+| troop | troop bay (1) | **2** | **7** |
+| corv | large pilot cabin (2) | 1 | **7** |
+| bomber | — (fusion bomb) | 1 | 2 |
+| mass | — (mass driver, shield) | 1 | 2 |
+
+Not chassis, not colonisation-capable (the troop design reads 2 and cannot colonise), not "carries a
+module" (the pilot-cabin design has one and reads 1). Module ids `0` and `1` both **deliver a payload
+to a planet**, enabling colonise and conquer. Note `:76` and `:80` key off the *same* module id on
+two different axes — payload versus personnel — which is why any single-design comparison was always
+going to conflate them.
+
+> **Two wrong conclusions came from the same mistake here:** treating "these two designs agree" as
+> "these two designs share the property I have in mind". Five designs varying one thing each is what
+> separated chassis, engine count, payload and crew; two designs agreeing on a number proved nothing.
+> The `:80` error was caught only because the user knew the hull sizes and contradicted the claim.
+
+**`Owner:440/444/448` is not the ship-design list — falsified.** It reads **empty on both civs** with
+four user designs present. The earlier "3 elements on the civ that owned 3 designs" was coincidence.
+
+**There is no `ShipDesign` registry.** A sweep of `.data` for vectors containing *only* EJBO object
+pointers — accepting both `tag-8` and multiple-inheritance base forms — found none for `ShipDesign`,
+so designs are not registered the way other classes are. For sync they can simply be enumerated by
+scanning for the EJBO tag, which is how the viewer finds them anyway.
+
+That sweep did complete the registry table, adding two that were unknown:
+
+| Address | Class | Entries |
+|---|---|---|
+| `0x00854628` | `Ship` | one per ship |
+| `0x008553C4` | **`Planet`** | 536, every planet |
+| `0x00856384` | **`Sun`** | 108, every sun |
+| `0x0086ED78` | `Treaty` | one per treaty |
+| `0x02D48740` | `Owner` | a `std::map`, not a vector — see the audit section |
+
+> **A phantom was rejected in the same pass.** A 33-entry "`Planet` registry" appeared at
+> `0x00856388`, four bytes after the `Sun` registry. It is the Sun registry's **`end` field**: a triple
+> read there is `(end, cap, next)`, its "capacity" is `0x3F333333` — the float `0.7` — and the 33
+> planets are just the array that follows the Sun array in the heap. This is the third time
+> overlapping `[begin, end, cap]` triples have manufactured a fake container, after `Owner:1132` and
+> the first known-players attempt. **Any vector-shaped scan must reject triples that overlap a
+> known vector's fields.**
+
+**`Owner:-48` is a `ShipDesign*`, and the "galaxy welcome text" annotation is withdrawn.** Both civs
+hold the same value, resolving to `ShipDesign#650 tag-12` with a valid `ShipDesign` vftable — the
+Colony Ship *base* template rather than the computed one. The earlier label came from seeing ASCII
+near the pointer target in a different game without resolving RTTI, which is the same failure mode as
+the `Owner:-12` "SolarSystem pointer". In that earlier game the target's first word was `0x636C6500`,
+not a vftable, so the field does not hold a `ShipDesign` in every game and the reading is not yet
+complete.
+
+[ ] settle `Owner:-48`: confirmed a `ShipDesign*` (the Colony Ship base template) in one game but
+pointing at text-like memory in another. Leading reading is the civ's default/starting design
+[ ] pin down `ShipDesign:76` and `ShipDesign:80` together: build a design mixing a **troop bay with
+weapons** to see whether `:76` stays 2, and a design with **two personnel modules** to see whether
+`:80` scales past 7 (which would confirm it as a capacity rather than a flag)
+[ ] extend the part-id tables by fitting each remaining part type once — the weapon ids are already
+known to be non-contiguous (`0` then `10`), so the ranges cannot be inferred and must be observed
+
+### Homeworld customisation — four click counts in `.data` (August 2026)
+
+The start-of-game popup offers four adjustable options for the homeworld — space, food, production
+and science — with 30 increments to distribute. **What is stored is the click counts, not the
+results.**
+
+```
+0x00842AE4   space       clicks
+0x00842AE8   food        clicks
+0x00842AEC   production  clicks
+0x00842AF0   science     clicks
+```
+
+CONFIRMED across three snapshots: all four read `0` before any click; after a first round of
+`space 2, food 3, production 5, science 7` the record read exactly that; after loading the remaining
+13 increments into space it read `15, 3, 5, 7`, totalling the 30 available. The **space slot tracking
+`0 → 2 → 15` across two separate rounds of clicking** is what identifies it, rather than a single
+end-state match.
+
+**Everything the UI shows is derived from those counts plus a base table.** The defaults live at
+`0x02CA8410` as `[300, 32, 30, 40]` — space, food, production, science — and the UI computes:
+
+```
+space              = 300 + 50 + 5 x spaceClicks      = 300 + 50 + 75  = 425
+food per farmer    = 32 + foodClicks                 = 32 + 3         = 35
+production/worker  = 30 + productionClicks           = 30 + 5         = 35
+science/scientist  = 40 + scienceClicks              = 40 + 7         = 47
+```
+
+The flat **+50 on space** applies on top of the clicks. Only the space result is written to an object
+(`Planet:104` high 16 bits); the three per-unit outputs appear **nowhere in memory** as ints or
+floats, in any grouping or stride. They join ETA, military rank and maximum population as
+derived-not-stored values.
+
+**So the syncable state is the four click counts**, and a client given those reproduces every visible
+number itself.
+
+Two things this cost, both worth recording as method:
+
+*The popup writes nothing while open.* All 17 first-round increments left `Planet` untouched — space
+stayed at 300. The staged values were duplicated across UI widgets: **1385 words** moved by one of the
+four expected deltas, in 610 clusters, and the only windows containing one of each had irregular
+strides. Nothing there was a record. Had space not been a known field acting as a control, that diff
+would have looked like a promising lead.
+
+*The confirmation diff was clean per-object and filthy globally.* Only 9 offsets changed on the
+customised planet and **zero** on the rival's, but memory-wide the same step changed **425,677**
+small-valued words. A whole-memory sweep was therefore useless while the two-planet comparison was
+decisive. Picking the right comparison mattered more than the size of the sweep.
+
+*Three `.data` sequences read `[3, 5, 7]`* and only one of them was the record; the other three were
+static constants that never changed across any snapshot. The value pattern alone would have picked
+the wrong address.
+
+#### Multiplayer consequence — a real gap, not a hypothetical
+
+**Every player customises their own civ traits and their own homeworld.** The two systems store
+their results very differently, and only one of them survives being replicated to other clients.
+
+*Civ traits are safe.* `Owner:744…940` is per-`Owner` state — non-zero on the human civ and zero on
+the AI in the same game — so replicating the `Owner` carries a civ's traits and every client agrees.
+
+*Homeworld space is safe.* It is baked into `Planet:104`, per planet.
+
+*Food, production and science are not.* They are recomputed every turn from `base table + click
+counts`, and the click counts appear to be **one global `.data` record**, not one per civ. This
+matters because **turn resolution runs client-side and each client simulates every civ's economy,
+not just its own** — directly evidenced by the food work, where a single turn on the human's client
+produced HQ +153, new colony +99, **and rival HQ +80**. If two players each customise, every client
+would compute the *other's* homeworld output from its own local record, and the simulations would
+drift a little every turn, silently, with nothing in the UI showing the discrepancy.
+
+**Cheap prototype fix:** require all players to leave the homeworld food/production/science at
+default. Zero clicks means every client computes `32 / 30 / 40` for every homeworld and they agree by
+construction. The constraint applies only to those three values — space can vary freely per player
+because it is genuinely stored per planet.
+
+**Best lead for solving it properly:** the per-unit outputs may be stored per *citizen* rather than
+per planet. Population is a list of 16-byte citizen records at `Planet:144`, and the search for the
+output values turned up repeating `[35, 47]` pairs at a 40-byte stride in the heap. Both were read at
+turn 0 with no population, so a planet with citizens is the state in which to look.
+
+[ ] check whether the per-unit outputs appear in the `Planet:144` citizen records once a planet has
+population — if they do, they are per-planet after all and the multiplayer gap closes
+[ ] confirm whether the click record is per-civ or global: customise, then look for a sibling
+four-word slot holding the AI's zeros. An attempt at this was inconclusive because the game was
+restarted mid-check
+[ ] confirm the `+50` space constant and the `[300, 32, 30, 40]` base table are galaxy-wide rather
+than per-galaxy-type — both were read in a single game, and galaxy type is known to vary other
+parameters. The user's working assumption is that these defaults are constant for every galaxy
+[ ] **suppress both customisation popups for a returning player.** The civ-trait and homeworld
+popups fire at game start, and a player rejoining a galaxy already has their traits and modifiers in
+the loaded state. This is not merely cosmetic: confirming the homeworld popup is what *writes* the
+click record and applies the `+50` space commit, so a returning player who is shown the popup and
+confirms it with zero clicks would silently reset their homeworld to base values and overwrite
+whatever the server restored. Options, in rough order of preference: (a) write the loaded traits and
+click counts into memory *before* the popup would appear and auto-confirm it, so the engine's own
+commit path produces a consistent result; (b) patch the client to skip the popup entirely, which
+risks leaving the commit-time side effects unapplied; (c) let it appear and re-write the state
+afterwards, which is the least safe because the commit also touched 425,677 words of galaxy setup.
+Whichever is chosen, the restore must run *after* the commit, not before it
+
 ### Registries are per class, not global (August 2026)
 
 `0x00854628` was recorded as "the object registry". It is not — it holds **only `Ship`s**. The war
