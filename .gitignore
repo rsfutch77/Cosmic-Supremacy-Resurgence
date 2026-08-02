@@ -12,3 +12,7 @@ prototype/server/.venv/
 *.hex
 *.log
 *.dmp
+prototype/client/__pycache__
+server/__pycache__
+client/__pycache__
+client/dev_tools/__pycache__
