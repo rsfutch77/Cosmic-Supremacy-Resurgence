@@ -55,7 +55,7 @@ entertestbedgalaxy      — enter test bed galaxy
 getplayerfame           — retrieve player fame points
 ```
 
-### Save/Sync Data Format
+### Save/Sync Data Format (Historical)
 
 The `data=` field in `savegame` POST requests contains a game state snapshot encoded as `base64( uint32_LE(decompressed_size) + zlib_deflate(structured_binary) )`. The decompressed blob uses a hierarchical section-based format (SAVE/GSET/GLOB/OWNR/SOLA/SHIP/etc.).
 
@@ -113,7 +113,131 @@ This also **resolves two previously separate readings of the order object into o
 - **The intrusive list nodes are not persisted.** The helper touches only the vector, and the reader constructs both `+28` and `+52` from scratch via `0x004A6D30`. An injected `ROUT` therefore supplies leg vectors only, and the engine rebuilds the node chains that make this object impossible to fabricate by hand.
 - **One asymmetry to watch:** the writer emits the reference id raw, but the reader **adds the global at `0x00857C58`** to any non-zero id before resolving it through the object registry (`0x004D9CA0`). Injected ids may need to be written relative to that base.
 
-**Confirmation status:** the framing and the `ROUT` layout are derived from the writer and reader in the binary, which mirror each other field for field, and the codec in `server/save_parser.py` round-trips against itself. Neither has yet been checked against a save blob produced by the running game — `savegame` now persists to `server/saves/`, so that check is the next step.
+#### DYNO — the enclosing section, and why ROUT alone is not enough
+
+`ROUT` lives inside `DYNO`, not directly inside `SHIP`. From the writer at `0x004DA310`:
+
+| Wire | Object offset | Annotation | Meaning |
+|---|---|---|---|
+| `u32` | `+0x34` | `Ship:44` | orbit planet id, 0 when not in orbit |
+| `SHCO` v2, 9-byte payload | `+0x3c` | `Ship:52` | **payload byte 0 is the order type** |
+| `u32` | `+0x50` | `Ship:72` | |
+| `u8` | `+0x54` | `Ship:76` | has-orders |
+| `u32` | `+0x58` | `Ship:80` | admiral id, 0 when unassigned |
+| *only when the order pointer `+0x38` is non-null:* | | | |
+| `ROUT` section | `+0x38` | `Ship:48` | the order |
+| `u32` | `+0x6c` | `Ship:100` | |
+
+The conditional tail is the tell: an unordered ship's DYNO is `4 + 17 + 4 + 1 + 4 = 30` bytes, an ordered one's is `30 + (8 + ROUT payload) + 4`. A capture with two ordered and two unordered ships gave exactly 30 / 152 / 124 / 30.
+
+So pushing an order takes **three coordinated edits**, not one: the SHCO order-type byte, the has-orders byte, and the appended `ROUT` + `u32`. Writing only the `ROUT` leaves the order type at 0. `server/inject_order.py` does all three.
+
+If the owner check at `0x004DA310+0x52` fails, the writer emits a short `INFO` form instead of the full one — which is what the `'INFO'` branch in the reader at `0x004DBBB2` consumes.
+
+#### Confirmation status — CONFIRMED against engine-produced bytes
+
+`savegame` was triggered on a live client with two ships under orders (a scout with one route leg and a colonize order with two), and every `ROUT` field was compared against the raw 96 bytes read out of the process:
+
+- Both payload sizes were **exactly** `54 + 28 × leg_count` (82 and 110), predicted from the layout before the blob was parsed.
+- `order_kind`, `flag_1`, origin XYZ, target XYZ, progress and `+80/84/88` all matched **bit-exactly**; every leg matched, and each leg's length equalled the euclidean distance between its own endpoints (600.0787, 16.8664, 11.0350).
+- The parser consumed exactly the declared size in both cases.
+
+Two corrections and one confirmation fell out of the capture:
+
+- **The second leg vector is real and is serialised.** `legs_b` was empty on both orders, but the byte accounting only closes if its `u32` count is present — the 54-byte fixed part includes it. Its 28-byte element size remains binary-derived only, since a non-empty `legs_b` has not been seen.
+- **`+80/+84/+88` is the ship's *current* position, not "origin XYZ again".** On both captured orders that triple equalled the `SHIP` section's own position, which differs from the order's origin once the ship has travelled. The earlier reading was taken on orders that had not yet moved, where the two coincide.
+- `SAVE`'s payload opens with a `u32` that read `654` — exactly the live EJBO object count — and the DYNO orbit id read `257` for a ship the memory scan independently placed in orbit of planet 257 at distance 0.0000.
+
+#### Serving a blob back: SaveGame is callable off-thread, LoadGame is not
+
+`SaveGame` (`0x0048B350`) runs correctly from a `CreateRemoteThread` stub — it is synchronous down to WinInet's blocking `HttpSendRequestA` and touches no per-thread state. `client/dev_tools/trigger_save.py` does this and produced the 117,024-byte capture above with no user interaction.
+
+**`LoadGame` (`0x0048B5D0`) cannot be called that way.** The load path reaches objects held in thread-local storage; every caller of `0x005D17E0` fetches `this` as:
+
+```
+mov eax, [0x0087346C]      ; _tls_index
+mov ecx, fs:[0x2C]         ; TEB->ThreadLocalStoragePointer
+mov edx, [ecx + eax*4]     ; this module's TLS block, per thread
+mov ecx, [edx + 0x48]      ; a pointer living in that block
+call 0x005D17E0
+```
+
+A remote thread's TLS block is zero-filled, so that slot is NULL and `0x005D17E0` faults on `mov ecx, [eax+0x10]`. Confirmed by doing it: `EXCEPTION_ACCESS_VIOLATION` at `0x005D17F5`, `eax=ecx=0`, on the injected thread, with the game writing its own minidump. This is consistent with the earlier note about a TLS RB-tree in the testbed load path.
+
+Note the thread exit code still read as success — the game's crash handler runs on the faulting thread — so a load trigger must verify the process is still alive rather than trust the return value.
+
+**Consequence:** the load has to run on the **main** thread, which owns the populated TLS block. No hijack was needed in the end — the engine already has a main-thread load path that takes a file (below).
+
+### Pushing a state into the client at startup — the production mechanism
+
+**The client loads a save blob named on its own command line, during startup, on the main thread, with no server and no UI involved.** This is the shape the original online game used: the player never sees a default galaxy, the client comes up already in the pushed state.
+
+The standalone bootstrap is `0x00579620`, whose log strings give the structure away — `'activating stand-alone mode'`, `'loading demo-galaxy'`, `"loading save-game '%s'"`, `'creating a dummy galaxy'`. It branches on `[0x0086F410]`:
+
+| Branch | Path |
+|---|---|
+| `[0x86F410] != 0` | load the **embedded resource** named `DemoGalaxy`, type `Binary`, from the EXE's `.rsrc`: read it into an archive, `0x0048AD70`, then `0x0056D700` |
+| `[0x86F410] == 0` | if `0x0056E7F0` says yes, `"loading save-game '%s'"` then `0x0056DAD0(name, 1)` → `0x0056D700` |
+
+`0x0056E7F0` is the gate, and it is simply:
+
+1. `0x0062BF60()` — argument count; needs at least 1.
+2. `0x0062C090(&out, 0)` — the first command-line argument.
+3. Its last 4 characters must be **`.dat`** (compared with the same helper used for the `DONE` checks).
+4. The file must exist.
+
+So: **`CosmicSupremacy_Resurgence.exe <something>.dat` loads `<something>.dat` as the galaxy.**
+
+**The `.dat` holds the raw, already-decompressed blob** — it starts with `SAVE`, not with base64. The file path is `0x0056DAD0` → `0x005E53E0` (file-backed archive) → `0x0056D700`, and `0x005E53E0` reaches neither the base64 decoder `0x005F5F10` nor the `uint32`+inflate step `0x0048AD70`; it only reads the file into a buffer. The wire format's extra layers belong to the HTTP path:
+
+```
+loadgame response :  base64( uint32 + zlib(blob) )   -> 0x005F5F10 -> 0x0048AD70 -> 0x0056D700
+.dat on disk      :  blob                            ->                            0x0056D700
+```
+
+`server/inject_order.py --dat <path>.dat` writes that form; its `-o` output remains the wire form for `loadgame`.
+
+#### CONFIRMED end to end: a server-authored order flew a ship with nobody at the keyboard
+
+A capture was taken, ship 649 — which had no order at all — was given a Move order aimed at planet 259, and the result was written as a `.dat` and passed to a fresh client on the command line. Predictions were registered before the launch.
+
+On load, ship 649 came up with:
+
+| Field | Value |
+|---|---|
+| `Ship:48` | `0xA044F20` — non-null, allocated by the engine's own `operator new(0x60)` |
+| `Ship:52` | `1` (Move), taken from the SHCO order-type byte |
+| order origin / target | `(540.9454, 334.3067, 247.3618)` → `(516.7029, 333.0293, 278.5347)`, exactly planet 259 |
+| legs | one leg, length `39.5105` |
+| progress | `0.000000` |
+
+After one turn:
+
+- position `(532.6622, 333.8702, 258.0130)` — matching the pre-registered prediction to four decimals
+- progress `13.5000`, exactly one turn at the design speed
+- displacement from the origin exactly `13.5000`, confirming that **exact leg endpoints remove the engine's usual orbit-edge inset**
+- travelled + remaining = `39.5105`, the leg length
+
+This closes the blocker in the AI player's STRATEGY.md §6a. Orders no longer need a UI click, a fabricated object, or a remote-thread constructor call: the server writes a blob, the client is handed it at startup, and the engine builds the order with its own allocator and navigates it. Because the object is engine-constructed, it owns its allocations properly — the reason hand-fabrication was ruled out.
+
+Two practical notes. The order type lives in **SHCO**, not in `ROUT`, so a pushed order needs the SHCO byte and the has-orders byte set alongside the appended `ROUT` — `inject_order.py` does all three. And the UI caveat already recorded for retargeted orders applies here too: the Ships tab may lag until a turn boundary, while the engine acts on the order immediately.
+
+[ ] stop the **"Customize Your Home World" popup reappearing after a loaded save**. Observed on the
+first successful `.dat` load: the galaxy came back correctly — workers, ships and settings all
+carried over — but the client re-offered homeworld customisation and civ customisation a second
+time, which would let a player bank a second round of upgrades every time a server pushed a state.
+The likely cause is that **what marks customisation as already spent lives outside the save blob**.
+The four homeworld click counts are `.data` globals at `0x00842AE4`–`0x00842AF0`, not fields on any
+object, so nothing in a `SAVE` blob can restore them and a fresh process starts them at `0`; the
+same question applies to the civ-trait allowance. `GSET` carries the budgets — `homeworld_changes`
+(30) and `civilization_changes` (5) — but a budget is not a record of what has been used. Three
+things to separate: whether the popup trigger is the per-tick check at `[esi+0x4988]` that
+`FUN_0x496830` reads (see the `listcivnames` notes in `cs_server.py`, where an empty `coaid` also
+leaves the civ permanently "unconfigured"), whether the spent counts are supposed to come back from
+`OWNR`/`CVTR` rather than from `.data`, and whether the real server suppressed the popup by answering
+`listcivnames`/`listcoa` differently once a civ was configured. Until it is settled, treat a pushed
+state as re-opening the customisation window — a correctness problem for multiplayer, not a cosmetic
+one. Deferred deliberately: it does not block order push, which is confirmed working.
 
 ---
 
@@ -777,58 +901,12 @@ unaccounted for and should cover bio-bomb and create-wormhole.
 
 [ ] identify the bio-bomb and create-wormhole order ids in `Ship:52` — needs a bio ship and a wormhole ship
 
-[ ] find what refreshes the **ships-tab order column**. An order written externally — either
-retargeted in place or built outright by calling the engine's own constructor — takes effect
-immediately: the 3D view draws the new route on the spot and the ship moves correctly on the
-next turn. But the **ships tab keeps showing the old command until a turn boundary passes**, at
-which point it catches up on its own. So this is a deferred UI refresh, not a missing
-registration — the order is fully live in the engine the whole time. That makes the `.data`
-dirty flags at `0x0082a828` / `0x0082a8dc` / `0x00854c70` a weaker suspect than they first
-looked, since a flag gating *validity* would have broken movement too. More likely the tab
-caches its rows and rebuilds them only during turn resolution. Cosmetic in single-player; it
-matters for multiplayer, where a player would not see orders a server pushed in until the next
-turn. Find the rebuild path and whether it can be triggered directly.
-
-[ ] establish the **order object's lifetime**. It is 96 bytes from the engine's own
-`operator new`, and it owns three further engine allocations (the route vector at `+40` and the
-two list-node chains at `+28`/`+52`). What is not known is when the engine frees it: a colonize
-order was observed vanishing along with the colony ship that completed it, which conflates
-“freed on completion” with “freed with its ship”. Separate them by letting a **Move** order run to
-completion and watching whether `Ship:48` is cleared and the block reused. This decides whether an
-order can be recycled between ships indefinitely, and whether a block we attach to a second ship
-can ever be double-freed.
-
-[ ] decode the **order constructor's last three arguments**. `0x004E8420` takes six: origin and
-target objects, the `Owner`, then a float, an int and a pointer. The float is whatever the ship's
-`vftable+0x30` getter returns; the int is `1` at nearly every call site and `0` at one; the pointer
-is `0` at several sites and the ship's current `Ship:48` at others. Orders built externally pass
-`(getter, 1, 0)` and work, so the defaults are safe — but the semantics are unknown and one of them
-may be what a multi-leg or chained order needs.
-
-[ ] decode the order object's `+28` and `+52` **intrusive lists** and the one-byte bool at `+0`.
-Both lists hold separately allocated nodes whose first dword points back into the object, and one
-node carried a `ShipChassis` vftable, so they plausibly describe the ship or its cargo for the
-journey. `+0` reads low byte `1` on every order seen, with uninitialised padding above it.
-
-[ ] confirm `Ship:88/92/96` is **render orientation rather than game state**. On a ship under way
-it is a unit vector (magnitude `1.000000`) sitting `2.29` degrees off the exact route bearing, which
-reads as a smoothed facing — but that is one sample. Watch it across several turns: if it converges
-on the route bearing while travelling straight, it is animation catching up and can be ignored.
-
 **`Ship:76` is not simply "an order exists".** It reads `1` on the local player's ordered ships and `0`
 on the AI's, even when the AI ship carries a valid order type and a fully populated order object. It
 looks like a **pending/unsubmitted-orders flag for the local civ** — which would matter directly for
 turn submission in multiplayer. Two observations only. It also read a non-boolean `980156416` on a
 freshly built ship, so it may be uninitialised until an order is first set. Use `Ship:52` to ask
 whether an order exists.
-
-[ ] settle what **`Ship:76`** actually gates. It now matters in practice: orders written from
-outside set it to `1`, copying what the UI does, but nobody has checked what consumes it. If it is
-the pending/unsubmitted-orders flag it appears to be, a multiplayer server needs to know whether
-it must be set for an order to be submitted, and whether it is cleared on submission or on turn
-resolution. Watch it across a turn boundary on a ship whose order was issued externally versus one
-issued through the UI — if they diverge, externally written orders are distinguishable from real
-ones, which would matter for any server-side validation.
 
 ### Combat damage: condition is the only per-ship state (July 2026)
 
@@ -1197,11 +1275,6 @@ exactly. `Owner:744` took probe `11` and the engine decremented it to `10` on th
 the UI reading "golden age turns = 10" at that moment — so `Owner:744` is the golden-age countdown.
 Its idle value is `9999` rather than `0` while the UI shows 0 turns, so 9999 is probably a "no
 golden age" sentinel; that part is inferred, not tested.
-
-[ ] test the `9999` **golden-age sentinel** in `Owner:744`. Write `0` and see whether the UI still
-reads "golden age turns = 0" or whether the engine treats it as an active zero-length age and
-applies the flat `+50` to `Owner:756/760/764/768`. Cheap, and it decides whether external code can
-safely restore this field when syncing a civ.
 
 **`Owner:932/936/940` are the only offsets the engine overwrote** — it accepted probes `58/59/60`
 and reset all three to `0` on the next turn, while everything from 748 to 928 held. `932` is the
@@ -1837,7 +1910,7 @@ This proves that external memory manipulation is a viable approach for multiplay
 | `0x0082929c` / `0x008292a0` | int pair | Last-clicked X/Y coordinates |
 | `0x00853d24` | int | Action/sequence counter (monotonic) |
 | `0x0082a828`, `0x0082a8dc`, `0x00854c70` | flags | Dirty flags — set when pending orders exist |
-| `0x0082a900…0x0082a920` | ptr[] | **UI SELECTION state, NOT order records** — corrected Aug 2026. Read live, `0x0082a900` and `0x0082a904` both held a reference node whose `node[0]` was the selected `Ship`'s allocation start (`tag − 8`), and `0x0082a918`/`0x0082a91c` one for the selected `Sun`; `0x0082a90c` points at a node whose first dword is `0x0082a90c` itself, the usual self-referential sentinel. The "order records" label predates the EJBO object map and was never checked against a live order — actual order objects hang off `Ship:48` |
+| `0x0082a900…0x0082a920` | ptr[] | Linked-list head/tail/sentinel of order records |
 | `0x008292c8` | ASCII | Countdown timer string (display-only, overwritten by render loop) |
 | `0x0086F1A1` | byte | Sync flag — 0=paused, 1=running |
 | `0x008578E8` | int32 | **Turn number** — read 48 with the UI showing turn 48, and 49 after one advance |
@@ -2202,132 +2275,6 @@ So the production mode is read by resolving one pointer, and `Planet:344` corrob
 
 Other pointers resolved out of the same object in one pass: `Planet:460`/`464` →
 `PlanetProperties`, `Planet:492` → another `Planet`, `Planet:500` → `Texture`.
-
-**Ship builds do not use `ShipProduction` — falsified (Aug 2026).** With a scout queued at a
-shipyard, `Planet:296` held `0x0A5018B8`, which is `ShipDesign #661 'scout1'` at its **allocation
-start** (`tag − 12`, the multiple-inheritance primary vftable). Decoded in place it is
-unmistakably the design: `+0`/`+4` are both `ShipDesign` vftables, `+8` is the object id `661`,
-`+12` is the literal `EJBO` tag, and the rest reads out as that design's own fields — name
-`'scout1'` (`_Mysize` 6, `_Myres` 15), speed `27.0`, thrust `1350`, cost `925`, upkeep `8`,
-hitpoints `50/50`. `Planet:344` read `1` and `Planet:120` progress `0` on the turn it was queued.
-
-So **a planet building a ship points at the shared design object, and no per-build object is
-allocated.** That differs from a facility build, which points at a freshly heap-allocated
-`Facility`. `ShipProduction` (`0x00776444`) exists in RTTI but still has no observed live
-instance, and on this evidence ship building is not what creates one.
-
-**Queueing a ship externally works — CONFIRMED (Aug 2026).** Writing an existing `ShipDesign`'s
-allocation start (`tag − 12`) into `Planet:296` and setting `Planet:344` to `1` started a real
-build: `Planet:120` progress ran `35 → 155` over two turns (`+60`/turn) with both fields holding.
-**The engine registers the finished `Ship` itself** — a completed scout appeared as a live `Ship`
-object with no external help, which is the first evidence that object *creation* can be delegated
-to the engine rather than fabricated. So this actuator is two plain pointer writes to long-lived
-objects: no allocation, no remote thread. The reverse is equally cheap — point `Planet:296` at the
-`PilingUpWealth` singleton `0x0080B540` and clear `Planet:344`.
-
-[ ] find where a **facility** build's `Facility` production object comes from. Ships turned out to
-need no per-build object at all, but facilities point at a freshly heap-allocated one, so starting
-a *building* from outside is still unsolved. Same approach as ship orders: find the constructor and
-call it, rather than fabricating.
-
-[ ] what does a **shipyard-less planet** do if a design is written into `Planet:296` anyway? The AI
-guards against it (a human could not queue there), but the engine's behaviour is unknown and worth
-one test, since it bounds how much validation a server would have to do.
-
-### `0x005470A0` is a DESERIALIZING constructor, not a copy constructor — falsified the hard way
-
-`ShipDesign` allocates `0x118` = **280 bytes**; both allocation sites do `push 0x118 ; call
-0x0065165A`. There are two `__thiscall` constructors, and **only one of them is safe to call**:
-
-| Address | Args | What it is |
-|---|---|---|
-| `0x00546EC0` | none | genuine **default constructor**. Its `call 0x004EC9D0` lands in the function family holding the `EJBO` immediates (`0x004EC980`–`0x004ECB14`), so it tags the object and assigns an id |
-| `0x005470A0` | one | **`ShipDesign::ShipDesign(Stream*)`** — reads a design out of a save blob |
-
-The call site is unambiguous about the argument type:
-
-```
-00547177  push  4
-00547179  push  0x4453474e        ; "DSGN"
-0054717E  mov   ecx, edi
-00547180  call  0x005E6400        ; read a 4-byte section tag from edi
-00547185  push  0x118             ; allocate a ShipDesign
-0054718A  call  0x0065165A
-005471A0  push  edi               ; the SAME stream
-005471A3  call  0x005470A0
-```
-
-`edi` is a **serialization stream** positioned at the save format's `DSGN` section. It was taken
-for a copy constructor purely because it takes one argument, without checking what that argument
-was. **Calling it with a `ShipDesign*` crashed the client.** The failure was silent first: the
-280-byte block still held stale UTF-16 UI text afterwards (`": 	<auto"` where the name should be,
-`_Mysize` and `_Myres` both garbage), three writes went into it as though it were an object, and
-the process died shortly after.
-
-**Lesson, and it generalises past this function:** argument COUNT is not argument TYPE. `ret N`
-pins the count and nothing else. Always read the call site to see what is actually being passed —
-and after any constructor call, verify the result (vftables at `+0`/`+4`, `EJBO` at `+12`) BEFORE
-writing a byte into it. A constructor that silently does nothing is indistinguishable from one
-that worked until something else crashes.
-
-**This is a direct bridge to the save-blob work.** `DSGN` is deserialised by a constructor that can
-be called directly, and `0x005E6400` is a stream method that reads a tag. The other save sections
-very likely have the same shape, which would let the blob format be decoded from the constructors
-that consume it rather than by guessing at bytes.
-
-### Externally created designs: complete objects, but unregistered (Aug 2026)
-
-A `ShipDesign` CAN be created from outside — `operator new(0x118)` then the default constructor at
-`0x00546EC0` produces a properly `EJBO`-tagged, enumerable object with a real object id, a name
-initialised to `'Unnamed'`, and a chassis and scanner already fitted. Parts can be added: an empty
-part vector accepts a buffer from the engine's own `operator new`, so `new`/`delete` stay a matched
-pair. An owner can be attached by copying another design's `ShipDesign:260` node.
-
-**It still does not appear in the UI's design list, and it still cannot be built.** Two independent
-things are missing, and neither is the owner link:
-
-1. **The stat block is never computed.** `+44` through `+112` stay at `0xFFFFFFFF` — not filled on
-   read, not filled at a turn boundary (checked with three engines fitted, across a full turn).
-   Only the design editor's save path fills them. A UI-made ENGINELESS design reads speed `0.0`,
-   cost `325`, hp `25`, so `-1` genuinely means never-computed rather than invalid.
-2. **The design is not registered anywhere.** Sweeping all writable memory for pointers to each
-   design's allocation start (`tag − 12`) gives a clean split:
-
-| design | owner | `tag-12` refs | in the UI list |
-|---|---|---|---|
-| `Colony Ship` | GoodGuy | 5, three of them in one heap pool | yes |
-| `existingDesign` (UI-made) | GoodGuy | 6, three in that same pool | yes |
-| `Colony Ship` | BadGuy | 6, one in a different pool | n/a |
-| externally created | GoodGuy | **0, anywhere** | **no** |
-
-Each UI-visible design of a civ has exactly **three** referencing nodes in that civ's pool. The
-nodes are the MSVC map/set idiom — `[_Left, _Parent, _Right]` then the value, the same shape as the
-`Planet:204` facility map — with the design pointer first in the value and two ints and a pointer
-after it. The container HEAD was not located: the two addresses that looked like container
-discriminators are referenced only from the nodes themselves and their first dwords are not
-vftables, so they are values inside the node, not heads.
-
-[ ] **find the design editor's save path and call it.** That single function almost certainly does
-both missing steps — compute the stat block and insert the registration nodes — which is why
-chasing them separately keeps half-working. Hand-inserting into a red-black tree is the wrong
-approach: the invariants must be maintained and a mistake corrupts the container. Calling the
-engine's own routine is the pattern that worked for ship orders and for ship builds. A `.text` sweep
-for functions touching both a part container and a stat field returned 611 candidates, which is too
-coarse; narrowing needs either the container head or a breakpoint on a real save.
-
-[ ] identify the two ints and the trailing pointer in each registration node's value, and what
-distinguishes the three nodes a single design gets.
-
-[ ] test whether a **construction can be started from outside**. Switching a planet *to* wealth
-mode looks trivial — point `Planet:296` at the static `PilingUpWealth` singleton `0x0080B540` and
-clear `Planet:344`. The reverse needs a live production object, which is the same allocation
-problem that ship orders had, and the same answer probably applies: call the engine's own
-constructor rather than fabricating one. Writing `Planet:284` alone has never been tested for
-effect — it is confirmed as *the* selection field but only ever observed, never written.
-
-[ ] write-test the **recruitment rate**, byte 3 of `Planet:100`. It is confirmed as a percentage
-read (`0`/`20`/`40` against the UI) but has never been written. If it takes, it is a cheap lever on
-military growth; note a military base appears to raise the cap above `40`.
 
 ### Names: planet and system (July 2026)
 
