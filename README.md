@@ -22,11 +22,9 @@ replacement backend** so the game can be played again.
 ## Repository layout
 
 ```
-exploration/          Analysis artifacts from reverse-engineering the EXE
-
-prototype/            Working prototype (patched client + stub server)
-  client/             Patched EXE and .csgalaxy launcher files
-  server/             Python HTTP stub server
+client/               Patched EXE and .csgalaxy launcher files
+  dev_tools/          Memory viewer, snapshotting, and turn-driving scripts
+server/               Python HTTP stub server
 ```
 
 ## Quick start
@@ -34,7 +32,7 @@ prototype/            Working prototype (patched client + stub server)
 1. Install Python 3.10+
 2. Install dependencies:
    ```
-   cd prototype/server
+   cd server
    pip install -r requirements.txt
    ```
 3. Start the local server for development:

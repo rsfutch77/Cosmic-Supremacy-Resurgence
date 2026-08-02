@@ -2,17 +2,15 @@
 cs_server.log
 save_game_*.dat
 save_gov_*.dat
-prototype/server/save_game_*.dat
-prototype/server/save_gov_*.dat
+server/*.sqlite3
+server/.venv/
 
-# ── Prototype runtime ─────────────────────────────────────────────────────────
-prototype/server/*.sqlite3
-prototype/server/__pycache__/
-prototype/server/.venv/
+# ── Build / debug leftovers ───────────────────────────────────────────────────
 *.hex
 *.log
 *.dmp
-prototype/client/__pycache__
-server/__pycache__
-client/__pycache__
-client/dev_tools/__pycache__
+__pycache__/
+
+# ── Dev tool output ───────────────────────────────────────────────────────────
+client/dev_tools/snapshots/
+*.exe.bak

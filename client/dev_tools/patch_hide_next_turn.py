@@ -28,13 +28,15 @@ ORIGINAL_BYTE = 0x50  # WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON
 PATCHED_BYTE  = 0x40  # WS_CHILD | BS_PUSHBUTTON (no WS_VISIBLE)
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+# The EXEs live in client/, one level above this script's dev_tools/ directory.
+CLIENT_DIR = os.path.dirname(SCRIPT_DIR)
 
 
 def main():
     restore = "--restore" in sys.argv
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
 
-    src = args[0] if args else os.path.join(SCRIPT_DIR, "CosmicSupremacy.exe")
+    src = args[0] if args else os.path.join(CLIENT_DIR, "CosmicSupremacy.exe")
     if not os.path.exists(src):
         print(f"ERROR: File not found: {src}")
         sys.exit(1)
