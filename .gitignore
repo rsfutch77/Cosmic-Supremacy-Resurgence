@@ -4,6 +4,11 @@ save_game_*.dat
 save_gov_*.dat
 server/*.sqlite3
 server/.venv/
+# captured savegame blobs, and the blob loadgame injects when present
+server/saves/
+server/loadgame_blob.b64
+# raw blobs handed to the client as its command-line argument at startup
+client/*.dat
 
 # ── Build / debug leftovers ───────────────────────────────────────────────────
 *.hex
