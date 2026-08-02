@@ -1063,6 +1063,126 @@ There is also a **`Log`** class, and the game's log buffer is already known to t
 what overwrote `Admiral`'s tail past `+88` and forced that class's extent down from a stride of 288.
 If news is backed by that buffer, the same allocation is already partly characterised.
 
+### The Overview tab (August 2026)
+
+Two buttons plus the civilisation traits.
+
+#### The civ-trait block — `Owner:744 … 940`, mapped in one pass
+
+The ~50 game-start adjustable traits are a **contiguous block of 4-byte ints on `Owner`**, each a
+plain percentage with `0` meaning unmodified, and all zero on the AI civ.
+
+Mapping them one at a time would have taken fifty readings. Instead **one distinct probe value was
+written to every offset in the block** (11, 12, 13 … 60), the on-screen trait list was read once,
+and each trait named its own offset by the number it displayed: `offset = 744 + (value − 11) × 4`.
+Originals were saved to disk first and restored afterwards, verified byte-for-byte.
+
+The UI order is **not** the memory order — "planetary defence firepower" and "stationed military
+training" appear near the bottom of the list but sit at `Owner:780`/`784` — so a positional guess
+would have mismapped most of the block. Distinct values were what made a single pass work.
+
+Two independent checks confirm the method: ship speed displayed 18 → `Owner:772`, and firepower 19
+→ `Owner:776`, both exactly where the pre-write values (5 and 10, matching the UI's +5% and +10%)
+already placed them. Full offset list is in the annotations.
+
+**Doctrine and technology modifiers are not stored in the block.** The clearest case: light ship
+speed held probe `30` and displayed `50`, which is `30 +` the researched doctrine's `+20`. So the
+stored value is the base trait only, and the UI adds research effects at display time from the
+`Owner:108` completed list. **The server must sync the base trait plus the research list, never the
+displayed number** — syncing the displayed value would double-count every modifier.
+
+**A golden age adds a flat +50 to the four output bonuses.** Discovered by accident: food,
+production, science and mining displayed `probe + 50` while every other trait displayed its probe
+exactly. `Owner:744` took probe `11` and the engine decremented it to `10` on the next turn, with
+the UI reading "golden age turns = 10" at that moment — so `Owner:744` is the golden-age countdown.
+Its idle value is `9999` rather than `0` while the UI shows 0 turns, so 9999 is probably a "no
+golden age" sentinel; that part is inferred, not tested.
+
+**`Owner:932/936/940` are the only offsets the engine overwrote** — it accepted probes `58/59/60`
+and reset all three to `0` on the next turn, while everything from 748 to 928 held. `932` is the
+leading candidate for **dark age turns**, cleared because a golden age was active, but that is a
+hypothesis built on one observation.
+
+Four items remain open:
+
+[ ] resolve `Owner:788` (ship shield strength): probe `22` displayed as **−12**, but the doctrine's
+−10 shield penalty predicts **+12**. Either the sign was transcribed wrong or the penalty is not a
+flat −10 — and since every other doctrine-affected trait fits the additive model exactly, this one
+disagreement is worth settling before the model is trusted
+[ ] separate `Owner:792`: the screen showed `23` for **both** "income per citizen" and "ship units
+bonus", and only this offset holds 23, so one of the two is derived or lives outside the block
+[ ] identify `Owner:748` and `Owner:752`, which held probes `12`/`13` that no trait displayed.
+"Food consumption per citizen" is the candidate: it read `10` before the pass and an unexplained
+`232` during it
+[ ] confirm which of `Owner:920/924/928` is **anonymous scanning** — the UI renders it as a
+checkbox rather than a number and read "enabled" while all three were non-zero
+
+#### Cash and the resource market
+
+`Owner:8` is **current cash** — CONFIRMED against the UI showing `$2026` at the instant memory read
+2026, with the AI at 1766 simultaneously. Earlier readings had both civs equal, which made "per-civ"
+look unproven; a symmetric start was the reason.
+
+**Buy price is derived, not stored: it is exactly 8× the sell price** across all five resources
+(99→792, 149→1192, 199→1592, 300→2400, 900→7200). Only the sell price needs syncing.
+
+**Resource stocks are `Owner:1128`** — a `std::vector` of five 8-byte `[resourceId, amount]` records,
+ids `0` metal, `1` deuterium, `2` radioactives, `3` crystal, `4` exotics. Confirmed against the UI
+and again by metal tracking a `530 → 583` change at the same address.
+
+This **resolves the "5-entry keyed table"** that had been an unexplained `Owner` field since the
+diplomacy work; the earlier `(0,630) (1,350) (2,260) (3,0) (4,0)` reading was simply that civ's
+stocks. It is also the only vector observed whose **capacity exceeds its end** (48 vs 40) — research
+and known-players both grow to an exact fit — so a sixth resource could be appended in place.
+
+**Prices are computed, not stored.** A sweep of 369 MB, *including 285 MB of read-only data that
+earlier sweeps never covered*, found no contiguous `[100,150,200,300,900]` at any stride from 4 to
+24; a layout-agnostic search found **zero** 512-byte windows containing all five values in any order.
+They are compiled constants.
+
+**`Owner:916` drives both prices** — CONFIRMED by a single-variable write test with a pre-registered
+prediction. Writing 25, with nothing else changed, produced sell prices `125/188/250/375/1125`,
+matching all five predicted values exactly including `187.5 → 188`:
+
+```
+sell = base × (1 + Owner:916 / 100)
+buy  = base × 8 × (1 − Owner:916 / 100)
+base = [100, 150, 200, 300, 900]      in Owner:1128 resource-id order
+```
+
+Positive is good in both directions: it raises sell revenue and lowers purchase cost (metal buy
+`800 → 600` as sell went `100 → 125`). That also explains why buy is exactly 8× sell only when the
+modifier is 0.
+
+**So the syncable market state is just `Owner:916` plus the `Owner:1128` stocks** — no price table.
+
+> **Method note.** The `×1.54` reading that first suggested this relationship was taken while the
+> *entire trait block was scrambled* by the probe pass — fifty variables at once, and the buy/sell
+> ratio was distorted to 2.39× as well. It was a correct hunch from unusable evidence, and it was
+> only worth acting on once re-run as a clean one-variable test. The same instinct with no follow-up
+> test is what produced `Owner:68` and `Owner:200`.
+
+[ ] explain the residual price drift: an early clean reading gave `99/149/199/300/900`, one below
+base on the three resources with non-zero stock and exactly base on the two with zero stock, while a
+later clean reading gave base exactly. Small, and irrelevant to sync if the server writes `Owner:916`
+and the stocks directly, but it means prices are not a pure function of the modifier
+[ ] confirm the **buy**-price formula with a second value of `Owner:916` — it currently rests on one
+data point, unlike the sell formula which is confirmed on five
+[ ] determine whether trading, turn resolution, or both move the market, and whether AI trading
+affects the human's prices
+
+> **Scanner bug worth remembering:** the first price sweep "found" the sequence at a dozen
+> consecutive addresses, which is arithmetically impossible for an increasing sequence. The cause
+> was **NaN**: every comparison against NaN is false, so `abs(v - want) > tol` silently passes and a
+> block of NaN bytes matches any float sequence. Float scans must reject NaN and infinities
+> explicitly.
+
+[ ] decode the **"vote to end galaxy"** button. Deferred: it is a galaxy-lifecycle action rather
+than per-turn state, so nothing in the playable loop needs it. Expect a per-civ vote flag plus a
+tally, and note that the original game resolved this server-side, so the client may hold only the
+local vote and rely on a server response — which would make it unsyncable without the real server
+protocol and would close the item.
+
 ### Registries are per class, not global (August 2026)
 
 `0x00854628` was recorded as "the object registry". It is not — it holds **only `Ship`s**. The war
@@ -1377,6 +1497,114 @@ The address is stable across launches but shows `0xFFFFFFFF` before a galaxy is 
 | T5 | `0x0017902D` | NOP turn guard JZ |
 
 Other timer-related addresses (`0x008292C8` ASCII string, EJBO #160 offset −28 ones-complement timer) are display-only copies overwritten by the render loop — not useful for control.
+
+### Doctrines share the technology research slot (August 2026)
+
+The research UI has two selectable trees, technologies and **doctrines**. They are **not separate
+state.** Selecting a doctrine while a technology was already selected, diffed over a seconds-wide
+interval with no turn advance, changed **exactly two words in the entire process**:
+
+```
+Owner#634  +144   12 -> 43       (current science topic)
+Owner#634  +152   12 -> 43       (selected science topic)
+Owner#638  unchanged
+```
+
+No other `Owner` field moved, no object was created, and no vector changed length. So:
+
+- **One research slot, one item at a time**, across both trees. Selecting a doctrine *replaces* the
+  technology in progress rather than running alongside it.
+- **There is no "which tree" flag.** If one existed it would have had to change when switching from
+  a technology to a doctrine, and nothing did — so the **id alone identifies the tree**, and
+  `Owner:144` fully expresses the research target regardless of which tree it came from. Nothing
+  extra to sync.
+- Doctrine ids share the id space with technology ids: `3` was the tech "Cold Fusion", `12` another
+  technology, `43` a doctrine. Whether doctrines occupy a distinct high range is not established
+  from three samples.
+
+**One `.data` red herring, recorded so it is not chased again.** A 102-character `std::string`
+appeared at `0x008578C8` (`_Mysize` at `+16`, `_Myres` at `+20`, chars off-heap because the length
+exceeds the 15-byte SSO buffer). It reads:
+
+```
+Increases the planetary shield strength by <Shield>40% (<Units>3000 units)
+(Tech-Level 0: +0% Bonus)
+```
+
+That is not the doctrine that was selected — the selected one was "Mobility" (light ships +20%
+speed, all ship shields −10%). It is a **hover/tooltip render buffer** holding whatever the mouse
+last passed over, complete with embedded colour-escape markers. It correlates perfectly with the
+action and carries no state.
+
+#### Completion: one list for both trees, `[id, cost]` records
+
+The doctrine was driven to completion by advancing turns unattended, with a rolling one-turn
+snapshot so the completion was bracketed by a single turn:
+
+```
+turn 39   progress=1560   topic=43   done=16B
+turn 40   progress=0      topic=-1   done=24B
+```
+
+`Owner:108` grew by one 8-byte element, so **completed technologies and completed doctrines share
+one vector.** Records are `[id, cost]`:
+
+```
+[0] id=0    cost=0        starting techs, granted rather than researched
+[1] id=1    cost=0
+[2] id=43   cost=1600     the doctrine, and the exact progress it took
+```
+
+**`Owner:12` accrues whether or not a topic is selected.** The AI sat at `topic = -1` for the whole
+game and still climbed to 1600, gaining 40/turn in lockstep with the human. So it is a research
+**stockpile**, not progress toward a topic, and completion fires when the stockpile reaches the
+selected topic's cost. It **carries the remainder** rather than zeroing. The earlier annotation
+described it as "progress toward the current topic and not a lifetime total", which was right about
+the reset and wrong about the accrual.
+
+This has a sync consequence: **restoring `Owner:12` too high will instantly complete whatever topic
+is set** on the next turn.
+
+#### Loading research state — let the engine append the record
+
+`Owner:108` has `cap == end` after every growth, so there is no slack to append a record by hand;
+doing so would need `VirtualAllocEx` and a pointer the engine will later free. It is unnecessary,
+because completion is driven entirely by two writable fields. **CONFIRMED by write test:**
+
+```
+write   Owner:144 = 12, Owner:152 = 12, Owner:12 = 10000
+advance one turn
+result  progress=7640  topic=-1  done 24B -> 32B  cap 32B
+        [3] id=12 cost=2400        written by the engine, array reallocated
+```
+
+`10000 + 40 − 2400 = 7640`, so the remainder carry is proven rather than inferred, and the engine
+reallocated the array with its own allocator (the array's address changed).
+
+**So the procedure for loading a civ's research state is:** for each completed item, write the id to
+`Owner:144`/`Owner:152`, write a stockpile above its cost to `Owner:12`, and advance one turn — the
+engine appends `[id, cost]` with the correct cost and applies the item's modifiers client-side.
+Then write the true stockpile to `Owner:12` once at the end, or the civ is left holding the leftover
+surplus. This costs one turn per completed item and needs no foreign allocation, which is the same
+trade the known-players ship shuffle makes.
+
+[ ] check whether more than one item can complete per turn — the stockpile survived at 7640, well
+above the next cost, so a single turn might absorb several if the topic is rewritten between them,
+which would collapse the load to far fewer turns
+[ ] establish whether doctrine ids occupy a distinct range from technology ids — three samples
+(`3`, `12` technologies; `43` a doctrine) hint at it but do not show it, and it only matters if the
+server ever has to validate an id rather than copy it
+
+**`Owner:344` is withdrawn as a research candidate.** It doubled 120 → 240 bytes on doctrine
+completion, having also doubled on a technology completion in an earlier game — so the correlation
+has now held twice. Its contents do not support it: ASCII fragments on the human civ (`"BoxTicket"`,
+`"the xy-map|click"`, `">GoodGuy"`) and `SolarSystem` pointers on the AI's. It is neither a research
+list nor the "available/unlocked build options" previously guessed, and a field that changes on the
+right events with the wrong contents is exactly the shape that produced the falsified `Owner:68`
+and `Owner:200`.
+
+[ ] identify `Owner:344` on its own terms — mixed ASCII and `SolarSystem` pointers across civs
+suggests the 8-byte record framing is wrong, so start by establishing the real element stride
 
 ### Research/science accrual — TestBed “Next Turn” vs. full turn resolution (June 2026)
 
