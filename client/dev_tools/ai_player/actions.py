@@ -148,8 +148,110 @@ class Actuator:
                        f"Planet:296 -> ShipDesign {design.design_name!r} (tag-12)")
         return self._u32(planet.addr + 344, 1, "Planet:344 build-active -> 1") and ok
 
+    # -- I': fit parts to a design --------------------------------------
+    # The five part categories sit at a 24-byte stride, each a std::vector of
+    # 8-byte [vftable, subtypeId] records.
+    PART_VECTORS = {
+        "chassis":  (128, 0x007515E0),   # ShipChassis   0 shuttle, 1 corvette
+        "scanners": (152, 0x00763028),   # ShipScanner   0 neutron
+        "engines":  (176, 0x00763054),   # ShipEngine    0 nuclear, 1 fusion
+        "weapons":  (200, 0x007589A8),   # ShipWeapon    0 mass driver, 10 fusion bomb
+        "modules":  (224, 0x007573A0),   # ShipModule    0 colony, 1 troop bay, 2 cabin
+    }
+
+    def fit_parts(self, design, category, ids):
+        """Populate an EMPTY part vector on a design.
+
+        A default-constructed design arrives with a chassis and a scanner but
+        NO ENGINE, which is why its speed and cost stay at the -1 sentinel and
+        why it cannot be built. Fitting an engine is what turns it into a real
+        design.
+
+        The buffer comes from the engine's OWN `operator new`, so when the
+        vector is eventually destroyed its `operator delete` is the matching
+        half of the pair. That is the same reasoning that makes create_order
+        safe, and the reason a VirtualAllocEx buffer would not be.
+
+        ONLY fills a vector that is currently null. Growing or replacing an
+        existing engine-owned buffer would mean freeing memory we did not
+        allocate, which is exactly the hazard this avoids.
+        """
+        if category not in self.PART_VECTORS:
+            raise ValueError(f"{category!r} is not one of "
+                             f"{sorted(self.PART_VECTORS)}")
+        off, vftable = self.PART_VECTORS[category]
+        begin, end = design.u32(off), design.u32(off + 4)
+        if gs.is_ptr(begin) or (end and end != begin):
+            raise ValueError(
+                f"{design} already has a {category} vector at 0x{begin:08X}; "
+                f"this only populates an empty one, because replacing an "
+                f"engine-owned buffer would mean freeing memory we did not "
+                f"allocate")
+        if not ids:
+            raise ValueError("no part ids given")
+        if self.dry_run:
+            self.log(f"  [WOULD FIT] {category}={ids} on {design} "
+                     f"(operator new({len(ids) * 8}) + vector begin/end/cap)")
+            return None
+        if self.remote is None:
+            raise RuntimeError("fit_parts needs a remote.Remote to allocate")
+
+        size = len(ids) * 8
+        buf = self.remote.operator_new(size)
+        payload = b"".join(struct.pack("<II", vftable, i) for i in ids)
+        self._write(buf, payload, f"{category} records {ids}")
+        self._u32(design.addr + off,     buf,        f"{category} begin")
+        self._u32(design.addr + off + 4, buf + size, f"{category} end")
+        self._u32(design.addr + off + 8, buf + size, f"{category} cap")
+        self.log(f"  fitted {len(ids)} {category[:-1] if len(ids) == 1 else category}"
+                 f" to {design}")
+        return buf
+
+    # -- I'': give a design an owner ------------------------------------
+    DESIGN_OWNER = 260
+
+    def set_design_owner(self, design, civ):
+        """Point ShipDesign:260 at a civ's owner reference node.
+
+        A default-constructed design carries the static null node 0x00857C54
+        here, while every design made through the UI carries a real node
+        resolving to its civ's Owner — confirmed across four designs, two civs.
+        That is the difference between a design the game considers yours and one
+        that belongs to nobody, and is the likeliest reason a constructed design
+        does not appear in the UI's design list.
+
+        The node is REUSED from another design of the same civ, never
+        fabricated. That is the same rule the report gives for Ship:40: take the
+        node from something that already has one, because a hand-made node is
+        not registered anywhere the engine knows about.
+        """
+        def owner_of(d):
+            node = d.u32(self.DESIGN_OWNER)
+            if not gs.is_ptr(node) or node == gs.NULL_NODE:
+                return None
+            return self.snap.civ_of(self.snap.rd32(node))
+
+        # Compare by ADDRESS, not identity. Snapshot.refresh() rebuilds every
+        # wrapper, so a Civ handed in by a caller is a different object from the
+        # one in the current snapshot even though both describe the same Owner —
+        # an `is` check here could never match after a refresh.
+        donor = next((d for d in self.snap.designs
+                      if d.addr != design.addr
+                      and (owner_of(d) is not None)
+                      and owner_of(d).addr == civ.addr), None)
+        if donor is None:
+            seen = {d.design_name: (owner_of(d).civ_name if owner_of(d) else None)
+                    for d in self.snap.designs}
+            raise ValueError(
+                f"no existing design of {civ.civ_name!r} to take an owner node "
+                f"from; fabricating one is not safe. Design owners seen: {seen}")
+        node = donor.u32(self.DESIGN_OWNER)
+        self.log(f"  owner node 0x{node:08X} (from {donor.design_name!r})")
+        return self._u32(design.addr + self.DESIGN_OWNER, node,
+                         f"ShipDesign:260 -> Owner {civ.civ_name!r}")
+
     # -- I: create a ship design ----------------------------------------
-    def create_design(self, name):
+    def create_design(self, name, civ=None):
         """Default-construct a new ShipDesign. UNTESTED — see the warning below.
 
         The engine allocates 280 bytes and its own constructor at 0x00546EC0
@@ -175,6 +277,14 @@ class Actuator:
             raise ValueError(f"{name!r} is longer than the 15-char SSO buffer; "
                              f"a longer name would move the string off-heap and "
                              f"turn ShipDesign:8 into a pointer")
+        # The UI requires a unique design name before it will save one, so a
+        # duplicate is a value a human could not have produced. It also makes
+        # every later lookup by name ambiguous.
+        clash = [d for d in self.snap.designs if d.design_name == name]
+        if clash:
+            raise ValueError(
+                f"a design named {name!r} already exists (#{clash[0].id}); the "
+                f"UI enforces unique names, so pick another")
         if self.dry_run:
             self.log(f"  [WOULD CREATE] default-constructed ShipDesign {name!r} "
                      f"(no parts — see create_design docstring)")
@@ -198,6 +308,24 @@ class Actuator:
         self._write(tag + 8, raw, f"design name -> {name!r}")
         self._u32(tag + 24, len(name), "name _Mysize")
         self._u32(tag + 28, 15, "name _Myres (SSO)")
+
+        # A design with no owner belongs to nobody. The default constructor
+        # leaves ShipDesign:260 as the static null node, so attaching an owner
+        # is part of creating a design, not an optional extra.
+        if civ is not None:
+            self.snap.refresh()
+            fresh = next((d for d in self.snap.designs if d.addr == tag), None)
+            if fresh is None:
+                self.log("  [warn] the new design is not enumerable, so no "
+                         "owner node could be attached")
+            else:
+                try:
+                    self.set_design_owner(fresh, civ)
+                except ValueError as e:
+                    # Loud, but not fatal: the design exists and is worth
+                    # inspecting even unowned, and raising here would strand it
+                    # AND skip everything the caller wanted to do next.
+                    self.log(f"  [warn] could not set the owner: {e}")
         return block
 
     def set_wealth_mode(self, planet):

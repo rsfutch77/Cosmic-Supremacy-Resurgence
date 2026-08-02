@@ -2275,14 +2275,48 @@ be called directly, and `0x005E6400` is a stream method that reads a tag. The ot
 very likely have the same shape, which would let the blob format be decoded from the constructors
 that consume it rather than by guessing at bytes.
 
-[ ] **automate ship design — still unsolved.** The default ctor at `0x00546EC0` is callable and
-should produce a properly tagged design, but it leaves all five part vectors EMPTY, and a design
-with no chassis or engine is very likely unbuildable. Growing those engine-owned vectors is the
-unsolved part. Two better angles: build a `DSGN` blob and let `0x005470A0` deserialise it properly,
-or find the UI's own "save design" path. ALSO OPEN: where the civ's list of designs lives —
-`Owner:440` was falsified as that list and there is no `.data` registry for `ShipDesign`, so a
-constructed design may build correctly (`Planet:296` points straight at a design and consults no
-registry) while never appearing in the UI list.
+### Externally created designs: complete objects, but unregistered (Aug 2026)
+
+A `ShipDesign` CAN be created from outside — `operator new(0x118)` then the default constructor at
+`0x00546EC0` produces a properly `EJBO`-tagged, enumerable object with a real object id, a name
+initialised to `'Unnamed'`, and a chassis and scanner already fitted. Parts can be added: an empty
+part vector accepts a buffer from the engine's own `operator new`, so `new`/`delete` stay a matched
+pair. An owner can be attached by copying another design's `ShipDesign:260` node.
+
+**It still does not appear in the UI's design list, and it still cannot be built.** Two independent
+things are missing, and neither is the owner link:
+
+1. **The stat block is never computed.** `+44` through `+112` stay at `0xFFFFFFFF` — not filled on
+   read, not filled at a turn boundary (checked with three engines fitted, across a full turn).
+   Only the design editor's save path fills them. A UI-made ENGINELESS design reads speed `0.0`,
+   cost `325`, hp `25`, so `-1` genuinely means never-computed rather than invalid.
+2. **The design is not registered anywhere.** Sweeping all writable memory for pointers to each
+   design's allocation start (`tag − 12`) gives a clean split:
+
+| design | owner | `tag-12` refs | in the UI list |
+|---|---|---|---|
+| `Colony Ship` | GoodGuy | 5, three of them in one heap pool | yes |
+| `existingDesign` (UI-made) | GoodGuy | 6, three in that same pool | yes |
+| `Colony Ship` | BadGuy | 6, one in a different pool | n/a |
+| externally created | GoodGuy | **0, anywhere** | **no** |
+
+Each UI-visible design of a civ has exactly **three** referencing nodes in that civ's pool. The
+nodes are the MSVC map/set idiom — `[_Left, _Parent, _Right]` then the value, the same shape as the
+`Planet:204` facility map — with the design pointer first in the value and two ints and a pointer
+after it. The container HEAD was not located: the two addresses that looked like container
+discriminators are referenced only from the nodes themselves and their first dwords are not
+vftables, so they are values inside the node, not heads.
+
+[ ] **find the design editor's save path and call it.** That single function almost certainly does
+both missing steps — compute the stat block and insert the registration nodes — which is why
+chasing them separately keeps half-working. Hand-inserting into a red-black tree is the wrong
+approach: the invariants must be maintained and a mistake corrupts the container. Calling the
+engine's own routine is the pattern that worked for ship orders and for ship builds. A `.text` sweep
+for functions touching both a part container and a stat field returned 611 candidates, which is too
+coarse; narrowing needs either the container head or a breakpoint on a real save.
+
+[ ] identify the two ints and the trailing pointer in each registration node's value, and what
+distinguishes the three nodes a single design gets.
 
 [ ] test whether a **construction can be started from outside**. Switching a planet *to* wealth
 mode looks trivial — point `Planet:296` at the static `PilingUpWealth` singleton `0x0080B540` and
