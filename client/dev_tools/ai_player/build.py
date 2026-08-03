@@ -49,12 +49,12 @@ def main():
     args = sys.argv[1:]
     def opt(n, d=None, cast=None):
         return cli.opt(args, n, d, cast)
-    civ_name = opt("--civ", "GoodGuy")
+    civ_name = opt("--civ")
     apply_it = "--apply" in args
     dry_run  = not apply_it
 
     snap = gs.Snapshot()
-    civ = snap.civ(civ_name)
+    civ = gs.resolve_civ(snap, civ_name)
     if civ is None:
         sys.exit(f"no civ {civ_name!r}")
     print(f"=== build — turn {snap.turn} — civ {civ.civ_name!r} — "
