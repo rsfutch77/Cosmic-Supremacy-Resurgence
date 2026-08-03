@@ -32,6 +32,7 @@ import ejbo_viewer as ev
 
 # ── .data statics (stable across launches) ─────────────────────────────────
 TURN_COUNTER     = 0x008578E8
+LOCAL_PLAYER     = 0x00857904   # ref node -> the human civ's Owner
 NULL_NODE        = ev.NULL_REF_NODE      # 0x00857C54
 PILING_UP_WEALTH = 0x0080B540            # shared "generating wealth" singleton
 FACILITY_VFTABLE = 0x00752BA4
@@ -349,6 +350,20 @@ WRAPPERS = {"Owner": Civ, "Planet": Planet, "Ship": Ship,
             "ShipDesign": Design, "Sun": Sun}
 
 
+def resolve_civ(snap, name=None):
+    """The civ a tool should act for, or None with a printed reason.
+
+    Wraps Snapshot.our_civ so every entry point behaves the same: an explicit
+    --civ must exist, and with no --civ we take the local player rather than
+    guessing at a name that customisation may have changed.
+    """
+    try:
+        return snap.our_civ(name)
+    except LookupError as e:
+        print(f"error: {e}")
+        return None
+
+
 def dist(a, b):
     return math.sqrt(sum((x - y) ** 2 for x, y in zip(a, b)))
 
@@ -413,8 +428,35 @@ class Snapshot:
 
     # -- convenience ----------------------------------------------------
     def civ(self, name):
-        """Our civ, by the name at Owner:-44."""
+        """A civ by the name at Owner:-44."""
         return next((c for c in self.civs if c.civ_name == name), None)
+
+    def local_civ(self):
+        """The human player's civ, from the .data local-player node.
+
+        Preferred over matching a name, because the civ name is EDITABLE during
+        home-world customisation: a hardcoded 'GoodGuy' silently matches nothing
+        the moment a player renames their empire, and every rule then quietly
+        does nothing. The pointer is stable and confirmed across separate games.
+        """
+        node = self.rd32(LOCAL_PLAYER)
+        if not is_ptr(node) or node == NULL_NODE:
+            return None
+        return self.civ_of(self.rd32(node))
+
+    def our_civ(self, name=None):
+        """The civ a tool should act for: the named one, else the local player."""
+        if name:
+            c = self.civ(name)
+            if c is None:
+                raise LookupError(f"no civ named {name!r}; saw "
+                                  f"{[x.civ_name for x in self.civs]}")
+            return c
+        c = self.local_civ()
+        if c is None:
+            raise LookupError(f"could not resolve the local player from "
+                              f"0x{LOCAL_PLAYER:08X}; pass --civ explicitly")
+        return c
 
     def owned_planets(self, civ):
         return [p for p in self.planets if p.owner is civ]

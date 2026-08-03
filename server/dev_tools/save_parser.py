@@ -49,6 +49,7 @@ version 4 gives a high uint16 of 0x1000, and a body_size of "decompressed_size
 """
 
 import base64
+import os
 import struct
 import sys
 import zlib
@@ -503,9 +504,23 @@ def main():
     p.add_argument('--gset', action='store_true', help='dump galaxy settings')
     p.add_argument('--rout', action='store_true', help='dump ROUT records')
     p.add_argument('--raw',  action='store_true', help='write the decompressed blob')
+    p.add_argument('--dat', metavar='PATH',
+                   help='write the decompressed blob to PATH for the client to '
+                        'load at startup. The extension must be .dat: the gate at '
+                        '0x0056E7F0 compares the last four characters of argv[0] '
+                        'against ".dat" before it will load anything.')
     args = p.parse_args()
 
     blob = load_any(args.file)
+
+    if args.dat:
+        if not args.dat.lower().endswith('.dat'):
+            sys.exit("--dat path must end in .dat or the client will ignore it")
+        with open(args.dat, 'wb') as f:
+            f.write(blob)
+        print(f"Wrote {len(blob)} bytes to {args.dat} (starts {blob[:4]!r})")
+        print(f'  launch: CosmicSupremacy_Resurgence.exe "{os.path.abspath(args.dat)}"')
+        return
 
     if args.raw:
         out = args.file.rsplit('.', 1)[0] + '.raw'

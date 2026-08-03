@@ -31,16 +31,18 @@ import time
 import actions
 import cli
 import expand
+import exploit
 import gamestate as gs
 import remote
+import sensors
 
 TURN_COUNTER    = gs.TURN_COUNTER
 TURNLENGTH_ADDR = 0x0080AA08
 DEFAULT_LENGTH  = 3600
 
-# Rules run in this order every pass. Sustain belongs at the front once it
-# exists — a starving colony undoes any amount of expansion.
-RULES = expand.RULES
+# Sustain first: a starving colony undoes any amount of expansion, so food is
+# settled before anything else spends a citizen or a shipyard.
+RULES = exploit.RULES + expand.RULES
 
 
 class Loop:
@@ -56,6 +58,7 @@ class Loop:
             raise RuntimeError("CosmicSupremacy is not running")
         self.remote = None
         self.passes = 0
+        self.history = sensors.History()
 
     # -- turn clock -----------------------------------------------------
     def turn(self):
@@ -118,7 +121,7 @@ class Loop:
     # -- one decision pass ----------------------------------------------
     def one_pass(self):
         snap = gs.Snapshot(self.state)
-        civ = snap.civ(self.civ_name)
+        civ = gs.resolve_civ(snap, self.civ_name)
         if civ is None:
             self.log(f"[loop] no civ named {self.civ_name!r}; saw "
                      f"{[c.civ_name for c in snap.civs]}")
@@ -140,6 +143,9 @@ class Loop:
                      "home-world customisation popup. While it is up the turn "
                      "counter will not advance either.")
 
+        self.history.observe(snap, civ)
+        self.log(f"    {self.history.summary()}")
+
         act = actions.Actuator(snap, dry_run=self.dry_run, log=self.log,
                                remote_factory=self._get_remote)
         for name, fn in RULES:
@@ -147,6 +153,8 @@ class Loop:
                 if fn is expand.run_xpn02:
                     fn(snap, civ, act, vision=self.vision, top=self.top,
                        log=self.log)
+                elif fn is exploit.run_food:
+                    fn(snap, civ, act, self.history, log=self.log)
                 else:
                     fn(snap, civ, act, log=self.log)
             except Exception as e:
@@ -189,8 +197,12 @@ class Loop:
         finally:
             if original is not None:
                 self.set_turn_length(original)
-                self.log(f"[loop] turn length restored to "
-                         f"{self.read_turn_length()}s")
+                now = self.read_turn_length()
+                # A dead process reads None; saying "restored to Nones" hides
+                # the far more important fact that the client is gone.
+                self.log(f"[loop] turn length restored to {now}s" if now
+                         else "[loop] could not restore turn length — the "
+                              "client is gone (it exited or crashed)")
             if self.remote is not None:
                 self.remote.close()
 
@@ -199,7 +211,7 @@ def main():
     args = sys.argv[1:]
     def opt(n, d=None, cast=None):
         return cli.opt(args, n, d, cast)
-    loop = Loop(civ_name=opt("--civ", "GoodGuy"),
+    loop = Loop(civ_name=opt("--civ"),
                 dry_run=not cli.flag(args, "--apply"),
                 vision=opt("--vision", "all"),
                 top=opt("--top", 0, int))

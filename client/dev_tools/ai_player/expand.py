@@ -275,14 +275,14 @@ def main():
     args = sys.argv[1:]
     def opt(name, default=None, cast=None):
         return cli.opt(args, name, default, cast)
-    civ_name = opt("--civ", "GoodGuy")
+    civ_name = opt("--civ")
     top      = opt("--top", 10, int)
     vision   = opt("--vision", "all")
     forced   = opt("--target")
     dry_run  = "--apply" not in args
 
     snap = gs.Snapshot()
-    civ = snap.civ(civ_name)
+    civ = gs.resolve_civ(snap, civ_name)
     if civ is None:
         sys.exit(f"no civ named {civ_name!r}; saw "
                  f"{[c.civ_name for c in snap.civs]}")
