@@ -251,7 +251,7 @@ This also settles an asymmetry flagged earlier as unconfirmed: the loader adds `
 
 #### The gap: `.data` bookkeeping the blob does not serialise
 
-The four homeworld customisation click counters at `0x00842AE4`–`0x00842AF0` all read **0** after a load, against a `GSET homeworld_changes` budget of 30 — while the *effect* is present, the homeworld (planet 257) carrying space 450 against a 300 base. So the client believes nothing has been spent and re-offers the whole allowance. This is the popup, and it is a **correctness** problem: a player could bank another 30 increments on every pushed state. Tracked as the TODO below.
+The four homeworld customisation click counters at `0x00842AE4`–`0x00842AF0` all read **0** after a load, against a `GSET homeworld_changes` budget of 30 — while the *effect* is present, the homeworld (planet 257) carrying space 450 against a 300 base. So the client believes nothing has been spent and re-offers the whole allowance. This is the popup, and it is worse than a duplicated allowance: **confirming that popup is the engine's commit path, so a zero-click confirm resets the homeworld over whatever the server restored** — a data-loss bug, tracked as its own TODO below along with the trigger.
 
 The general shape matters more than this instance: **game state living in `.data` rather than on an object cannot be in the blob**, because the blob serialises objects. Any other such counter has the same problem.
 
@@ -276,29 +276,46 @@ non-blob state is already at defaults on both sides. The homeworld click counter
 `0x00842AE4`–`0x00842AF0` are the one confirmed member of this class so far, found via the popup
 rather than by search.
 
-[ ] stop the **"Customize Your Home World" popup reappearing after a loaded save**. Observed on the
-first successful `.dat` load: the galaxy came back correctly — workers, ships and settings all
-carried over — but the client re-offered homeworld customisation and civ customisation a second
-time, which would let a player bank a second round of upgrades every time a server pushed a state.
-**It is worse than a second helping of upgrades.** Confirming the popup is what *writes* the click
-record and applies the `+50` space commit, so a returning player who is shown the popup and confirms
-it with zero clicks would **silently reset their homeworld to base values and overwrite whatever the
-server restored**. The memory report's "suppress both customisation popups" item carries the
-implementation options and the warning that any restore must run *after* the engine's commit, not
-before it.
+[ ] **BUG, DATA LOSS — confirming the customisation popup overwrites server-restored homeworld
+state.** The highest-severity known defect in the save-push path, and the reason the popup is not a
+cosmetic issue. Confirming the homeworld popup is the engine's *commit* path: it writes the click
+record and applies the `+50` space constant. A returning player who is shown the popup and confirms
+it **with zero clicks** therefore resets their homeworld to base values, silently destroying whatever
+the server had just restored. The commit is also heavy — the same step touched 425,677 words of
+galaxy setup — so it cannot be treated as a small local write.
 
-The likely cause is that **what marks customisation as already spent lives outside the save blob**.
-The four homeworld click counts are `.data` globals at `0x00842AE4`–`0x00842AF0`, not fields on any
-object, so nothing in a `SAVE` blob can restore them and a fresh process starts them at `0`; the
+Two consequences worth stating separately from the trigger. First, **this is destructive whenever the
+popup fires, however it got triggered** — suppressing the specific reappearance below removes one
+trigger, not the hazard. Second, it constrains every candidate fix: **any state restore must run
+after the engine's commit, not before it**, or the commit overwrites the restore. The memory report's
+"suppress both customisation popups" item holds the three implementation options and that ordering
+warning.
+
+Not yet measured: whether the civ-trait popup has the same commit-time destructiveness, and what
+exactly a zero-click confirm does to a homeworld whose space was restored to a customised value —
+the reset is inferred from the commit path, not yet observed end to end. Reproducing it deliberately
+on a throwaway state would settle both.
+
+[ ] stop the **"Customize Your Home World" popup reappearing after a loaded save** — the trigger
+behind the bug above. Observed on the first successful `.dat` load: the galaxy came back correctly —
+workers, ships and settings all carried over — but the client re-offered homeworld and civ
+customisation a second time, which on its own would also let a player bank a fresh allowance on every
+pushed state.
+
+The cause is that **what marks customisation as already spent lives outside the save blob**. The four
+homeworld click counts are `.data` globals at `0x00842AE4`–`0x00842AF0`, not fields on any object, so
+nothing in a `SAVE` blob can restore them and a fresh process starts them at `0` — measured directly:
+all four read `0` after a load while the homeworld already carried space 450 against a 300 base. The
 same question applies to the civ-trait allowance. `GSET` carries the budgets — `homeworld_changes`
 (30) and `civilization_changes` (5) — but a budget is not a record of what has been used. Three
 things to separate: whether the popup trigger is the per-tick check at `[esi+0x4988]` that
 `FUN_0x496830` reads (see the `listcivnames` notes in `cs_server.py`, where an empty `coaid` also
 leaves the civ permanently "unconfigured"), whether the spent counts are supposed to come back from
 `OWNR`/`CVTR` rather than from `.data`, and whether the real server suppressed the popup by answering
-`listcivnames`/`listcoa` differently once a civ was configured. Until it is settled, treat a pushed
-state as re-opening the customisation window — a correctness problem for multiplayer, not a cosmetic
-one. Deferred deliberately: it does not block order push, which is confirmed working.
+`listcivnames`/`listcoa` differently once a civ was configured.
+
+Deferred deliberately: it does not block order push, which is confirmed working. But treat any pushed
+state as re-opening the customisation window until this is settled.
 
 ---
 
