@@ -44,6 +44,9 @@ PAGE_READWRITE     = 0x04
 INFINITE           = 0xFFFFFFFF
 
 OPERATOR_NEW = 0x0065165A
+SELL_FACILITY = 0x004F8580      # PlanetProperties::SellFacility
+PLANET_PROPERTIES = 88          # PlanetProperties lives at planet_tag + 88
+OFFLINE_FLAG = 0x0086F1A0       # the local-apply path runs only when this byte is set
 ORDER_CTOR   = 0x004E8420
 ORDER_SIZE   = 0x60
 
@@ -65,6 +68,13 @@ DESIGN_CTOR = 0x00546EC0      # __thiscall, NO stack arguments. The real one.
 # object uninitialised — the 280-byte block still held stale UTF-16 UI text
 # afterwards. Do not call this without a real stream.
 DESIGN_STREAM_CTOR = 0x005470A0
+
+# ShipDesignData lives at ShipDesign allocation + 0x10, i.e. (EJBO tag) + 4.
+# Every derived stat is a lazy cache: the block is set to -1 whenever parts
+# change, and each getter is `if (cached == -1) { compute; cache; } return`.
+# Calling the getter therefore both READS the value and warms the cache.
+DESIGN_DATA_OFFSET  = 4        # from the EJBO tag
+DESIGN_SPEED_GETTER = 0x005480A0   # __thiscall, no args, returns in st(0)
 
 # Every ShipDesign must show these at its allocation start, or construction
 # did not happen. Checking them is cheap and is the difference between a bad
@@ -249,6 +259,22 @@ class Remote:
             return None
         return bytes(buf[:n.value])
 
+    def design_speed(self, design_tag):
+        """Call the engine's speed getter for a design; returns the float bits.
+
+        A design whose derived block reads -1 is NOT invalid — the cache is cold.
+        Treating -1 as "unbuildable" froze the AI after every load, because a
+        load leaves the block invalidated and only a getter call fills it. This
+        both answers the question and warms the cache, so subsequent plain reads
+        of ShipDesign:36 return the real number.
+        """
+        code = (mov_ecx_imm(design_tag + DESIGN_DATA_OFFSET) +
+                mov_eax_imm(DESIGN_SPEED_GETTER) +
+                CALL_EAX +
+                SUB_ESP_4 + FSTP_ESP + POP_EAX +
+                RET_4)
+        return self.run_stub(code, f"design speed getter on 0x{design_tag:08X}")
+
     def construct_order(self, order, origin_alloc, target_alloc, owner_alloc,
                         f_bits, a5=1, a6=0):
         """Run the engine's order constructor on an engine-allocated block.
@@ -267,3 +293,31 @@ class Remote:
                 CALL_EAX +
                 RET_4)
         return self.run_stub(code, f"order ctor on 0x{order:08X}")
+
+    # ── selling a facility ────────────────────────────────────────────────
+    # __thiscall bool PlanetProperties::SellFacility(int typeId, int count)
+    # at 0x004F8580, ret 8 (callee-cleaned, so the stub pushes and forgets).
+    #
+    # ecx is the PlanetProperties, i.e. planet_allocation + 0x60, which is
+    # planet_tag + 88 -- both call sites reach it with a literal `add ecx, 0x60`.
+    #
+    # It does the whole transaction itself: prices the facility, credits the
+    # owner's treasury at Owner:8, and removes the units. That is exactly why we
+    # call it instead of reproducing it. STRATEGY.md 1.1 forbids writing cash,
+    # and a sale that paid itself would be indistinguishable from inventing
+    # money -- letting the engine compute the payout keeps the rule intact.
+    #
+    #   price = round(facilityValue * 0.05) * count
+    #
+    # The 0.05 is the double at 0x753CF8. A military camp paying 75 implies a
+    # facility value of 1500, which is the number to check the call against.
+    def sell_facility(self, planet_tag, type_id, count=1):
+        code = (push_imm(count) +
+                push_imm(type_id) +
+                mov_ecx_imm(planet_tag + PLANET_PROPERTIES) +
+                mov_eax_imm(SELL_FACILITY) +
+                CALL_EAX +
+                RET_4)
+        return self.run_stub(
+            code, f"SellFacility(type {type_id} x{count}) on planet "
+                  f"0x{planet_tag:08X}")

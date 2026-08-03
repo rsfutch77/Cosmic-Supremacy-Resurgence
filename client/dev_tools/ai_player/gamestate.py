@@ -38,7 +38,11 @@ PILING_UP_WEALTH = 0x0080B540            # shared "generating wealth" singleton
 FACILITY_VFTABLE = 0x00752BA4
 
 # ── Id tables (all CONFIRMED in the annotations unless marked) ─────────────
-JOBS       = {0: "farmer", 1: "worker", 2: "scientist", 5: "miner", 6: "banker"}
+# 3 = crew, first observed on a ship's crew vector (Ship:124). 4 is still
+# unobserved.
+JOBS       = {0: "farmer", 1: "worker", 2: "scientist", 3: "crew",
+              5: "miner", 6: "banker"}
+CREW_JOB   = 3
 FACILITIES = {0: "farm", 2: "shipyard", 4: "university", 6: "military camp",
               8: "defence agency", 9: "light turret"}
 ORDERS     = {0: "none", 1: "move", 2: "scout", 3: "colonize", 4: "attack",
@@ -167,13 +171,19 @@ class Civ(Obj):
 class Design(Obj):
     """ShipDesign.
 
-    NOT-COMPUTED SENTINEL: an unfinished design holds -1 *in the field's own
-    type* — int fields read 0xFFFFFFFF, the float speed reads 0xBF800000. Both
-    were seen on the human civ's Colony Ship while the game was still on the
-    home-world customisation dialog, with the AI civ's equivalent design already
-    computed at speed 13.5. So -1 means "the engine has not filled this in yet",
-    not a real value, and every accessor here returns None for it rather than
-    letting a -1 propagate into arithmetic.
+    THE DERIVED STATS ARE A LAZY CACHE, NOT A VALIDITY FLAG. `-1` in a field's
+    own type (0xFFFFFFFF for ints, 0xBF800000 for the speed float) means "not
+    cached", and the engine writes it across the whole block whenever parts
+    change or a design is copied — `ShipDesignData::InvalidateDerivedStats` at
+    0x005471D0. Each stat then has a getter shaped
+    `if (cached == -1) { compute; cache; } return cached`, e.g. speed at
+    0x005480A0, and the UI shows correct numbers for a -1 design precisely
+    because the UI calls them.
+
+    So a design reading -1 IS buildable. Accessors return None to keep the
+    sentinel out of arithmetic, but None here means "ask the engine", not
+    "broken" — treating it as broken froze the AI after every load, since a load
+    leaves the block invalidated. remote.design_speed warms it.
     """
 
     @staticmethod
@@ -200,9 +210,22 @@ class Design(Obj):
     def cost_radio(self):  return self._n(self.i32(100))
 
     @property
-    def computed(self):
-        """False while the engine has not yet filled the design in."""
+    def stats_cached(self):
+        """Whether the derived stat block is warm.
+
+        NOT a validity test. The block is a LAZY CACHE: the engine writes -1
+        across it whenever parts change or a design is copied, and each stat has
+        a getter of the form `if (cached == -1) { compute; cache; } return`. A
+        design reading -1 is perfectly buildable — the UI shows correct numbers
+        for exactly that design because the UI calls those getters.
+
+        Gating rules on this was wrong and froze the AI after every load, since
+        a load leaves the block invalidated. Use remote.design_speed to warm it.
+        """
         return self.speed is not None
+
+    # Kept as an alias so nothing silently changes meaning; prefer stats_cached.
+    computed = stats_cached
 
     @property
     def firepower(self):
@@ -225,6 +248,17 @@ class Design(Obj):
     def modules(self):  return self._parts(224)
 
     # -- role taxonomy (ours, derived; see STRATEGY.md §2.4) ----------------
+    @property
+    def owner(self):
+        """The civ this design belongs to — ShipDesign:260, a reference node.
+
+        Designs are PER CIV and every civ's are visible in memory, so anything
+        choosing a design to build must filter on this. Without it a rule will
+        happily pick the rival's design, which is both wrong and not something a
+        player could do.
+        """
+        return self.snap.civ_of(self.node_target(260))
+
     @property
     def is_colony(self): return 0 in self.modules
     @property
@@ -261,6 +295,22 @@ class Ship(Obj):
         return d.role if d else "?"
     @property
     def idle(self):       return (self.order_type or 0) == 0
+
+    @property
+    def crew(self):
+        """Crew aboard — 16-byte records at Ship:124, the same shape as the
+        Planet:144 citizens, each carrying job id 3.
+
+        A SHIP WITH NO CREW CANNOT MOVE, and the engine cancels any order it is
+        given at the next turn boundary: it frees the order object and clears
+        Ship:48. A rule that does not check this re-issues an order every turn
+        forever and leaks one engine allocation each time, while every log line
+        reads like success.
+        """
+        return [struct.unpack_from("<I", r, 0)[0] for r in self.vec(124, 16)]
+
+    @property
+    def crewed(self):     return len(self.crew) > 0
 
 
 class Planet(Obj):

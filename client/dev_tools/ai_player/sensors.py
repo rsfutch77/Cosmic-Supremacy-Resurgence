@@ -24,11 +24,19 @@ TWO RULES THIS ENFORCES, both from hard experience elsewhere in this project:
 """
 
 
+import math
+
+
+def _dist(a, b):
+    """Local copy so sensors does not import gamestate and create a cycle."""
+    return math.sqrt(sum((x - y) ** 2 for x, y in zip(a, b)))
+
 class History:
     def __init__(self):
         self.prev = None          # {"turn", "planets": {id: {...}}, "civ": {...}}
         self._acted = set()       # planet ids touched since the last observation
         self._stale = set()       # planet ids whose next delta is untrustworthy
+        self.discovered = set()   # sun ids whose planets we are allowed to see
 
     # -- recording -------------------------------------------------------
     def observe(self, snap, civ):
@@ -44,7 +52,48 @@ class History:
         self._stale, self._acted = self._acted, set()
         self._cur, self._prev_for_pass = cur, self.prev
         self.prev = cur
+        self._discover(snap, civ)
         return self
+
+    # -- fog of war ------------------------------------------------------
+    def _discover(self, snap, civ):
+        """Grow the set of systems this civ is entitled to see inside.
+
+        Client memory holds every planet in the galaxy, discovered or not, so an
+        AI that reads it directly is cheating: in the real game a system's
+        planets are only revealed once a ship reaches its SUN, which is why the
+        scout order targets a star rather than a planet. Picking a colony target
+        in a system nobody has visited is exactly that cheat, and the AI did it
+        until this was added.
+
+        A system counts as discovered when we hold a planet in it, when one of
+        our ships is inside it, or when a scan report names it. Nothing here
+        ever forgets — discovery is permanent, as it is in the game.
+        """
+        for p in snap.owned_planets(civ):
+            s, _r = snap.nearest_sun(p)
+            if s is not None:
+                self.discovered.add(s.id)
+        for sh in snap.owned_ships(civ):
+            s, r = snap.nearest_sun(sh)
+            # Inside the system, not merely closest to it: the widest orbit
+            # measured is 39.6 and the tightest gap between stars is 111.7.
+            if s is not None and r <= 55.0:
+                self.discovered.add(s.id)
+        for rep in civ.vec(320, 4):
+            import struct as _s
+            ptr = _s.unpack("<I", rep)[0]
+            raw = snap.read(ptr + 16, 12) if 0x10000 < ptr < 0x7FFF0000 else None
+            if raw and len(raw) == 12:
+                xyz = _s.unpack("<fff", raw)
+                near = min(snap.suns, key=lambda q: _dist(xyz, q.pos))
+                if _dist(xyz, near.pos) <= 55.0:
+                    self.discovered.add(near.id)
+
+    def can_see(self, snap, planet):
+        """True if `planet` sits in a system we have discovered."""
+        s, _r = snap.nearest_sun(planet)
+        return s is not None and s.id in self.discovered
 
     def mark_acted(self, planet_id):
         self._acted.add(planet_id)

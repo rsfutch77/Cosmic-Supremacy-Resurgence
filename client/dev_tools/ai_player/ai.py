@@ -32,6 +32,7 @@ import actions
 import cli
 import expand
 import exploit
+import explore
 import gamestate as gs
 import remote
 import sensors
@@ -41,13 +42,15 @@ TURNLENGTH_ADDR = 0x0080AA08
 DEFAULT_LENGTH  = 3600
 
 # Sustain first: a starving colony undoes any amount of expansion, so food is
-# settled before anything else spends a citizen or a shipyard.
-RULES = exploit.RULES + expand.RULES
+# settled before anything else spends a citizen or a shipyard. Explore runs
+# LAST, so it only picks up ships that Expand had no legal target for — a ship
+# should colonise a known planet in preference to going looking for a new one.
+RULES = exploit.RULES + expand.RULES + explore.RULES
 
 
 class Loop:
     def __init__(self, civ_name="GoodGuy", dry_run=True, vision="all",
-                 top=0, log=print):
+                 top=0, log=print, settle=1.5):
         self.civ_name = civ_name
         self.dry_run = dry_run
         self.vision = vision
@@ -59,6 +62,8 @@ class Loop:
         self.remote = None
         self.passes = 0
         self.history = sensors.History()
+        # Seconds to let turn resolution finish before snapshotting.
+        self.settle = settle
 
     # -- turn clock -----------------------------------------------------
     def turn(self):
@@ -86,6 +91,13 @@ class Loop:
                 self.log("[loop] lost the process")
                 return None
             if t > after:
+                # The counter moves at the START of turn resolution, not the
+                # end. A snapshot taken immediately can catch the engine
+                # mid-rewrite: one pass read "0 planet(s)" for a civ that had
+                # three, and the next read four. Deciding on that would have
+                # had R-XPN-01 see no shipyard and R-XPN-02 no targets. Let it
+                # settle before looking.
+                time.sleep(self.settle)
                 return t
             if drive and self.read_turn_length() != drive:
                 self.log(f"[loop] turn length drifted; re-asserting {drive}s")
@@ -119,9 +131,39 @@ class Loop:
         return self.remote
 
     # -- one decision pass ----------------------------------------------
+    def _snapshot_settled(self, tries=3, pause=1.5):
+        """Snapshot, and retry if the galaxy looks half-rewritten.
+
+        The turn counter moves at the START of resolution, so a snapshot can
+        catch the engine mid-rewrite and report a civ owning nothing. A fixed
+        settle delay only moves the race: 1.5s was enough most turns and still
+        produced a "0 planet(s)" read. Losing every planet between two turns is
+        not something that happens in this game, so treat it as evidence the
+        read was torn and look again rather than guessing at a longer sleep.
+        """
+        for attempt in range(tries):
+            snap = gs.Snapshot(self.state)
+            civ = gs.resolve_civ(snap, self.civ_name)
+            if civ is None:
+                return snap, None
+            if snap.owned_planets(civ):
+                return snap, civ
+            # Retry even on the FIRST pass, when there is no history to compare
+            # against. That blind spot let a torn read through on loop start:
+            # the pass reported "0 planet(s)" for a five-planet civ and computed
+            # its buildable-facility set from an empty empire. A civ genuinely
+            # holding nothing has already lost, so a wasted re-read costs
+            # nothing and the check is worth having unconditionally.
+            had = self.history.prev and self.history.prev["planets"]
+            self.log(f"[loop] read 0 planets"
+                     + (f" for a civ that had {len(had)}" if had else "")
+                     + f" — turn resolution may still be in flight, "
+                       f"re-reading ({attempt + 1}/{tries})")
+            time.sleep(pause)
+        return snap, civ
+
     def one_pass(self):
-        snap = gs.Snapshot(self.state)
-        civ = gs.resolve_civ(snap, self.civ_name)
+        snap, civ = self._snapshot_settled()
         if civ is None:
             self.log(f"[loop] no civ named {self.civ_name!r}; saw "
                      f"{[c.civ_name for c in snap.civs]}")
@@ -152,8 +194,9 @@ class Loop:
             try:
                 if fn is expand.run_xpn02:
                     fn(snap, civ, act, vision=self.vision, top=self.top,
-                       log=self.log)
-                elif fn is exploit.run_food:
+                       hist=self.history, log=self.log)
+                elif fn in (exploit.run_food, explore.run_exp02,
+                            exploit.run_facilities, exploit.run_jobs):
                     fn(snap, civ, act, self.history, log=self.log)
                 else:
                     fn(snap, civ, act, log=self.log)
@@ -213,8 +256,9 @@ def main():
         return cli.opt(args, n, d, cast)
     loop = Loop(civ_name=opt("--civ"),
                 dry_run=not cli.flag(args, "--apply"),
-                vision=opt("--vision", "all"),
-                top=opt("--top", 0, int))
+                vision=opt("--vision", "known"),
+                top=opt("--top", 0, int),
+                settle=opt("--settle", 1.5, float))
     loop.run(follow=cli.flag(args, "--follow"),
              max_turns=opt("--turns", None, int),
              drive=opt("--drive", None, int),
