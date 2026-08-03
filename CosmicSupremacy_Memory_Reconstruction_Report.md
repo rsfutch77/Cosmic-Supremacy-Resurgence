@@ -1076,8 +1076,10 @@ parameters. The user's working assumption is that these defaults are constant fo
 [ ] **suppress both customisation popups for a returning player.** Now confirmed to happen in
 practice, not just in theory: a client loaded from a server-authored `.dat` re-offered both popups,
 because the four click counters below are `.data` globals that no blob can restore — they read `0`
-against a budget of 30 while the homeworld already carried the benefit. This is the top correctness
-blocker on the save-push path; the main report tracks the symptom, this item holds the fix.
+against a budget of 30 while the homeworld already carried the benefit. The main report tracks both
+the data-loss bug (a zero-click confirm re-commits over server-restored state) and the trigger; this
+item holds the three implementation options below and the ordering constraint they all share —
+**a restore must run after the engine's commit, not before it.**
 The civ-trait and homeworld
 popups fire at game start, and a player rejoining a galaxy already has their traits and modifiers in
 the loaded state. This is not merely cosmetic: confirming the homeworld popup is what *writes* the
