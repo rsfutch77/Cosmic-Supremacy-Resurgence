@@ -357,6 +357,29 @@ So a scout targets a *system* while move and conquer target *planets*, and the d
 distinguishes the orders as reliably as the id does. Ids `6` and anything above `7` remain
 unaccounted for and should cover bio-bomb and create-wormhole.
 
+[ ] **conscript a citizen without the UI.** Crew comes from either conscription (pay cash
+for an immediate unit) or the per-planet recruitment rate at `Planet:100` byte 3 plus a wait.
+The rate is a plain byte and is reachable; conscription is a UI button whose memory-side effect
+is unknown. Diff a planet and the civ across a single conscription click: expect cash down,
+the `Planet:168` stationed-military vector up by one, and possibly a population change. Until
+this is solved an external controller can only raise the rate and wait.
+
+**Loading crew without the UI — SOLVED (Aug 2026).** A stationed military unit, a ship's
+crew member and a planet citizen are the SAME 16-byte record, `[jobId, flags, owner-node,
+turnAdded]`, held in three different vectors. Crew carry job id 3, and `Planet:168`'s `+0`
+slot — previously read as "upkeep, 3 on all units" — is that same job id.
+
+So loading crew is a move between vectors: allocate the ship's buffer from the engine's own
+`operator new`, copy the records in, and shrink `Planet:168` by walking its `end` back, which
+frees nothing and keeps the capacity. Confirmed end to end: two units moved off a homeworld
+onto a colony ship, and the ship then held and flew a colonize order it had previously been
+unable to keep for even one turn. Implemented as `actions.load_crew`.
+
+[ ] confirm the crew transfer against a UI-performed load. The move above is accepted by the
+engine and the ship flies, but nothing has checked whether the UI also updates something the
+move does not — a per-civ military total, or a morale or upkeep figure. Diff a planet and a
+ship across one context-menu load and compare with what `load_crew` writes.
+
 [ ] identify the bio-bomb and create-wormhole order ids in `Ship:52` — needs a bio ship and a wormhole ship
 
 **`Ship:76` is not simply "an order exists".** It reads `1` on the local player's ordered ships and `0`
@@ -1709,6 +1732,48 @@ update and the table above stands as measured.
 `farm = 0` is accordingly credible: the other three ids registered promptly when selected,
 and `0,2,4,6` is even and consecutive with no gaps. It is not independently proven, since a
 planet that has never chosen a building also reads `0` (the AI's homeworld does).
+
+### Planet embeds PlanetProperties; production is a closed enumeration (Aug 2026)
+
+From static analysis of the client, cross-checked against the live readings elsewhere here.
+
+**`Planet` embeds a `PlanetProperties` sub-object at allocation `+0x60`** — the SAME memory,
+not a copy. The Planet constructor does `lea ecx,[esi+0x60] ; call 0x004F7BC0`, and the
+sub-object is `0x198` bytes, from the one site that heap-allocates a standalone one
+(`push 0x198 ; call operator new ; call 0x4F7BC0`). The `EJBO` tag sits at planet allocation
+`+8`, so:
+
+> **`Planet:N` == `PlanetProperties + (N - 88)`**
+
+That is the "copy shifted by 88 bytes" noted below, correctly explained. Cross-checked on
+`Planet:120`, `:204`, `:208`, `:284`, `:288`, `:296` and `:344`. Engine functions taking a
+`PlanetProperties*` — most production setters do — want **planet tag + 88**, not the Planet.
+
+`ShipDesign` has the same shape: a `ShipDesignData` sub-object at allocation `+0x10`, so
+**`ShipDesign:N` == `ShipDesignData + (N - 4)`**, the data base being the `EJBO` tag `+ 4`.
+
+**Production is a closed four-value enumeration.** The `Production` vftable's slot 0 is a kind
+getter returning a constant — `Facility` 0, `PilingUpWealth` 7, `ShipDesign` 8, `Scan` 9 — and
+three jump tables switch on exactly that enum. `Planet:296` can only ever hold the embedded
+`Facility` at planet tag + 280, the embedded `Scan` at + 288, the `PilingUpWealth` singleton
+`0x0080B540`, or a `ShipDesign*` at its allocation start. **Nothing is ever heap-allocated for
+a planet's production**, which corrects the "freshly heap-allocated Facility" reading below:
+the observed pointer was simply never compared against planet tag + 280.
+
+`ShipProduction` at `0x00776444` is a nested class of `PlanetaryScanReport`, not a production
+kind, so it can never appear in `Planet:296`. That closes the "expect ShipProduction when
+building ships" lead as a name collision.
+
+Engine entry points, all `__thiscall` on `PlanetProperties` (= planet tag + 88):
+`SetFacilityProduction` 0x004F9890 (2 args, `ret 8`), `SetProduction` 0x004F8290 (2 args),
+`MarkBuildActive` 0x004EFF50, `CanBuildFacility` 0x004F5030. A single network dispatcher at
+0x00573650 covers all four modes on the same 0/7/8/9 key — the receiver to use if production
+is ever driven over the wire rather than by poking memory.
+
+[ ] write-test the three-write facility build: `Planet:284` = type id, `Planet:296` = planet
+tag + 280, `Planet:344` = 1. Byte-for-byte what the engine's own setter does, but it SKIPS
+`CanBuildFacility`, so it must not be used for a type the civ has not unlocked (`Owner:172`)
+or cannot afford. Untested as a write.
 
 ### Production classes are not EJBO-tagged — but they are reachable
 

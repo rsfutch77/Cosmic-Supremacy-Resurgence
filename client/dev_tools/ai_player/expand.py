@@ -35,26 +35,50 @@ import actions
 import cli
 import gamestate as gs
 import remote
+import sensors
 
 TURN_WEIGHT       = 10.0   # score points charged per turn of travel
 SAME_SYSTEM_BONUS = 30.0   # shared defence, no exposed transit
 
 # A colony ship counts as available when it is idle (0), merely moving (1) or
 # already colonising (3). Move carries no colonisation commitment — a colony
-# ship in transit is exactly the thing a human would redirect. Scout, attack and
+# ship in transit is exactly the thing a human would redirect. Attack and
 # conquer are purposeful and are left alone.
+#
+# SCOUT (2) is a special case. The engine does NOT clear a scout order when the
+# ship arrives, so the order type stays 2 for ever. Excluding it outright left a
+# ship parked in a system it had just revealed, four unowned planets beside it,
+# ignored by this rule for thirty-five turns. A scout whose target system is
+# already in the discovery set has finished its job, and that is the test used
+# below rather than the order type alone.
 AVAILABLE_ORDERS = (0, 1, 3)
 
 
-def ship_speed(ship):
-    """The ship's speed, or None if its design is not computed yet.
+def ship_speed(ship, act=None):
+    """The ship's speed, warming the engine's cache if it is cold.
 
-    Never substitute a default here. A silent fallback of 1.0 turned a 24-unit
+    The derived stat block is a lazy cache, so a design reading -1 is valid and
+    merely uncached — the engine fills it on the first getter call. Skipping
+    such a ship froze the AI after every load. If an elevated handle is
+    available, call the getter (0x005480A0) which both answers and caches;
+    otherwise return None and let the caller skip this turn.
+
+    Never substitute a default. A silent fallback of 1.0 once turned a 24-unit
     hop into a '24 turn' ETA and reordered the whole ranking while looking
     perfectly plausible on screen.
     """
     d = ship.design
-    return d.speed if d and d.computed and d.speed > 0 else None
+    if d is None:
+        return None
+    if d.speed and d.speed > 0:
+        return d.speed
+    rem = getattr(act, "remote", None) if act is not None else None
+    if rem is None:
+        return None
+    import struct as _s
+    bits = rem.design_speed(d.addr)
+    val = _s.unpack("<f", _s.pack("<I", bits))[0]
+    return val if val > 0 else None
 
 
 def eta_turns(ship, target, speed):
@@ -74,19 +98,41 @@ def score_targets(snap, civ, ship, candidates, speed):
     return out
 
 
-def visible_targets(snap, civ, vision):
+def visible_targets(snap, civ, vision, hist=None):
     """Unowned planets the AI is allowed to consider.
 
     'all'   — everything in client memory, including undiscovered systems.
-    'known' — only systems the civ already occupies. This is the
-              fog-of-war-respecting mode; it is not the default yet because the
-              discovery set has to persist across turns (STRATEGY.md §6.1).
+    'known' — DEFAULT. Only systems the civ has actually discovered: one it
+              holds a planet in, one a ship has been inside, or one named by a
+              scan report. Client memory holds every planet in the galaxy
+              whether or not it has been found, so reading it directly is
+              cheating — in the real game a system's planets are revealed by
+              flying to its SUN, which is why the scout order targets a star.
     """
     unowned = snap.unowned_planets()
+    if vision == "known" and hist is not None:
+        return [p for p in unowned if hist.can_see(snap, p)]
     if vision == "all":
         return unowned
     home_suns = {snap.nearest_sun(p)[0] for p in snap.owned_planets(civ)}
     return [p for p in unowned if snap.nearest_sun(p)[0] in home_suns]
+
+
+def scout_finished(snap, ship, hist):
+    """True when a scout order has already delivered what it was for.
+
+    The engine leaves `Ship:52` at 2 after arrival, so "is it scouting?" is not
+    the same question as "does it still have something to scout". Ask the
+    discovery set instead: if the system it was sent to is known, the mission is
+    over and the ship is free.
+    """
+    if (ship.order_type or 0) != 2 or not gs.is_ptr(ship.order_ptr):
+        return False
+    if hist is None:
+        return False
+    xyz = struct.unpack("<fff", snap.read(ship.order_ptr + 16, 12))
+    sun = min(snap.suns, key=lambda q: gs.dist(xyz, q.pos))
+    return sun.id in hist.discovered
 
 
 def _order_target(snap, ship):
@@ -119,21 +165,26 @@ def run_xpn01(snap, civ, act, log=print):
     if len(colony_ships) >= COLONY_SHIP_TARGET:
         return 0
 
-    designs = [d for d in snap.designs if d.is_colony and d.computed]
+    # OURS ONLY. Every civ's designs are visible in memory, and filtering by
+    # "has a warm stat cache" instead of by owner made this rule select the
+    # RIVAL's Colony Ship — ours was excluded merely because its cache was cold.
+    designs = [d for d in snap.designs
+               if d.is_colony and d.owner is not None
+               and d.owner.addr == civ.addr and d.chassis and d.engines]
     if not designs:
-        log("R-XPN-01: no computed COLONY design to build")
+        log("R-XPN-01: this civ has no COLONY design with parts")
         return 0
-    design = min(designs, key=lambda d: d.cost or 1 << 30)
+    design = min(designs, key=lambda d: d.cost if d.cost is not None else 1 << 30)
 
     if not snap.unowned_planets():
         log("R-XPN-01: nowhere left to colonise; not building")
         return 0
 
-    cash = civ.cash or 0
-    if design.cost is not None and cash < design.cost:
-        log(f"R-XPN-01: {design.design_name!r} costs {design.cost}, "
-            f"we have {cash} — waiting")
-        return 0
+    # NO CASH GATE. A ship is paid for in PRODUCTION: the build accumulates in
+    # Planet:120 until it reaches the design cost, and cash is untouched
+    # throughout — watched across a whole build in an earlier game, cash rose
+    # steadily and never dropped by the ship's price. Gating on cash stalled
+    # this rule for turns at a time waiting for a currency that is not spent.
 
     yards = [p for p in snap.owned_planets(civ) if 2 in p.facilities]
     if not yards:
@@ -155,11 +206,22 @@ def run_xpn01(snap, civ, act, log=print):
 
 
 # ── R-XPN-02 ───────────────────────────────────────────────────────────────
-def run_xpn02(snap, civ, act, vision="all", top=10, forced=None, log=print):
+def run_xpn02(snap, civ, act, vision="known", top=10, forced=None,
+              hist=None, log=print):
     """Dispatch every available colony ship to a distinct best target."""
     colony = [s for s in snap.owned_ships(civ) if s.role == "COLONY"]
-    available = [s for s in colony if (s.order_type or 0) in AVAILABLE_ORDERS]
+    available = [s for s in colony
+                 if (s.order_type or 0) in AVAILABLE_ORDERS
+                 or scout_finished(snap, s, hist)]
+    # Crew is a hard precondition. A crewless ship cannot move and the engine
+    # cancels the order at the next turn boundary, so ordering one anyway burns
+    # an engine allocation every turn while the log reads like success.
+    crewless = [s for s in available if not act.is_crewed(s)]
+    available = [s for s in available if act.is_crewed(s)]
     available.sort(key=lambda s: (not gs.is_ptr(s.order_ptr), s.id))
+    for s in crewless:
+        log(f"  SKIP {s}: no crew — it cannot move, and the engine would "
+            f"cancel any order at the next turn boundary")
 
     log(f"R-XPN-02: {len(colony)} colony ship(s), {len(available)} available "
         f"({sum(1 for s in available if gs.is_ptr(s.order_ptr))} retargetable)")
@@ -170,7 +232,10 @@ def run_xpn02(snap, civ, act, vision="all", top=10, forced=None, log=print):
         log("  every colony ship is busy with a non-colonize order")
         return 0
 
-    candidates = visible_targets(snap, civ, vision)
+    candidates = visible_targets(snap, civ, vision, hist)
+    if vision == "known" and hist is not None:
+        log(f"  vision=known: {len(hist.discovered)} system(s) discovered, "
+            f"{len(candidates)} target(s) we are entitled to see")
 
     # Do not send two ships to the same rock. An in-flight colonize order claims
     # its target, but a ship we are about to reconsider must not block itself.
@@ -182,10 +247,13 @@ def run_xpn02(snap, civ, act, vision="all", top=10, forced=None, log=print):
 
     acted = 0
     for ship in available:
-        speed = ship_speed(ship)
+        if act.is_claimed(ship):
+            continue
+        speed = ship_speed(ship, act)
         if speed is None:
-            log(f"  SKIP {ship}: design {ship.design} is not computed — its "
-                f"fields hold the -1 sentinel, so every ETA would be junk")
+            log(f"  SKIP {ship}: could not obtain a speed for "
+                f"{ship.design} — the stat cache is cold and no elevated "
+                f"handle is available to warm it, so every ETA would be junk")
             continue
         pool = [p for p in candidates if p.id not in claimed]
         ranked = score_targets(snap, civ, ship, pool, speed)
@@ -214,6 +282,18 @@ def run_xpn02(snap, civ, act, vision="all", top=10, forced=None, log=print):
             f"{best_eta} turns{', same system' if best_same else ''}")
         claimed.add(best.id)
 
+        # Already going there? Leave it alone. Rewriting an order every turn
+        # works — the ship still arrives — but it resets the route leg origin
+        # to the ship's current position and zeroes progress each time, so the
+        # progress field never accumulates and the writes are pure noise.
+        if ship.order_type == 3:
+            cur = _order_target(snap, ship)
+            if cur is not None and cur.id == best.id:
+                log(f"    already en route to #{best.id}; leaving the order "
+                    f"untouched")
+                act.claim(ship)     # committed, even though nothing was written
+                continue
+
         try:
             new_ptr = None
             if not gs.is_ptr(ship.order_ptr):
@@ -221,9 +301,11 @@ def run_xpn02(snap, civ, act, vision="all", top=10, forced=None, log=print):
                 if new_ptr is None:      # dry run, or creation refused
                     log("    [WOULD WRITE] target, origin, route leg, "
                         "progress=0, order type 3 and the pending flag")
+                    act.claim(ship)
                     acted += 1
                     continue
             act.retarget_order(ship, 3, best.pos, order_ptr=new_ptr)
+            act.claim(ship)
             acted += 1
         except actions.NeedsEngineOrder as e:
             log(f"    BLOCKED: {e}")
@@ -277,7 +359,7 @@ def main():
         return cli.opt(args, name, default, cast)
     civ_name = opt("--civ")
     top      = opt("--top", 10, int)
-    vision   = opt("--vision", "all")
+    vision   = opt("--vision", "known")
     forced   = opt("--target")
     dry_run  = "--apply" not in args
 
@@ -295,7 +377,9 @@ def main():
     act = actions.Actuator(snap, dry_run=dry_run, remote_=rem)
     try:
         run_xpn03(snap, civ, act)
-        run_xpn02(snap, civ, act, vision=vision, top=top, forced=forced)
+        hist = sensors.History().observe(snap, civ)
+        run_xpn02(snap, civ, act, vision=vision, top=top, forced=forced,
+                  hist=hist)
         run_xpn01(snap, civ, act)
     finally:
         if rem is not None:

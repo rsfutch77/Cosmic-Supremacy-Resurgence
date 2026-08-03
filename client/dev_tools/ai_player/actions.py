@@ -76,12 +76,48 @@ class Actuator:
         # PROCESS_ALL_ACCESS at all.
         self._remote = remote_
         self._remote_factory = remote_factory
+        # Ships already committed by an earlier rule THIS PASS. Every rule in a
+        # pass reads the SAME snapshot, so a ship ordered by one rule still
+        # looks idle to the next one — Expand sent a colony ship to a planet and
+        # Explore, reading the stale order type, redirected it to a star in the
+        # same pass. That repeated for eight turns and expansion stalled. Rule
+        # ORDER cannot fix it; something has to record the claim.
+        self.claimed_ships = set()
+        # Ships crewed THIS PASS. Same stale-snapshot problem as claimed_ships:
+        # R-XPL-06 loads crew, then R-XPN-02 reads Ship:124 from the snapshot,
+        # still sees an empty vector and refuses to order the ship. It sorts
+        # itself out next turn, so it costs a turn per ship rather than
+        # deadlocking -- but it made crew loading look like it had failed.
+        self.crewed_ships = set()
+        # Planets whose CITIZENS a rule has already rewritten this pass. S-food
+        # owns farmers and R-XPL-01 owns everyone else, but they read the same
+        # snapshot: if S-food converts a banker to a farmer to stop a famine,
+        # R-XPL-01 still sees a banker at that index and would convert it
+        # straight back, undoing the famine fix every single turn.
+        self.claimed_planets = set()
 
     @property
     def remote(self):
         if self._remote is None and self._remote_factory is not None:
             self._remote = self._remote_factory()
         return self._remote
+
+    def claim(self, ship):
+        """Mark a ship as committed for the rest of this pass."""
+        self.claimed_ships.add(ship.id)
+
+    def is_claimed(self, ship):
+        return ship.id in self.claimed_ships
+
+    def claim_planet(self, planet):
+        self.claimed_planets.add(planet.id)
+
+    def planet_claimed(self, planet):
+        return planet.id in self.claimed_planets
+
+    def is_crewed(self, ship):
+        """Crewed per the snapshot, OR crewed by a rule earlier this pass."""
+        return ship.crewed or ship.id in self.crewed_ships
 
     # -- primitive ------------------------------------------------------
     def _write(self, addr, data, what):
@@ -136,9 +172,16 @@ class Actuator:
         """
         if design.type != "ShipDesign":
             raise ValueError(f"{design} is not a ShipDesign")
-        if not design.computed:
-            raise ValueError(f"{design} is not computed yet (-1 sentinels); "
-                             f"queueing it would build from garbage")
+        # NOT gated on the derived stat block. That block is a lazy cache set
+        # to -1 whenever parts change; a design reading -1 is perfectly
+        # buildable and the UI shows real numbers for it by calling the getters.
+        # What actually makes a design unbuildable is having no parts.
+        if not design.chassis:
+            raise ValueError(f"{design} has no chassis; the UI could not have "
+                             f"produced it and it is not buildable")
+        if not design.engines:
+            raise ValueError(f"{design} has no engine, so nothing built from it "
+                             f"could move")
         # A human can only queue ships where there is a shipyard (facility 2).
         if 2 not in planet.facilities:
             raise ValueError(f"{planet} has no shipyard, so the UI could not "
@@ -146,6 +189,47 @@ class Actuator:
         self.log(f"  queue {design.design_name!r} at {planet}")
         ok = self._u32(planet.addr + 296, design.addr - 12,
                        f"Planet:296 -> ShipDesign {design.design_name!r} (tag-12)")
+        return self._u32(planet.addr + 344, 1, "Planet:344 build-active -> 1") and ok
+
+    # -- C: start a facility build (three plain writes) -----------------
+    PLANET_EMBEDDED_FACILITY = 280   # Facility{vftable, typeId} lives here
+
+    def build_facility(self, planet, type_id):
+        """Start building a facility. Nothing is allocated.
+
+        A planet is BORN carrying a valid `Facility{vftable, typeId}` embedded at
+        Planet:280, written once by the PlanetProperties constructor and
+        resident for the planet's whole life. Selecting a building overwrites
+        its type id at Planet:284; starting the build points Planet:296 at the
+        embedded object. That is the entire mechanism, and it is why Planet:284
+        survives a switch to generating wealth — it is a field of a permanent
+        object, not of a production object that comes and goes.
+
+        Safer than the ship actuator: the target is inside the planet, so
+        nothing can be freed underneath it.
+
+        THIS SKIPS THE ENGINE'S OWN CanBuildFacility CHECK (0x004F5030), so the
+        caller must not ask for a type the civ cannot actually build. Owner:172
+        is documented as the unlocked-type list but reads EMPTY on a civ with
+        three facilities standing, so it cannot be trusted as that gate — the
+        rules use evidence instead, meaning a type already built somewhere.
+        """
+        if type_id not in gs.FACILITIES:
+            raise ValueError(f"{type_id} is not a known facility type")
+        if planet.u32(self.PLANET_EMBEDDED_FACILITY) != gs.FACILITY_VFTABLE:
+            raise ValueError(
+                f"{planet} has no embedded Facility at +280 (read "
+                f"0x{planet.u32(self.PLANET_EMBEDDED_FACILITY):08X}); refusing "
+                f"to point production at something that is not one")
+        if planet.building_now:
+            raise ValueError(f"{planet} is already building; replacing it would "
+                             f"discard {planet.build_progress} progress")
+        name = gs.FACILITIES[type_id]
+        self.log(f"  build {name} at {planet}")
+        ok = self._u32(planet.addr + 284, type_id, f"Planet:284 -> {name}")
+        ok = self._u32(planet.addr + 296,
+                       planet.addr + self.PLANET_EMBEDDED_FACILITY,
+                       "Planet:296 -> the planet's embedded Facility") and ok
         return self._u32(planet.addr + 344, 1, "Planet:344 build-active -> 1") and ok
 
     # -- I': fit parts to a design --------------------------------------
@@ -339,6 +423,148 @@ class Actuator:
         ok = self._u32(planet.addr + 296, gs.PILING_UP_WEALTH,
                        "Planet:296 -> PilingUpWealth singleton")
         return self._u32(planet.addr + 344, 0, "Planet:344 build-active -> 0") and ok
+
+    # -- J: move a trained unit from a planet onto a ship as crew -------
+    SHIP_CREW      = 124      # begin/end/cap at 124/128/132
+    PLANET_MILITARY = 168     # begin/end/cap at 168/172/176
+    CITIZEN_STRIDE = 16
+
+    def load_crew(self, planet, ship, count=2):
+        """Move `count` stationed military units into a ship's crew vector.
+
+        UNTESTED — no unit had finished training when this was written. The
+        reasoning it rests on:
+
+        A stationed military unit, a ship's crew member and a planet citizen all
+        appear to be the SAME 16-byte record — [jobId, flags, owner-node,
+        turnAdded]. Crew read job id 3 and flags 0x004F0000, which is the exact
+        citizen shape, and Planet:168's elements read 3 in the same slot. The
+        annotation calls that slot "upkeep, 3 on all units", which now looks like
+        a misread of the job id, since every unit having the same upkeep and
+        every unit having job 3 are indistinguishable from one sample.
+
+        So loading crew is a MOVE between two vectors of identical records:
+
+          * the ship's crew buffer comes from the engine's own operator new, so
+            new/delete stay a matched pair — the same rule fit_parts follows
+          * the planet's military vector is SHRUNK by walking `end` back, which
+            frees nothing and keeps its capacity, exactly what set_population.py
+            does to reduce a population safely
+
+        A crewed ship differed from an identical uncrewed one at 124/128/132 and
+        nowhere else, so there is no separate crew count to keep in step.
+        """
+        mil = planet.vec(self.PLANET_MILITARY, self.CITIZEN_STRIDE)
+        if len(mil) < count:
+            raise ValueError(f"{planet} has {len(mil)} trained unit(s), "
+                             f"need {count}")
+        if gs.is_ptr(ship.u32(self.SHIP_CREW)):
+            raise ValueError(
+                f"{ship} already has a crew vector; this only fills an empty "
+                f"one, because growing the existing engine-owned buffer would "
+                f"mean freeing memory we did not allocate")
+        if self.dry_run:
+            self.log(f"  [WOULD LOAD] {count} unit(s) from {planet} onto {ship} "
+                     f"({len(mil)} trained, {len(mil) - count} would remain)")
+            self.crewed_ships.add(ship.id)
+            return None
+        if self.remote is None:
+            raise RuntimeError("load_crew needs a remote.Remote to allocate")
+
+        # Take from the END so the surviving records stay contiguous from begin.
+        taken = b"".join(mil[-count:])
+        size = count * self.CITIZEN_STRIDE
+        buf = self.remote.operator_new(size)
+        self._write(buf, taken, f"{count} crew record(s)")
+        self._u32(ship.addr + self.SHIP_CREW,     buf,        "crew begin")
+        self._u32(ship.addr + self.SHIP_CREW + 4, buf + size, "crew end")
+        self._u32(ship.addr + self.SHIP_CREW + 8, buf + size, "crew cap")
+
+        mb = planet.u32(self.PLANET_MILITARY)
+        new_end = mb + (len(mil) - count) * self.CITIZEN_STRIDE
+        self._u32(planet.addr + self.PLANET_MILITARY + 4, new_end,
+                  f"planet military end -> {len(mil) - count} unit(s)")
+        self.crewed_ships.add(ship.id)
+        self.log(f"  moved {count} unit(s) from {planet} to {ship}")
+        return buf
+
+    # -- J: sell a facility (engine call) --------------------------------
+    def sell_facility(self, planet, type_id, count=1):
+        """Sell `count` of a facility type, crediting the civ's treasury.
+
+        A player can sell a building, so an AI should be able to. The use is not
+        tidying up: it is a recovery move. A civ that loses the planets funding
+        its expensive buildings faces a cascade -- upkeep it can no longer pay
+        against income it no longer has -- and liquidating those buildings is
+        how a human trades a long-term asset for immediate solvency instead of
+        surrendering.
+
+        THIS GOES THROUGH THE ENGINE, and that is not incidental. Selling pays
+        cash, and STRATEGY.md 1.1 forbids writing the treasury: a sale that
+        credited itself would be arithmetically identical to inventing money,
+        and we would have no way to tell a correct payout from a generous one.
+        PlanetProperties::SellFacility prices the building, credits Owner:8 and
+        removes the units in one call, so the payout is the engine's number.
+
+        Refuses on the online path. The call site at 0x0056EF91 is guarded by
+        the offline flag at 0x0086F1A0 -- in multiplayer the server owns the
+        transaction, and applying it locally would desync rather than cheat.
+        """
+        have = planet.facilities.get(type_id, 0)
+        if have < count:
+            raise ValueError(
+                f"{planet} has {have} of facility type {type_id}, cannot sell "
+                f"{count}")
+        name = gs.FACILITIES.get(type_id, f"type {type_id}")
+        if self.dry_run:
+            self.log(f"  [WOULD SELL] {count} x {name} on {planet} "
+                     f"({have} standing) via the engine's own SellFacility")
+            return None
+        if self.remote is None:
+            raise RuntimeError("sell_facility needs a remote.Remote")
+        flag = self.snap.read(remote.OFFLINE_FLAG, 1)
+        if not flag or flag[0] == 0:
+            raise RuntimeError(
+                "the offline flag at 0x0086F1A0 is clear, so this client is on "
+                "the networked path; the server owns the sale and applying it "
+                "locally would desync")
+        ok = self.remote.sell_facility(planet.addr, type_id, count)
+        self.log(f"  sold {count} x {name} on {planet} (engine returned {ok})")
+        self.writes.append((planet.addr, b"", b"", f"sold {count} x {name}"))
+        return ok
+
+    # -- G: set a planet's recruitment rate (Planet:100 byte 3) ---------
+    RECRUITMENT_MAX = 40      # the highest the UI was seen to offer
+
+    def set_recruitment(self, planet, percent):
+        """Set the military recruitment rate, a percentage in byte 3 of
+        Planet:100.
+
+        Only that one byte moves. Bytes 0-2 read 100/100/100 on every planet
+        including uncolonised ones and are the leading loyalty candidate, so
+        writing the dword wholesale would clobber three fields to change one.
+
+        The UI was observed offering 0 to 40, so this refuses anything outside
+        that: a value the interface could not produce is exactly what the
+        no-cheating rule forbids. A military base is suspected to raise the cap
+        — a planet with one read 60 — but that is unproven, so the ceiling stays
+        at what has actually been seen.
+        """
+        if not 0 <= percent <= self.RECRUITMENT_MAX:
+            raise ValueError(
+                f"{percent}% is outside the 0..{self.RECRUITMENT_MAX} range the "
+                f"UI was seen to offer; a higher cap with a military base is "
+                f"suspected but unproven")
+        raw = self.snap.read(planet.addr + 100, 4)
+        if not raw or len(raw) != 4:
+            raise ValueError(f"cannot read Planet:100 on {planet}")
+        cur = raw[3]
+        if cur == percent:
+            return True
+        new = bytes(raw[:3]) + bytes([percent])
+        self.log(f"  {planet} recruitment {cur}% -> {percent}%")
+        return self._write(planet.addr + 100, new,
+                           f"Planet:100 byte 3 recruitment -> {percent}%")
 
     # -- F: set the research topic (Owner:144 and :152 together) --------
     def set_research(self, civ, topic_id):

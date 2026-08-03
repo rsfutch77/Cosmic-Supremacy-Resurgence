@@ -155,9 +155,26 @@ consecutive turn snapshots and are the honest substitute:
 |---|---|
 | `foodDelta[planet]` | Δ`Planet:112` per turn — **the** signal for the food rules |
 | `productionRate[planet]` | Δ`Planet:120` per turn while `Planet:344 == 1` |
-| `researchRate` | Δ`Owner:12` per turn |
+| `researchRate` | Δ`Owner:12` per turn — **net of science wastage**, see below |
 | `incomeRate` | Δ`Owner:8` per turn |
 | `popGrowth[planet]` | Δ population count per turn |
+
+**Science wastage caps the value of scientists, and we do not model it.** From the
+official manual (`cosmicsupremacy.com/wiki/manual/research-screen`):
+
+```
+Science-Surplus = Output * (0.7 + 0.3 / (1 + 1e-8 * Output^2))
+Science-Wastage = Output - Science-Surplus
+```
+
+Wastage is invisible below ~1,000 points/turn, reaches 15% at 10,000, 27% at 30,000 and
+is hard-capped at 30%. Corruption is applied per planet first, then wastage on the total.
+
+`[ ]` **R-XPL-01 has no scientist ceiling.** The job mix assigns scientists by a flat
+percentage, so a large empire keeps adding them into a 30% loss. The marginal value of a
+scientist falls continuously above 1,000 output; the rule should stop well before the cap
+and put those citizens somewhere with linear returns. Not implemented — the trigger needs
+per-planet science output, which we do not read yet.
 
 Deltas are only meaningful when nothing else changed that turn, so the AI records the
 snapshot pair alongside the actions it took, and treats a delta as stale for one turn
@@ -183,6 +200,22 @@ One module per UI action. Grade is how confident we are it works today.
 | F | **Set research topic** | write `Owner:144` **and** `Owner:152` | **READY** — confirmed writable |
 | G | **Set recruitment rate** | write byte 3 of `Planet:100` | **NEEDS TEST** — report `[ ]` write-test the recruitment rate |
 | H | ~~Assign a governor~~ | — | **DROPPED** — the AI manages planets itself and leaves `Planet:496` unset |
+| J | **Sell a facility** | call `PlanetProperties::SellFacility` `0x004F8580` (`__thiscall`, `ret 8`, ECX = `planet_tag + 88`) | **READY** — `actions.sell_facility`. Confirmed live twice: a military camp paid exactly **75** and was removed. `price = round(facilityValue * 0.05) * count`; the 0.05 is the double at `0x753CF8` |
+
+**Actuator J is the first actuator that is a whole engine TRANSACTION rather than a field
+write, and the reason matters beyond this one button.** Selling pays cash, and §1.1
+forbids writing `Owner:8`. A sale that credited itself would be arithmetically identical
+to inventing money, with no way to distinguish a correct payout from a generous one. The
+engine prices the building, credits the treasury and removes the units in one call, so
+the number is its own. It refuses on the networked path — the call site at `0x0056EF91`
+is guarded by the offline flag `0x0086F1A0`, and in multiplayer the server owns the
+transaction, so a local apply would desync rather than cheat.
+
+Generalising: **an engine call inherits whatever validation the engine does; a field
+write inherits none.** Every cheat found so far — research prerequisites, facility
+unlocks — came from writing a legal field to a value the UI would have refused. Where an
+engine function performs the *whole* action, calling it is both less code and safer than
+reproducing it. See §8.
 
 **Consequence for sequencing:** the Explore and Expand rules that only *move* existing
 ships are reachable now via E; everything that *creates* a ship waits on D. The build
@@ -318,6 +351,14 @@ THEN   queue the COLONY design at the best shipyard planet
 USES   D   [BLOCKED]
 ```
 
+**CREW IS A PRECONDITION FOR EVERY ORDER RULE.** A ship with no crew cannot move,
+and the engine CANCELS the order at the next turn boundary — it frees the order object
+and clears `Ship:48`, so a controller that does not check will re-issue an order every
+turn forever and leak one order object each time. Observed over twelve turns on a
+colony ship whose order was otherwise perfect. Crew comes from conscripting a citizen
+for cash, or from raising the recruitment rate (`Planet:100` byte 3) and waiting for a
+unit to train, then loading crew onto the ship. A colony ship needs only the minimum.
+
 **R-XPN-02 — Score and pick a colony target** — IMPLEMENTED in `expand.py`
 ```
 targets = visible planets where Planet:40 resolves to the null node 0x00857C54
@@ -406,9 +447,30 @@ THEN   pick the cheapest uncompleted item (id not in Owner:108) whose effect
 NOTE   the stockpile accrues regardless, so leaving this at -1 is pure waste
 USES   F
 ```
-⚠ We have no tech-tree table yet: ids and costs are only learnable from `Owner:108`
-records after the fact. Until one exists, this rule picks by id order and records
-`[id, cost]` pairs to build the table empirically.
+**Implemented in `exploit.py`, gated by `research.py`.** The full 80-record tree is read
+out of the running client by `research_dump.py`; the rule only ever selects a topic
+`research.selectable()` approves, and corrects an illegal one already in flight.
+
+```
+Research-Cost = costFactor * (researches already completed) * 800
+```
+Confirmed three ways: derived from the engine (`GetScale` `0x0054A6F0` = 800, `GetCost`
+`0x0054B140`), matched against four live observations, and stated verbatim in the manual.
+
+`[ ]` **The cheapest-first tiebreak is the wrong direction.** Because the multiplier is
+the completed count *at the moment of purchase*, a fixed set of techs costs least when the
+HIGHEST-factor ones are bought FIRST. `available()` still orders by value then cheapest.
+Changing it is a strategy decision, not a bug fix, so it is left explicit.
+
+`[ ]` **One cost reading does not fit** — Quantum Fields (factor 2.8, 4 completed) should
+show 8960 and was reported as 3200, which is exactly `800 * 1.0 * 4`, the price of
+Advanced Magnetism — a member of its OR-prerequisite list. Two candidates: a misread, or
+the UI displaying the next step of a chain rather than the target. A third, raised by the
+user and worth taking seriously: **this civ's tree is inconsistent** because it holds
+Astro Engineering without Advanced Magnetism, so any path-finder walking prerequisites may
+behave oddly on exactly this node. Free test: the number should become `2240 * 5 = 11200`
+once the current research completes, and `800 * 1.0 * 5 = 4000` if it is showing a
+prerequisite instead.
 
 **R-XPL-05 — Recruitment**
 ```
@@ -418,6 +480,36 @@ WHEN   phase != War  AND  foodDelta[P] < 0
 THEN   lower it toward 0 (military costs food — Owner:880)
 USES   G   [NEEDS TEST]
 ```
+
+**R-XPL-07 — Liquidate to survive a collapse** — `[ ]` NOT BUILT
+```
+WHEN   incomeRate < 0 for N consecutive turns
+       AND projected Owner:8 hits 0 within RECOVERY_HORIZON turns
+       AND the deficit is attributable to facility upkeep we can shed
+THEN   sell facilities, cheapest-contribution-first, until incomeRate >= 0
+KEEP   never sell the last farm on a planet, a shipyard while a ship is queued,
+       or anything on a planet that is not itself part of the problem
+USES   J
+```
+The motivating case is not tidying up: a civ that **loses the planets funding its
+expensive buildings** faces a cascade — upkeep it can no longer pay against income it no
+longer has. Liquidating is how a human trades a long-term asset for immediate solvency
+instead of surrendering. It is the economic mirror of R-XTM-05 retreat.
+
+`[ ]` **Blocked on an upkeep sensor, which is the whole difficulty.** The trigger needs
+to know what each facility costs per turn, and we cannot compute it. `incomeRate` is
+derived by differencing `Owner:8` across turns (§2.5), which gives the *net* figure and
+cannot attribute the drain to individual buildings — so "which facility do I sell first"
+has no answer yet. `ShipDesign:48` gives ship upkeep; there is no known facility
+equivalent. Two ways in, neither attempted:
+  * find the per-turn upkeep accumulator in the binary, the way `SellFacility` was found
+    by anchoring on the treasury field
+  * measure it: sell one facility on an otherwise-idle planet and difference `incomeRate`
+    across the boundary — cheap now that actuator J works, but only yields the types we
+    happen to own
+
+`[ ]` Decide whether selling should also be available as a *funding* move (sell to afford
+something better) or strictly as a solvency backstop. Only the latter is specified here.
 
 ### 4.4 Exterminate
 
@@ -634,7 +726,49 @@ Recorded for completeness; not to be built.
 originates one for any ship at any time, so a ship that starts at `Ship:48 == 0` — which
 every colony ship does — is fully controllable from the moment it exists.
 
-## 7. Build order
+## 7. Engine calls vs. field writes
+
+**Every cheat found so far came from a field write.** Research prerequisites and facility
+unlocks were both cases of writing a legal field to a value the UI would have refused,
+because the engine does not validate those fields on the path we write. An engine call
+inherits whatever checking the engine does; a field write inherits none. That makes the
+choice a *correctness* question, not just an ergonomic one.
+
+We have called engine functions since Route 2 (`operator new`, the order constructor, the
+`ShipDesign` constructor, the speed getter). What actuator J adds is the first call to a
+complete **transaction** — a whole UI action, priced and applied by the engine — rather
+than an allocator, a constructor or a getter. That is the pattern worth extending.
+
+### Ranked candidates
+
+| Candidate | Address | Why it matters |
+|---|---|---|
+| **Read the live research table** | `0x0054AA70` id→record, `0x0054B140` cost, `0x0054B200` prereq-at-index, `0x0054B7D0` exclusion test | `research.py` currently carries a table extracted for content version **≥688** while this client runs **565**, and the two demonstrably differ (see the cost-ratio argument in that file). These calls read the table the client is *actually* using. Read-only, so the safest possible first target, and it retires a known-wrong data source |
+| **`Ship::SetCommand`** | `0x004D9DC0` | `Ship:52/56/60/61` are one `ShipCommand` value written as a unit. **We currently write `Ship:52` alone**, which is a latent bug rather than a theoretical one — there is an order type 8 distinguished only by `Ship:61 = 0x0B` |
+| **`ChangeCitizenJobs`** | `0x00574180` (`__cdecl`, 4 args) | Replaces actuator A *and* unlocks conscription, with the engine's own cost check (`5*(T+k)+105`, debited from `Owner:8`) instead of one we would have to reproduce. Closes the `[ ]` conscription item |
+| **`GetTrait`** | `0x00516180` | Real civ-modifier values (trait 18 = ship speed %, trait 38 = planet space %) rather than assuming 0. Feeds any speed or max-pop calculation |
+| **available space** | `0x004F1140` (PP vftable slot 6) | `max_pop` with the trait bonus applied, instead of our `space/10` approximation |
+| **`GetDraftCost`** | `0x00516060` | Prices conscription before committing, so the AI can choose between cash and the ~25-turn recruitment path |
+
+### The standing hazard
+
+Stubs run on a `CreateRemoteThread`, **not the game's main thread**. Nothing has gone
+wrong yet, but nothing guarantees it: a call that takes a lock the main thread holds, or
+mutates a container the main thread is walking, can deadlock or corrupt where a field
+write would merely have been wrong. Static analysis found no TLS dependency in the
+conscription call graph, which is evidence but not proof.
+
+Practical consequences, and the rules that follow from them:
+* Prefer **read-only** calls (`getters`, table lookups) — they carry the least risk and,
+  as the research table shows, often the most value.
+* For mutating calls, prefer ones whose call sites show them being invoked as a complete
+  unit behind the offline flag `0x0086F1A0`, as `SellFacility` is.
+* Validate every new stub on a **side-effect-free getter** before pointing it at anything
+  that mutates state — `remote.py` already does this.
+* `ret N` gives argument **count**, never **type**. Mistaking `0x005470A0` for a copy
+  constructor on that basis crashed the client once.
+
+## 8. Build order
 
 1. **RE `ShipProduction`** (open decision 2a) — unblocks D.
 2. **Framework**: snapshot / diff / rule-engine / dry-run mode that logs every intended
