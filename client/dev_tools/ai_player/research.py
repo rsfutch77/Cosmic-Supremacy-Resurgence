@@ -398,9 +398,13 @@ def selectable(tid, done, allow_doctrines=ALLOW_DOCTRINES):
 #     war, and they do it legitimately.
 #   * CHASSIS and MODULE are mid: bigger hulls and more module slots, both of
 #     which feed better colony ships, but the mapping is not yet pinned.
-#   * WEAPON, SHIELD and PLANDEF are near-worthless UNTIL Exterminate exists.
-#     Revisit this the moment combat rules land -- that is the whole reason the
-#     weights are a table and not buried in a comparison.
+#   * WEAPON, SHIELD and PLANDEF score low in the BASE table, but weapons are
+#     no longer optional: Exterminate exists, and a design cannot carry a
+#     weapon the civ has not researched. A civ with no unlocked weapon
+#     cannot build an armed ship at all, however much it wants one. That is
+#     handled by a BOOST rather than by raising the base weight, because it
+#     is a threshold and not a preference -- the first weapon is critical
+#     and the fifth is not.
 KIND_VALUE = {
     ENGINE: 10, FACILITY: 6, SCANNER: 5, SCAN: 5, CHASSIS: 4, MODULE: 4,
     HYPENERGY: 2, SHIELD: 1, WEAPON: 1, PLANDEF: 1, TRAIT: 3,
@@ -426,11 +430,23 @@ def describe_grants(tid):
     return ", ".join(out) or "nothing"
 
 
-def value(tid):
+def unlocked(done, kind):
+    """The object ids of a given kind this civ has actually unlocked.
+
+    A part can only be fitted to a design once some completed research grants
+    it, so this is what decides whether an armed design is even legal. A fresh
+    civ holds chassis 0, scanner 0, engine 0 and module 0 from the two granted
+    starting techs and NO weapon at all — the first weapon comes with Cold
+    Fusion (id 3).
+    """
+    return {oid for t in done for k, oid, _v in grants(t) if k == kind}
+
+
+def value(tid, boost=None):
     """How much this AI wants a tech, given what it currently knows how to do."""
     total = 0
     for kind, oid, _val in grants(tid):
-        total += KIND_VALUE.get(kind, 0)
+        total += KIND_VALUE.get(kind, 0) + (boost or {}).get(kind, 0)
         if kind == FACILITY and oid in FACILITY_NAME:
             total += KNOWN_FACILITY_BONUS
     return total
@@ -442,7 +458,8 @@ def unlocked_by(kind, obj_id):
             if any(k == kind and o == obj_id for k, o, _v in grants(t))]
 
 
-def available(done, allow_doctrines=ALLOW_DOCTRINES, by_value=True):
+def available(done, allow_doctrines=ALLOW_DOCTRINES, by_value=True,
+              boost=None):
     """Every legal pick, best first.
 
     Ordered by what the tech GRANTS, then by price as a tiebreak, then by id so
@@ -453,7 +470,7 @@ def available(done, allow_doctrines=ALLOW_DOCTRINES, by_value=True):
     ok = [t for t in sorted(TECHS) if selectable(t, done, allow_doctrines)]
     if not by_value:
         return sorted(ok, key=lambda t: (TECHS[t][1], t))
-    return sorted(ok, key=lambda t: (-value(t), TECHS[t][1], t))
+    return sorted(ok, key=lambda t: (-value(t, boost), TECHS[t][1], t))
 
 
 def explain(tid, done):

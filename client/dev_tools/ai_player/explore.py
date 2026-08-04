@@ -99,12 +99,23 @@ def free_targets_known(snap, hist):
 def run_exp02(snap, civ, act, hist, log=print):
     """Send each free ship to the nearest star nobody has visited."""
     known_free = free_targets_known(snap, hist)
-    if len(known_free) >= ENOUGH_KNOWN_TARGETS:
-        return 0                      # plenty to colonise; scouting can wait
-
     ships = scoutable(snap, civ, hist, act)
     if not ships:
         return 0
+
+    # "Plenty to colonise, scouting can wait" is right for a COLONY ship and
+    # wrong for everything else. Applying it to every ship parked three crewed
+    # warships for hundreds of turns while the civ was at war and R-XTM-03 said
+    # every turn that it had no visible enemy planet: the one thing that could
+    # have found the enemy was being held back because there were still rocks to
+    # settle. At turn 494 the civ had explored 2 of 108 systems.
+    #
+    # A warship has nothing better to do than look, and at war looking IS the
+    # objective. Only colony ships are held back.
+    if len(known_free) >= ENOUGH_KNOWN_TARGETS:
+        ships = [s for s in ships if s.role != "COLONY"]
+        if not ships:
+            return 0
     targets = undiscovered_suns(snap, hist)
     if not targets:
         log("R-EXP-02: every system is already discovered")

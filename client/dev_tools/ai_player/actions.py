@@ -95,6 +95,21 @@ class Actuator:
         # R-XPL-01 still sees a banker at that index and would convert it
         # straight back, undoing the famine fix every single turn.
         self.claimed_planets = set()
+        # Planets whose PRODUCTION a rule has already set this pass. Planet:296
+        # and Planet:344 hold exactly one build, so a second write silently
+        # replaces the first: R-XTM-01 queued a warship at the homeworld and
+        # R-XPN-01 queued a colony ship over the top of it in the same pass,
+        # and the log read as though both had been ordered. Enforced HERE rather
+        # than in each rule, because every rule that builds goes through these
+        # two actuators and none of them can be relied on to remember.
+        self.claimed_production = set()
+        # Net effect OUR OWN actions had on the treasury this pass, signed:
+        # negative when we spend. The income sensor differences Owner:8 across
+        # turns, so without this our spending reads as a collapsing economy —
+        # hurrying 1,184 credits made the next turn report income -742/turn and
+        # R-XPL-08 refused to hurry "into a falling balance" that was entirely
+        # its own purchase.
+        self.cash_effect = 0
 
     @property
     def remote(self):
@@ -108,6 +123,24 @@ class Actuator:
 
     def is_claimed(self, ship):
         return ship.id in self.claimed_ships
+
+    def production_claimed(self, planet):
+        """Has a rule already set this planet's production this pass?
+
+        Rules should FILTER on this when choosing where to build. The raise in
+        _claim_production stays as a backstop for anything that does not, but a
+        backstop that fires aborts the whole rule: R-XPN-01 hit it, propagated a
+        ValueError to the loop, and skipped every other shipyard it might have
+        used that turn.
+        """
+        return planet.id in self.claimed_production
+
+    def _claim_production(self, planet, what):
+        if planet.id in self.claimed_production:
+            raise ValueError(
+                f"{planet} already had its production set this pass; "
+                f"{what} would silently replace it. Production is one slot.")
+        self.claimed_production.add(planet.id)
 
     def claim_planet(self, planet):
         self.claimed_planets.add(planet.id)
@@ -187,6 +220,7 @@ class Actuator:
             raise ValueError(f"{planet} has no shipyard, so the UI could not "
                              f"queue a ship there")
         self.log(f"  queue {design.design_name!r} at {planet}")
+        self._claim_production(planet, f"queueing {design.design_name!r}")
         ok = self._u32(planet.addr + 296, design.addr - 12,
                        f"Planet:296 -> ShipDesign {design.design_name!r} (tag-12)")
         return self._u32(planet.addr + 344, 1, "Planet:344 build-active -> 1") and ok
@@ -227,6 +261,7 @@ class Actuator:
         name = gs.FACILITIES[type_id]
         self.log(f"  build {name} at {planet}")
         ok = self._u32(planet.addr + 284, type_id, f"Planet:284 -> {name}")
+        self._claim_production(planet, f"building facility type {type_id}")
         ok = self._u32(planet.addr + 296,
                        planet.addr + self.PLANET_EMBEDDED_FACILITY,
                        "Planet:296 -> the planet's embedded Facility") and ok
@@ -533,6 +568,242 @@ class Actuator:
         self.writes.append((planet.addr, b"", b"", f"sold {count} x {name}"))
         return ok
 
+    # -- K: hurry the current production (engine call) --------------------
+    HURRY_MIN_FRACTION = 0.5
+
+    def hurry_state(self, planet):
+        """(cost, done, total, fraction) for this planet's current build.
+
+        Every number comes from the engine, not from us: the cost function at
+        0x00555660 and the PlanetProperties total-production virtual at vftable
+        slot 0x74. cost is -1 when the production cannot be hurried at all,
+        which is what a planet generating wealth (production kind 7) returns.
+        """
+        if self.remote is None:
+            return None
+        vft = self.snap.rd32(planet.addr + gs.PLANET_PROPERTIES)
+        if not gs.is_ptr(vft):
+            return None
+        slot = self.snap.rd32(vft + 0x74)
+        cost = self.remote.hurry_cost(planet.addr)
+        total = self.remote.production_total(planet.addr, slot)
+        done = self.remote.production_done(planet.addr)
+        frac = (done / total) if total else 0.0
+        return cost, done, total, frac
+
+    def hurry_production(self, planet):
+        """Spend cash to complete this planet's build now.
+
+        This is the one use for cash we have actually found. Ships and
+        facilities accumulate PRODUCTION, and cash sat unspent at 46,000 while
+        builds crawled -- hurrying converts the idle balance into finished
+        buildings at 4 credits per unit of remaining production.
+
+        Engine call, for the same reason as sell_facility: it debits Owner:8,
+        which STRATEGY.md 1.1 forbids us to write. Every precondition below is
+        one the engine itself enforces, checked here only to avoid spawning a
+        remote thread for a call that would refuse.
+        """
+        st = self.hurry_state(planet)
+        if st is None:
+            raise RuntimeError("hurry needs a remote.Remote to price the build")
+        cost, done, total, frac = st
+        if cost is None or cost < 0:
+            raise ValueError(f"{planet} has nothing hurryable "
+                             f"(cost {cost}; a planet piling up wealth "
+                             f"returns -1)")
+        if planet.u32(300):
+            raise ValueError(f"{planet} has Planet:300 set, which the engine "
+                             f"treats as already hurried")
+        if frac < self.HURRY_MIN_FRACTION:
+            raise ValueError(
+                f"{planet} is {frac:.0%} built ({done}/{total}); the engine "
+                f"refuses below {self.HURRY_MIN_FRACTION:.0%} — "
+                f"'the production needs to be at least half finished'")
+        civ = self.snap.civ_of(self.snap.rd32(planet.u32(40)))             if gs.is_ptr(planet.u32(40)) else None
+        cash = civ.cash if civ else None
+        if cash is not None and cost > cash:
+            raise ValueError(f"{planet} hurry costs {cost}, cash is {cash}")
+        if self.dry_run:
+            self.log(f"  [WOULD HURRY] {planet} at {frac:.0%} "
+                     f"({done}/{total}) for {cost} credits")
+            return None
+        ok = self.remote.hurry_production(planet.addr)
+        # The callee returns AL, so only the low byte is meaningful — the
+        # upper 24 bits of EAX are whatever the function last had there.
+        ok = None if ok is None else bool(ok & 0xFF)
+        self.log(f"  hurried {planet} for {cost} credits (engine says {ok})")
+        self.cash_effect -= cost
+        self.writes.append((planet.addr, b"", b"", f"hurried for {cost}"))
+        return ok
+
+    # -- L: set a ship's command, target node included (engine call) -------
+    # Order types that consult Ship:56. 0x004D9880 Ship::HasActiveTargetedOrder
+    # requires the type to be one of these AND Ship:56 to be non-null, so an
+    # order of these types written without a target node is very likely inert.
+    TARGETED_ORDER_TYPES = (1, 4, 7)      # Move, Attack, MoveNear
+
+    def set_command(self, ship, order_type, target, civ=None):
+        """Give a ship an order that names a target OBJECT, not just coordinates.
+
+        `retarget_order` writes Ship:52 and the order's coordinate triple, which
+        is right for Colonize (3) and Scout (2) — neither consults Ship:56, and
+        both were confirmed to navigate correctly. It is NOT right for Move (1),
+        Attack (4) or MoveNear (7): those are exactly the types
+        Ship::HasActiveTargetedOrder tests, and it also requires Ship:56 to be
+        non-null. Our writer leaves the static null node there.
+
+        So this goes through the engine instead. ShipCommand's constructor turns
+        a target object into the reference node via GetReferenceNode(objectId),
+        and Ship::SetCommand writes Ship:52/56/60/61 as the single value they
+        are. Nothing else we have can populate Ship:56 — a hand-made node is not
+        registered anywhere the engine knows about, which is the same reason
+        set_design_owner reuses a node rather than fabricating one.
+
+        The 16-byte ShipCommand comes from the engine's own operator new so the
+        engine may legally free it. It is a plain value type and SetCommand
+        copies out of it, so nothing retains a pointer; it simply leaks, which is
+        the same trade create_order already accepts.
+        """
+        if order_type not in gs.ORDER_TYPES:
+            raise ValueError(f"order type {order_type} is not one the UI issues")
+        if target is None:
+            raise ValueError("a targeted order needs a target object")
+        if not self.is_crewed(ship):
+            raise ValueError(
+                f"{ship} has no crew — the engine cancels a crewless ship's "
+                f"orders at the next turn boundary, so this would leak an "
+                f"allocation every turn and never move")
+        if self.dry_run:
+            self.log(f"  [WOULD COMMAND] {ship} -> type {order_type} "
+                     f"({gs.ORDER_TYPES[order_type]}) targeting {target}, "
+                     f"via ShipCommand + Ship::SetCommand so Ship:56 is set")
+            return None
+        if self.remote is None:
+            raise RuntimeError("set_command needs a remote.Remote")
+
+        # ORDER OBJECT AND ROUTE FIRST. SetCommand only writes four fields; it
+        # does NOT build a route. The engine's own callers run Ship::SetOrder
+        # before it (0x004CD090 and 0x004D0FB3 both do), and skipping that step
+        # CRASHED THE CLIENT: a ship under a scout order was given
+        # SetCommand(Move, planet), so Ship:52 and Ship:56 described a move to a
+        # planet while the order object still held the route to a SUN. The write
+        # itself looked perfect — order type 1, a real target node — and the
+        # client died at the next turn boundary with EIP 0.
+        #
+        # retarget_order already builds a correct single-leg route and is
+        # confirmed end to end (a retargeted colonize order moved exactly
+        # ShipDesign:36 units along the new bearing). So establish a consistent
+        # order first, then let SetCommand add the target node the coordinate
+        # writer cannot produce.
+        new_ptr = None
+        if not gs.is_ptr(ship.order_ptr):
+            if civ is None:
+                raise ValueError(
+                    f"{ship} has no order object and no civ was passed, so "
+                    f"one cannot be originated; pass civ= to set_command")
+            new_ptr = self.create_order(ship, target, civ)
+            if new_ptr is None:
+                raise RuntimeError(f"could not originate an order for {ship}")
+        # Route and coordinates only. The TYPE is deliberately not written
+        # here — SetCommand writes Ship:52 and Ship:56 as the single value
+        # they are, and any window where the type says Attack while the
+        # target node is null is a window the engine can crash in.
+        self.retarget_order(ship, order_type, target.pos, order_ptr=new_ptr,
+                            set_type=False)
+
+        block = self.remote.operator_new(remote.SHIPCOMMAND_SIZE)
+        if not gs.is_ptr(block):
+            raise RuntimeError("the engine's operator new refused the "
+                               "ShipCommand block")
+        # Allocation start, not tag: the constructor reads the object id at
+        # target[+4], which is tag-4 for Planet, Ship and Sun alike.
+        self.remote.make_ship_command(block, order_type, target.addr - 8)
+        node = self.snap.rd32(block + 4)
+        if not gs.is_ptr(node):
+            raise RuntimeError(f"ShipCommand built at 0x{block:08X} has no "
+                               f"target node; refusing to install it")
+        if node == gs.NULL_NODE:
+            raise RuntimeError(
+                f"ShipCommand resolved to the STATIC NULL NODE, so the target "
+                f"id did not resolve — installing it would give a targeted "
+                f"order the engine treats as untargeted")
+        self.remote.ship_set_command(ship.addr, block)
+        got_type = self.snap.rd32(ship.addr + SHIP_ORDER_TYPE)
+        got_node = self.snap.rd32(ship.addr + 56)
+        self.log(f"  {ship} order type {got_type}, Ship:56 -> 0x{got_node:08X} "
+                 f"(target {target})")
+        self.writes.append((ship.addr, b"", b"",
+                            f"SetCommand type {order_type} at {target}"))
+        return got_type == order_type and got_node == node
+
+    # -- M: declare war (engine-assisted, symmetric) ----------------------
+    # The relation record is SYMMETRIC: the engine's own applier writes the same
+    # code into BOTH civs' Owner:248 in one call. Writing only our own side
+    # leaves an inconsistent galaxy, and since the battle phases ask *a* civ's
+    # map, which side gets asked would decide whether combat happens at all.
+    WAR, NEUTRAL = 1, 0
+    RELATION_NAMES = {0: "Neutral", 1: "War", 2: "Cease-Fire", 3: "Peace",
+                      4: "Alliance"}
+
+    # Reputation for declaring war. The UI quantifies a figure before confirming
+    # and we have NOT recovered its formula, so this is a placeholder that must
+    # be set deliberately rather than left to default silently. Applying nothing
+    # is not neutral: it is a free war, which in an AI-vs-AI galaxy would be an
+    # advantage shared by whoever uses this code and denied to anyone who does
+    # not. Tracked as a [ ] in STRATEGY.md.
+    WAR_REPUTATION_DELTA = None
+
+    def declare_war(self, civ, other, reputation_delta=None):
+        """Move two civs to War, both directions, and apply the standing cost.
+
+        Uses the engine for the parts that have invariants — creating the
+        relation record (`first_contact`, which no-ops when one exists) and
+        adjusting the clamped standing score — and writes only the relation code
+        itself, which is a plain int inside a record the engine just built.
+
+        NEWS IS NOT GENERATED. The UI path emits a "Declares War" item and this
+        does not. For an AI-vs-AI galaxy that is acceptable — no human is reading
+        the news tab — but it means the victim gets no notification, so AIs have
+        to learn about wars by reading relations rather than by being told.
+        """
+        if other.addr == civ.addr:
+            raise ValueError("a civ cannot declare war on itself")
+        if self.dry_run:
+            self.log(f"  [WOULD DECLARE WAR] {civ.civ_name!r} -> "
+                     f"{other.civ_name!r}, both directions")
+            return None
+        if self.remote is None:
+            raise RuntimeError("declare_war needs a remote.Remote")
+
+        for a, b in ((civ, other), (other, civ)):
+            self.remote.first_contact(a.addr, b.addr)
+        wrote = []
+        for a, b in ((civ, other), (other, civ)):
+            rec = self.remote.relation_record(a.addr, b.addr)
+            if rec is None:
+                raise RuntimeError(
+                    f"no relation record for {a.civ_name!r} -> {b.civ_name!r} "
+                    f"even after first contact; refusing to half-declare")
+            before = self.snap.rd32(rec + remote.RELATION_CODE_OFF)
+            self._u32(rec + remote.RELATION_CODE_OFF, self.WAR,
+                      f"{a.civ_name!r} -> {b.civ_name!r}: "
+                      f"{self.RELATION_NAMES.get(before, before)} -> War")
+            wrote.append(rec)
+
+        delta = (self.WAR_REPUTATION_DELTA if reputation_delta is None
+                 else reputation_delta)
+        if delta:
+            for a, b in ((civ, other), (other, civ)):
+                self.remote.add_reputation(a.addr, b.addr, delta)
+            self.log(f"  applied {delta:+d} reputation both ways")
+        else:
+            self.log("  [!] NO reputation change applied — the UI's figure is "
+                     "not known, so declaring war is currently FREE. Fine while "
+                     "every civ runs this code; not fine against a human.")
+        return all(self.snap.rd32(r + remote.RELATION_CODE_OFF) == self.WAR
+                   for r in wrote)
+
     # -- G: set a planet's recruitment rate (Planet:100 byte 3) ---------
     RECRUITMENT_MAX = 40      # the highest the UI was seen to offer
 
@@ -573,7 +844,8 @@ class Actuator:
                          f"{civ.civ_name} topic mirror -> {topic_id}") and ok
 
     # -- E: order a ship ------------------------------------------------
-    def retarget_order(self, ship, order_type, target_xyz, order_ptr=None):
+    def retarget_order(self, ship, order_type, target_xyz, order_ptr=None,
+                       set_type=True):
         """Point an EXISTING order at a new destination.
 
         Writes, in order: the target triple, the route leg (origin = the ship's
@@ -621,7 +893,15 @@ class Actuator:
         # inherited progress plus one turn — and it looked like a speed bug.
         self._f32(ord_ptr + ORD_PROGRESS, 0.0, "route progress -> 0")
 
-        self._u32(ship.addr + SHIP_ORDER_TYPE, order_type, f"order type -> {name}")
+        # set_type=False leaves Ship:52 ALONE, for callers that will set the
+        # order type and its target node together through Ship::SetCommand.
+        # Writing the type here first is what crashed the client on the very
+        # first attack order: the ship briefly held order type 4 with Ship:56
+        # still the static null node, which is exactly the state
+        # Ship::HasActiveTargetedOrder refuses to accept for types 1, 4 and 7.
+        if set_type:
+            self._u32(ship.addr + SHIP_ORDER_TYPE, order_type,
+                      f"order type -> {name}")
         self._u32(ship.addr + SHIP_HAS_ORDERS, 1, "pending-orders flag")
         return True
 

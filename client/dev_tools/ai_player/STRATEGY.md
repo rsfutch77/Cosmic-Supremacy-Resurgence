@@ -13,7 +13,10 @@ Expand cycle — R-XPN-01 build, R-XPN-02 dispatch, R-XPN-03 bootstrap (`expand.
 `survey.py` and `build.py`. Verified over a full game: the AI founded colonies on turns 4 and
 5 unattended and led the rival 3730 to 1666 on score by turn 12.
 
-**Still specification:** Sustain (§4.0), Explore (§4.1), Exploit (§4.3) and Exterminate (§4.4).
+**Also built:** Sustain (S-food), Exploit (R-XPL-01 jobs, -02 facilities, -04 research,
+-05/-06 crew, -08 hurry), Explore (R-EXP-02) and Exterminate (R-XTM-01 fleet, -03 attack,
+-05 withdraw). **Still specification:** R-XTM-00 declare war, R-XTM-02 defend, R-XTM-04
+conquer, R-XPL-03 wealth mode, R-XPL-07 liquidation, R-XPN-04 over-expansion, S-04.
 
 **Open questions about the game itself belong in
 `CosmicSupremacy_Reconstruction_Report.md` as `[ ]` items**, not here — this document
@@ -201,6 +204,8 @@ One module per UI action. Grade is how confident we are it works today.
 | G | **Set recruitment rate** | write byte 3 of `Planet:100` | **NEEDS TEST** — report `[ ]` write-test the recruitment rate |
 | H | ~~Assign a governor~~ | — | **DROPPED** — the AI manages planets itself and leaves `Planet:496` unset |
 | J | **Sell a facility** | call `PlanetProperties::SellFacility` `0x004F8580` (`__thiscall`, `ret 8`, ECX = `planet_tag + 88`) | **READY** — `actions.sell_facility`. Confirmed live twice: a military camp paid exactly **75** and was removed. `price = round(facilityValue * 0.05) * count`; the 0.05 is the double at `0x753CF8` |
+| K | **Hurry the current build** | call `PlanetProperties::HurryProduction` `0x004EFFF0` (`__thiscall`, ECX = `planet_tag + 88`) | **READY** — `actions.hurry_production`. `cost = 4 * (total - progress)`; needs `progress/total >= 0.5`, `cost <= Owner:8`, production kind != 7 and `Planet:300 == 0`. Confirmed live: cash moved by exactly the quoted price and progress jumped to its total |
+| L | **Order a ship at a TARGET OBJECT** | engine `ShipCommand` ctor `0x004E9BA0` + `Ship::SetCommand` `0x004D9DC0`, after `retarget_order` has built the route | **READY** — `actions.set_command`. The ONLY way to populate `Ship:56`, which `Ship::HasActiveTargetedOrder` requires for order types 1, 4 and 7. Building the route FIRST is not optional: setting the command alone left a Move order carrying a scout's route and crashed the client |
 
 **Actuator J is the first actuator that is a whole engine TRANSACTION rather than a field
 write, and the reason matters beyond this one button.** Selling pays cash, and §1.1
@@ -350,6 +355,32 @@ AND    Owner:8 >= ShipDesign:44 of the colony design
 THEN   queue the COLONY design at the best shipyard planet
 USES   D   [BLOCKED]
 ```
+
+`[ ]` **RECRUITMENT CAN STOP DEAD, AND WE DO NOT KNOW WHY.** `Planet:124` is the military
+food store and `Planet:128` the cost per unit (300, recomputed each turn at pipeline stage
+27 from civ traits); a unit appears when the store reaches the cost and the store then
+wraps. On two separate games the store simply froze — 150/149/122 on one, and exactly
+192/300 and 189/300 for thirty-plus turns on another — which is the state the UI reports as
+*"No Military Is Recruited"*. Measured, it is **not** food (one frozen planet sat at 6% of
+food capacity, another at 54% and rising), **not** the rate (frozen at both 20% and 40%,
+having advanced at those same rates earlier in the same game), **not** a stationed-military
+cap (both had zero) and **not** population. The per-turn growth figure the UI tests lives in
+`0x0042AE70` at `[esp+0x3c]`; nobody has traced it to its source, and finding what writes
+`PP+0x24` each turn is the open question.
+
+**It is CYCLICAL, not terminal, and it recurs at the same value.** Planet #157 froze at
+192/300, then later advanced and wrapped normally — producing the units that crewed the
+whole fleet — and then froze again at **exactly 192/300**. Its neighbour froze at 189/300.
+So whatever gates it is a repeating condition the planet enters and leaves, not damage or a
+one-way state, and the freeze point is reproducible per planet. Anything that explains it
+has to explain why the SAME planet advances freely for a stretch and then halts at the same
+figure, twice.
+
+**This is currently the binding constraint on the whole AI.** Crew gates every order rule,
+so a stalled recruitment eventually stops expansion, exploration and any attack. Do not
+"fix" it by zeroing the rate: that was tried, and because a new ship parks on the planet
+that built it and a crewless ship cannot move, it deadlocked a seven-planet empire with
+five ships at turn 345.
 
 **CREW IS A PRECONDITION FOR EVERY ORDER RULE.** A ship with no crew cannot move,
 and the engine CANCELS the order at the next turn boundary — it frees the order object
@@ -513,6 +544,43 @@ something better) or strictly as a solvency backstop. Only the latter is specifi
 
 ### 4.4 Exterminate
 
+**R-XTM-00 — Declare war first** — `[ ]` NOT BUILT, and it is a hard precondition
+```
+WHEN   any R-XTM rule wants to attack (4), conquer (5) or bio-bomb (6) civ C
+AND    relation code for C in Owner:248 != 1 (War)
+THEN   declare war on C before issuing the order
+USES   a diplomacy actuator that does not exist yet
+```
+**War is checked in two independent places**, so an Attack order without it accomplishes
+nothing: at order-issue time by `0x00477D90` (which refuses Conquer and Bio-bomb outright),
+and again inside all three battle phases by `IsAtWarWith` `0x00535080`.
+
+`Owner:248` is the relation container, one record per civ, code at `+0x04`:
+**0 Neutral, 1 War, 2 Cease-Fire, 3 Peace, 4 Alliance** (from the game's own string table at
+`0x00776DA4`).
+
+**Static analysis suggested we might already be at war and need none of this. Checked live,
+we are not.** First contact (`0x00534F90`) only defaults to War when
+`GetGameOption(2) > 1`; on this galaxy that option reads **0**, which takes the branch that
+leaves both civs **Neutral** — matching the user's report that a fresh game requires an
+explicit declaration. `GetGameOption(29)` (force initial war) and `GetGameOption(31)`
+(force combat hostility) also read 0. Read all three before assuming anything about the
+starting relation; a differently configured galaxy genuinely would start at war.
+
+`[ ]` **The relation record is SYMMETRIC and must be written as such.** `0x0055BD40` writes
+the same code into *both* civs' `Owner:248` in one call. Writing only our own map leaves the
+galaxy inconsistent, and since the battle phases query *a* civ's map, which side is asked
+would decide whether combat happens.
+
+`[ ]` **Prefer the command path over a raw write, and this is a fairness decision, not a
+technical one.** The `NWTR` handler `0x0056F310` validates nothing, but the surrounding path
+generates a **news item** ("Declares War") and applies a **reputation** change that the UI
+quantifies before confirming. A raw relation write is silent: no notification to the victim,
+no reputation cost. That is the first case found where bypassing the UI is an *advantage*
+rather than merely unvalidated, so it is squarely a §1.1 violation. All the human-facing
+rules live in the UI validator `0x004BDE50` — build-up-phase protection, teammate
+protection, and the confirmations.
+
 **R-XTM-01 — Maintain a standing fleet**
 ```
 WHEN   sum(our WARSHIP count) < threatLevel
@@ -523,6 +591,19 @@ THEN   queue the best WARSHIP design affordable in Owner:8 and Owner:1128
        against stock)
 USES   D   [BLOCKED]
 ```
+
+**ATTACK ORDERS NEED `Ship:56`, WHICH OUR ORDER WRITER LEAVES NULL.** `0x004D9880`
+`Ship::HasActiveTargetedOrder` requires the order type to be 1 (Move), 7 (MoveNear) or
+4 (Attack) **and** `Ship:56` to be non-null. Our `create_order` / `retarget_order` leave it
+as the static null node `0x00857C54`, which is harmless for the types we use today —
+Colonize (3) and Scout (2) are not on that list and carry their target as coordinates. An
+Attack order written the same way would very likely be inert, the same dead end as writing
+`Ship:52` with a null `Ship:48`.
+
+The fix is already known and must be used here: `ShipCommand(int type, EJBO* target)`
+`0x004E9BA0` populates `Ship:56` via `GetReferenceNode(target->objectId)`, and
+`Ship::SetCommand` `0x004D9DC0` writes `Ship:52/56/60/61` together as one value. So the
+Exterminate rules go through that pair, not through the coordinate-only writer.
 
 **R-XTM-02 — Defend**
 ```

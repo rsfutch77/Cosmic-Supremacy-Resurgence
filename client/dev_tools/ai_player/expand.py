@@ -190,7 +190,8 @@ def run_xpn01(snap, civ, act, log=print):
     if not yards:
         log("R-XPN-01: no planet has a shipyard")
         return 0
-    idle = [p for p in yards if not p.building_now]
+    idle = [p for p in yards
+            if not p.building_now and not act.production_claimed(p)]
     if not idle:
         log(f"R-XPN-01: all {len(yards)} shipyard planet(s) are already "
             f"building; leaving them alone")

@@ -32,6 +32,7 @@ import actions
 import cli
 import expand
 import exploit
+import exterminate
 import explore
 import gamestate as gs
 import remote
@@ -41,11 +42,44 @@ TURN_COUNTER    = gs.TURN_COUNTER
 TURNLENGTH_ADDR = 0x0080AA08
 DEFAULT_LENGTH  = 3600
 
-# Sustain first: a starving colony undoes any amount of expansion, so food is
-# settled before anything else spends a citizen or a shipyard. Explore runs
-# LAST, so it only picks up ships that Expand had no legal target for — a ship
-# should colonise a known planet in preference to going looking for a new one.
-RULES = exploit.RULES + expand.RULES + explore.RULES
+# ── Rule order ────────────────────────────────────────────────────────────────
+# Spelled out rather than concatenating each module's list, because the order is
+# a STRATEGY decision and concatenation quietly encoded the wrong one: the
+# facility rule sat ahead of both ship-build rules, so on a civ whose only
+# shipyard was the homeworld it took that planet's production every single turn.
+# The empire built farms for 40 turns, never produced a ship, never explored, and
+# never found the enemy. Nothing looked broken — every rule was doing its job.
+#
+# The principle: PRODUCTION IS THE SCARCE RESOURCE, and only shipyard planets can
+# make ships, while facilities can be built anywhere. So ships get first refusal
+# on a shipyard and facilities take what is left.
+RULES = [
+    # 1. Preserve what exists. A wreck must not be claimed by anything else,
+    #    and a starving colony undoes any amount of expansion.
+    ("R-XTM-05", exterminate.run_xtm05),      # withdraw damaged ships
+    ("R-XTM-00", exterminate.run_xtm00),      # declare war (off by default)
+    ("S-food",   exploit.run_food),           # famine / surplus farmers
+    ("R-XPL-01", exploit.run_jobs),           # the rest of the job mix
+    ("R-XPN-03", expand.run_xpn03),           # set up anything colonised this turn
+
+    # 2. Production, ships before buildings.
+    ("R-XTM-01", exterminate.run_xtm01),      # warships, only when at war
+    ("R-XPN-01", expand.run_xpn01),           # colony ships
+    ("R-XPL-02", exploit.run_facilities),     # facilities take what is left
+    ("R-XPL-08", exploit.run_hurry),          # spend surplus cash on all of it
+
+    # 3. Crew, then research. Crew gates every order rule below.
+    ("R-XPL-05", exploit.run_crew_supply),
+    ("R-XPL-06", exploit.run_crew_load),
+    ("R-XPL-04", exploit.run_research),
+
+    # 4. Orders. Attack before colonise before scout: a warship should fight
+    #    rather than explore, and a colony ship should take a known planet in
+    #    preference to going looking for a new one.
+    ("R-XTM-03", exterminate.run_xtm03),
+    ("R-XPN-02", expand.run_xpn02),
+    ("R-EXP-02", explore.run_exp02),
+]
 
 
 class Loop:
@@ -178,8 +212,15 @@ class Loop:
         # A game still sitting on the home-world customisation popup has
         # uncomputed designs AND a frozen turn pipeline, so every rule skips and
         # then the loop waits for a turn that can never arrive. Name it.
+        # Only meaningful if the turn counter is ALSO stuck, which is the
+        # symptom this warning actually claims. Judging it on the stat cache
+        # alone made it fire on a healthy game at turn 99 with every design
+        # reading computed=True a moment later — a cold or torn read looks
+        # identical to an unstarted game.
         ours = {s.design for s in snap.owned_ships(civ) if s.design}
-        if ours and not any(d.computed for d in ours):
+        stuck = (self.history.prev
+                 and self.history.prev.get("turn") == snap.turn)
+        if stuck and ours and not any(d.computed for d in ours):
             self.log("    [!] none of this civ's ship designs are computed. "
                      "The game has almost certainly not started — finish the "
                      "home-world customisation popup. While it is up the turn "
@@ -196,13 +237,21 @@ class Loop:
                     fn(snap, civ, act, vision=self.vision, top=self.top,
                        hist=self.history, log=self.log)
                 elif fn in (exploit.run_food, explore.run_exp02,
-                            exploit.run_facilities, exploit.run_jobs):
+                            exploit.run_facilities, exploit.run_jobs,
+                            exploit.run_hurry, exploit.run_crew_supply,
+                            exterminate.run_xtm00,
+                            exterminate.run_xtm01,
+                            exterminate.run_xtm03,
+                            exterminate.run_xtm05):
                     fn(snap, civ, act, self.history, log=self.log)
                 else:
                     fn(snap, civ, act, log=self.log)
             except Exception as e:
                 # One bad rule must not take the loop down mid-game.
                 self.log(f"[loop] rule {name} raised {type(e).__name__}: {e}")
+        # Tell the sensors what WE did to the treasury, so next turn's income
+        # reading reflects the economy and not this pass's purchases.
+        self.history.note_cash_effect(act.cash_effect)
         self.passes += 1
         self.log(f"    {act.summary()}")
         return snap.turn

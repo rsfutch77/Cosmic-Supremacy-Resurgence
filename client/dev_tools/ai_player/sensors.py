@@ -45,7 +45,20 @@ class History:
             "turn": snap.turn,
             "planets": {p.id: {"food": p.food or 0,
                                "pop": len(p.population),
-                               "progress": p.build_progress or 0}
+                               "progress": p.build_progress or 0,
+                               # Planet:124, the MILITARY FOOD STORE. A unit
+                               # appears when it reaches Planet:128 (the food
+                               # cost, 300 by default). Tracked because a
+                               # recruitment rate can be set, look correct in
+                               # the UI, and move this by nothing at all --
+                               # which is what "No Military Is Recruited"
+                               # means and what wasted a hundred turns.
+                               "milstore": p.u32(124) or 0,
+                               # Needed to undo the store's WRAP: when a unit
+                               # is recruited the store drops by the cost, and
+                               # a raw difference reads as a large negative.
+                               "military": p.military or 0,
+                               "milcost": p.u32(128) or 0}
                         for p in snap.owned_planets(civ)},
             "civ": {"cash": civ.cash or 0, "research": civ.research or 0},
         }
@@ -127,6 +140,81 @@ class History:
     def production_rate(self, planet_id):
         return self._delta(planet_id, "progress")
 
+    STALL_TURNS = 4       # consecutive non-advancing turns before believing it
+
+    def note_military_stall(self, planet_id, advancing):
+        """Count consecutive turns a planet's military store failed to advance.
+
+        Needed because a SINGLE non-advancing turn means nothing. The store
+        drops by the cost when a unit is recruited, and a unit can be produced
+        and then carried off as crew in the same turn, so any one-turn test can
+        be fooled from both directions. This detector fired twice on perfectly
+        healthy planets before it was made to require persistence.
+        """
+        if not hasattr(self, "_mil_stall"):
+            self._mil_stall = {}
+        self._mil_stall[planet_id] = 0 if advancing else             self._mil_stall.get(planet_id, 0) + 1
+        return self._mil_stall[planet_id]
+
+    def military_stalled(self, planet_id):
+        return getattr(self, "_mil_stall", {}).get(planet_id, 0) >= self.STALL_TURNS
+
+    def military_rate(self, planet_id):
+        """Food per turn flowing into this planet's military store.
+
+        Corrected for the WRAP. Recruiting a unit subtracts the cost from the
+        store, so a raw difference across that turn is hugely negative — 259
+        became 2 on a 300-cost planet. The first version of this sensor read
+        that as "not moving" and reported a healthy planet as permanently
+        stalled, one turn after reporting a correct 1-turn ETA. The units
+        produced have to be added back before the rate means anything.
+        """
+        prev = getattr(self, "_prev_for_pass", None)
+        if not prev or not self.turns:
+            return None
+        a = prev["planets"].get(planet_id)
+        b = self._cur["planets"].get(planet_id)
+        if a is None or b is None:
+            return None
+        made = max(0, b["military"] - a["military"])
+        cost = b["milcost"] or a["milcost"] or 0
+        return (b["milstore"] - a["milstore"] + made * cost) / self.turns
+
+    # ── the banker share, a slow controller with a deadband ────────────────
+    # The first attempt was bang-bang: negative income converted every scientist
+    # to a banker, positive income converted them all back, and the empire
+    # oscillated every single turn. The user watched it flip-flopping. A binary
+    # switch cannot express "some bankers", which is the only stable answer.
+    BANKER_STEP = 0.05      # how fast the share may move per turn
+    BANKER_MAX = 0.60       # of the non-farming citizens
+    COMFORTABLE_INCOME = 150   # only give bankers back above this, not at zero
+
+    def banker_share(self, income):
+        """Nudge the empire's banker share toward whatever balances the books.
+
+        The DEADBAND between 0 and COMFORTABLE_INCOME is the point: an income of
+        +10/turn is not a reason to sack the treasury staff, and reacting to it
+        is what produced the oscillation. The share only rises when income is
+        actually negative and only falls when there is real headroom.
+        """
+        cur = getattr(self, "_banker_share", 0.0)
+        if income is None:
+            return cur
+        if income < 0:
+            cur = min(self.BANKER_MAX, cur + self.BANKER_STEP)
+        elif income > self.COMFORTABLE_INCOME:
+            cur = max(0.0, cur - self.BANKER_STEP)
+        self._banker_share = cur
+        return cur
+
+    def note_cash_effect(self, amount):
+        """Record what our own actions did to the treasury this turn.
+
+        Called by the loop after the rules have run. income_rate() subtracts it
+        back out so the sensor measures the ECONOMY rather than our spending.
+        """
+        self._our_cash_effect = amount
+
     def _civ_delta(self, key):
         p = getattr(self, "_prev_for_pass", None)
         n = self.turns
@@ -134,7 +222,20 @@ class History:
             return None
         return (self._cur["civ"][key] - p["civ"][key]) / n
 
-    def income_rate(self):   return self._civ_delta("cash")
+    def income_rate(self):
+        """Cash per turn from the economy, excluding our own spending.
+
+        Owner:8 moves for two reasons: the empire earns, and we spend. Only the
+        first is a signal. Hurrying a build is a deliberate purchase, and
+        counting it as lost income made R-XPL-08 oscillate — spend, see
+        "negative income", refuse, recover, spend again.
+        """
+        d = self._civ_delta("cash")
+        if d is None:
+            return None
+        ours = getattr(self, "_our_cash_effect", 0) or 0
+        n = self.turns or 1
+        return d - ours / n
     def research_rate(self): return self._civ_delta("research")
 
     def summary(self):

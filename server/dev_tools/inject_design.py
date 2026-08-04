@@ -297,6 +297,147 @@ def inject(blob, src_name, new_name, new_id=None, log=print):
     return bytes(out)
 
 
+
+# ── Building a design from scratch ────────────────────────────────────────────
+# The SDPR payload was decoded by parsing four real designs across two civs and
+# checking that every payload is consumed EXACTLY, with no bytes left over:
+#
+#     u32 nameLen ; char name[nameLen]
+#     6 x ( u32 count ; u32 ids[count] )      chassis, scanners, engines,
+#                                             weapons, modules, and a sixth list
+#                                             that is empty on every design seen
+#     u32 ownerObjectId
+#
+# Cross-checked against memory: the Colony Ship parses as chassis[0],
+# scanners[0], engines[0,0,0], weapons[], modules[0], which is exactly what
+# gamestate reads from ShipDesign:128/152/176/200/224 on the running client. The
+# trailing id matches the owning civ's object id (647 and 651 for the two civs),
+# which is the value the deserialiser feeds to GetReferenceNode to build
+# ShipDesign:260.
+PART_LISTS = ("chassis", "scanners", "engines", "weapons", "modules", "list6")
+
+
+def build_sdpr(name, parts, owner_id):
+    """The SDPR payload for a design. `parts` maps list name -> [ids]."""
+    nb = name.encode("ascii")
+    out = bytearray(struct.pack("<I", len(nb)) + nb)
+    for key in PART_LISTS:
+        ids = list(parts.get(key, ()))
+        out += struct.pack("<I", len(ids))
+        for i in ids:
+            out += struct.pack("<I", i)
+    out += struct.pack("<I", owner_id)
+    return bytes(out)
+
+
+def build_dsgn(new_id, name, parts, owner_id, dsgn_ver=4, sdpr_ver=0):
+    """A complete DSGN section: header, object id, and its SDPR child.
+
+    Section versions are taken from real records rather than assumed — DSGN is
+    version 4 and SDPR version 0 in every capture examined, and the version
+    occupies bits 26..31 of the length word.
+    """
+    payload = build_sdpr(name, parts, owner_id)
+    sdpr = struct.pack("<4sI", SDPR, (sdpr_ver << 26) | len(payload)) + payload
+    body = struct.pack("<I", new_id) + sdpr
+    return struct.pack("<4sI", DSGN, (dsgn_ver << 26) | len(body)) + body
+
+
+def make(blob, like, new_name, parts, new_id=None, log=print):
+    """Add a NEW design (not a clone) to the civ that owns `like`.
+
+    `like` only identifies which civ to add to and where to splice; none of its
+    bytes are copied. Everything after the record is built is shared with
+    inject(): sections nest and every enclosing one must be widened, the civ's
+    design count sits immediately before its first DSGN, and SAVE's high-water
+    object id has to be raised or the engine hands our id straight back out.
+    """
+    records = design_records(blob)
+    if not records:
+        raise SystemExit("no DSGN records found; is this a real save blob?")
+    if isinstance(like, int):
+        ref = [r for r in records if r[1] == like]
+        if not ref:
+            raise SystemExit(f"no design with object id {like}")
+    else:
+        ref = [r for r in records if r[2] == like]
+        if not ref:
+            raise SystemExit(f"no design named {like!r}")
+        if len(ref) > 1:
+            raise SystemExit(f"{len(ref)} designs named {like!r} (ids "
+                             f"{[r[1] for r in ref]}); pass --like-id to choose")
+    ref_off = ref[0][0]
+
+    if any(r[2] == new_name for r in records):
+        raise SystemExit(f"a design named {new_name!r} already exists; the "
+                         f"client requires unique design names")
+    if len(new_name) > 15:
+        raise SystemExit(f"{new_name!r} is longer than the 15-char name buffer")
+
+    owner = owner_of_design(blob, ref_off)
+    mine = [r for r in records if owner_of_design(blob, r[0]) == owner]
+    first = min(r[0] for r in mine)
+    last_end = max(sec_end(blob, r[0]) for r in mine)
+    count_at = first - 4
+    count = struct.unpack_from("<I", blob, count_at)[0]
+    if count != len(mine):
+        raise SystemExit(f"design count {count} does not match the {len(mine)} "
+                         f"records found; the layout is not what this expects")
+
+    # The owner's OBJECT ID is the trailing dword of any of that civ's designs,
+    # which is more reliable than trying to locate the OWNR's own id field.
+    ref_owner_id = read_owner_id(blob, ref_off)
+
+    if new_id is None:
+        new_id = max_object_id(blob) + 1
+    rec = build_dsgn(new_id, new_name, parts, ref_owner_id)
+
+    log(f"building {new_name!r} for the civ owning design @{ref_off} "
+        f"(owner object id {ref_owner_id})")
+    for key in PART_LISTS:
+        if parts.get(key):
+            log(f"    {key}: {list(parts[key])}")
+    log(f"  new object id {new_id}; record is {len(rec)} bytes")
+
+    grow = len(rec)
+    out = bytearray(blob)
+    for off, tag, ver, ln in containing_sections(blob, last_end):
+        struct.pack_into("<I", out, off + 4, (ver << 26) | (ln + grow))
+        log(f"    widened {tag.decode():4} @{off:<6} {ln} -> {ln + grow}")
+    out[last_end:last_end] = rec
+    struct.pack_into("<I", out, count_at, count + 1)
+    log(f"  inserted at {last_end}; design count {count} -> {count + 1}")
+
+    hi = struct.unpack_from("<I", out, HIGH_WATER_ID)[0]
+    if new_id > hi:
+        struct.pack_into("<I", out, HIGH_WATER_ID, new_id)
+        log(f"  high-water object id {hi} -> {new_id}")
+    return bytes(out)
+
+
+def read_design(blob, dsgn_off):
+    """Parse one DSGN into (objectId, name, {list: [ids]}, ownerId)."""
+    oid = struct.unpack_from("<I", blob, dsgn_off + 8)[0]
+    sl = sec_len(blob, dsgn_off + 12)[1]     # (version, length)
+    p = dsgn_off + 20
+    end = p + sl
+    nlen = struct.unpack_from("<I", blob, p)[0]; p += 4
+    name = blob[p:p + nlen].decode("latin-1"); p += nlen
+    parts = {}
+    for key in PART_LISTS:
+        n = struct.unpack_from("<I", blob, p)[0]; p += 4
+        parts[key] = list(struct.unpack_from(f"<{n}I", blob, p)); p += 4 * n
+    owner_id = struct.unpack_from("<I", blob, p)[0]; p += 4
+    if p != end:
+        raise ValueError(f"SDPR at {dsgn_off} left {end - p} byte(s) unread; "
+                         f"the layout is not what this expects")
+    return oid, name, parts, owner_id
+
+
+def read_owner_id(blob, dsgn_off):
+    return read_design(blob, dsgn_off)[3]
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("capture", help="captured savegame .b64")
@@ -304,24 +445,61 @@ def main():
     ap.add_argument("--from-id", dest="src_id", type=int,
                     help="object id of the design to clone (unambiguous when "
                          "both civs have an identically named design)")
-    ap.add_argument("--name", required=True, help="name for the new design")
+    ap.add_argument("--name", help="name for the new design")
     ap.add_argument("--id", type=int, default=None,
                     help="object id (default: one above the highest in the blob)")
     ap.add_argument("-o", "--out", default=None,
                     help="output .b64 (default: server/loadgame_blob.b64)")
     ap.add_argument("--dry-run", action="store_true")
+    # --- synthesise a design rather than clone one ---
+    ap.add_argument("--make", action="store_true",
+                    help="build a NEW design from --chassis/--engine/etc "
+                         "instead of cloning one")
+    ap.add_argument("--like", help="name of any design of the civ to add to")
+    ap.add_argument("--like-id", type=int, help="...or its object id")
+    for lst in ("chassis", "scanner", "engine", "weapon", "module"):
+        ap.add_argument(f"--{lst}", action="append", type=int, default=None,
+                        help=f"{lst} part id; repeat for more than one")
+    ap.add_argument("--list", action="store_true",
+                    help="just print the designs in the capture and exit")
     a = ap.parse_args()
 
     blob = sp.decode_save(open(a.capture).read())
     print(f"{a.capture}: {len(blob)} bytes inflated\n")
-    if a.src_id is None and not a.src:
-        raise SystemExit("need --from <name> or --from-id <id>")
-    new = inject(blob, a.src_id if a.src_id is not None else a.src, a.name, a.id)
+    if a.list:
+        for off, oid, name in design_records(blob):
+            _, _, parts, owner = read_design(blob, off)
+            shown = {k: v for k, v in parts.items() if v}
+            print(f"  @{off:<6} id={oid:<6} owner={owner:<6} {name!r:16s} {shown}")
+        return
+
+    if a.make:
+        if a.like_id is None and not a.like:
+            raise SystemExit("--make needs --like <name> or --like-id <id> to "
+                             "say which civ the design belongs to")
+        parts = {"chassis": a.chassis or [], "scanners": a.scanner or [],
+                 "engines": a.engine or [], "weapons": a.weapon or [],
+                 "modules": a.module or [], "list6": []}
+        if not parts["chassis"]:
+            raise SystemExit("a design with no chassis is not buildable; "
+                             "pass --chassis <id>")
+        if not parts["engines"]:
+            print("  [warn] no engine: the UI allows it but nothing built from "
+                  "this design can move")
+        new = make(blob, a.like_id if a.like_id is not None else a.like,
+                   a.name, parts, a.id)
+    else:
+        if a.src_id is None and not a.src:
+            raise SystemExit("need --from <name>, --from-id <id>, or --make")
+        new = inject(blob, a.src_id if a.src_id is not None else a.src,
+                     a.name, a.id)
 
     # Re-parse the result and prove the edit before writing anything.
     print("\nverifying the rewritten blob:")
     for off, oid, name in design_records(new):
-        print(f"  @{off:<6} id={oid:<6} {name!r}")
+        _, _, parts, owner = read_design(new, off)
+        shown = {k: v for k, v in parts.items() if v}
+        print(f"  @{off:<6} id={oid:<6} owner={owner:<6} {name!r:16s} {shown}")
 
     if a.dry_run:
         print("\n--dry-run: nothing written")
