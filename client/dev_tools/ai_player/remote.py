@@ -45,6 +45,22 @@ INFINITE           = 0xFFFFFFFF
 
 OPERATOR_NEW = 0x0065165A
 SELL_FACILITY = 0x004F8580      # PlanetProperties::SellFacility
+HURRY_PRODUCTION = 0x004EFFF0   # PlanetProperties::HurryProduction
+SHIPCOMMAND_CTOR = 0x004E9BA0   # __thiscall(int orderType, EJBO* target), ret 8
+GET_RELATION_CODE = 0x00534D90  # __thiscall(Owner* other) on Owner:248, ret 4
+FIRST_CONTACT     = 0x00534F90  # __thiscall(Owner* other); creates the record
+RELATION_FIND     = 0x00534340  # __thiscall(Owner* other) -> record pointer
+REPUTATION_ADD    = 0x00534D50  # __thiscall(Owner* other, short delta), ret 8
+RELATION_CODE_OFF = 4           # within the record Find returns
+OWNER_RELATIONS = 248           # Owner:248, the diplomacy container
+OWNER_PRIMARY_FROM_TAG = -52    # Owner allocation starts at tag - 52
+SHIP_SETCOMMAND  = 0x004D9DC0   # __thiscall(ShipCommand*), ret 4
+SHIPCOMMAND_SIZE = 16           # +0 type, +4 target node, +8/+9 two bytes
+SHIP_ALLOC_FROM_TAG = -8        # Ship:N == ship_allocation + (N + 8)
+HURRY_COST       = 0x00555660   # __cdecl(PlanetProperties*) -> cost, or -1
+PRODUCTION_DONE  = 0x004F0260   # __thiscall(PP) -> production accumulated
+PP_TOTAL_SLOT    = 0x74         # PP vftable slot -> total production needed
+HURRY_MIN_FRACTION = 0.5        # [0x00750360]; below this the engine refuses
 PLANET_PROPERTIES = 88          # PlanetProperties lives at planet_tag + 88
 OFFLINE_FLAG = 0x0086F1A0       # the local-apply path runs only when this byte is set
 ORDER_CTOR   = 0x004E8420
@@ -75,6 +91,10 @@ DESIGN_STREAM_CTOR = 0x005470A0
 # Calling the getter therefore both READS the value and warms the cache.
 DESIGN_DATA_OFFSET  = 4        # from the EJBO tag
 DESIGN_SPEED_GETTER = 0x005480A0   # __thiscall, no args, returns in st(0)
+DESIGN_MINCREW_GETTER = 0x005490E0 # __thiscall, no args, returns in eax
+# The three firepower pools. Each is an independent damage class: 1 and 2 are
+# anti-ship, 3 is what planetary-defence participants are counted into.
+DESIGN_FP_GETTERS = (0x00548CC0, 0x00548E20, 0x00548F80)
 
 # Every ShipDesign must show these at its allocation start, or construction
 # did not happen. Checking them is cheap and is the difference between a bad
@@ -103,6 +123,15 @@ class RemoteCallError(Exception):
     pass
 
 
+class RemoteThreadStuck(RemoteCallError):
+    """A remote thread was created and did not finish in time.
+
+    Its stub page MUST be leaked, never freed — the thread is still inside it.
+    Subclasses RemoteCallError so existing handlers keep catching it; the
+    distinction only matters to run_stub, which needs it to decide cleanup.
+    """
+
+
 # ── x86 encoding helpers ───────────────────────────────────────────────────
 def push_imm(v):     return b"\x68" + struct.pack("<I", v & 0xFFFFFFFF)
 def mov_ecx_imm(v):  return b"\xB9" + struct.pack("<I", v & 0xFFFFFFFF)
@@ -113,6 +142,7 @@ PUSH_ECX   = b"\x51"
 FSTP_ESP   = b"\xD9\x1C\x24"      # fstp dword ptr [esp]
 POP_EAX    = b"\x58"
 SUB_ESP_4  = b"\x83\xEC\x04"
+ADD_ESP_4  = b"\x83\xC4\x04"      # __cdecl callees leave their args to us
 
 
 class Remote:
@@ -121,6 +151,10 @@ class Remote:
     def __init__(self, pid, log=print):
         self.pid = pid
         self.log = log
+        # Stub pages we deliberately did NOT free, because a remote thread may
+        # still be executing them. Leaking 4 KB is always the right trade
+        # against decommitting a page under a running thread.
+        self.leaked_pages = []
         self.h = kernel32.OpenProcess(PROCESS_ALL_ACCESS, False, pid)
         if not self.h:
             raise RemoteCallError(
@@ -129,6 +163,12 @@ class Remote:
                 f"more rights than the viewer's read/write handle.")
 
     def close(self):
+        if self.leaked_pages:
+            self.log(f"  [stub] {len(self.leaked_pages)} page(s) left allocated "
+                     f"in the client "
+                     f"({', '.join(f'0x{p:08X}' for p in self.leaked_pages)}). "
+                     f"A stuck remote thread was in each, so freeing them would "
+                     f"crash it; they go when the client exits.")
         if self.h:
             kernel32.CloseHandle(self.h)
             self.h = None
@@ -153,8 +193,18 @@ class Remote:
                                   f"(error {ctypes.get_last_error()})")
         return n.value
 
-    def _run(self, start, param, timeout_ms=5000):
-        """Start a thread at `start` and return its exit code (EAX)."""
+    def _run(self, start, param, timeout_ms=15000):
+        """Start a thread at `start` and return its exit code (EAX).
+
+        A timeout raises RemoteThreadStuck rather than plain RemoteCallError,
+        because the two demand opposite cleanup: if no thread was created the
+        page is ours to free, but if a thread is still inside it, freeing is
+        fatal. See run_stub.
+
+        The wait was 5s and is now 15s. A getter returns instantly, but a call
+        that contends with the main thread mid-turn can take far longer than a
+        stopwatch suggests, and waiting is free while giving up is not.
+        """
         th = kernel32.CreateRemoteThread(self.h, None, 0,
                                          ctypes.c_void_p(start),
                                          ctypes.c_void_p(param), 0, None)
@@ -163,9 +213,9 @@ class Remote:
                                   f"(error {ctypes.get_last_error()})")
         try:
             if kernel32.WaitForSingleObject(th, timeout_ms) != 0:
-                raise RemoteCallError(
+                raise RemoteThreadStuck(
                     f"remote thread at 0x{start:08X} did not finish within "
-                    f"{timeout_ms}ms — the game is probably wedged or dead")
+                    f"{timeout_ms}ms")
             code = wintypes.DWORD()
             kernel32.GetExitCodeThread(th, ctypes.byref(code))
             return code.value
@@ -173,14 +223,33 @@ class Remote:
             kernel32.CloseHandle(th)
 
     def run_stub(self, code, what=""):
-        """Run a self-contained stub. Returns EAX at its `ret`."""
+        """Run a self-contained stub. Returns EAX at its `ret`.
+
+        THE PAGE IS NEVER FREED WHILE A THREAD MIGHT STILL BE IN IT. This used
+        to free in a `finally`, which also fired on the timeout path: the wait
+        gave up, we decommitted the page, and the still-running remote thread
+        carried on into nothing. Two client crashes were logged with
+        ACCESS_VIOLATION reading 0 AT instruction address 0, which is exactly
+        what executing a freed page looks like.
+
+        A leaked 4 KB page costs nothing. Killing the user's game costs a lot,
+        and it is the one thing this module must never do.
+        """
         page = self.alloc(max(len(code), 64), exec_=True)
         try:
             self.write(page, code)
             self.log(f"  [stub] 0x{page:08X} {len(code)}B  {what}")
-            return self._run(page, 0)
-        finally:
-            self.free(page)
+            result = self._run(page, 0)
+        except RemoteThreadStuck:
+            self.leaked_pages.append(page)
+            self.log(f"  [stub] LEAKING page 0x{page:08X}: a thread is still "
+                     f"executing it and freeing it would crash the client")
+            raise
+        except BaseException:
+            self.free(page)      # no thread was ever started; safe to reclaim
+            raise
+        self.free(page)
+        return result
 
     # ── the calls we actually need ─────────────────────────────────────
     def operator_new(self, size=ORDER_SIZE):
@@ -274,6 +343,196 @@ class Remote:
                 SUB_ESP_4 + FSTP_ESP + POP_EAX +
                 RET_4)
         return self.run_stub(code, f"design speed getter on 0x{design_tag:08X}")
+
+    def hurry_production(self, planet_tag):
+        """Spend cash to finish this planet's current production immediately.
+
+        __thiscall on the PlanetProperties, no arguments. The engine does the
+        whole transaction: it prices the remainder, debits Owner:8 and completes
+        the build. Called rather than reproduced for the same reason as
+        sell_facility -- STRATEGY.md 1.1 forbids writing the treasury, and a
+        hurry that paid for itself would be indistinguishable from a free one.
+
+        The engine's own refusals, which the caller should pre-check so a
+        pointless remote thread is not spawned:
+          * production at least half finished (progress / total >= 0.5)
+          * cost <= Owner:8
+          * production kind != 7 (a planet generating wealth has nothing to
+            hurry), and Planet:300 == 0
+        """
+        code = (mov_ecx_imm(planet_tag + PLANET_PROPERTIES) +
+                mov_eax_imm(HURRY_PRODUCTION) +
+                CALL_EAX +
+                RET_4)
+        return self.run_stub(code, f"HurryProduction on 0x{planet_tag:08X}")
+
+    def hurry_cost(self, planet_tag):
+        """4 x (total production needed - progress); -1 when not hurryable."""
+        code = (push_imm(planet_tag + PLANET_PROPERTIES) +
+                mov_eax_imm(HURRY_COST) +
+                CALL_EAX +
+                ADD_ESP_4 +
+                RET_4)
+        v = self.run_stub(code, f"hurry cost on 0x{planet_tag:08X}")
+        return None if v is None else struct.unpack("<i", struct.pack("<I", v))[0]
+
+    def production_total(self, planet_tag, vftable_slot_addr):
+        """PP vftable[0x74] — the production this build needs in total."""
+        code = (mov_ecx_imm(planet_tag + PLANET_PROPERTIES) +
+                mov_eax_imm(vftable_slot_addr) +
+                CALL_EAX +
+                RET_4)
+        return self.run_stub(code, f"production total on 0x{planet_tag:08X}")
+
+    def production_done(self, planet_tag):
+        code = (mov_ecx_imm(planet_tag + PLANET_PROPERTIES) +
+                mov_eax_imm(PRODUCTION_DONE) +
+                CALL_EAX +
+                RET_4)
+        return self.run_stub(code, f"production done on 0x{planet_tag:08X}")
+
+    def make_ship_command(self, block, order_type, target_alloc):
+        """Run the engine's ShipCommand constructor on a block we hand it.
+
+        __thiscall(int orderType, EJBO* target), ret 8 — callee-cleaned, so the
+        stub pushes and forgets. Arguments go right to left, so the target is
+        pushed first.
+
+        `target_alloc` is an ALLOCATION START, not a tag. The constructor reads
+        the object id at target[+4], which is tag-4 for every class we deal with,
+        and getting this wrong is the same crash that mistaking a stream
+        constructor for a copy constructor caused.
+
+        Why this exists at all: the constructor is what turns a target OBJECT
+        into the reference node that lands in Ship:56, via
+        GetReferenceNode(target->objectId). Nothing else we have populates that
+        field, and Ship::HasActiveTargetedOrder (0x004D9880) requires it to be
+        non-null for order types 1 (Move), 7 (MoveNear) and 4 (Attack).
+        """
+        code = (push_imm(target_alloc) +
+                push_imm(order_type) +
+                mov_ecx_imm(block) +
+                mov_eax_imm(SHIPCOMMAND_CTOR) +
+                CALL_EAX +
+                RET_4)
+        return self.run_stub(
+            code, f"ShipCommand({order_type}, 0x{target_alloc:08X}) "
+                  f"-> 0x{block:08X}")
+
+    def ship_set_command(self, ship_tag, cmd_block):
+        """Ship::SetCommand — writes Ship:52/56/60/61 from the ShipCommand.
+
+        __thiscall, ret 4, ECX = the ship's ALLOCATION start (tag - 8), because
+        the function writes the order type at [ecx+0x3c] and Ship:52 sits at
+        allocation + 60.
+
+        The four fields are one value and the engine writes them together. Our
+        own retarget_order writes Ship:52 alone, which is fine for Colonize and
+        Scout — they carry coordinates and are not order types that consult
+        Ship:56 — but is not fine for Move or Attack.
+        """
+        code = (push_imm(cmd_block) +
+                mov_ecx_imm(ship_tag + SHIP_ALLOC_FROM_TAG) +
+                mov_eax_imm(SHIP_SETCOMMAND) +
+                CALL_EAX +
+                RET_4)
+        return self.run_stub(code, f"Ship::SetCommand on 0x{ship_tag:08X}")
+
+    def relation_code(self, civ_tag, other_tag):
+        """The diplomacy relation code between two civs, via the engine.
+
+        0 Neutral, 1 War, 2 Cease-Fire, 3 Peace, 4 Alliance, and 0 also when
+        there is no record at all — the engine treats "absent" and "Neutral" as
+        the same thing.
+
+        This is an engine call for a read, which is normally the wrong trade, but
+        the container at Owner:248 is NOT a std::map: it holds four pointers
+        where a map would hold {head, size}, and a hand-rolled traversal walked
+        straight out of it into unrelated memory (one "node" it found contained
+        the string "IllegalPosition"). Rather than reverse a custom container,
+        ask the accessor that already knows how to search it.
+
+        ECX is the container, and `other` must be the OWNER PRIMARY form
+        (tag - 52), which is what the engine's own call sites pass.
+        """
+        code = (push_imm(other_tag + OWNER_PRIMARY_FROM_TAG) +
+                mov_ecx_imm(civ_tag + OWNER_RELATIONS) +
+                mov_eax_imm(GET_RELATION_CODE) +
+                CALL_EAX +
+                RET_4)
+        return self.run_stub(code, f"relation code vs 0x{other_tag:08X}")
+
+    def design_firepower(self, design_tag):
+        """(light, heavy, third) via the engine's getters, warming the cache.
+
+        ShipDesign:60/64/68 are lazy derived stats and read -1 until something
+        asks for them, so a design that has never been inspected reports
+        (0, 0, 0) and looks unarmed. Reading them through the getters both
+        answers the question and leaves the plain reads correct afterwards.
+        """
+        out = []
+        for fn in DESIGN_FP_GETTERS:
+            v = self.run_stub(
+                mov_ecx_imm(design_tag + DESIGN_DATA_OFFSET) +
+                mov_eax_imm(fn) + CALL_EAX + RET_4,
+                f"firepower getter 0x{fn:08X}")
+            out.append(0 if v is None else struct.unpack("<i",
+                       struct.pack("<I", v))[0])
+        return tuple(out)
+
+    def first_contact(self, civ_tag, other_tag):
+        """Create the relation record between two civs if it does not exist.
+
+        0x00534F90 skips silently when a record is already present or when the
+        two civs are the same, so this is safe to call unconditionally. It picks
+        the INITIAL code itself -- Neutral on this galaxy, because
+        GetGameOption(2) reads 0 -- which is why declaring war is a second step.
+        """
+        code = (push_imm(other_tag + OWNER_PRIMARY_FROM_TAG) +
+                mov_ecx_imm(civ_tag + OWNER_RELATIONS) +
+                mov_eax_imm(FIRST_CONTACT) + CALL_EAX + RET_4)
+        return self.run_stub(code, f"first contact 0x{civ_tag:08X} <-> "
+                                   f"0x{other_tag:08X}")
+
+    def relation_record(self, civ_tag, other_tag):
+        """Pointer to the relation record, or None. Code lives at +4."""
+        code = (push_imm(other_tag + OWNER_PRIMARY_FROM_TAG) +
+                mov_ecx_imm(civ_tag + OWNER_RELATIONS) +
+                mov_eax_imm(RELATION_FIND) + CALL_EAX + RET_4)
+        p = self.run_stub(code, f"find relation record vs 0x{other_tag:08X}")
+        return p if p and 0x10000 < p < 0x7FFF0000 else None
+
+    def add_reputation(self, civ_tag, other_tag, delta):
+        """Add to the standing score at record +0x10, engine-clamped to 100.
+
+        The engine clamps only the HIGH side (cmp 0x64), so a large negative
+        delta is not floored here -- pass sane values.
+        """
+        code = (push_imm(delta & 0xFFFFFFFF) +
+                push_imm(other_tag + OWNER_PRIMARY_FROM_TAG) +
+                mov_ecx_imm(civ_tag + OWNER_RELATIONS) +
+                mov_eax_imm(REPUTATION_ADD) + CALL_EAX + RET_4)
+        return self.run_stub(code, f"reputation {delta:+d} vs 0x{other_tag:08X}")
+
+    def design_min_crew(self, design_tag):
+        """ShipDesign:76 — the MINIMUM CREW a design needs to function.
+
+        The report called :76 a "payload-delivery flag" because it reads 2 on
+        the Colony Ship and troop designs and 1 on the weapon-only ones. The
+        combat code settles it: the firepower accumulator computes the ship's
+        crew count from its Ship:124 vector and SKIPS the ship entirely when
+        that count is below this value, so an undercrewed warship contributes
+        exactly zero damage. Read as a crew minimum, every observed value fits.
+
+        Called rather than read because :76 is part of the lazy derived-stat
+        block, which reads -1 until something asks for it. Our own Colony Ship
+        reads -1 right now while the rival's reads 2.
+        """
+        code = (mov_ecx_imm(design_tag + DESIGN_DATA_OFFSET) +
+                mov_eax_imm(DESIGN_MINCREW_GETTER) +
+                CALL_EAX +
+                RET_4)
+        return self.run_stub(code, f"design min-crew on 0x{design_tag:08X}")
 
     def construct_order(self, order, origin_alloc, target_alloc, owner_alloc,
                         f_bits, a5=1, a6=0):

@@ -33,6 +33,23 @@ import ejbo_viewer as ev
 # ── .data statics (stable across launches) ─────────────────────────────────
 TURN_COUNTER     = 0x008578E8
 LOCAL_PLAYER     = 0x00857904   # ref node -> the human civ's Owner
+
+# PlanetProperties is embedded in the Planet allocation at +0x60, which is
+# planet_tag + 88 — the same frame the annotations call Planet:88. Every
+# __thiscall on a PlanetProperties takes ECX = planet_tag + this.
+PLANET_PROPERTIES = 88
+
+# Ship:52 order types the UI can issue. 6 (Bio bomb) and 8 are real but the AI
+# has no use for them: bio-bombing requires war and is a civilian-killing weapon,
+# and 8 is unidentified beyond carrying Ship:61 = 0x0B.
+ORDER_TYPES = {0: "none", 1: "move", 2: "scout", 3: "colonize", 4: "attack",
+               5: "conquer", 6: "bio bomb", 7: "move near"}
+
+# The three that ALSO require Ship:56, the order's target-object reference node
+# (Ship::HasActiveTargetedOrder, 0x004D9880). Colonize and Scout carry their
+# target as coordinates instead, which is why the coordinate-only writer works
+# for them and not for these.
+TARGETED_ORDER_TYPES = (1, 4, 7)
 NULL_NODE        = ev.NULL_REF_NODE      # 0x00857C54
 PILING_UP_WEALTH = 0x0080B540            # shared "generating wealth" singleton
 FACILITY_VFTABLE = 0x00752BA4
@@ -264,7 +281,20 @@ class Design(Obj):
     @property
     def is_troop(self):  return 1 in self.modules
     @property
-    def is_warship(self): return max(self.firepower) > 0
+    def is_warship(self):
+        """Armed per its FITTED WEAPONS, not per its firepower numbers.
+
+        firepower reads (0,0,0) on a design whose derived stat block is cold,
+        because the block holds -1 until a getter warms it. Testing
+        max(firepower) > 0 therefore called a real warship unarmed whenever its
+        cache had not been touched — the same lazy-cache trap that had R-XPN-01
+        selecting the rival's colony design.
+
+        ShipDesign:200 is a parts vector, not a derived stat, so it is true
+        whatever the cache is doing. Use firepower to RANK armed designs, never
+        to decide whether a design is armed.
+        """
+        return bool(self.weapons) or max(self.firepower) > 0
 
     @property
     def role(self):
