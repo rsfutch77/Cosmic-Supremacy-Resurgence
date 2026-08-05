@@ -65,6 +65,7 @@ RULES = [
     # 2. Production, ships before buildings.
     ("R-XTM-01", exterminate.run_xtm01),      # warships, only when at war
     ("R-XPN-01", expand.run_xpn01),           # colony ships
+    ("R-EXP-01", explore.run_exp01),          # dedicated scouts
     ("R-XPL-02", exploit.run_facilities),     # facilities take what is left
     ("R-XPL-08", exploit.run_hurry),          # spend surplus cash on all of it
 
@@ -239,6 +240,7 @@ class Loop:
                 elif fn in (exploit.run_food, explore.run_exp02,
                             exploit.run_facilities, exploit.run_jobs,
                             exploit.run_hurry, exploit.run_crew_supply,
+                            explore.run_exp01,
                             exterminate.run_xtm00,
                             exterminate.run_xtm01,
                             exterminate.run_xtm03,

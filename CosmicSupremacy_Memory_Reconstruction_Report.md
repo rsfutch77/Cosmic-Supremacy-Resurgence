@@ -2226,6 +2226,26 @@ floats across `Planet` and `PlanetProperties`, and as vector element counts. Loy
 uniform 100% carries no discriminating information and cannot be found until one planet
 differs; corruption is plausibly derived at display time.
 
+[ ] **UNDERSTAND REPUTATION BEFORE MULTIPLAYER.** Reputation is a signed word at `+0x10`
+of each relation record inside `Owner:248`, added to by `AddReputation` `0x00534D50`
+(`__thiscall(Owner* other, short delta)`, clamped to 100 on the high side only). Static
+analysis found **exactly one caller** — conquest resolution `0x004F6DE0`, reached from
+`0x004DABD0` in turn stage 18 — and **no reader anywhere in gameplay code**: no threshold
+test, no comparison, no branch on the value. So within this client it is inert, which is
+why an AI-vs-AI galaxy can ignore it.
+
+That is NOT sufficient for multiplayer, for two reasons:
+  * **It feeds score, which is the thing players are ranked on.** An AI that declares war
+    without paying the reputation cost is not gaining a capability but may be gaining
+    standing, and against humans that is unfair even though nothing mechanical changes.
+  * The relation record is serialised — R5 found it in the `DATA`/`SERV`/`PRIV`/`CLIE`
+    sections — so a **server** can consult it in ways this binary cannot reveal. Anything
+    concluded from the client alone is a statement about the client.
+Specifically still open: the forecast formula the declare-war dialog displays
+(`0x004430F0`, identity confirmed, arithmetic not closed — trace `[esp+0x2c]`/`[esp+0x30]`
+through the `[0x0085795C]` loop); which side's record the conquest writer updates; and how
+reputation enters the score calculation.
+
 [ ] test whether loyalty and corruption are derived rather than stored — populate one planet's population, buildings and military fully, and check whether both values follow from those inputs without any field of their own changing.
 
 ### Governor — located and confirmed (July 2026)

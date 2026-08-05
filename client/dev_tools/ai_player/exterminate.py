@@ -137,7 +137,15 @@ def anti_planet(design, act=None):
     two are anti-ship, which is what makes "one of each" the right fleet.
     """
     fp = design.firepower
-    if act is not None and act.remote is not None and not any(fp):
+    # Only warm the cache for a design that HAS weapons. An unarmed hull's
+    # firepower is legitimately (0,0,0), so "all zero means cold" made this call
+    # the getters on every single evaluation, every turn, forever. Those getters
+    # WRITE the lazy stat block, and the ship-design tab does the same work on
+    # the UI thread — the user crashed the client twice by opening that tab while
+    # this was running. Fewer stub calls is not an optimisation here, it is the
+    # mitigation.
+    if (act is not None and act.remote is not None
+            and design.weapons and not any(fp)):
         try:
             fp = act.remote.design_firepower(design.addr)
         except (RuntimeError, OSError):
@@ -213,12 +221,25 @@ def run_xtm01(snap, civ, act, hist, log=print):
     have_as = any(not anti_planet(d, act) for d in fleet)
     if len(fleet) >= WARSHIP_TARGET and have_ap and have_as:
         return 0
+    stranded = exploit.awaiting_crew(snap, civ, act, role="WARSHIP")
+    if stranded:
+        log(f"R-XTM-01: {len(stranded)} warship(s) built and waiting for "
+            f"crew; another hull would not add any firepower")
+        return 0
     designs = warship_designs(snap, civ)
     if not designs:
+        import research
+        done = {t for t, _ in civ.completed}
+        arms = sorted(research.unlocked(done, research.WEAPON))
         log(f"R-XTM-01: at war with {[f.civ_name for f in foes]} and "
-            f"{len(have)}/{WARSHIP_TARGET} warship(s), but this civ has NO "
-            f"armed design. Design creation is parked (STRATEGY.md actuator I), "
-            f"so a warship design has to be made in the UI.")
+            f"{len(have)}/{WARSHIP_TARGET} warship(s), but this civ has no "
+            f"armed design."
+            + (f" Weapons {arms} are unlocked, so one can be synthesised: "
+               f"client/dev_tools/game_cycle.py --design "
+               f"'f1:chassis=0,scanner=0,engine=0,weapon={arms[0]}'"
+               if arms else
+               " No weapon is unlocked yet either — R-XPL-04 is prioritising "
+               "the research that grants one."))
         return 0
     yards = [p for p in snap.owned_planets(civ)
              if exploit.SHIPYARD in p.facilities and not p.u32(344)
@@ -356,7 +377,7 @@ def run_xtm00(snap, civ, act, hist, log=print):
 
 
 # Off by default: see run_xtm00. Flip this for an AI-vs-AI galaxy.
-ALLOW_DECLARE_WAR = False
+ALLOW_DECLARE_WAR = True
 
 RULES = [("R-XTM-05", run_xtm05), ("R-XTM-00", run_xtm00),
          ("R-XTM-01", run_xtm01), ("R-XTM-03", run_xtm03)]

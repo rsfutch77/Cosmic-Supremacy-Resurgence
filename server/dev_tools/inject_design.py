@@ -317,8 +317,23 @@ def inject(blob, src_name, new_name, new_id=None, log=print):
 PART_LISTS = ("chassis", "scanners", "engines", "weapons", "modules", "list6")
 
 
+# EVERY design the game itself produced carries scanners=[0] -- all four in the
+# reference capture, and the starting Colony Ship of both civs. Designs
+# synthesised WITHOUT one could be selected and queued, but the engine CRASHED
+# when a build completed and it tried to construct the ship: R-EXP-01 queued a
+# scanner-less scout, the hurry rule finished it, and the client died at the turn
+# boundary. Nothing else distinguished that design from the ones that work.
+#
+# So a scanner is defaulted in rather than left to the caller to remember. It can
+# still be overridden explicitly, but the default matches what the UI does.
+DEFAULT_SCANNERS = [0]
+
+
 def build_sdpr(name, parts, owner_id):
     """The SDPR payload for a design. `parts` maps list name -> [ids]."""
+    parts = dict(parts)
+    if not parts.get("scanners"):
+        parts["scanners"] = list(DEFAULT_SCANNERS)
     nb = name.encode("ascii")
     out = bytearray(struct.pack("<I", len(nb)) + nb)
     for key in PART_LISTS:

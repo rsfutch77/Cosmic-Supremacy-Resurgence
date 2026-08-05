@@ -27,6 +27,7 @@ import sys
 
 import actions
 import cli
+import exploit
 import gamestate as gs
 import remote
 import sensors
@@ -40,6 +41,9 @@ SYSTEM_RADIUS = 55.0
 # past that the civ has more room than it can use and the ship is better spent
 # colonising.
 ENOUGH_KNOWN_TARGETS = 3
+
+# Dedicated scouts to keep in the field. Cheap hulls, so several is normal.
+SCOUT_TARGET = 3
 
 
 def scoutable(snap, civ, hist, act):
@@ -158,7 +162,77 @@ def run_exp02(snap, civ, act, hist, log=print):
     return acted
 
 
-RULES = [("R-EXP-02", run_exp02)]
+def scout_designs(snap, civ):
+    """Our own PURPOSE-BUILT scouts: a chassis, engines, and nothing else.
+
+    Deliberately stricter than the SCOUT role, which is defined by absence and so
+    quietly includes any unarmed hull — a colony ship with its module stripped, a
+    half-finished experiment. Those are slow and expensive. A scout is a hull
+    spending its whole cost on engines, which makes it both the cheapest ship in
+    the empire and the fastest.
+    """
+    out = []
+    for d in snap.designs:
+        own = d.owner
+        if own is None or own.addr != civ.addr:
+            continue
+        # A SCANNER IS REQUIRED, not cosmetic. Every design the game itself
+        # produced carries scanners=[0], and a synthesised design without
+        # one crashed the client at the turn boundary when a build
+        # completed and the engine tried to construct the ship. The design
+        # could be selected and queued perfectly happily right up to that
+        # point, which is what made it look fine.
+        if (d.chassis and d.engines and d.scanners
+                and not d.weapons and not d.modules):
+            out.append(d)
+    return out
+
+
+def run_exp01(snap, civ, act, hist, log=print):
+    """R-EXP-01: keep dedicated scouts in the field.
+
+    Exploration is the gate on everything under fog of war — expansion needs
+    targets and Exterminate needs an enemy — and doing the looking with colony
+    ships is why a galaxy took hundreds of turns to survey. A scout is cheap
+    enough to build several and fast enough that each one covers far more ground.
+    """
+    have = [s for s in snap.owned_ships(civ) if s.role == "SCOUT"]
+    if len(have) >= SCOUT_TARGET:
+        return 0
+    stranded = exploit.awaiting_crew(snap, civ, act, role="SCOUT")
+    if stranded:
+        log(f"R-EXP-01: {len(stranded)} scout(s) already built and waiting "
+            f"for crew; not queueing another until they can fly")
+        return 0
+    designs = scout_designs(snap, civ)
+    if not designs:
+        log(f"R-EXP-01: {len(have)}/{SCOUT_TARGET} scout(s) and no "
+            f"engines-only design exists. Synthesise one: game_cycle.py "
+            f"--design 'scout:chassis=0,engine=<fastest unlocked>'")
+        return 0
+    yards = [p for p in snap.owned_planets(civ)
+             if exploit.SHIPYARD in p.facilities and not p.building_now
+             and not act.production_claimed(p)]
+    if not yards:
+        return 0
+    # Fastest, not cheapest: the whole point of the hull is speed, and speed is
+    # what decides how much galaxy one ship covers before the game is decided.
+    # speed is a lazy stat and reads None until warmed, so engine count is
+    # the tiebreak that still ranks sensibly on a cold cache.
+    best = max(designs, key=lambda d: (d.speed or 0, len(d.engines)))
+    planet = max(yards, key=lambda p: len(p.population))
+    log(f"R-EXP-01: {len(have)}/{SCOUT_TARGET} scout(s) — queueing "
+        f"{best.design_name!r} (speed {best.speed}, {len(best.engines)} engine(s)) "
+        f"at {planet}")
+    try:
+        act.queue_ship(planet, best)
+        return 1
+    except (ValueError, RuntimeError) as e:
+        log(f"  could not queue: {e}")
+        return 0
+
+
+RULES = [("R-EXP-01", run_exp01), ("R-EXP-02", run_exp02)]
 
 
 def main():
