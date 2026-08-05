@@ -142,6 +142,27 @@ class History:
 
     STALL_TURNS = 4       # consecutive non-advancing turns before believing it
 
+    def note_rate_written(self, planet_id, pct):
+        """Remember the recruitment rate we WROTE, to compare next turn.
+
+        The AI writes the rate just after a turn boundary, so every reading it
+        takes is of its own fresh write. If the engine were clearing the byte
+        during the tick, the tick would always see 0 while we always saw 40 --
+        and the store would never advance, which is exactly the unexplained
+        stall. Comparing what we wrote LAST turn against what is there BEFORE we
+        write this turn is the one measurement that separates those cases.
+        """
+        if not hasattr(self, "_rate_written"):
+            self._rate_written = {}
+        self._rate_written[planet_id] = pct
+
+    def rate_survived(self, planet_id, observed):
+        """(wrote, survived) for the rate written last turn, or (None, None)."""
+        wrote = getattr(self, "_rate_written", {}).get(planet_id)
+        if wrote is None:
+            return None, None
+        return wrote, observed == wrote
+
     def note_military_stall(self, planet_id, advancing):
         """Count consecutive turns a planet's military store failed to advance.
 

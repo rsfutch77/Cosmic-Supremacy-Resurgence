@@ -805,7 +805,26 @@ class Actuator:
                    for r in wrote)
 
     # -- G: set a planet's recruitment rate (Planet:100 byte 3) ---------
-    RECRUITMENT_MAX = 40      # the highest the UI was seen to offer
+    # The maximum is PER PLANET and depends on military camps. Confirmed in the
+    # UI: a planet with ONE camp offers up to 60%, with the remaining 40% going
+    # to citizen growth. The report's "0-40" was the no-camp base, and each camp
+    # adds 20 (the game's own string says so). We had been capping every planet
+    # at 40, so a planet with a camp was recruiting at two thirds of the rate a
+    # player would have used.
+    #
+    # The engine applies whatever byte is written with NO clamp of its own -- the
+    # getter is `movsx eax, byte ptr [ecx+0xf]` and nothing else -- so respecting
+    # the maximum is entirely our responsibility, and it is a 1.1 obligation
+    # rather than a safety one. The movsx also means the byte must stay under
+    # 128, or the rate reads NEGATIVE and the military store would go DOWN.
+    RECRUITMENT_BASE_MAX = 40     # no military camp
+    RECRUITMENT_PER_CAMP = 20     # each camp raises the ceiling by this
+    RECRUITMENT_HARD_MAX = 100    # and never above the UI's own 0..100 range
+
+    def max_recruitment(self, planet):
+        camps = planet.facilities.get(6, 0)
+        return min(self.RECRUITMENT_HARD_MAX,
+                   self.RECRUITMENT_BASE_MAX + self.RECRUITMENT_PER_CAMP * camps)
 
     def set_recruitment(self, planet, percent):
         """Set the military recruitment rate, a percentage in byte 3 of
@@ -821,9 +840,10 @@ class Actuator:
         — a planet with one read 60 — but that is unproven, so the ceiling stays
         at what has actually been seen.
         """
-        if not 0 <= percent <= self.RECRUITMENT_MAX:
+        ceiling = self.max_recruitment(planet)
+        if not 0 <= percent <= ceiling:
             raise ValueError(
-                f"{percent}% is outside the 0..{self.RECRUITMENT_MAX} range the "
+                f"{percent}% is outside the 0..{ceiling} range the "
                 f"UI was seen to offer; a higher cap with a military base is "
                 f"suspected but unproven")
         raw = self.snap.read(planet.addr + 100, 4)

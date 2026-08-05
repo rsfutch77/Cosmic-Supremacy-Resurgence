@@ -106,7 +106,7 @@ rather than read directly.
 | Selected building | `Planet:284` | type id, *last selected*, not current activity |
 | Current production | `Planet:296` → RTTI | `Facility` / `PilingUpWealth` (`0x0080B540`) / `Scan` / `ShipProduction` |
 | Building now? | `Planet:344` | 1 = constructing, 0 = wealth |
-| Recruitment rate | `Planet:100` byte 3 | percent, 0–40 without a military base ⚠ |
+| Recruitment rate | `Planet:100` byte 3 | percent of the food SURPLUS diverted to military; the rest goes to citizen growth. Ceiling is per planet: **40 with no military camp, +20 per camp** — confirmed in the UI at 60% with one camp |
 | Governor | `Planet:496` | node[0] = `Governor` |
 | Colonised on turn | `Planet:92` | 0 is ambiguous — disambiguate with `Planet:40` |
 
@@ -312,13 +312,67 @@ USES   A
 
 ### 4.1 Explore
 
-**R-EXP-01 — Keep a scout in the field**
+**R-EXP-01 — Keep dedicated scouts in the field**
 ```
-WHEN   count(our ships of role SCOUT) < SCOUT_TARGET   (initial: 2)
-THEN   queue the cheapest SCOUT design (min ShipDesign:44) at the planet with
-       a shipyard (type 2 in Planet:204) and the highest productionRate
-USES   D   [BLOCKED]
+WHEN   count(our ships of role SCOUT) < SCOUT_TARGET   (initial: 3)
+THEN   queue the FASTEST scout design (max ShipDesign:36) at a free shipyard
+USES   D
 ```
+
+**A SCOUT IS A CHASSIS AND ENGINES AND NOTHING ELSE.** This is how the game is
+actually played, and it is worth stating as doctrine because the AI's own taxonomy
+buries it: `SCOUT` is currently defined by *absence* (not colony, not troop, not armed),
+so anything unarmed drifts into the role — including colony ships, which are slow,
+expensive and needed elsewhere. A purpose-built scout is the opposite: strip the modules
+and weapons, spend the whole hull on engines, and it is both the cheapest ship in the
+empire and by far the fastest.
+
+Speed compounds three ways, which is why this matters more than it looks:
+* **Contact time.** Under fog of war, expansion and Exterminate are both gated on
+  finding things. A galaxy is 108 systems; a colony ship doing the looking at 13.5/turn
+  took ~500 turns to find one enemy planet.
+* **It improves with research.** Engine ids come from the tech tree — Engine 1 arrives
+  with Cold Fusion (id 3), which the AI now researches early anyway for its first weapon,
+  and later engines from Quantum Fields, Gravity Controller, Anti-Matter Control and on
+  up. A scout design should be REBUILT whenever a faster engine unlocks, not fitted once.
+* **Cheapness means several.** Three scouts fanning out cover ground three times as fast,
+  and losing one costs almost nothing.
+
+`[ ]` **Rebuild the scout design when a faster engine is researched.** Designs are
+synthesised through `game_cycle.py`, so this is mechanical: on unlocking a new engine id,
+mint a replacement scout and let R-EXP-01 build that one instead. Nothing does this yet.
+
+**MEASURED.** Synthesised hulls, shuttle chassis, nothing fitted but engines, speed read
+through the engine's own getter:
+
+| engines | engine id | `ShipDesign:36` |
+|---|---|---|
+| 1 | 0 | 9.00 |
+| 2 | 0 | 15.43 |
+| 2 | **1** | **41.00** |
+| 4 | 1 | 54.67 |
+| 6 | 1 | 61.50 |
+
+For comparison: the Colony Ship (3× engine 0 plus a colony module) makes **13.5**, the
+fighter f1 (1× engine 0, mass driver) **6.43**, and the bomber b1 (1× engine 0, fusion
+bomb) **3.38**.
+
+Three things fall out, and they change how the AI should play:
+
+* **The engine TECH matters more than the engine count.** Going from two engine-0s to two
+  engine-1s more than doubles speed, 15.4 to 41.0, while doubling the count from 2 to 4
+  adds only a third. Cold Fusion — already researched early for the first weapon — is what
+  makes a fast scout possible.
+* **Returns diminish but never reverse**, so there is no count that is actively wrong; 6
+  engines still beats 4. The right number is an economic question about hull cost, not a
+  speed question.
+* **Payload is expensive in speed.** b1 carries the same single engine as probe1 and moves
+  at a THIRD of its speed. A ship that has to arrive quickly should carry nothing it does
+  not need, and a warship will always be slow.
+
+A scout at 61.5 covers the galaxy roughly **4.5x faster than the colony ships that were
+doing the exploring**, which is the difference between surveying a galaxy in tens of turns
+and hundreds.
 
 **R-EXP-02 — Send idle scouts to the nearest unvisited system**
 ```
@@ -356,31 +410,63 @@ THEN   queue the COLONY design at the best shipyard planet
 USES   D   [BLOCKED]
 ```
 
-`[ ]` **RECRUITMENT CAN STOP DEAD, AND WE DO NOT KNOW WHY.** `Planet:124` is the military
-food store and `Planet:128` the cost per unit (300, recomputed each turn at pipeline stage
-27 from civ traits); a unit appears when the store reaches the cost and the store then
-wraps. On two separate games the store simply froze — 150/149/122 on one, and exactly
-192/300 and 189/300 for thirty-plus turns on another — which is the state the UI reports as
-*"No Military Is Recruited"*. Measured, it is **not** food (one frozen planet sat at 6% of
-food capacity, another at 54% and rising), **not** the rate (frozen at both 20% and 40%,
-having advanced at those same rates earlier in the same game), **not** a stationed-military
-cap (both had zero) and **not** population. The per-turn growth figure the UI tests lives in
-`0x0042AE70` at `[esp+0x3c]`; nobody has traced it to its source, and finding what writes
-`PP+0x24` each turn is the open question.
+**SOLVED — the recruitment stall is the "Inactivity" throttle, and it is a RAMP ON THE TURN
+NUMBER.** The UI's Food Calculation tooltip names it: an `Inactivity: -N%` line that grows
+over the life of a galaxy. It is `0x00538450`, and the formula is
 
-**It is CYCLICAL, not terminal, and it recurs at the same value.** Planet #157 froze at
-192/300, then later advanced and wrapped normally — producing the units that crewed the
-whole fleet — and then froze again at **exactly 192/300**. Its neighbour froze at 189/300.
-So whatever gates it is a repeating condition the planet enters and leaves, not damage or a
-one-way state, and the freeze point is reproducible per planet. Anything that explains it
-has to explain why the SAME planet advances freely for a stretch and then halts at the same
-figure, twice.
+```
+pct = clamp( (currentTurn - offset - Owner:716) * 100 / divisor , 0, 100 )
+      offset/divisor = 72/100 when GetGameOption(4)->[+0x30] == 0, else 150/150
+```
 
-**This is currently the binding constraint on the whole AI.** Crew gates every order rule,
-so a stalled recruitment eventually stops expansion, exploration and any attack. Do not
-"fix" it by zeroing the rate: that was tried, and because a new ship parks on the planet
-that built it and a crewless ship cannot move, it deadlocked a seven-planet empire with
-five ships at turn 345.
+On this galaxy `Owner:716` is 0 and the option is 0, so **pct = turn - 72**: first visible
+around turn 73, 88% at turn 160, and **100% at turn 172, after which recruitment is
+impossible at any slider setting.**
+
+It is applied TWICE, at different weights, which is why the arithmetic never closed:
+
+* **to food production, at HALF weight**, inside `0x004F0800` — the tooltip's `-47%` on a
+  648 production figure;
+* **to the military share, at FULL weight**, in the splitter `0x004F1580` — and *after* the
+  food share has already been computed from the UNREDUCED military share.
+
+That second point is the whole mystery. Measured live by the user at surplus 171, rate 60%:
+
+```
+military share before the throttle = 171 x 0.60 = 102.6
+food share = 171 - 102.6           = 68.4   -> UI showed 69   ✓
+military credited = 102.6 x (1 - 0.88)      -> UI showed 12   ✓
+90 food is simply DESTROYED
+```
+
+So raising the slider visibly takes food from citizens and gives almost none of it to the
+military. Nothing was broken; the throttle was eating it.
+
+**Why three rounds of static analysis missed it: the branch labels were inverted.**
+
+```
+0x00538450:  cmp byte ptr [0x86f1a0], 0
+             je  -> Owner:660      ; taken when the byte is ZERO
+                 -> the turn ramp  ; taken when NON-zero
+```
+
+R6 and R7 both read non-zero as the `Owner:660` path, found that nothing ever writes
+`Owner:660`, and closed the hypothesis as inert. This client reads the byte as **1**, which
+takes the ramp. R7 then argued the throttle could not produce "food rising, military flat"
+because it also reduces food — true, but at *half* weight and *before* the split, so it
+does exactly that.
+
+`[ ]` **How to clear it, and whether we should.** `Owner:716` is the subtrahend, so writing
+`Owner:716 = turn - offset` sets pct to 0. In a served game the server presumably maintains
+it — the mechanic is plainly there to wind down abandoned empires, which is why the UI calls
+it Inactivity. In an offline AI-vs-AI galaxy nothing maintains it, so every civ decays
+regardless of how active it is. Two honest positions:
+  * **Simulating the server** by keeping `Owner:716` current is defensible, because the
+    decay models absence and these civs are not absent. If done, it MUST be applied to
+    every civ equally — doing it only for ours would be a straightforward cheat.
+  * **Leaving it alone** and accepting that a galaxy has a recruitment lifespan of ~172
+    turns is also defensible, and is what a human player in this offline setup would face.
+Not decided, and not implemented.
 
 **CREW IS A PRECONDITION FOR EVERY ORDER RULE.** A ship with no crew cannot move,
 and the engine CANCELS the order at the next turn boundary — it frees the order object
@@ -505,12 +591,25 @@ prerequisite instead.
 
 **R-XPL-05 — Recruitment**
 ```
-WHEN   phase == War  AND  Planet:100[P] byte 3 < 40
-THEN   raise it toward 40
-WHEN   phase != War  AND  foodDelta[P] < 0
-THEN   lower it toward 0 (military costs food — Owner:880)
-USES   G   [NEEDS TEST]
+WHEN   a ship parked at P needs crew and P has a military camp
+THEN   raise the rate toward max_recruitment(P) if P is comfortably fed,
+       otherwise to RECRUIT_RATE_LEAN so growth is not starved
+WHEN   nothing at P needs crew
+THEN   lower it to 0 — the diversion costs food and buys nothing
+USES   G
 ```
+**The rate is a SPLIT, not a throttle.** It is the percentage of the planet's food
+*surplus* diverted into the military store, and the remainder goes to citizen growth —
+confirmed both in the splitter `0x004F1580` (`foodShare = surplus - militaryShare`) and in
+the UI, which shows 60% to military and 40% to growth on a one-camp planet. So recruiting
+always costs growth directly, which is why the rule backs off on a poorly-fed planet.
+
+**The ceiling is per planet: 40 with no camp, +20 per camp.** We capped every planet at a
+flat 40, so a planet with a camp was recruiting at two thirds of the rate a player would
+have used. The engine applies whatever byte is written with **no clamp of its own** — the
+getter is `movsx eax, byte ptr [ecx+0xf]` and nothing more — so honouring the ceiling is a
+§1.1 obligation rather than a safety check. The `movsx` also means the byte must stay below
+128, or the rate reads negative and the military store would count *down*.
 
 **R-XPL-07 — Liquidate to survive a collapse** — `[ ]` NOT BUILT
 ```
@@ -645,7 +744,7 @@ USES   E
 
 | Name | Initial | Meaning |
 |---|---|---|
-| `SCOUT_TARGET` | 2 | scouts kept in the field |
+| `SCOUT_TARGET` | 3 | dedicated scouts kept in the field |
 | `TURN_WEIGHT` | 10.0 | colony-target score charged per **turn** of travel |
 | `SAME_SYSTEM_BONUS` | 30 | prefer filling out a system we already hold |
 | `THREAT_DIST` | 120.0 | "near" — one sun separation (measured min 111.7) |
@@ -846,6 +945,12 @@ Practical consequences, and the rules that follow from them:
   unit behind the offline flag `0x0086F1A0`, as `SellFacility` is.
 * Validate every new stub on a **side-effect-free getter** before pointing it at anything
   that mutates state — `remote.py` already does this.
+* **The design getters are NOT side-effect-free.** `ShipDesign:36/52/56/60/64/68/76` are a
+  lazy cache: each getter computes the value and WRITES IT BACK. The ship-design tab does
+  the same thing on the UI thread, so calling them while a human has that tab open is two
+  threads writing one cache. A crash was traced to exactly that — six speed getters run
+  back to back while the user opened the design tab. Read them when the AI is driving
+  alone, not while someone is looking.
 * `ret N` gives argument **count**, never **type**. Mistaking `0x005470A0` for a copy
   constructor on that basis crashed the client once.
 
