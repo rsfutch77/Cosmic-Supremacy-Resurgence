@@ -456,17 +456,41 @@ takes the ramp. R7 then argued the throttle could not produce "food rising, mili
 because it also reduces food — true, but at *half* weight and *before* the split, so it
 does exactly that.
 
-`[ ]` **How to clear it, and whether we should.** `Owner:716` is the subtrahend, so writing
-`Owner:716 = turn - offset` sets pct to 0. In a served game the server presumably maintains
-it — the mechanic is plainly there to wind down abandoned empires, which is why the UI calls
-it Inactivity. In an offline AI-vs-AI galaxy nothing maintains it, so every civ decays
-regardless of how active it is. Two honest positions:
-  * **Simulating the server** by keeping `Owner:716` current is defensible, because the
-    decay models absence and these civs are not absent. If done, it MUST be applied to
-    every civ equally — doing it only for ours would be a straightforward cheat.
-  * **Leaving it alone** and accepting that a galaxy has a recruitment lifespan of ~172
-    turns is also defensible, and is what a human player in this offline setup would face.
-Not decided, and not implemented.
+**NEUTRALISED — by setting the flag the engine already looks for, not by forging its
+timer.** The engine refreshes the baseline itself, in `0x00543B90` (turn stage 26):
+
+```
+cmp  byte ptr [esi + 0x2fc], bl    ; Owner:712 — the ACTIVITY FLAG
+je   skip                          ;   zero -> no refresh
+mov  eax, [0x008578E8] ; dec eax
+mov  [esi + 0x300], eax            ; Owner:716 = turn - 1
+skip:
+mov  cl, byte ptr [esi + 0x304]    ; Owner:720 — next turn's flag
+mov  byte ptr [esi + 0x2fc], cl    ; Owner:712 = Owner:720
+```
+
+`Owner:720` is the "this player is present" signal and `Owner:712` is it latched for the
+current turn, so **setting `Owner:720 = 1` once is self-sustaining** — the engine copies it
+forward and writes its own value into `Owner:716` every turn thereafter. `set_activity.py`
+does exactly that and nothing else.
+
+Writing `Owner:716` directly would have worked too and is the wrong thing: it forges the
+engine's own bookkeeping with a number we invented. Supplying the input a connected client
+supplies, and letting the engine compute, is both smaller and honest.
+
+**It marks EVERY civ, and the tool refuses to do one.** The decay models an ABSENT player
+and in an AI-vs-AI galaxy nobody is absent — but clearing it only for ours would be a plain
+cheat worth a compounding food and recruitment advantage. Confirmed live: both civs read
+`active=1` and `pct=0%` together.
+
+Measured on the live galaxy at turn 110, where the penalty stood at 38%:
+
+```
+turn 110  base=0    pct=38%   store 199/300
+turn 112  base=111  pct=0%    store 226      (+27/turn, the old throttled rate)
+turn 113  base=112  pct=0%    store 291      (+65/turn)
+turn 114  base=113  pct=0%    store  56      <- wrapped; a unit was recruited
+```
 
 **CREW IS A PRECONDITION FOR EVERY ORDER RULE.** A ship with no crew cannot move,
 and the engine CANCELS the order at the next turn boundary — it frees the order object
