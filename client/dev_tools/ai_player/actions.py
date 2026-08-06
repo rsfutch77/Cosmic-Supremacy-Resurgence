@@ -174,6 +174,61 @@ class Actuator:
     def _xyz(self, addr, xyz, what):
         return self._write(addr, struct.pack("<fff", *xyz), what)
 
+    # -- order rollback --------------------------------------------------
+    # retarget_order writes an order across several disjoint regions, and a
+    # half-applied retarget is worse than none: the route describes one
+    # destination while Ship:52/56 describe another, which is the shape that has
+    # now crashed this client twice. These two helpers let a caller undo it.
+    def _order_bytes(self, ship, ord_ptr):
+        """Read back every region retarget_order is about to overwrite."""
+        if not gs.is_ptr(ord_ptr):
+            return []
+        spans = [(ord_ptr + ORD_TARGET, 12), (ord_ptr + ORD_ORIGIN, 12),
+                 (ord_ptr + ORD_ORIGIN2, 12), (ord_ptr + ORD_PROGRESS, 4),
+                 (ord_ptr + ORD_ROUTE + 4, 8),   # route end and cap
+                 (ship.addr + SHIP_ORDER_TYPE, 4),
+                 (ship.addr + SHIP_HAS_ORDERS, 4)]
+        b = self.snap.rd32(ord_ptr + ORD_ROUTE)
+        if gs.is_ptr(b):
+            spans.append((b, ROUTE_STRIDE))
+        out = []
+        for addr, size in spans:
+            data = self.snap.read(addr, size)
+            # A region we could not read is a region we cannot promise to
+            # restore. Say so now rather than discover it during a rollback.
+            if data is None or len(data) != size:
+                self.log(f"  [warn] could not snapshot 0x{addr:08X}+{size} for "
+                         f"rollback; a failure here will leave a torn order")
+                continue
+            out.append((addr, data))
+        return out
+
+    def _restore_order_bytes(self, saved, ship):
+        """Put an order back the way it was after a failed set_command."""
+        if not saved:
+            return
+        if self.dry_run:
+            return
+        self.log(f"  [rollback] restoring {ship}'s previous order — a torn "
+                 f"order (route to one target, type naming another) is what "
+                 f"crashes the client at the next turn boundary")
+        for addr, data in saved:
+            if not gs.ev.write_bytes(self.snap.h, addr, data):
+                # Nothing better is available: the process is usually already
+                # gone by the time we get here. Name it precisely so the log
+                # says whether the ship was left torn.
+                self.log(f"  [rollback] FAILED at 0x{addr:08X} — {ship} may be "
+                         f"left in an inconsistent state")
+
+    def _require_same_turn(self, ship):
+        """Abort if the turn rolled over since the snapshot was taken."""
+        now = self.snap.rd32(gs.TURN_COUNTER)
+        if now != self.snap.turn:
+            raise StaleTurn(
+                f"turn moved {self.snap.turn} -> {now} while ordering {ship}; "
+                f"every coordinate in this order came from the old turn's "
+                f"snapshot and the ship has since moved")
+
     # -- A: set a citizen's job (Planet:144 element +0) ------------------
     def set_job(self, planet, index, job_id):
         """Change one citizen's job. A plain int in an existing vector element:
@@ -705,30 +760,54 @@ class Actuator:
             new_ptr = self.create_order(ship, target, civ)
             if new_ptr is None:
                 raise RuntimeError(f"could not originate an order for {ship}")
-        # Route and coordinates only. The TYPE is deliberately not written
-        # here — SetCommand writes Ship:52 and Ship:56 as the single value
-        # they are, and any window where the type says Attack while the
-        # target node is null is a window the engine can crash in.
-        self.retarget_order(ship, order_type, target.pos, order_ptr=new_ptr,
-                            set_type=False)
 
-        block = self.remote.operator_new(remote.SHIPCOMMAND_SIZE)
-        if not gs.is_ptr(block):
-            raise RuntimeError("the engine's operator new refused the "
-                               "ShipCommand block")
-        # Allocation start, not tag: the constructor reads the object id at
-        # target[+4], which is tag-4 for Planet, Ship and Sun alike.
-        self.remote.make_ship_command(block, order_type, target.addr - 8)
-        node = self.snap.rd32(block + 4)
-        if not gs.is_ptr(node):
-            raise RuntimeError(f"ShipCommand built at 0x{block:08X} has no "
-                               f"target node; refusing to install it")
-        if node == gs.NULL_NODE:
-            raise RuntimeError(
-                f"ShipCommand resolved to the STATIC NULL NODE, so the target "
-                f"id did not resolve — installing it would give a targeted "
-                f"order the engine treats as untargeted")
-        self.remote.ship_set_command(ship.addr, block)
+        # ROUTE-FIRST OPENS A TORN WINDOW, SO IT HAS TO BE CLOSABLE.
+        # Between retarget_order and SetCommand the ship's route points at the
+        # NEW target while Ship:52/56 still describe the OLD order. That window
+        # is normally microseconds and harmless. It stopped being harmless when
+        # a remote call failed inside it: the client died with ship #669 holding
+        # a route to the enemy HQ under a stale Scout order — the same
+        # type-disagrees-with-route shape documented above as fatal, just
+        # arrived at from the other side.
+        #
+        # So snapshot every byte retarget_order is about to touch, and put it
+        # back if we cannot finish. A ship left under its old, self-consistent
+        # order is merely disobedient; a ship left torn crashes the game.
+        saved = self._order_bytes(ship, new_ptr if new_ptr else ship.order_ptr)
+        try:
+            # Route and coordinates only. The TYPE is deliberately not written
+            # here — SetCommand writes Ship:52 and Ship:56 as the single value
+            # they are, and any window where the type says Attack while the
+            # target node is null is a window the engine can crash in.
+            self.retarget_order(ship, order_type, target.pos, order_ptr=new_ptr,
+                                set_type=False)
+
+            block = self.remote.operator_new(remote.SHIPCOMMAND_SIZE)
+            if not gs.is_ptr(block):
+                raise RuntimeError("the engine's operator new refused the "
+                                   "ShipCommand block")
+            # Allocation start, not tag: the constructor reads the object id at
+            # target[+4], which is tag-4 for Planet, Ship and Sun alike.
+            self.remote.make_ship_command(block, order_type, target.addr - 8)
+            node = self.snap.rd32(block + 4)
+            if not gs.is_ptr(node):
+                raise RuntimeError(f"ShipCommand built at 0x{block:08X} has no "
+                                   f"target node; refusing to install it")
+            if node == gs.NULL_NODE:
+                raise RuntimeError(
+                    f"ShipCommand resolved to the STATIC NULL NODE, so the "
+                    f"target id did not resolve — installing it would give a "
+                    f"targeted order the engine treats as untargeted")
+            # LAST CHECK BEFORE THE POINT OF NO RETURN. If the turn rolled over
+            # while we were doing all this, every coordinate we just wrote came
+            # from the previous turn's snapshot: the ship has already moved, so
+            # the route origin is wrong and the progress reset is measured from
+            # a position it no longer holds. Roll back rather than install it.
+            self._require_same_turn(ship)
+            self.remote.ship_set_command(ship.addr, block)
+        except Exception:
+            self._restore_order_bytes(saved, ship)
+            raise
         got_type = self.snap.rd32(ship.addr + SHIP_ORDER_TYPE)
         got_node = self.snap.rd32(ship.addr + 56)
         self.log(f"  {ship} order type {got_type}, Ship:56 -> 0x{got_node:08X} "
@@ -1023,3 +1102,18 @@ class NeedsEngineOrder(Exception):
             f"has no remote.Remote to create one with. Construct the Actuator "
             f"with remote_=remote.Remote(pid).")
         self.ship = ship
+
+
+class StaleTurn(Exception):
+    """Raised when the turn rolled over in the middle of issuing an order.
+
+    Every coordinate in an order — the route origin, the leg length, the
+    progress reset — is computed from the pass's snapshot. Once the engine
+    resolves a turn, the ship has moved and all three are wrong. Installing the
+    order anyway writes a route from a position the ship no longer occupies.
+
+    This is not hypothetical. Driving turns at 12s while a pass makes ~30 remote
+    calls put the boundary squarely inside the ordering window on the first
+    contact of a 193-turn game. Raise it, roll back, and let the next pass
+    re-decide on fresh numbers — one turn of delay costs nothing next to a
+    corrupt order."""

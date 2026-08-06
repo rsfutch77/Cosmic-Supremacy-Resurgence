@@ -112,6 +112,9 @@ class Loop:
         # nothing but the aftermath to look at.
         self.halt_on_contact = halt_on_contact
         self.halt_reason = None
+        # Set by run(); one_pass uses it to notice when it is outrunning the
+        # turn it is deciding for.
+        self.drive = None
 
     # -- turn clock -----------------------------------------------------
     def turn(self):
@@ -211,6 +214,7 @@ class Loop:
         return snap, civ
 
     def one_pass(self):
+        started = time.time()
         snap, civ = self._snapshot_settled()
         if civ is None:
             self.log(f"[loop] no civ named {self.civ_name!r}; saw "
@@ -268,7 +272,20 @@ class Loop:
         # reading reflects the economy and not this pass's purchases.
         self.history.note_cash_effect(act.cash_effect)
         self.passes += 1
-        self.log(f"    {act.summary()}")
+        elapsed = time.time() - started
+        self.log(f"    {act.summary()} in {elapsed:.1f}s")
+
+        # A pass that outlasts the driven turn is a pass that writes orders the
+        # engine is simultaneously resolving. That is how the first-contact run
+        # died: turns driven at 12s, and the pass that finally had two attack
+        # orders to issue made ~30 remote calls and overran the boundary. The
+        # actuator now rolls back a torn order, but rolling back every turn is
+        # not playing the game — the honest fix is to drive slower.
+        if self.drive and elapsed > self.drive * 0.6:
+            self.log(f"    [!] this pass took {elapsed:.1f}s against a "
+                     f"{self.drive}s turn. Orders are being written close to "
+                     f"the boundary; raise --drive to at least "
+                     f"{max(30, int(elapsed * 3))}s.")
 
         # Checked AFTER the rules, not before, so R-XTM-03 has already committed
         # the fleet on this same pass. Halting first would leave the human to
@@ -298,6 +315,7 @@ class Loop:
     # -- drive ----------------------------------------------------------
     def run(self, follow=False, max_turns=None, drive=None, stall=None):
         original = None
+        self.drive = drive
         try:
             if drive:
                 original = self.read_turn_length()

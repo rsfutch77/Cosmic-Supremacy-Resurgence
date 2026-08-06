@@ -384,6 +384,33 @@ NOTE   scout targets a SUN, not a planet — this is the one order that does
 USES   E
 ```
 
+**`[ ]` R-EXP-02 CONSCRIPTS WARSHIPS, AND THAT LOSES THE OPENING BATTLE.**
+It selects any ship free to scout. Early on the only free ships ARE the warships,
+so the standing fleet gets dispersed across the galaxy one system at a time —
+and it is dispersed precisely when exploration is most urgent, which is also
+precisely when contact is most likely.
+
+Measured, first-contact run, turn 193: the two warships R-XTM-03 committed were
+**367 and 618 units** from BadGuy's HQ — 58 and 184 turns of travel. Ship #669
+would have arrived on turn 377. There is no version of that fight we win; the
+fleet was not beaten, it was out of position before the war started.
+
+Two things follow, and they are separable:
+
+1. **Never scout with a ship that has weapons.** A warship costs several times a
+   scout and is the one asset whose position at contact decides the war. Restrict
+   R-EXP-02's pool to designs with no weapons fitted, and let R-EXP-01 build more
+   scouts if the pool is empty — scouts are cheap and that is the whole point of
+   the design.
+2. **Warships need a rally point.** Even undispersed, ships park where they were
+   built. A fleet spread over five home systems is nearly as slow to concentrate
+   as one spread over the galaxy. R-XTM-01 should gather idle warships at a
+   single staging planet — the owned planet closest to the nearest known enemy,
+   falling back to the highest-population planet before contact.
+
+Until both exist, R-XTM-03 is committing whatever happens to be nearest, and the
+raid threshold in §5 is measuring a fleet that cannot actually assemble.
+
 **R-EXP-03 — Record arrivals**
 ```
 WHEN   ship S had order 2 last turn and Ship:52 == 0 now
@@ -745,6 +772,31 @@ THEN   pick the weakest known enemy planet
        order the raid group to move (1) then attack (4)
 USES   E
 ```
+
+**THE ORDERING WINDOW IS THE MOST DANGEROUS WRITE THE AI MAKES.**
+A targeted order (Move 1, Attack 4, MoveNear 7) cannot be written atomically: the
+route and coordinates go in by hand, then `Ship::SetCommand` supplies the type and
+the target node together. Between those two steps the ship's route names one
+destination while `Ship:52/56` name another, and **the engine crashes on a torn
+order at the next turn boundary.** This has now killed the client twice, from
+opposite directions — once by writing the type early, once by a remote call
+failing after the route was rewritten.
+
+Two mitigations, both in `set_command`:
+
+* **Rollback.** Every region `retarget_order` touches is snapshotted first and
+  restored if anything raises. A ship left under its old, self-consistent order
+  is disobedient; a ship left torn is a crash.
+* **A same-turn check immediately before `SetCommand`.** Every coordinate in an
+  order — route origin, leg length, progress reset — comes from the pass's
+  snapshot. If the turn rolled over, the ship has moved and all three are wrong,
+  so the order is abandoned and re-decided next pass (`StaleTurn`).
+
+**And do not drive turns faster than a pass can finish.** The first-contact run
+used `--drive 12` while a pass makes ~30 remote calls; the pass that finally had
+two attack orders to issue overran the boundary and the client died mid-write. The
+loop now times each pass and says so. **30s is a floor for a live run; a pass that
+issues orders wants more.** Rolling back every turn is not playing the game.
 
 **R-XTM-04 — Conquer**
 ```
