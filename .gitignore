@@ -19,3 +19,4 @@ __pycache__/
 # ── Dev tool output ───────────────────────────────────────────────────────────
 client/dev_tools/snapshots/
 *.exe.bak
+tools
