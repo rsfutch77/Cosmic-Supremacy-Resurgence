@@ -9,6 +9,13 @@ snapshots memory, runs every rule once in priority order, writes, and sleeps.
     python ai.py --apply --follow         # keep playing, every turn, forever
     python ai.py --apply --follow --turns 20
     python ai.py --apply --follow --drive 10   # also shorten turns to 10s
+    python ai.py --apply --follow --drive 10 --halt-on-contact
+
+`--halt-on-contact` stops the loop on the first turn an enemy planet is visible,
+after the rules have run — so R-XTM-03 has already committed the fleet — and
+restores the turn length on the way out. It exists because driving turns at 10s
+resolves a battle faster than a human can open the report: without it the first
+fight is over before anyone sees it.
 
 Dry run is the default here as everywhere: a pass with no `--apply` prints every
 intended write and performs none of them.
@@ -85,7 +92,7 @@ RULES = [
 
 class Loop:
     def __init__(self, civ_name="GoodGuy", dry_run=True, vision="all",
-                 top=0, log=print, settle=1.5):
+                 top=0, log=print, settle=1.5, halt_on_contact=False):
         self.civ_name = civ_name
         self.dry_run = dry_run
         self.vision = vision
@@ -99,6 +106,12 @@ class Loop:
         self.history = sensors.History()
         # Seconds to let turn resolution finish before snapshotting.
         self.settle = settle
+        # Stop the loop the turn an enemy planet first becomes visible, so a
+        # human can drive the approach and read the battle report. Unattended
+        # turn driving would otherwise resolve the fight in seconds and leave
+        # nothing but the aftermath to look at.
+        self.halt_on_contact = halt_on_contact
+        self.halt_reason = None
 
     # -- turn clock -----------------------------------------------------
     def turn(self):
@@ -256,7 +269,31 @@ class Loop:
         self.history.note_cash_effect(act.cash_effect)
         self.passes += 1
         self.log(f"    {act.summary()}")
+
+        # Checked AFTER the rules, not before, so R-XTM-03 has already committed
+        # the fleet on this same pass. Halting first would leave the human to
+        # issue the attack by hand, which is not what handing over the approach
+        # means.
+        if self.halt_on_contact:
+            self._check_contact(snap, civ, act)
         return snap.turn
+
+    def _check_contact(self, snap, civ, act):
+        """Set halt_reason once an enemy planet is legitimately visible."""
+        try:
+            foes = exterminate.enemies(snap, civ, act)
+            if not foes:
+                return
+            ranked = exterminate.target_planets(snap, civ, self.history, foes)
+        except Exception as e:
+            self.log(f"[loop] contact check raised {type(e).__name__}: {e}")
+            return
+        if not ranked:
+            return
+        weakness, target = ranked[0]
+        self.halt_reason = (
+            f"CONTACT on turn {snap.turn}: {len(ranked)} enemy planet(s) "
+            f"visible, weakest is {target} (weakness {weakness})")
 
     # -- drive ----------------------------------------------------------
     def run(self, follow=False, max_turns=None, drive=None, stall=None):
@@ -274,7 +311,7 @@ class Loop:
                     self.set_turn_length(drive)
 
             t = self.one_pass()
-            if t is None or not follow:
+            if t is None or not follow or self.halt_reason:
                 return
             done = 1
             while max_turns is None or done < max_turns:
@@ -283,6 +320,8 @@ class Loop:
                     return
                 t = self.one_pass()
                 if t is None:
+                    return
+                if self.halt_reason:
                     return
                 done += 1
             self.log(f"[loop] finished {done} turn(s)")
@@ -299,6 +338,13 @@ class Loop:
                               "client is gone (it exited or crashed)")
             if self.remote is not None:
                 self.remote.close()
+            # Last, so it is the final thing on screen and so it can promise the
+            # turn length is back to normal — which the block above just did.
+            if self.halt_reason:
+                self.log(f"\n[loop] {self.halt_reason}\n"
+                         f"[loop] stopping here. The fleet has its orders and "
+                         f"turns are back to normal length — drive it yourself "
+                         f"from the client and read the battle report.")
 
 
 def main():
@@ -309,7 +355,8 @@ def main():
                 dry_run=not cli.flag(args, "--apply"),
                 vision=opt("--vision", "known"),
                 top=opt("--top", 0, int),
-                settle=opt("--settle", 1.5, float))
+                settle=opt("--settle", 1.5, float),
+                halt_on_contact=cli.flag(args, "--halt-on-contact"))
     loop.run(follow=cli.flag(args, "--follow"),
              max_turns=opt("--turns", None, int),
              drive=opt("--drive", None, int),
