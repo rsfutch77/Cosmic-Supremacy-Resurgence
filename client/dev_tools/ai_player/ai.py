@@ -85,14 +85,18 @@ RULES = [
 
 class Loop:
     def __init__(self, civ_name="GoodGuy", dry_run=True, vision="all",
-                 top=0, log=print, settle=1.5):
+                 top=0, log=print, settle=1.5, state=None):
         self.civ_name = civ_name
         self.dry_run = dry_run
         self.vision = vision
         self.top = top
         self.log = log
-        self.state = gs.ev.ViewerState()
-        if not self.state.connect():
+        # `state` lets several loops share one connection and one scan cache —
+        # duel.py drives two civs in one process and a second ViewerState would
+        # mean a second process handle and a second full memory scan per turn
+        # for no gain. Left None, a loop still owns its own, as it always did.
+        self.state = state or gs.ev.ViewerState()
+        if self.state.handle is None and not self.state.connect():
             raise RuntimeError("CosmicSupremacy is not running")
         self.remote = None
         self.passes = 0

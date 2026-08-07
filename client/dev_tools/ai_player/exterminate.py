@@ -107,6 +107,68 @@ def enemies(snap, civ, act=None):
             if c.addr != civ.addr and at_war_with(snap, civ, c, act)]
 
 
+def send_to(act, ship, target, civ, order_type=1):
+    """Move `ship` to `target` with a route-only order. NO actuator L.
+
+    **`set_command` KILLS THE CLIENT AT THE NEXT TURN BOUNDARY.** Measured from
+    `client/armed.dat` (turn 38, at war, one crewed `b1`), one turn boundary per
+    trial:
+
+        set_command(4 attack)        -> client dead
+        set_command(1 move)          -> client dead
+        create_order + retarget(1)   -> SURVIVED, and moved 9.5 units, which is
+                                        exactly this hull's ShipDesign:36
+
+    The order is written cleanly and the pass completes either way; the engine
+    dies resolving it. So this is the whole `ShipCommand` / `Ship::SetCommand`
+    path, not Attack, and not the order TYPE — a route-only Move is fine.
+
+    That also corrects the premise actuator L was built on. `Ship:56` is left as
+    the static null node here and the ship navigates correctly anyway, so
+    `Ship::HasActiveTargetedOrder` gates something other than movement.
+
+    **Combat does not need actuator L.** The battle driver `0x00523AC0` buckets
+    ships by POSITION and never reads the order type at all, so arriving at an
+    enemy-held planet while at war is what starts a fight. A Move order that gets
+    the hull there does the whole job.
+    """
+    ptr = (ship.order_ptr if gs.is_ptr(ship.order_ptr)
+           else act.create_order(ship, target, civ))
+    if ptr is None:
+        raise RuntimeError(f"could not originate an order for {ship}")
+    act.retarget_order(ship, order_type, target.pos, order_ptr=ptr)
+    return ptr
+
+
+def _why(snap, civ, act, foes):
+    """'at war with [...]' or 'in contact with [...]', whichever is true.
+
+    R-XTM-01 fires on either, and saying "at war" when we are merely in contact
+    would misreport the galaxy's diplomatic state in the one log line someone
+    reads to find out why the fleet is being built.
+    """
+    names = [f.civ_name for f in foes]
+    at_war = [f.civ_name for f in foes if at_war_with(snap, civ, f, act)]
+    return (f"at war with {at_war}" if at_war
+            else f"in contact with {names} (not yet at war)")
+
+
+def contacted(snap, civ, hist):
+    """Rival civs we have MET — a planet of theirs is in our discovery set.
+
+    Contact, not war. This is the trigger R-XTM-01 needs; see the deadlock note
+    in run_xtm01 for why asking `enemies()` there could never work.
+    """
+    out = []
+    for other in snap.civs:
+        if other.addr == civ.addr:
+            continue
+        if any(p.owner is not None and p.owner.addr == other.addr
+               and hist.can_see(snap, p) for p in snap.planets):
+            out.append(other)
+    return out
+
+
 def production_design(snap, planet):
     """The ShipDesign this planet is currently building, if it is building one.
 
@@ -203,8 +265,22 @@ def target_planets(snap, civ, hist, foes):
 
 
 def run_xtm01(snap, civ, act, hist, log=print):
-    """R-XTM-01: keep a standing fleet once there is someone to fight."""
-    foes = enemies(snap, civ, act)
+    """R-XTM-01: keep a standing fleet once there is someone to fight.
+
+    THE TRIGGER IS CONTACT, NOT WAR (STRATEGY.md §4.4: threatLevel is "floored
+    at 2 once contact is made"). Asking `enemies()` here instead was a DEADLOCK,
+    and a silent one — every rule logged nothing and looked content:
+
+        R-XTM-01 builds no warship until at war
+        R-XTM-00 declares no war until a crewed warship exists
+
+    so from a neutral start neither could ever fire, and R-XTM-01 is the ONLY
+    rule that queues an armed hull. Measured on a full game: by turn 200 the civ
+    held 9 planets, score 33,362, cash 11,229, both f1 and b1 designs ready and
+    105 of 108 systems explored — and had never once evaluated a target, because
+    R-XTM-03 was never reached. Nothing in the logs indicated a problem.
+    """
+    foes = enemies(snap, civ, act) or contacted(snap, civ, hist)
     if not foes:
         return 0
     have = warships(snap, civ)
@@ -231,7 +307,7 @@ def run_xtm01(snap, civ, act, hist, log=print):
         import research
         done = {t for t, _ in civ.completed}
         arms = sorted(research.unlocked(done, research.WEAPON))
-        log(f"R-XTM-01: at war with {[f.civ_name for f in foes]} and "
+        log(f"R-XTM-01: {_why(snap, civ, act, foes)} and "
             f"{len(have)}/{WARSHIP_TARGET} warship(s), but this civ has no "
             f"armed design."
             + (f" Weapons {arms} are unlocked, so one can be synthesised: "
@@ -302,7 +378,10 @@ def run_xtm03(snap, civ, act, hist, log=print):
                 f"contribute zero firepower; leaving it")
             continue
         try:
-            act.set_command(ship, 4, target, civ)
+            # Move (1), not Attack (4), and via send_to rather than actuator L:
+            # set_command crashes the client at the next turn boundary for BOTH
+            # types, and combat triggers on co-location regardless. See send_to.
+            send_to(act, ship, target, civ, order_type=1)
             act.claim(ship)
             acted += 1
         except (ValueError, RuntimeError) as e:
@@ -328,7 +407,7 @@ def run_xtm05(snap, civ, act, hist, log=print):
         home = min(ours, key=lambda p: gs.dist(ship.pos, p.pos))
         log(f"R-XTM-05: {ship} at condition {c:.2f} — withdrawing to {home}")
         try:
-            act.set_command(ship, 1, home, civ)      # Move
+            send_to(act, ship, home, civ, order_type=1)   # not actuator L
             act.claim(ship)
             acted += 1
         except (ValueError, RuntimeError) as e:
