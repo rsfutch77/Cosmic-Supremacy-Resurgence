@@ -24,19 +24,105 @@ TWO RULES THIS ENFORCES, both from hard experience elsewhere in this project:
 """
 
 
+import json
 import math
+import os
 
 
 def _dist(a, b):
     """Local copy so sensors does not import gamestate and create a cycle."""
     return math.sqrt(sum((x - y) ** 2 for x, y in zip(a, b)))
 
+
+STATE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "state")
+
+
+def _fingerprint(snap):
+    """A stable id for THIS galaxy, so one galaxy's map is never read as another's.
+
+    Sun ids alone are not enough — two galaxies can both number their suns from
+    the same pool. Positions are the galaxy's identity, so this hashes the sorted
+    (id, rounded position) pairs. Rounded because the coordinates are floats we
+    only ever read, and an exact-bit dependency would be fragile for no gain.
+    """
+    key = tuple(sorted((s.id,
+                        round(s.pos[0], 1), round(s.pos[1], 1),
+                        round(s.pos[2], 1)) for s in snap.suns))
+    return f"{len(snap.suns)}_{abs(hash(key)) & 0xFFFFFFFF:08x}"
+
+
 class History:
-    def __init__(self):
+    """Turn-over-turn observation, plus the PERSISTENT fog-of-war map.
+
+    **Discovery is permanent in the game and must be permanent here.** It used to
+    live only in this object, rebuilt each pass from where our planets and ships
+    are *now* plus scan reports — so it silently reset whenever the controller
+    restarted. Measured: a process restart on an unchanged galaxy took the map
+    from 105 explored systems down to 7, which cost ~170 turns of re-scouting and
+    broke contact with the only rival, disabling every Exterminate rule. A galaxy
+    outlives one process in every real game, and in multiplayer by definition.
+
+    So the set is written to `state/discovered_<galaxy>_<civ>.json` and reloaded
+    on construction. Keyed by galaxy fingerprint AND civ, because one machine
+    plays several galaxies and a map is per player. Persisting our own discoveries
+    is not omniscience — it is the opposite, and it is what stops a restart from
+    quietly handing the AI a fresh fog of war it then re-explores at full speed.
+    """
+
+    def __init__(self, snap=None, civ_name=None, persist=True):
         self.prev = None          # {"turn", "planets": {id: {...}}, "civ": {...}}
         self._acted = set()       # planet ids touched since the last observation
         self._stale = set()       # planet ids whose next delta is untrustworthy
         self.discovered = set()   # sun ids whose planets we are allowed to see
+        self._path = None
+        self._persisted = set()   # what is already on disk, to avoid rewriting
+        self._want_persist = persist
+        if persist and snap is not None:
+            self._bind(snap, civ_name)
+
+    # -- persistence -----------------------------------------------------
+    def _bind(self, snap, civ_name):
+        """Choose the file for this galaxy+civ and merge whatever is already in it.
+
+        Bound lazily from `observe` when the caller did not pass a snapshot, so
+        every existing `History()` call site — the loop and each standalone rule
+        tool — gets a persistent map without being changed. Binding happens
+        BEFORE `_discover`, so the loaded set and this pass's sightings union
+        rather than one clobbering the other.
+        """
+        self._path = os.path.join(
+            STATE_DIR,
+            f"discovered_{_fingerprint(snap)}_{civ_name or 'unknown'}.json")
+        self._load()
+
+    def _load(self):
+        try:
+            with open(self._path) as f:
+                ids = json.load(f).get("discovered", [])
+            self.discovered |= {int(i) for i in ids}
+            self._persisted = set(self.discovered)
+        except (OSError, ValueError, TypeError):
+            # A missing or corrupt file means "we have explored nothing yet",
+            # which is the correct starting state and not worth failing over.
+            pass
+
+    def _save(self):
+        """Write the map, but only when it actually grew.
+
+        Discovery never shrinks, so an unchanged set means an unchanged file, and
+        a pass that found nothing new should not touch the disk at all.
+        """
+        if self._path is None or self.discovered == self._persisted:
+            return
+        try:
+            os.makedirs(STATE_DIR, exist_ok=True)
+            tmp = self._path + ".tmp"
+            with open(tmp, "w") as f:
+                json.dump({"discovered": sorted(self.discovered)}, f)
+            os.replace(tmp, self._path)   # atomic; a killed loop cannot truncate it
+            self._persisted = set(self.discovered)
+        except OSError:
+            pass                          # never take the loop down over the map
 
     # -- recording -------------------------------------------------------
     def observe(self, snap, civ):
@@ -65,7 +151,10 @@ class History:
         self._stale, self._acted = self._acted, set()
         self._cur, self._prev_for_pass = cur, self.prev
         self.prev = cur
+        if self._path is None and self._want_persist:
+            self._bind(snap, civ.civ_name)
         self._discover(snap, civ)
+        self._save()
         return self
 
     # -- fog of war ------------------------------------------------------

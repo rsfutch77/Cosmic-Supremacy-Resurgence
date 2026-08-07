@@ -14,9 +14,25 @@ Expand cycle — R-XPN-01 build, R-XPN-02 dispatch, R-XPN-03 bootstrap (`expand.
 5 unattended and led the rival 3730 to 1666 on score by turn 12.
 
 **Also built:** Sustain (S-food), Exploit (R-XPL-01 jobs, -02 facilities, -04 research,
--05/-06 crew, -08 hurry), Explore (R-EXP-02) and Exterminate (R-XTM-01 fleet, -03 attack,
--05 withdraw). **Still specification:** R-XTM-00 declare war, R-XTM-02 defend, R-XTM-04
-conquer, R-XPL-03 wealth mode, R-XPL-07 liquidation, R-XPN-04 over-expansion, S-04.
+-05/-06 crew, -08 hurry), Explore (R-EXP-01/-02) and Exterminate (R-XTM-00 declare war,
+-01 fleet, -03 attack, -05 withdraw). Fifteen rules are wired into `ai.py`'s `RULES` list;
+that list is the authority on what actually runs, not this paragraph.
+
+**Every civ can now be played by this controller** (Aug 2026): `duel.py` runs one decision pass
+per civ per turn on a shared turn clock, with per-civ fog of war and a rotating move order. It
+needed no new actuator. **And a galaxy is no longer limited to the two civs the engine
+generates** — `server/dev_tools/inject_civ.py` adds a whole player to a save blob, confirmed live
+with a third civ that owned a homeworld and played four turns. See §6.6.
+
+**A full game has been played end to end** (Aug 2026): the AI expanded to 9 planets, out-scored
+the rival 33k to 3.5k, explored 105 of 108 systems with three self-built scouts, declared war,
+built and crewed a bomber, sent it 624 units and fought at turn 114 — losing both warships in a
+single turn boundary. Every X now runs unattended; none of them is finished.
+
+`[ ]` **Still specification, none of these has a `run_*` function:** S-04 insolvency,
+R-EXP-03 record arrivals (partly subsumed by `sensors._discover`), R-EXP-04 recall damaged
+scouts, R-XPN-04 over-expansion, R-XPL-03 wealth mode, R-XPL-07 liquidation, R-XTM-02 defend,
+R-XTM-04 conquer. Each is marked at its own rule below.
 
 **Open questions about the game itself belong in
 `CosmicSupremacy_Reconstruction_Report.md` as `[ ]` items**, not here — this document
@@ -59,7 +75,10 @@ by accident:
    must be a type the civ has unlocked (`Owner:172`); a population must not exceed
    `Planet:104 >> 16` / 10.
 3. **No omniscience.** Client memory holds all 538 planets and every `Owner`,
-   including things the player has not discovered. See §6 — this is an open decision.
+   including things the player has not discovered. **RESOLVED — the AI keeps its own
+   discovery set** (`sensors.History.discovered`), grown only by reaching a sun or by a
+   scan report, and now persisted across restarts. `--vision all` still exists as an
+   explicit opt-out for testing; it is a different game and should not be the default.
 
 ---
 
@@ -192,8 +211,8 @@ One module per UI action. Grade is how confident we are it works today.
 | # | Action | Mechanism | Grade |
 |---|---|---|---|
 | A | **Set a citizen's job** | write job id to `Planet:144` element `+0` | **READY** — plain int, no allocation, same field `set_population.py` already writes |
-| B | **Select the next building** | write type id to `Planet:284` | **NEEDS TEST** — confirmed as *the* selection field, never written to. May be display-only unless paired with C |
-| C | **Start constructing / switch to wealth** | wealth: point `Planet:296` at the singleton `0x0080B540` and set `Planet:344 = 0`. Build: `Planet:296` needs a live `Facility` production object | **PARTIAL** — wealth direction is a pointer we already know; the build direction needs an object we cannot allocate |
+| B | **Select the next building** | write type id to `Planet:284` | **READY** — paired with C in `actions.build_facility`; farms and shipyards were built repeatedly over a full game |
+| C | **Start constructing / switch to wealth** | wealth: point `Planet:296` at the singleton `0x0080B540` and set `Planet:344 = 0`. Build: point `Planet:296` at the planet's own embedded `Facility` | **READY** — both directions. The build direction never needed an allocation: the `Facility` object is embedded in the planet, so `actions.build_facility` points at it rather than making one |
 | D | **Queue a ship** | write a `ShipDesign*` (`tag-12`) to `Planet:296`, set `Planet:344` | **READY** — `actions.queue_ship`. Ship builds point at the shared design; no per-build object exists and the engine registers the finished `Ship` itself |
 | D′ | **Stop building / generate wealth** | `Planet:296` → `PilingUpWealth` `0x0080B540`, clear `Planet:344` | **READY** — `actions.set_wealth_mode` |
 | I | **Design a ship** | `operator new(0x118)` + default ctor `0x00546EC0`, `fit_parts`, `set_design_owner` | **PARKED** — the object is created, tagged, owned and parts fit, but it is never REGISTERED (zero `tag-12` refs vs three per UI design) and its stat block is never computed. Both are done by the design editor's save path; report `[ ]` find the design editor's save path |
@@ -201,11 +220,12 @@ One module per UI action. Grade is how confident we are it works today.
 | E′ | **Originate an order** | engine's own `operator new` + order constructor, via `remote.py` | **READY** — `actions.create_order`; see §6a Route 2 |
 | E″ | **Move an order between ships** | detach donor, attach recipient | **READY** — `actions.transfer_order` |
 | F | **Set research topic** | write `Owner:144` **and** `Owner:152` | **READY** — confirmed writable |
-| G | **Set recruitment rate** | write byte 3 of `Planet:100` | **NEEDS TEST** — report `[ ]` write-test the recruitment rate |
+| G | **Set recruitment rate** | write byte 3 of `Planet:100` | **READY** — `actions.set_recruitment`. Driven live at 0 / 20 / 60 % with the military store responding each time; the ceiling in §4.3 R-XPL-05 is honoured by `max_recruitment` |
 | H | ~~Assign a governor~~ | — | **DROPPED** — the AI manages planets itself and leaves `Planet:496` unset |
 | J | **Sell a facility** | call `PlanetProperties::SellFacility` `0x004F8580` (`__thiscall`, `ret 8`, ECX = `planet_tag + 88`) | **READY** — `actions.sell_facility`. Confirmed live twice: a military camp paid exactly **75** and was removed. `price = round(facilityValue * 0.05) * count`; the 0.05 is the double at `0x753CF8` |
 | K | **Hurry the current build** | call `PlanetProperties::HurryProduction` `0x004EFFF0` (`__thiscall`, ECX = `planet_tag + 88`) | **READY** — `actions.hurry_production`. `cost = 4 * (total - progress)`; needs `progress/total >= 0.5`, `cost <= Owner:8`, production kind != 7 and `Planet:300 == 0`. Confirmed live: cash moved by exactly the quoted price and progress jumped to its total |
-| L | **Order a ship at a TARGET OBJECT** | engine `ShipCommand` ctor `0x004E9BA0` + `Ship::SetCommand` `0x004D9DC0`, after `retarget_order` has built the route | **READY** — `actions.set_command`. The ONLY way to populate `Ship:56`, which `Ship::HasActiveTargetedOrder` requires for order types 1, 4 and 7. Building the route FIRST is not optional: setting the command alone left a Move order carrying a scout's route and crashed the client |
+| L | **Order a ship at a TARGET OBJECT** | engine `ShipCommand` ctor `0x004E9BA0` + `Ship::SetCommand` `0x004D9DC0` | **DO NOT USE — KILLS THE CLIENT.** `actions.set_command` crashes the game at the NEXT TURN BOUNDARY, for Move (1) as well as Attack (4), even with the route built first. Reproduced from a restore point; see §4.4. Nothing uses it. Kept only because it is still the one known way to populate `Ship:56` |
+| M | **Move a ship to a target, route only** | `create_order` + `retarget_order`, and nothing else | **READY** — `exterminate.send_to`. The replacement for L. Reuses `Ship:48` when the ship has one, so it allocates nothing per turn. `Ship:56` stays the null node and the ship navigates correctly anyway |
 
 **Actuator J is the first actuator that is a whole engine TRANSACTION rather than a field
 write, and the reason matters beyond this one button.** Selling pays cash, and §1.1
@@ -222,10 +242,14 @@ unlocks — came from writing a legal field to a value the UI would have refused
 engine function performs the *whole* action, calling it is both less code and safer than
 reproducing it. See §8.
 
-**Consequence for sequencing:** the Explore and Expand rules that only *move* existing
-ships are reachable now via E; everything that *creates* a ship waits on D. The build
-rules are reachable as far as choosing what to build (B) and stopping a build (C), but
-starting one may not be.
+**Sequencing is no longer a constraint.** D, B and C are all READY, so ship production and
+facility building both work; that paragraph described a blocked state that no longer exists.
+
+`[ ]` **Two actuators are built but unused, and one of them matters.** `sell_facility` (J)
+is called by nothing because R-XPL-07 was never built, and `transfer_order` (E″) is
+superseded by `create_order`. J is the more interesting of the two — it works, it is the
+only priced engine transaction we have, and the rule that would use it is blocked on a
+facility-upkeep sensor (§4.3 R-XPL-07).
 
 **The order object cannot be fabricated** — this was measured, not assumed. Its payload
 is exactly 96 bytes (heap headers at −8 and +96 bracket it), and it owns three *separate*
@@ -259,8 +283,8 @@ it — the write is *safe* but *inert*.
 | Move | 1 | a `Planet`'s XYZ |
 | Scout | 2 | a **`Sun`'s** XYZ (a system, not a planet) |
 | Colonize | 3 | a planet's XYZ — **CONFIRMED**, matched a planet to 0.0000 |
-| Attack | 4 | destination unobserved; on a fleet the order lives on `Fleet:52` |
-| Conquer | 5 | an **enemy-owned** planet's XYZ |
+| Attack | 4 | an enemy planet's XYZ — issued live, but see §4.4: issuing it through actuator L crashes the client, and Move (1) reaches the same outcome because combat is positional. On a fleet the order lives on `Fleet:52` |
+| Conquer | 5 | an **enemy-owned** planet's XYZ — `[ ]` never issued; do not assume it survives a turn boundary until tested |
 
 ---
 
@@ -271,8 +295,11 @@ claimed by one rule is not reconsidered by a later one. **Sustain runs before th
 X's** — a starving colony undoes any amount of expansion — but it is a precondition
 layer, not a fifth strategy.
 
-Each rule cites the fields it reads and the actuator it needs. `[BLOCKED: x]` marks a
-rule whose actuator is not yet available.
+Each rule cites the fields it reads and the actuator it needs. Every rule carries its
+implementation status on its heading — IMPLEMENTED with the function that runs it, or
+`[ ]` NOT BUILT. **`ai.py`'s `RULES` list is the authority**; a heading here that disagrees
+with it is a bug in this document. No rule is blocked on a missing actuator any more, which
+is why the old `[BLOCKED: x]` marker no longer appears.
 
 ### 4.0 Sustain — keep colonies alive
 
@@ -287,11 +314,11 @@ LIMIT  reassign at most ceil(pop/4) citizens per turn — the delta is only
 USES   A
 ```
 
-**S-02 — Famine: build a farm**
+**S-02 — Famine: build a farm** — IMPLEMENTED, folded into R-XPL-02 (`exploit.run_facilities`)
 ```
 WHEN   foodDelta[P] < 0  AND  farm count in Planet:204[P] < ceil(pop / 4)
 THEN   Planet:284[P] = 0 (farm); ensure Planet:344[P] == 1
-USES   B, C   [BLOCKED: C build direction]
+USES   B, C
 ```
 
 **S-03 — Surplus: release farmers**
@@ -302,13 +329,17 @@ LIMIT  never below the farmer count that made foodDelta >= 0
 USES   A
 ```
 
-**S-04 — Insolvency**
+**S-04 — Insolvency** — `[ ]` NOT BUILT
 ```
 WHEN   incomeRate < 0  AND  Owner:8 < 3 turns of burn
 THEN   reassign workers/scientists to banker (6) on the highest-pop planet;
        suspend all rules that add ship upkeep (ShipDesign:48) this turn
 USES   A
 ```
+`[ ]` Never triggered in testing because income has been strongly positive all game
+(11k–20k cash idle by turn 150), so this is untested rather than merely unwritten — the
+failure it guards against has not been seen. It is also the trigger for R-XPL-01's Economy
+phase, which therefore never fires either.
 
 ### 4.1 Explore
 
@@ -355,7 +386,14 @@ through the engine's own getter:
 
 For comparison: the Colony Ship (3× engine 0 plus a colony module) makes **13.5**, the
 fighter f1 (1× engine 0, mass driver) **6.43**, and the bomber b1 (1× engine 0, fusion
-bomb) **3.38**.
+bomb) **3.38**. The `f1`/`b1` now in use carry **engine 1** instead and make about **10**,
+measured from the bomber's actual per-turn movement.
+
+`[ ]` **A warship at 10/turn is a 62-turn trip across this galaxy**, which is most of what
+made Exterminate slow: war was declared around turn 100 and the fleet did not arrive until
+turn 114, by which time the rest of the empire had moved on. Warship designs should spend
+more hull on engines than the current one-engine minimum, and the §4.4 strength test should
+account for the fact that a slow fleet arrives piecemeal.
 
 Three things fall out, and they change how the AI should play:
 
@@ -384,20 +422,32 @@ NOTE   scout targets a SUN, not a planet — this is the one order that does
 USES   E
 ```
 
-**R-EXP-03 — Record arrivals**
+**R-EXP-03 — Record arrivals** — SUBSUMED by `sensors.History._discover`
 ```
 WHEN   ship S had order 2 last turn and Ship:52 == 0 now
 THEN   add that Sun to visitedSystems; add its planets to the known set
-       (this is the AI's own bookkeeping — see §6)
 USES   none (read-only)
 ```
+There is no `run_exp03`: `_discover` runs every pass and adds any sun a ship is currently
+inside (within 55.0), which covers arrival without needing to watch for the order clearing.
 
-**R-EXP-04 — Recall damaged scouts**
+`[ ]` **Discovery is sampled once per turn, so a fly-through is invisible.** A scout that
+passes through a system and out the other side between two boundaries is never recorded as
+having been there. Nothing has been seen to go wrong, but with fast scouts (61.5/turn
+against a 39.6 orbit radius) it is arithmetically possible to skip a system entirely.
+Recording the swept SEGMENT rather than the sampled point would close it.
+
+**R-EXP-04 — Recall damaged scouts** — `[ ]` NOT BUILT
 ```
 WHEN   Ship:136 < 0.5
 THEN   order 1 (move) to the nearest owned planet's XYZ
-USES   E
+USES   M
 ```
+`[ ]` Now cheap to write — `exterminate.send_to` is exactly this actuator and R-XTM-05 is
+the same rule with a different threshold. The two should probably be one rule parameterised
+by threshold and role rather than two near-copies. Note the caveat on R-XTM-05: a ship that
+dies inside one turn boundary is never observed damaged, so this only helps against
+attrition, not against being caught.
 
 ### 4.2 Expand
 
@@ -407,7 +457,7 @@ WHEN   count(our ships of role COLONY) == 0
 AND    there is at least one known colonisable target (R-XPN-02)
 AND    Owner:8 >= ShipDesign:44 of the colony design
 THEN   queue the COLONY design at the best shipyard planet
-USES   D   [BLOCKED]
+USES   D
 ```
 
 **SOLVED — the recruitment stall is the "Inactivity" throttle, and it is a RAMP ON THE TURN
@@ -535,11 +585,19 @@ USES   A, B
 No governor is assigned — the AI does all planet management itself, so `Planet:496` is
 left unset everywhere and actuator H is not used.
 
-**R-XPN-04 — Do not over-expand**
+**R-XPN-04 — Do not over-expand** — `[ ]` NOT BUILT
 ```
 WHEN   count(owned planets) * COLONY_UPKEEP_EST > incomeRate
 THEN   suppress R-XPN-01 until income recovers
 ```
+`[ ]` **This is the rule that starves Exterminate, and the mechanism is not income.** With
+531 unowned planets in the galaxy R-XPN-01 always has a target, so colony ships are queued
+forever and compete for the one shipyard. Ships get first refusal over facilities in the
+rule order, but *within* ships the order is warships → colony → scouts, so expansion
+outranks scouting indefinitely. The trigger above (income) never fires because income stays
+strongly positive; the real constraint is SHIPYARD TIME and crew, not cash. Either add a
+second shipyard target, or cap concurrent colony ships, or charge expansion against the
+fleet the AI is trying to build.
 
 ### 4.3 Exploit
 
@@ -570,15 +628,30 @@ priority, first unbuilt/under-target that is unlocked in Owner:172 wins:
   light turret 9  if this planet is a border planet (nearest enemy < THREAT_DIST)
   defence agency 8 if scan types in Owner:200 is empty
 THEN   Planet:284[P] = that id, Planet:344[P] = 1
-USES   B, C   [BLOCKED: C build direction]
+USES   B, C
 ```
+`[ ]` **The priority list above is not what the code does.** `exploit.run_facilities` gates
+on `buildable_types` (research-unlocked) and builds farms and shipyards; the university,
+military-camp, light-turret and defence-agency clauses are not all implemented, and the
+border-planet test that light turret needs (`nearest enemy < THREAT_DIST`) has no
+implementation at all. Reconcile the list with the code, or trim the list to what is real.
 
-**R-XPL-03 — Wealth mode when there is nothing worth building**
+`[ ]` **`MAX_SHIPYARDS = 2` exists in the code but not in this spec**, and the spec's
+"shipyard 2 if the civ has no shipyard anywhere" says one. Two shipyards were in fact built
+in the last game, which is the code winning. §5 should carry the constant.
+
+**R-XPL-03 — Wealth mode when there is nothing worth building** — `[ ]` NOT WIRED
 ```
 WHEN   every priority in R-XPL-02 is satisfied  AND  no ship is queued
 THEN   point Planet:296[P] at 0x0080B540 and set Planet:344[P] = 0
 USES   C   (this direction is available — it is a known static pointer)
 ```
+`[ ]` The actuator (`actions.set_wealth_mode`) is READY and called from `exploit`, but
+there is no `run_xpl03` in `ai.py`'s `RULES`, so there is no rule deciding *when* a planet
+should switch to wealth. Planets that have built everything currently sit idle rather than
+banking cash. Low value while cash is already the resource we cannot spend — which is
+itself the argument for building the rule only after R-XPL-07 or conscription gives cash
+somewhere to go.
 
 **R-XPL-04 — Always be researching**
 ```
@@ -635,6 +708,32 @@ getter is `movsx eax, byte ptr [ecx+0xf]` and nothing more — so honouring the 
 §1.1 obligation rather than a safety check. The `movsx` also means the byte must stay below
 128, or the rate reads negative and the military store would count *down*.
 
+**R-XPL-06 — Load crew onto a waiting ship** — IMPLEMENTED in `exploit.run_crew_load`
+```
+WHEN   a ship in orbit of owned planet P has fewer crew than ShipDesign:76
+       AND P has that many trained military units stationed
+THEN   move the units from P onto the ship
+USES   load_crew
+```
+`[ ]` **Written in code before it was written here** — it, and R-XPL-08 below, were never
+specified. Both now exist; this entry is the spec catching up.
+
+`[ ]` **No priority between competing ships.** `run_crew_load` walks `owned_ships` in scan
+order, so a colony ship wanting 2 crew and a scout wanting 1 compete on iteration order
+rather than on what the empire needs. With recruitment at ~1 unit per 10 turns this decided
+which rule made progress, and nothing chose it deliberately.
+
+**R-XPL-08 — Hurry a build with surplus cash** — IMPLEMENTED in `exploit.run_hurry`
+```
+WHEN   a build is >= 50% done, Planet:300 == 0, and cash above a floor
+THEN   call HurryProduction, cheapest first, within a per-turn budget
+USES   K
+```
+`[ ]` **The budget rule is arbitrary** — a 5000 floor and a fraction of the remainder, both
+invented. It routinely declined every eligible build ("35552 would exceed the turn's budget")
+while sitting on 20k cash it had no other use for. Wants a real policy, ideally one that
+knows what else the cash is for.
+
 **R-XPL-07 — Liquidate to survive a collapse** — `[ ]` NOT BUILT
 ```
 WHEN   incomeRate < 0 for N consecutive turns
@@ -667,7 +766,9 @@ something better) or strictly as a solvency backstop. Only the latter is specifi
 
 ### 4.4 Exterminate
 
-**R-XTM-00 — Declare war first** — `[ ]` NOT BUILT, and it is a hard precondition
+**R-XTM-00 — Declare war first** — IMPLEMENTED in `exterminate.run_xtm00`, and it is a hard
+precondition. Confirmed live: the relation went Neutral → War in *both* civs' records and
+R-XTM-03 then engaged. Gated behind `ALLOW_DECLARE_WAR`, which is on for AI-vs-AI galaxies.
 ```
 WHEN   any R-XTM rule wants to attack (4), conquer (5) or bio-bomb (6) civ C
 AND    relation code for C in Owner:248 != 1 (War)
@@ -690,10 +791,16 @@ explicit declaration. `GetGameOption(29)` (force initial war) and `GetGameOption
 (force combat hostility) also read 0. Read all three before assuming anything about the
 starting relation; a differently configured galaxy genuinely would start at war.
 
-`[ ]` **The relation record is SYMMETRIC and must be written as such.** `0x0055BD40` writes
-the same code into *both* civs' `Owner:248` in one call. Writing only our own map leaves the
-galaxy inconsistent, and since the battle phases query *a* civ's map, which side is asked
-would decide whether combat happens.
+**The relation record is SYMMETRIC and is written as such — DONE.** `0x0055BD40` writes the
+same code into *both* civs' `Owner:248` in one call, and `actions.declare_war` does the same:
+the live log shows two writes, `'GoodGuy' -> 'BadGuy'` and `'BadGuy' -> 'GoodGuy'`, both
+Neutral → War. Since the battle phases query *a* civ's map, writing one side only would have
+made combat depend on which side was asked.
+
+`[ ]` **NO REPUTATION COST IS APPLIED, so declaring war is currently FREE.** The actuator
+says so itself at runtime. That is tolerable while every civ in the galaxy runs this same
+code and pays the same nothing, and it is a straightforward §1.1 violation the moment a human
+is on the other side. The UI quantifies the figure before confirming; we do not know it.
 
 `[ ]` **Prefer the command path over a raw write, and this is a fairness decision, not a
 technical one.** The `NWTR` handler `0x0056F310` validates nothing, but the surrounding path
@@ -712,55 +819,149 @@ WHEN   sum(our WARSHIP count) < threatLevel
 THEN   queue the best WARSHIP design affordable in Owner:8 and Owner:1128
        (rank by max(:60,:64,:68) / :44, filter by metal :92 and radioactives :100
        against stock)
-USES   D   [BLOCKED]
+USES   D
 ```
 
-**ATTACK ORDERS NEED `Ship:56`, WHICH OUR ORDER WRITER LEAVES NULL.** `0x004D9880`
-`Ship::HasActiveTargetedOrder` requires the order type to be 1 (Move), 7 (MoveNear) or
-4 (Attack) **and** `Ship:56` to be non-null. Our `create_order` / `retarget_order` leave it
-as the static null node `0x00857C54`, which is harmless for the types we use today —
-Colonize (3) and Scout (2) are not on that list and carry their target as coordinates. An
-Attack order written the same way would very likely be inert, the same dead end as writing
-`Ship:52` with a null `Ship:48`.
+**FIXED — the trigger is CONTACT, and gating it on WAR was a silent deadlock.** The
+implementation opened with `if not enemies(): return 0`, which is narrower than the rule
+above ("floored at 2 **once contact is made**") and closes the Exterminate loop on itself:
 
-The fix is already known and must be used here: `ShipCommand(int type, EJBO* target)`
-`0x004E9BA0` populates `Ship:56` via `GetReferenceNode(target->objectId)`, and
-`Ship::SetCommand` `0x004D9DC0` writes `Ship:52/56/60/61` together as one value. So the
-Exterminate rules go through that pair, not through the coordinate-only writer.
+```
+R-XTM-01 queues no warship until at war
+R-XTM-00 declares no war until a CREWED WARSHIP exists
+```
 
-**R-XTM-02 — Defend**
+R-XTM-01 is the only rule that queues an armed hull, so from a Neutral start neither could
+ever fire and the AI could not reach a battle at all. **Nothing in the logs said so** —
+both rules return 0 before logging, so a game with no Exterminate output looks identical to
+a peaceful one. Measured over a full run: at turn 200 the civ held 9 planets, score 33,362,
+cash 11,229, `f1` and `b1` both ready and 105 of 108 systems explored, and R-XTM-03 had
+never once been reached. `contacted()` now supplies the contact set and
+`enemies() or contacted()` is the gate. Attack itself stays war-gated in R-XTM-03, which is
+correct — the engine checks `IsAtWarWith` in all three battle phases.
+
+**FIXED — the discovery set now survives a restart, which this rule depends on.**
+`sensors.History.discovered` was rebuilt each pass from where our planets and ships are *now*
+plus scan reports, and never written down. A fresh process on the same galaxy recovered 7
+systems out of 105 explored, so contact — and therefore the whole Exterminate chain — was
+lost by restarting the controller alone, with nothing changed in the game.
+
+It is now persisted to `ai_player/state/discovered_<galaxy>_<civ>.json`, keyed by a galaxy
+FINGERPRINT (sun count plus a hash of every sun's id and rounded position) as well as the civ
+name, because one machine plays several galaxies and a map belongs to one player. The file is
+loaded before `_discover` runs so a reload and this pass's sightings union, written only when
+the set actually grew, and replaced atomically so a killed loop cannot truncate it. Verified
+across two processes: one saved, the next reloaded and `contacted()` returned the rival.
+
+Persisting our own discoveries is the OPPOSITE of the omniscience worry in §6.1 — the bug was
+handing the AI a fresh fog of war on every restart, which it then re-explored at full speed.
+
+### Actuator L crashes the client — R-XTM-03 and R-XTM-05 do not use it (Aug 2026)
+
+**`set_command` kills the client at the NEXT TURN BOUNDARY, for Move as well as Attack.**
+The order is written cleanly and the pass completes; the engine dies resolving the turn.
+Measured from `client/armed.dat` (turn 38, at war, one crewed `b1`), one boundary per trial:
+
+| what was issued | survived the boundary |
+|---|---|
+| `set_command(4 attack)` | **no** |
+| `set_command(1 move)` | **no** |
+| `create_order` + `retarget_order(1 move)` | **yes** — moved 9.5 units, exactly `ShipDesign:36` |
+
+So it is the `ShipCommand` / `Ship::SetCommand` pair, not Attack, and not the order TYPE.
+
+**This also refutes the premise actuator L was built on.** A route-only order leaves `Ship:56`
+as the static null node `0x00857C54` and the ship navigates correctly regardless, so
+`Ship::HasActiveTargetedOrder` gates something other than movement. Nothing the AI does needs
+`Ship:56`: combat triggers on CO-LOCATION and the battle driver `0x00523AC0` never reads the
+order type at all, so a Move order that delivers the hull does the whole job.
+
+Both rules now go through `exterminate.send_to`, which reuses `Ship:48` when the ship already
+has one — verified over 8 turns as **zero** order allocations and **zero** ShipCommand
+allocations, with the bomber closing 624.3 → 544.2 on BadGuy's HQ.
+
+`[ ]` **Why SetCommand is fatal is still unknown**, and it is the only known way to populate
+`Ship:56`, so the function is kept and marked do-not-use rather than deleted. Two unreconciled
+observations for whoever picks it up: in the harness SetCommand appears to be a NO-OP (the ship
+still read type 1 with a null `Ship:56` afterwards), while in the 400-turn run at turn 405 it
+DID apply — type 4, real node — and crashed anyway. The difference was that order object had
+been created a turn earlier rather than in the same pass.
+
+**~~ATTACK ORDERS NEED `Ship:56`~~ — WRONG, and it was the premise for actuator L.** The
+claim was that `Ship::HasActiveTargetedOrder` (`0x004D9880`) requires order type 1/4/7 **and**
+a non-null `Ship:56`, so a coordinate-only Attack order would be inert. Measured: a route-only
+Move order leaves `Ship:56` as the static null node `0x00857C54` and the ship navigates
+correctly regardless. Whatever that function gates, it is not movement, and it is not combat —
+the battle driver `0x00523AC0` buckets by position and never reads the order type. Superseded
+by the actuator-L section above; kept here only so the old reasoning is not re-derived.
+
+`[ ]` **What `Ship::HasActiveTargetedOrder` actually gates is still unknown.** It is called
+from somewhere, and `Ship:56` is populated by the UI path, so both exist for a reason we have
+not found. Worth knowing before assuming a null `Ship:56` is harmless in every situation
+rather than just the ones tested (Move and Attack toward an enemy planet).
+
+**R-XTM-02 — Defend** — `[ ]` NOT BUILT
 ```
 WHEN   an enemy ship is within THREAT_DIST of owned planet P
-THEN   order every idle WARSHIP within reach to move (1) to P's XYZ;
-       if already there and the enemy is adjacent, order attack (4)
-USES   E   ⚠ attack order semantics unobserved
+THEN   order every idle WARSHIP within reach to move (1) to P's XYZ
+USES   M
 ```
+`[ ]` Still not built, but no longer untestable: `duel.py` (§6.6) supplies the opponent this
+rule needs. It will not attack until it has an armed design, so the order is designs for the
+second civ, then this rule. Note the rule no longer needs an "order attack (4)" step: arriving
+is the whole action.
 
-**R-XTM-03 — Raid**
+**R-XTM-03 — Raid** — IMPLEMENTED in `exterminate.run_xtm03`
 ```
 WHEN   our WARSHIP count >= threatLevel + RAID_MARGIN
-THEN   pick the weakest known enemy planet
-       weakness = stationed military count (Planet:168 span / 16)
-                + turret count from Planet:204 type 9
-       order the raid group to move (1) then attack (4)
-USES   E
+THEN   pick the weakest visible enemy planet
+       weakness = stationed military (Planet:168 span / 16)
+                + defensive facilities, from facilities.read_table
+       send the fleet with M (Move); co-location at war starts the fight
+USES   M
 ```
+`[ ]` **There is no "too strong to attack" test, and it fed hulls into a meat grinder.**
+The rule picks the WEAKEST visible enemy planet, but with one enemy planet in view the weakest
+is also the only one. It sent a shuttle-chassis bomber at a homeworld of weakness 500, lost it,
+queued a replacement, and sent that too. It needs to compare its own firepower against the
+target's defence and decline — a raid it cannot win is worse than no raid, because it also
+feeds the enemy score.
 
-**R-XTM-04 — Conquer**
+`[ ]` **`RAID_MARGIN` is in §5 but not in the code**, which uses `WARSHIP_TARGET = 2` and
+attacks as soon as anything is crewed. The margin was meant to stop exactly the trickle-feed
+above.
+
+`[ ]` **The fleet is dispatched piecemeal.** Each warship is sent the moment it is crewed, so
+they arrive one at a time and are defeated one at a time. Ships travel at very different speeds
+(bomber ~10/turn); a rendezvous or a wait-for-N-ships gate is the obvious fix and does not
+exist.
+
+**R-XTM-04 — Conquer** — `[ ]` NOT BUILT
 ```
 WHEN   a TROOP ship exists and its target planet's weakness == 0
 THEN   Ship:52 = 5 (conquer), destination = that planet's Planet:4/8/12
 NOTE   conquer is confirmed to target an enemy-owned planet's exact XYZ
 USES   E
 ```
+`[ ]` Blocked on two things, neither started: no TROOP design has ever been synthesised
+(module id 1, troop bay), and Conquer (5) is a targeted order type we have never issued — given
+what Move and Attack did through actuator L, assume nothing about whether it survives a turn
+boundary until it is tested from a restore point.
 
-**R-XTM-05 — Retreat**
+**R-XTM-05 — Retreat** — IMPLEMENTED in `exterminate.run_xtm05`
 ```
 WHEN   Ship:136 < 0.3
-THEN   order 1 (move) to the nearest owned planet; ships are deleted on death,
+THEN   send it to the nearest owned planet with M; ships are deleted on death,
        not marked, so a ship that vanishes from the scan was destroyed
-USES   E
+USES   M
 ```
+`[ ]` **It cannot fire against a one-boundary wipe, and that is how ships have actually
+died.** Damage is multiplicative over up to 200 rounds with no early exit, all inside a single
+turn resolution, so both warships went from condition 1.0 to deleted between two samples and
+this rule never saw a damaged ship. It only helps a hull tough enough to survive a boundary,
+which none of the current designs are. Not a defect in the rule — a reason it is not the
+safety net it looks like. The real mitigation is arriving with enough hull, i.e. R-XTM-03's
+missing strength test.
 
 ---
 
@@ -775,6 +976,16 @@ USES   E
 | `RAID_MARGIN` | 3 | surplus warships before going on the offensive |
 | `FARM_PER_POP` | 4 | citizens per farm target |
 | `REASSIGN_CAP` | pop/4 | job changes per planet per turn |
+
+`[ ]` **This table has drifted from the code and should be generated from it, not typed.**
+Known mismatches: `WARSHIP_TARGET` (2, in `exterminate.py`), `RETREAT_AT` (0.30),
+`MAX_SHIPYARDS` (2), `SHIPYARD_POP` (10), `RECRUIT_RATE_LEAN` (20) and `CREW_PER_COLONY_SHIP`
+all exist in code and not here, while `RAID_MARGIN` is here and used nowhere. A constant that
+appears in only one of the two places is a constant nobody is tuning.
+
+`[ ]` **None of these has actually been tuned.** They are still the initial guesses, apart
+from `TURN_WEIGHT`, which was recalibrated once against a real galaxy. Tuning needs many fast
+games, which `--drive` now makes possible and nothing has yet used.
 
 Units: distances are in the same space as `Planet:4/8/12`; a scout's ETA is
 `ceil(distance / ShipDesign:36)`, which is how the game derives it (ETA is not stored).
@@ -791,20 +1002,16 @@ new galaxy rather than inherited.
 
 ## 6. Open decisions — need your call before implementation
 
-1. **Fog of war.** Client memory holds every planet and every `Owner`, discovered or
-   not. The rules above say "known planets" and "known enemy ships", which implies the
-   AI maintains its own discovery set seeded from the homeworld and grown by
-   R-EXP-03 and by `Owner:320` scan reports. That is the honest reading of "not
-   cheating", and it is more work. The alternative — let the AI see the whole galaxy —
-   is simpler and makes the first version much stronger, but it is a different game.
-   **Which?**
+1. ~~**Fog of war.**~~ **RESOLVED — the AI keeps its own discovery set**, seeded from owned
+   planets, grown by ships reaching a sun and by `Owner:320` scan reports, and persisted
+   across restarts. `--vision all` remains as an explicit testing opt-out. See §4.4 for the
+   persistence design and §4.1 R-EXP-03 for the one remaining hole (a fly-through between
+   two samples is never recorded).
 
-2. **Ship production is the critical path.** Three of the four X's need actuator D,
-   and `ShipProduction` has never been seen live. Options: (a) RE it first by
-   queueing a ship in the UI and reading `Planet:296`, then build the AI around a
-   known-good actuator; (b) build the framework and the order-based rules now, stub D,
-   and fill it in later. (a) is lower risk, (b) gets something running this week.
-   **My recommendation: (a), and it is cheap — one game, one queued ship, one scan.**
+2. ~~**Ship production is the critical path.**~~ **RESOLVED — actuator D works.** A ship
+   build points `Planet:296` at the shared `ShipDesign` (tag-12); there is no per-build
+   object. Colony ships, scouts and warships have all been queued, built and crewed
+   unattended over a full game.
 
 3. **Where the AI sits.** `client/dev_tools/ai_player/` as a peer of the other dev
    tools, importing `ejbo_viewer`, is the low-friction choice. If the AI is meant to
@@ -816,10 +1023,72 @@ new galaxy rather than inherited.
    management itself and leaves `Planet:496` unset everywhere. Actuator H is dropped and
    R-XPN-03 no longer assigns one.
 
-5. **Turn acceleration.** `advance_turns.py` collapses the turn length so a full game
-   runs in minutes, which is how the AI gets enough games to tune `TURN_WEIGHT` and the
-   rest of §5. The AI's wake-on-turn-change loop works unchanged at any turn length.
-   Not yet wired up.
+5. ~~**Turn acceleration.**~~ **RESOLVED — `ai.py --drive N`** writes the turn length at
+   `0x0080AA08`, re-asserts it whenever the engine resets it (which it does, often), and
+   restores the original on exit including on Ctrl-C. Games run at 8–15s per turn; a
+   400-turn game takes about an hour. `[ ]` Nothing has yet used it for its actual purpose,
+   which was tuning §5 over many games.
+
+6. ~~**Two AI civs, or one AI against the engine's own?**~~ **RESOLVED — two AI civs, both
+   driven from one client by `duel.py`.** The engine plays `BadGuy` passively: over 154 turns
+   it held one planet, built no warship and declared no war, so R-XTM-02 (defend) could never
+   fire and every other rule was measured against an opponent that never contested anything.
+
+   **It needed no new actuator and no memory hack**, which is the opposite of what this item
+   assumed. Every module already resolves its civ BY NAME through `gamestate.resolve_civ`
+   rather than assuming the local player, and every write is addressed through that civ's own
+   objects — the `.data` local-player node at `0x00857904` only chooses the DEFAULT civ, it
+   does not gate what may be written. Confirmed live on a turn-154 galaxy: a controller
+   pointed at `BadGuy` set its research topic, built it a farm, colonised two planets and took
+   it from score 3644 to 5868 in eight turns, with the engine keeping every change across the
+   turn boundaries and reverting nothing.
+
+   Two clients is still the *correct* architecture and is still blocked on server-side turn
+   sync; one client with two controllers is the testbed, and §1.1 is honoured per civ rather
+   than per process:
+   * **Separate fog of war** — one `sensors.History` per loop, and the discovery set is
+     already persisted per civ, so neither side sees inside a system its own ships have not
+     reached. `--vision all` remains an explicit opt-out.
+   * **No fixed move order** — whoever passes first claims contested things (a shipyard, a
+     colony target) against the other's pre-move state, so `duel.py` alternates the order by
+     turn parity instead of letting one civ hold that advantage all game.
+
+   `[ ]` **The engine's AI is still running underneath.** It reverted nothing in eight turns
+   and it may simply have nothing to say about a civ whose planets are already busy, but
+   nothing has established which of the two is deciding when they disagree. `Owner:360` and
+   `Owner:1196` are the candidates to look at first — both read 1 on the local player and 0 on
+   the engine's civ, and neither has been identified.
+
+   `[ ]` **`BadGuy` has no synthesised designs**, so R-EXP-01 and R-XTM-01 cannot fire for it:
+   it owns only the starting `Colony Ship`, which makes it an expander that can never scout or
+   fight. Designs come from the save blob (`game_cycle.py --design`, which needs
+   `--like-id <that civ's design>` because it otherwise resolves the local player's). Until
+   that is done a duel is expansion-only, and only one side can reach a battle.
+
+   **THE GALAXY IS NO LONGER LIMITED TO TWO CIVS.** `server/dev_tools/inject_civ.py` adds a whole
+   player to a save blob — an `OWNR` clone under a new name plus a homeworld built by transplanting
+   the donor's `PLPR` onto an uncolonised planet. Confirmed live: a turn-162 capture came back up
+   with three `Owner` instances, `'Ceti'` owning the planet it was given, and `duel.py` drove all
+   three for four turns with no crash. `--name` is repeatable, so twenty civs is one command. The
+   engine derives each civ's registry key from its NAME, so the only uniqueness requirement is the
+   name itself. Details and the measured blob layout are in the memory reconstruction report.
+
+   `[ ]` **A pass costs a full memory scan, and they are serialised.** Three civs means three scans
+   per turn; twenty means twenty, which will not fit in a short driven turn. `duel.py` should share
+   ONE snapshot per turn across all controllers instead of re-scanning per civ — the fog of war is
+   already applied per civ on top of the shared scan, so nothing about §1.1 depends on scanning
+   separately.
+
+   `[ ]` **A torn read got through with three civs.** On turn 166 `GoodGuy` read 1 planet when it
+   held 7, and acted on that. `_snapshot_settled` only re-reads when a civ reads ZERO planets, so a
+   partial read of a seven-planet empire passes the guard. With more civs each pass starts later
+   after the boundary, so this gets more likely, not less. The check should compare against the
+   previous turn's count rather than against zero.
+
+7. `[ ]` **The client must be relaunched to pick up a code change**, and doing so re-offers
+   the customisation popups and (before persistence) discarded the discovery map. A restart
+   also re-commits the homeworld click record over restored state — the report's data-loss
+   bug. Worth deciding whether the loop should hot-reload its rule modules instead.
 
 ---
 
@@ -948,16 +1217,25 @@ than an allocator, a constructor or a getter. That is the pattern worth extendin
 | Candidate | Address | Why it matters |
 |---|---|---|
 | **Read the live research table** | `0x0054AA70` id→record, `0x0054B140` cost, `0x0054B200` prereq-at-index, `0x0054B7D0` exclusion test | `research.py` currently carries a table extracted for content version **≥688** while this client runs **565**, and the two demonstrably differ (see the cost-ratio argument in that file). These calls read the table the client is *actually* using. Read-only, so the safest possible first target, and it retires a known-wrong data source |
-| **`Ship::SetCommand`** | `0x004D9DC0` | `Ship:52/56/60/61` are one `ShipCommand` value written as a unit. **We currently write `Ship:52` alone**, which is a latent bug rather than a theoretical one — there is an order type 8 distinguished only by `Ship:61 = 0x0B` |
+| ~~**`Ship::SetCommand`**~~ | `0x004D9DC0` | **WITHDRAWN — this candidate was tried and it kills the client** at the next turn boundary, for Move as well as Attack (§4.4). Writing `Ship:52` alone turns out to be fine: the ship navigates correctly with `Ship:56` null. `[ ]` The order-type-8 / `Ship:61 = 0x0B` observation is still unexplained and still unused |
 | **`ChangeCitizenJobs`** | `0x00574180` (`__cdecl`, 4 args) | Replaces actuator A *and* unlocks conscription, with the engine's own cost check (`5*(T+k)+105`, debited from `Owner:8`) instead of one we would have to reproduce. Closes the `[ ]` conscription item |
 | **`GetTrait`** | `0x00516180` | Real civ-modifier values (trait 18 = ship speed %, trait 38 = planet space %) rather than assuming 0. Feeds any speed or max-pop calculation |
 | **available space** | `0x004F1140` (PP vftable slot 6) | `max_pop` with the trait bonus applied, instead of our `space/10` approximation |
 | **`GetDraftCost`** | `0x00516060` | Prices conscription before committing, so the AI can choose between cash and the ~25-turn recruitment path |
 
+`[ ]` **None of the remaining candidates has been attempted**, and the first two are now the
+highest-value work in this document. The live research table would retire a data source known
+to be for the wrong content version (`research.py` carries ≥688, this client runs 565).
+`ChangeCitizenJobs` unlocks **conscription**, which is the answer to the crew bottleneck that
+gates every order rule — the civ sat on 11k–20k idle cash for a hundred turns with nothing to
+spend it on while waiting ~10 turns per recruit.
+
 ### The standing hazard
 
-Stubs run on a `CreateRemoteThread`, **not the game's main thread**. Nothing has gone
-wrong yet, but nothing guarantees it: a call that takes a lock the main thread holds, or
+Stubs run on a `CreateRemoteThread`, **not the game's main thread**. **Something has now gone
+wrong**: `Ship::SetCommand` kills the client at the next turn boundary (§4.4), and the cause is
+not understood — it may be this hazard or it may be the call itself. Read the rest of this
+section as a live risk rather than a precaution. Nothing guarantees safety: a call that takes a lock the main thread holds, or
 mutates a container the main thread is walking, can deadlock or corrupt where a field
 write would merely have been wrong. Static analysis found no TLS dependency in the
 conscription call graph, which is evidence but not proof.
@@ -980,10 +1258,29 @@ Practical consequences, and the rules that follow from them:
 
 ## 8. Build order
 
-1. **RE `ShipProduction`** (open decision 2a) — unblocks D.
-2. **Framework**: snapshot / diff / rule-engine / dry-run mode that logs every intended
-   write without performing it. Dry-run is the safety net for all of §4.
-3. **Actuator modules**, in dependency order: A (jobs) → F (research) → B+C (building)
-   → E (orders) → D (ship production) → G, H.
-4. **Explore**, end to end, with a real scout — smallest rule set that closes the loop.
-5. **Expand**, then **Exploit**, then **Exterminate**.
+Steps 1–5 are **DONE**. The AI plays all four X's unattended and has fought a battle.
+
+1. ~~RE `ShipProduction`~~ — D works.
+2. ~~Framework~~ — `ai.py` loop, `sensors.History`, dry-run by default.
+3. ~~Actuator modules~~ — A, B, C, D, E, E′, F, G, J, K, M all READY. L is fatal, see §3.
+4. ~~Explore end to end~~ — three self-built scouts swept 105 of 108 systems.
+5. ~~Expand, Exploit, Exterminate~~ — all running; Exterminate reached combat.
+
+### What comes next, in the order I would do it
+
+1. `[ ]` **Make the fleet survivable.** R-XTM-03's missing strength test plus real hulls
+   (corvette chassis, shields, several weapons) via `game_cycle.py --design`. Everything else
+   in Exterminate is downstream of not losing every ship on arrival. Test from
+   `client/armed.dat` with `battle_harness.py`, not from a fresh game.
+2. `[ ]` **Conscription** (`ChangeCitizenJobs` + `GetDraftCost`, §7). Turns idle cash into
+   crew and removes the bottleneck that gates every order rule.
+3. `[ ]` **Stop expansion starving the shipyard** — R-XPN-04, which is about shipyard time
+   and crew rather than the income trigger currently specified.
+4. `[ ]` **Read the live research table** (§7) — retires a table known to be for the wrong
+   content version, and it is read-only, so it is the safest engine call available.
+5. ~~**A second AI-driven civ**~~ — **DONE**, `duel.py` drives both civs on one turn clock
+   (§6.6). `[ ]` What remains before a duel is a real test: synthesised designs for the second
+   civ, and a FRESH galaxy — the demonstration ran on a turn-154 game the first civ had already
+   won 21,591 to 3,644, which measures nothing about the strategy.
+6. `[ ]` **Tune §5 over many fast games** — `--drive` makes this possible and nothing has
+   used it for that yet.

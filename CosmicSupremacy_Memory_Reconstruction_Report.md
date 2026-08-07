@@ -689,11 +689,73 @@ this vector by exact reallocation or in doubling steps.** The 8-byte block with 
 suggests exact. If so, the bootstrap has to run to the full player count in one pass, since any
 later natural discovery would reallocate and discard whatever we had written.
 
-[ ] **CRITICAL — create a third player.** Everything above is untestable beyond two civs, and any
-galaxy with more than two players needs civ fabrication anyway: a new `Owner` (multiple-inheritance
-layout, allocation starting 52 bytes before the tag, name string at `−44`), plus registration in
-the `Owner` registry, which has not been located yet. This gates multiplayer above 1v1 and it gates
-measuring the growth behaviour above.
+### Creating a third player — SOLVED, in the save blob rather than in memory (August 2026)
+
+**A new civ is injected as an `OWNR` section and the engine builds the rest.** This was the
+CRITICAL blocked item here for months, on the grounds that a fabricated civ needs a
+multiple-inheritance `Owner` allocation *and* an insertion into the red-black `Owner` registry
+at `0x02D48740`, keyed by a hash whose derivation is unknown. All of that is true of memory and
+none of it applies to a blob: the deserialiser allocates, registers and keys the civ itself.
+`server/dev_tools/inject_civ.py` does it; **confirmed live** — a two-civ capture at turn 162 came
+back up with **three** `Owner` instances, the new civ owning the planet it was given, holding its
+own cloned `ShipDesign`, and four turns resolved with no crash.
+
+**The registry key is derived from the name, not stored.** Neither civ's `Owner:-16`
+(`0x2DB018D6`, `0x6C157D63`) appears anywhere in a capture, and both read the same values across
+two independently generated galaxies. The injected civ 'Ceti' came up with `0xE6731243` — a value
+that was in no file. So the "a fabricated civ needs a key that does not collide" worry is
+answered by giving the civ a **unique name**, and nothing else.
+
+Blob layout, measured against a two-civ capture and re-measured after the edit:
+
+```
+GLXY payload:  u32 civCount ; OWNR x civCount ; SOLA... ; SHIP... ; NEBU...
+OWNR payload:  u32 nameLen ; char name[] ; u32 objectId
+               DATA { OWPR, KNPL, EXSY, ASKY, CVTR, SERV,
+                      u32 designCount, DSGN x n, NEWS x n, GOVS, ADMS, SPQS, USSE }
+               u32                                        (= Owner:4 in memory)
+PLNT payload:  u32 objectId ; f32 x, z, y ; u32 ownerObjectId ; f32 ;
+               u32 nameLen ; char name[] ; 6 bytes ; PLPR {...} ; u32
+```
+
+`GLXY`'s leading count is the same count-then-records idiom as the design count inside `OWNR`,
+where a record added without bumping the count is never read.
+
+**Ownership is carried by object id in more places than the obvious one.** Besides `PLNT:+16`
+and the owner id that ends every `SDPR`, **every citizen record inside a `PLPR` carries its
+civ's id** — which is why the owner id repeats at a 9-byte stride through a populated
+homeworld's properties. A clone that patches only the identity fields leaves a homeworld full of
+citizens belonging to the donor.
+
+**A homeworld is a `PLPR` transplant.** The new civ's planet keeps its own head fields — object
+id, position — and receives the donor homeworld's whole `PLPR`, so it inherits that planet's
+space, population, food and facilities. Planet space lives in `PLPR` (it is `Planet:104`, inside
+the embedded `PlanetProperties` at `Planet:88`), so the target rock's own size is irrelevant and
+the two homeworlds come out identical, which is what a fair start needs anyway.
+
+`[ ]` **`EXSY` is cloned, not reset, and that is a cheat rather than a cosmetic defect.** An
+injected civ inherits the donor's explored-systems map, so cloning a developed donor hands the
+newcomer everything that civ had found — including where the home planets are, once anyone has
+met anyone. Two things keep it from mattering yet and neither is a fix: the AI player does not
+read `EXSY` (`sensors.History.discovered` is its own set, persisted per civ NAME, so a new civ
+starts it empty), and cloning from a turn-1 capture inherits an empty map, so only the
+developed-donor fixture leaks. The fix needs the record layout, which is not decoded — the
+leading `u32` reads 63 on a civ that had explored 105 systems, so it is not a plain count and the
+obvious guess is already falsified. **That `EXSY` is the explored-systems map is itself inferred**
+from the tag and from its size tracking exploration across the two civs; confirm it while
+decoding it.
+
+`[ ]` **An injected civ gets no ships.** `SHIP`/`DYNO` records are galaxy-level rather than
+per-civ, so adding a starting colony ship is a separate job. The civ can build its own if the
+donor's homeworld had a shipyard.
+
+`[ ]` **Homeworld placement is one hardcoded policy.** New civs are placed as far from every
+claimed planet as possible, which is the right default for testing the strategy but not the only
+one worth having — random placement is what a real generator does and is the only way to test a
+hostile neighbour two systems away, and clustered or per-team placement follow from it. Wants a
+`--placement` option rather than a second function.
+
+`[ ]` The known-players growth question above is now measurable — a three-civ galaxy exists.
 
 ### The News tab — deferred in full (August 2026)
 

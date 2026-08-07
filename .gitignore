@@ -18,5 +18,8 @@ __pycache__/
 
 # ── Dev tool output ───────────────────────────────────────────────────────────
 client/dev_tools/snapshots/
+# the AI's persistent fog-of-war map: per machine, per galaxy, per civ — game
+# state rather than source, and meaningless in another checkout
+client/dev_tools/ai_player/state/
 *.exe.bak
 tools

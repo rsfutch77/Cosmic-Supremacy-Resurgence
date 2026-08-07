@@ -32,5 +32,29 @@ def opt(args, name, default=None, cast=None):
         sys.exit(f"error: {name} expected {cast.__name__}, got {value!r}")
 
 
+def opts(args, name, cast=None):
+    """Every value following a repeated `name`, in the order given.
+
+    `--civ A --civ B` is how duel.py names both sides; opt() would silently
+    return only the first, which is exactly the kind of quiet half-answer this
+    module exists to avoid.
+    """
+    out = []
+    for i, a in enumerate(args):
+        if a != name:
+            continue
+        if i + 1 >= len(args) or args[i + 1].startswith("--"):
+            sys.exit(f"error: {name} needs a value")
+        value = args[i + 1]
+        if cast is not None:
+            try:
+                value = cast(value)
+            except ValueError:
+                sys.exit(f"error: {name} expected {cast.__name__}, "
+                         f"got {value!r}")
+        out.append(value)
+    return out
+
+
 def flag(args, name):
     return name in args

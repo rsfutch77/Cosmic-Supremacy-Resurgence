@@ -646,6 +646,24 @@ class Actuator:
     def set_command(self, ship, order_type, target, civ=None):
         """Give a ship an order that names a target OBJECT, not just coordinates.
 
+        *** DO NOT USE. THIS KILLS THE CLIENT. ***
+
+        Measured 2026-08-06 from `client/armed.dat`, one turn boundary per trial:
+        `set_command(4)` and `set_command(1)` BOTH crashed the client while the
+        engine resolved the turn, while `create_order` + `retarget_order(1)`
+        survived and moved the ship exactly `ShipDesign:36` units. The order is
+        written cleanly and the pass completes; the death is at resolution.
+
+        The premise below is also wrong on its own terms: a route-only order
+        leaves `Ship:56` as the static null node and the ship navigates fine, so
+        `Ship::HasActiveTargetedOrder` is not what makes a ship move. Nothing in
+        the AI needs `Ship:56` today — combat triggers on co-location and the
+        battle driver never reads the order type.
+
+        Kept, unused, because the ShipCommand/SetCommand call pair is still the
+        only known way to populate `Ship:56` and the crash is not understood yet.
+        Use `exterminate.send_to` instead. See STRATEGY.md §4.4.
+
         `retarget_order` writes Ship:52 and the order's coordinate triple, which
         is right for Colonize (3) and Scout (2) — neither consults Ship:56, and
         both were confirmed to navigate correctly. It is NOT right for Move (1),
