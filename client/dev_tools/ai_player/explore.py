@@ -58,6 +58,13 @@ def scoutable(snap, civ, hist, act):
     for s in snap.owned_ships(civ):
         if not act.is_crewed(s):
             continue
+        # A TROOP hull never scouts. It is the most expensive ship in the empire
+        # and the ONLY thing that can take a planet, and this rule took a freshly
+        # crewed one and sent it to a sun 409 units away — because nothing in
+        # Exterminate claimed it and "idle" was the only test. Colony ships are
+        # held back conditionally below; a troop transport is held back always.
+        if s.role == "TROOP":
+            continue
         ot = s.order_type or 0
         if ot in (0, 1):
             out.append(s)

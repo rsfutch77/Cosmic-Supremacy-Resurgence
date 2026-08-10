@@ -48,6 +48,11 @@ import remote
 import sensors
 
 WARSHIP_TARGET = 2        # warships to keep once we are at war with anyone
+TROOP_TARGET = 1          # troop hulls to keep while anything is takeable
+GARRISON_WINDOW = 3       # turns after a capture that still count as "newly
+                          # taken" — a captured planet read Planet:92 == the
+                          # turn it changed hands, and the hull arrives in the
+                          # same boundary the capture resolves in
 RETREAT_AT = 0.30         # Ship:136 below this and the ship goes home
 THREAT_DIST = 120.0       # "near" — one sun separation (measured minimum 111.7)
 
@@ -387,6 +392,203 @@ def run_xtm03(snap, civ, act, hist, log=print):
         except (ValueError, RuntimeError) as e:
             log(f"  could not order {ship}: {e}")
     return acted
+
+
+def run_xtm04(snap, civ, act, hist, log=print):
+    """R-XTM-04: land troops on an undefended enemy planet and take it.
+
+    THIS IS WHAT R-XTM-03 CANNOT DO. A warship arriving at an enemy planet with
+    no garrison and no defences does exactly nothing — measured, two fleets sat
+    in each other's colonies for fifty turns. Killing what defends a planet and
+    TAKING it are different actions needing different hulls, and this is the
+    second one.
+
+    Confirmed mechanics, from a controlled pair (STRATEGY.md §4.4):
+      * order type 5 is safe across a turn boundary, route-only, Ship:56 null
+      * the hull must carry ONE record above ShipDesign:76 — with exactly the
+        minimum the order stays live and unfulfilled forever
+      * the capture keeps the population, garrisons the landed unit, and the
+        ship survives minus that one record
+
+    WEAKEST FIRST IS RIGHT HERE, and it is the same ranking that is wrong for
+    R-XTM-03. An invasion wants the target nothing is defending; a battle wants
+    a target with something to fight. Same function, opposite ends of the list.
+    """
+    foes = enemies(snap, civ, act)
+    if not foes:
+        return 0
+    troopers = [s for s in snap.owned_ships(civ)
+                if s.role == "TROOP" and not act.is_claimed(s)]
+    if not troopers:
+        return 0
+
+    ranked = target_planets(snap, civ, hist, foes)
+    undefended = [(w, p) for w, p in ranked if w == 0]
+    if not undefended:
+        log(f"R-XTM-04: {len(troopers)} troop ship(s) but every visible enemy "
+            f"planet is defended; that is R-XTM-03's job first")
+        return 0
+
+    ours = snap.owned_planets(civ)
+    acted = 0
+    for ship in troopers:
+        # The flight crew is not an invasion force. A hull at exactly
+        # ShipDesign:76 flies to the target and sits there — the failure looks
+        # identical to a refused order, so it is checked here rather than
+        # discovered in orbit.
+        need = exploit.min_crew(ship, act)
+        if len(ship.crew) <= need:
+            # RE-STATION IT. A spent hull is not useless, it is empty, and the
+            # crew rules only load at a planet we own — so a transport left in
+            # orbit of the planet it just took (or just lost) waits there
+            # forever while R-XTM-07 builds a replacement it did not need.
+            here = ship.orbiting
+            if here is not None and here.owner is not None \
+                    and here.owner.addr == civ.addr:
+                log(f"R-XTM-04: {ship} is empty at {here}, where R-XPL-06 can "
+                    f"reload it")
+                continue
+            if not ours:
+                continue
+            home = min(ours, key=lambda p: gs.dist(ship.pos, p.pos))
+            log(f"R-XTM-04: {ship} carries {len(ship.crew)} and cannot land "
+                f"anyone — sending it home to {home} to re-arm "
+                f"({gs.dist(ship.pos, home.pos):.0f} units)")
+            try:
+                send_to(act, ship, home, civ, order_type=1)
+                act.claim(ship)
+                acted += 1
+            except (ValueError, RuntimeError) as e:
+                log(f"  could not send it home: {e}")
+            continue
+        _w, target = min(undefended,
+                         key=lambda wp: gs.dist(ship.pos, wp[1].pos))
+        log(f"R-XTM-04: {ship} ({len(ship.crew)} aboard, {need} to fly) "
+            f"-> conquer {target}, undefended, "
+            f"{gs.dist(ship.pos, target.pos):.0f} units")
+        try:
+            send_to(act, ship, target, civ, order_type=5)
+            act.claim(ship)
+            acted += 1
+        except (ValueError, RuntimeError) as e:
+            log(f"  could not order {ship}: {e}")
+    return acted
+
+
+def run_xtm06(snap, civ, act, hist, log=print):
+    """R-XTM-06: garrison a freshly taken planet with the troops still aboard.
+
+    A captured planet is DISLOYAL and in civil disorder — the UI warns it may
+    rebel and swaps its corruption readout for a civil-disorder one — and the
+    repair is occupying infantry. The invasion leaves exactly one unit as the
+    garrison, which is the minimum the engine takes, not a sufficient one.
+
+    So anything still aboard, above the crew needed to fly home, goes down onto
+    the planet it just took. It costs nothing: those units are already paid for,
+    and a troop hull sitting in orbit with them still loaded is holding a
+    garrison hostage to a return trip it may not survive.
+
+    `[ ]` STILL NOT MEASURED, and the one measurable proxy came back NEGATIVE.
+    `Planet:368` looked like the sensor this rule needed — it drops when a planet
+    changes hands and climbs back over turns — but per-turn sampling showed it is
+    exactly `min(8, turn - Planet:92 + 1)`, and that a garrison does not change
+    it: #450 recovered 1..8 carrying two stationed units while #149 recovered
+    1..8 carrying none, +1 per turn each, on the same turns. So that field is a
+    timer, not loyalty, and loyalty itself is still unlocated — `Planet:100`
+    bytes 0-2, the long-standing candidate, were ruled out at the same time.
+
+    That garrisoning repairs loyalty and disorder remains the user's reading of
+    the client, which is real evidence — it is just evidence this AI cannot see
+    yet. The rule is kept because those units are otherwise idle and a captured
+    planet was lost while empty five turns after we took it, so occupying costs
+    nothing and plausibly buys something. It has NOT been shown to work.
+    """
+    acted = 0
+    for ship in snap.owned_ships(civ):
+        if ship.role != "TROOP":
+            continue
+        p = ship.orbiting
+        if p is None or p.owner is None or p.owner.addr != civ.addr:
+            continue
+        # Only somewhere NEWLY TAKEN. A troop hull over the homeworld is loading
+        # for the next invasion, not unloading from the last one, and dumping
+        # its troops there would have the crew rules and this one undo each
+        # other every turn.
+        #
+        # Planet:92 is the signal: it is rewritten on CAPTURE, not only on
+        # founding — #41 read 222 after changing hands on turn 222. A window
+        # rather than equality, because the capture resolves in the same
+        # boundary the hull arrives in, so by the next pass the turn has moved.
+        age = None if p.colonised_turn is None else snap.turn - p.colonised_turn
+        if age is None or not (0 <= age <= GARRISON_WINDOW):
+            continue
+        keep = exploit.min_crew(ship, act)
+        spare = len(ship.crew) - keep
+        if spare <= 0:
+            continue
+        log(f"R-XTM-06: garrisoning {spare} unit(s) from {ship} onto {p}, "
+            f"newly taken and in disorder (keeping {keep} to fly)")
+        try:
+            act.unload_crew(ship, p, count=spare, keep=keep)
+            acted += 1
+        except (ValueError, RuntimeError) as e:
+            log(f"  could not garrison: {e}")
+    return acted
+
+
+def run_xtm07(snap, civ, act, hist, log=print):
+    """R-XTM-07: keep a troop transport while there is anything to take.
+
+    R-XTM-04 can only spend hulls somebody built, and nothing built them —
+    R-XTM-01 queues warships and stops there, so the first two troop ships in
+    this project were made by hand. A civ that can see an undefended enemy
+    planet and has no way to land on it is not at war, it is watching.
+    """
+    foes = enemies(snap, civ, act)
+    if not foes:
+        return 0
+    ranked = target_planets(snap, civ, hist, foes)
+    if not any(w == 0 for w, _p in ranked):
+        return 0                       # nothing takeable; build warships instead
+
+    have = [s for s in snap.owned_ships(civ) if s.role == "TROOP"]
+    if len(have) >= TROOP_TARGET:
+        return 0
+    # A hull built and waiting for crew is not a reason to build another, the
+    # same trap R-XTM-01 fell into: the shipyard fills with hulls nobody can fly
+    # while the crew rules work through them one conscript at a time.
+    stranded = exploit.awaiting_crew(snap, civ, act, role="TROOP")
+    if stranded:
+        log(f"R-XTM-07: {len(stranded)} troop ship(s) built and waiting for "
+            f"crew; another hull would not land anyone sooner")
+        return 0
+
+    designs = [d for d in snap.designs
+               if d.owner is not None and d.owner.addr == civ.addr
+               and d.role == "TROOP"]
+    if not designs:
+        log(f"R-XTM-07: {len(have)}/{TROOP_TARGET} troop ship(s) and this civ "
+            f"has no design with a troop bay. Synthesise one: "
+            f"client/dev_tools/game_cycle.py --design "
+            f"'t1:chassis=0,scanner=0,engine=1,engine=1,module=1'")
+        return 0
+    yards = [p for p in snap.owned_planets(civ)
+             if exploit.SHIPYARD in p.facilities and not p.u32(344)
+             and not act.production_claimed(p)]
+    if not yards:
+        log(f"R-XTM-07: {len(have)}/{TROOP_TARGET} troop ship(s); every "
+            f"shipyard is already building")
+        return 0
+    design = designs[0]
+    planet = max(yards, key=lambda p: len(p.population))
+    log(f"R-XTM-07: {len(have)}/{TROOP_TARGET} troop ship(s) — queueing "
+        f"{design.design_name!r} at {planet}")
+    try:
+        act.queue_ship(planet, design)
+        return 1
+    except (ValueError, RuntimeError) as e:
+        log(f"  could not queue: {e}")
+        return 0
 
 
 def run_xtm05(snap, civ, act, hist, log=print):

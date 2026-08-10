@@ -32,8 +32,14 @@ a human at the keyboard between each step.
   than sleeping a fixed time: a slow load otherwise looks exactly like a crash.
 
 A pushed state can re-open the home-world customisation popup, and confirming one
-is destructive. This never clicks anything; if a popup blocks the turn counter,
-that is reported rather than worked around.
+IS destructive — it rewrites the click record and re-applies the +50 space commit
+over whatever was loaded. This never clicks anything.
+
+It does not need to. **An unanswered popup does not stop the game**: measured
+Aug 2026 on a fresh galaxy, turns 0, 1 and 2 all resolved with 'Customize Your
+Home World' up and untouched. The docs here previously said it "blocks turn
+resolution entirely", which sent readers to dismiss a dialog that was never in
+the way — and dismissing it is the one action that actually costs something.
 """
 import argparse
 import os
@@ -157,20 +163,53 @@ def parse_design(spec):
     return name.strip(), parts
 
 
-def inject_designs(capture, designs, out_b64, like_id=None):
+def civ_template_ids(blob):
+    """One template design id per civ: the first DSGN inside each OWNR.
+
+    This is what makes --all-civs possible without the running client. The
+    single-civ path needs memory only to disambiguate two identically named
+    'Colony Ship' designs; when every civ is getting the design there is nothing
+    to disambiguate, and the blob says which designs belong to whom by nesting.
+    """
+    sys.path.insert(0, os.path.join(REPO, "server", "dev_tools"))
+    import inject_civ as icv
+    import inject_design as idg
+    out = []
+    for o in icv.owner_records(blob):
+        mine = [r for r in idg.design_records(blob) if o["off"] < r[0] < o["end"]]
+        if mine:
+            first = min(mine)
+            out.append((o["name"], first[1]))
+    return out
+
+
+def inject_designs(capture, designs, out_b64, like_id=None, all_civs=False):
     """Add each design in turn, threading the blob through inject_design."""
     sys.path.insert(0, os.path.join(REPO, "server", "dev_tools"))
     import save_parser as sp
     import inject_design as idg
 
-    if like_id is None:
-        raise SystemExit("inject_designs needs like_id: both civs start with an "
-                         "identically named 'Colony Ship', so only the running "
-                         "client can say which one is ours")
     blob = sp.decode_save(open(capture).read())
-    for name, parts in designs:
-        parts.setdefault("list6", [])
-        blob = idg.make(blob, like_id, name, parts, None, log=log)
+    if all_civs:
+        targets = civ_template_ids(blob)
+        if not targets:
+            raise SystemExit("no civ in the blob owns a design to extend")
+        log(f"  extending every civ: "
+            + ", ".join(f"{n!r} (like id {i})" for n, i in targets))
+    elif like_id is None:
+        raise SystemExit("inject_designs needs like_id or --all-civs: both civs "
+                         "start with an identically named 'Colony Ship', so only "
+                         "the running client can say which one is ours")
+    else:
+        targets = [(None, like_id)]
+
+    for civ_name, tid in targets:
+        # Re-resolve per civ: every injection shifts the offsets behind it, but
+        # object IDS are stable, and that is what inject_design keys on.
+        for name, parts in designs:
+            parts = dict(parts)
+            parts.setdefault("list6", [])
+            blob = idg.make(blob, tid, name, parts, None, log=log)
     with open(out_b64, "w") as f:
         f.write(sp.encode_save(blob) if isinstance(sp.encode_save(blob), str)
                 else sp.encode_save(blob).decode("ascii"))
@@ -184,6 +223,10 @@ def main():
     ap.add_argument("--like-id", type=int, default=None,
                     help="object id of a design of the civ to extend; taken "
                          "from the running client when omitted")
+    ap.add_argument("--all-civs", action="store_true",
+                    help="give every design to EVERY civ in the galaxy, not "
+                         "just the local player — an AI-vs-AI galaxy needs both "
+                         "sides able to build the same things")
     ap.add_argument("--name", default="cycle", help="save name (<=15 chars)")
     ap.add_argument("--dat", default=None, help="where to write the .dat")
     ap.add_argument("--save-only", action="store_true")
@@ -199,7 +242,7 @@ def main():
     # Resolve the local civ BEFORE closing: only the running client can say
     # which of the two identically named starting designs is ours.
     like_id = a.like_id
-    if like_id is None and not a.save_only:
+    if like_id is None and not a.save_only and not a.all_civs:
         import gamestate as gs
         snap = gs.Snapshot()
         civ = gs.resolve_civ(snap, None)
@@ -225,7 +268,8 @@ def main():
     log("3. editing the blob")
     designs = [parse_design(s) for s in a.design]
     out_b64 = os.path.join(REPO, "server", "loadgame_blob.b64")
-    inject_designs(capture, designs, out_b64, like_id=like_id)
+    inject_designs(capture, designs, out_b64, like_id=like_id,
+                   all_civs=a.all_civs)
 
     dat = a.dat or os.path.join(CLIENT_DIR, "cycle.dat")
     sys.path.insert(0, os.path.join(REPO, "server", "dev_tools"))

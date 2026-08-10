@@ -689,73 +689,29 @@ this vector by exact reallocation or in doubling steps.** The 8-byte block with 
 suggests exact. If so, the bootstrap has to run to the full player count in one pass, since any
 later natural discovery would reallocate and discard whatever we had written.
 
-### Creating a third player — SOLVED, in the save blob rather than in memory (August 2026)
+#### Creating a third player — no longer blocked, and no longer a memory problem (August 2026)
 
-**A new civ is injected as an `OWNR` section and the engine builds the rest.** This was the
-CRITICAL blocked item here for months, on the grounds that a fabricated civ needs a
-multiple-inheritance `Owner` allocation *and* an insertion into the red-black `Owner` registry
-at `0x02D48740`, keyed by a hash whose derivation is unknown. All of that is true of memory and
-none of it applies to a blob: the deserialiser allocates, registers and keys the civ itself.
-`server/dev_tools/inject_civ.py` does it; **confirmed live** — a two-civ capture at turn 162 came
-back up with **three** `Owner` instances, the new civ owning the planet it was given, holding its
-own cloned `ShipDesign`, and four turns resolved with no crash.
+This section used to carry a CRITICAL `[ ]` for creating a civ, on the grounds that it needs an
+`Owner` allocation with the multiple-inheritance layout *plus* an insertion into the red-black
+registry at `0x02D48740`, keyed by a hash nobody had derived. All of that is true of memory and
+none of it is necessary: **a civ is now added as an `OWNR` section in the save blob**, and the
+engine's own deserialiser allocates, registers and keys it. Confirmed live — a two-civ capture
+came back up with three `Owner` instances. The method, the blob layout and its open items are in
+the main reconstruction report's save-blob section; only what the experiment says about *memory*
+is kept here.
 
-**The registry key is derived from the name, not stored.** Neither civ's `Owner:-16`
-(`0x2DB018D6`, `0x6C157D63`) appears anywhere in a capture, and both read the same values across
-two independently generated galaxies. The injected civ 'Ceti' came up with `0xE6731243` — a value
-that was in no file. So the "a fabricated civ needs a key that does not collide" worry is
-answered by giving the civ a **unique name**, and nothing else.
+**`Owner:-16` is derived from the civ NAME, not stored.** Three pieces of evidence, and it retires
+the "a fabricated civ needs a key that will not collide" worry recorded on that annotation:
 
-Blob layout, measured against a two-civ capture and re-measured after the edit:
+- neither civ's key (`0x2DB018D6` GoodGuy, `0x6C157D63` BadGuy) appears anywhere in a save capture,
+  searched as a raw dword;
+- both read the *same* values across two independently generated galaxies;
+- the injected civ `'Ceti'` came up holding `0xE6731243`, a value that was in no file the client
+  was given.
 
-```
-GLXY payload:  u32 civCount ; OWNR x civCount ; SOLA... ; SHIP... ; NEBU...
-OWNR payload:  u32 nameLen ; char name[] ; u32 objectId
-               DATA { OWPR, KNPL, EXSY, ASKY, CVTR, SERV,
-                      u32 designCount, DSGN x n, NEWS x n, GOVS, ADMS, SPQS, USSE }
-               u32                                        (= Owner:4 in memory)
-PLNT payload:  u32 objectId ; f32 x, z, y ; u32 ownerObjectId ; f32 ;
-               u32 nameLen ; char name[] ; 6 bytes ; PLPR {...} ; u32
-```
+So the uniqueness requirement on a new civ is its **name**, and the key takes care of itself.
 
-`GLXY`'s leading count is the same count-then-records idiom as the design count inside `OWNR`,
-where a record added without bumping the count is never read.
-
-**Ownership is carried by object id in more places than the obvious one.** Besides `PLNT:+16`
-and the owner id that ends every `SDPR`, **every citizen record inside a `PLPR` carries its
-civ's id** — which is why the owner id repeats at a 9-byte stride through a populated
-homeworld's properties. A clone that patches only the identity fields leaves a homeworld full of
-citizens belonging to the donor.
-
-**A homeworld is a `PLPR` transplant.** The new civ's planet keeps its own head fields — object
-id, position — and receives the donor homeworld's whole `PLPR`, so it inherits that planet's
-space, population, food and facilities. Planet space lives in `PLPR` (it is `Planet:104`, inside
-the embedded `PlanetProperties` at `Planet:88`), so the target rock's own size is irrelevant and
-the two homeworlds come out identical, which is what a fair start needs anyway.
-
-`[ ]` **`EXSY` is cloned, not reset, and that is a cheat rather than a cosmetic defect.** An
-injected civ inherits the donor's explored-systems map, so cloning a developed donor hands the
-newcomer everything that civ had found — including where the home planets are, once anyone has
-met anyone. Two things keep it from mattering yet and neither is a fix: the AI player does not
-read `EXSY` (`sensors.History.discovered` is its own set, persisted per civ NAME, so a new civ
-starts it empty), and cloning from a turn-1 capture inherits an empty map, so only the
-developed-donor fixture leaks. The fix needs the record layout, which is not decoded — the
-leading `u32` reads 63 on a civ that had explored 105 systems, so it is not a plain count and the
-obvious guess is already falsified. **That `EXSY` is the explored-systems map is itself inferred**
-from the tag and from its size tracking exploration across the two civs; confirm it while
-decoding it.
-
-`[ ]` **An injected civ gets no ships.** `SHIP`/`DYNO` records are galaxy-level rather than
-per-civ, so adding a starting colony ship is a separate job. The civ can build its own if the
-donor's homeworld had a shipyard.
-
-`[ ]` **Homeworld placement is one hardcoded policy.** New civs are placed as far from every
-claimed planet as possible, which is the right default for testing the strategy but not the only
-one worth having — random placement is what a real generator does and is the only way to test a
-hostile neighbour two systems away, and clustered or per-team placement follow from it. Wants a
-`--placement` option rather than a second function.
-
-`[ ]` The known-players growth question above is now measurable — a three-civ galaxy exists.
+The known-players growth question above is now measurable: a three-civ galaxy exists.
 
 ### The News tab — deferred in full (August 2026)
 
@@ -1686,6 +1642,72 @@ placed has now failed direct observation; the empirically verified layout is
 Incidental: `ShipDesign` #635 (the used-up Colony Ship) is progressively converting into a
 base template — `+36`/`+40` became `-1.0f` and `+56/60/64/68/72/112` became `0xFFFFFFFF`
 across two turns. That is how the FF-sentinel templates described earlier come to exist.
+
+### `Planet:368` is a turn counter, and loyalty is STILL unlocated (August 2026)
+
+**RESOLVED: `Planet:368` == `min(8, currentTurn - Planet:92 + 1)`.** It is turns since the
+planet last changed hands, capped at 8, and it carries no information that `Planet:92` and the
+turn counter do not already carry. **It is not loyalty**, and the "civil disorder" the client
+shows on a freshly conquered planet is not here either.
+
+**A garrison makes no difference to it** — the discriminating test, run per turn:
+
+| turn since capture | #450, garrison **2** | #149, garrison **0** |
+|---|---|---|
+| 1 | 1 | 1 |
+| 2..7 | 2,3,4,5,6,7 | 2,3,4,5,6,7 |
+| 8 | 8 | 8 |
+
+Identical, +1 per turn, on the same turns. This was written up a few hours earlier as
+"settledness", on eleven-turn-apart samples that could see the recovery but not its rate, with
+the turn-counter hypothesis recorded as the open question. Per-turn sampling answers it against
+the more interesting reading, which is the way that usually goes.
+
+`[ ]` **Loyalty and corruption are still not located** — the conquest A/B that made this field
+findable did not turn up either of them. What it DID rule out: `Planet:100` bytes 0-2, the
+long-standing candidate, read `100/100/100` on freshly captured planets exactly as on planets
+held for 268 turns. Whatever the client is rendering as loyalty is derived, held off-object, or
+in a field that does not move on capture.
+
+`[ ]` A single out-of-trend sample here is a TORN READ, not a signal: #476 read 8, 8, 7, 8 on
+consecutive turns with nothing happening to it.
+
+The historical observations below still hold and were the first clue.
+
+**Why it took until now: every planet reads the same value until one changes hands.** That is
+the same reason loyalty and corruption are still listed as unlocated below — a whole-galaxy
+survey has nothing to correlate against when all 525 planets agree. A conquest breaks the tie,
+and this project could not conquer anything until August.
+
+Measured on the AI-vs-AI galaxy. Two planets captured within a turn of each other, against
+controls held for 268 turns:
+
+| planet | event | `:368` at capture | 11 turns later | garrison |
+|---|---|---|---|---|
+| #343 | taken by GoodGuy | **2** | 8 | 6 |
+| #253 | taken by BadGuy | **4** | 8 | 0 |
+| #12, #40 | held all game | 8 | 8 | 0 |
+
+**The old falsification data already contained the answer.** It recorded that "only the
+one-turn-old colony reads 5" — that 5 is this field, not noise. So acquisition knocks it down
+and time restores it, and **conquest knocks it down further than colonisation** (2 and 4
+against a new colony's 5). It also explains the wild change frequency noted then (525/525
+planets on some turns, 1/525 on others): it only moves on planets that are still settling.
+
+This is the memory side of what the client shows as loyalty, and of the "civil disorder"
+readout that replaces corruption on a freshly conquered planet.
+
+`[ ]` **NOT disambiguated from a plain "turns since acquisition, capped at 8" counter.** Both
+fit every reading taken. The discriminating test is whether anything but time moves it: sample
+it EVERY turn on two fresh captures, one garrisoned and one not, and compare the climb rates.
+The two above recovered within 11 turns while carrying garrisons of 6 and 0, which is weak
+evidence against the garrison mattering — but the samples were 11 turns apart and could not
+have seen a rate difference.
+
+`[ ]` `Planet:396` read 1 on the captured planet and 0 once it had settled, and 0 on the
+controls throughout. Its annotation calls it "likely appearance / render data" because every
+non-zero value decodes as a plausible float; a 1/0 that tracks conquest does not. Worth a look
+as a "recently taken" flag.
 
 ### `Planet:368` is not an ownership flag — falsified (July 2026)
 

@@ -226,6 +226,7 @@ One module per UI action. Grade is how confident we are it works today.
 | K | **Hurry the current build** | call `PlanetProperties::HurryProduction` `0x004EFFF0` (`__thiscall`, ECX = `planet_tag + 88`) | **READY** — `actions.hurry_production`. `cost = 4 * (total - progress)`; needs `progress/total >= 0.5`, `cost <= Owner:8`, production kind != 7 and `Planet:300 == 0`. Confirmed live: cash moved by exactly the quoted price and progress jumped to its total |
 | L | **Order a ship at a TARGET OBJECT** | engine `ShipCommand` ctor `0x004E9BA0` + `Ship::SetCommand` `0x004D9DC0` | **DO NOT USE — KILLS THE CLIENT.** `actions.set_command` crashes the game at the NEXT TURN BOUNDARY, for Move (1) as well as Attack (4), even with the route built first. Reproduced from a restore point; see §4.4. Nothing uses it. Kept only because it is still the one known way to populate `Ship:56` |
 | M | **Move a ship to a target, route only** | `create_order` + `retarget_order`, and nothing else | **READY** — `exterminate.send_to`. The replacement for L. Reuses `Ship:48` when the ship has one, so it allocates nothing per turn. `Ship:56` stays the null node and the ship navigates correctly anyway |
+| N | **Conscript a citizen** | `ChangeCitizenJobs` `0x00574180` (`__cdecl`, 4 args) with job id 3, priced by `GetDraftCost` `0x00516060` | **READY** — `actions.conscript`. Confirmed live: citizen count −1, stationed military +1, and cash down by exactly the quoted 115. The cost getter was validated first against a formula derived from the disassembly — six readings across two civs, all exact |
 
 **Actuator J is the first actuator that is a whole engine TRANSACTION rather than a field
 write, and the reason matters beyond this one button.** Selling pays cash, and §1.1
@@ -734,6 +735,39 @@ invented. It routinely declined every eligible build ("35552 would exceed the tu
 while sitting on 20k cash it had no other use for. Wants a real policy, ideally one that
 knows what else the cash is for.
 
+**R-XPL-09 — Conscript crew for a grounded ship** — IMPLEMENTED in `exploit.run_conscript`
+```
+WHEN   a ship is BUILT, short of ShipDesign:76 crew, in orbit of our planet P,
+       P has fewer trained units than it needs, and cash > DRAFT_CASH_FLOOR
+THEN   draft ONE citizen on P (cheapest role first, never a farmer)
+USES   N
+```
+**This replaces a timer with a purchase, and the timer was setting the pace of the whole
+game.** R-XPL-05 raises the recruitment rate and waits; recruitment delivers roughly one
+unit per ten turns, so a scout finished on turn 30 sat on the pad until turn 40 and
+Explore → contact → Exterminate all ran at that speed. Measured on the fresh galaxy: both
+civs reached turn 41 with a second scout built and grounded while holding 6,121 and 3,144
+cash with nothing to spend it on. A conscript costs **115**.
+
+The price is `5 * (T + k) + 105` where `T` is the civ's military across the WHOLE empire,
+counting ship crew — so it is cheap early and rises as the fleet grows, which is the right
+shape for a rule that exists to unblock the first ships.
+
+**ONE per pass per planet**, and that is correctness rather than caution: the engine erases
+the drafted record and memmoves the tail down, so every citizen index above it shifts and a
+second index taken from the same snapshot names a different citizen than the one it was
+chosen for.
+
+**Never drafts a farmer.** Food is the one thing that kills a colony and S-01 exists to put
+citizens back on it; drafting off the farms would have the two rules fighting every turn.
+
+`[ ]` **The loader still waits a turn.** R-XPL-09 runs before R-XPL-06, but the pass's
+snapshot was taken before the draft, so the new unit is invisible until the next pass and
+crew loads one turn later. Re-reading the planet after a draft would close it.
+
+`[ ]` **`DRAFT_CASH_FLOOR` (500) is invented**, like R-XPL-08's budget. It is there so
+drafting cannot empty the treasury the build rules also spend from, and nothing has tuned it.
+
 **R-XPL-07 — Liquidate to survive a collapse** — `[ ]` NOT BUILT
 ```
 WHEN   incomeRate < 0 for N consecutive turns
@@ -920,6 +954,38 @@ THEN   pick the weakest visible enemy planet
        send the fleet with M (Move); co-location at war starts the fight
 USES   M
 ```
+`[ ]` **"WEAKEST" SELECTS THE ONE TARGET THAT CANNOT PRODUCE A BATTLE — measured Aug 2026 on
+the AI-vs-AI galaxy.** Both civs reached war with crewed warships, both fleets flew, both
+ARRIVED, and nothing happened for fifty turns:
+
+| ship | owner | in orbit of | planet's owner | defences |
+|---|---|---|---|---|
+| #690, #691 | GoodGuy | #41 | BadGuy | military 0, no turret |
+| #689 | BadGuy | #43 | GoodGuy | military 0, no turret |
+
+The rule ranks by `weakness = stationed military + defensive facilities` and takes the
+minimum, so on any civ that has expanded it picks a bare colony — weakness 0, nothing aboard
+to fight. The fleet parks in orbit permanently, the order completes, and the next pass
+re-issues an order whose origin already equals its target.
+
+**This also corrects the doctrine above.** "Co-location at war starts the fight" is not
+enough: there must be something to fight. The one battle this project has ever seen was
+against a homeworld of weakness 500, and it happened only because the rival held exactly ONE
+planet, so weakest and strongest were the same object. That made a broken heuristic look
+correct.
+
+Two fixes, and they are different rules rather than alternatives:
+* **An undefended enemy planet should be CONQUERED, not stared at** — that is R-XTM-04, which
+  is not built and needs a TROOP design plus order type 5. Arriving and doing nothing is the
+  *correct* behaviour for a Move order; the gap is that the AI has no way to take a planet.
+* **A battle needs a defended target or an enemy fleet.** If the goal is combat, rank by
+  "can I beat it" rather than by "is it weak", which is the same strength test the `[ ]` below
+  asks for from the other direction.
+
+`[ ]` **The two fleets passed each other.** Each civ raided the other's colony simultaneously
+and neither intercepted, because nothing looks at where the enemy's ships are going. R-XTM-02
+(defend) is the missing half.
+
 `[ ]` **There is no "too strong to attack" test, and it fed hulls into a meat grinder.**
 The rule picks the WEAKEST visible enemy planet, but with one enemy planet in view the weakest
 is also the only one. It sent a shuttle-chassis bomber at a homeworld of weakness 500, lost it,
@@ -936,7 +1002,69 @@ they arrive one at a time and are defeated one at a time. Ships travel at very d
 (bomber ~10/turn); a rendezvous or a wait-for-N-ships gate is the obvious fix and does not
 exist.
 
-**R-XTM-04 — Conquer** — `[ ]` NOT BUILT
+**R-XTM-04 — Conquer** — `[ ]` NOT BUILT, but two of its three unknowns are now closed
+
+**ORDER TYPE 5 IS SAFE — issued for the first time, Aug 2026.** The worry recorded below was
+that Conquer might do what Move and Attack did through actuator L and kill the client at the
+next boundary. It does not. A `t1` troop hull was given order 5 through `exterminate.send_to`
+(route-only, `Ship:56` left null) and the client resolved eight boundaries with the order
+live, navigating at its design speed the whole way.
+
+**AN INVASION COSTS ONE UNIT ABOVE THE FLIGHT CREW — CONFIRMED, and by a controlled pair.**
+Two identical `t1` hulls were sent at the same planet:
+
+| | #704 | #705 |
+|---|---|---|
+| aboard on arrival | 2 — exactly `ShipDesign:76` | 3 |
+| result | seven turns parked, order still 5, nothing | **captured on arrival** |
+| aboard afterwards | 2 | 2 |
+
+So `ShipDesign:76` is the crew needed to FLY, and an invasion spends one record ON TOP of it.
+With only the minimum the order stays live and unfulfilled — the engine is waiting for troops,
+not refusing the order. That is why the earlier attempt looked like a failure and was not one.
+
+**What a capture does**, read off the planet before and after:
+* ownership moves to the attacker, and the **population survives intact** (17 before, 17 after)
+* the landed unit becomes the garrison: `Planet:168` went 0 → 1
+* the ship is **NOT consumed** — unlike a colony ship it stays, minus the one unit
+* the order clears to 0, the same way a completed Move does
+
+`[ ]` The target's military camp was in its facility map before the capture and gone after
+(`{6:1, 4:1, 0:7}` → `{4:1, 0:7}`). Fifteen turns passed between the two readings, so this is
+NOT established as a consequence of conquest — check it across a single boundary before
+believing it.
+
+**Crew and troops share one container.** A troop hull was diffed against a scout across the
+whole `Ship` window: there is exactly one 16-byte-record vector, `Ship:124/128/132`, holding
+two records of job id 3. There is no second "troops" vector, which fits the report's finding
+that a citizen, a stationed military unit and a ship's crew member are the same record.
+
+**There is no separate troop-loading action in the UI** — confirmed by the user at the
+client. Crewing and loading troops are the same thing, which is why they share the
+`Ship:124` container. So no engine call has to be found for this: the AI only has to load
+MORE than the minimum.
+
+`[ ]` **`load_crew` cannot top up a crewed ship, so the extra must go in at FIRST load.** It
+refuses when `Ship:124` is already a pointer, by design — growing the engine-owned buffer
+would mean freeing memory we did not allocate. That is not a blocker now that the requirement
+is known, because it allocates the whole buffer in one call: R-XPL-06 just has to ask for
+`ShipDesign:76 + troops` on a TROOP hull instead of `ShipDesign:76`. Topping up a hull that has
+already spent its troops still needs solving, and that is what a second invasion needs.
+
+```
+WHEN   a TROOP ship exists and its target planet's weakness == 0
+THEN   Ship:52 = 5 (conquer), destination = that planet's Planet:4/8/12
+NOTE   conquer is confirmed to target an enemy-owned planet's exact XYZ
+USES   E
+```
+`[ ]` Blocked on ONE thing now rather than two: a TROOP design exists and is buildable by both
+civs (`t1`, injected once Advanced Magnetism unlocked module 1), and order 5 is proven safe.
+What remains is what an invasion actually requires aboard.
+
+`[ ]` **Explore steals troop hulls.** `run_exp02` took a freshly crewed `t1` and sent it to a
+sun 409 units away, because nothing in Exterminate claims a troop ship and the first rule that
+wants an idle hull gets it. The same defect the SCOUT-by-absence taxonomy has always had, now
+biting the most expensive hull in the empire.
 ```
 WHEN   a TROOP ship exists and its target planet's weakness == 0
 THEN   Ship:52 = 5 (conquer), destination = that planet's Planet:4/8/12
@@ -1071,7 +1199,9 @@ new galaxy rather than inherited.
    with three `Owner` instances, `'Ceti'` owning the planet it was given, and `duel.py` drove all
    three for four turns with no crash. `--name` is repeatable, so twenty civs is one command. The
    engine derives each civ's registry key from its NAME, so the only uniqueness requirement is the
-   name itself. Details and the measured blob layout are in the memory reconstruction report.
+   name itself. Details and the measured blob layout are in
+   `CosmicSupremacy_Reconstruction_Report.md` §2, with the save-blob work rather than the
+   memory work.
 
    `[ ]` **A pass costs a full memory scan, and they are serialised.** Three civs means three scans
    per turn; twenty means twenty, which will not fit in a short driven turn. `duel.py` should share
@@ -1218,10 +1348,10 @@ than an allocator, a constructor or a getter. That is the pattern worth extendin
 |---|---|---|
 | **Read the live research table** | `0x0054AA70` id→record, `0x0054B140` cost, `0x0054B200` prereq-at-index, `0x0054B7D0` exclusion test | `research.py` currently carries a table extracted for content version **≥688** while this client runs **565**, and the two demonstrably differ (see the cost-ratio argument in that file). These calls read the table the client is *actually* using. Read-only, so the safest possible first target, and it retires a known-wrong data source |
 | ~~**`Ship::SetCommand`**~~ | `0x004D9DC0` | **WITHDRAWN — this candidate was tried and it kills the client** at the next turn boundary, for Move as well as Attack (§4.4). Writing `Ship:52` alone turns out to be fine: the ship navigates correctly with `Ship:56` null. `[ ]` The order-type-8 / `Ship:61 = 0x0B` observation is still unexplained and still unused |
-| **`ChangeCitizenJobs`** | `0x00574180` (`__cdecl`, 4 args) | Replaces actuator A *and* unlocks conscription, with the engine's own cost check (`5*(T+k)+105`, debited from `Owner:8`) instead of one we would have to reproduce. Closes the `[ ]` conscription item |
+| ~~**`ChangeCitizenJobs`**~~ | `0x00574180` | **DONE — actuator N.** Conscription works and R-XPL-09 uses it. Note it is still *not* used to replace actuator A: setting an ordinary job id by field write remains cheaper than a remote thread, and only job 3 goes through the engine, because only job 3 costs money |
 | **`GetTrait`** | `0x00516180` | Real civ-modifier values (trait 18 = ship speed %, trait 38 = planet space %) rather than assuming 0. Feeds any speed or max-pop calculation |
 | **available space** | `0x004F1140` (PP vftable slot 6) | `max_pop` with the trait bonus applied, instead of our `space/10` approximation |
-| **`GetDraftCost`** | `0x00516060` | Prices conscription before committing, so the AI can choose between cash and the ~25-turn recruitment path |
+| ~~**`GetDraftCost`**~~ | `0x00516060` | **DONE.** `remote.draft_cost`. Validated read-only before the mutating call, per the rule below: six readings across two civs at three counts, every one matching `sum(5*(T+k)+105)` computed independently from a snapshot. That match is also what confirmed `T` counts ship crew as well as stationed units |
 
 `[ ]` **None of the remaining candidates has been attempted**, and the first two are now the
 highest-value work in this document. The live research table would retire a data source known
@@ -1272,8 +1402,11 @@ Steps 1–5 are **DONE**. The AI plays all four X's unattended and has fought a 
    (corvette chassis, shields, several weapons) via `game_cycle.py --design`. Everything else
    in Exterminate is downstream of not losing every ship on arrival. Test from
    `client/armed.dat` with `battle_harness.py`, not from a fresh game.
-2. `[ ]` **Conscription** (`ChangeCitizenJobs` + `GetDraftCost`, §7). Turns idle cash into
-   crew and removes the bottleneck that gates every order rule.
+2. ~~**Conscription**~~ — **DONE**, actuator N and R-XPL-09. Running unattended on the fresh
+   galaxy: a grounded scout was drafted for, crewed the next turn and flew, and exploration
+   went from roughly one new system per ten turns to five in four. The engine call it needed
+   was also the first mutating one attempted since `SetCommand` killed the client, so it was
+   built getter-first and tested one draft at a time from a checkpoint.
 3. `[ ]` **Stop expansion starving the shipyard** — R-XPN-04, which is about shipyard time
    and crew rather than the income trigger currently specified.
 4. `[ ]` **Read the live research table** (§7) — retires a table known to be for the wrong
