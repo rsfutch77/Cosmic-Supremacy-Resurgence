@@ -23,3 +23,6 @@ client/dev_tools/snapshots/
 client/dev_tools/ai_player/state/
 *.exe.bak
 tools
+
+# named restore points (raw save blobs, big and regenerable)
+client/checkpoints/

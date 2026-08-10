@@ -66,6 +66,27 @@ OFFLINE_FLAG = 0x0086F1A0       # the local-apply path runs only when this byte 
 ORDER_CTOR   = 0x004E8420
 ORDER_SIZE   = 0x60
 
+# ── Conscription ───────────────────────────────────────────────────────────
+# Static analysis in dev_tools/findings_production_path.md 1.0-1.6; every
+# signature below is CONFIRMED there from the callee and both call sites.
+#
+# Conscription is not an append to the military list. A citizen and a stationed
+# military unit are the SAME 16-byte record in two different vectors, and
+# drafting is a job change: set the record's job id to 3 and hand the list back,
+# and PlanetProperties::CommitPopulation migrates every job-3 record across.
+CHANGE_CITIZEN_JOBS = 0x00574180  # __cdecl(Planet* alloc, container* indices,
+                                  #         int newJobId, bool bFromMilitaryList)
+GET_DRAFT_COST      = 0x00516060  # __thiscall(int count), ret 4
+DRAFT_COST_THIS     = 728         # ECX = Owner_primary + 0x30c == civ_tag + 728
+DRAFT_JOB           = 3           # job id 3 is crew/military
+CONTAINER_VECTOR    = 12          # a container holds its vector 12 bytes in —
+                                  # the same wrapper idiom as Planet:132 and the
+                                  # order object's +28/+52 list heads
+DRAFT_FREE_BELOW    = 0x0080AA00  # content version; < 150 and the engine skips
+                                  # the whole cost block, i.e. drafting is FREE
+PLANET_ALLOC_FROM_TAG = -8        # Planet is single-inheritance: an 8-byte
+                                  # header, so the allocation starts at tag - 8
+
 # ShipDesign. Size and both constructors come from the two allocation sites,
 # which each do `push 0x118 ; call operator new` and then call one of these.
 DESIGN_SIZE = 0x118           # 280 bytes
@@ -143,6 +164,7 @@ FSTP_ESP   = b"\xD9\x1C\x24"      # fstp dword ptr [esp]
 POP_EAX    = b"\x58"
 SUB_ESP_4  = b"\x83\xEC\x04"
 ADD_ESP_4  = b"\x83\xC4\x04"      # __cdecl callees leave their args to us
+ADD_ESP_16 = b"\x83\xC4\x10"      # four of them
 
 
 class Remote:
@@ -533,6 +555,99 @@ class Remote:
                 CALL_EAX +
                 RET_4)
         return self.run_stub(code, f"design min-crew on 0x{design_tag:08X}")
+
+    # ── conscription ───────────────────────────────────────────────────
+    def draft_cost(self, civ_tag, count=1):
+        """What the engine will charge to draft `count` citizens, empire-wide.
+
+        READ-ONLY, and deliberately the first of the pair to be built: §7 of
+        STRATEGY.md says validate a new stub on a side-effect-free getter before
+        pointing it at anything that mutates state, and this one is checkable
+        against a formula derived independently from the disassembly:
+
+            cost = sum over k in 0..count-1 of  5 * (T + k) + 105
+
+        where T is the civ's military across the WHOLE empire — every planet's
+        Planet:168 count plus every owned ship's crew. So the price rises by 5
+        per unit already owned and conscription is cheapest early.
+
+        ECX is Owner_primary + 0x30c, which is the civ-trait container; the
+        function only uses it to reach the Owner behind it.
+        """
+        code = (push_imm(count) +
+                mov_ecx_imm(civ_tag + DRAFT_COST_THIS) +
+                mov_eax_imm(GET_DRAFT_COST) +
+                CALL_EAX +
+                RET_4)
+        return self.run_stub(code, f"draft cost for {count} on 0x{civ_tag:08X}")
+
+    def draft_is_free(self):
+        """The engine skips the whole cost block when [0x0080AA00] < 150.
+
+        That dword is the content/data version. Worth reading rather than
+        assuming, because a controller that predicts a charge which never
+        happens will keep refusing to draft on an affordability test it did not
+        need to pass.
+        """
+        b = self.read(DRAFT_FREE_BELOW, 4)
+        if not b or len(b) != 4:
+            return None
+        return struct.unpack("<I", b)[0] < 150
+
+    def change_citizen_jobs(self, planet_tag, indices, new_job=DRAFT_JOB,
+                            from_military=0):
+        """Set the job of the listed citizens, letting the ENGINE do the rest.
+
+        `__cdecl(Planet* allocation, container* indices, int newJobId,
+                 bool bFromMilitaryList)` — four args, caller-cleaned, so it
+        needs a stub: CreateRemoteThread passes exactly one.
+
+        Called rather than reproduced for the STRATEGY.md §7 reason. With
+        newJobId 3 the engine prices the draft, refuses outright if the cost
+        exceeds Owner:8 — `jg` before any list write, so a rejected draft
+        changes nothing — debits the treasury itself, and migrates the records
+        into the military vector. Reproducing that by hand would mean writing
+        Owner:8, which §1.1 forbids for exactly this reason: a draft that paid
+        for itself would be indistinguishable from a free one.
+
+        POINTER FORMS, both from the callee: arg1 is the planet's ALLOCATION
+        start (tag - 8), because the callee reaches PlanetProperties as
+        [arg1 + 0x60] and that is planet_tag + 88. arg2 is a CONTAINER whose
+        vector sits 12 bytes in — the callee reads _Myfirst/_Mylast at +0xc/+0x10
+        — not a bare vector.
+
+        The container is a foreign allocation, and that is safe HERE though it
+        was not for the order object: the original is a caller's stack local, so
+        the engine reads it and never takes ownership of it. It is freed after
+        the thread returns, never on the stuck path.
+        """
+        if not indices:
+            raise RemoteCallError("no citizens selected to draft")
+        n = len(indices)
+        # [0 .. 24) container wrapper, [32 ..) the int array it points at.
+        block = self.alloc(32 + 4 * n)
+        arr = block + 32
+        wrapper = bytearray(32)
+        struct.pack_into("<III", wrapper, CONTAINER_VECTOR,
+                         arr, arr + 4 * n, arr + 4 * n)   # first, last, end
+        self.write(block, bytes(wrapper))
+        self.write(arr, struct.pack(f"<{n}I", *indices))
+
+        code = (push_imm(1 if from_military else 0) +
+                push_imm(new_job) +
+                push_imm(block) +
+                push_imm(planet_tag + PLANET_ALLOC_FROM_TAG) +
+                mov_eax_imm(CHANGE_CITIZEN_JOBS) +
+                CALL_EAX +
+                ADD_ESP_16 +
+                RET_4)
+        try:
+            r = self.run_stub(code, f"draft {n} citizen(s) on "
+                                    f"0x{planet_tag:08X} -> job {new_job}")
+        except RemoteThreadStuck:
+            raise                      # the page and this block both leak
+        self.free(block)
+        return r
 
     def construct_order(self, order, origin_alloc, target_alloc, owner_alloc,
                         f_bits, a5=1, a6=0):

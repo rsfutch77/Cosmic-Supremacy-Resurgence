@@ -222,6 +222,48 @@ This closes the blocker in the AI player's STRATEGY.md §6a. Orders no longer ne
 
 Two practical notes. The order type lives in **SHCO**, not in `ROUT`, so a pushed order needs the SHCO byte and the has-orders byte set alongside the appended `ROUT` — `inject_order.py` does all three. And the UI caveat already recorded for retargeted orders applies here too: the Ships tab may lag until a turn boundary, while the engine acts on the order immediately.
 
+### Adding a whole PLAYER to a blob — `inject_civ.py` (August 2026)
+
+**A galaxy is no longer limited to the two civs the client generates.** `server/dev_tools/inject_civ.py` clones an existing civ's `OWNR` section under a new name and object id, and hands the new civ a homeworld by transplanting the donor homeworld's `PLPR` onto an uncolonised planet. `--name` is repeatable, so a two-civ galaxy becomes a twenty-civ galaxy in one pass.
+
+**CONFIRMED live.** A two-civ capture at turn 162 was edited and handed to a fresh client on the command line. It came back up with **three** `Owner` instances; the new civ owned the planet it was given (renamed `"Ceti's HQ"`), held its own cloned `ShipDesign`, and four turn boundaries resolved with no crash. The AI player then drove all three civs.
+
+This closes what the memory report carried as a CRITICAL blocker. In memory a civ needs an allocation with `Owner`'s multiple-inheritance layout plus an insertion into the red-black registry at `0x02D48740`, keyed by an underived hash. In a blob it is bytes, and the deserialiser does all three. **The key is derived from the NAME** — neither existing civ's `Owner:-16` appears anywhere in a capture, both read identically across two independently generated galaxies, and the injected civ came up with a key that was in no file. A new civ therefore needs a unique *name* and nothing else.
+
+#### Layout, measured against a two-civ capture and re-measured after the edit
+
+```
+GLXY payload:  u32 civCount ; OWNR x civCount ; SOLA... ; SHIP... ; NEBU...
+
+OWNR payload:  u32 nameLen ; char name[nameLen] ; u32 objectId
+               DATA { OWPR, KNPL, EXSY, ASKY, CVTR, SERV,
+                      u32 designCount, DSGN x n, NEWS x n, GOVS, ADMS, SPQS, USSE }
+               u32                                    (= Owner:4 in memory)
+
+PLNT payload:  u32 objectId ; f32 x, z, y ; u32 ownerObjectId ; f32 ;
+               u32 nameLen ; char name[nameLen] ; 6 bytes ; PLPR {...} ; u32
+```
+
+`GLXY`'s leading `u32` is the civ count — the same count-then-records idiom as the design count in front of a civ's first `DSGN`, where a record added without bumping the count is simply never read.
+
+**Ownership is carried by object id in more places than the obvious one.** Besides `PLNT`'s `ownerObjectId` and the owner id that ends every `SDPR`, **every citizen record inside a `PLPR` carries its civ's id** — which is why the donor's id repeats at a 9-byte stride through a populated homeworld. A clone that patches only the identity fields leaves a homeworld full of the donor's citizens. `inject_civ.py` does a blanket 4-byte replacement across the cloned range instead.
+
+**A homeworld is a `PLPR` transplant.** The target planet keeps its own head fields — object id, position — and receives the donor homeworld's whole `PLPR`, so it inherits that planet's space, population, food and facilities. Planet space lives in `PLPR` (it is `Planet:104`, inside the `PlanetProperties` embedded at `Planet:88`), so the target rock's own size is irrelevant and the two homeworlds come out identical, which is what a fair start needs anyway.
+
+**Diplomacy comes with the clone.** The donor's relation records name the *other* civs by id, and those ids are not the donor's, so the blanket repointing leaves them intact: a clone of a civ at war starts at war with the same enemies, which have no matching record for it. Observed. A fresh-start galaxy should clone a civ at peace.
+
+#### Designs for every civ
+
+`inject_design.py`'s uniqueness check was galaxy-wide and is now **per civ**, which is what the game itself does — every galaxy starts with each civ owning a design called `Colony Ship`. `client/dev_tools/game_cycle.py --all-civs` uses that to give each `--design` to every civ in the blob, taking one template design id per `OWNR` straight from the blob rather than from the running client. An AI-vs-AI galaxy needs it: at turn 0 a civ owns nothing but a colony ship, so without it one side can scout and the other cannot.
+
+#### Open items
+
+`[ ]` **`EXSY` is cloned, not reset, and that is a cheat rather than a cosmetic defect.** An injected civ inherits the donor's explored-systems map, so cloning a developed donor tells the newcomer where the home planets are. Two things keep it from mattering yet and neither is a fix: the AI player does not read `EXSY` (it keeps its own discovery set, persisted per civ name), and cloning from a turn-1 capture inherits an empty map, so only the developed-donor fixture leaks. The fix needs the record layout, which is not decoded — the leading `u32` reads 63 on a civ that had explored 105 systems, so it is not a plain count and the obvious guess is already falsified. **That `EXSY` is the explored-systems map is itself inferred** from the tag and from its size tracking exploration across two civs; confirm it while decoding it.
+
+`[ ]` **An injected civ gets no ships.** `SHIP`/`DYNO` records are galaxy-level rather than per-civ, so a starting colony ship is a separate job. Against civs that start with two, that is a real handicap at turn 1 — the civ can build its own only if the donor's homeworld had a shipyard.
+
+`[ ]` **Homeworld placement is one hardcoded policy.** New civs are placed as far from every claimed planet as possible, which is the right default for testing an AI (contact becomes something it has to earn) but not the only one worth having — random placement is what a real generator does and is the only way to test a hostile neighbour two systems away, and clustered or per-team placement follow from it. Wants a `--placement` option rather than a second function.
+
 ### Audit: is memory editing still needed for multiplayer? (August 2026)
 
 **Verdict: no, not for state sync — with one confirmed gap and one caveat.** Both directions of the multiplayer loop now run through the save blob, and everything the memory-editing tools write is carried by it. What memory access remains is either test harness or a small amount of `.data` bookkeeping the blob does not serialise.

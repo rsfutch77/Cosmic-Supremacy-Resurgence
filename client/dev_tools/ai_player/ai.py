@@ -64,19 +64,33 @@ RULES = [
 
     # 2. Production, ships before buildings.
     ("R-XTM-01", exterminate.run_xtm01),      # warships, only when at war
+    ("R-XTM-07", exterminate.run_xtm07),      # a troop hull while anything is takeable
     ("R-XPN-01", expand.run_xpn01),           # colony ships
     ("R-EXP-01", explore.run_exp01),          # dedicated scouts
     ("R-XPL-02", exploit.run_facilities),     # facilities take what is left
     ("R-XPL-08", exploit.run_hurry),          # spend surplus cash on all of it
 
     # 3. Crew, then research. Crew gates every order rule below.
+    #    Conscription runs BEFORE the loader so a unit bought this turn is on
+    #    the planet when R-XPL-06 next looks — the load itself waits a turn,
+    #    because this pass's snapshot was taken before the draft.
     ("R-XPL-05", exploit.run_crew_supply),
+    ("R-XPL-09", exploit.run_conscript),
     ("R-XPL-06", exploit.run_crew_load),
     ("R-XPL-04", exploit.run_research),
 
     # 4. Orders. Attack before colonise before scout: a warship should fight
     #    rather than explore, and a colony ship should take a known planet in
     #    preference to going looking for a new one.
+    # Conquer before raid: a troop hull and a warship want OPPOSITE targets —
+    # the invasion wants the planet nothing defends, the raid wants one with
+    # something to fight — so letting the invasion claim its target first keeps
+    # the warships from being sent to escort an empty rock.
+    # Garrison BEFORE ordering anything: a hull that just took a planet should
+    # put its troops down before R-XTM-04 sends it at the next one, or the
+    # occupation never happens and the planet rebels straight back.
+    ("R-XTM-06", exterminate.run_xtm06),
+    ("R-XTM-04", exterminate.run_xtm04),
     ("R-XTM-03", exterminate.run_xtm03),
     ("R-XPN-02", expand.run_xpn02),
     ("R-EXP-02", explore.run_exp02),
@@ -147,10 +161,16 @@ class Loop:
                          f"elapsed (turn length {self.read_turn_length()}s)")
                 last_beat = now
             if timeout and now - start > timeout:
+                # NOT the customisation popup. That was asserted here for
+                # months and it is wrong: measured Aug 2026 on a fresh galaxy
+                # with 'Customize Your Home World' up and unanswered, turns 0, 1
+                # and 2 all resolved normally. Whatever stalls the pipeline, the
+                # popup is not it, and naming the wrong cause sends whoever
+                # reads this to click a dialog that was never the problem.
                 self.log(f"[loop] no turn in {timeout}s. The turn pipeline is "
-                         f"not firing. The usual cause is a MODAL DIALOG in the "
-                         f"client — the home-world customisation popup blocks "
-                         f"turn resolution entirely. Dismiss it and re-run.")
+                         f"not firing. Check the client is alive and that the "
+                         f"turn length at 0x{TURNLENGTH_ADDR:08X} is what you "
+                         f"expect — the engine resets it, often.")
                 return None
             time.sleep(poll)
 
@@ -214,22 +234,24 @@ class Loop:
                  f"{len(snap.owned_ships(civ))} ship(s), cash {civ.cash}, "
                  f"research {civ.research}, score {civ.score}")
 
-        # A game still sitting on the home-world customisation popup has
-        # uncomputed designs AND a frozen turn pipeline, so every rule skips and
-        # then the loop waits for a turn that can never arrive. Name it.
-        # Only meaningful if the turn counter is ALSO stuck, which is the
-        # symptom this warning actually claims. Judging it on the stat cache
-        # alone made it fire on a healthy game at turn 99 with every design
-        # reading computed=True a moment later — a cold or torn read looks
-        # identical to an unstarted game.
+        # Uncomputed designs on a civ whose turn counter is ALSO stuck: the
+        # rules will all skip and the loop will then wait for a turn that never
+        # comes, so say so rather than looping in silence.
+        #
+        # The customisation popup used to be named here as the cause. It is not:
+        # measured Aug 2026, a fresh galaxy resolved turns 0-2 normally with that
+        # dialog up and unanswered. Judging it on the stat cache alone was also
+        # wrong once — it fired on a healthy game at turn 99 whose designs read
+        # computed=True a moment later, because a cold or torn read looks
+        # identical to an unstarted game. Hence both conditions.
         ours = {s.design for s in snap.owned_ships(civ) if s.design}
         stuck = (self.history.prev
                  and self.history.prev.get("turn") == snap.turn)
         if stuck and ours and not any(d.computed for d in ours):
-            self.log("    [!] none of this civ's ship designs are computed. "
-                     "The game has almost certainly not started — finish the "
-                     "home-world customisation popup. While it is up the turn "
-                     "counter will not advance either.")
+            self.log("    [!] none of this civ's ship designs are computed and "
+                     "the turn counter has not moved. The game is not running: "
+                     "check the client is alive and that something is driving "
+                     "the turn length.")
 
         self.history.observe(snap, civ)
         self.log(f"    {self.history.summary()}")
@@ -244,11 +266,15 @@ class Loop:
                 elif fn in (exploit.run_food, explore.run_exp02,
                             exploit.run_facilities, exploit.run_jobs,
                             exploit.run_hurry, exploit.run_crew_supply,
+                            exploit.run_conscript,
                             explore.run_exp01,
                             exterminate.run_xtm00,
                             exterminate.run_xtm01,
                             exterminate.run_xtm03,
-                            exterminate.run_xtm05):
+                            exterminate.run_xtm04,
+                            exterminate.run_xtm05,
+                            exterminate.run_xtm06,
+                            exterminate.run_xtm07):
                     fn(snap, civ, act, self.history, log=self.log)
                 else:
                     fn(snap, civ, act, log=self.log)

@@ -383,14 +383,19 @@ def make(blob, like, new_name, parts, new_id=None, log=print):
                              f"{[r[1] for r in ref]}); pass --like-id to choose")
     ref_off = ref[0][0]
 
-    if any(r[2] == new_name for r in records):
-        raise SystemExit(f"a design named {new_name!r} already exists; the "
-                         f"client requires unique design names")
     if len(new_name) > 15:
         raise SystemExit(f"{new_name!r} is longer than the 15-char name buffer")
 
     owner = owner_of_design(blob, ref_off)
     mine = [r for r in records if owner_of_design(blob, r[0]) == owner]
+
+    # Uniqueness is PER CIV, not galaxy-wide. This used to reject any name
+    # already in the blob, which is demonstrably too strict: every galaxy starts
+    # with each civ owning a design called 'Colony Ship'. The narrow rule is what
+    # lets one design be given to every civ in a many-civ game under one name.
+    if any(r[2] == new_name for r in mine):
+        raise SystemExit(f"that civ already owns a design named {new_name!r}; "
+                         f"design names must be unique within a civ")
     first = min(r[0] for r in mine)
     last_end = max(sec_end(blob, r[0]) for r in mine)
     count_at = first - 4

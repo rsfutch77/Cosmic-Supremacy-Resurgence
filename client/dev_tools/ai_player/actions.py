@@ -467,8 +467,10 @@ class Actuator:
     def load_crew(self, planet, ship, count=2):
         """Move `count` stationed military units into a ship's crew vector.
 
-        UNTESTED — no unit had finished training when this was written. The
-        reasoning it rests on:
+        CONFIRMED many times since — scouts, warships and troop hulls have all
+        been crewed this way and flown. It now also TOPS UP an already-crewed
+        ship, which it used to refuse; see `_set_ship_crew` for what that costs.
+        The reasoning it rests on:
 
         A stationed military unit, a ship's crew member and a planet citizen all
         appear to be the SAME 16-byte record — [jobId, flags, owner-node,
@@ -493,14 +495,11 @@ class Actuator:
         if len(mil) < count:
             raise ValueError(f"{planet} has {len(mil)} trained unit(s), "
                              f"need {count}")
-        if gs.is_ptr(ship.u32(self.SHIP_CREW)):
-            raise ValueError(
-                f"{ship} already has a crew vector; this only fills an empty "
-                f"one, because growing the existing engine-owned buffer would "
-                f"mean freeing memory we did not allocate")
+        aboard = ship.vec(self.SHIP_CREW, self.CITIZEN_STRIDE)
         if self.dry_run:
             self.log(f"  [WOULD LOAD] {count} unit(s) from {planet} onto {ship} "
-                     f"({len(mil)} trained, {len(mil) - count} would remain)")
+                     f"({len(aboard)} aboard, {len(mil)} trained, "
+                     f"{len(mil) - count} would remain)")
             self.crewed_ships.add(ship.id)
             return None
         if self.remote is None:
@@ -508,20 +507,111 @@ class Actuator:
 
         # Take from the END so the surviving records stay contiguous from begin.
         taken = b"".join(mil[-count:])
-        size = count * self.CITIZEN_STRIDE
-        buf = self.remote.operator_new(size)
-        self._write(buf, taken, f"{count} crew record(s)")
-        self._u32(ship.addr + self.SHIP_CREW,     buf,        "crew begin")
-        self._u32(ship.addr + self.SHIP_CREW + 4, buf + size, "crew end")
-        self._u32(ship.addr + self.SHIP_CREW + 8, buf + size, "crew cap")
+        buf = self._set_ship_crew(ship, b"".join(aboard) + taken,
+                                  len(aboard) + count)
 
         mb = planet.u32(self.PLANET_MILITARY)
         new_end = mb + (len(mil) - count) * self.CITIZEN_STRIDE
         self._u32(planet.addr + self.PLANET_MILITARY + 4, new_end,
                   f"planet military end -> {len(mil) - count} unit(s)")
         self.crewed_ships.add(ship.id)
-        self.log(f"  moved {count} unit(s) from {planet} to {ship}")
+        self.log(f"  moved {count} unit(s) from {planet} to {ship} "
+                 f"({len(aboard)} -> {len(aboard) + count} aboard)")
         return buf
+
+    def _set_ship_crew(self, ship, records, n):
+        """Point a ship's crew vector at a fresh engine buffer holding `records`.
+
+        TOPPING UP A CREWED SHIP LEAKS ITS OLD BUFFER, deliberately. The vector
+        is engine-allocated and there is no `operator delete` we are willing to
+        call on a buffer the engine may still consider its own, so a reload
+        abandons the previous block rather than freeing it. This is the same
+        trade `set_population.py` already accepts for the citizen vector, and it
+        is bounded: one 16-32 byte block per reload, on a process that lives for
+        one game.
+
+        It exists because the alternative is worse. `load_crew` used to refuse
+        any ship that already had a crew vector, which meant a troop hull could
+        invade exactly ONCE and then be dead weight forever -- and R-XTM-04
+        would keep reporting it as unusable while the empire built replacements.
+        """
+        old = ship.u32(self.SHIP_CREW)
+        size = n * self.CITIZEN_STRIDE
+        buf = self.remote.operator_new(size)
+        self._write(buf, records, f"{n} crew record(s)")
+        self._u32(ship.addr + self.SHIP_CREW,     buf,        "crew begin")
+        self._u32(ship.addr + self.SHIP_CREW + 4, buf + size, "crew end")
+        self._u32(ship.addr + self.SHIP_CREW + 8, buf + size, "crew cap")
+        if gs.is_ptr(old):
+            self.log(f"  [leak] abandoned the old crew buffer 0x{old:08X}; "
+                     f"freeing an engine allocation is not something we do")
+        return buf
+
+    def unload_crew(self, ship, planet, count=1, keep=None):
+        """Garrison troops FROM a ship onto a planet — the reverse of load_crew.
+
+        Why the AI needs it: a freshly conquered planet is disloyal and in civil
+        disorder, and the repair is occupying infantry. The invasion already
+        leaves one unit behind as the garrison; putting the rest of the hull's
+        troops down is what turns a captured planet into a held one.
+
+        `keep` guards the flight crew — unload past `ShipDesign:76` and the ship
+        is stranded wherever it happens to be, which is by definition inside
+        hostile territory.
+
+        The planet side APPENDS, and appending is the direction a vector cannot
+        do for free. When the engine's buffer has spare capacity the records go
+        in place and only `end` moves; otherwise the whole vector is reallocated
+        and the old block is abandoned, same trade as _set_ship_crew.
+        """
+        aboard = ship.vec(self.SHIP_CREW, self.CITIZEN_STRIDE)
+        if keep is not None and len(aboard) - count < keep:
+            raise ValueError(
+                f"{ship} carries {len(aboard)}; unloading {count} would leave "
+                f"{len(aboard) - count} against a flight minimum of {keep}, "
+                f"stranding it in hostile space")
+        if count <= 0 or len(aboard) < count:
+            raise ValueError(f"{ship} carries {len(aboard)}, cannot unload "
+                             f"{count}")
+        mil = planet.vec(self.PLANET_MILITARY, self.CITIZEN_STRIDE)
+        if self.dry_run:
+            self.log(f"  [WOULD GARRISON] {count} unit(s) from {ship} onto "
+                     f"{planet} ({planet.military} stationed -> "
+                     f"{planet.military + count})")
+            return None
+        if self.remote is None:
+            raise RuntimeError("unload_crew needs a remote.Remote to allocate")
+
+        landed = b"".join(aboard[-count:])
+        begin = planet.u32(self.PLANET_MILITARY)
+        end   = planet.u32(self.PLANET_MILITARY + 4)
+        cap   = planet.u32(self.PLANET_MILITARY + 8)
+        need  = count * self.CITIZEN_STRIDE
+        if gs.is_ptr(begin) and cap is not None and end is not None \
+                and cap - end >= need:
+            self._write(end, landed, f"{count} unit(s) into spare capacity")
+            self._u32(planet.addr + self.PLANET_MILITARY + 4, end + need,
+                      f"planet military end -> {len(mil) + count} unit(s)")
+        else:
+            total = b"".join(mil) + landed
+            size = len(total)
+            buf = self.remote.operator_new(size)
+            self._write(buf, total, f"{len(mil) + count} unit(s), reallocated")
+            self._u32(planet.addr + self.PLANET_MILITARY,     buf,        "mil begin")
+            self._u32(planet.addr + self.PLANET_MILITARY + 4, buf + size, "mil end")
+            self._u32(planet.addr + self.PLANET_MILITARY + 8, buf + size, "mil cap")
+            if gs.is_ptr(begin):
+                self.log(f"  [leak] abandoned the old military buffer "
+                         f"0x{begin:08X}")
+
+        # The ship side only SHRINKS, which needs no allocation at all: walk
+        # `end` back and the surviving records stay contiguous from `begin`.
+        cb = ship.u32(self.SHIP_CREW)
+        self._u32(ship.addr + self.SHIP_CREW + 4,
+                  cb + (len(aboard) - count) * self.CITIZEN_STRIDE,
+                  f"crew end -> {len(aboard) - count} aboard")
+        self.log(f"  garrisoned {count} unit(s) from {ship} onto {planet}")
+        return count
 
     # -- J: sell a facility (engine call) --------------------------------
     def sell_facility(self, planet, type_id, count=1):
@@ -636,6 +726,68 @@ class Actuator:
         self.cash_effect -= cost
         self.writes.append((planet.addr, b"", b"", f"hurried for {cost}"))
         return ok
+
+    # -- N: conscript a citizen into the military (engine call) ------------
+    # Never a farmer. Food is the one thing that actually kills a colony, and
+    # S-01 exists to put citizens back onto it — drafting one straight off the
+    # farms would have the two rules fighting each other every turn.
+    DRAFT_PREFERENCE = (6, 2, 5, 1)        # banker, scientist, miner, worker
+
+    def draft_cost(self, civ, count=1):
+        """The engine's own price for `count` conscripts. Read-only."""
+        if self.remote is None:
+            return None
+        return self.remote.draft_cost(civ.addr, count)
+
+    def conscript(self, planet, civ):
+        """Turn ONE citizen into a stationed military unit, at the engine's price.
+
+        The crew bottleneck this exists to break: a ship with no crew cannot
+        move and the engine CANCELS its order at the next boundary, so every
+        order rule is gated on crew, and recruitment delivers roughly one unit
+        per ten turns. Meanwhile cash accumulates with nothing to buy — 6,121
+        on a civ whose scouts were grounded, against 115 for a conscript.
+
+        Engine call, for the STRATEGY.md §7 reason and more sharply than usual:
+        the price depends on empire-wide military INCLUDING ship crew, and it
+        debits Owner:8, which §1.1 forbids us to write. A draft we priced
+        ourselves would be indistinguishable from a free one.
+
+        The engine refuses outright when the cost exceeds the treasury — `jg`
+        before any list write, so a rejected draft changes nothing at all. The
+        checks here only avoid spawning a remote thread for a call that would
+        refuse.
+
+        ONE per call, and that is a correctness bound rather than caution: the
+        engine ERASES the drafted record and memmoves the tail down, so every
+        index above it shifts. A second index taken from the same snapshot would
+        name a different citizen than the one it was chosen for. A rule that
+        wants two drafts takes them on two turns, against two snapshots.
+        """
+        if self.remote is None and not self.dry_run:
+            raise RuntimeError("conscription needs a remote.Remote")
+        jobs = planet.population
+        pick = next((jobs.index(w) for w in self.DRAFT_PREFERENCE if w in jobs),
+                    None)
+        if pick is None:
+            raise ValueError(f"{planet} has no draftable citizen — every one "
+                             f"is a farmer, and drafting those starves it")
+
+        cost = self.draft_cost(civ, 1)
+        if cost is not None and civ.cash is not None and cost > civ.cash:
+            raise ValueError(f"a conscript costs {cost}, cash is {civ.cash}; "
+                             f"the engine would refuse")
+
+        if self.dry_run:
+            self.log(f"  [WOULD DRAFT] citizen {pick} "
+                     f"({gs.JOBS.get(jobs[pick], jobs[pick])}) on {planet} "
+                     f"for {cost} credits")
+            return None
+        self.remote.change_citizen_jobs(planet.addr, [pick])
+        self.cash_effect -= cost or 0
+        self.writes.append((planet.addr, b"", b"",
+                            f"drafted citizen {pick} for {cost}"))
+        return pick
 
     # -- L: set a ship's command, target node included (engine call) -------
     # Order types that consult Ship:56. 0x004D9880 Ship::HasActiveTargetedOrder
