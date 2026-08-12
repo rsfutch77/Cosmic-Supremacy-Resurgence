@@ -750,7 +750,10 @@ invented. It routinely declined every eligible build ("35552 would exceed the tu
 while sitting on 20k cash it had no other use for. Wants a real policy, ideally one that
 knows what else the cash is for.
 
-**R-XPL-09 — Conscript crew for a grounded ship** — IMPLEMENTED in `exploit.run_conscript`
+**R-XPL-09 — Conscript crew for a grounded ship** — IMPLEMENTED in
+`exploit.run_conscript`, and it does the migration by FIELD WRITE rather than by
+calling `ChangeCitizenJobs`. See §7 for why, and for the wrong diagnosis it took
+to get there.
 ```
 WHEN   a ship is BUILT, short of ShipDesign:76 crew, in orbit of our planet P,
        P has fewer trained units than it needs, and cash > DRAFT_CASH_FLOOR
@@ -1017,7 +1020,7 @@ they arrive one at a time and are defeated one at a time. Ships travel at very d
 (bomber ~10/turn); a rendezvous or a wait-for-N-ships gate is the obvious fix and does not
 exist.
 
-**R-XTM-04 — Conquer** — `[ ]` NOT BUILT, but two of its three unknowns are now closed
+**R-XTM-04 — Conquer** — IMPLEMENTED in `exterminate.run_xtm04`, and it has taken a planet
 
 **ORDER TYPE 5 IS SAFE — issued for the first time, Aug 2026.** The worry recorded below was
 that Conquer might do what Move and Attack did through actuator L and kill the client at the
@@ -1090,6 +1093,30 @@ USES   E
 (module id 1, troop bay), and Conquer (5) is a targeted order type we have never issued — given
 what Move and Attack did through actuator L, assume nothing about whether it survives a turn
 boundary until it is tested from a restore point.
+
+**R-XTM-06 — Garrison a planet just taken** — IMPLEMENTED in `exterminate.run_xtm06`
+```
+WHEN   a TROOP ship is in orbit of a planet we took within GARRISON_WINDOW turns
+       (Planet:92 is rewritten on CAPTURE, not only on founding)
+THEN   unload everything above ShipDesign:76 onto it, keeping enough to fly home
+USES   N′ (actions.unload_crew)
+```
+The invasion leaves exactly one unit, which is the minimum the engine takes and
+not a sufficient garrison: planet #41 was taken that way and was back in enemy
+hands five turns later. See the `[ ]` on the rule itself — that occupation
+repairs loyalty is the user's reading of the client, and the one measurable proxy
+(`Planet:368`) turned out to be a plain turn counter that a garrison does not
+change.
+
+**R-XTM-07 — Keep a troop transport** — IMPLEMENTED in `exterminate.run_xtm07`
+```
+WHEN   at war, some visible enemy planet has weakness 0, and we hold fewer than
+       TROOP_TARGET troop hulls, and none is already built and awaiting crew
+THEN   queue the civ's TROOP design at the largest free shipyard
+USES   D
+```
+R-XTM-04 can only spend hulls somebody built, and R-XTM-01 queues warships only —
+the first two troop ships in this project were made by hand.
 
 **R-XTM-05 — Retreat** — IMPLEMENTED in `exterminate.run_xtm05`
 ```
@@ -1375,6 +1402,109 @@ to be for the wrong content version (`research.py` carries ≥688, this client r
 gates every order rule — the civ sat on 11k–20k idle cash for a hundred turns with nothing to
 spend it on while waiting ~10 turns per recruit.
 
+### The crash of Aug 2026 — RETRACTED DIAGNOSIS, then solved (Aug 2026)
+
+**READ THIS BEFORE THE TABLE BELOW.** The conclusion this section originally
+reached — that a mutating engine call on a remote thread kills the client, and
+that `ChangeCitizenJobs` is necessary and sufficient — is **WRONG**, and it was
+wrong with a five-arm bisect behind it. The real fault was `_set_ship_crew`
+repointing a `std::vector` the engine already owned. Conscription was convicted
+because it PRODUCES the units that make the crew loader run: every arm that
+turned drafting off also stopped the loading, so the crash disappeared for a
+reason nobody had tested.
+
+What separated them, finally:
+
+| arm | outcome |
+|---|---|
+| conscription on, crew loading on | dies ~30 turns later |
+| conscription on, crew loading **OFF** | **survives 45/45**, 19 drafts |
+| all rules, vectors never repointed | **survives 45/45**, 9 drafts, 10 loads |
+
+**The rule that actually holds: never repoint a container the engine owns.**
+Fill a crew or military vector only when it is EMPTY. The code that predated
+this session refused to do otherwise and said why; overriding that comment cost
+a day, and the comment was the most valuable thing in the file.
+
+`[ ]` **`Ship::SetCommand` is marked DO-NOT-USE on the same style of reasoning
+that failed here** — "the client died after we called it" — and deserves
+re-testing rather than inheriting this mistake. It may never have been the call.
+
+The original text follows because the experiment shape was right even though the
+conclusion was not, and because the arms below are still the evidence that our
+FIELD WRITES are innocent:
+
+| arm | outcome |
+|---|---|
+| every rule running | **client dies** |
+| the AI writes nothing at all | survives, 45/45 turns |
+| **every memory write, but no mutating engine call** (`--without R-XPL-08 --without R-XPL-09`) | **survives, 45/45 turns** |
+
+So the field writes this project spent months on are FINE, and the calls are not.
+The two in the failing arm are `HurryProduction` and `ChangeCitizenJobs`; the
+read-only getters (`draft_cost`, `hurry_cost`, the design stats, relation codes)
+run in every arm including the ones that survive.
+
+**The failure is delayed and does not look like a crash at the call site.** The
+call returns, the pass completes, the game plays on for tens of turns, and then
+the engine dies walking a structure. Two different faults were captured:
+
+```
+ACCESS_VIOLATION  at exe+0x12E6A   movzx esi, word [ecx]   ecx = 0x02DAF00C
+ACCESS_VIOLATION  at exe+0x1133E4  reading 0xFFFFFFFFC5C8190C
+```
+
+The second is a FLOAT being dereferenced as a pointer — the same signature as the
+object-id confusion the reconstruction report records for the design high-water
+bug. A corrupted container is the most likely intermediate.
+
+**IT IS `ChangeCitizenJobs` — CONSCRIPTION — and `HurryProduction` is innocent.**
+Two further arms separated them:
+
+| arm | outcome |
+|---|---|
+| hurry kept, conscription off | survives 45 turns, **95 `HurryProduction` calls** |
+| conscription kept, hurry off | **dies at turn 184**, after 8 drafts |
+
+Necessary and sufficient. What distinguishes the two is what they touch:
+`ChangeCitizenJobs` runs `CommitPopulation`, which MIGRATES RECORDS BETWEEN THE
+CITIZEN AND MILITARY VECTORS AND REALLOCATES THEM, on a remote thread, while the
+main thread may be walking those same containers. `HurryProduction` prices a
+build and debits the treasury — it touches no container, and 95 calls did
+nothing at all.
+
+**R-XPL-09 IS ON and works** (`exploit.ALLOW_CONSCRIPTION = True`). It no longer
+calls `ChangeCitizenJobs` at all: the migration is plain field writes — one
+16-byte record from the citizen vector to the military vector with its job id set
+to 3 — while the PRICE still comes from the engine's read-only `GetDraftCost`.
+Verified over 45 turns with every rule running, 9 drafts and 10 crew loads.
+
+`[x]` **A STALE CITIZEN INDEX IS NOT THE CAUSE — tested and falsified.** The
+obvious suspicion, and the user's, was that the index came from a snapshot and
+named a citizen the engine had already moved: `CommitPopulation` erases the
+drafted record, memmoves the tail, and auto-conscripts surplus population above
+`space/10` while it is in there. `conscript` now re-reads the citizen vector live
+and compares it against the snapshot before choosing. Result: the crash is
+unchanged, at the same turn after the same number of drafts, and the comparison
+reported **zero** discrepancies — the snapshot index was correct every time.
+
+That leaves the call itself rather than its arguments, which is the stronger
+reading of the bisect anyway: `HurryProduction` takes arguments too and 95 of
+them did nothing. **It is not WHAT is passed, it is WHERE the call runs.**
+
+`[ ]` **The fix is probably not "stop calling them".** Conscription is the only
+answer to the crew bottleneck and hurrying is the only sink for cash. What the
+evidence argues for is calling them ON THE MAIN THREAD — suspend it, point EIP at
+a stub, restore — which the reconstruction report already sketches as the
+remaining route for `LoadGame`, and which would remove the whole class rather
+than these two instances.
+
+`[ ]` **Every earlier "it crashed after we did X" in this document is now
+suspect**, including `Ship::SetCommand`. That one was blamed for a crash at the
+next turn boundary and marked DO-NOT-USE on that basis. It is a mutating engine
+call on a remote thread, so it belongs to this class, and the same experiment
+would settle whether the call is fatal or merely the thread it ran on.
+
 ### The standing hazard
 
 Stubs run on a `CreateRemoteThread`, **not the game's main thread**. **Something has now gone
@@ -1400,6 +1530,43 @@ Practical consequences, and the rules that follow from them:
   alone, not while someone is looking.
 * `ret N` gives argument **count**, never **type**. Mistaking `0x005470A0` for a copy
   constructor on that basis crashed the client once.
+
+## 7a. Prototype status — is each X actually demonstrated? (Aug 2026)
+
+Written for the question "can this game be shown baseline functional through all
+four X, by an AI with nobody at the keyboard". Answered per X, against runs, not
+against intentions.
+
+| X | demonstrated | how |
+|---|---|---|
+| **eXplore** | **yes** | civs build their own scouts, crew them, sweep systems, and keep a per-civ fog of war that survives restarts. A fresh galaxy went from 108 unknown systems to full contact between three civs unaided |
+| **eXpand** | **yes** | colony ships built, targets scored and taken; three civs reached 6–13 planets each from one homeworld apiece |
+| **eXploit** | **yes** | jobs, farms, shipyards, research, recruitment, crew loading and hurrying all run unattended; research picks legal topics and switches when a capability threshold is unmet |
+| **eXterminate** | **partly — see below** | war is declared, warships are built and crewed and sent, a planet has been TAKEN by troops and garrisoned, and ships have fought and been damaged |
+
+**The one gap that matters: combat does not happen in ordinary play.** Every
+battle so far was either staged (`battle_meet.py`, two fleets pointed at each
+other) or one-sided (troops landing on an undefended planet). R-XTM-03 ranks
+targets by weakness and takes the MINIMUM, so it reliably picks the planet with
+nothing on it — the fleet arrives, sits in orbit, and nothing happens. Two civs
+did exactly that to each other for fifty turns.
+
+That makes exactly two items critical for a prototype claim, and both are already
+specified above:
+
+1. `[ ]` **R-XTM-03 must rank by "can I beat it", not "is it weakest"** (§4.4).
+   Without it a raid never produces a fight, which is the observable most people
+   would ask for first.
+2. `[ ]` **R-XTM-02 defend is NOT BUILT** (§4.4). Nothing responds to an incoming
+   fleet, so an attacked civ has no behaviour at all — the half of Exterminate
+   that makes the other half meaningful.
+
+Everything else outstanding is tuning or economics, not capability: S-04, R-EXP-04,
+R-XPN-04, R-XPL-03, R-XPL-07. Each is a `[ ]` on its own rule with a reason.
+
+**R-XPL-09 conscription is ON and working** — it buys crew for cash instead of
+waiting ten turns per recruit, and the client survives it now that no vector the
+engine owns is ever repointed (§7).
 
 ## 8. Build order
 

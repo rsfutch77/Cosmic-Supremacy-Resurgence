@@ -26,3 +26,4 @@ tools
 
 # named restore points (raw save blobs, big and regenerable)
 client/checkpoints/
+.vscode

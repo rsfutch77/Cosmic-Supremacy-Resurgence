@@ -52,7 +52,7 @@ class Duel:
     """One turn clock, several controllers."""
 
     def __init__(self, civ_names=None, dry_run=True, vision="known",
-                 log=print, settle=1.5):
+                 log=print, settle=1.5, skip=()):
         self.log = log
         self.state = gs.ev.ViewerState()
         if not self.state.connect():
@@ -69,8 +69,11 @@ class Duel:
 
         # One shared ViewerState: one process handle, and each pass re-scans it
         # anyway, so a second connection would buy nothing.
+        if skip:
+            self.log(f"[duel] NOT running: {sorted(skip)}")
         self.loops = [ai.Loop(civ_name=n, dry_run=dry_run, vision=vision,
-                              log=log, settle=settle, state=self.state)
+                              log=log, settle=settle, state=self.state,
+                              skip=skip)
                       for n in civ_names]
 
     # -- one shared scan per turn ---------------------------------------
@@ -241,7 +244,8 @@ def main():
     duel = Duel(civ_names=cli.opts(args, "--civ"),
                 dry_run=not cli.flag(args, "--apply"),
                 vision=cli.opt(args, "--vision", "known"),
-                settle=cli.opt(args, "--settle", 1.5, float))
+                settle=cli.opt(args, "--settle", 1.5, float),
+                skip=cli.opts(args, "--without"))
     duel.run(follow=cli.flag(args, "--follow"),
              max_turns=cli.opt(args, "--turns", None, int),
              drive=cli.opt(args, "--drive", None, int),
