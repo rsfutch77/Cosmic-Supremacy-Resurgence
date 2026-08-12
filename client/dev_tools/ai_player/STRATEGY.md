@@ -55,6 +55,21 @@ moves. One decision pass per turn.
 | Write | `ejbo_viewer.write_bytes` |
 | Turn driving in test | `advance_turns.py` shortens turn length so a game runs in minutes |
 
+`[ ]` **THE TURN COUNTER IS NOT A RECORD OF PASSES TAKEN, and treating it as one
+will produce confident nonsense.** The engine advances turns against elapsed
+time, so a host that sleeps comes back to a BURST of resolved turns that the
+controller was never awake for: one run showed 29 turns elapsed against 12
+decision passes, and the machine had been suspended for most of it. The same
+signature — turns outrunning passes — is also what a controller too slow for its
+turn length looks like, and the two are indistinguishable after the fact.
+
+Consequences, both learned the hard way:
+* **Never infer a rule's behaviour from a turn range that spans a gap.** Deltas
+  in `sensors.History` are normalised per turn, which hides it further.
+* **A per-turn measurement must be checked for contiguity**, not just length —
+  the `Planet:368` traces were trustworthy precisely because their turn numbers
+  ran 285..312 with no holes.
+
 **Identity.** "Our civ" is the `Owner` whose name at `Owner:-44` matches a configured
 string. Remember `Owner` is multiple-inheritance: the allocation starts at **tag-52**,
 reference nodes store **tag-8**, and the known-players vector stores **tag-52**. Any
