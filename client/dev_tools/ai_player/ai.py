@@ -99,7 +99,14 @@ RULES = [
 
 class Loop:
     def __init__(self, civ_name="GoodGuy", dry_run=True, vision="all",
-                 top=0, log=print, settle=1.5, state=None):
+                 top=0, log=print, settle=1.5, state=None, skip=()):
+        # `skip` names rules NOT to run, by their R-XXX-NN id. It exists for
+        # bisecting a crash: the client died twice at the same turn from the
+        # same saved state, which makes the fault deterministic and therefore
+        # attributable — disable a suspect, replay, and see whether the crash
+        # moves. Guessing from what happened just beforehand has already cost
+        # this project a day.
+        self.skip = set(skip)
         self.civ_name = civ_name
         self.dry_run = dry_run
         self.vision = vision
@@ -274,6 +281,8 @@ class Loop:
         act = actions.Actuator(snap, dry_run=self.dry_run, log=self.log,
                                remote_factory=self._get_remote)
         for name, fn in RULES:
+            if name in self.skip:
+                continue
             try:
                 if fn is expand.run_xpn02:
                     fn(snap, civ, act, vision=self.vision, top=self.top,

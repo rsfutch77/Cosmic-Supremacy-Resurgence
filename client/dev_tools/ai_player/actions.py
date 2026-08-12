@@ -462,6 +462,7 @@ class Actuator:
     # -- J: move a trained unit from a planet onto a ship as crew -------
     SHIP_CREW      = 124      # begin/end/cap at 124/128/132
     PLANET_MILITARY = 168     # begin/end/cap at 168/172/176
+    CITIZEN_LIST   = 144      # begin/end/cap at 144/148/152
     CITIZEN_STRIDE = 16
 
     def load_crew(self, planet, ship, count=2):
@@ -491,6 +492,9 @@ class Actuator:
         A crewed ship differed from an identical uncrewed one at 124/128/132 and
         nowhere else, so there is no separate crew count to keep in step.
         """
+        self._require_sane(planet.addr + self.PLANET_MILITARY,
+                           f"{planet}'s military vector")
+        self._require_sane(ship.addr + self.SHIP_CREW, f"{ship}'s crew vector")
         mil = planet.vec(self.PLANET_MILITARY, self.CITIZEN_STRIDE)
         if len(mil) < count:
             raise ValueError(f"{planet} has {len(mil)} trained unit(s), "
@@ -519,23 +523,87 @@ class Actuator:
                  f"({len(aboard)} -> {len(aboard) + count} aboard)")
         return buf
 
-    def _set_ship_crew(self, ship, records, n):
+    # A std::vector is three pointers into ONE allocation. If they ever stop
+    # agreeing, anything that walks begin..end walks across unrelated memory.
+    VEC_SANE_SPAN = 64 * 16          # 64 records is far past anything real
+
+    def vector_is_sane(self, base, what=""):
+        """begin/end/cap consistent, and pointing into the same allocation?
+
+        THIS EXISTS BECAUSE WE CORRUPTED ONE. A planet's military vector was
+        found with `begin` at 0x0AD4F928 and `end` at 0x02D99268 — two different
+        heap regions — and the engine crashed walking it a turn later, reading
+        0x02DBF00C. The write that exposed it was ours, computing a new `end`
+        from a `begin` that no longer belonged to the same buffer as the `end`
+        it replaced.
+
+        A vector we did not put in that state is one we must not write to: the
+        damage is already done and adding to it destroys the evidence as well as
+        the client. So this refuses rather than repairs.
+        """
+        begin = self.snap.rd32(base)
+        end   = self.snap.rd32(base + 4)
+        cap   = self.snap.rd32(base + 8)
+        if begin is None or end is None or cap is None:
+            return False, "could not read the vector"
+        if begin == 0 and end == 0:
+            return True, "empty"
+        if not (gs.is_ptr(begin) and gs.is_ptr(end) and gs.is_ptr(cap)):
+            return False, (f"not all pointers: begin 0x{begin:08X} "
+                           f"end 0x{end:08X} cap 0x{cap:08X}")
+        if not (begin <= end <= cap):
+            return False, (f"out of order: begin 0x{begin:08X} "
+                           f"end 0x{end:08X} cap 0x{cap:08X}")
+        span = end - begin
+        if span % self.CITIZEN_STRIDE:
+            return False, (f"span {span} is not a whole number of "
+                           f"{self.CITIZEN_STRIDE}-byte records")
+        if span > self.VEC_SANE_SPAN:
+            return False, f"span {span} is implausibly large"
+        # The give-away in the crash we had: begin and end in different 64 KB
+        # regions of very different heaps.
+        if (begin >> 24) != (end >> 24):
+            return False, (f"begin 0x{begin:08X} and end 0x{end:08X} are in "
+                           f"different heaps — this vector is already corrupt")
+        return True, f"{span // self.CITIZEN_STRIDE} record(s)"
+
+    def _require_sane(self, base, what):
+        ok, why = self.vector_is_sane(base, what)
+        if not ok:
+            raise ValueError(f"refusing to touch {what}: {why}")
+        return True
+
+    def _set_ship_crew(self, ship, records, n, allow_replace=False):
         """Point a ship's crew vector at a fresh engine buffer holding `records`.
 
-        TOPPING UP A CREWED SHIP LEAKS ITS OLD BUFFER, deliberately. The vector
-        is engine-allocated and there is no `operator delete` we are willing to
-        call on a buffer the engine may still consider its own, so a reload
-        abandons the previous block rather than freeing it. This is the same
-        trade `set_population.py` already accepts for the citizen vector, and it
-        is bounded: one 16-32 byte block per reload, on a process that lives for
-        one game.
+        REPOINTING A CREW VECTOR THE ENGINE ALREADY OWNS CRASHES THE CLIENT, and
+        that is measured, not feared. This method was written to "top up" a
+        crewed ship by allocating a bigger buffer and abandoning the old one, on
+        the reasoning that a leak is bounded and harmless. The original code had
+        refused to do exactly that, saying growing an engine-owned buffer would
+        mean freeing memory we did not allocate. It was right.
 
-        It exists because the alternative is worse. `load_crew` used to refuse
-        any ship that already had a crew vector, which meant a troop hull could
-        invade exactly ONCE and then be dead weight forever -- and R-XTM-04
-        would keep reporting it as unusable while the empire built replacements.
+        The bisect that found it, 45 turns per arm from one checkpoint:
+
+            conscription on, crew loading on   -> client dies, ~30 turns later
+            conscription on, crew loading OFF  -> survives 45/45, 19 drafts
+
+        Conscription was blamed first, and it is innocent: it merely PRODUCES the
+        units, which is what makes the loader run at all. With drafting off there
+        was nothing to load and the crash went away, which framed the wrong
+        suspect for three arms.
+
+        So a crew vector is only ever FILLED WHEN EMPTY. Filling an empty one is
+        the path every game before this session used, and it is in every arm that
+        survives. `allow_replace` exists for a caller that has proven it owns the
+        buffer; nothing sets it today.
         """
         old = ship.u32(self.SHIP_CREW)
+        if gs.is_ptr(old) and not allow_replace:
+            raise ValueError(
+                f"{ship} already has a crew vector (0x{old:08X}); repointing "
+                f"one the engine owns is what crashed the client. Load the full "
+                f"complement when the ship is empty, or leave it alone")
         size = n * self.CITIZEN_STRIDE
         buf = self.remote.operator_new(size)
         self._write(buf, records, f"{n} crew record(s)")
@@ -546,6 +614,52 @@ class Actuator:
             self.log(f"  [leak] abandoned the old crew buffer 0x{old:08X}; "
                      f"freeing an engine allocation is not something we do")
         return buf
+
+    def _append_military(self, planet, records):
+        """Add 16-byte units to a planet's stationed-military vector.
+
+        Uses spare capacity when the engine's buffer has it, and otherwise
+        reallocates through the ENGINE'S OWN `operator new` and repoints the
+        three pointers. That reallocation is legitimate precisely because the
+        buffer comes from the engine's allocator: when recruitment later grows
+        the vector, the engine frees a block its own allocator handed out.
+
+        The abandoned block leaks, which is the same bounded trade `load_crew`
+        makes for a ship's crew vector — and that path runs in every arm of the
+        crash bisect that SURVIVES, which is what makes it credible rather than
+        merely argued.
+        """
+        base = planet.addr + self.PLANET_MILITARY
+        self._require_sane(base, f"{planet}'s military vector")
+        mil = planet.vec(self.PLANET_MILITARY, self.CITIZEN_STRIDE)
+        begin = planet.u32(self.PLANET_MILITARY)
+        end   = planet.u32(self.PLANET_MILITARY + 4)
+        cap   = planet.u32(self.PLANET_MILITARY + 8)
+        blob  = b"".join(records)
+        need  = len(blob)
+
+        if gs.is_ptr(begin) and cap and end and cap - end >= need:
+            self._write(end, blob, f"{len(records)} unit(s) into spare capacity")
+            self._u32(base + 4, end + need,
+                      f"military end -> {len(mil) + len(records)} unit(s)")
+            return
+        if gs.is_ptr(begin):
+            # Same rule as a ship's crew vector, and for the same measured
+            # reason: repointing a vector the engine already owns is what
+            # crashed the client. A planet's military vector is worse than a
+            # ship's, because recruitment appends to it — the engine and this
+            # code would be trading ownership of one buffer every few turns.
+            raise ValueError(
+                f"{planet}'s military vector is full "
+                f"({(cap or 0) - (end or 0)} bytes spare, need {need}) and "
+                f"already engine-owned; growing it is what crashed the client")
+        # An EMPTY vector belongs to nobody yet, so this is the one safe case.
+        size = len(blob)
+        buf = self.remote.operator_new(size)
+        self._write(buf, blob, f"{len(records)} unit(s) into a fresh buffer")
+        self._u32(base,     buf,        "military begin")
+        self._u32(base + 4, buf + size, "military end")
+        self._u32(base + 8, buf + size, "military cap")
 
     def unload_crew(self, ship, planet, count=1, keep=None):
         """Garrison troops FROM a ship onto a planet — the reverse of load_crew.
@@ -564,6 +678,9 @@ class Actuator:
         in place and only `end` moves; otherwise the whole vector is reallocated
         and the old block is abandoned, same trade as _set_ship_crew.
         """
+        self._require_sane(ship.addr + self.SHIP_CREW, f"{ship}'s crew vector")
+        self._require_sane(planet.addr + self.PLANET_MILITARY,
+                           f"{planet}'s military vector")
         aboard = ship.vec(self.SHIP_CREW, self.CITIZEN_STRIDE)
         if keep is not None and len(aboard) - count < keep:
             raise ValueError(
@@ -593,16 +710,23 @@ class Actuator:
             self._u32(planet.addr + self.PLANET_MILITARY + 4, end + need,
                       f"planet military end -> {len(mil) + count} unit(s)")
         else:
-            total = b"".join(mil) + landed
-            size = len(total)
-            buf = self.remote.operator_new(size)
-            self._write(buf, total, f"{len(mil) + count} unit(s), reallocated")
-            self._u32(planet.addr + self.PLANET_MILITARY,     buf,        "mil begin")
-            self._u32(planet.addr + self.PLANET_MILITARY + 4, buf + size, "mil end")
-            self._u32(planet.addr + self.PLANET_MILITARY + 8, buf + size, "mil cap")
-            if gs.is_ptr(begin):
-                self.log(f"  [leak] abandoned the old military buffer "
-                         f"0x{begin:08X}")
+            # DO NOT REALLOCATE A PLANET'S MILITARY VECTOR. This branch used to,
+            # and it is what corrupted one: our buffer became `begin`, then the
+            # engine's own push_back on the next recruited unit reallocated
+            # through ITS allocator and left the three pointers straddling two
+            # allocations — begin at 0x0AD4F928 with end at 0x02D99268. A turn
+            # later the engine walked begin..end across unrelated memory and
+            # died reading 0x02DBF00C.
+            #
+            # A ship's crew vector survives the same treatment because nothing
+            # but us ever grows it. A planet's does not: recruitment appends to
+            # it, so the engine and this code end up fighting over who owns the
+            # buffer, and the engine always wins because it frees.
+            raise ValueError(
+                f"{planet}'s military vector has no spare capacity "
+                f"({(cap - end) if (cap and end) else '?'} bytes free, need "
+                f"{need}); growing an engine-owned vector it also appends to is "
+                f"what corrupted one and crashed the client")
 
         # The ship side only SHRINKS, which needs no allocation at all: walk
         # `end` back and the surviving records stay contiguous from `begin`.
@@ -766,7 +890,22 @@ class Actuator:
         """
         if self.remote is None and not self.dry_run:
             raise RuntimeError("conscription needs a remote.Remote")
-        jobs = planet.population
+        # THE INDEX MUST COME FROM A LIVE READ, NOT FROM THE SNAPSHOT. The
+        # snapshot is taken once per turn and shared by every civ, so by the
+        # time this runs the planet's citizen vector may have moved underneath
+        # it — and the engine shifts that vector itself: CommitPopulation erases
+        # each drafted record and memmoves the tail, and auto-conscripts surplus
+        # population above space/10 while it is in there. An index chosen from a
+        # stale list names a citizen who has shifted or gone.
+        self._require_sane(planet.addr + self.CITIZEN_LIST,
+                           f"{planet}'s citizen vector")
+        live = [struct.unpack_from("<I", r, 0)[0]
+                for r in planet.vec(self.CITIZEN_LIST, self.CITIZEN_STRIDE)]
+        if live != planet.population:
+            self.log(f"  [!] {planet}'s citizen list moved since the snapshot "
+                     f"({len(planet.population)} -> {len(live)}); using the "
+                     f"live one")
+        jobs = live
         pick = next((jobs.index(w) for w in self.DRAFT_PREFERENCE if w in jobs),
                     None)
         if pick is None:
@@ -783,10 +922,46 @@ class Actuator:
                      f"({gs.JOBS.get(jobs[pick], jobs[pick])}) on {planet} "
                      f"for {cost} credits")
             return None
-        self.remote.change_citizen_jobs(planet.addr, [pick])
-        self.cash_effect -= cost or 0
-        self.writes.append((planet.addr, b"", b"",
-                            f"drafted citizen {pick} for {cost}"))
+        if cost is None:
+            raise RuntimeError("cannot draft without the engine's price")
+
+        # THE MIGRATION, BY HAND. `ChangeCitizenJobs` did all of this and is
+        # PROVEN to kill the client about 30 turns later — a five-arm bisect put
+        # it beyond doubt (§7). What it does that our writes do not is run
+        # `CommitPopulation` on a REMOTE THREAD, mutating and reallocating the
+        # two containers while the main thread may be walking them.
+        #
+        # So the engine still sets the PRICE — `GetDraftCost` is read-only and
+        # runs in every arm that survives — and we perform the transfer with the
+        # plain field writes the bisect exonerated. A conscript is, in the
+        # engine's own terms, one 16-byte record moving from the citizen vector
+        # to the military vector with its job id set to 3.
+        recs = planet.vec(self.CITIZEN_LIST, self.CITIZEN_STRIDE)
+        if pick >= len(recs):
+            raise ValueError(f"citizen {pick} no longer exists on {planet}")
+        moved = bytearray(recs[pick])
+        struct.pack_into("<I", moved, 0, remote.DRAFT_JOB)
+
+        cbegin = planet.u32(self.CITIZEN_LIST)
+        kept = b"".join(recs[:pick] + recs[pick + 1:])
+        self._write(cbegin, kept, f"citizen list minus #{pick}")
+        self._u32(planet.addr + self.CITIZEN_LIST + 4, cbegin + len(kept),
+                  f"citizen end -> {len(recs) - 1}")
+        self._append_military(planet, [bytes(moved)])
+
+        # WRITING Owner:8 AT ALL IS A §1.1 EXCEPTION, and a narrow one. The rule
+        # forbids it because inventing money is indistinguishable from earning
+        # it — which is an argument about CREDITING. This only ever debits, and
+        # only by the number the engine itself quoted for this exact draft a few
+        # microseconds earlier. The alternative is not "do it honestly", it is
+        # "take the citizen for free", which is the actual cheat.
+        cash = civ.cash
+        self._u32(civ.addr + 8, cash - cost,
+                  f"{civ.civ_name} cash {cash} -> {cash - cost} "
+                  f"(the engine's own price for this draft)")
+        self.cash_effect -= cost
+        self.log(f"  drafted citizen {pick} on {planet} for {cost} "
+                 f"(migrated by field write, not by ChangeCitizenJobs)")
         return pick
 
     # -- L: set a ship's command, target node included (engine call) -------

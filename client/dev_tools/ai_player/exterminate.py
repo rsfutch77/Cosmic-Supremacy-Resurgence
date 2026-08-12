@@ -38,6 +38,7 @@ rounds each, and Ship:136_new = Ship:136_old * (1 - damage/hitpoints). A battle
 ends by annihilation or is cut off with both sides alive, so a STALEMATE is a real
 outcome and a losing fleet does not retreat on its own — R-XTM-05 has to.
 """
+import struct
 import sys
 
 import actions
@@ -112,6 +113,35 @@ def enemies(snap, civ, act=None):
             if c.addr != civ.addr and at_war_with(snap, civ, c, act)]
 
 
+def already_heading(ship, target, order_type, tol=1.0):
+    """Is this ship ALREADY under this order, aimed at this target?
+
+    RE-ISSUING AN ORDER RESETS ITS PROGRESS, so a rule that re-orders the same
+    ship at the same planet every turn moves it one turn's worth and then sends
+    it back to the start line. `retarget_order` must zero `+76` — a retarget that
+    inherited stale progress once moved a ship at twice its speed — so the cost
+    is not in the retarget, it is in calling it when nothing has changed.
+
+    Measured in a live log: a troop hull ordered to conquer the same planet on
+    consecutive turns had 21.9 units of travel zeroed each time, and crawled.
+    The user watched it flip between conquer and orbit and never arrive.
+
+    R-XPN-02 has always had this guard ("already en route; leaving the order
+    untouched"); the Exterminate rules never got one, which is why the fault
+    showed up in raids and invasions and not in colonisation.
+    """
+    if (ship.order_type or 0) != order_type:
+        return False
+    ptr = ship.order_ptr
+    if not gs.is_ptr(ptr):
+        return False
+    blob = ship.snap.read(ptr + actions.ORD_TARGET, 12)
+    if not blob or len(blob) < 12:
+        return False
+    aim = struct.unpack("<fff", blob)
+    return gs.dist(aim, target.pos) <= tol
+
+
 def send_to(act, ship, target, civ, order_type=1):
     """Move `ship` to `target` with a route-only order. NO actuator L.
 
@@ -137,6 +167,10 @@ def send_to(act, ship, target, civ, order_type=1):
     enemy-held planet while at war is what starts a fight. A Move order that gets
     the hull there does the whole job.
     """
+    if already_heading(ship, target, order_type):
+        act.log(f"  {ship} is already under order {order_type} for {target}; "
+                f"leaving it alone — re-issuing would zero its progress")
+        return ship.order_ptr
     ptr = (ship.order_ptr if gs.is_ptr(ship.order_ptr)
            else act.create_order(ship, target, civ))
     if ptr is None:

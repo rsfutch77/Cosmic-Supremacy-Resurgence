@@ -256,7 +256,26 @@ PLNT payload:  u32 objectId ; f32 x, z, y ; u32 ownerObjectId ; f32 ;
 
 `inject_design.py`'s uniqueness check was galaxy-wide and is now **per civ**, which is what the game itself does — every galaxy starts with each civ owning a design called `Colony Ship`. `client/dev_tools/game_cycle.py --all-civs` uses that to give each `--design` to every civ in the blob, taking one template design id per `OWNR` straight from the blob rather than from the running client. An AI-vs-AI galaxy needs it: at turn 0 a civ owns nothing but a colony ship, so without it one side can scout and the other cannot.
 
+#### `Owner:4` must be unique per civ — the missing-from-the-score-list bug (CONFIRMED, August 2026)
+
+**An injected civ was present in the diplomacy list but absent from the overview score list, because a clone inherited its donor's `Owner:4`.** `Owner:4` is the `u32` that ends the `OWNR` payload (see the layout above). `add_civ`'s blanket `replace_u32` rewrites the donor's *object id*, which this is not, so the clone kept it. **`inject_civ.py` now assigns `max(existing) + 1`**, and `--userid` forces a value — pass one another civ already holds and the bug comes back, which is how the control below was built.
+
+*How it was found, before anything was run.* Ruled out the server (no score-related `action=` has ever reached the stub — the log carries only `savegame`, `testconnection`, `listcivnames`, `listcoa`, `getcoa`, so the list is client-side); ruled out a missing per-civ section (`OWPR`, `CVTR`, `SERV`, `GOVS`, `ADMS`, `SPQS`, `USSE` are byte-identical across all three civs in a turn-5 capture, and score itself lives on the object at `Owner:28`); ruled out `KNPL` (at turn 185 every civ knows every other, the injected one included — 36-byte records keyed by the other civ's object id, second word the turn contact was made). What was left was the one per-civ field a clone duplicates: across three separately generated galaxies it reads **20 for `GoodGuy` and 21 for `BadGuy`, always**, and every injected civ carried its donor's value.
+
+*The A/B that confirmed it.* Two `.dat`s built from the same turn-185 capture, **differing in four bytes** — `Ceti`'s `Owner:4`, 20 (colliding with `GoodGuy`) versus 22. Same galaxy, same scores, same contact state, loaded one after the other:
+
+| | `Ceti` `Owner:4` | Diplomacy list | Overview score list |
+|---|---|---|---|
+| **A** | 20 — collides with `GoodGuy` | all three civs | `GoodGuy` and `BadGuy` only, **and it stays that way across turn boundaries** (185 → 191+) |
+| **B** | 22 | all three civs | all three — **but only after the first turn boundary** |
+
+So the score list holds one row per distinct `Owner:4`, and the collision — not the injection — is what hid the civ. The A row matters as much as the B row: ticking turns does not fix a collision, so the boundary is not what was missing.
+
+**What `Owner:4` actually is remains open.** `ejbo_annotations.json` recorded it as `Human=0, AI=21`, which suggested an account id rebound to the local player on load. **That is falsified**: live, the local player's civ reads **20**, matching its blob value. What is measured is narrower — the field is per-civ, distinct across generated civs, and the score list keys on it. A slot index, a roster index and an account id all fit.
+
 #### Open items
+
+`[ ]` **The score list is built at a turn boundary, not at load, so a civ with a correct `Owner:4` is still missing for the whole of a galaxy's first turn.** Confirmed on the B galaxy: parked at turn 185 straight off the `.dat`, the score list showed two rows; after one boundary it showed three, with no other change. This is the residual limitation of the fix and it is **not addressed** — it bites every freshly injected galaxy until its first tick, and a galaxy parked at 3600s turns stays wrong for an hour. Two ways round it, neither implemented: tick one boundary before showing the list (`fast_turns.py <secs>` collapses the current turn — one write starts the clock), or render the standing somewhere else entirely, since the numbers are readable per civ off `Owner:28` without the client's table. Worth revisiting properly: find what the boundary path does to the table that the load path does not, which is also the question of whether anything *else* the UI shows is only refreshed at a boundary.
 
 `[ ]` **`EXSY` is cloned, not reset, and that is a cheat rather than a cosmetic defect.** An injected civ inherits the donor's explored-systems map, so cloning a developed donor tells the newcomer where the home planets are. Two things keep it from mattering yet and neither is a fix: the AI player does not read `EXSY` (it keeps its own discovery set, persisted per civ name), and cloning from a turn-1 capture inherits an empty map, so only the developed-donor fixture leaks. The fix needs the record layout, which is not decoded — the leading `u32` reads 63 on a civ that had explored 105 systems, so it is not a plain count and the obvious guess is already falsified. **That `EXSY` is the explored-systems map is itself inferred** from the tag and from its size tracking exploration across two civs; confirm it while decoding it.
 

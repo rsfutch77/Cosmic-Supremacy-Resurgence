@@ -61,6 +61,18 @@ WHAT IS PATCHED IN A CLONE, AND WHY EACH ONE
 * **`KNPL` reset to zero records** — that is the known-PLAYERS vector (its one
   record holds the other civ's object id), and a civ that has just appeared has
   met nobody.
+* **the `u32` that ends the `OWNR` payload** — the field that lands at `Owner:4`
+  in memory. It reads 20 for `GoodGuy` and 21 for `BadGuy` in every galaxy the
+  client has generated here, and **a clone that keeps its donor's value is
+  missing from the client's score list** while still appearing in diplomacy: the
+  list holds one row per distinct `Owner:4`. CONFIRMED by an A/B on two `.dat`s
+  built from one turn-185 capture and differing in these four bytes — with a
+  colliding value the civ never appears, across turn boundaries; with a fresh one
+  it appears after the galaxy's first boundary. The clone gets
+  `max(existing) + 1`; `--userid` forces a value, including the donor's, which is
+  what reproduces the bug. What the field IS is still open — per-civ and distinct
+  per generated civ is all that is measured. It is NOT the local account id: the
+  human's civ reads 20 live, matching its blob value.
 
 WHAT IS DELIBERATELY LEFT ALONE
 -------------------------------
@@ -274,7 +286,8 @@ def pick_homeworld(planets, taken):
 
 
 # ── the injection ─────────────────────────────────────────────────────────────
-def add_civ(blob, new_name, donor_name=None, home_id=None, taken=(), log=print):
+def add_civ(blob, new_name, donor_name=None, home_id=None, taken=(),
+            user_id=None, log=print):
     owners = owner_records(blob)
     if not owners:
         raise SystemExit("no OWNR records found")
@@ -378,6 +391,18 @@ def add_civ(blob, new_name, donor_name=None, home_id=None, taken=(), log=print):
         else:
             log(f"  KNPL left alone (count field reads {met}, not a count)")
 
+    # The last u32 of the payload is Owner:4, and it is the ONE per-civ field a
+    # clone would otherwise duplicate: the blanket replace_u32 above rewrites the
+    # donor's OBJECT id, and this is a different number entirely. Two generated
+    # civs read 20 and 21, so max+1 continues the sequence.
+    donor_uid = struct.unpack_from("<I", blob, donor["end"] - 4)[0]
+    uid = (max(struct.unpack_from("<I", blob, o["end"] - 4)[0]
+               for o in owners) + 1) if user_id is None else user_id
+    struct.pack_into("<I", rec, len(rec) - 4, uid)
+    forced = "" if user_id is None else ("  (FORCED — a value already in use "
+                                         "hides the civ from the highscore list)")
+    log(f"  Owner:4 {donor_uid} -> {uid}{forced}")
+
     # -- 3. splice the clone in after the last OWNR --------------------------
     at = max(o["end"] for o in owner_records(blob))
     log(f"  inserting {len(rec)} bytes at {at}:")
@@ -404,11 +429,15 @@ def describe(blob, log=print):
     ca = civ_count_at(blob)
     log(f"civ count field @{ca} reads "
         f"{struct.unpack_from('<I', blob, ca)[0]}; {len(owners)} OWNR record(s)")
+    seen = {}
     for o in owners:
         mine = [p for p in planets if p["owner"] == o["oid"]]
-        log(f"  {o['name']!r:16} id={o['oid']:<6} OWNR {o['ln']:>6} bytes  "
-            f"{len(mine)} planet(s): "
-            f"{', '.join(str(p['id']) for p in mine)}")
+        uid = struct.unpack_from("<I", blob, o["end"] - 4)[0]
+        clash = f"  <-- SAME Owner:4 AS {seen[uid]!r}" if uid in seen else ""
+        seen.setdefault(uid, o["name"])
+        log(f"  {o['name']!r:16} id={o['oid']:<6} Owner:4={uid:<4} "
+            f"OWNR {o['ln']:>6} bytes  {len(mine)} planet(s): "
+            f"{', '.join(str(p['id']) for p in mine)}{clash}")
     free = [p for p in planets if not p["owner"]]
     log(f"  {len(planets)} planet(s), {len(free)} uncolonised")
     log(f"  high-water object id "
@@ -423,6 +452,10 @@ def main():
     ap.add_argument("--home", action="append", default=[], type=int,
                     help="planet object id for the matching --name; "
                          "auto-picked when omitted")
+    ap.add_argument("--userid", action="append", default=[], type=int,
+                    help="Owner:4 for the matching --name; -1 or omitted takes "
+                         "max(existing) + 1. Pass a value another civ already "
+                         "holds to reproduce the missing-from-highscores bug")
     ap.add_argument("--donor", default=None,
                     help="civ to clone (default: the smallest OWNR, which is "
                          "normally the engine's own civ)")
@@ -443,8 +476,9 @@ def main():
     taken = []
     for i, name in enumerate(a.name):
         home = a.home[i] if i < len(a.home) else None
+        uid = a.userid[i] if i < len(a.userid) else -1
         blob, used = add_civ(blob, name, donor_name=a.donor, home_id=home,
-                             taken=taken)
+                             taken=taken, user_id=None if uid < 0 else uid)
         taken.append(used)
 
     print()
