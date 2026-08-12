@@ -221,8 +221,23 @@ class Loop:
             time.sleep(pause)
         return snap, civ
 
-    def one_pass(self):
-        snap, civ = self._snapshot_settled()
+    def one_pass(self, snap=None):
+        """One decision pass. `snap` lets a caller supply a SHARED snapshot.
+
+        The scan is 94% of a pass — 1.8s against 0.1s for all seventeen rules —
+        so a controller that scans per civ pays it N times for one turn's worth
+        of information. duel.py passes one snapshot to every civ instead.
+
+        Sharing is not just cheaper, it is arguably more correct: every civ then
+        decides from the SAME start-of-turn state, rather than each later civ
+        seeing the earlier ones' writes. Civs share no objects — a planet or ship
+        belongs to exactly one of them — so nothing a rule reads about its own
+        empire goes stale mid-turn.
+        """
+        if snap is not None:
+            civ = gs.resolve_civ(snap, self.civ_name)
+        else:
+            snap, civ = self._snapshot_settled()
         if civ is None:
             self.log(f"[loop] no civ named {self.civ_name!r}; saw "
                      f"{[c.civ_name for c in snap.civs]}")

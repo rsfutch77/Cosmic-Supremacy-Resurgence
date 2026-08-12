@@ -361,6 +361,57 @@ state as re-opening the customisation window until this is settled.
 
 ---
 
+## 2a. Galaxy settings — the `GSET` block (August 2026)
+
+**Every save blob opens with the galaxy's full configuration, and it is the closest thing we have to the original server's galaxy-creation form.** 32 settings, decoded by `save_parser.parse_gset` and dumped by `server/dev_tools/set_turnlength.py`. This matters beyond curiosity: a replacement server has to *decide* all of these when it creates a galaxy, and until now we have been inferring the game's constants from memory one at a time.
+
+**Six of them independently confirm numbers this project measured by completely different routes**, which is the strongest evidence that the block is what it appears to be:
+
+| setting | value | independently measured as |
+|---|---|---|
+| `planetspersystem` | `(4, 6)` | 4–6 planets per system, counted across 108 systems |
+| `startcredits` | `200` | `Owner:8` reads 200 at turn 0 |
+| `colonyships` | `2` | every civ starts with exactly two colony ships |
+| `homeworld_properties` | `[300, 32, 30, 40, 7]` | the customisation base table at `0x02CA8410` = `[300, 32, 30, 40]` — space, food/farmer, production/worker, science/scientist |
+| `homeworld_changes` | `30` | the 30 increments the homeworld popup distributes |
+| `tech_multiplier` | `800` | `GetScale` `0x0054A6F0` returns 800; `research.py`'s `COST_SCALE` |
+
+The full block, from a live galaxy:
+
+```
+name  ''            speed 0        team 0       xp 0          sandbox 0    2d 0
+rank (0, 999)       maxusers 100   density 0    sectorsize 200
+turnlength 3600     primetime (-1, -1)          primetime_turnlength -1
+startticks (-1, -1)
+homeworld_properties      [300, 32, 30, 40, 7]
+regularplanet_properties  [150, 290, 25, 40]
+juicyplanet_properties    [220, 310, 32, 42]      juicyplanets 2
+planetspersystem (4, 6)   colonyships 2           startcredits 200
+tech_multiplier 800       corruption_multiplier 100   reputation_multiplier 100
+colonymodule_multiplier 100   hse_multiplier 100
+homeworld_changes 30      civilization_changes 5  score_breakeven 20
+premium 1   waronly 1     autoattack 1
+```
+
+**Turn length was a per-galaxy choice, not a constant.** Galaxies ran anywhere from minutes to hours per turn, which is what made the game playable across time zones — the design the README describes as "long turn based play (hours between ticks)". `turnlength` is that choice in seconds.
+
+**`primetime` and `primetime_turnlength` are a scheduled fast window.** A galaxy could run at its normal slow rate most of the day and switch to a much shorter turn during peak hours — early evening, when most players are home and want to see things happen. `primetime` is the `(start, end)` pair and `primetime_turnlength` the rate inside it; all three read `-1` here, meaning unused. Not needed for single-player or AI work, recorded because a faithful server has to implement it and nothing else documents it.
+
+`[ ]` **Not yet mapped to behaviour:** `speed`, `density`, `rank`, `startticks`, `premium`, `score_breakeven`, `civilization_changes`, `hse_multiplier`, `colonymodule_multiplier`. `civilization_changes = 5` is a good guess at the civ-trait budget, matching the trait block at `Owner:744…940`, but that is inference.
+
+`[ ]` **`corruption_multiplier = 100` is the first handle on corruption we have.** Corruption has resisted location in memory entirely — see the memory report — and here is a galaxy-level knob for it. Changing it and watching what moves is a far cheaper search than diffing planets, and it is the same trick that finally located `Planet:368`: make the thing vary.
+
+**`turnlength` drives the game's clock, and the engine re-applies it AT EVERY TURN BOUNDARY.** A galaxy set to 75 was observed writing 75 back over a driven 15 at each boundary, so a galaxy configured above the floor runs at its configured rate with nothing driving it — `ai.py --drive` is only needed to go faster than the game wants to.
+
+Two things make this easy to get wrong, and both cost this project a false conclusion:
+
+* **At LOAD the live value at `0x0080AA08` reads 3600 regardless of the config.** Reading it there and stopping says the setting does nothing. The refresh runs at a turn BOUNDARY, and on a 3600-second galaxy the first boundary is an hour away, so nothing can be observed without driving turns first.
+* **Below 60 the value never appears at all.** Two sites in the binary clamp it — `cmp esi, 60 ; mov [0x0080AA08], esi ; jg skip ; mov [0x0080AA08], 60` — so a galaxy configured at 10 presents as 60 every turn, which reads like the engine ignoring the config rather than honouring it and rounding up.
+
+**60 seconds is therefore the engine's real minimum turn**, which is worth knowing independently: the original game had no reason to support anything faster, and a training loop does. Lowering it is one byte per site (`3c` → `01`), keeping the clamp and moving its floor.
+
+---
+
 ## 3. Galaxy Types
 
 | Galaxy | Description |
@@ -531,6 +582,36 @@ Six patch sites bypass server sync checks in the turn pipeline so turns can fire
 
 **Side effect:** Applying T1–T5 removes the Next Turn button from the UI. This is intentional for the multiplayer build — turns are advanced externally via `fast_turns.py`, not by player clicks.
 
+### Patches 18–27 — Turn-length floor, 60s → 1s (10 bytes, August 2026)
+
+**Optional, and the only patch here that changes game RULES rather than plumbing.** Applied by `client/dev_tools/patch_turn_floor.py --apply`, reverted by `--revert`, with a `.preturnfloor.bak` written beside the EXE.
+
+The engine re-applies `GSET.turnlength` at every turn boundary (see §2a) and clamps it to a **minimum of 60 seconds**. Sixty is a sensible floor for the game this was — turns ran from minutes to hours — and the wrong one for developing an AI against it: at 75s a 300-turn game takes 6.3 hours, at 3s it takes 15 minutes, and three civs' worth of decisions cost 0.5s of that.
+
+Ten single-byte immediates, `0x3C` → `0x01`. No instruction lengths change, no branch targets move, nothing relocates. The clamp still exists and still guards against a zero or negative turn length; it guards at 1 second instead of 60.
+
+| # | file | VA | instruction |
+|---|---|---|---|
+| 18 | `0x12C743` | `0x0052D343` | `mov edx, 60` — floor taken as a max against it |
+| 19 | `0x12C78B` | `0x0052D38B` | `cmp esi, 60` |
+| 20 | `0x12C79A` | `0x0052D39A` | `mov dword [0x0080AA08], 60` |
+| 21 | `0x12C8C2` | `0x0052D4C2` | `cmp ecx, 60` |
+| 22 | `0x12C8E5` | `0x0052D4E5` | `cmp ecx, 60` |
+| 23 | `0x12C8F1` | `0x0052D4F1` | `mov ecx, 60` |
+| 24 | `0x12C90C` | `0x0052D50C` | `cmp ecx, 60` |
+| 25 | `0x12C910` | `0x0052D510` | `mov ecx, 60` |
+| 26 | `0x16D8D3` | `0x0056E4D3` | `cmp eax, 60` |
+| 27 | `0x16D8E2` | `0x0056E4E2` | `mov dword [0x0080AA08], 60` |
+
+**CONFIRMED:** galaxy configured `turnlength = 3`, one write to `0x0080AA08` to trigger the first boundary, then **15 boundaries in 40 seconds at a mean of 2.7s** with nothing driving and the live value holding at 3.
+
+Two things cost time here and are worth passing on:
+
+* **Patching the two obvious sites did nothing.** Only #20 and #27 write the immediate straight to memory; the rest load 60 into a REGISTER first (`mov ecx, 60 ; mov [0x0080AA08], ecx`), which does not match a search for `mov [addr], imm`. The live value kept coming up 60 on a client whose patched bytes verified correct on disk.
+* **Read the RUNNING process to tell the two failures apart.** "The patch does not work" and "the patch is not where I think it is" present identically. Reading the bytes back out of the live process settled it in one step.
+
+`[ ]` The same function also carries an **upper** bound — `cmp ebx, 0xA8C0` (43,200 = 12 hours) at `0x0052D34F`. Untouched, and presumably the longest turn the original game offered.
+
 ### Summary
 
 Patches 1–4 (54 bytes) redirect all network traffic from the dead production servers (`www.cosmicsupremacy.com`, `cosmicsupremacy.com`, and a hardcoded IP) to `127.0.0.1:8888`, where the local stub server (`cs_server.py`) listens. Patch 1 converts a conditional branch (JZ) to an unconditional jump (JMP), forcing the client to always take the "success" path past a connection-validation check.
@@ -546,6 +627,7 @@ Patches 12–17 (22 bytes, T1–T5) bypass turn-pipeline sync checks, enabling e
 | `CosmicSupremacy.exe` | None | Yes | — | Unmodified original |
 | `CosmicSupremacy_TestBed.exe` | 1–11 | Yes | `TestBedGalaxy_local.csgalaxy` | Manual testing with interactive turn button |
 | `CosmicSupremacy_Resurgence.exe` | 1–17 (incl. T1–T5) | No | `SandboxGalaxy_local.csgalaxy` | Production multiplayer — turns controlled by `fast_turns.py` |
+| `CosmicSupremacy_Resurgence.exe` | + 18–27 (optional) | No | any | AI development — sub-60s turns. **Do not ship**: it changes a game rule, not plumbing, and a galaxy built on it runs faster than the original ever allowed |
 
 ---
 
