@@ -71,6 +71,10 @@ protocol, and how to build a release. The
 [reverse-engineering report](docs/CosmicSupremacy_Reconstruction_Report.md) and
 the [development plan](docs/Development_Plan.md) have the deep detail.
 
+## Use of Generative AI
+
+I'm a fan of the original game and definitely did not grow up around the languages this game was originally written in. My goal with this project was to rebuild the original as faithfully as possible. To that end, I only use GenAI to help me understand how this puzzle fits together. GenAI will not be used to create new art assets for the game, and the "AI" players will not use GenAI. 
+
 ## Licence
 
 Cosmic Supremacy was created by Erwin, and the original game assets remain their
