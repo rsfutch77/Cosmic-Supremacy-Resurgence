@@ -79,7 +79,7 @@ def game_root_candidates() -> "list[str]":
 
 def find_game_root(modes) -> "str | None":
     """First directory that holds every EXE the manifest asks for."""
-    wanted = {m["exe"] for m in modes}
+    wanted = {m["exe"] for m in modes if is_playable(m)}
     for cand in game_root_candidates():
         if all(os.path.exists(os.path.join(cand, exe)) for exe in wanted):
             return cand
@@ -91,8 +91,20 @@ def _short(mode) -> str:
     return mode.get("short") or mode["title"]
 
 
+def is_playable(mode) -> bool:
+    """
+    Can this mode actually be launched today?
+
+    A placeholder — "enabled": false, or simply no EXE named — is shown as a
+    greyed-out card advertising what is coming. It must not be counted when
+    looking for the game files, or a release that ships no multiplayer client
+    would decide the whole install is broken.
+    """
+    return bool(mode.get("enabled", True) and mode.get("exe") and mode.get("galaxy"))
+
+
 def find_galaxy_root(game_root: str, modes) -> "str | None":
-    wanted = {m["galaxy"] for m in modes}
+    wanted = {m["galaxy"] for m in modes if is_playable(m)}
     for cand in (os.path.join(game_root, "galaxies"), game_root):
         if all(os.path.exists(os.path.join(cand, g)) for g in wanted):
             return cand
@@ -356,7 +368,7 @@ class Launcher:
         # Every client the manifest knows about, including modes not shown: a
         # hidden mode's client is still a running game that a second launch
         # would kill.
-        self.client_exes = {m["exe"] for m in cfg["modes"]}
+        self.client_exes = {m["exe"] for m in cfg["modes"] if m.get("exe")}
         # Diagnostics start before the data directory is known — where the game
         # was found, and whether it was found at all, are exactly the lines a
         # failed startup needs to leave behind — so they buffer until there is a
@@ -395,16 +407,32 @@ class Launcher:
             card = tk.Frame(body, bg=PANEL, highlightbackground=EDGE,
                             highlightthickness=1)
             card.pack(fill="x", pady=5)
+            ready = is_playable(mode)
             btn = tk.Button(card, text=mode["title"], width=18,
-                            bg=BTN, fg="#ffffff", activebackground=BTN_HI,
-                            activeforeground="#ffffff", relief="flat", bd=0,
-                            font=("Segoe UI", 10, "bold"), cursor="hand2",
+                            bg=BTN if ready else PANEL,
+                            fg="#ffffff" if ready else FAINT,
+                            activebackground=BTN_HI, activeforeground="#ffffff",
+                            relief="flat", bd=0,
+                            font=("Segoe UI", 10, "bold"),
+                            cursor="hand2" if ready else "",
+                            state="normal" if ready else "disabled",
+                            disabledforeground=FAINT,
                             command=lambda m=mode: self.on_play(m))
             btn.pack(side="left", padx=14, pady=14)
-            btn.bind("<Enter>", lambda e, b=btn: b.configure(bg=BTN_HI))
-            btn.bind("<Leave>", lambda e, b=btn: b.configure(bg=BTN))
-            self.buttons.append(btn)
-            tk.Label(card, text=mode["blurb"], bg=PANEL, fg=DIM, justify="left",
+            if ready:
+                btn.bind("<Enter>", lambda e, b=btn: b.configure(bg=BTN_HI))
+                btn.bind("<Leave>", lambda e, b=btn: b.configure(bg=BTN))
+                # Only playable buttons go in the list fail() disables — a
+                # coming-soon button is already disabled and must stay that way.
+                self.buttons.append(btn)
+            else:
+                # Packed before the blurb so the right-hand side claims its
+                # width first and the blurb wraps around it.
+                tk.Label(card, text=" COMING SOON ", bg=EDGE, fg=TEXT,
+                         font=("Segoe UI", 7, "bold")).pack(side="right",
+                                                            padx=(0, 14))
+            tk.Label(card, text=mode["blurb"], bg=PANEL,
+                     fg=DIM if ready else FAINT, justify="left",
                      wraplength=340, font=("Segoe UI", 9)).pack(
                          side="left", padx=(0, 14))
 
@@ -463,7 +491,8 @@ class Launcher:
         game_root = find_game_root(self.modes)
         if not game_root:
             searched = "\n".join("    " + c for c in game_root_candidates())
-            needed = ", ".join(sorted({m["exe"] for m in self.modes}))
+            needed = ", ".join(sorted({m["exe"] for m in self.modes
+                                       if is_playable(m)}))
             for line in ("game files not found; searched:", searched):
                 self.say(line)
             self.fail(
@@ -521,6 +550,10 @@ class Launcher:
 
     # ── actions ──
     def on_play(self, mode):
+        # The button is disabled, so this is unreachable from the UI — but a
+        # placeholder has no EXE to run and must never fall through to Popen.
+        if not is_playable(mode):
+            return
         busy = running_clients(self.client_exes)
         if busy:
             self.warn("A Cosmic Supremacy game is already running "

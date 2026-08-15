@@ -15,12 +15,14 @@
     "When they are, this file is the only thing that changes: point every mode",
     "at the same 'exe' and delete the others from build.ps1's copy list.",
     "",
-    "  needs_server  documentation, not control flow. The launcher always runs",
-    "                the stub server. Every mode contacts localhost:8888 at",
-    "                startup. Measured, not assumed: Tutorial calls it, Demo",
-    "                never contacts it at all over a 45s run.",
+    "  needs_server  documentation, not control flow — the launcher always runs",
+    "                the stub server. Measured, not assumed: Tutorial calls",
+    "                localhost:8888 at startup, Demo never contacts it at all.",
     "  show          false keeps a mode out of the player-facing window without",
-    "                losing the mapping."
+    "                losing the mapping.",
+    "  enabled       false renders the card greyed out with a COMING SOON badge.",
+    "                Such a mode needs no exe or galaxy, and is skipped when",
+    "                looking for the game files."
   ],
 
   "modes": [
@@ -46,12 +48,20 @@
     },
     {
       "id": "testbed",
-      "title": "Play TestBed",
-      "short": "TestBed",
+      "title": "Play Single Player",
+      "short": "Single Player",
       "blurb": "A full single-player galaxy against the new Resurgence AI. Turns run locally, on your machine, at your own pace.",
       "exe": "CosmicSupremacy_TestBed.exe",
       "galaxy": "TestBedGalaxy_local.csgalaxy",
       "needs_server": true,
+      "show": true
+    },
+    {
+      "id": "multiplayer",
+      "title": "Multiplayer",
+      "short": "Multiplayer",
+      "blurb": "Persistent galaxies against other players, the way the original was played.",
+      "enabled": false,
       "show": true
     },
     {

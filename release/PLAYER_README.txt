@@ -44,8 +44,12 @@ Play the Tutorial   The original guided walkthrough. Start here if you have
 View the Demo      The original demo galaxy. A look at the game with nothing
                     at stake.
 
-Play TestBed        A full single-player galaxy against the computer. Turns
+Play Single Player  A full single-player galaxy against the computer. Turns
                     resolve on your own machine.
+
+Multiplayer         Coming soon. Persistent galaxies against other players,
+                    the way the original was played. The button is greyed out
+                    until it is ready.
 
 
 KNOWN ISSUES IN THIS RELEASE
@@ -58,7 +62,7 @@ KNOWN ISSUES IN THIS RELEASE
 - The tutorial has some rough edges inherited from the original game. They are
   known and are not caused by this restoration.
 
-- In TestBed, the in-game Save and Load buttons do not work yet. This is the
+- In Single Player, the in-game Save and Load buttons do not work yet. This is the
   next thing being fixed.
 
 - Only one game can run at a time. The launcher will tell you if one is already
