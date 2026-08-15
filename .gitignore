@@ -27,3 +27,13 @@ tools
 # named restore points (raw save blobs, big and regenerable)
 client/checkpoints/
 .vscode
+
+# ── Release build output ──────────────────────────────────────────────────────
+# The staged release folder duplicates the 8 MB client binaries that are already
+# tracked in client/ — it is an artifact of release/build.ps1, regenerable from
+# the manifest, and belongs on a GitHub release rather than in the history.
+dist/
+release/build/
+release/.venv-build/
+# written by launcher.py when it is run from a checkout rather than a release
+release/data/

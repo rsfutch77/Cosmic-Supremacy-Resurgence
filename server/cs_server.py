@@ -25,7 +25,16 @@ import os
 import sys
 
 PORT = int(os.environ.get('CSPORT', 8888))
-LOGFILE = os.path.join(os.path.dirname(__file__), 'cs_server.log')
+
+# Where runtime artifacts live: the log, captured save blobs, governor blobs, and
+# the opt-in loadgame injection file.  Defaults to this file's own directory, so
+# `python cs_server.py` from a checkout behaves exactly as it always has.  The
+# release launcher overrides it because the frozen build imports this module out
+# of a temporary extraction directory that Windows deletes when the app exits —
+# saves written relative to __file__ there would vanish with it.
+DATA_DIR = os.environ.get('CS_DATA_DIR') or os.path.dirname(os.path.abspath(__file__))
+os.makedirs(DATA_DIR, exist_ok=True)
+LOGFILE = os.path.join(DATA_DIR, 'cs_server.log')
 
 # ── Web UI served at GET / (the game opens a browser here on first run) ───────
 WEB_INDEX = """<!DOCTYPE html>
@@ -86,8 +95,8 @@ def _get_civ(userid: str) -> dict:
 # exactly as it came off the wire, no decoding) plus a small .json sidecar with
 # the other POST fields.  Nothing is ever overwritten: each save gets its own
 # sequence number so a series of saves can be diffed against each other.
-SAVE_DIR    = os.path.join(os.path.dirname(__file__), 'saves')
-INJECT_BLOB = os.path.join(os.path.dirname(__file__), 'loadgame_blob.b64')
+SAVE_DIR    = os.path.join(DATA_DIR, 'saves')
+INJECT_BLOB = os.path.join(DATA_DIR, 'loadgame_blob.b64')
 
 
 def _raw_data_field(raw_body: str) -> 'str | None':
@@ -271,7 +280,7 @@ def handle_action(action: str, params: dict, raw_body: str = '') -> tuple[int, s
         govid    = params.get('govid',   ['0'])[0]
         govname  = params.get('govname', [''])[0].strip("'")
         data_str = params.get('data',    [''])[0]
-        gov_path = os.path.join(os.path.dirname(__file__), f'save_gov_{govid}.dat')
+        gov_path = os.path.join(DATA_DIR, f'save_gov_{govid}.dat')
         with open(gov_path, 'wb') as f:
             f.write(data_str.encode('latin-1'))
         log(f'  -> savegov: govid={govid} name={govname} {len(data_str)} bytes')
@@ -283,7 +292,7 @@ def handle_action(action: str, params: dict, raw_body: str = '') -> tuple[int, s
 
     if action == 'loadgov':
         govid    = params.get('govid', ['0'])[0]
-        gov_path = os.path.join(os.path.dirname(__file__), f'save_gov_{govid}.dat')
+        gov_path = os.path.join(DATA_DIR, f'save_gov_{govid}.dat')
         if os.path.exists(gov_path):
             gov_data = open(gov_path, 'rb').read().decode('latin-1')
             # Governor load likely uses same DONE#VER#<6>DATA# format as loadgame
@@ -388,7 +397,14 @@ def log(msg: str):
         _log_fh = open(LOGFILE, 'a', buffering=1, encoding='utf-8')
     ts = datetime.datetime.now().strftime('%H:%M:%S.%f')[:-3]
     line = f'[{ts}] {msg}'
-    print(line)
+    # A windowed (console-less) frozen build has sys.stdout == None, and a bare
+    # print() there raises inside the serving thread and kills the request.  The
+    # file is the log that matters; the console is a convenience.
+    if sys.stdout is not None:
+        try:
+            print(line)
+        except (OSError, ValueError, AttributeError):
+            pass
     _log_fh.write(line + '\n')
 
 
@@ -455,11 +471,17 @@ class CSHandler(http.server.BaseHTTPRequestHandler):
 
         if path == '/enter-demo':
             # Serve DemoGalaxy_local.csgalaxy as a file download
-            galaxy_path = os.path.join(os.path.dirname(__file__), 'DemoGalaxy_local.csgalaxy')
-            if os.path.exists(galaxy_path):
-                resp_bytes = open(galaxy_path, 'rb').read()
-            else:
-                resp_bytes = b''
+            # The galaxy pass files live with the client, not the server, so look
+            # in CS_GALAXY_DIR first (the launcher points this at the release's
+            # galaxies folder) and fall back to the data dir.
+            resp_bytes = b''
+            for base in (os.environ.get('CS_GALAXY_DIR'), DATA_DIR):
+                if not base:
+                    continue
+                galaxy_path = os.path.join(base, 'DemoGalaxy_local.csgalaxy')
+                if os.path.exists(galaxy_path):
+                    resp_bytes = open(galaxy_path, 'rb').read()
+                    break
             log(f'  <- serving DemoGalaxy_local.csgalaxy ({len(resp_bytes)} bytes)')
             self.send_response(200)
             self.send_header('Content-Type', 'application/octet-stream')
