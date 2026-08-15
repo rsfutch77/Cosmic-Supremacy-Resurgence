@@ -284,6 +284,60 @@ def start_server(host: str, port: int, data_dir: str, galaxy_dir: str, sink):
 
 
 # ── Client process ────────────────────────────────────────────────────────────
+def _process_names_via_api() -> "list[str] | None":
+    """
+    Every running process name, from the toolhelp snapshot API.
+
+    The status watcher asks once a second, and spawning tasklist.exe at that
+    rate to read a list the kernel will hand over directly is wasteful. Returns
+    None if the API is unavailable so the caller can fall back.
+    """
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        class PROCESSENTRY32W(ctypes.Structure):
+            _fields_ = [("dwSize", wintypes.DWORD),
+                        ("cntUsage", wintypes.DWORD),
+                        ("th32ProcessID", wintypes.DWORD),
+                        ("th32DefaultHeapID", ctypes.POINTER(ctypes.c_ulong)),
+                        ("th32ModuleID", wintypes.DWORD),
+                        ("cntThreads", wintypes.DWORD),
+                        ("th32ParentProcessID", wintypes.DWORD),
+                        ("pcPriClassBase", ctypes.c_long),
+                        ("dwFlags", wintypes.DWORD),
+                        ("szExeFile", wintypes.WCHAR * 260)]
+
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        k32.CreateToolhelp32Snapshot.restype = wintypes.HANDLE
+        k32.CreateToolhelp32Snapshot.argtypes = [wintypes.DWORD, wintypes.DWORD]
+        k32.Process32FirstW.argtypes = [wintypes.HANDLE,
+                                        ctypes.POINTER(PROCESSENTRY32W)]
+        k32.Process32NextW.argtypes = [wintypes.HANDLE,
+                                       ctypes.POINTER(PROCESSENTRY32W)]
+        k32.CloseHandle.argtypes = [wintypes.HANDLE]
+
+        TH32CS_SNAPPROCESS = 0x00000002
+        snap = k32.CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
+        if not snap or snap == wintypes.HANDLE(-1).value:
+            return None
+        try:
+            entry = PROCESSENTRY32W()
+            entry.dwSize = ctypes.sizeof(PROCESSENTRY32W)
+            if not k32.Process32FirstW(snap, ctypes.byref(entry)):
+                return []
+            names = []
+            while True:
+                names.append(entry.szExeFile)
+                if not k32.Process32NextW(snap, ctypes.byref(entry)):
+                    break
+            return names
+        finally:
+            k32.CloseHandle(snap)
+    except Exception:
+        return None
+
+
 def running_clients(exe_names) -> "list[str]":
     """
     Names of any Cosmic Supremacy *client* already running.
@@ -303,20 +357,19 @@ def running_clients(exe_names) -> "list[str]":
     wanted.discard(os.path.basename(sys.executable).lower())
     if not wanted:
         return []
-    try:
-        out = subprocess.run(["tasklist", "/FO", "CSV", "/NH"],
-                             capture_output=True, text=True, timeout=10,
-                             creationflags=CREATE_NO_WINDOW).stdout
-    except (OSError, subprocess.SubprocessError):
-        return []
-    names = []
-    for line in out.splitlines():
-        if not line.startswith('"'):
-            continue
-        name = line.split('","')[0].lstrip('"')
-        if name.lower() in wanted:
-            names.append(name)
-    return sorted(set(names))
+
+    names = _process_names_via_api()
+    if names is None:
+        try:
+            out = subprocess.run(["tasklist", "/FO", "CSV", "/NH"],
+                                 capture_output=True, text=True, timeout=10,
+                                 creationflags=CREATE_NO_WINDOW).stdout
+        except (OSError, subprocess.SubprocessError):
+            return []
+        names = [line.split('","')[0].lstrip('"')
+                 for line in out.splitlines() if line.startswith('"')]
+
+    return sorted({n for n in names if n.lower() in wanted})
 
 
 def launch_mode(mode, game_root: str, galaxy_root: str) -> subprocess.Popen:
@@ -637,12 +690,13 @@ class Launcher:
 
     def _watch_game(self):
         """
-        Notice when the running game exits and go back to the ready state.
+        Keep the status line honest about whether a game is up.
 
-        Polling Popen.poll() rather than re-running tasklist: it is a cheap
-        handle check instead of spawning a process every second, and it reports
-        on the exact game this launcher started rather than anything that
-        happens to share a name.
+        Two sources, because neither alone is enough. The child handle is exact
+        — it names the mode that was clicked — but only covers games this
+        launcher started. Enumerating processes also catches a client started
+        from a dev tool or outside the launcher entirely, at the cost of only
+        knowing the EXE, and one EXE serves both Tutorial and Demo.
         """
         if self.child is not None and self.child.poll() is not None:
             name = _short(self.running_mode) if self.running_mode else "the game"
@@ -650,8 +704,31 @@ class Launcher:
             self.child = None
             self.running_mode = None
             self.say(f"{name} exited (code {code})")
-            self.set_status(*self._ready)
+
+        if self.child is not None and self.running_mode is not None:
+            self._status_if_changed(f"{_short(self.running_mode)} is running", OK)
+        else:
+            busy = running_clients(self.client_exes)
+            if busy:
+                self._status_if_changed(f"{self._name_for(busy)} is running", OK)
+            else:
+                self._status_if_changed(*self._ready)
         self.root.after(1000, self._watch_game)
+
+    def _name_for(self, exe_names) -> str:
+        """
+        What to call a game we did not launch, knowing only its EXE.
+
+        CosmicSupremacy.exe backs both Tutorial and Demo, so when the mapping is
+        ambiguous say "A game" rather than confidently name the wrong one.
+        """
+        shorts = {_short(m) for m in self.modes if m.get("exe") in exe_names}
+        return shorts.pop() if len(shorts) == 1 else "A game"
+
+    def _status_if_changed(self, text: str, colour: str):
+        """Repaint only on a real change — this runs once a second."""
+        if self.status.cget("text") != text:
+            self.set_status(text, colour)
 
     def _drain(self):
         try:
