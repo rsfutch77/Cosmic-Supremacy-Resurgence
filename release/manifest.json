@@ -17,7 +17,8 @@
     "",
     "  needs_server  documentation, not control flow. The launcher always runs",
     "                the stub server. Every mode contacts localhost:8888 at",
-    "                startup, including Tutorial and Demo - measured, not assumed.",
+    "                startup. Measured, not assumed: Tutorial calls it, Demo",
+    "                never contacts it at all over a 45s run.",
     "  show          false keeps a mode out of the player-facing window without",
     "                losing the mapping."
   ],
@@ -35,12 +36,12 @@
     },
     {
       "id": "demo",
-      "title": "Watch the Demo",
+      "title": "View the Demo",
       "short": "Demo",
       "blurb": "The original demo galaxy. A look at the game in an advanced state.",
       "exe": "CosmicSupremacy.exe",
       "galaxy": "DemoGalaxy_local.csgalaxy",
-      "needs_server": true,
+      "needs_server": false,
       "show": true
     },
     {

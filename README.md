@@ -37,7 +37,7 @@ the local game server.
 | Mode | What it is |
 |------|------------|
 | **Play the Tutorial** | The original guided walkthrough. Start here if you've never played — it teaches colonising, research, ship design and combat. |
-| **Watch the Demo** | The original demo galaxy. A look at an advanced game. |
+| **View the Demo** | The original demo galaxy. A look at an advanced game. |
 | **Play TestBed** | A full single-player galaxy against the computer, resolving turns on your own machine at your own pace. Now with the new, smarter Resurgence AI. |
 
 ### Something went wrong?

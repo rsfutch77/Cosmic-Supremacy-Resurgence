@@ -69,11 +69,14 @@ modified, not unmodified. Its name is historical and misleading.
 | `CosmicSupremacy_TestBed.exe` | `127.0.0.1:8888` | TestBed galaxy join and load paths | TestBed galaxies |
 | `CosmicSupremacy_Resurgence.exe` | `127.0.0.1:8888` | no "analyzing system" popup; works with custom turn lengths and the AI harness | Sandbox galaxy, AI harness |
 
-Tutorial and Demo never reach the internet — no DNS lookup for the old domain
-occurs, so the `www.cosmicsupremacy.com` string above is not contacted. They do
-however call **`localhost:8888`** at startup, which is one of the startup checks
-`CosmicSupremacy.exe` was modified to take. They are local-only, not
-server-free.
+Neither Tutorial nor Demo reaches the internet — no DNS lookup for the old domain
+occurs, so the `www.cosmicsupremacy.com` string above is never contacted. They
+differ from each other on the local server, measured rather than assumed:
+
+| Mode | Contacts `localhost:8888`? |
+|------|----------------------------|
+| Tutorial | Yes — `testconnection` at startup, one of the checks this EXE was modified to take |
+| Demo | No — zero requests and zero connection attempts across a 45-second run with both loopback listeners up |
 
 ### Bind both loopback addresses, not just 127.0.0.1
 
