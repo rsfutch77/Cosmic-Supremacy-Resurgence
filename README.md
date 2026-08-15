@@ -1,72 +1,80 @@
 # Cosmic Supremacy — Resurgence
 
-**Bringing a classic space strategy game back online.**
+**A classic space strategy game, brought back online.**
 
 [Cosmic Supremacy](http://www.cosmicsupremacy.com) was a multiplayer 4X space
-strategy game released circa 2006.  Players colonised planets, researched
-technology, designed fleets, and competed in persistent galaxies. Long turn based play (hours between ticks) and automated governors enabled deep strategy and always online play for players across timezones battling huge fleets of custom ships.
+strategy game released around 2006. You colonised planets, researched
+technology, designed your own fleets, and fought for a galaxy. Turns took hours,
+governors ran your empire while you slept, and players across every timezone
+commanded enormous custom-built fleets against each other.
 
-The server has been offline for years, but the original client EXE still exists.
-This project aims to **reverse-engineer the server protocol and build a modern
-replacement backend** so the game can be played again.
+The servers went dark years ago. This project brings the game back.
 
-## Project goals
+---
 
-1. **Understand the original client** — extract assets, map out the HTTP API it
-   expects, and document game mechanics (tech tree, ship design, galaxy rules).
-2. **Build a compatible server** — a Python (FastAPI) backend that speaks the
-   same protocol so the unmodified (patched for localhost) client can connect.
-3. **Preserve and share** — make the findings, tools, and server code available
-   so anyone who remembers the game can help bring it back.
+## Play it
 
-## Repository layout
+**[⬇ Download the latest release](https://github.com/rsfutch77/Cosmic-Supremacy-Resurgence/releases/latest)**
 
-```
-client/               Patched EXE and .csgalaxy launcher files
-  dev_tools/          Memory viewer, snapshotting, and turn-driving scripts
-server/               Python HTTP stub server
-```
+1. **Unzip the whole folder** somewhere you can write to — Desktop or Downloads
+   is perfect. Don't run it from inside the zip, and don't put it in Program
+   Files.
+2. **Double-click `CosmicSupremacyLauncher.exe`**
+3. **Pick a mode and click it.**
 
-## Quick start
+That's the whole thing. No account, no installer, no internet connection for offline play, and
+nothing to configure. Leave the launcher window open while you play — it is also
+the local game server.
 
-1. Install Python 3.10+
-2. Install dependencies:
-   ```
-   cd server
-   pip install -r requirements.txt
-   ```
-3. Start the local server for development:
-   ```
-   python cs_server.py
-   ```
-4. Drag the .csgalaxy file onto the .EXE
+> **You will see "Windows protected your PC" the first time.** That is expected.
+> It appears because the launcher isn't code-signed, which costs a few hundred
+> dollars a year and this is a free fan project. Click **More info**, then
+> **Run anyway**. If you'd rather not take my word for it, the launcher's
+> source is [right here](release/launcher.py) and you can build it yourself.
 
-## Tech stack
+### What you can play
 
-| Layer    | Technology |
-|----------|------------|
-| Client   | Original Windows EXE (MFC / DirectX 9)|
-| Server   | Python · FastAPI · SQLite |
-| Protocol | HTTP/1.0 POST |
+| Mode | What it is |
+|------|------------|
+| **Play the Tutorial** | The original guided walkthrough. Start here if you've never played — it teaches colonising, research, ship design and combat. |
+| **Watch the Demo** | The original demo galaxy. A look at an advanced game. |
+| **Play TestBed** | A full single-player galaxy against the computer, resolving turns on your own machine at your own pace. Now with the new, smarter Resurgence AI. |
+
+### Something went wrong?
+
+Click **show log** at the bottom of the launcher, and grab `data\launcher.log`
+and `data\cs_server.log` from the release folder. Those three things are exactly
+what we need — please include them when you
+[open an issue](https://github.com/rsfutch77/Cosmic-Supremacy-Resurgence/issues).
+
+---
 
 ## Status
 
-The project is in active development. The patched client and stub server support
-fully playable single-player sandbox gameplay — ships move, turns tick, saves
-round-trip correctly. The server handles all 15 game API actions with correct
-response formats confirmed by binary analysis. Customization (civ names, coat of
-arms) and save/load persistence are working. See the Development Plan for current
-progress and next steps.
+The client and stub server support fully playable single-player gameplay: ships
+move, turns tick, and saves round-trip correctly. The server handles all 15 game
+API actions with response formats confirmed by binary analysis. Civilisation
+customisation and save/load persistence work. A heuristic AI capable of playing a
+full 4X game is in beta.
 
-See `CosmicSupremacy_Reconstruction_Report.md` for the full reverse-engineering
-reference.
+Multiplayer and hosted galaxies are not part of this release. All play is local.
 
-## Contributing
+## Help bring it back
 
-This is a preservation and fan project.  If you played Cosmic Supremacy and
-want to help, contributions are welcome — whether that's protocol analysis,
-server implementation, documentation, or testing.
+This is a preservation and fan project, and contributions are welcome — protocol
+analysis, server implementation, documentation, or just playing it and telling us
+what broke.
 
-## License
+Start with **[docs/DEVELOPMENT.md](docs/DEVELOPMENT.md)** for setup, the server
+protocol, and how to build a release. The
+[reverse-engineering report](docs/CosmicSupremacy_Reconstruction_Report.md) and
+the [development plan](docs/Development_Plan.md) have the deep detail.
 
-The original game assets remain the property of their creator, Erwin. We have tried to reach out to Erwin, and hope to involve them in the project. This patch will remain completely free in the spirt of the original game.
+## Licence
+
+Cosmic Supremacy was created by Erwin, and the original game assets remain their
+property. We have tried to reach out, and hope to involve them in the project.
+
+This is an unofficial restoration, not affiliated with or endorsed by the
+original author. It is free, in the spirit of the original game — it will never
+be sold and will never carry advertising.

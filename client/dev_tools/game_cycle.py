@@ -64,9 +64,15 @@ def log(msg):
 
 # ── process control ───────────────────────────────────────────────────────────
 def client_pids():
+    # The 'CosmicSupremacy*' wildcard also matches CosmicSupremacyLauncher.exe,
+    # the player-facing launcher added in release/. close_client() force-kills
+    # everything this returns, so without the exclusion a harness run with the
+    # launcher open would take the launcher — and the stub server living inside
+    # it — down with the client, mid-game.
     out = subprocess.run(
         ["powershell", "-NoProfile", "-Command",
          "Get-Process -Name 'CosmicSupremacy*' -ErrorAction SilentlyContinue "
+         "| Where-Object { $_.ProcessName -ne 'CosmicSupremacyLauncher' } "
          "| Select-Object -ExpandProperty Id"],
         capture_output=True, text=True).stdout
     return [int(x) for x in out.split() if x.strip().isdigit()]

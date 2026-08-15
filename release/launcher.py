@@ -65,15 +65,30 @@ def _repo_root() -> str:
     return os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 
+def game_root_candidates() -> "list[str]":
+    """Where a game folder can legitimately be, in priority order."""
+    cands = [os.path.join(app_dir(), "game"),   # a release
+             app_dir()]                         # exes beside the launcher
+    # The checkout layout only applies when running from source. Frozen,
+    # _repo_root() is derived from a temp extraction path and names a directory
+    # that cannot exist — listing it in the not-found message is pure confusion.
+    if not getattr(sys, "frozen", False):
+        cands.append(os.path.join(_repo_root(), "client"))
+    return cands
+
+
 def find_game_root(modes) -> "str | None":
     """First directory that holds every EXE the manifest asks for."""
     wanted = {m["exe"] for m in modes}
-    for cand in (os.path.join(app_dir(), "game"),
-                 app_dir(),
-                 os.path.join(_repo_root(), "client")):
+    for cand in game_root_candidates():
         if all(os.path.exists(os.path.join(cand, exe)) for exe in wanted):
             return cand
     return None
+
+
+def _short(mode) -> str:
+    """A mode's name as a noun, for status lines. Falls back to the button text."""
+    return mode.get("short") or mode["title"]
 
 
 def find_galaxy_root(game_root: str, modes) -> "str | None":
@@ -82,6 +97,56 @@ def find_galaxy_root(game_root: str, modes) -> "str | None":
         if all(os.path.exists(os.path.join(cand, g)) for g in wanted):
             return cand
     return None
+
+
+def set_app_user_model_id():
+    """
+    Give Windows an explicit taskbar identity.
+
+    Without one, a process that loads the Python DLL can be grouped under the
+    interpreter's identity, and the taskbar button then shows the interpreter's
+    icon no matter what the window or the EXE carries. Setting this before the
+    first window is created makes the taskbar button ours.
+    """
+    try:
+        import ctypes
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
+            "CosmicSupremacy.Resurgence.Launcher")
+    except Exception:
+        pass        # cosmetic only; never worth failing a launch over
+
+
+def find_icon(data_dir: "str | None" = None) -> "str | None":
+    """
+    Locate a .ico for the window, or build one.
+
+    Frozen, the build packs cosmic.ico in beside the manifest. From a checkout
+    nothing has been built, so the icon is extracted out of the client EXE on
+    first run and cached in the data directory — the same code the build uses,
+    so a dev run looks like the real thing.
+    """
+    packed = bundled("cosmic.ico")
+    if os.path.exists(packed):
+        return packed
+    if not data_dir:
+        return None
+    cached = os.path.join(data_dir, "cosmic.ico")
+    if os.path.exists(cached):
+        return cached
+    try:
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import extract_icon
+        for root in game_root_candidates():
+            src = os.path.join(root, "CosmicSupremacy.exe")
+            if os.path.exists(src):
+                extract_icon.main(["extract_icon", src, cached])
+                break
+    except Exception:
+        pass
+    # Checked rather than returned from inside the try: extract_icon prints a
+    # summary on success, and a console-less build would raise on that print
+    # after the file was already written correctly.
+    return cached if os.path.exists(cached) else None
 
 
 def find_data_dir() -> str:
@@ -142,7 +207,7 @@ def stub_server_answers(host: str, port: int, timeout: float = 1.5) -> bool:
 
 def start_server(host: str, port: int, data_dir: str, galaxy_dir: str, sink):
     """
-    Import cs_server and serve it on a daemon thread. Returns (httpd, note).
+    Import cs_server and serve it on daemon threads. Returns (servers, logfile).
 
     cs_server reads its environment at import time — PORT, and the DATA_DIR that
     the log, saves\\ and governor blobs hang off — so the environment has to be
@@ -173,22 +238,59 @@ def start_server(host: str, port: int, data_dir: str, galaxy_dir: str, sink):
         sink(msg)
     cs_server.log = tee
 
+    # ── Listen on BOTH loopback addresses ────────────────────────────────────
+    # The client connects to the name "localhost", and Windows resolves that to
+    # ::1 before 127.0.0.1. Bound to IPv4 alone, the first connection attempt
+    # sits in SynSent against a port nothing is listening on and only reaches us
+    # after the client gives up and retries over IPv4 — observed as a stalled
+    # startup with no request arriving for many seconds.
+    #
+    # Two loopback listeners rather than one dual-stack socket on ::, because ::
+    # would also accept connections from the LAN. A single-player game has no
+    # reason to be reachable from the network, and both of these are addressable
+    # only from this machine.
+    servers = []
     httpd = http.server.HTTPServer((host, port), cs_server.CSHandler)
     threading.Thread(target=httpd.serve_forever, daemon=True,
-                     name="cs_server").start()
-    return httpd, cs_server.LOGFILE
+                     name="cs_server-v4").start()
+    servers.append(httpd)
+
+    if socket.has_ipv6:
+        class _V6Server(http.server.HTTPServer):
+            address_family = socket.AF_INET6
+        try:
+            v6 = _V6Server(("::1", port), cs_server.CSHandler)
+            threading.Thread(target=v6.serve_forever, daemon=True,
+                             name="cs_server-v6").start()
+            servers.append(v6)
+        except OSError as exc:
+            # A host with IPv6 disabled still works over IPv4, just slower to
+            # make the first connection. Not worth failing the launch.
+            sink(f"ipv6 loopback listener unavailable ({exc})")
+
+    return servers, cs_server.LOGFILE
 
 
 # ── Client process ────────────────────────────────────────────────────────────
-def running_clients() -> "list[str]":
+def running_clients(exe_names) -> "list[str]":
     """
-    Names of any Cosmic Supremacy client already running.
+    Names of any Cosmic Supremacy *client* already running.
 
     This matters more than it looks: starting a second client does not open a
     second game, it silently kills the first. A player who clicks Tutorial while
     TestBed is up would watch their game vanish with no message, so the launcher
     checks first and says so.
+
+    Match the manifest's exact EXE names, never a "CosmicSupremacy" prefix: the
+    launcher is itself CosmicSupremacyLauncher.exe, so a prefix test finds this
+    very process and every mode button reports a game already running.
     """
+    wanted = {n.lower() for n in exe_names}
+    # Belt and braces for the same trap: whatever this process is called, it is
+    # not a client, even if someone renames a binary into collision.
+    wanted.discard(os.path.basename(sys.executable).lower())
+    if not wanted:
+        return []
     try:
         out = subprocess.run(["tasklist", "/FO", "CSV", "/NH"],
                              capture_output=True, text=True, timeout=10,
@@ -200,7 +302,7 @@ def running_clients() -> "list[str]":
         if not line.startswith('"'):
             continue
         name = line.split('","')[0].lstrip('"')
-        if name.lower().startswith("cosmicsupremacy"):
+        if name.lower() in wanted:
             names.append(name)
     return sorted(set(names))
 
@@ -240,11 +342,21 @@ class Launcher:
         self.cfg = cfg
         self.modes = [m for m in cfg["modes"] if m.get("show", True)]
         self.msgs: "queue.Queue[str]" = queue.Queue()
-        self.httpd = None
+        self.servers: "list" = []
         self.child: "subprocess.Popen | None" = None
+        self.running_mode = None
+        # The status to fall back to whenever no game is running. Recorded when
+        # the server settles so that a game exiting restores whatever was true
+        # then — "server running", "port taken", "reusing the existing server" —
+        # rather than a guess.
+        self._ready: "tuple[str, str]" = ("starting…", WARN)
         self.log_visible = False
         self.buttons: "list" = []
         self.game_root = self.galaxy_root = self.data_dir = None
+        # Every client the manifest knows about, including modes not shown: a
+        # hidden mode's client is still a running game that a second launch
+        # would kill.
+        self.client_exes = {m["exe"] for m in cfg["modes"]}
         # Diagnostics start before the data directory is known — where the game
         # was found, and whether it was found at all, are exactly the lines a
         # failed startup needs to leave behind — so they buffer until there is a
@@ -260,15 +372,20 @@ class Launcher:
         self._build()
         self._boot()
         self.root.after(120, self._drain)
+        self.root.after(1000, self._watch_game)
 
     # ── construction ──
     def _build(self):
         tk = self.tk
         pad = {"padx": 26}
 
-        tk.Label(self.root, text="COSMIC SUPREMACY", bg=BG, fg=ACCENT,
-                 font=("Segoe UI", 22, "bold")).pack(anchor="w", pady=(22, 0), **pad)
-        tk.Label(self.root, text=f"Resurgence  ·  v{self.cfg['version']}",
+        # One line, from the manifest, so the header, the title bar and every
+        # dialog title are the same string rather than three things to keep in
+        # step. 20pt rather than 22: the full name is 28 characters and the
+        # window sizes itself to its widest child.
+        tk.Label(self.root, text=self.cfg["product"], bg=BG, fg=ACCENT,
+                 font=("Segoe UI", 20, "bold")).pack(anchor="w", pady=(22, 0), **pad)
+        tk.Label(self.root, text=f"v{self.cfg['version']}",
                  bg=BG, fg=DIM, font=("Segoe UI", 10)).pack(anchor="w", **pad)
 
         body = tk.Frame(self.root, bg=BG)
@@ -329,14 +446,35 @@ class Launcher:
         self.say(f"{self.cfg['product']} v{self.cfg['version']}")
         self.say(f"data    {self.data_dir}")
 
+        icon = find_icon(self.data_dir)
+        if icon:
+            try:
+                # default= applies to this window and every dialog it spawns,
+                # so the message boxes carry the icon too.
+                self.root.iconbitmap(default=icon)
+                self.say(f"icon    {icon}")
+            except Exception as exc:
+                self.say(f"icon    not applied ({exc})")
+        else:
+            self.say("icon    none found")
+
         # Only the modes actually offered gate startup. A hidden mode whose EXE
         # the build no longer ships is a stale manifest row, not a broken install.
         game_root = find_game_root(self.modes)
         if not game_root:
-            self.fail("Game files not found.\n\nExpected a 'game' folder next to "
-                      "this launcher.\n\nIf you unzipped only the launcher, "
-                      "download the full release archive again and keep the "
-                      "folder together.")
+            searched = "\n".join("    " + c for c in game_root_candidates())
+            needed = ", ".join(sorted({m["exe"] for m in self.modes}))
+            for line in ("game files not found; searched:", searched):
+                self.say(line)
+            self.fail(
+                "Game files not found.\n\n"
+                "This launcher needs a 'game' folder beside it containing:\n"
+                f"    {needed}\n\n"
+                "Looked in:\n" + searched + "\n\n"
+                "If you are running the launcher out of a build folder, run the "
+                "one in dist\\ instead — that is the complete release. If you "
+                "unzipped only the launcher, download the full archive again and "
+                "keep the folder together.")
             return
         galaxy_root = find_galaxy_root(game_root, self.modes)
         if not galaxy_root:
@@ -354,10 +492,10 @@ class Launcher:
 
         if not port_is_free(host, port):
             if stub_server_answers(host, port):
-                self.set_status(f"using the server already on {host}:{port}", OK)
+                self.set_ready_status(f"using the server already on {host}:{port}", OK)
                 self.say(f"port {port} already serving our protocol — reusing it")
                 return
-            self.set_status(f"port {port} is taken by something else", BAD)
+            self.set_ready_status(f"port {port} is taken by something else", BAD)
             self.say(f"port {port} is in use and did not answer testconnection")
             self.warn(
                 f"Port {port} is already in use by another program.\n\n"
@@ -368,20 +506,22 @@ class Launcher:
             return
 
         try:
-            self.httpd, logfile = start_server(
+            self.servers, logfile = start_server(
                 host, port, self.data_dir, self.galaxy_root, self.say_threadsafe)
         except Exception as exc:
-            self.set_status(f"server failed to start: {exc}", BAD)
+            self.set_ready_status(f"server failed to start: {exc}", BAD)
             self.say("server failed: " + "".join(
                 traceback.format_exception_only(type(exc), exc)).strip())
             return
-        self.set_status(f"server running on {host}:{port}", OK)
-        self.say(f"server listening on {host}:{port}")
+        self.set_ready_status(f"server running on {host}:{port}", OK)
+        listening = ", ".join(
+            f"{s.server_address[0]}:{s.server_address[1]}" for s in self.servers)
+        self.say(f"server listening on {listening}")
         self.say(f"log     {logfile}")
 
     # ── actions ──
     def on_play(self, mode):
-        busy = running_clients()
+        busy = running_clients(self.client_exes)
         if busy:
             self.warn("A Cosmic Supremacy game is already running "
                       f"({', '.join(busy)}).\n\nStarting a second one would "
@@ -397,8 +537,11 @@ class Launcher:
         except OSError as exc:
             self.warn(f"Could not start the game:\n\n{exc}")
             return
+        self.running_mode = mode
         self.say(f"launched {mode['id']}: {mode['exe']} {mode['galaxy']}")
-        self.set_status(f"{mode['title']} is running", OK)
+        # "short", not "title": the buttons are imperative ("Play the Tutorial")
+        # and reading one back as a state gives "Play the Tutorial is running".
+        self.set_status(f"{_short(mode)} is running", OK)
 
     def toggle_log(self):
         self.log_visible = not self.log_visible
@@ -411,16 +554,16 @@ class Launcher:
 
     def on_close(self):
         from tkinter import messagebox
-        if running_clients():
+        if running_clients(self.client_exes):
             if not messagebox.askokcancel(
                     "Quit launcher?",
                     "A game is still running.\n\nClosing the launcher stops the "
                     "local server, and TestBed needs it — saving and loading "
                     "will fail from that point on.\n\nClose anyway?"):
                 return
-        if self.httpd is not None:
+        for srv in self.servers:
             try:
-                self.httpd.shutdown()
+                srv.shutdown()
             except Exception:
                 pass
         self.root.destroy()
@@ -459,6 +602,24 @@ class Launcher:
         """Called from the server thread; tkinter is not thread-safe."""
         self.msgs.put(msg)
 
+    def _watch_game(self):
+        """
+        Notice when the running game exits and go back to the ready state.
+
+        Polling Popen.poll() rather than re-running tasklist: it is a cheap
+        handle check instead of spawning a process every second, and it reports
+        on the exact game this launcher started rather than anything that
+        happens to share a name.
+        """
+        if self.child is not None and self.child.poll() is not None:
+            name = _short(self.running_mode) if self.running_mode else "the game"
+            code = self.child.returncode
+            self.child = None
+            self.running_mode = None
+            self.say(f"{name} exited (code {code})")
+            self.set_status(*self._ready)
+        self.root.after(1000, self._watch_game)
+
     def _drain(self):
         try:
             while True:
@@ -470,6 +631,11 @@ class Launcher:
     def set_status(self, text: str, colour: str):
         self.status.configure(text=text)
         self.dot.configure(fg=colour)
+
+    def set_ready_status(self, text: str, colour: str):
+        """Set the status *and* remember it as the no-game-running state."""
+        self._ready = (text, colour)
+        self.set_status(text, colour)
 
     def warn(self, msg: str):
         from tkinter import messagebox
@@ -489,6 +655,7 @@ def main() -> int:
     import tkinter as tk
     with open(bundled("manifest.json"), "r", encoding="utf-8") as fh:
         cfg = json.load(fh)
+    set_app_user_model_id()     # must precede the first window
     root = tk.Tk()
     Launcher(root, cfg)
     root.mainloop()

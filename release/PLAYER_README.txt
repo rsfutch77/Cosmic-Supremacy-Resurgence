@@ -51,6 +51,10 @@ Play TestBed        A full single-player galaxy against the computer. Turns
 KNOWN ISSUES IN THIS RELEASE
 ----------------------------
 
+- The Tutorial and the Demo briefly show an "analyzing system" message when they
+  start. That is left over from the original game's launch sequence. Let it
+  finish.
+
 - The tutorial has some rough edges inherited from the original game. They are
   known and are not caused by this restoration.
 
@@ -64,9 +68,15 @@ KNOWN ISSUES IN THIS RELEASE
 IF SOMETHING GOES WRONG
 -----------------------
 
-Click "show log" at the bottom right of the launcher. That pane, plus the file
-at  data\cs_server.log , is exactly what we need to diagnose a problem. Please
-include both when reporting an issue.
+Click "show log" at the bottom right of the launcher. That pane, plus these two
+files, is exactly what we need to diagnose a problem:
+
+    data\launcher.log     what the launcher found and started
+    data\cs_server.log    what the game asked the server for
+
+Please include all three when reporting an issue at
+
+    https://github.com/rsfutch77/Cosmic-Supremacy-Resurgence/issues
 
 
 WHAT'S IN THIS FOLDER
