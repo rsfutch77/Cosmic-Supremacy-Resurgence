@@ -67,6 +67,14 @@ kernel32.VirtualAllocEx.restype  = ctypes.c_void_p
 kernel32.CreateRemoteThread.restype = wintypes.HANDLE
 
 
+# Names that contain the substring below but are not the game client. The
+# player-facing launcher (release/) is CosmicSupremacyLauncher.exe and is a
+# 64-bit process: attaching to it and injecting this 32-bit stub gets as far as
+# VirtualAllocEx returning an address above 4 GB, which then fails to pack into
+# a `push imm32` — a confusing way to discover you are in the wrong process.
+NOT_THE_CLIENT = ("launcher",)
+
+
 def find_pid(exe_substr="CosmicSupremacy"):
     arr = (wintypes.DWORD * 4096)()
     cb  = ctypes.c_ulong()
@@ -81,9 +89,10 @@ def find_pid(exe_substr="CosmicSupremacy"):
             continue
         try:
             buf = ctypes.create_unicode_buffer(260)
-            if psapi.GetModuleBaseNameW(h, None, buf, 260) and \
-               exe_substr.lower() in buf.value.lower():
-                return pid, buf.value
+            name = buf.value if psapi.GetModuleBaseNameW(h, None, buf, 260) else ""
+            low = name.lower()
+            if exe_substr.lower() in low and not any(x in low for x in NOT_THE_CLIENT):
+                return pid, name
         finally:
             kernel32.CloseHandle(h)
     return None, None
@@ -114,7 +123,12 @@ def build_call_stub(fn_addr: int, args, this_ptr: int) -> bytes:
     """
     code = b""
     for a in reversed(args):
-        code += b"\x68" + struct.pack("<i", a)
+        # Two's complement, not "<i". The argument list mixes a small signed
+        # gameid (-1 is the new-slot sentinel) with a VirtualAllocEx address,
+        # and an allocation above 0x7FFFFFFF overflows a signed pack and raises.
+        # `push imm32` stores four raw bytes either way; signedness is the
+        # callee's interpretation, not the encoding's.
+        code += b"\x68" + struct.pack("<I", a & 0xFFFFFFFF)
     code += b"\xB9" + struct.pack("<I", this_ptr)
     code += b"\xB8" + struct.pack("<I", fn_addr)
     code += b"\xFF\xD0"
