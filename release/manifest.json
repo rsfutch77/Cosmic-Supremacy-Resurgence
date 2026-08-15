@@ -1,0 +1,62 @@
+{
+  "product": "Cosmic Supremacy — Resurgence",
+  "version": "0.1.0",
+  "server": {
+    "host": "127.0.0.1",
+    "port": 8888
+  },
+
+  "_comment_modes": [
+    "Each mode is a client EXE plus the .csgalaxy pass file handed to it as its",
+    "single command-line argument — which is all a drag-and-drop ever did.",
+    "",
+    "There are three EXEs today only because the localhost redirect and the",
+    "code patches that TestBed needs have not been reconciled into one binary.",
+    "When they are, this file is the only thing that changes: point every mode",
+    "at the same 'exe' and delete the others from build.ps1's copy list.",
+    "",
+    "  needs_server  documentation, not control flow. The launcher always runs",
+    "                the stub server; this records which modes actually use it.",
+    "  show          false keeps a mode out of the player-facing window without",
+    "                losing the mapping."
+  ],
+
+  "modes": [
+    {
+      "id": "tutorial",
+      "title": "Play the Tutorial",
+      "blurb": "The original guided walkthrough. Start here if you have never played.",
+      "exe": "CosmicSupremacy.exe",
+      "galaxy": "TutorialGalaxy_local.csgalaxy",
+      "needs_server": false,
+      "show": true
+    },
+    {
+      "id": "demo",
+      "title": "Watch the Demo",
+      "blurb": "The original attract-mode demo galaxy. A look at the game with nothing to lose.",
+      "exe": "CosmicSupremacy.exe",
+      "galaxy": "DemoGalaxy_local.csgalaxy",
+      "needs_server": false,
+      "show": true
+    },
+    {
+      "id": "testbed",
+      "title": "Play TestBed",
+      "blurb": "A full single-player galaxy against the AI. Turns run locally, on your machine.",
+      "exe": "CosmicSupremacy_TestBed.exe",
+      "galaxy": "TestBedGalaxy_local.csgalaxy",
+      "needs_server": true,
+      "show": true
+    },
+    {
+      "id": "sandbox",
+      "title": "Sandbox",
+      "blurb": "Development galaxy — 16 seats, used by the AI harness. Not part of this release.",
+      "exe": "CosmicSupremacy_Resurgence.exe",
+      "galaxy": "SandboxGalaxy_local.csgalaxy",
+      "needs_server": true,
+      "show": false
+    }
+  ]
+}
