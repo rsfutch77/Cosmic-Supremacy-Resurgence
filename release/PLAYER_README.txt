@@ -41,7 +41,7 @@ Play the Tutorial   The original guided walkthrough. Start here if you have
                     never played Cosmic Supremacy. It teaches colonising,
                     research, ship design and combat.
 
-Watch the Demo      The original demo galaxy. A look at the game with nothing
+View the Demo      The original demo galaxy. A look at the game with nothing
                     at stake.
 
 Play TestBed        A full single-player galaxy against the computer. Turns
