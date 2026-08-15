@@ -81,6 +81,17 @@ $modes = @($cfg.modes | Where-Object { $_.show })
 if ($modes.Count -eq 0) { throw 'manifest has no modes with "show": true' }
 Write-Host "Modes  : $(($modes | ForEach-Object { $_.id }) -join ', ')"
 
+# Placeholder cards ("enabled": false, e.g. the coming-soon Multiplayer button)
+# are shown in the launcher but ship no files. They must be filtered out before
+# any path is built from $_.exe, or Join-Path is handed $null and throws.
+$playable = @($modes | Where-Object { $_.exe -and $_.galaxy -and ($_.enabled -ne $false) })
+if ($playable.Count -eq 0) { throw 'manifest has no playable modes to ship' }
+$placeholders = @($modes | Where-Object { $playable -notcontains $_ })
+if ($placeholders.Count -gt 0) {
+    Write-Host "Shipping: $(($playable | ForEach-Object { $_.id }) -join ', ')"
+    Write-Host "Coming soon (no files): $(($placeholders | ForEach-Object { $_.id }) -join ', ')"
+}
+
 # ── 1. Clean ──────────────────────────────────────────────────────────────────
 if ($Clean) {
     Write-Step "Cleaning"
@@ -94,7 +105,7 @@ if ($Clean) {
 # after a PyInstaller run.
 Write-Step "Checking source files"
 $missing = @()
-foreach ($m in $modes) {
+foreach ($m in $playable) {
     foreach ($f in @((Join-Path $ClientDir $m.exe), (Join-Path $ClientDir $m.galaxy))) {
         if (-not (Test-Path $f)) { $missing += $f }
     }
@@ -209,7 +220,7 @@ Copy-Item (Join-Path $ReleaseDir 'PLAYER_README.txt') (Join-Path $Stage 'README.
 
 # Several modes share one EXE, so copy the distinct set rather than per mode.
 $copied = @{}
-foreach ($m in $modes) {
+foreach ($m in $playable) {
     if (-not $copied.ContainsKey($m.exe)) {
         Copy-Item (Join-Path $ClientDir $m.exe) (Join-Path $GameDir $m.exe)
         $copied[$m.exe] = $true
