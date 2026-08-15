@@ -4,6 +4,11 @@ save_game_*.dat
 save_gov_*.dat
 server/*.sqlite3
 server/.venv/
+# captured savegame blobs, and the blob loadgame injects when present
+server/saves/
+server/loadgame_blob.b64
+# raw blobs handed to the client as its command-line argument at startup
+client/*.dat
 
 # ── Build / debug leftovers ───────────────────────────────────────────────────
 *.hex
@@ -13,4 +18,12 @@ __pycache__/
 
 # ── Dev tool output ───────────────────────────────────────────────────────────
 client/dev_tools/snapshots/
+# the AI's persistent fog-of-war map: per machine, per galaxy, per civ — game
+# state rather than source, and meaningless in another checkout
+client/dev_tools/ai_player/state/
 *.exe.bak
+tools
+
+# named restore points (raw save blobs, big and regenerable)
+client/checkpoints/
+.vscode

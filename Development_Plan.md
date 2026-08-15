@@ -72,3 +72,21 @@ The server also serves a minimal HTML portal at `GET /` (the game opens a browse
 ---
 
 ## Phase 3 - Recreate Website?
+
+---
+
+## Idea Backlog
+
+### AI Players as a Product Feature
+The AI player work in [client/dev_tools/ai_player/](client/dev_tools/ai_player/) is currently a
+reverse-engineering probe harness. If it matures into a bot that can play a full game, it unlocks:
+
+1. **On-demand AI galaxies** — a player asks the server to create a new galaxy and fill it with AI
+   players. Single-player / practice mode against bots.
+2. **Local play** — the same mode running entirely on the player's machine, since the AI driver is
+   already client-side. No server dependency, no waiting.
+3. **Lobby seat filling** — for regular multiplayer galaxies, offer waiting players the option to
+   start early and fill the remaining seats with AI players instead of waiting for humans to join.
+
+Note the bar this sets: holding a seat for an entire game is a much larger target than exercising a
+single actuator. Worth scoping before committing.
