@@ -141,7 +141,37 @@ if ($LASTEXITCODE -ne 0 -or -not (Test-Path $IconOut)) {
     Write-Ok "icon written to $IconOut"
 }
 
-# ── 5. Freeze the launcher ────────────────────────────────────────────────────
+# ── 5. Create the release folder ──────────────────────────────────────────────
+# Before freezing, not after, so PyInstaller can emit the executable straight
+# into its final home. Building it somewhere else first and copying leaves a
+# second, runnable launcher in the build tree with no game\ folder beside it —
+# which looks exactly like the real thing, fails with "Game files not found",
+# and is the first thing anyone double-clicks.
+Write-Step "Preparing $StageName"
+
+# A launcher still running holds its own exe and data\ open, so the staging
+# wipe below fails on a file lock. Say why rather than surfacing a bare
+# access-denied several lines later.
+$live = Get-Process CosmicSupremacyLauncher -ErrorAction SilentlyContinue
+if ($live) {
+    throw ("a launcher is still running (pid " + (($live | ForEach-Object { $_.Id }) -join ', ') +
+           ") and holds the files this build must overwrite - close it and re-run")
+}
+
+# Earlier versions of this script built to build\exe and copied from there. Any
+# leftover copy is a fully runnable launcher with no game\ folder beside it,
+# which fails with "Game files not found" - remove the trap.
+$LegacyExeDir = Join-Path $BuildDir 'exe'
+if (Test-Path $LegacyExeDir) {
+    Remove-Item -Recurse -Force $LegacyExeDir
+    Write-Ok "removed stale $LegacyExeDir"
+}
+
+if (Test-Path $Stage) { Remove-Item -Recurse -Force $Stage }
+New-Item -ItemType Directory -Force $GalaxyDir | Out-Null
+Write-Ok "created $Stage"
+
+# ── 6. Freeze the launcher ────────────────────────────────────────────────────
 Write-Step "Freezing launcher (PyInstaller)"
 $piArgs = @(
     '--noconfirm', '--onefile', '--windowed',
@@ -153,26 +183,28 @@ $piArgs = @(
     # name it explicitly rather than relying on the import graph walker.
     '--paths', $ServerDir,
     '--hidden-import', 'cs_server',
-    '--distpath', (Join-Path $BuildDir 'exe'),
+    '--distpath', $Stage,
     '--workpath', (Join-Path $BuildDir 'work'),
     '--specpath', $BuildDir
 )
-if ($IconOut) { $piArgs += @('--icon', $IconOut) }
+if ($IconOut) {
+    # --icon sets the icon Explorer draws on the EXE. The taskbar button and the
+    # window title bar come from the *window* icon instead, which tkinter
+    # defaults to its own feather - so the .ico also ships as data for the
+    # launcher to hand to iconbitmap() at runtime.
+    $piArgs += @('--icon', $IconOut, '--add-data', "$IconOut;.")
+}
 $piArgs += (Join-Path $ReleaseDir 'launcher.py')
 
 & $VenvPy -m PyInstaller @piArgs
 if ($LASTEXITCODE -ne 0) { throw 'PyInstaller failed' }
 
-$BuiltExe = Join-Path $BuildDir 'exe\CosmicSupremacyLauncher.exe'
+$BuiltExe = Join-Path $Stage 'CosmicSupremacyLauncher.exe'
 if (-not (Test-Path $BuiltExe)) { throw "PyInstaller reported success but $BuiltExe is missing" }
 Write-Ok "built $([math]::Round((Get-Item $BuiltExe).Length / 1MB, 1)) MB"
 
-# ── 6. Assemble the release folder ────────────────────────────────────────────
-Write-Step "Assembling $StageName"
-if (Test-Path $Stage) { Remove-Item -Recurse -Force $Stage }
-New-Item -ItemType Directory -Force $GalaxyDir | Out-Null
-
-Copy-Item $BuiltExe (Join-Path $Stage 'CosmicSupremacyLauncher.exe')
+# ── 7. Add the game files ─────────────────────────────────────────────────────
+Write-Step "Adding game files"
 Copy-Item (Join-Path $ReleaseDir 'PLAYER_README.txt') (Join-Path $Stage 'README.txt')
 
 # Several modes share one EXE, so copy the distinct set rather than per mode.
@@ -190,7 +222,7 @@ foreach ($m in $modes) {
     }
 }
 
-# ── 7. Zip ────────────────────────────────────────────────────────────────────
+# ── 8. Zip ────────────────────────────────────────────────────────────────────
 if (-not $SkipZip) {
     Write-Step "Creating archive"
     $Zip = "$Stage.zip"

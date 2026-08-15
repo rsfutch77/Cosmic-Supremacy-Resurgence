@@ -1,5 +1,5 @@
 {
-  "product": "Cosmic Supremacy — Resurgence",
+  "product": "Cosmic Supremacy: Resurgence",
   "version": "0.1.0",
   "server": {
     "host": "127.0.0.1",
@@ -16,7 +16,8 @@
     "at the same 'exe' and delete the others from build.ps1's copy list.",
     "",
     "  needs_server  documentation, not control flow. The launcher always runs",
-    "                the stub server; this records which modes actually use it.",
+    "                the stub server. Every mode contacts localhost:8888 at",
+    "                startup, including Tutorial and Demo - measured, not assumed.",
     "  show          false keeps a mode out of the player-facing window without",
     "                losing the mapping."
   ],
@@ -25,25 +26,28 @@
     {
       "id": "tutorial",
       "title": "Play the Tutorial",
+      "short": "Tutorial",
       "blurb": "The original guided walkthrough. Start here if you have never played.",
       "exe": "CosmicSupremacy.exe",
       "galaxy": "TutorialGalaxy_local.csgalaxy",
-      "needs_server": false,
+      "needs_server": true,
       "show": true
     },
     {
       "id": "demo",
       "title": "Watch the Demo",
-      "blurb": "The original attract-mode demo galaxy. A look at the game with nothing to lose.",
+      "short": "Demo",
+      "blurb": "The original demo galaxy. A look at the game in an advanced state.",
       "exe": "CosmicSupremacy.exe",
       "galaxy": "DemoGalaxy_local.csgalaxy",
-      "needs_server": false,
+      "needs_server": true,
       "show": true
     },
     {
       "id": "testbed",
       "title": "Play TestBed",
-      "blurb": "A full single-player galaxy against the AI. Turns run locally, on your machine.",
+      "short": "TestBed",
+      "blurb": "A full single-player galaxy against the new Resurgence AI. Turns run locally, on your machine, at your own pace.",
       "exe": "CosmicSupremacy_TestBed.exe",
       "galaxy": "TestBedGalaxy_local.csgalaxy",
       "needs_server": true,
@@ -52,6 +56,7 @@
     {
       "id": "sandbox",
       "title": "Sandbox",
+      "short": "Sandbox",
       "blurb": "Development galaxy — 16 seats, used by the AI harness. Not part of this release.",
       "exe": "CosmicSupremacy_Resurgence.exe",
       "galaxy": "SandboxGalaxy_local.csgalaxy",

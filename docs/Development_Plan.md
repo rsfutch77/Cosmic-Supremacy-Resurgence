@@ -78,7 +78,7 @@ The server also serves a minimal HTML portal at `GET /` (the game opens a browse
 ## Idea Backlog
 
 ### AI Players as a Product Feature
-The AI player work in [client/dev_tools/ai_player/](client/dev_tools/ai_player/) is currently a
+The AI player work in [client/dev_tools/ai_player/](../client/dev_tools/ai_player/) is currently a
 reverse-engineering probe harness. If it matures into a bot that can play a full game, it unlocks:
 
 1. **On-demand AI galaxies** — a player asks the server to create a new galaxy and fill it with AI
