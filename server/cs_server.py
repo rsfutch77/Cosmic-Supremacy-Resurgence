@@ -81,10 +81,82 @@ def _default_civ() -> dict:
 def _get_civ(userid: str) -> dict:
     return _civ_state.get(userid, _default_civ())
 
-def handle_action(action: str, params: dict) -> tuple[int, str, str]:
+# ── Save-blob persistence ─────────────────────────────────────────────────────
+# Every savegame POST is written to server/saves/ verbatim (the base64 text
+# exactly as it came off the wire, no decoding) plus a small .json sidecar with
+# the other POST fields.  Nothing is ever overwritten: each save gets its own
+# sequence number so a series of saves can be diffed against each other.
+SAVE_DIR    = os.path.join(os.path.dirname(__file__), 'saves')
+INJECT_BLOB = os.path.join(os.path.dirname(__file__), 'loadgame_blob.b64')
+
+
+def _raw_data_field(raw_body: str) -> 'str | None':
+    """
+    Pull data= out of the unparsed POST body and percent-decode it.
+
+    The request format is  ...&version=%d&data=%s  with data last, so everything
+    after the first '&data=' is the field.
+
+    Why not parse_qs: form decoding also turns '+' into a space, and base64 uses
+    '+'.  Measured on a real 38,960-char capture, the client percent-encodes and
+    emits '%2B' (748 of them) with no literal '+', so parse_qs would in fact have
+    survived this client — but unquote is correct either way, since it decodes
+    the escapes without touching a literal '+' should some path ever emit one.
+    """
+    marker = '&data='
+    i = raw_body.find(marker)
+    if i < 0:
+        if not raw_body.startswith('data='):
+            return None
+        field = raw_body[5:]
+    else:
+        field = raw_body[i + len(marker):]
+    return urllib.parse.unquote(field)
+
+
+def _persist_save(gameid: str, gamename: str, turn: str, version: str,
+                  data_str: str, raw_body: str = '') -> str:
+    os.makedirs(SAVE_DIR, exist_ok=True)
+    stamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+    seq   = len([n for n in os.listdir(SAVE_DIR) if n.endswith('.b64')])
+    base  = f'save_{seq:03d}_{stamp}_g{gameid}_t{turn}'
+    path  = os.path.join(SAVE_DIR, base + '.b64')
+
+    raw_data = _raw_data_field(raw_body) if raw_body else None
+    payload  = raw_data if raw_data is not None else data_str
+    with open(path, 'w', encoding='ascii', errors='replace') as f:
+        f.write(payload)
+    # the whole request body as well, so nothing is lost if the data= slice
+    # above turns out to be wrong for some request shape
+    with open(os.path.join(SAVE_DIR, base + '.body'), 'w',
+              encoding='latin-1') as f:
+        f.write(raw_body)
+    import json as _json
+    with open(os.path.join(SAVE_DIR, base + '.json'), 'w', encoding='utf-8') as f:
+        _json.dump({'gameid': gameid, 'gamename': gamename, 'turn': turn,
+                    'version': version,
+                    'data_len_raw': len(raw_data) if raw_data is not None else None,
+                    'data_len_parsed': len(data_str),
+                    'used': 'raw' if raw_data is not None else 'parsed',
+                    'received': stamp}, f, indent=2)
+    return os.path.basename(path)
+
+
+def _load_injection_blob() -> 'str | None':
+    """Return the base64 payload to serve from loadgame, or None for the stub."""
+    if not os.path.exists(INJECT_BLOB):
+        return None
+    with open(INJECT_BLOB, 'r', encoding='ascii') as f:
+        return f.read().strip()
+
+
+def handle_action(action: str, params: dict, raw_body: str = '') -> tuple[int, str, str]:
     """
     Returns (http_status, content_type, body).
     Add real response formats here as you discover them from cs_server.log.
+
+    raw_body is the undecoded POST body; savegame needs it because form
+    decoding mangles base64 (see _raw_data_field).
     """
 
     # ── Connection health check ───────────────────────────────────────────────
@@ -161,11 +233,20 @@ def handle_action(action: str, params: dict) -> tuple[int, str, str]:
     if action == 'uploadcoa':
         return 200, 'text/plain', 'OK'
 
-    # ── Save / load game (stub) ─────────────────────────────────────────────
-    # Game state is now managed via external memory reading/writing, not save
-    # blobs.  These stubs keep the game happy when it tries to save/load.
+    # ── Save / load game ────────────────────────────────────────────────────
+    # savegame now PERSISTS the raw data= field so the blob format (ROUT in
+    # particular) can be reverse engineered.  The response is unchanged: the
+    # client does strncmp(response, "DONE", 4) at 0x0048b350 and puts up
+    # "Failed to save the Save-Game" for anything else.
     if action == 'savegame':
-        log(f'  -> savegame: accepted (stub, not persisted)')
+        gameid   = params.get('gameid',   ['-1'])[0]
+        gamename = params.get('gamename', [''])[0].strip("'")
+        turn     = params.get('turn',     ['?'])[0]
+        version  = params.get('version',  ['?'])[0]
+        data_str = params.get('data',     [''])[0]
+        path = _persist_save(gameid, gamename, turn, version, data_str, raw_body)
+        log(f'  -> savegame: gameid={gameid} name={gamename!r} turn={turn} '
+            f'version={version} data={len(data_str)} chars -> {path}')
         return 200, 'text/plain', 'DONE'
 
     if action == 'savegamelist':
@@ -173,9 +254,17 @@ def handle_action(action: str, params: dict) -> tuple[int, str, str]:
         return 200, 'text/plain', '0#SPC#TestBed Save 1#SPC#0#NEXT#DONE'
 
     if action == 'loadgame':
+        # Opt-in injection: if server/loadgame_blob.b64 exists, its contents are
+        # served as the DATA payload.  Absent that file the behaviour is the
+        # original stub (empty blob → client generates its own galaxy), so a
+        # session that is not testing blob injection is unaffected.
         gameid = params.get('gameid', ['0'])[0]
-        log(f'  -> loadgame: gameid={gameid} (stub, returning empty)')
-        return 200, 'text/plain', 'DONE#VER#000000#DATA#'
+        blob = _load_injection_blob()
+        if blob is None:
+            log(f'  -> loadgame: gameid={gameid} (no injection blob, returning empty)')
+            return 200, 'text/plain', 'DONE#VER#000000#DATA#'
+        log(f'  -> loadgame: gameid={gameid} serving {INJECT_BLOB} ({len(blob)} chars)')
+        return 200, 'text/plain', 'DONE#VER#000000#DATA#' + blob
 
     # ── Governor settings ─────────────────────────────────────────────────────
     if action == 'savegov':
@@ -328,16 +417,22 @@ class CSHandler(http.server.BaseHTTPRequestHandler):
         log(f'POST {self.path}')
         log(f'  Content-Type={self.headers.get("Content-Type","")}  Content-Length={length}')
         log(f'  action={action}')
-        # Log body in 400-char chunks so nothing is lost (params can be large blobs)
+        # Log body in 400-char chunks so nothing is lost (params can be large
+        # blobs).  Save blobs are the exception: they run to hundreds of KB and
+        # are written to server/saves/ in full, so the log only keeps a head.
         CHUNK = 400
-        if len(body) <= CHUNK:
-            log(f'  body: {body}')
+        LOG_CAP = 4000 if action in ('savegame', 'savegov') else len(body)
+        shown = body[:LOG_CAP]
+        if len(shown) <= CHUNK:
+            log(f'  body: {shown}')
         else:
-            for ci, start in enumerate(range(0, len(body), CHUNK)):
+            for ci, start in enumerate(range(0, len(shown), CHUNK)):
                 tag = 'body' if ci == 0 else 'body+'
-                log(f'  {tag}: {body[start:start+CHUNK]}')
+                log(f'  {tag}: {shown[start:start+CHUNK]}')
+        if len(shown) < len(body):
+            log(f'  body… ({len(body) - len(shown)} more chars not logged)')
 
-        status, ctype, resp_body = handle_action(action, merged_params)
+        status, ctype, resp_body = handle_action(action, merged_params, body)
 
         if isinstance(resp_body, str):
             resp_bytes = resp_body.encode('latin-1')

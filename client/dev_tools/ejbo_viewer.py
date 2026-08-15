@@ -532,6 +532,11 @@ class ViewerState:
         self.lock        = threading.Lock()
         self.last_update = 0
         self.scan_count  = 0
+        # Warm-scan state; see ViewerState.scan.
+        self.hot_regions = []          # regions that have held objects
+        self.prev_regions = []         # last enum, to spot new or grown ones
+        self.scans_since_full = 0
+        self._extent_notes = None      # so extents are reported on change only
 
     def connect(self):
         pid, name = find_pid("CosmicSupremacy")
@@ -579,11 +584,41 @@ class ViewerState:
                 self.last_update = time.time()
             return False
 
-    def scan(self):
+    # A full sweep reads the whole writable address space looking for the tag.
+    # Measured: 118 MB at ~103 MB/s = 1.15s, which is 87% of a scan, while every
+    # object read that follows it costs 0.17s.
+    #
+    # It is also almost entirely wasted. All 682 objects in a live galaxy sit in
+    # TWO heap regions totalling 2.44 MB -- 2.1% of what gets swept -- and
+    # sweeping just those finds the identical set in 0.021s.
+    #
+    # So a warm scan sweeps the regions that HAVE held objects, plus any region
+    # the process has added or grown since the last look, and takes a full sweep
+    # every FULL_SWEEP_EVERY scans as a backstop. The middle clause is what makes
+    # this safe rather than merely fast: a newly built ship is allocated from the
+    # same heap as every other ship, and if the engine ever allocates somewhere
+    # new, that region is new territory and gets swept because it is new.
+    FULL_SWEEP_EVERY = 20
+
+    def scan(self, full=False):
         if not self.handle:
             return 0
         regions = enum_writable_regions(self.handle)
-        self.ejbo_addrs = scan_for_ejbo(self.handle, regions)
+        stale = self.scans_since_full >= self.FULL_SWEEP_EVERY
+        if full or not self.hot_regions or stale:
+            sweep = regions
+            self.scans_since_full = 0
+        else:
+            known = set(self.prev_regions)
+            sweep = list(self.hot_regions) + [r for r in regions
+                                              if r not in known]
+            self.scans_since_full += 1
+        self.prev_regions = regions
+        self.ejbo_addrs = scan_for_ejbo(self.handle, sweep)
+        # Remember where they actually were, so the next warm sweep is narrow.
+        self.hot_regions = [r for r in regions
+                            if any(r[0] <= a < r[0] + r[1]
+                                   for a in self.ejbo_addrs)]
         self.scan_count = len(self.ejbo_addrs)
         # Pointer targets can be freed and reused, so drop the cache on a rescan
         self.ptr_cache = {}
@@ -592,8 +627,14 @@ class ViewerState:
                     for a in self.ejbo_addrs}
         self.extents, notes = measure_extents(self.handle, self.ejbo_addrs,
                                               class_of, self.rtti_cache)
-        for n in sorted(notes):
-            print(f"[extent] {n}")
+        # Say it once, not every scan. These are derivations, not events, and
+        # they were tolerable at one scan per turn; a warm scan is cheap enough
+        # to run often, and twelve unchanged lines per scan buries the log lines
+        # that do mean something.
+        if notes != self._extent_notes:
+            for n in sorted(notes):
+                print(f"[extent] {n}")
+            self._extent_notes = notes
         self._refresh_objects()
         return self.scan_count
 
