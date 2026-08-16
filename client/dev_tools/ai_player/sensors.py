@@ -34,7 +34,14 @@ def _dist(a, b):
     return math.sqrt(sum((x - y) ** 2 for x, y in zip(a, b)))
 
 
-STATE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "state")
+# Beside the source in a checkout, which is where every dev run expects it.
+# CS_AI_STATE_DIR overrides it because a FROZEN build has nowhere else to go:
+# PyInstaller unpacks the module into a temp directory that Windows deletes on
+# exit, so the discovery set would be written, lost, and rebuilt from scratch
+# every launch — which is precisely the restart bug §4.4 R-XTM-01 records, only
+# permanent. The launcher points this at its own data directory.
+STATE_DIR = (os.environ.get("CS_AI_STATE_DIR")
+             or os.path.join(os.path.dirname(os.path.abspath(__file__)), "state"))
 
 
 def _fingerprint(snap):

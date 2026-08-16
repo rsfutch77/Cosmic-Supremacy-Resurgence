@@ -88,7 +88,27 @@ by accident:
    *diagnostics*, not actuators, and the AI must not call them.
 2. **No illegal values.** A citizen job must be a real job id; a selected building
    must be a type the civ has unlocked (`Owner:172`); a population must not exceed
-   `Planet:104 >> 16` / 10.
+   `Planet:104 >> 16` / 10. **A queued SHIP DESIGN must be one every fitted part
+   is researched for** — see below.
+   **OWNING A DESIGN STOPPED BEING PROOF THAT IT IS LEGAL** (Aug 2026), and every
+   selector here assumed otherwise. A design the UI produced can only contain parts
+   the civ had already unlocked, so filtering on owner and fitted parts was
+   sufficient for as long as designs only ever came from the design editor. Single
+   Player breaks that: the AI cannot create a design at all (§3, actuator I), so
+   its designs are SEEDED INTO THE GALAXY at turn 0 — and `b1` carries a fusion
+   bomb from the first turn while no weapon is unlocked until Cold Fusion.
+   Measured on the seeded galaxy, `BadGuy` owning `f1` and `b1` with completed
+   research `{0, 1}` and **no weapon unlocked at all**.
+
+   `research.design_legal(design, done)` is the gate, and
+   `research.illegal_parts` names what is missing so a rule can log the blocker
+   rather than the flatly wrong "this civ has no armed design". It is applied in
+   `explore.scout_designs`, `exterminate.warship_designs`, `exterminate.run_xtm07`
+   and `expand.run_xpn01`. Shields are deliberately unchecked: the design object
+   exposes a shield STAT (`ShipDesign:72`) but no fitted-shield vector is read, and
+   a check against a list we do not read would pass everything while looking like
+   a gate.
+
 3. **No omniscience.** Client memory holds all 538 planets and every `Owner`,
    including things the player has not discovered. **RESOLVED — the AI keeps its own
    discovery set** (`sensors.History.discovered`), grown only by reaching a sun or by a
@@ -230,7 +250,7 @@ One module per UI action. Grade is how confident we are it works today.
 | C | **Start constructing / switch to wealth** | wealth: point `Planet:296` at the singleton `0x0080B540` and set `Planet:344 = 0`. Build: point `Planet:296` at the planet's own embedded `Facility` | **READY** — both directions. The build direction never needed an allocation: the `Facility` object is embedded in the planet, so `actions.build_facility` points at it rather than making one |
 | D | **Queue a ship** | write a `ShipDesign*` (`tag-12`) to `Planet:296`, set `Planet:344` | **READY** — `actions.queue_ship`. Ship builds point at the shared design; no per-build object exists and the engine registers the finished `Ship` itself |
 | D′ | **Stop building / generate wealth** | `Planet:296` → `PilingUpWealth` `0x0080B540`, clear `Planet:344` | **READY** — `actions.set_wealth_mode` |
-| I | **Design a ship** | `operator new(0x118)` + default ctor `0x00546EC0`, `fit_parts`, `set_design_owner` | **PARKED** — the object is created, tagged, owned and parts fit, but it is never REGISTERED (zero `tag-12` refs vs three per UI design) and its stat block is never computed. Both are done by the design editor's save path; report `[ ]` find the design editor's save path |
+| I | **Design a ship** | `operator new(0x118)` + default ctor `0x00546EC0`, `fit_parts`, `set_design_owner` | **PARKED, but the save path is now located** — see below. The object is created, tagged, owned and parts fit, and is never REGISTERED (zero `tag-12` refs vs three per UI design) |
 | E | **Retarget an existing order** | rewrite `Ship:48+16/20/24`, the route leg, progress, then `Ship:52`/`Ship:76` | **READY** — `actions.retarget_order` |
 | E′ | **Originate an order** | engine's own `operator new` + order constructor, via `remote.py` | **READY** — `actions.create_order`; see §6a Route 2 |
 | E″ | **Move an order between ships** | detach donor, attach recipient | **READY** — `actions.transfer_order` |
@@ -242,6 +262,75 @@ One module per UI action. Grade is how confident we are it works today.
 | L | **Order a ship at a TARGET OBJECT** | engine `ShipCommand` ctor `0x004E9BA0` + `Ship::SetCommand` `0x004D9DC0` | **DO NOT USE — KILLS THE CLIENT.** `actions.set_command` crashes the game at the NEXT TURN BOUNDARY, for Move (1) as well as Attack (4), even with the route built first. Reproduced from a restore point; see §4.4. Nothing uses it. Kept only because it is still the one known way to populate `Ship:56` |
 | M | **Move a ship to a target, route only** | `create_order` + `retarget_order`, and nothing else | **READY** — `exterminate.send_to`. The replacement for L. Reuses `Ship:48` when the ship has one, so it allocates nothing per turn. `Ship:56` stays the null node and the ship navigates correctly anyway |
 | N | **Conscript a citizen** | `ChangeCitizenJobs` `0x00574180` (`__cdecl`, 4 args) with job id 3, priced by `GetDraftCost` `0x00516060` | **READY** — `actions.conscript`. Confirmed live: citizen count −1, stationed military +1, and cash down by exactly the quoted 115. The cost getter was validated first against a formula derived from the disassembly — six readings across two civs, all exact |
+| N′ | **Conscript straight onto a ship** | rewrite the citizen list without the drafted records; hand those records to a fresh crew buffer; debit `GetDraftCost` | **READY** — `actions.conscript_to_crew`. Confirmed live twice, and it is what finally unblocked Exterminate. See below |
+
+**Actuator N′ exists because the planet's garrison was a staging area that only ever
+failed.** N puts a unit in `Planet:168` and R-XPL-06 takes it straight back out the moment
+a ship wants it, so a crew-bound unit never needed to stand on the planet at all — and
+that vector is engine-owned, fills up, and then `_append_military` rightly refuses to grow
+it. Measured: a finished hull sat grounded for ~100 turns behind
+`"military vector is full (0 bytes spare, need 16)"` while the civ held 18k cash and had
+nothing else in its way.
+
+A citizen, a stationed unit and a crew member are the **same 16-byte record**, so the move
+is legal in one hop. It **fills an empty crew vector only** — the Aug 2026 crash was
+`_set_ship_crew` repointing a vector the engine already owned, and filling an empty one
+with the whole complement in a single allocation is the path in every arm of that bisect
+that survived. Partially-crewed ships still go the long way round.
+
+It debits the engine's own quoted price for the whole batch, the same narrow §1.1 exception
+N documents: a debit at a number we did not invent. The trade-off is deliberate — crew
+taken this way never appears in the garrison, so N′ cannot conscript for DEFENCE. That
+stays R-XPL-05's slider, and no rule defends a planet yet.
+
+### Actuator I — the design-editor save path, located but not yet called (Aug 2026)
+
+Found statically with `client/dev_tools/xrefs.py`, which was validated first by
+rediscovering `SellFacility`'s documented call site `0x0056EF91` before being pointed at
+anything unknown. **Every address below is a candidate to confirm, not a fact**: the tool
+decodes only `E8 rel32` and 32-bit absolute operands, so it is blind to virtual dispatch,
+and nothing here has been executed yet.
+
+**The `ShipDesign` constructor `0x00546EC0` has exactly TWO callers**, and both are
+preceded by `operator new` — which is what makes them real construction sites rather than
+byte sequences that decode like one:
+
+| Caller | Enclosing fn | Reached from | Also calls | Reading |
+|---|---|---|---|---|
+| `0x00546855` | **`0x00546430`** | `0x004CE890`, itself called twice from `0x004D06F0` | `0x00537BF0` ×3 | **the design editor's save path** |
+| `0x00576C97` | `0x00576B80` | `0x004A5D40`, which has **no direct callers** | `0x0054A410`, the speed getter `0x005480A0` | deserialisation — reached by virtual dispatch, which is what a response/load handler looks like |
+
+**`0x00546430` calls `0x00537BF0` exactly three times, with the constructor between the
+first and second — against the three `tag-12` references a UI design carries and a
+synthesised one does not.** That numerical agreement is the reason to believe this is the
+registration, and it is also exactly the kind of "two things agree so they must be the
+same thing" reasoning the memory report warns cost it two wrong conclusions. It wants
+confirming by execution, not by counting.
+
+**`0x00537BF0` is `reference_node_for(EJBO*)`**, hand-decoded from its first bytes:
+
+```
+83 EC 08        sub  esp, 8
+57              push edi
+8B 7C 24 10     mov  edi, [esp+0x10]     ; one stack argument
+85 FF           test edi, edi
+75 0A           jnz  ...
+B8 54 7C 85 00  mov  eax, 0x00857C54     ; the null node, already documented in §2.2
+5F 83 C4 08 C3  pop/add/ret              ; cdecl, caller cleans up
+```
+
+It has **419 call sites**, so it is a general "give me the reference node for this object"
+helper rather than anything design-specific — which is why the three calls inside
+`0x00546430` are interesting and the function itself is not.
+
+`[ ]` **Next step, and it is a measurement, not more reading.** `find_refs.py --designs`
+already reports where a registered design's references live; run it against a design built
+by actuator I and diff the two. The difference IS the registration, and it names the three
+slots `0x00546430` writes without having to trust the static reading at all.
+
+`[ ]` The editor path does **not** call the speed getter while the load path does, so where
+the stat block gets computed on the editor path is still unknown. `remote.design_speed`
+already warms that cache on demand, so this may not need solving at all.
 
 **Actuator J is the first actuator that is a whole engine TRANSACTION rather than a field
 write, and the reason matters beyond this one button.** Selling pays cash, and §1.1
@@ -469,12 +558,24 @@ attrition, not against being caught.
 
 **R-XPN-01 — Keep a colony ship available** — IMPLEMENTED in `expand.py`
 ```
-WHEN   count(our ships of role COLONY) == 0
+WHEN   count(our COLONY ships THAT CAN SETTLE) < COLONY_SHIP_TARGET
 AND    there is at least one known colonisable target (R-XPN-02)
-AND    Owner:8 >= ShipDesign:44 of the colony design
 THEN   queue the COLONY design at the best shipyard planet
 USES   D
 ```
+**"Available" means available, and counting hulls instead froze expansion
+outright.** The engine hands one of the two starting colony ships a SCOUT order
+on turn 0 and never clears it, and a scout order on a 13.5/turn hull is a
+commitment measured in dozens of turns. R-XPN-02 correctly skipped that ship as
+busy; this rule counted it, saw 1/1, and declined to build a replacement. Measured
+in the launcher's Single Player galaxy: two planets, an idle shipyard and 159
+unowned planets, from turn 3 to turn 25, with **neither rule logging anything
+wrong** — R-XPN-01 returned 0 before its first log line, exactly the silent-
+deadlock signature §4.4 R-XTM-01 records.
+
+It now counts only hulls that could take a colonisation order, using the same
+`scout_finished` test R-XPN-02 uses, and says so when it is building a
+replacement for one that is away.
 
 **SOLVED — the recruitment stall is the "Inactivity" throttle, and it is a RAMP ON THE TURN
 NUMBER.** The UI's Food Calculation tooltip names it: an `Inactivity: -N%` line that grows
@@ -776,8 +877,23 @@ the drafted record and memmoves the tail down, so every citizen index above it s
 second index taken from the same snapshot names a different citizen than the one it was
 chosen for.
 
-**Never drafts a farmer.** Food is the one thing that kills a colony and S-01 exists to put
-citizens back on it; drafting off the farms would have the two rules fighting every turn.
+**Never drafts a farmer — EXCEPT where the colony has no use for them.** The blanket rule
+was right in spirit and wrong in the case that mattered. Measured live: a colony ship sat
+at a 23-citizen all-farmer planet for a hundred turns while the HQ two systems away held
+three spare citizens.
+
+**Two distinct conditions, and CONFLATING THEM GETS THE COMMON CASE BACKWARDS:**
+
+* **At the population cap** (`pop >= space/10`). Growth has stopped, so the drafted citizen
+  is replaced by growth that had nowhere to go — the cost is transient. Such a planet is
+  typically running a food **SURPLUS**, piling up against a cap it cannot use. This is the
+  case that stranded the ship, and a rule gated on famine would never have fired on it.
+* **Food-negative with everyone farming.** Production is below consumption, so the average
+  farmer eats more than they grow and removing one improves the balance.
+
+`allow_farmers` therefore means "this colony can spare one", NOT "this colony is starving".
+`MIN_COLONY_POP = 4` still floors it, because a planet that cannot work is worse than a
+ship that cannot fly.
 
 `[ ]` **The loader still waits a turn.** R-XPL-09 runs before R-XPL-06, but the pass's
 snapshot was taken before the draft, so the new unit is invisible until the next pass and
@@ -907,6 +1023,65 @@ across two processes: one saved, the next reloaded and `contacted()` returned th
 
 Persisting our own discoveries is the OPPOSITE of the omniscience worry in §6.1 — the bug was
 handing the AI a fresh fog of war on every restart, which it then re-explored at full speed.
+
+### The AI was never slow — the TURNS were bursting (Aug 2026)
+
+**Read this before optimising anything here.** Decision passes were landing 2–3 turns
+apart and three separate explanations were proposed, asserted, and measured wrong in turn:
+engine calls, then the memory scan, then the snapshot phase. What the numbers actually say,
+all from a working build:
+
+```
+scan     0.1–0.2s warm, 1.25s cold (126 MB, ~200 objects)
+rules    <0.05s per pass, WITH ~20 engine calls in it
+engine   ~2.5 ms per remote-thread call
+```
+
+A pass costs about **0.2 seconds**. It was never the bottleneck, and the "~68 seconds per
+pass" figure an earlier draft of this section carried was not measured — it was
+`2.73 turns x 25s` computed while assuming the AI was at fault. Do not repeat that: the
+per-pass timing is printed every pass now, so read it.
+
+**The real cause is `advance_turns.py` losing a tug-of-war over the turn length.** The
+engine rewrites `0x0080AA08` back to 3600 at every boundary, and that script re-asserts the
+short value only AFTER it sees the counter move. So the engine spends most of each interval
+on an hour-long turn and then resolves SEVERAL at once to catch up on elapsed time — the
+burst §1 already warns about, arriving from the test harness rather than from a sleeping
+host. Measured on one galaxy:
+
+| driver | turns with a decision pass |
+|---|---|
+| `advance_turns.py 12` | 247, 250, 252, 255, 257, 259 |
+| `ai.py --drive 12` | 260, 261, 262, 263, 264, 265, 266, 267 |
+
+`ai.py --drive` re-asserts the length *during* the wait, which is the whole difference. **Use
+it for any run whose per-turn numbers matter**, and treat `advance_turns.py` as a tool for
+advancing a game with no controller attached.
+
+### Engine-call caching (Aug 2026) — worth having, not a performance fix
+
+Introduced while chasing the phantom above, and kept on its own merits: 138 of 571 calls in
+one run were the firepower getter, which spends three remote threads on a number that
+cannot change unless a design is refitted, and nothing here refits designs. Fewer remote
+threads into a live client is worth having for its own sake. Measured hit rate in ordinary
+play: **23–29%**.
+
+**Two cache lifetimes, because these are two kinds of fact.** Design-level stats (speed,
+firepower, min crew) are functions of fitted parts and are read once per process.
+Everything else is true of one turn only and is dropped by `Remote.begin_pass()` at the top
+of every pass, so a stale reading can never outlive the snapshot it belongs to. Anything
+that *mutates* the quantity clears its own entry — `invalidate_draft_cost` after a
+conscript, because within a pass we are the thing changing the price.
+
+**Nothing that writes is cached.** A cache on a mutating call is not a speed-up, it is a
+silently skipped action.
+
+`[ ]` **A dead engine handle looks exactly like an idle AI**, and it fooled two rounds of
+analysis here. A bad edit left `Remote.__init__` never opening its handle; every engine call
+then raised, every rule caught its own exception and moved on, and the loop reported clean
+fast passes while doing nothing at all. The logs showed 0% cache hits and "rules 0.0s",
+which read as *healthy*. `Remote` now proves itself on construction — see `_selftest` — so
+the failure is loud instead of silent.
 
 ### Actuator L crashes the client — R-XTM-03 and R-XTM-05 do not use it (Aug 2026)
 

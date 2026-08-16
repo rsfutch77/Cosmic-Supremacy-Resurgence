@@ -170,9 +170,43 @@ ADD_ESP_16 = b"\x83\xC4\x10"      # four of them
 class Remote:
     """A privileged handle to the game plus the ability to run stubs in it."""
 
+    # ── Caches ───────────────────────────────────────────────────────────────
+    # EVERY ENGINE CALL COSTS A REMOTE THREAD, and that is the AI's real clock.
+    # Measured Aug 2026 over 22 passes: 571 stub calls, ~26 per pass, and a pass
+    # taking about 68 SECONDS of wall clock against the 1.8s the code used to
+    # claim. Turns then outrun decision passes at any sane turn length, which is
+    # the §1 contiguity hazard — the AI stops seeing most of the game it is
+    # playing. The counts that drove this:
+    #
+    #     138  firepower getter      immutable per design
+    #     127  production total      per planet, per turn
+    #     127  production done       per planet, per turn
+    #     127  hurry cost            per planet, per turn
+    #      60  draft cost            per civ, moves only when military does
+    #      25  relation code         per civ pair, moves only on a declaration
+    #
+    # Two lifetimes, because these are two different kinds of fact:
+    #
+    #   DESIGN cache — a design's speed, firepower and crew requirement are
+    #   functions of its fitted parts, and nothing in this AI ever refits a
+    #   design (actuator I is parked). They cannot change while the process
+    #   lives, so they are read once and kept.
+    #
+    #   PASS cache — everything else is true of one turn only. It is cleared at
+    #   the start of every decision pass by `begin_pass`, so a stale reading can
+    #   never outlive the snapshot it belongs to. Anything that MUTATES the
+    #   underlying quantity clears it immediately as well, because within a pass
+    #   we are the thing doing the changing.
+    #
+    # Nothing that writes is ever cached. A cache on a mutating call would not
+    # be a speed-up, it would be a silently skipped action.
     def __init__(self, pid, log=print):
         self.pid = pid
         self.log = log
+        self._design_cache = {}
+        self._pass_cache = {}
+        self.cache_hits = 0
+        self.cache_misses = 0
         # Stub pages we deliberately did NOT free, because a remote thread may
         # still be executing them. Leaking 4 KB is always the right trade
         # against decommitting a page under a running thread.
@@ -183,6 +217,63 @@ class Remote:
                 f"OpenProcess(PROCESS_ALL_ACCESS) failed on pid {pid} "
                 f"(error {ctypes.get_last_error()}). CreateRemoteThread needs "
                 f"more rights than the viewer's read/write handle.")
+        self._selftest()
+
+    def _selftest(self):
+        """Prove the remote-call machinery works, before any rule depends on it.
+
+        A BROKEN ENGINE HANDLE IS INDISTINGUISHABLE FROM AN IDLE AI, and that
+        cost two rounds of analysis. A bad edit once left this constructor
+        never reaching the OpenProcess line: every call then raised
+        AttributeError, every rule caught its own exception and moved on, and
+        the loop reported fast clean passes with 0% cache hits and "rules 0.0s"
+        — which reads as a healthy, quiet game rather than one where nothing
+        works. Several conclusions were drawn from those numbers and all of
+        them were wrong.
+
+        So the machinery proves itself once, here, on a stub that only returns a
+        constant: no game state is read and nothing is written, so it is safe on
+        any client at any moment. If this cannot run, nothing downstream could
+        have either, and saying so now is worth more than discovering it as
+        silence forty turns later.
+        """
+        probe = 0x5EE1F00D
+        code = mov_eax_imm(probe) + RET_4
+        got = self.run_stub(code, "self-test")
+        if got != probe:
+            raise RemoteCallError(
+                f"remote-call self-test failed: expected 0x{probe:08X}, got "
+                f"{got!r}. Engine calls do not work in this process, so every "
+                f"rule that needs one would fail silently — refusing to start "
+                f"rather than play a hollow game.")
+
+    def begin_pass(self):
+        """Drop everything that is only true of the turn just gone."""
+        self._pass_cache.clear()
+
+    def invalidate(self, *keys):
+        """Forget specific cached facts after we change the thing they describe."""
+        for k in keys:
+            self._pass_cache.pop(k, None)
+
+    def _cached(self, store, key, compute):
+        if key in store:
+            self.cache_hits += 1
+            return store[key]
+        self.cache_misses += 1
+        value = compute()
+        # A failed call returns None. Caching that would turn one bad read into
+        # a permanent one, so misses are not remembered.
+        if value is not None:
+            store[key] = value
+        return value
+
+    def cache_summary(self):
+        total = self.cache_hits + self.cache_misses
+        if not total:
+            return "no engine calls"
+        return (f"{self.cache_hits}/{total} engine call(s) served from cache "
+                f"({100 * self.cache_hits // total}%)")
 
     def close(self):
         if self.leaked_pages:
@@ -359,12 +450,14 @@ class Remote:
         both answers the question and warms the cache, so subsequent plain reads
         of ShipDesign:36 return the real number.
         """
-        code = (mov_ecx_imm(design_tag + DESIGN_DATA_OFFSET) +
-                mov_eax_imm(DESIGN_SPEED_GETTER) +
-                CALL_EAX +
-                SUB_ESP_4 + FSTP_ESP + POP_EAX +
-                RET_4)
-        return self.run_stub(code, f"design speed getter on 0x{design_tag:08X}")
+        def call():
+            code = (mov_ecx_imm(design_tag + DESIGN_DATA_OFFSET) +
+                    mov_eax_imm(DESIGN_SPEED_GETTER) +
+                    CALL_EAX +
+                    SUB_ESP_4 + FSTP_ESP + POP_EAX +
+                    RET_4)
+            return self.run_stub(code, f"design speed getter on 0x{design_tag:08X}")
+        return self._cached(self._design_cache, ("speed", design_tag), call)
 
     def hurry_production(self, planet_tag):
         """Spend cash to finish this planet's current production immediately.
@@ -390,28 +483,35 @@ class Remote:
 
     def hurry_cost(self, planet_tag):
         """4 x (total production needed - progress); -1 when not hurryable."""
-        code = (push_imm(planet_tag + PLANET_PROPERTIES) +
-                mov_eax_imm(HURRY_COST) +
-                CALL_EAX +
-                ADD_ESP_4 +
-                RET_4)
-        v = self.run_stub(code, f"hurry cost on 0x{planet_tag:08X}")
-        return None if v is None else struct.unpack("<i", struct.pack("<I", v))[0]
+        def call():
+            code = (push_imm(planet_tag + PLANET_PROPERTIES) +
+                    mov_eax_imm(HURRY_COST) +
+                    CALL_EAX +
+                    ADD_ESP_4 +
+                    RET_4)
+            v = self.run_stub(code, f"hurry cost on 0x{planet_tag:08X}")
+            return None if v is None else struct.unpack("<i", struct.pack("<I", v))[0]
+        return self._cached(self._pass_cache, ("hurry_cost", planet_tag), call)
 
     def production_total(self, planet_tag, vftable_slot_addr):
         """PP vftable[0x74] — the production this build needs in total."""
-        code = (mov_ecx_imm(planet_tag + PLANET_PROPERTIES) +
-                mov_eax_imm(vftable_slot_addr) +
-                CALL_EAX +
-                RET_4)
-        return self.run_stub(code, f"production total on 0x{planet_tag:08X}")
+        def call():
+            code = (mov_ecx_imm(planet_tag + PLANET_PROPERTIES) +
+                    mov_eax_imm(vftable_slot_addr) +
+                    CALL_EAX +
+                    RET_4)
+            return self.run_stub(code, f"production total on 0x{planet_tag:08X}")
+        return self._cached(self._pass_cache,
+                            ("prod_total", planet_tag, vftable_slot_addr), call)
 
     def production_done(self, planet_tag):
-        code = (mov_ecx_imm(planet_tag + PLANET_PROPERTIES) +
-                mov_eax_imm(PRODUCTION_DONE) +
-                CALL_EAX +
-                RET_4)
-        return self.run_stub(code, f"production done on 0x{planet_tag:08X}")
+        def call():
+            code = (mov_ecx_imm(planet_tag + PLANET_PROPERTIES) +
+                    mov_eax_imm(PRODUCTION_DONE) +
+                    CALL_EAX +
+                    RET_4)
+            return self.run_stub(code, f"production done on 0x{planet_tag:08X}")
+        return self._cached(self._pass_cache, ("prod_done", planet_tag), call)
 
     def make_ship_command(self, block, order_type, target_alloc):
         """Run the engine's ShipCommand constructor on a block we hand it.
@@ -492,15 +592,20 @@ class Remote:
         (0, 0, 0) and looks unarmed. Reading them through the getters both
         answers the question and leaves the plain reads correct afterwards.
         """
-        out = []
-        for fn in DESIGN_FP_GETTERS:
-            v = self.run_stub(
-                mov_ecx_imm(design_tag + DESIGN_DATA_OFFSET) +
-                mov_eax_imm(fn) + CALL_EAX + RET_4,
-                f"firepower getter 0x{fn:08X}")
-            out.append(0 if v is None else struct.unpack("<i",
-                       struct.pack("<I", v))[0])
-        return tuple(out)
+        def call():
+            out = []
+            for fn in DESIGN_FP_GETTERS:
+                v = self.run_stub(
+                    mov_ecx_imm(design_tag + DESIGN_DATA_OFFSET) +
+                    mov_eax_imm(fn) + CALL_EAX + RET_4,
+                    f"firepower getter 0x{fn:08X}")
+                out.append(0 if v is None else struct.unpack("<i",
+                           struct.pack("<I", v))[0])
+            return tuple(out)
+        # THREE remote threads per call, and the single biggest consumer in the
+        # whole AI: 138 of 571 stub calls in a 22-pass run, for a number that
+        # cannot change unless a design is refitted.
+        return self._cached(self._design_cache, ("firepower", design_tag), call)
 
     def first_contact(self, civ_tag, other_tag):
         """Create the relation record between two civs if it does not exist.
@@ -550,11 +655,13 @@ class Remote:
         block, which reads -1 until something asks for it. Our own Colony Ship
         reads -1 right now while the rival's reads 2.
         """
-        code = (mov_ecx_imm(design_tag + DESIGN_DATA_OFFSET) +
-                mov_eax_imm(DESIGN_MINCREW_GETTER) +
-                CALL_EAX +
-                RET_4)
-        return self.run_stub(code, f"design min-crew on 0x{design_tag:08X}")
+        def call():
+            code = (mov_ecx_imm(design_tag + DESIGN_DATA_OFFSET) +
+                    mov_eax_imm(DESIGN_MINCREW_GETTER) +
+                    CALL_EAX +
+                    RET_4)
+            return self.run_stub(code, f"design min-crew on 0x{design_tag:08X}")
+        return self._cached(self._design_cache, ("min_crew", design_tag), call)
 
     # ── conscription ───────────────────────────────────────────────────
     def draft_cost(self, civ_tag, count=1):
@@ -574,12 +681,26 @@ class Remote:
         ECX is Owner_primary + 0x30c, which is the civ-trait container; the
         function only uses it to reach the Owner behind it.
         """
-        code = (push_imm(count) +
-                mov_ecx_imm(civ_tag + DRAFT_COST_THIS) +
-                mov_eax_imm(GET_DRAFT_COST) +
-                CALL_EAX +
-                RET_4)
-        return self.run_stub(code, f"draft cost for {count} on 0x{civ_tag:08X}")
+        def call():
+            code = (push_imm(count) +
+                    mov_ecx_imm(civ_tag + DRAFT_COST_THIS) +
+                    mov_eax_imm(GET_DRAFT_COST) +
+                    CALL_EAX +
+                    RET_4)
+            return self.run_stub(code,
+                                 f"draft cost for {count} on 0x{civ_tag:08X}")
+        # Per pass only: the price is a function of empire-wide military, so it
+        # moves the moment we draft, build or lose a ship. Every caller that
+        # changes that calls invalidate_draft_cost().
+        return self._cached(self._pass_cache, ("draft_cost", civ_tag, count),
+                            call)
+
+    def invalidate_draft_cost(self, civ_tag=None):
+        """Forget cached draft prices after the military count changes."""
+        for key in [k for k in self._pass_cache
+                    if k[0] == "draft_cost"
+                    and (civ_tag is None or k[1] == civ_tag)]:
+            del self._pass_cache[key]
 
     def draft_is_free(self):
         """The engine skips the whole cost block when [0x0080AA00] < 150.

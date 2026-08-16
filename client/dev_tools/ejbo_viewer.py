@@ -58,6 +58,17 @@ class MEMORY_BASIC_INFORMATION(ctypes.Structure):
         ("Type",              wintypes.DWORD),
     ]
 
+# Processes whose names match the "CosmicSupremacy" substring but are NOT the
+# game. The launcher is the whole reason this list exists: it ships as
+# CosmicSupremacyLauncher.exe, sits beside the client in every release, and is
+# the FIRST match EnumProcesses happens to return often enough to matter. An AI
+# that attached to it would read a Python process's memory, find no civs, and
+# report "no civ named 'BadGuy'" — a wrong answer that looks like a game bug.
+# game_cycle.py already carries the same exclusion for Stop-Process; this is the
+# read side of it.
+NOT_THE_GAME = ("cosmicsupremacylauncher.exe",)
+
+
 def find_pid(exe_substr="CosmicSupremacy"):
     arr = (wintypes.DWORD * 4096)()
     cb  = ctypes.c_ulong()
@@ -74,7 +85,8 @@ def find_pid(exe_substr="CosmicSupremacy"):
         try:
             buf = ctypes.create_unicode_buffer(260)
             n = psapi.GetModuleBaseNameW(h, None, buf, 260)
-            if n and exe_substr.lower() in buf.value.lower():
+            if (n and exe_substr.lower() in buf.value.lower()
+                    and buf.value.lower() not in NOT_THE_GAME):
                 return pid, buf.value
         finally:
             kernel32.CloseHandle(h)

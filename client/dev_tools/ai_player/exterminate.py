@@ -258,13 +258,20 @@ def warships(snap, civ):
     return [s for s in snap.owned_ships(civ) if s.role == "WARSHIP"]
 
 
-def warship_designs(snap, civ):
+def warship_designs(snap, civ, done=None):
     """Our own armed designs, buildable ones only.
 
     Filtered by OWNER, not by whether the derived stat block is warm. That block
     is a lazy cache reading -1 until a getter touches it, and filtering on it
     once had R-XPN-01 selecting the RIVAL's design.
+
+    Also filtered by RESEARCH, which owning the design no longer implies: Single
+    Player seeds `f1` and `b1` into the galaxy at turn 0 and their weapons are
+    not unlocked until Cold Fusion completes. See research.illegal_parts.
     """
+    if done is None:
+        done = {t for t, _ in civ.completed}
+    import research
     out = []
     for d in snap.designs:
         own = d.owner
@@ -272,8 +279,32 @@ def warship_designs(snap, civ):
             continue
         if not d.chassis or not d.engines:
             continue
-        if d.weapons:            # cache-independent test for 'armed'
-            out.append(d)
+        if not d.weapons:        # cache-independent test for 'armed'
+            continue
+        if not research.design_legal(d, done):
+            continue
+        out.append(d)
+    return out
+
+
+def unresearched_warships(snap, civ):
+    """Armed designs we own but may not build yet, with what each is waiting on.
+
+    Exists so R-XTM-01 can say "b1 is waiting on weapon 10" rather than the
+    flatly wrong "this civ has no armed design" — which is what it would report
+    for a seeded galaxy, and would send whoever read it off to synthesise a
+    design that is already sitting in the list.
+    """
+    import research
+    done = {t for t, _ in civ.completed}
+    out = []
+    for d in snap.designs:
+        own = d.owner
+        if own is None or own.addr != civ.addr:
+            continue
+        if not d.weapons or research.design_legal(d, done):
+            continue
+        out.append((d, research.explain_illegal(d, done)))
     return out
 
 
@@ -346,6 +377,17 @@ def run_xtm01(snap, civ, act, hist, log=print):
         import research
         done = {t for t, _ in civ.completed}
         arms = sorted(research.unlocked(done, research.WEAPON))
+        # A seeded galaxy OWNS armed designs before it may build them, so check
+        # that before claiming there are none — the two states want opposite
+        # actions from whoever reads the log.
+        waiting = unresearched_warships(snap, civ)
+        if waiting:
+            log(f"R-XTM-01: {_why(snap, civ, act, foes)} and "
+                f"{len(have)}/{WARSHIP_TARGET} warship(s); "
+                + "; ".join(f"{d.design_name!r} is waiting on {why}"
+                            for d, why in waiting)
+                + ". R-XPL-04 is prioritising the research that grants it.")
+            return 0
         log(f"R-XTM-01: {_why(snap, civ, act, foes)} and "
             f"{len(have)}/{WARSHIP_TARGET} warship(s), but this civ has no "
             f"armed design."
@@ -597,9 +639,11 @@ def run_xtm07(snap, civ, act, hist, log=print):
             f"crew; another hull would not land anyone sooner")
         return 0
 
+    import research
+    done = {t for t, _ in civ.completed}
     designs = [d for d in snap.designs
                if d.owner is not None and d.owner.addr == civ.addr
-               and d.role == "TROOP"]
+               and d.role == "TROOP" and research.design_legal(d, done)]
     if not designs:
         log(f"R-XTM-07: {len(have)}/{TROOP_TARGET} troop ship(s) and this civ "
             f"has no design with a troop bay. Synthesise one: "
@@ -656,10 +700,19 @@ def run_xtm05(snap, civ, act, hist, log=print):
 def run_xtm00(snap, civ, act, hist, log=print):
     """R-XTM-00: declare war on a civ we can reach and are equipped to fight.
 
-    OFF BY DEFAULT. Declaring war is outward-facing and effectively irreversible
-    for the rest of a galaxy's life, so it is not something to start doing as a
-    side effect of a code change. Set ALLOW_DECLARE_WAR to enable it, which is
-    the intended configuration for an AI-vs-AI galaxy.
+    ON, via ALLOW_DECLARE_WAR below — this docstring said "OFF BY DEFAULT" while
+    the constant read True, and the constant is what runs. Declaring war is
+    outward-facing and effectively irreversible for the rest of a galaxy's life,
+    so which of the two was right is not a detail.
+
+    `[ ]` **It is now enabled against a HUMAN, which §4.4 flagged in advance as a
+    §1.1 violation.** Declaring through a raw relation write costs no reputation
+    and generates no news item, so the AI pays nothing for a declaration a player
+    is charged for, and the player is never notified. That was tolerable when
+    every civ in the galaxy ran this same code and paid the same nothing. In
+    Single Player it is an advantage taken from the person playing. The fix is
+    the command path (§4.4), not turning the rule off — an opponent that never
+    fights is the bug this rule exists to close.
 
     Aggression is tied to CAPABILITY rather than to opportunity: the rule waits
     until it can both see a planet of theirs and field a crewed warship. An AI
@@ -691,7 +744,8 @@ def run_xtm00(snap, civ, act, hist, log=print):
     return acted
 
 
-# Off by default: see run_xtm00. Flip this for an AI-vs-AI galaxy.
+# ON: see run_xtm00, including the fairness caveat now that a human can be the
+# civ being declared on.
 ALLOW_DECLARE_WAR = True
 
 RULES = [("R-XTM-05", run_xtm05), ("R-XTM-00", run_xtm00),

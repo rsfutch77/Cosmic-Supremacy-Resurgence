@@ -9,6 +9,10 @@ server/saves/
 server/loadgame_blob.b64
 # raw blobs handed to the client as its command-line argument at startup
 client/*.dat
+# ...except the Single Player galaxy, which is not a throwaway capture but a
+# shipped release asset: build.ps1 copies it into the zip, so a checkout without
+# it cannot build a release at all.
+!client/SinglePlayerGalaxy.dat
 
 # ── Build / debug leftovers ───────────────────────────────────────────────────
 *.hex

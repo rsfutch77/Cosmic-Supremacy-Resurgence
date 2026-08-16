@@ -9,11 +9,16 @@
     committed twice. The repo keeps sources; this script produces artifacts.
 
         dist\CosmicSupremacy-Resurgence-v<version>\
-            CosmicSupremacyLauncher.exe
+            CosmicSupremacyLauncher.exe     <- the only thing a player runs
             README.txt
-            game\CosmicSupremacy.exe, CosmicSupremacy_TestBed.exe
-            game\galaxies\*.csgalaxy
+            LICENSE.txt
+            game\CosmicSupremacy.exe, CosmicSupremacy_Resurgence.exe
+            game\CosmicSupremacyAI.exe      <- the opponent, started by the launcher
+            game\galaxies\*.csgalaxy, SinglePlayerGalaxy.dat
         dist\CosmicSupremacy-Resurgence-v<version>.zip
+
+    Everything except the launcher lives under game\ on purpose: a player who
+    unzips this should see one obvious thing to double-click.
 
     Which client EXEs and galaxy files get copied is read from manifest.json,
     not hardcoded here — every mode with "show": true contributes its pair. When
@@ -194,6 +199,10 @@ $piArgs = @(
     # name it explicitly rather than relying on the import graph walker.
     '--paths', $ServerDir,
     '--hidden-import', 'cs_server',
+    # gamectl backs the Next Turn / Save / Load buttons and is imported inside
+    # the handlers, not at module scope, so name it rather than rely on the
+    # import graph walker finding it.
+    '--hidden-import', 'gamectl',
     '--distpath', $Stage,
     '--workpath', (Join-Path $BuildDir 'work'),
     '--specpath', $BuildDir
@@ -213,6 +222,58 @@ if ($LASTEXITCODE -ne 0) { throw 'PyInstaller failed' }
 $BuiltExe = Join-Path $Stage 'CosmicSupremacyLauncher.exe'
 if (-not (Test-Path $BuiltExe)) { throw "PyInstaller reported success but $BuiltExe is missing" }
 Write-Ok "built $([math]::Round((Get-Item $BuiltExe).Length / 1MB, 1)) MB"
+
+# ── 6b. Freeze the AI opponent ────────────────────────────────────────────────
+# Only if a mode asks for one. A release with no "ai" key in any mode should not
+# carry a second executable it never starts.
+$wantsAI = @($modes | Where-Object { $_.ai }).Count -gt 0
+if ($wantsAI) {
+    Write-Step "Freezing AI opponent (PyInstaller)"
+    $AiDir    = Join-Path $ClientDir 'dev_tools\ai_player'
+    $ToolsDir = Join-Path $ClientDir 'dev_tools'
+    $AiEntry  = Join-Path $AiDir 'ai.py'
+    if (-not (Test-Path $AiEntry)) { throw "AI entry point not found: $AiEntry" }
+
+    # NOT --windowed, deliberately. The AI prints its whole decision trace and
+    # the launcher reads it back over a pipe; in a windowed build sys.stdout is
+    # None and the first print() raises. It is launched with CREATE_NO_WINDOW
+    # instead, so a console build shows no console.
+    #
+    # ejbo_viewer lives one directory up and is reached through a runtime
+    # sys.path insert in gamestate.py, so name it explicitly rather than trust
+    # the import graph walker to follow that.
+    $aiArgs = @(
+        '--noconfirm', '--onefile',
+        '--name', 'CosmicSupremacyAI',
+        '--paths', $AiDir,
+        '--paths', $ToolsDir,
+        '--hidden-import', 'ejbo_viewer',
+        # Into game\, not the folder root. The player should open the release
+        # and see exactly one thing to click; the opponent is machinery the
+        # launcher starts, and a second executable beside the launcher is an
+        # invitation to run the wrong one. find_ai() already looks here.
+        '--distpath', $GameDir,
+        '--workpath', (Join-Path $BuildDir 'work-ai'),
+        '--specpath', $BuildDir
+    )
+    if ($IconOut) { $aiArgs += @('--icon', $IconOut) }
+    $aiArgs += $AiEntry
+
+    & $VenvPy -m PyInstaller @aiArgs
+    if ($LASTEXITCODE -ne 0) { throw 'PyInstaller failed for the AI' }
+
+    $BuiltAI = Join-Path $GameDir 'CosmicSupremacyAI.exe'
+    if (-not (Test-Path $BuiltAI)) { throw "PyInstaller reported success but $BuiltAI is missing" }
+    Write-Ok "game\CosmicSupremacyAI.exe  ($([math]::Round((Get-Item $BuiltAI).Length / 1MB, 1)) MB)"
+
+    # Fail the build rather than ship a Single Player mode with nobody in it.
+    foreach ($m in @($modes | Where-Object { $_.ai })) {
+        if (-not $m.ai.civ) { throw "mode '$($m.id)' has an ai block with no civ name" }
+        Write-Ok "$($m.id): opponent plays '$($m.ai.civ)'"
+    }
+} else {
+    Write-Warn2 'no mode declares an "ai" opponent - not building one'
+}
 
 # ── 7. Add the game files ─────────────────────────────────────────────────────
 Write-Step "Adding game files"

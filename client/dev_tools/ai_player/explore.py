@@ -178,10 +178,14 @@ def scout_designs(snap, civ):
     spending its whole cost on engines, which makes it both the cheapest ship in
     the empire and the fastest.
     """
+    import research
+    done = {t for t, _ in civ.completed}
     out = []
     for d in snap.designs:
         own = d.owner
         if own is None or own.addr != civ.addr:
+            continue
+        if not research.design_legal(d, done):
             continue
         # A SCANNER IS REQUIRED, not cosmetic. Every design the game itself
         # produced carries scanners=[0], and a synthesised design without
