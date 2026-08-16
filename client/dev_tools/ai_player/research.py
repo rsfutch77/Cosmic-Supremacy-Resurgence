@@ -442,6 +442,60 @@ def unlocked(done, kind):
     return {oid for t in done for k, oid, _v in grants(t) if k == kind}
 
 
+# Which ShipDesign parts vector answers to which research kind. Shields are
+# absent deliberately: the design object exposes a shield STAT (ShipDesign:72)
+# but gamestate reads no fitted-shield vector, so there is nothing to check
+# against. No design this AI builds fits one, and inventing a check for a list
+# we do not read would be a gate that silently passes everything.
+DESIGN_PART_KINDS = (
+    ("chassis",  CHASSIS),
+    ("scanners", SCANNER),
+    ("engines",  ENGINE),
+    ("weapons",  WEAPON),
+    ("modules",  MODULE),
+)
+
+
+def illegal_parts(design, done):
+    """The fitted parts this civ has not researched — empty means buildable.
+
+    THE DESIGN LIST IS NOT THE BUILDABLE LIST, and that distinction only starts
+    mattering once designs arrive from somewhere other than the design editor.
+    A design the UI produced can only contain parts the civ had already
+    unlocked, so owning it was proof enough — which is why every selector here
+    filtered on owner and fitted parts and stopped there.
+
+    Single Player seeds BadGuy's designs into the galaxy at turn 0, because the
+    AI cannot create one in memory (STRATEGY.md §3, actuator I). That breaks the
+    proof: `b1` carries a fusion bomb from the first turn and nothing is unlocked
+    until Cold Fusion completes. Building it would be a plain §1.1 violation —
+    a legal field written to a value the UI would have refused.
+
+    Returns a list of (part list name, object id) so a caller can say WHICH part
+    is missing rather than only that something is.
+    """
+    missing = []
+    for attr, kind in DESIGN_PART_KINDS:
+        have = unlocked(done, kind)
+        for oid in (getattr(design, attr, None) or []):
+            if oid not in have:
+                missing.append((attr, oid))
+    return missing
+
+
+def design_legal(design, done):
+    """Could this civ have built this design through the UI today?"""
+    return not illegal_parts(design, done)
+
+
+def explain_illegal(design, done):
+    """'weapon 10' — the missing parts, for a log line that names the blocker."""
+    kinds = dict(DESIGN_PART_KINDS)
+    return ", ".join(
+        f"{KIND_NAME.get(kinds[attr], attr).lower()} {oid}"
+        for attr, oid in illegal_parts(design, done)) or "nothing"
+
+
 def value(tid, boost=None):
     """How much this AI wants a tech, given what it currently knows how to do."""
     total = 0

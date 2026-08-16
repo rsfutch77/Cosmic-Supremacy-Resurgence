@@ -887,4 +887,40 @@ in `CosmicSupremacy_Memory_Reconstruction_Report.md`.
 
 - **OAuth / social login** — requires new UI windows in the EXE; not feasible via patching
 
----                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             
+---
+
+## 13. Conscription: the production/population path (August 2026)
+
+Derived from the binary in `client/dev_tools/findings_production_path.md` §1.0-1.6,
+which `client/dev_tools/ai_player/remote.py` cites by name. **That file was deleted
+once in a cleanup pass and its contents existed nowhere else** — none of these
+symbols appeared anywhere under `docs/` — so the load-bearing findings are recorded
+here as well. Every signature below is confirmed from the callee and both call sites.
+
+| Function | Address | Signature |
+|---|---|---|
+| `ChangeCitizenJobs` | `0x00574180` | `__cdecl(Planet* alloc, container* indices, int newJobId, bool bFromMilitaryList)` |
+| `GetDraftCost` | `0x00516060` | `__thiscall(int count)`, `ret 4`; ECX = `Owner_primary + 0x30C` |
+| `CommitPopulation` | `0x004F5280` | performs the migration between the two vectors |
+
+**The draft price.** `cost = sum over k in 0..count-1 of 5 * (T + k) + 105`, where `T`
+is the civ's military across the WHOLE empire — every planet's `Planet:168` count plus
+every owned ship's crew. Verified live against the engine six times across two civs.
+Conscription is therefore cheapest early and rises as the fleet grows.
+
+**A citizen and a stationed military unit are the same 16-byte record.** Drafting is a
+job change to id 3 plus a migration between two vectors, not an append to a military
+list. This is what makes `actions.conscript_to_crew` legitimate: a crew member is that
+same record again, so a draft can go straight onto a ship.
+
+**Container wrappers.** `Planet:132` and `Planet:156` hold their vector 12 bytes in —
+the same idiom as the order object's `+28`/`+52` list heads.
+
+**Drafting is FREE below content version 150.** The gate is `[0x0080AA00] >= 150`;
+under it the engine skips the whole cost block.
+
+`[ ]` **HAZARD — `CommitPopulation` auto-conscripts any population above `space/10`.**
+Anything calling it must expect the citizen vector to shift underneath a stale index,
+which is why `actions.conscript` re-reads the list live rather than trusting the
+snapshot.
+

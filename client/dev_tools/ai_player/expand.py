@@ -148,7 +148,7 @@ def _order_target(snap, ship):
 COLONY_SHIP_TARGET = 1     # colony ships to keep in existence
 
 
-def run_xpn01(snap, civ, act, log=print):
+def run_xpn01(snap, civ, act, hist=None, log=print):
     """Build a colony ship when we have none and somewhere to send it.
 
     Uses only actuator D, which is two plain pointer writes — no allocation and
@@ -162,15 +162,35 @@ def run_xpn01(snap, civ, act, log=print):
         than having its progress silently replaced
     """
     colony_ships = [s for s in snap.owned_ships(civ) if s.role == "COLONY"]
-    if len(colony_ships) >= COLONY_SHIP_TARGET:
+    # COUNT THE ONES THAT CAN ACTUALLY SETTLE SOMETHING, not every colony hull
+    # in existence. The engine hands one of the two starting colony ships a
+    # SCOUT order on turn 0 and never clears it, and a scout order on a 13.5/turn
+    # hull is a commitment measured in dozens of turns. Counting it froze
+    # expansion outright in the launcher's Single Player galaxy: R-XPN-02 skipped
+    # the ship as busy, this rule saw 1/1 and declined to build a replacement,
+    # and the civ sat on two planets with an idle shipyard and 159 unowned
+    # planets from turn 3 to turn 25. Neither rule logged anything wrong.
+    #
+    # This is the same availability question R-XPN-02 asks, so it uses the same
+    # test: a scout order whose system is already discovered is finished.
+    settlers = [s for s in colony_ships
+                if (s.order_type or 0) != 2 or scout_finished(snap, s, hist)]
+    if len(settlers) >= COLONY_SHIP_TARGET:
         return 0
+    if colony_ships and not settlers:
+        log(f"R-XPN-01: {len(colony_ships)} colony ship(s), but every one is "
+            f"away on an unfinished scout order — building a replacement so "
+            f"expansion does not wait for it")
 
     # OURS ONLY. Every civ's designs are visible in memory, and filtering by
     # "has a warm stat cache" instead of by owner made this rule select the
     # RIVAL's Colony Ship — ours was excluded merely because its cache was cold.
+    import research
+    done = {t for t, _ in civ.completed}
     designs = [d for d in snap.designs
                if d.is_colony and d.owner is not None
-               and d.owner.addr == civ.addr and d.chassis and d.engines]
+               and d.owner.addr == civ.addr and d.chassis and d.engines
+               and research.design_legal(d, done)]
     if not designs:
         log("R-XPN-01: this civ has no COLONY design with parts")
         return 0
@@ -200,8 +220,9 @@ def run_xpn01(snap, civ, act, log=print):
     # Population is the available stand-in for production rate until the
     # derived-by-observation sensors (STRATEGY.md §2.5) are wired up.
     planet = max(idle, key=lambda p: len(p.population))
-    log(f"R-XPN-01: {len(colony_ships)}/{COLONY_SHIP_TARGET} colony ships — "
-        f"queueing {design.design_name!r} (cost {design.cost}) at {planet}")
+    log(f"R-XPN-01: {len(settlers)}/{COLONY_SHIP_TARGET} colony ships able to "
+        f"settle ({len(colony_ships)} owned) — queueing "
+        f"{design.design_name!r} (cost {design.cost}) at {planet}")
     act.queue_ship(planet, design)
     return 1
 

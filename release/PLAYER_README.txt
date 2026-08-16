@@ -62,7 +62,7 @@ KNOWN ISSUES IN THIS RELEASE
 - The tutorial has some rough edges inherited from the original game. They are
   known and are not caused by this restoration.
 
-- Your saved games live in the data\saves folder next to the launcher. Keep that
+- Your saved games live in the data\games folder next to the launcher. Keep that
   folder if you move the game somewhere else.
 
 - Only one game can run at a time. The launcher will tell you if one is already
@@ -88,7 +88,9 @@ WHAT'S IN THIS FOLDER
 
 CosmicSupremacyLauncher.exe   The launcher. This is the only thing you run.
 README.txt                    This file.
-game\                         The game client and galaxy files.
+LICENSE.txt                   Licence and credits.
+game\                         The game client, the computer opponent, and the
+                              galaxy files. The launcher starts these for you.
 data\                         Created on first run. Logs and saved games.
 
 

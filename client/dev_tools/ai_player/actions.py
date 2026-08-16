@@ -960,9 +960,162 @@ class Actuator:
                   f"{civ.civ_name} cash {cash} -> {cash - cost} "
                   f"(the engine's own price for this draft)")
         self.cash_effect -= cost
+        if self.remote is not None:
+            self.remote.invalidate_draft_cost()
         self.log(f"  drafted citizen {pick} on {planet} for {cost} "
                  f"(migrated by field write, not by ChangeCitizenJobs)")
         return pick
+
+    # Never strip a colony to nothing, however hungry it is: a planet that
+    # cannot work is worse than a ship that cannot fly.
+    MIN_COLONY_POP = 4
+
+    def conscript_to_crew(self, planet, ship, count, civ,
+                          allow_farmers=False):
+        """Draft citizens straight onto a ship, skipping the planet entirely.
+
+        THE PLANET'S MILITARY VECTOR IS THE BOTTLENECK, AND NOTHING NEEDS IT.
+        `conscript` moves a citizen into `Planet:168` and `load_crew` moves it
+        out again the moment a ship wants it, so the stationed-military vector is
+        a staging area a crew-bound unit never has to visit. It is also the step
+        that fails: it is engine-owned, it fills up, and `_append_military`
+        rightly refuses to grow it — "military vector is full (0 bytes spare,
+        need 16)" is what left a finished bomber grounded for ~100 turns with
+        18k cash in the bank and nothing else in its way.
+
+        A citizen, a stationed unit and a crew member are the SAME 16-byte
+        record (see `load_crew`), so the move is legal in one hop: rewrite the
+        citizen list without the drafted records, and hand those records to a
+        fresh crew buffer.
+
+        WHY THIS DOES NOT REOPEN THE AUG 2026 CRASH. That crash was
+        `_set_ship_crew` repointing a crew vector the engine already owned, and
+        the rule that came out of it is "fill a crew vector only when it is
+        EMPTY". This fills an empty one, in a single allocation, with the ship's
+        whole complement — the exact path present in every arm of the bisect
+        that survived. It refuses outright if the ship already has crew, rather
+        than topping up.
+
+        WHAT IT COSTS THE CIV, so this is not a free army: the engine's own
+        `GetDraftCost` prices all `count` drafts and the treasury is debited by
+        that number, the same narrow §1.1 exception `conscript` documents — a
+        debit at a price we did not invent. The player-visible outcome matches
+        what a human gets by drafting and then loading; only the staging hop is
+        skipped.
+
+        TRADE-OFF, DELIBERATE: crew taken this way never appears in the planet's
+        garrison, so this cannot conscript for DEFENCE. That is the recruitment
+        slider's job (R-XPL-05), and no rule defends a planet yet anyway.
+        """
+        if count <= 0:
+            raise ValueError("conscript_to_crew needs a positive count")
+        if self.remote is None and not self.dry_run:
+            raise RuntimeError("conscription needs a remote.Remote")
+
+        # Empty-only, checked before anything is taken from the planet: a
+        # half-done draft that then cannot deliver its crew would delete
+        # citizens for nothing.
+        existing = ship.u32(self.SHIP_CREW)
+        if gs.is_ptr(existing):
+            raise ValueError(
+                f"{ship} already has a crew vector (0x{existing:08X}); this "
+                f"path only ever fills an empty one, because repointing a "
+                f"vector the engine owns is what crashed the client")
+
+        self._require_sane(planet.addr + self.CITIZEN_LIST,
+                           f"{planet}'s citizen vector")
+        # Live read, never the snapshot: the engine shifts this vector itself
+        # (CommitPopulation erases and memmoves, and auto-conscripts surplus
+        # population), so an index chosen from a stale list names someone else.
+        recs = planet.vec(self.CITIZEN_LIST, self.CITIZEN_STRIDE)
+        jobs = [struct.unpack_from("<I", r, 0)[0] for r in recs]
+
+        picks = []
+        for want in self.DRAFT_PREFERENCE:
+            for i, job in enumerate(jobs):
+                if job == want and i not in picks:
+                    picks.append(i)
+                    if len(picks) == count:
+                        break
+            if len(picks) == count:
+                break
+
+        # A FARMER IS DRAFTABLE WHEN THE COLONY HAS NO USE FOR THEM, which is a
+        # judgement about the planet, not about food alone. R-XPL-09 makes it
+        # and passes it down, because only the rule has the population cap and
+        # the food history (STRATEGY.md §2.5) in front of it.
+        #
+        # DO NOT READ `allow_farmers` AS "THE PLANET IS STARVING". The case that
+        # actually matters is a planet at its POPULATION CAP running a food
+        # SURPLUS: growth has stopped, the surplus has nowhere to go, and the
+        # drafted citizen is replaced by growth that was being discarded. A
+        # food-negative colony qualifies too, for the opposite reason. Treating
+        # the flag as a famine signal would invert the common case.
+        if len(picks) < count and allow_farmers:
+            spare = len(jobs) - len(picks) - self.MIN_COLONY_POP
+            for i, job in enumerate(jobs):
+                if spare <= 0 or len(picks) == count:
+                    break
+                if i not in picks:
+                    picks.append(i)
+                    spare -= 1
+
+        if len(picks) < count:
+            raise ValueError(
+                f"{planet} can spare {len(picks)} of the {count} citizen(s) "
+                f"{ship} needs — the rest are farmers"
+                + (f", and it has only {len(jobs)} citizen(s), at or near the "
+                   f"{self.MIN_COLONY_POP} this rule will not take a colony "
+                   f"below" if allow_farmers else
+                   ", and drafting those starves the colony"))
+
+        cost = self.draft_cost(civ, count)
+        if cost is not None and civ.cash is not None and cost > civ.cash:
+            raise ValueError(f"{count} conscript(s) cost {cost}, cash is "
+                             f"{civ.cash}; the engine would refuse")
+
+        if self.dry_run:
+            who = ", ".join(f"{i} ({gs.JOBS.get(jobs[i], jobs[i])})"
+                            for i in picks)
+            self.log(f"  [WOULD DRAFT TO CREW] {count} citizen(s) on {planet} "
+                     f"-> {ship} for {cost} credits: {who}")
+            self.crewed_ships.add(ship.id)
+            return None
+        if cost is None:
+            raise RuntimeError("cannot draft without the engine's price")
+
+        # Both vectors are rewritten from one live read, so no index is used
+        # after the list beneath it has shifted — the hazard that makes
+        # `conscript` strictly one-per-call does not arise here.
+        drafted = []
+        for i in picks:
+            rec = bytearray(recs[i])
+            struct.pack_into("<I", rec, 0, remote.DRAFT_JOB)
+            drafted.append(bytes(rec))
+
+        keep = [r for i, r in enumerate(recs) if i not in picks]
+        cbegin = planet.u32(self.CITIZEN_LIST)
+        kept = b"".join(keep)
+        self._write(cbegin, kept, f"citizen list minus {count}")
+        self._u32(planet.addr + self.CITIZEN_LIST + 4, cbegin + len(kept),
+                  f"citizen end -> {len(keep)}")
+
+        self._set_ship_crew(ship, b"".join(drafted), count)
+
+        cash = civ.cash
+        self._u32(civ.addr + 8, cash - cost,
+                  f"{civ.civ_name} cash {cash} -> {cash - cost} "
+                  f"(the engine's price for {count} draft(s))")
+        self.cash_effect -= cost
+        self.crewed_ships.add(ship.id)
+        # The draft price is a function of empire-wide military and we just
+        # raised it. A stale price would under-quote the NEXT draft this pass.
+        if self.remote is not None:
+            self.remote.invalidate_draft_cost()
+        self.log(f"  drafted {count} citizen(s) on {planet} directly onto "
+                 f"{ship} for {cost} — the planet's military vector was never "
+                 f"involved")
+        return picks
 
     # -- L: set a ship's command, target node included (engine call) -------
     # Order types that consult Ship:56. 0x004D9880 Ship::HasActiveTargetedOrder

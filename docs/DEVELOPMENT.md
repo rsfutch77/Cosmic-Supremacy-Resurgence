@@ -112,6 +112,98 @@ Both refuse to run unless they find exactly the bytes they expect, and both
 write a `.bak` first, so a wrong offset fails loudly instead of corrupting the
 client.
 
+## Single Player and the AI opponent
+
+Single Player is the TestBed client plus the heuristic AI playing the rival civ
+as a separate process. The launcher starts the AI right after the game and kills
+it when the game exits; the AI's whole decision trace is teed into the launcher's
+log pane, prefixed `[ai]`.
+
+A mode opts in with an `ai` block in `manifest.json`:
+
+```json
+{ "id": "testbed", "exe": "...", "galaxy": "...", "ai": { "civ": "BadGuy" } }
+```
+
+`civ` must match the name the engine gives the rival. **Measured, not assumed:
+in the launcher's galaxy the human is `DemoPlayer` — from the `.csgalaxy` pass
+token — and the rival is `BadGuy`.** The sandbox galaxy the AI was developed
+against uses `GoodGuy`/`BadGuy`, so anything that assumes `GoodGuy` is wrong here.
+
+`release/build.ps1` freezes `ai_player/ai.py` into `CosmicSupremacyAI.exe`
+whenever any mode declares an `ai`. It is a **console** build launched with
+`CREATE_NO_WINDOW`, not a windowed one: the AI prints continuously and the
+launcher reads it back over a pipe, and in a windowed build `sys.stdout` is
+`None` and the first `print()` raises.
+
+Two environment variables matter to the frozen AI:
+
+| Variable | Purpose |
+|----------|---------|
+| `CS_AI_STATE_DIR` | Where the fog-of-war discovery set is persisted. PyInstaller unpacks into a temp directory Windows deletes on exit, so without this the AI re-explores the galaxy from scratch on every launch. The launcher points it at `data\ai_state`. |
+| `PYTHONUNBUFFERED` | Without it the log pane fills in 8 KB bursts instead of live. |
+
+### The AI cannot design ships, and that limits what it can play
+
+Nothing registers a design created in memory (STRATEGY.md §3, actuator I), so a
+civ can only build designs the galaxy already contains. A fresh galaxy gives each
+civ exactly one — `Colony Ship` — which means `R-EXP-01` (scouts) and `R-XTM-01`
+/ `R-XTM-07` (warships, troop hulls) can never fire. **The AI plays Expand and
+Exploit properly, explores slowly with colony ships, and never fights.**
+
+`client/dev_tools/make_single_player_galaxy.py` builds a galaxy with `probe1`,
+`f1` and `b1` seeded into the AI civ only — the human has the design editor, the
+AI does not, so seeding both would hand the player designs they did not earn.
+The AI's build rules gate on research (`research.design_legal`), so owning `b1`
+on turn 0 does not mean building it on turn 1; the weapons stay locked until Cold
+Fusion completes.
+
+**That galaxy is not shipped yet, because the delivery route is unsolved.**
+Measured over repeated 60-second samples, and confirmed on screen:
+
+- Launching the client on a **`.dat`** takes the normal path, not the testbed
+  join. The window is titled `Cosmic Supremacy` rather than `Cosmic Supremacy -
+  Test-Bed Galaxy` and the TestBed dialog is never created — so the player has
+  **no Next Turn, no Save and no Load**. A seeded `.dat` is therefore unusable as
+  a shipped galaxy however correct its contents are.
+- The **Load** button does not load anything directly: it issues `savegamelist`
+  and opens a `Load Game` dialog (`ListBox` `0x03f1`, `OK` `0x0001`). A seeded
+  galaxy could arrive that way, but only through a save slot the player picks.
+- `server/loadgame_blob.b64` **must not** be used to deliver it. `loadgame`
+  serves that file ahead of the save index whenever it exists, so it would
+  hijack every load the player ever makes, including their own saves.
+
+### `[ ]` Let the player name a save
+
+Save writes `data\games\savegame_turn<N>.dat` and the name the engine records is
+always `singleplayer`. A player with several games in flight has only the turn
+number to tell them apart. Wants a name prompt, passed through to
+`gamectl.Client.save_game` (which already takes one) and used for the filename.
+
+### `[ ]` Per-session galaxy generation, for replayability
+
+Single Player ships one pre-seeded `.dat`, so **every new game is the same
+galaxy**. That is a regression against the pass-file path, which generates a
+fresh galaxy on every launch — measured, two launches gave 170 vs 159 planets
+with different sun layouts and different homeworld positions.
+
+The fix reuses pieces that all already work: launch on the pass file to generate
+a fresh galaxy, trigger `SaveGame`, inject the AI's designs into the blob
+(`make_single_player_galaxy.py` does exactly this), then relaunch on the result.
+Roughly a minute of "preparing your galaxy" at the start of a new game.
+
+Deferred deliberately — the fixed galaxy is playable, and the buttons and the
+seeding were worth proving first.
+
+### Driving the game's UI from outside
+
+Turn advance in Single Player is the TestBed dialog's Next Turn button. Anything
+automating it must send **`WM_COMMAND` with `BN_CLICKED` to the parent dialog** —
+a posted `BM_CLICK` and a synthesised `WM_LBUTTONDOWN`/`UP` pair both leave the
+turn counter untouched. Turn resolution itself is effectively instant (<0.5s
+measured); a turn that appears to take many minutes is the host sleeping, which
+STRATEGY.md §1 warns about and which looks identical to a stalled pipeline.
+
 ## Server
 
 `server/cs_server.py` is a stdlib-only HTTP server — despite `requirements.txt`,
@@ -210,6 +302,13 @@ run. This is expected and is documented in the release's `README.txt`.
 - `ejbo_viewer.py` / `ejbo_viewer.html` — live game-state viewer
 - `snapshot.py`, `checkpoint.py` — capture and restore game state
 - `game_cycle.py`, `fast_turns.py`, `advance_turns.py` — drive turns
+- `make_single_player_galaxy.py` — build a galaxy with the AI's designs seeded in
+- `xrefs.py` — static cross-references: who calls this address, and what else does that
+  caller call. Decodes `E8 rel32` and 32-bit absolute operands only, so it is blind to
+  virtual dispatch; a negative result is weak evidence, a positive one is checkable.
+  Validate it on a known address before trusting it on a new one
+- `find_refs.py` — the runtime counterpart: who currently points at this object, searching
+  every reference form (`tag-8`, `tag-12`, `tag-52`) because searching one finds a fraction
 - `ai_player/` — the heuristic AI; see its [STRATEGY.md](../client/dev_tools/ai_player/STRATEGY.md)
 
 `server/dev_tools/` works on save blobs: `save_parser.py`, `diff_saves.py`, and

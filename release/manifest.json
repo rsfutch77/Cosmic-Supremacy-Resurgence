@@ -15,6 +15,14 @@
     "When they are, this file is the only thing that changes: point every mode",
     "at the same 'exe' and delete the others from build.ps1's copy list.",
     "",
+    "SINGLE PLAYER USES Resurgence.exe, NOT TestBed.exe, and the difference is",
+    "not cosmetic. Launched on a .dat, TestBed.exe loads the save correctly and",
+    "then never resolves a turn -- the counter does not move however short the",
+    "turn length is set. Resurgence.exe on the same .dat advances normally.",
+    "Measured both ways against the same file. Neither contacts the server on",
+    "the .dat path, so the client's flashing 'disconnected' indicator is",
+    "expected there and is not the cause.",
+    "",
     "  needs_server  documentation, not control flow — the launcher always runs",
     "                the stub server. Measured, not assumed: Tutorial calls",
     "                localhost:8888 at startup, Demo never contacts it at all.",
@@ -22,7 +30,14 @@
     "                losing the mapping.",
     "  enabled       false renders the card greyed out with a COMING SOON badge.",
     "                Such a mode needs no exe or galaxy, and is skipped when",
-    "                looking for the game files."
+    "                looking for the game files.",
+    "  ai            the opponent. The heuristic AI is a separate process that",
+    "                plays a civ by reading and writing the running client's",
+    "                memory, so it is started after the game and killed with it.",
+    "                'civ' MUST match the name the engine gives the rival civ in",
+    "                that galaxy — measured, not assumed: the human is",
+    "                'DemoPlayer' (from the .csgalaxy pass token) and the rival",
+    "                is 'BadGuy'. A mode with no 'ai' key simply has no opponent."
   ],
 
   "modes": [
@@ -51,10 +66,12 @@
       "title": "Play Single Player",
       "short": "Single Player",
       "blurb": "A full single-player galaxy against the new Resurgence AI. Turns run locally, on your machine, at your own pace.",
-      "exe": "CosmicSupremacy_TestBed.exe",
-      "galaxy": "TestBedGalaxy_local.csgalaxy",
+      "exe": "CosmicSupremacy_Resurgence.exe",
+      "galaxy": "SinglePlayerGalaxy.dat",
       "needs_server": true,
-      "show": true
+      "show": true,
+      "controls": true,
+      "ai": { "civ": "BadGuy" }
     },
     {
       "id": "multiplayer",
