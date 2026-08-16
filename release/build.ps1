@@ -218,6 +218,16 @@ Write-Ok "built $([math]::Round((Get-Item $BuiltExe).Length / 1MB, 1)) MB"
 Write-Step "Adding game files"
 Copy-Item (Join-Path $ReleaseDir 'PLAYER_README.txt') (Join-Path $Stage 'README.txt')
 
+# The zip is where the original binaries actually get distributed, so the file
+# explaining whose they are travels with them rather than only living in the repo.
+$License = Join-Path $RepoRoot 'LICENSE'
+if (Test-Path $License) {
+    Copy-Item $License (Join-Path $Stage 'LICENSE.txt')
+    Write-Ok 'LICENSE.txt'
+} else {
+    Write-Warn2 'no LICENSE at the repo root - shipping without one'
+}
+
 # Several modes share one EXE, so copy the distinct set rather than per mode.
 $copied = @{}
 foreach ($m in $playable) {
@@ -240,6 +250,12 @@ if (-not $SkipZip) {
     if (Test-Path $Zip) { Remove-Item -Force $Zip }
     Compress-Archive -Path $Stage -DestinationPath $Zip -CompressionLevel Optimal
     Write-Ok "$Zip  ($([math]::Round((Get-Item $Zip).Length / 1MB, 1)) MB)"
+
+    # Published in the release notes so a player can verify the download, and so
+    # "is this the build I tested?" has an answer later.
+    $sha = (Get-FileHash $Zip -Algorithm SHA256).Hash.ToLower()
+    Set-Content -Path "$Zip.sha256" -Encoding ascii -Value "$sha  $(Split-Path -Leaf $Zip)"
+    Write-Ok "SHA256 $sha"
 }
 
 # ── Done ──────────────────────────────────────────────────────────────────────

@@ -8,7 +8,7 @@ technology, designed your own fleets, and fought for a galaxy. Turns took hours,
 governors ran your empire while you slept, and players across every timezone
 commanded enormous custom-built fleets against each other.
 
-The servers went dark years ago. This project brings the game back.
+The servers went dark years ago and it appears the original backend was lost in an accident. This project brings the game back.
 
 ---
 
@@ -78,8 +78,17 @@ I'm a fan of the original game and definitely did not grow up around the languag
 ## Licence
 
 Cosmic Supremacy was created by Erwin, and the original game assets remain their
-property. We have tried to reach out, and hope to involve them in the project.
+property. I have tried to reach out to involve them in the project, and would be happy to turn over the assets so that he can restore the server that was lost. 
 
 This is an unofficial restoration, not affiliated with or endorsed by the
 original author. It is free, in the spirit of the original game — it will never
 be sold and will never carry advertising.
+
+The code written for this project — the server, the launcher, the development
+tools and the documentation — is released under the
+[MIT License](LICENSE), so anyone is free to build on it.
+
+That licence covers **only** the new work. The original game binaries
+(`CosmicSupremacy*.exe`) and the `.csgalaxy` files are not mine to license: they
+remain the property of their author and are included purely so the game can be
+played again. They will be removed on request by the copyright holder.

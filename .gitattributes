@@ -1,0 +1,22 @@
+# Normalise line endings so `git add` stops warning on every text file and a
+# diff never shows a whole file changed because it was opened in another editor.
+* text=auto
+
+# Windows-only tooling: keep CRLF in the working tree so Notepad and the
+# PowerShell ISE render them correctly.
+*.ps1  text eol=crlf
+*.bat  text eol=crlf
+*.txt  text eol=crlf
+
+*.py   text eol=lf
+*.md   text eol=lf
+*.json text eol=lf
+
+# The client binaries and galaxy pass files are data. Never let newline
+# translation near them — it would corrupt an EXE.
+*.exe      binary
+*.csgalaxy binary
+*.dat      binary
+*.ico      binary
+*.b64      binary
+*.dmp      binary

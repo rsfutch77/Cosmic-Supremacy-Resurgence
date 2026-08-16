@@ -175,12 +175,30 @@ its own exe and `data\` open and the staging wipe would fail on a file lock.
 Test the result from the staged folder rather than the repo — that is the only
 layout a player will ever have.
 
+### Pre-release tests
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\release\tests\run_all.ps1
+```
+
+Five runs, a few minutes. Close the launcher first — one already holding port
+8888 makes the tests silently reuse it instead of exercising their own server.
+The last four start and kill the real game, so leave the machine alone.
+
+| Test | Covers |
+|------|--------|
+| `test_save_protocol.py` | The wire protocol against cs_server directly, no game: slot allocation from the `gameid=-1` sentinel, `savegamelist` format, blob round-trip, saving over a slot, delimiter injection in a save name |
+| `test_status_cycle.py <mode>` | Drives the real launcher and client: click, report running, kill, recover |
+| `test_external_status.py` | The same for a client started outside the launcher, where there is no child handle |
+
 ### Release checklist
 
 1. `build.ps1 -Clean` and confirm the version is right.
-2. Run the staged launcher and click through every visible mode.
-3. Confirm `data/` is created next to the launcher and both logs appear.
-4. Tag `v<version>` and attach the `.zip` to a GitHub release.
+2. Run `release\tests\run_all.ps1` — all green.
+3. Run the staged launcher and click through every visible mode.
+4. Confirm `data/` is created next to the launcher and both logs appear.
+5. Tag `v<version>` and attach the `.zip` to a GitHub release, with the
+   SHA256 the build printed.
 
 The launcher is unsigned, so players will see a SmartScreen warning on first
 run. This is expected and is documented in the release's `README.txt`.
