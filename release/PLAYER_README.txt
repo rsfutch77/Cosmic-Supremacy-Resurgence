@@ -62,8 +62,8 @@ KNOWN ISSUES IN THIS RELEASE
 - The tutorial has some rough edges inherited from the original game. They are
   known and are not caused by this restoration.
 
-- In Single Player, the in-game Save and Load buttons do not work yet. This is the
-  next thing being fixed.
+- Your saved games live in the data\saves folder next to the launcher. Keep that
+  folder if you move the game somewhere else.
 
 - Only one game can run at a time. The launcher will tell you if one is already
   open rather than letting a second one close it.
