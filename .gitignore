@@ -41,3 +41,7 @@ release/build/
 release/.venv-build/
 # written by launcher.py when it is run from a checkout rather than a release
 release/data/
+
+# ── Claude Code local config ──────────────────────────────────────────────────
+# per-developer tool permissions and agent settings; not project source
+.claude/
