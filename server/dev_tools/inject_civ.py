@@ -14,84 +14,6 @@ the same way `inject_design.py` gets a ship design built.
 pass: each new civ gets its own auto-picked homeworld, chosen to sit as far as
 possible from every planet already spoken for.
 
-WHY THE BLOB AND NOT MEMORY
----------------------------
-In memory a civ is an `Owner` — a multiple-inheritance object whose allocation
-starts 52 bytes in front of its EJBO tag, and which has to be inserted into an
-MSVC `std::map` (head `0x02D48740`) keyed by a hash nobody has derived. The
-reconstruction report has carried "create a third player" as a CRITICAL blocked
-item for exactly that reason. In a blob a civ is just bytes: no allocator, no
-red-black tree, no key. The engine builds all of it.
-
-**The registry key is not in the blob at all.** Both civs' `Owner:-16` values
-(`0x2DB018D6`, `0x6C157D63`) appear nowhere in a capture, and they are the SAME
-values across two separately generated games — so the key is derived on load,
-almost certainly from the civ NAME. Two consequences: a new civ needs no key
-invented for it, and it needs a name nothing else in the galaxy uses.
-
-THE LAYOUT, measured against a two-civ capture
-----------------------------------------------
-    GLXY  payload:  u32 civCount ; OWNR x civCount ; SOLA... ; SHIP... ; NEBU...
-
-    OWNR  payload:  u32 nameLen ; char name[nameLen] ; u32 objectId
-                    DATA { OWPR, KNPL, EXSY, ASKY, CVTR, SERV,
-                           u32 designCount, DSGN x n, u32, u32,
-                           NEWS x n, GOVS, ADMS, SPQS, USSE }
-                    u32                                   (= Owner:4 in memory)
-
-    PLNT  payload:  u32 objectId ; f32 x, z, y ; u32 ownerObjectId ; f32
-                    u32 nameLen ; char name[nameLen] ; 6 bytes ; PLPR {...} ; u32
-
-`GLXY`'s leading `u32` reads 2 on a two-civ galaxy and sits immediately in front
-of the first `OWNR`, which is the same count-then-records idiom `inject_design.py`
-found in front of a civ's designs — where a record added without bumping the
-count is simply never read.
-
-WHAT IS PATCHED IN A CLONE, AND WHY EACH ONE
---------------------------------------------
-* **name and object id** — the two identity fields in `OWNR`'s prologue.
-* **every embedded copy of the donor's object id** inside the clone. Ownership
-  is carried by id in more places than one: a design's `SDPR` ends with its
-  owner's id, and every CITIZEN record inside a `PLPR` carries it too (that is
-  why the donor's id repeats at a 9-byte stride through a populated homeworld).
-  A blanket 4-byte replacement inside the cloned range catches all of them.
-* **a fresh object id per cloned design**, and the SAVE high-water id raised
-  past everything issued. `inject_design.py` learned that one by crashing: reuse
-  an id and the next ship the engine builds collides with it.
-* **`KNPL` reset to zero records** — that is the known-PLAYERS vector (its one
-  record holds the other civ's object id), and a civ that has just appeared has
-  met nobody.
-* **the `u32` that ends the `OWNR` payload** — the field that lands at `Owner:4`
-  in memory. It reads 20 for `GoodGuy` and 21 for `BadGuy` in every galaxy the
-  client has generated here, and **a clone that keeps its donor's value is
-  missing from the client's score list** while still appearing in diplomacy: the
-  list holds one row per distinct `Owner:4`. CONFIRMED by an A/B on two `.dat`s
-  built from one turn-185 capture and differing in these four bytes — with a
-  colliding value the civ never appears, across turn boundaries; with a fresh one
-  it appears after the galaxy's first boundary. The clone gets
-  `max(existing) + 1`; `--userid` forces a value, including the donor's, which is
-  what reproduces the bug. What the field IS is still open — per-civ and distinct
-  per generated civ is all that is measured. It is NOT the local account id: the
-  human's civ reads 20 live, matching its blob value.
-
-WHAT IS DELIBERATELY LEFT ALONE
--------------------------------
-* **`EXSY`** — the explored-systems map, cloned as-is. Its record layout is not
-  decoded and a wrong guess here corrupts the blob. See the `[ ]` below: this is
-  accepted for now, not believed to be right.
-* **`OWPR` and `CVTR`** — cash, research, completed technologies and the civ
-  trait block are inherited from the donor. That is a feature rather than an
-  oversight: cloning the ENGINE's civ gives a new player the engine civ's
-  starting position, and cloning a developed civ gives a developed opponent for
-  testing a late game without playing to it.
-* **Diplomacy comes with the clone.** The donor's relation records name the
-  OTHER civs by id, and those ids are not the donor's, so the blanket
-  repointing leaves them intact — an injected clone of a civ at war starts at
-  war with the same enemies, and they have no matching record for it. Observed:
-  'Ceti', cloned from a 'BadGuy' at war, read "at war with ['GoodGuy']" on its
-  first pass. R-XTM-00 writes both sides, so it self-heals the moment either
-  declares; a fresh-start galaxy should clone a civ that is at peace.
-
 `[ ]` NOT DONE: the new civ gets no ships. It gets a homeworld with whatever the
 donor's homeworld had — shipyard included — so it can build its own, but the
 `SHIP`/`DYNO` records are galaxy-level rather than per-civ and adding one is a
@@ -102,22 +24,6 @@ separate job.
 newcomer everything that donor had found — including, once anyone has met
 anyone, where the home planets are. Nobody should start a game knowing that.
 
-Two things keep it from mattering yet, and neither is a fix:
-  * The AI player does not read `EXSY`. `sensors.History.discovered` is its own
-    set, persisted per civ NAME, so an injected civ starts that file empty and
-    its rules see only what its own ships have reached. The leak is in the
-    client's and the engine's knowledge, not in what our rules may use.
-  * Cloning from a TURN-1 capture inherits an empty map, so a fresh-start
-    galaxy has no leak at all. It is only the developed-donor case — the
-    late-game test fixture — that leaks.
-
-The fix is to decode `EXSY` and emit an empty one, which needs the record layout
-first. Note the leading `u32` reads 63 on a civ that had explored 105 systems,
-so it is NOT a plain count and the obvious guess is already falsified. Worth
-confirming what the section is at the same time: that it is the explored-systems
-map is inferred from the tag and from its size tracking exploration across the
-two civs, and has not been proven.
-
 `[ ]` **Homeworld placement is one hardcoded policy, and it should be a choice.**
 `pick_homeworld` spreads civs as far apart as it can, which is the right default
 for testing the strategy — contact is then a thing the AI has to earn rather than
@@ -126,6 +32,7 @@ RANDOM placement is the obvious second (it is what a real galaxy generator does,
 and it is the only way to test how the rules cope with a hostile neighbour two
 systems away), and clustered or per-team placement follow from that. Make it a
 `--placement` option rather than adding a second function.
+
 """
 import argparse
 import math

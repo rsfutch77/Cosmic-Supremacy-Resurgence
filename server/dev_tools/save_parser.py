@@ -3,10 +3,6 @@ save_parser.py — Cosmic Supremacy save blob decoder
 ====================================================
 Decodes the binary save format used by CosmicSupremacy.exe.
 
-Recovered from git history (`git show 1b4918c:prototype/server/save_parser.py`)
-and then rebuilt around the real section framing, which was read out of the
-EXE's archive class rather than inferred from the blob.
-
 Usage:
     python save_parser.py save.b64                 # summary
     python save_parser.py save.b64 --tree          # full section tree
@@ -34,18 +30,9 @@ are the version.  `Archive::EndSection` at 0x005e6320 seeks back and patches the
 low 26 bits with `current_offset - section_start - 8`.
 
 Everything inside a section is a flat byte append: `Archive::WriteRaw` at
-0x005e5e10 is a plain memcpy into the growing buffer with no per-field framing,
-so a payload is exactly the concatenation of the fields its writer emits.
+0x005e5e10 is a plain memcpy into the growing buffer with no per-field framing.
+A payload is exactly the concatenation of the fields its writer emits.
 
-Because the size lives in the header, the file can be walked generically — no
-section's internals have to be understood to find the next one.  This supersedes
-the earlier marker-regex scan, which could not distinguish a real tag from four
-bytes of float data that happened to spell one.
-
-This framing also re-reads the old SAVE-header note ("uint16 body_size + uint16
-version 0x1000 + uint32 section_count") as one dword: size | version << 26.
-version 4 gives a high uint16 of 0x1000, and a body_size of "decompressed_size
-- 8" is exactly a payload size with the header excluded.
 """
 
 import base64

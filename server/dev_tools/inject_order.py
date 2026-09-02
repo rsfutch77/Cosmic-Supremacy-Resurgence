@@ -2,9 +2,7 @@
 inject_order.py — Push a ship order into a save blob
 ====================================================
 Takes a captured savegame blob, gives a chosen ship an order it never had, and
-writes the result where `cs_server.py`'s `loadgame` will serve it.  The point is
-the multiplayer/AI capability: the server decides a ship's orders and the client
-picks them up on load with nobody at the keyboard.
+writes the result where `cs_server.py`'s `loadgame` will serve it. 
 
     python inject_order.py saves/<capture>.b64 --ship 649 \
         --target-x 516.7029 --target-y 333.0293 --target-z 278.5347 \
@@ -44,9 +42,7 @@ SHCO_HDR = 8
 def server_dir() -> str:
     """
     The directory holding cs_server.py, which is where relative output paths are
-    resolved.  Found by looking here and one level up, so this script works
-    whether it sits beside cs_server.py or in a dev_tools/ subdirectory next to
-    it — the default `loadgame_blob.b64` has to land where cs_server.py looks for
+    resolved. The default `loadgame_blob.b64` has to land where cs_server.py looks for
     it, not merely beside this file.
     """
     here = os.path.dirname(os.path.abspath(__file__))

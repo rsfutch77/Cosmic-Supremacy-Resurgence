@@ -1,39 +1,9 @@
 """
-inject_ship.py — give a civ a starting ship in a save blob
+inject_ship.py — give a civ a ship in a save blob
 ==========================================================
     python inject_ship.py ../saves/<capture>.b64 --civ Ceti --count 2 \
         -o ../loadgame_blob.b64 --dat ../../client/three_civ.dat
 
-WHY: `inject_civ.py` can add a whole player, but the new civ gets no ships,
-because `SHIP` records are galaxy-level rather than per-civ. Against civs that
-the generator starts with two colony ships each, that is not a handicap, it is a
-different game — the newcomer cannot colonise anything until it has built and
-crewed a hull, which takes ~30 turns it does not have.
-
-WHAT A SHIP IS IN A BLOB, measured against captures with 5, 9, 13 and 15 ships:
-
-    SHIP payload:  u32 objectId ; f32 x, z, y ; u32 ownerObjectId
-                   DYNO { u32 orbitPlanetId ; SHCO v2 (9B, byte 0 = order type)
-                          u32 ; u8 hasOrders ; u32 admiralId
-                          [ROUT + u32, only when the ship has an order] }
-                   SHPR { u32 designId ; u32 crew ; f32 condition ; ... }
-
-The head is the same idiom as `PLNT`: id, position, owner id. An UNORDERED ship
-is the donor to want — its DYNO is 30 bytes and the whole record is 86, against
-124 and 189 for one carrying a route, and cloning the short one means never
-having to strip a ROUT section that points at coordinates we are replacing.
-
-`[ ]` NO COUNT FIELD IS BUMPED, because none was found. Four captures holding 5,
-9, 13 and 15 ships share no offset that carries the ship count, unlike the civ
-count in front of `GLXY`'s owners and the design count in front of each civ's
-`DSGN` run. The likely reason is that the reader peeks the next tag instead —
-the same pattern the ship reader already uses for `ROUT`, where it builds an
-order only if the next section says `ROUT`. If a ship injected this way does not
-appear in the client, this assumption is the first thing to doubt.
-
-The new ship is given NO CREW, which is honest rather than lazy: a hull with no
-crew cannot move, and the AI player already conscripts and loads one. Handing it
-a crewed ship would hand it two free citizens as well.
 """
 import argparse
 import os

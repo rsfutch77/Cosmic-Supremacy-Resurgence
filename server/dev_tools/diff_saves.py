@@ -1,8 +1,7 @@
 """
 diff_saves.py — Compare two save blobs section by section
 =========================================================
-Built for one question: **is the save blob a complete description of game
-state?**  Capture a save, load it into a fresh client, capture again, and diff.
+Capture a save, load it into a fresh client, capture again, and diff.
 Any section that differs is state the save/load round trip does not carry, and
 therefore state that a server cannot push through a blob alone.
 
@@ -10,8 +9,7 @@ therefore state that a server cannot push through a blob alone.
     python diff_saves.py A.b64 B.b64 --show-bytes
 
 Sections are matched by their position in the tree (tag path plus sibling
-index), not by offset, so an insertion in one file does not misalign everything
-after it.
+index).
 """
 
 import argparse

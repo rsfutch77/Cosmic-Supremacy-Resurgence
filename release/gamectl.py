@@ -20,15 +20,6 @@ tools already proved:
   Save       call the engine's own SaveGame in a remote thread — trigger_save.py
   Load       relaunch the client on a .dat — game_cycle.py
 
-STDLIB AND CTYPES ONLY, deliberately: the launcher is frozen with PyInstaller and
-imports this directly, so anything heavier here becomes a packaging problem
-there.
-
-THE LAUNCHER IS 64-BIT AND THE CLIENT IS NOT. Injecting a 32-bit stub into the
-wrong process gets as far as VirtualAllocEx returning an address above 4 GB,
-which then will not pack into a `push imm32` — a confusing way to find out you
-attached to the launcher. find_client() excludes it by name for that reason, and
-the allocation is range-checked before it is used.
 """
 from __future__ import annotations
 
@@ -164,12 +155,6 @@ class Client:
 
     def advance_turn(self, timeout=45.0, drive=1, poll=0.25):
         """Resolve exactly one turn, then put the turn length back.
-
-        The engine runs turns off its own clock, so this does not "press" a
-        button — it shortens the turn so the clock fires now, waits for the
-        counter, and restores. The restore is in a finally: leaving a galaxy on
-        a 1-second turn would run the game away from the player at speed, which
-        is a far worse failure than the button not working.
         """
         before = self.turn()
         if before is None:
@@ -299,18 +284,6 @@ def newest_capture(save_dir: str, since: float = 0.0):
 # ── Is the opponent ready for the next turn? ─────────────────────────────────
 # The AI records the last turn it FINISHED deciding, and the launcher will not
 # let the player advance past it.
-#
-# WHY THIS IS CORRECTNESS AND NOT POLISH. Advancing a turn the opponent has not
-# decided yet does not make the game faster, it makes the opponent skip that
-# turn — no order issued, no build queued, nothing. And it is silent: the AI
-# simply wakes to a turn it never saw, exactly the burst that
-# STRATEGY.md §1 warns makes per-turn reasoning meaningless, only caused by a
-# person rather than by a sleeping host.
-#
-# A TIMER WOULD BE A GUESS. A pass is ~0.2s in an ordinary turn, but it is
-# whatever the rules take on a turn with a lot happening, and any fixed delay is
-# either too long to be pleasant or too short to be true. The AI knows exactly
-# when it has finished, so it says so.
 AI_READY_TIMEOUT = 45.0     # after this, let the player play anyway
 
 
@@ -328,11 +301,6 @@ def ai_pass_marker(state_dir: str, civ: str):
 
 def capture_to_dat(save_dir: str, out_path: str, since: float = 0.0) -> str:
     """Convert the newest captured save into a .dat the client can be launched on.
-
-    The engine's save goes out over HTTP and the server stores the wire form;
-    a `.dat` is that same blob decompressed. Doing the conversion here is what
-    makes Save and Load two halves of one feature rather than two unrelated
-    things that both say "save" somewhere.
     """
     cap = newest_capture(save_dir, since)
     if cap is None:
