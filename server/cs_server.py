@@ -9,7 +9,6 @@ Usage (Windows, run as Administrator OR use port > 1024 and set CSPORT):
     python cs_server.py
 
 The patched EXE connects to 127.0.0.1:8888 for everything.
-Double-click DemoGalaxy_local.csgalaxy to load the demo galaxy.
 
 Protocol notes (from binary analysis):
   • HTTP/1.0 POST to /clientinterface.php?

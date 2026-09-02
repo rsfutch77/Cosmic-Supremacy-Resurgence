@@ -1,35 +1,5 @@
 """
 launcher.py — the player-facing front door for Cosmic Supremacy: Resurgence
-===========================================================================
-One window, one click per mode. It replaces three things a non-developer should
-never have had to do: install Python, start the stub server from a terminal, and
-drag the right .csgalaxy file onto the right EXE.
-
-WHAT A MODE ACTUALLY IS. The client takes exactly one command-line argument: the
-path to a .csgalaxy pass file. Dropping a file on an EXE in Explorer *is* that
-argument — there is no other mechanism, and nothing about drag-and-drop was ever
-load-bearing. So a mode is a pair, (which EXE, which pass file), and that pair
-lives in manifest.json rather than in this file. Today the pairs span three EXEs
-because the localhost redirect and the TestBed code patches have not been
-reconciled into one binary; when they are, only the manifest changes.
-
-THE SERVER RUNS IN THIS PROCESS. cs_server.py imports nothing outside the
-standard library, so it is imported here and served on a daemon thread instead
-of being shipped as a second executable the player has to keep alive. Two
-consequences worth stating plainly:
-
-  • Closing this window stops the server. TestBed needs it, so the window has to
-    stay open for the session — the UI says so, and closing with a game running
-    asks first.
-  • The listener binds 127.0.0.1, not 0.0.0.0 as cs_server's own __main__ block
-    does. A single-player game has no reason to be reachable from the LAN, and a
-    player who unzips this on a coffee-shop network should not be publishing an
-    unauthenticated save endpoint to the room.
-
-RUNS FROM THE REPO TOO. Frozen, it looks for the game beside itself in game\\.
-From a checkout it finds client\\ instead, so `python release\\launcher.py`
-exercises the real launcher without a build. The two layouts are the reason for
-the search lists in find_game_root / find_galaxy_root rather than one fixed path.
 """
 from __future__ import annotations
 
@@ -132,11 +102,6 @@ def set_app_user_model_id():
 def find_icon(data_dir: "str | None" = None) -> "str | None":
     """
     Locate a .ico for the window, or build one.
-
-    Frozen, the build packs cosmic.ico in beside the manifest. From a checkout
-    nothing has been built, so the icon is extracted out of the client EXE on
-    first run and cached in the data directory — the same code the build uses,
-    so a dev run looks like the real thing.
     """
     packed = bundled("cosmic.ico")
     if os.path.exists(packed):
@@ -156,20 +121,12 @@ def find_icon(data_dir: "str | None" = None) -> "str | None":
                 break
     except Exception:
         pass
-    # Checked rather than returned from inside the try: extract_icon prints a
-    # summary on success, and a console-less build would raise on that print
-    # after the file was already written correctly.
     return cached if os.path.exists(cached) else None
 
 
 def find_data_dir() -> str:
     """
     Where the server writes its log and captured saves.
-
-    Beside the executable, so a player who wants to send us a log can find it
-    without knowing what AppData is — unless that location is read-only, which is
-    what unzipping into Program Files or running from the still-mounted zip
-    produces. Falling back rather than dying keeps a wrong-place install playable.
     """
     preferred = os.path.join(app_dir(), "data")
     try:
@@ -233,8 +190,6 @@ def start_server(host: str, port: int, data_dir: str, galaxy_dir: str, sink):
 
     if "cs_server" in sys.modules:
         raise RuntimeError("cs_server was imported before its environment was set")
-    # Frozen, cs_server is packed in beside the launcher. From a checkout it is
-    # server\cs_server.py, which is on nobody's path until we say so.
     if not getattr(sys, "frozen", False):
         server_dir = os.path.join(_repo_root(), "server")
         if server_dir not in sys.path:
@@ -253,15 +208,7 @@ def start_server(host: str, port: int, data_dir: str, galaxy_dir: str, sink):
 
     # ── Listen on BOTH loopback addresses ────────────────────────────────────
     # The client connects to the name "localhost", and Windows resolves that to
-    # ::1 before 127.0.0.1. Bound to IPv4 alone, the first connection attempt
-    # sits in SynSent against a port nothing is listening on and only reaches us
-    # after the client gives up and retries over IPv4 — observed as a stalled
-    # startup with no request arriving for many seconds.
-    #
-    # Two loopback listeners rather than one dual-stack socket on ::, because ::
-    # would also accept connections from the LAN. A single-player game has no
-    # reason to be reachable from the network, and both of these are addressable
-    # only from this machine.
+    # ::1 before 127.0.0.1.
     servers = []
     httpd = http.server.HTTPServer((host, port), cs_server.CSHandler)
     threading.Thread(target=httpd.serve_forever, daemon=True,
@@ -342,19 +289,8 @@ def _process_names_via_api() -> "list[str] | None":
 def running_clients(exe_names) -> "list[str]":
     """
     Names of any Cosmic Supremacy *client* already running.
-
-    This matters more than it looks: starting a second client does not open a
-    second game, it silently kills the first. A player who clicks Tutorial while
-    TestBed is up would watch their game vanish with no message, so the launcher
-    checks first and says so.
-
-    Match the manifest's exact EXE names, never a "CosmicSupremacy" prefix: the
-    launcher is itself CosmicSupremacyLauncher.exe, so a prefix test finds this
-    very process and every mode button reports a game already running.
     """
     wanted = {n.lower() for n in exe_names}
-    # Belt and braces for the same trap: whatever this process is called, it is
-    # not a client, even if someone renames a binary into collision.
     wanted.discard(os.path.basename(sys.executable).lower())
     if not wanted:
         return []
@@ -378,17 +314,6 @@ AI_EXE = "CosmicSupremacyAI.exe"
 
 def find_ai() -> "list[str] | None":
     """How to start the opponent, or None if it is not installed.
-
-    Two layouts, the same pair as the game itself. Frozen, the AI is a second
-    PyInstaller executable in game\\ beside the client — it has to be its own
-    process rather than a thread in this one, because it drives a blocking
-    turn loop and reads another process's memory, and because a crash in it
-    must not take the server down with it. From a checkout there is nothing
-    built, so it runs from source under the interpreter running this file.
-
-    game\\ is searched first: the release keeps it there so the player sees only
-    the launcher at the top level, and a copy left beside the launcher by an
-    older build would otherwise win and quietly run stale code.
     """
     for root in (os.path.join(app_dir(), "game"), app_dir()):
         cand = os.path.join(root, AI_EXE)
@@ -405,15 +330,9 @@ def find_ai() -> "list[str] | None":
 def ai_args(mode) -> "list[str]":
     """The opponent's command line.
 
-    --stall 0 disables the no-turn-in-N-seconds bail. That guard exists for an
-    unattended harness, where a stalled turn pipeline means something broke. In
-    single player the turn pipeline is the PLAYER: they advance turns when they
-    feel like it, and an afternoon between two of them is a lunch break, not a
-    fault. Left at its 300s default the opponent quietly exits mid-game.
+    --stall 0 disables the no-turn-in-N-seconds bail
 
     --vision known keeps the AI under the same fog of war the player is under.
-    It is the honest default and the one thing here that is about fair play
-    rather than plumbing.
     """
     return ["--civ", mode["ai"]["civ"], "--apply", "--follow",
             "--vision", "known", "--stall", "0", "--wait-for-client", "180"]
@@ -566,24 +485,10 @@ class Launcher:
                      wraplength=340, font=("Segoe UI", 9)).pack(
                          side="left", padx=(0, 14))
 
-        # ── Game controls ────────────────────────────────────────────────────
-        # Hidden until a mode that needs them is running. These are the TestBed
-        # dialog's three buttons: a game launched on a .dat never gets that
-        # dialog, so without these the player cannot end a turn at all.
         self.ctl_frame = tk.Frame(self.root, bg=PANEL,
                                   highlightbackground=EDGE, highlightthickness=1)
         inner = tk.Frame(self.ctl_frame, bg=PANEL)
         inner.pack(fill="x", padx=12, pady=10)
-        # Buttons right, status left. The status says things like "BadGuy is
-        # thinking", which a fixed narrow label clipped straight behind the
-        # buttons — the one part of this bar that has something to say was the
-        # part you could not read.
-        #
-        # The width is fixed rather than expanding because the window is not
-        # resizable and sizes itself to its widest child: a label that grew with
-        # its text would make the whole launcher jump every time the opponent
-        # started or stopped thinking. Wide enough for the longest message this
-        # can produce, and no wider.
         self.ctl_buttons = {}
         for key, text, cmd in (("load", "Load", self.on_load),
                                ("save", "Save", self.on_save),
@@ -630,9 +535,6 @@ class Launcher:
 
     # ── startup ──
     def _boot(self):
-        # The data directory depends on nothing else, so it is resolved first and
-        # the log opened immediately: a startup that cannot find the game must
-        # still leave behind the reason it could not.
         self.data_dir = find_data_dir()
         self._open_log(self.data_dir)
         self.say(f"{self.cfg['product']} v{self.cfg['version']}")
@@ -714,8 +616,6 @@ class Launcher:
 
     # ── actions ──
     def on_play(self, mode):
-        # The button is disabled, so this is unreachable from the UI — but a
-        # placeholder has no EXE to run and must never fall through to Popen.
         if not is_playable(mode):
             return
         busy = running_clients(self.client_exes)
@@ -751,9 +651,6 @@ class Launcher:
             self.say(f"opponent failed to start: {exc}")
         if self.ai_child is None:
             self.say(f"opponent NOT started — {AI_EXE} was not found")
-            # Not a silent degradation: this mode's whole premise is that
-            # something is playing against you, so an install missing the AI
-            # has to say so rather than hand over an empty galaxy.
             self.warn(
                 f"The computer opponent could not be started.\n\n{AI_EXE} is "
                 "missing from the game folder, so the other empire will not "
@@ -768,10 +665,6 @@ class Launcher:
 
     def _pump_ai(self, proc):
         """Tee the opponent's output into the log pane.
-
-        Worth the thread: every question about single player — is it playing,
-        what is it doing, why has it stopped — is answered by these lines, and
-        without them a working AI and a dead one look identical from here.
         """
         try:
             for line in proc.stdout:
@@ -920,10 +813,6 @@ class Launcher:
 
     def _opponent_ready(self, turn):
         """Has the opponent finished deciding the turn now showing?
-
-        Returns (ready, why). A mode with no AI is always ready. So is one whose
-        opponent has died — the game stays playable, it just has nobody in it,
-        and that is already said in the log.
         """
         import gamectl
         mode = self.running_mode or {}
@@ -947,12 +836,7 @@ class Launcher:
         return False, f"{civ} is thinking"
 
     def _refresh_turn(self):
-        """Update the turn readout, quietly — this runs once a second.
-
-        The handle is cached rather than reopened per tick: finding the client
-        means enumerating every process on the machine, and _watch_game already
-        does that once a second. Twice a second, to print one number, is a poor
-        trade. A stale handle simply reads None and is dropped.
+        """Update the turn readout
         """
         import gamectl
         try:
@@ -1052,15 +936,6 @@ class Launcher:
         self.msgs.put(msg)
 
     def _watch_game(self):
-        """
-        Keep the status line honest about whether a game is up.
-
-        Two sources, because neither alone is enough. The child handle is exact
-        — it names the mode that was clicked — but only covers games this
-        launcher started. Enumerating processes also catches a client started
-        from a dev tool or outside the launcher entirely, at the cost of only
-        knowing the EXE, and one EXE serves both Tutorial and Demo.
-        """
         if self.child is not None and self.child.poll() is not None:
             name = _short(self.running_mode) if self.running_mode else "the game"
             code = self.child.returncode
@@ -1070,9 +945,6 @@ class Launcher:
             self.stop_ai("the game exited")
             self._close_ctl_client()
 
-        # An opponent that dies while the game is still up is the failure this
-        # mode cannot afford to hide: play continues, the other empire simply
-        # stops doing anything, and nothing on screen would ever say why.
         if self.ai_child is not None and self.ai_child.poll() is not None:
             code = self.ai_child.returncode
             self.ai_child = None

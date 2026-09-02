@@ -8,36 +8,7 @@
 
   "_comment_modes": [
     "Each mode is a client EXE plus the .csgalaxy pass file handed to it as its",
-    "single command-line argument — which is all a drag-and-drop ever did.",
-    "",
-    "There are three EXEs today only because the localhost redirect and the",
-    "code patches that TestBed needs have not been reconciled into one binary.",
-    "When they are, this file is the only thing that changes: point every mode",
-    "at the same 'exe' and delete the others from build.ps1's copy list.",
-    "",
-    "SINGLE PLAYER USES Resurgence.exe, NOT TestBed.exe, and the difference is",
-    "not cosmetic. Launched on a .dat, TestBed.exe loads the save correctly and",
-    "then never resolves a turn -- the counter does not move however short the",
-    "turn length is set. Resurgence.exe on the same .dat advances normally.",
-    "Measured both ways against the same file. Neither contacts the server on",
-    "the .dat path, so the client's flashing 'disconnected' indicator is",
-    "expected there and is not the cause.",
-    "",
-    "  needs_server  documentation, not control flow — the launcher always runs",
-    "                the stub server. Measured, not assumed: Tutorial calls",
-    "                localhost:8888 at startup, Demo never contacts it at all.",
-    "  show          false keeps a mode out of the player-facing window without",
-    "                losing the mapping.",
-    "  enabled       false renders the card greyed out with a COMING SOON badge.",
-    "                Such a mode needs no exe or galaxy, and is skipped when",
-    "                looking for the game files.",
-    "  ai            the opponent. The heuristic AI is a separate process that",
-    "                plays a civ by reading and writing the running client's",
-    "                memory, so it is started after the game and killed with it.",
-    "                'civ' MUST match the name the engine gives the rival civ in",
-    "                that galaxy — measured, not assumed: the human is",
-    "                'DemoPlayer' (from the .csgalaxy pass token) and the rival",
-    "                is 'BadGuy'. A mode with no 'ai' key simply has no opponent."
+    "single command-line argument"
   ],
 
   "modes": [

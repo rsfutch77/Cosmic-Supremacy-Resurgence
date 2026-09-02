@@ -9,10 +9,7 @@ gives it a fresh object id, so the client builds the design itself on load.
 
 Why this and not a memory write: creating a ShipDesign in memory produces a real,
 EJBO-tagged object, but nothing registers it and nothing computes its stat block,
-so it never reaches the UI and cannot be built. The blob route hands the work to
-the engine's own deserialising constructor (`ShipDesign::ShipDesign(Stream*)` at
-0x005470A0), which does the registration and the stat computation as a matter of
-course. In a blob a design is just bytes — no allocator, no tree invariants.
+so it never reaches the UI and cannot be built.
 
 FORMAT, measured against a capture containing two hand-made designs
 -------------------------------------------------------------------
@@ -20,34 +17,14 @@ Every section is:
 
     tag(4)  (version << 26 | length26)(4)  payload[length]
 
-The version occupies bits 26..31 and the length bits 0..25 — read out of
-`Archive::BeginSection` (0x005E6260) and `Archive::EndSection` (0x005E6320), and
-matching every capture. The length EXCLUDES the 8-byte header, which is also
-verified by chaining: each record's computed end lands exactly on the next
-record's start.
-
-Splitting the word at 24 bits instead of 26 happens to round-trip correctly for
-any section under 16 MB, because bits 24..25 of such a length are zero and get
-preserved along with the version — every section in a real save qualifies. But it
-misreads the version by a factor of four (`DSGN` is version 4, not 0x10), and it
-would corrupt anything larger, so the split is at 26.
-
 A design is a `DSGN` section whose payload begins with the object id and then
 carries one `SDPR` child:
 
     DSGN  ver 4   objectId(4)  SDPR...
     SDPR  ver 0   nameLen(4)  name[nameLen]  ...rest...
 
-The object ids in the blob are the SAME ids the running client shows — 648, 655,
-656 and 652 in the reference capture matched memory exactly — so the engine
-adopts stored ids rather than renumbering. A new design therefore needs an id
-that is not already in use.
-
 Designs are per-civ and live inside `OWNR`, and immediately BEFORE the first
-`DSGN` of each civ there is a `u32` COUNT of that civ's designs. Confirmed on
-both civs of the reference capture: 3 for the civ with three designs, 1 for the
-civ with one. Adding a record without bumping that count would leave the last
-design unread.
+`DSGN` of each civ there is a `u32` COUNT of that civ's designs.
 """
 import argparse
 import os
@@ -97,21 +74,7 @@ KNOWN_TAGS = [
 
 
 def containing_sections(blob, at):
-    """Every validated section whose span strictly contains `at`.
-
-    A four-byte tag can occur by coincidence inside binary payloads, and widening
-    a false positive would corrupt the blob, so candidates need validating.
-
-    The validation is **nesting**, not "the end lands on another tag". That
-    earlier rule silently dropped a real ancestor and produced a blob the client
-    rejected with `unexpected chunk-id ... expected 0x41444d53 (ADMS), found 0x0`:
-    `DATA` inside `OWNR` ends on `OWNR`'s own trailing u32 (`14 00 00 00`), not on
-    a tag, so it was thrown away as a coincidence and never widened. The designs
-    then overran DATA's declared end and the reader met zeros where ADMS should
-    have been. A section's end genuinely need not land on a tag — it can land on
-    a parent's own trailing field.
-
-    So instead: take the candidates widest-first and keep one only if it nests
+    """Take the candidates widest-first and keep one only if it nests
     inside everything already kept. A real ancestor chain is strictly nested by
     definition, which a coincidental tag run is very unlikely to be.
     """
@@ -281,12 +244,6 @@ def inject(blob, src_name, new_name, new_id=None, log=print):
 
     # THE HIGH-WATER OBJECT ID. SAVE's first payload dword is the highest object
     # id in use, and the engine allocates the next object at that value plus one.
-    # Adding a design without raising it hands our id straight back out: the
-    # first ship built after the load took the same id as the injected design,
-    # an id lookup then returned the ShipDesign where a Ship was expected, and
-    # the engine read [obj+0x30] — an owner reference node on a Ship, but the
-    # SPEED float on a ShipDesign — and dereferenced -1.0f. Access violation at
-    # 0x0053C7FC reading 0xBF800000, with a minidump to prove it.
     hi = struct.unpack_from("<I", out, HIGH_WATER_ID)[0]
     if new_id > hi:
         struct.pack_into("<I", out, HIGH_WATER_ID, new_id)
@@ -299,32 +256,16 @@ def inject(blob, src_name, new_name, new_id=None, log=print):
 
 
 # ── Building a design from scratch ────────────────────────────────────────────
-# The SDPR payload was decoded by parsing four real designs across two civs and
-# checking that every payload is consumed EXACTLY, with no bytes left over:
-#
 #     u32 nameLen ; char name[nameLen]
 #     6 x ( u32 count ; u32 ids[count] )      chassis, scanners, engines,
 #                                             weapons, modules, and a sixth list
 #                                             that is empty on every design seen
 #     u32 ownerObjectId
 #
-# Cross-checked against memory: the Colony Ship parses as chassis[0],
-# scanners[0], engines[0,0,0], weapons[], modules[0], which is exactly what
-# gamestate reads from ShipDesign:128/152/176/200/224 on the running client. The
-# trailing id matches the owning civ's object id (647 and 651 for the two civs),
-# which is the value the deserialiser feeds to GetReferenceNode to build
-# ShipDesign:260.
 PART_LISTS = ("chassis", "scanners", "engines", "weapons", "modules", "list6")
 
 
-# EVERY design the game itself produced carries scanners=[0] -- all four in the
-# reference capture, and the starting Colony Ship of both civs. Designs
-# synthesised WITHOUT one could be selected and queued, but the engine CRASHED
-# when a build completed and it tried to construct the ship: R-EXP-01 queued a
-# scanner-less scout, the hurry rule finished it, and the client died at the turn
-# boundary. Nothing else distinguished that design from the ones that work.
-#
-# So a scanner is defaulted in rather than left to the caller to remember. It can
+# A scanner is defaulted in rather than left to the caller to remember. It can
 # still be overridden explicitly, but the default matches what the UI does.
 DEFAULT_SCANNERS = [0]
 
@@ -359,13 +300,7 @@ def build_dsgn(new_id, name, parts, owner_id, dsgn_ver=4, sdpr_ver=0):
 
 
 def make(blob, like, new_name, parts, new_id=None, log=print):
-    """Add a NEW design (not a clone) to the civ that owns `like`.
-
-    `like` only identifies which civ to add to and where to splice; none of its
-    bytes are copied. Everything after the record is built is shared with
-    inject(): sections nest and every enclosing one must be widened, the civ's
-    design count sits immediately before its first DSGN, and SAVE's high-water
-    object id has to be raised or the engine hands our id straight back out.
+    """Add a NEW design 
     """
     records = design_records(blob)
     if not records:

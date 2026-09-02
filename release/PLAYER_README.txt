@@ -10,12 +10,11 @@ HOW TO PLAY
 -----------
 
 1. Unzip this whole folder somewhere you can write to - your Desktop or
-   Downloads folder is perfect. Do NOT run it from inside the zip file, and
-   do not put it in Program Files.
+   Downloads folder
 
-2. Double-click  CosmicSupremacyLauncher.exe
+2. Double-click CosmicSupremacyLauncher.exe
 
-3. Pick a mode and click it. That's it.
+3. Pick a mode
 
 Leave the launcher window open while you play. It is also the local game
 server, and closing it will stop the game from saving.
@@ -51,24 +50,6 @@ Multiplayer         Coming soon. Persistent galaxies against other players,
                     the way the original was played. The button is greyed out
                     until it is ready.
 
-
-KNOWN ISSUES IN THIS RELEASE
-----------------------------
-
-- The Tutorial and the Demo briefly show an "analyzing system" message when they
-  start. That is left over from the original game's launch sequence. Let it
-  finish.
-
-- The tutorial has some rough edges inherited from the original game. They are
-  known and are not caused by this restoration.
-
-- Your saved games live in the data\games folder next to the launcher. Keep that
-  folder if you move the game somewhere else.
-
-- Only one game can run at a time. The launcher will tell you if one is already
-  open rather than letting a second one close it.
-
-
 IF SOMETHING GOES WRONG
 -----------------------
 
@@ -81,26 +62,3 @@ files, is exactly what we need to diagnose a problem:
 Please include all three when reporting an issue at
 
     https://github.com/rsfutch77/Cosmic-Supremacy-Resurgence/issues
-
-
-WHAT'S IN THIS FOLDER
----------------------
-
-CosmicSupremacyLauncher.exe   The launcher. This is the only thing you run.
-README.txt                    This file.
-LICENSE.txt                   Licence and credits.
-game\                         The game client, the computer opponent, and the
-                              galaxy files. The launcher starts these for you.
-data\                         Created on first run. Logs and saved games.
-
-
-CREDITS AND LICENCE
--------------------
-
-Cosmic Supremacy was created by Erwin. The original game assets remain their
-property. This is an unofficial preservation project, is not affiliated with or
-endorsed by the original author, and is free - it will never be sold and never
-carry advertising.
-
-If you played the original and want to help bring it back, the project welcomes
-contributions.
