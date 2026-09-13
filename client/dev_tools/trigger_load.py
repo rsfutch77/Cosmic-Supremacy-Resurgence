@@ -1,68 +1,14 @@
 """
-trigger_load.py — Make the running client load a save, with no user click
+trigger_load.py , Make the running client load a save, with no user click
 ========================================================================
 Companion to trigger_save.py.  Calls the game's own load routine in a remote
 thread so a server-authored blob can be pushed into a client that nobody is
-sitting at — which is the whole point of the exercise: the server decides the
+sitting at , which is the whole point of the exercise: the server decides the
 galaxy state, including ship orders, and the client adopts it.
 
     python trigger_load.py                # load slot 0
     python trigger_load.py --gameid 0
     python trigger_load.py --dry-run
-
-`cs_server.py` serves `server/loadgame_blob.b64` from `loadgame` when that file
-exists, so write the blob there first (see server/inject_order.py).
-
-Signature, from the call site at 0x0048BB0C and the `ret 4` epilogue:
-
-    bool __thiscall LoadGame(void *this, int gameid)
-
-Same shape as SaveGame: `this` is never read, and the whole thing is synchronous
-down to WinInet's blocking HttpSendRequestA, so no message pump is involved.
-
-!! THIS DOES NOT WORK FROM A REMOTE THREAD — CONFIRMED BY CRASHING IT !!
---------------------------------------------------------------------------
-Unlike SaveGame, the load path reaches objects held in **thread-local storage**.
-Every caller of 0x005D17E0 fetches its `this` the same way:
-
-    mov eax, [0x0087346C]      ; _tls_index
-    mov ecx, fs:[0x2C]         ; TEB->ThreadLocalStoragePointer
-    mov edx, [ecx + eax*4]     ; this module's TLS block, per thread
-    mov ecx, [edx + 0x48]      ; a pointer living in that block
-    call 0x005D17E0
-
-A thread created with CreateRemoteThread gets a zero-filled TLS block, so that
-slot is NULL and 0x005D17E0 faults immediately on `mov ecx, [eax+0x10]`.
-Observed exactly that: EXCEPTION_ACCESS_VIOLATION at 0x005D17F5 with
-eax=ecx=0 on the injected thread, and the game wrote its own minidump.
-
-So the load has to run on the **main** thread, which is the thread that owns the
-populated TLS block.
-
-USE THE STARTUP PATH INSTEAD — no hijack needed
------------------------------------------------
-The engine already loads a blob on the main thread at startup: pass a `.dat`
-file as the client's first command-line argument and it loads it as the galaxy.
-`0x0056E7F0` checks argument 0 ends in `.dat` and exists, then `0x00579620` logs
-"loading save-game '%s'" and hands it to `0x0056DAD0` -> `0x0056D700`.  That file
-holds the RAW blob (starting with 'SAVE'), not the wire format.
-
-    python server/inject_order.py <capture>.b64 --ship <id> ... \
-        --dat ../client/pushed_order.dat
-    CosmicSupremacy_Resurgence.exe pushed_order.dat
-
-That route is confirmed working end to end, so this script is only worth
-reviving if the `loadgame` HTTP path specifically is needed (multiplayer), and
-then only from the main thread.  The blob itself is not the problem: the same
-0x0056D700 loader accepted it via the .dat route.
-
-This script is kept because the failure is the useful part: it identifies the
-exact blocker, and it distinguishes a bad blob from a bad calling thread — the
-crash happens before the blob is ever interpreted.
-
-CAUTION: a load replaces the entire live galaxy — every object is torn down and
-rebuilt, and all heap addresses change.  Anything holding a pointer it read
-earlier (another tool, a cached scan) has to re-scan afterwards.
 """
 import argparse
 import ctypes
@@ -134,7 +80,7 @@ def main():
 
         rc = kernel32.WaitForSingleObject(th, args.timeout * 1000)
         if rc != 0:
-            print(f"  WARNING: wait returned {rc} — thread unfinished. Leaving its "
+            print(f"  WARNING: wait returned {rc} , thread unfinished. Leaving its "
                   f"page allocated so it cannot execute freed memory.")
             kernel32.CloseHandle(th)
             return 1
@@ -150,14 +96,14 @@ def main():
         still_there, _ = find_pid()
         if not still_there:
             print(f"  thread exit code was {code.value & 0xFF}, but THE PROCESS IS "
-                  f"GONE — the load crashed it.")
+                  f"GONE , the load crashed it.")
             print( "  look for CosmicSupremacy_Resurgence_<timestamp>.dmp next to "
                    "the exe; the exception record names the faulting address.")
             return 2
 
         ok = code.value & 0xFF
         print(f"  LoadGame returned {ok} "
-              f"({'loaded' if ok else 'FAILED — client will have shown a dialog'})")
+              f"({'loaded' if ok else 'FAILED , client will have shown a dialog'})")
         kernel32.VirtualFreeEx(h, ctypes.c_void_p(remote), 0, MEM_RELEASE)
         return 0 if ok else 1
     finally:

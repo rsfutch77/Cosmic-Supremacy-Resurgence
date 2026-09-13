@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>EJBO Viewer — Cosmic Supremacy</title>
+<title>EJBO Viewer , Cosmic Supremacy</title>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: 'Consolas', 'Courier New', monospace; font-size: 13px;
@@ -159,7 +159,7 @@ let refreshTimer = null;
 // ── Tab model ──
 // Tabs are not simply the RTTI class groups: Planet is split by ownership.
 // Roughly 500 of ~525 planets are uncolonised, and rebuilding that whole table
-// every refresh is what makes the tab crawl — the owned handful are the ones
+// every refresh is what makes the tab crawl , the owned handful are the ones
 // being annotated, so they get a tab that stays fast. Annotations stay keyed by
 // the underlying class name, so both halves share one set of Planet:offset keys.
 let tabGroups = {};   // tab key -> { cls, objs }
@@ -176,7 +176,7 @@ function buildTabGroups() {
   }
 }
 
-// Which tab holds a given object — a class name alone no longer identifies one
+// Which tab holds a given object , a class name alone no longer identifies one
 function tabKeyFor(cls, addr) {
   for (const [key, g] of Object.entries(tabGroups)) {
     if (g.cls === cls && g.objs.some(o => o.addr === addr)) return key;
@@ -197,7 +197,7 @@ function activeCls() {
 
 // Sticky change tracking: keys like "addr:offset" stay highlighted until clicked
 let stickyChanged = new Set();
-// Keys the user has dismissed — prevents re-adding until the server stops reporting changed
+// Keys the user has dismissed , prevents re-adding until the server stops reporting changed
 let dismissedKeys = new Set();
 
 // ── Format toggle ──
@@ -216,16 +216,16 @@ function fmtVal(f) {
     case 'hex':   return f.hex;
     case 'i32':   return f.i32.toLocaleString();
     case 'u32':   return f.u32.toLocaleString();
-    case 'f32':   return f.f32 || '—';
+    case 'f32':   return f.f32 || ',';
     case 'ascii': return f.ascii;
     case 'bin':   return binStr(f.u32);
-    case 'ptr':   return f.ptr || '—';
+    case 'ptr':   return f.ptr || ',';
     default:      return f.hex;
   }
 }
 
 function cellTitle(f) {
-  return `hex=${f.hex} i32=${f.i32} f32=${f.f32||'—'} ascii=${f.ascii}`
+  return `hex=${f.hex} i32=${f.i32} f32=${f.f32||','} ascii=${f.ascii}`
        + (f.ptr ? `\n${f.ptr}` : '');
 }
 
@@ -244,7 +244,7 @@ async function fetchData() {
               stickyChanged.add(key);
             }
           } else {
-            // Change event ended — clear dismissed state so future changes highlight again
+            // Change event ended , clear dismissed state so future changes highlight again
             dismissedKeys.delete(key);
           }
         }
@@ -255,7 +255,7 @@ async function fetchData() {
     updateTabs();
     render();
   } catch(e) {
-    document.getElementById('info').textContent = 'Connection lost — retrying...';
+    document.getElementById('info').textContent = 'Connection lost , retrying...';
   }
 }
 
@@ -268,7 +268,7 @@ async function rescan() {
 function updateInfo() {
   const el = document.getElementById('info');
   const t  = new Date(data.last_update * 1000).toLocaleTimeString();
-  el.textContent = `PID ${data.pid} (${data.proc}) — ${data.scan_count} objects — ${t}`;
+  el.textContent = `PID ${data.pid} (${data.proc}) , ${data.scan_count} objects , ${t}`;
 }
 
 function updateTabs() {
@@ -428,7 +428,7 @@ function render() {
     const stat = obj.static ? ' <span class="static-marker">[STATIC]</span>' : '';
     html += `<th><div class="obj-header">
       <span class="obj-id">#${obj.id}</span> ${tmpl}${stat}<br>
-      <span class="obj-name">${obj.name || '—'}</span><br>
+      <span class="obj-name">${obj.name || ','}</span><br>
       <span class="sr-addr">${obj.addr_hex}</span>
     </div></th>`;
   }
@@ -441,7 +441,7 @@ function render() {
     const annKey = annType + ':' + offset;
     const annVal = data.annotations[annKey] || '';
     html += `<tr onclick="dismissRow(this, ${offset})" style="cursor:pointer">`;
-    // Offset column — highlight EJBO tag row
+    // Offset column , highlight EJBO tag row
     const offLabel = offset >= 0 ? `+${offset}` : `${offset}`;
     const isEjbo = (offset === 0);
     html += `<td class="offset-col" ${isEjbo ? 'style="color:#6fc3ff;font-weight:bold"' : ''}>${offLabel}</td>`;
@@ -451,7 +451,7 @@ function render() {
     // Data columns
     for (const obj of objs) {
       const f = obj.fields[r];
-      if (!f) { html += '<td>—</td>'; continue; }
+      if (!f) { html += '<td>,</td>'; continue; }
       const stickyKey = obj.addr + ':' + f.offset;
       const cls = stickyChanged.has(stickyKey) ? 'changed' : '';
       const esc = s => String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
@@ -464,9 +464,9 @@ function render() {
   document.getElementById('table-area').innerHTML = html;
   const ext = data.extents && data.extents[annType];
   const extNote = ext !== undefined
-    ? ` — object extent ${ext} bytes after tag (measured from stride)` : '';
+    ? ` , object extent ${ext} bytes after tag (measured from stride)` : '';
   document.getElementById('status').textContent =
-    `${objs.length} objects — ${nFields} fields each${extNote} — double-click a value to poke`;
+    `${objs.length} objects , ${nFields} fields each${extNote} , double-click a value to poke`;
 }
 
 function annotate(type, offset, text) {
@@ -554,7 +554,7 @@ function renderChanges() {
       const val = fmtVal(f);
       html += `<tr class="sr-click" onclick="jumpToChanged('${typeName}', ${addr}, ${offset})">`;
       html += `<td class="sr-type">${typeName}</td>`;
-      html += `<td><span class="sr-name">${obj.name || '—'}</span> #${obj.id} <span class="sr-addr">${obj.addr_hex}</span></td>`;
+      html += `<td><span class="sr-name">${obj.name || ','}</span> #${obj.id} <span class="sr-addr">${obj.addr_hex}</span></td>`;
       html += `<td>${offLabel}</td>`;
       html += `<td style="color:#88cc88">${ann}</td>`;
       html += `<td class="sr-match">${val}</td>`;
@@ -649,13 +649,13 @@ function renderSearch() {
     if (r.match === 'name') {
       html += `<tr class="sr-click" onclick="setTab(tabKeyFor('${r.type}',${o.addr}))">
         <td class="sr-type">${r.type}</td><td><span class="sr-name">${o.name}</span> <span class="sr-addr">${o.addr_hex}</span></td>
-        <td>—</td><td class="sr-match">name match</td><td>—</td></tr>`;
+        <td>,</td><td class="sr-match">name match</td><td>,</td></tr>`;
     } else {
       const f = r.field;
       const off = f.offset >= 0 ? `+${f.offset}` : `${f.offset}`;
       html += `<tr class="sr-click" onclick="setTab(tabKeyFor('${r.type}',${o.addr}))">
-        <td class="sr-type">${r.type}</td><td><span class="sr-name">${o.name||'—'}</span> #${o.id} <span class="sr-addr">${o.addr_hex}</span></td>
-        <td>${off}</td><td>hex=${f.hex} i32=${f.i32} f32=${f.f32||'—'}</td>
+        <td class="sr-type">${r.type}</td><td><span class="sr-name">${o.name||','}</span> #${o.id} <span class="sr-addr">${o.addr_hex}</span></td>
+        <td>${off}</td><td>hex=${f.hex} i32=${f.i32} f32=${f.f32||','}</td>
         <td>${r.ann}</td></tr>`;
     }
   }

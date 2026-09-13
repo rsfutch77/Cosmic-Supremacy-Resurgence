@@ -1,4 +1,4 @@
-# Cosmic Supremacy — Resurgence
+# Cosmic Supremacy: Resurgence
 
 **A classic space strategy game, brought back online.**
 
@@ -16,14 +16,14 @@ The servers went dark years ago and it appears the original backend was lost in 
 
 **[⬇ Download the latest release](https://github.com/rsfutch77/Cosmic-Supremacy-Resurgence/releases/latest)**
 
-1. **Unzip the whole folder** somewhere you can write to — Desktop or Downloads
+1. **Unzip the whole folder** somewhere you can write to , Desktop or Downloads
    is perfect. Don't run it from inside the zip, and don't put it in Program
    Files.
 2. **Double-click `CosmicSupremacyLauncher.exe`**
 3. **Pick a mode and click it.**
 
 That's the whole thing. No account, no installer, no internet connection for offline play, and
-nothing to configure. Leave the launcher window open while you play — it is also
+nothing to configure. Leave the launcher window open while you play , it is also
 the local game server.
 
 > **You will see "Windows protected your PC" the first time.** That is expected.
@@ -36,7 +36,7 @@ the local game server.
 
 | Mode | What it is |
 |------|------------|
-| **Play the Tutorial** | The original guided walkthrough. Start here if you've never played — it teaches colonising, research, ship design and combat. |
+| **Play the Tutorial** | The original guided walkthrough. Start here if you've never played , it teaches colonising, research, ship design and combat. |
 | **View the Demo** | The original demo galaxy. A look at an advanced game. |
 | **Play Single Player** | A full single-player galaxy against the computer, resolving turns on your own machine at your own pace. Now with the new, smarter Resurgence AI. |
 | **Multiplayer** | Coming soon. Persistent galaxies against other players, the way the original was played. |
@@ -45,7 +45,7 @@ the local game server.
 
 Click **show log** at the bottom of the launcher, and grab `data\launcher.log`
 and `data\cs_server.log` from the release folder. Those three things are exactly
-what we need — please include them when you
+what we need , please include them when you
 [open an issue](https://github.com/rsfutch77/Cosmic-Supremacy-Resurgence/issues).
 
 ---
@@ -62,7 +62,7 @@ Multiplayer and hosted galaxies are not part of this release. All play is local.
 
 ## Help bring it back
 
-This is a preservation and fan project, and contributions are welcome — protocol
+This is a preservation and fan project, and contributions are welcome , protocol
 analysis, server implementation, documentation, or just playing it and telling us
 what broke.
 
@@ -81,11 +81,11 @@ Cosmic Supremacy was created by Erwin, and the original game assets remain their
 property. I have tried to reach out to involve them in the project, and would be happy to turn over the assets so that he can restore the server that was lost. 
 
 This is an unofficial restoration, not affiliated with or endorsed by the
-original author. It is free, in the spirit of the original game — it will never
+original author. It is free, in the spirit of the original game , it will never
 be sold and will never carry advertising.
 
-The code written for this project — the server, the launcher, the development
-tools and the documentation — is released under the
+The code written for this project , the server, the launcher, the development
+tools and the documentation , is released under the
 [MIT License](LICENSE), so anyone is free to build on it.
 
 That licence covers **only** the new work. The original game binaries

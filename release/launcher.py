@@ -1,5 +1,5 @@
 """
-launcher.py — the player-facing front door for Cosmic Supremacy: Resurgence
+launcher.py , the player-facing front door for Cosmic Supremacy: Resurgence
 """
 from __future__ import annotations
 
@@ -42,7 +42,7 @@ def game_root_candidates() -> "list[str]":
              app_dir()]                         # exes beside the launcher
     # The checkout layout only applies when running from source. Frozen,
     # _repo_root() is derived from a temp extraction path and names a directory
-    # that cannot exist — listing it in the not-found message is pure confusion.
+    # that cannot exist , listing it in the not-found message is pure confusion.
     if not getattr(sys, "frozen", False):
         cands.append(os.path.join(_repo_root(), "client"))
     return cands
@@ -66,7 +66,7 @@ def is_playable(mode) -> bool:
     """
     Can this mode actually be launched today?
 
-    A placeholder — "enabled": false, or simply no EXE named — is shown as a
+    A placeholder , "enabled": false, or simply no EXE named , is shown as a
     greyed-out card advertising what is coming. It must not be counted when
     looking for the game files, or a release that ships no multiplayer client
     would decide the whole install is broken.
@@ -179,8 +179,8 @@ def start_server(host: str, port: int, data_dir: str, galaxy_dir: str, sink):
     """
     Import cs_server and serve it on daemon threads. Returns (servers, logfile).
 
-    cs_server reads its environment at import time — PORT, and the DATA_DIR that
-    the log, saves\\ and governor blobs hang off — so the environment has to be
+    cs_server reads its environment at import time , PORT, and the DATA_DIR that
+    the log, saves\\ and governor blobs hang off , so the environment has to be
     set before the import, not after. Hence the import sitting inside this
     function rather than at module scope.
     """
@@ -408,7 +408,7 @@ class Launcher:
         self.running_mode = None
         # The status to fall back to whenever no game is running. Recorded when
         # the server settles so that a game exiting restores whatever was true
-        # then — "server running", "port taken", "reusing the existing server" —
+        # then , "server running", "port taken", "reusing the existing server" ,
         # rather than a guess.
         self._ready: "tuple[str, str]" = ("starting…", WARN)
         self.log_visible = False
@@ -418,9 +418,9 @@ class Launcher:
         # hidden mode's client is still a running game that a second launch
         # would kill.
         self.client_exes = {m["exe"] for m in cfg["modes"] if m.get("exe")}
-        # Diagnostics start before the data directory is known — where the game
+        # Diagnostics start before the data directory is known , where the game
         # was found, and whether it was found at all, are exactly the lines a
-        # failed startup needs to leave behind — so they buffer until there is a
+        # failed startup needs to leave behind , so they buffer until there is a
         # file to put them in.
         self._logfh = None
         self._pending: "list[str]" = []
@@ -471,7 +471,7 @@ class Launcher:
             if ready:
                 btn.bind("<Enter>", lambda e, b=btn: b.configure(bg=BTN_HI))
                 btn.bind("<Leave>", lambda e, b=btn: b.configure(bg=BTN))
-                # Only playable buttons go in the list fail() disables — a
+                # Only playable buttons go in the list fail() disables , a
                 # coming-soon button is already disabled and must stay that way.
                 self.buttons.append(btn)
             else:
@@ -500,13 +500,13 @@ class Launcher:
                           font=("Segoe UI", 9, "bold"), command=cmd)
             b.pack(side="right", padx=(6, 0))
             self.ctl_buttons[key] = b
-        self.turn_label = tk.Label(inner, text="turn —", bg=PANEL, fg=TEXT,
+        self.turn_label = tk.Label(inner, text="turn ,", bg=PANEL, fg=TEXT,
                                    font=("Segoe UI", 9, "bold"), width=34,
                                    anchor="w")
         self.turn_label.pack(side="left", fill="x")
 
         tk.Label(self.root,
-                 text="Keep this window open while you play — it is the game server.",
+                 text="Keep this window open while you play , it is the game server.",
                  bg=BG, fg=FAINT, font=("Segoe UI", 8)).pack(anchor="w",
                                                              pady=(6, 0), **pad)
 
@@ -567,7 +567,7 @@ class Launcher:
                 f"    {needed}\n\n"
                 "Looked in:\n" + searched + "\n\n"
                 "If you are running the launcher out of a build folder, run the "
-                "one in dist\\ instead — that is the complete release. If you "
+                "one in dist\\ instead , that is the complete release. If you "
                 "unzipped only the launcher, download the full archive again and "
                 "keep the folder together.")
             return
@@ -588,7 +588,7 @@ class Launcher:
         if not port_is_free(host, port):
             if stub_server_answers(host, port):
                 self.set_ready_status(f"using the server already on {host}:{port}", OK)
-                self.say(f"port {port} already serving our protocol — reusing it")
+                self.say(f"port {port} already serving our protocol , reusing it")
                 return
             self.set_ready_status(f"port {port} is taken by something else", BAD)
             self.say(f"port {port} is in use and did not answer testconnection")
@@ -629,7 +629,7 @@ class Launcher:
             self.child = launch_mode(mode, self.game_root, self.galaxy_root)
         except FileNotFoundError as exc:
             self.warn(f"Missing file:\n\n{exc}\n\nThe release folder looks "
-                      "incomplete — try downloading it again.")
+                      "incomplete , try downloading it again.")
             return
         except OSError as exc:
             self.warn(f"Could not start the game:\n\n{exc}")
@@ -650,7 +650,7 @@ class Launcher:
             self.ai_child = None
             self.say(f"opponent failed to start: {exc}")
         if self.ai_child is None:
-            self.say(f"opponent NOT started — {AI_EXE} was not found")
+            self.say(f"opponent NOT started , {AI_EXE} was not found")
             self.warn(
                 f"The computer opponent could not be started.\n\n{AI_EXE} is "
                 "missing from the game folder, so the other empire will not "
@@ -706,7 +706,7 @@ class Launcher:
 
         Ending a turn takes as long as the engine takes, and a save serialises
         the whole object graph. Doing either on the Tk thread freezes the window
-        for the duration, which reads exactly like a crash — and this window is
+        for the duration, which reads exactly like a crash , and this window is
         also the game's server, so it must keep answering while the game works.
         """
         self._ctl_busy = True
@@ -749,7 +749,7 @@ class Launcher:
                 if not c.save_game("singleplayer"):
                     raise gamectl.GameError(
                         "the game refused to save. This usually means the "
-                        "launcher's server is not reachable — keep this window "
+                        "launcher's server is not reachable , keep this window "
                         "open while you play.")
             # The engine's save goes out over HTTP; give the server a moment to
             # finish writing the capture before looking for it.
@@ -890,7 +890,7 @@ class Launcher:
             if not messagebox.askokcancel(
                     "Quit launcher?",
                     "A game is still running.\n\nClosing the launcher stops the "
-                    "local server, and TestBed needs it — saving and loading "
+                    "local server, and TestBed needs it , saving and loading "
                     "will fail from that point on.\n\nClose anyway?"):
                 return
         self.stop_ai("the launcher is closing")
@@ -948,7 +948,7 @@ class Launcher:
         if self.ai_child is not None and self.ai_child.poll() is not None:
             code = self.ai_child.returncode
             self.ai_child = None
-            self.say(f"opponent exited (code {code}) — the other empire will "
+            self.say(f"opponent exited (code {code}) , the other empire will "
                      f"not take any more turns")
 
         if self.child is not None and self.running_mode is not None:
@@ -981,7 +981,7 @@ class Launcher:
         return shorts.pop() if len(shorts) == 1 else "A game"
 
     def _status_if_changed(self, text: str, colour: str):
-        """Repaint only on a real change — this runs once a second."""
+        """Repaint only on a real change , this runs once a second."""
         if self.status.cget("text") != text:
             self.set_status(text, colour)
 
@@ -1044,7 +1044,7 @@ if __name__ == "__main__":
         detail = traceback.format_exc()
         try:
             import tkinter.messagebox as mb
-            mb.showerror("Cosmic Supremacy — Resurgence",
+            mb.showerror("Cosmic Supremacy: Resurgence",
                          "The launcher failed to start.\n\n" + detail)
         except Exception:
             pass

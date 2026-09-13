@@ -8,22 +8,6 @@
     Output lands in dist\ (gitignored) so the 8 MB client binaries are never
     committed twice. The repo keeps sources; this script produces artifacts.
 
-        dist\CosmicSupremacy-Resurgence-v<version>\
-            CosmicSupremacyLauncher.exe     <- the only thing a player runs
-            README.txt
-            LICENSE.txt
-            game\CosmicSupremacy.exe, CosmicSupremacy_Resurgence.exe
-            game\CosmicSupremacyAI.exe      <- the opponent, started by the launcher
-            game\galaxies\*.csgalaxy, SinglePlayerGalaxy.dat
-        dist\CosmicSupremacy-Resurgence-v<version>.zip
-
-    Everything except the launcher lives under game\ on purpose: a player who
-    unzips this should see one obvious thing to double-click.
-
-    Which client EXEs and galaxy files get copied is read from manifest.json,
-    not hardcoded here — every mode with "show": true contributes its pair. When
-    the three EXEs are reconciled into one, this script needs no edit.
-
     Build dependencies (PyInstaller) go in release\.venv-build, kept separate
     from server\.venv so a build never perturbs the dev environment.
 
@@ -158,25 +142,14 @@ if ($LASTEXITCODE -ne 0 -or -not (Test-Path $IconOut)) {
 }
 
 # ── 5. Create the release folder ──────────────────────────────────────────────
-# Before freezing, not after, so PyInstaller can emit the executable straight
-# into its final home. Building it somewhere else first and copying leaves a
-# second, runnable launcher in the build tree with no game\ folder beside it —
-# which looks exactly like the real thing, fails with "Game files not found",
-# and is the first thing anyone double-clicks.
+
 Write-Step "Preparing $StageName"
 
-# A launcher still running holds its own exe and data\ open, so the staging
-# wipe below fails on a file lock. Say why rather than surfacing a bare
-# access-denied several lines later.
 $live = Get-Process CosmicSupremacyLauncher -ErrorAction SilentlyContinue
 if ($live) {
     throw ("a launcher is still running (pid " + (($live | ForEach-Object { $_.Id }) -join ', ') +
            ") and holds the files this build must overwrite - close it and re-run")
 }
-
-# Earlier versions of this script built to build\exe and copied from there. Any
-# leftover copy is a fully runnable launcher with no game\ folder beside it,
-# which fails with "Game files not found" - remove the trap.
 $LegacyExeDir = Join-Path $BuildDir 'exe'
 if (Test-Path $LegacyExeDir) {
     Remove-Item -Recurse -Force $LegacyExeDir
@@ -233,15 +206,7 @@ if ($wantsAI) {
     $ToolsDir = Join-Path $ClientDir 'dev_tools'
     $AiEntry  = Join-Path $AiDir 'ai.py'
     if (-not (Test-Path $AiEntry)) { throw "AI entry point not found: $AiEntry" }
-
-    # NOT --windowed, deliberately. The AI prints its whole decision trace and
-    # the launcher reads it back over a pipe; in a windowed build sys.stdout is
-    # None and the first print() raises. It is launched with CREATE_NO_WINDOW
-    # instead, so a console build shows no console.
-    #
-    # ejbo_viewer lives one directory up and is reached through a runtime
-    # sys.path insert in gamestate.py, so name it explicitly rather than trust
-    # the import graph walker to follow that.
+    
     $aiArgs = @(
         '--noconfirm', '--onefile',
         '--name', 'CosmicSupremacyAI',

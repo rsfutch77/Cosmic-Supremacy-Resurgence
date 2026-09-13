@@ -1,5 +1,5 @@
 """
-patch_hide_next_turn.py — Hide the Next Turn button in TestBed mode
+patch_hide_next_turn.py , Hide the Next Turn button in TestBed mode
 ===================================================================
 Patches the dialog resource template to clear the WS_VISIBLE flag on the
 Next Turn button, making it invisible while keeping Save and Load buttons
@@ -52,28 +52,28 @@ def main():
             return
         if current != PATCHED_BYTE:
             print(f"WARNING: Unexpected byte at 0x{PATCH_OFFSET:08X}: 0x{current:02X}")
-            print(f"Expected 0x{PATCHED_BYTE:02X} (patched) — file may have other modifications.")
+            print(f"Expected 0x{PATCHED_BYTE:02X} (patched) , file may have other modifications.")
             resp = input("Continue anyway? (yes/no): ").strip().lower()
             if resp != "yes":
                 print("Aborted.")
                 sys.exit(0)
         data[PATCH_OFFSET] = ORIGINAL_BYTE
         action = "Restored"
-        detail = "WS_VISIBLE set — Next Turn button is now visible"
+        detail = "WS_VISIBLE set , Next Turn button is now visible"
     else:
         if current == PATCHED_BYTE:
             print(f"Next Turn button is already hidden (0x{current:02X}).")
             return
         if current != ORIGINAL_BYTE:
             print(f"WARNING: Unexpected byte at 0x{PATCH_OFFSET:08X}: 0x{current:02X}")
-            print(f"Expected 0x{ORIGINAL_BYTE:02X} (original) — file may have other modifications.")
+            print(f"Expected 0x{ORIGINAL_BYTE:02X} (original) , file may have other modifications.")
             resp = input("Continue anyway? (yes/no): ").strip().lower()
             if resp != "yes":
                 print("Aborted.")
                 sys.exit(0)
         data[PATCH_OFFSET] = PATCHED_BYTE
         action = "Patched"
-        detail = "WS_VISIBLE cleared — Next Turn button is now hidden"
+        detail = "WS_VISIBLE cleared , Next Turn button is now hidden"
 
     # Backup
     backup = src + ".bak"

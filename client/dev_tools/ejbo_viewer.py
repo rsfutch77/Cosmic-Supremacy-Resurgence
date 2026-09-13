@@ -1,5 +1,5 @@
 """
-ejbo_viewer.py — Live EJBO Object Memory Viewer for Cosmic Supremacy
+ejbo_viewer.py , Live EJBO Object Memory Viewer for Cosmic Supremacy
 
 Scans game process memory for EJBO-tagged objects, classifies them by type,
 and serves a live-updating browser dashboard on localhost where you can:
@@ -63,7 +63,7 @@ class MEMORY_BASIC_INFORMATION(ctypes.Structure):
 # CosmicSupremacyLauncher.exe, sits beside the client in every release, and is
 # the FIRST match EnumProcesses happens to return often enough to matter. An AI
 # that attached to it would read a Python process's memory, find no civs, and
-# report "no civ named 'BadGuy'" — a wrong answer that looks like a game bug.
+# report "no civ named 'BadGuy'" , a wrong answer that looks like a game bug.
 # game_cycle.py already carries the same exclusion for Stop-Process; this is the
 # read side of it.
 NOT_THE_GAME = ("cosmicsupremacylauncher.exe",)
@@ -206,7 +206,7 @@ KNOWN_STATICS = {
 
 # Planet:40 is the owner link. Colonised planets point at a node whose node[0]
 # is an Owner; everything else shares the static null node in .data. The viewer
-# splits the two into separate tabs — there are ~500 uncolonised planets and
+# splits the two into separate tabs , there are ~500 uncolonised planets and
 # rendering them all is what makes the tab crawl.
 OWNER_LINK_OFFSET = 40
 
@@ -253,7 +253,7 @@ def resolve_pointer(h, value, rtti_cache, ptr_cache, ejbo_by_start):
 
 # ── Object extents ─────────────────────────────────────────────────────────
 # The window read after the EJBO tag must not run past the end of the object,
-# or the viewer shows neighbouring heap allocations as if they were fields —
+# or the viewer shows neighbouring heap allocations as if they were fields ,
 # and any annotation made on them is junk. Real sizes are derived at scan time
 # from the stride between consecutive same-class tags (see measure_extents).
 READ_BEFORE       = 32    # covers the header plus the preceding object's tail
@@ -286,7 +286,7 @@ CLASS_EXTENTS = {
 # inheritance classes are different: the allocation starts at the PRIMARY vftable,
 # which sits well before the tag, and the fields in between are real object data.
 #
-# Owner was found this way — the .data vector at 0x0082AA28 holds Owner* values
+# Owner was found this way , the .data vector at 0x0082AA28 holds Owner* values
 # pointing at tag-52, which is where Owner's primary vftable lives. The 52 bytes
 # in front of the tag hold the CIV NAME, so reading only from tag-8 hid it
 # completely. Note that the reference-node idiom points at tag-8 instead: under
@@ -348,7 +348,7 @@ def scan_for_ejbo(h, regions):
 def classify_object(h, ejbo_addr, rtti_cache=None):
     """Classify an object from its vftable. EJBO-8 always holds the primary
     vftable; EJBO-12 holds a second one only for multiple-inheritance classes
-    (ShipDesign), and is ordinary field data otherwise — so it is tried second
+    (ShipDesign), and is ordinary field data otherwise , so it is tried second
     and only accepted if RTTI validates it."""
     header = read_bytes(h, ejbo_addr - 12, 12)
     if header is None or len(header) < 12:
@@ -375,7 +375,7 @@ def measure_extents(h, addrs, class_of, rtti_cache):
 
     Stride is only an upper bound, not the size: a class may allocate sub-objects
     between its instances, leaving unrelated heap inside the stride. Admiral is
-    the known case — stride 288 but the object ends near +88, and the gap was
+    the known case , stride 288 but the object ends near +88, and the gap was
     later reused by the game's log buffer. Where a class has a verified smaller
     size, CLASS_EXTENTS overrides the measurement.
     """
@@ -419,7 +419,7 @@ def measure_extents(h, addrs, class_of, rtti_cache):
             limit = max(0, size - header)
         else:
             limit = CLASS_EXTENTS.get(cls, DEFAULT_READ_AFTER)
-            basis = f"only {len(lst)} instance(s), no repeated stride — configured"
+            basis = f"only {len(lst)} instance(s), no repeated stride , configured"
 
         # A verified size always wins over a measured stride, which only bounds it.
         cfg = CLASS_EXTENTS.get(cls)
@@ -465,7 +465,7 @@ def read_object_fields(h, ejbo_addr, read_after=DEFAULT_READ_AFTER,
             "ascii":  asc,
             "raw":    b.hex(),
         })
-    # Try to extract a name string — search EJBO+4 through EJBO+16 for
+    # Try to extract a name string , search EJBO+4 through EJBO+16 for
     # the start of a printable ASCII run (name may be at different offsets
     # depending on object type). Negative offsets are included for multiple-
     # inheritance classes, whose fields start before the tag: Owner's civ name
@@ -495,7 +495,7 @@ def read_object_fields(h, ejbo_addr, read_after=DEFAULT_READ_AFTER,
     return fields, name
 
 # ── Annotations persistence ────────────────────────────────────────────────
-# Resolve next to this script, not the cwd — the viewer is often launched with
+# Resolve next to this script, not the cwd , the viewer is often launched with
 # an absolute path from the repo root, which would silently load zero annotations.
 ANNOTATIONS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                 "ejbo_annotations.json")
@@ -582,7 +582,7 @@ class ViewerState:
         if self._is_process_alive():
             return False  # still alive, no reconnect needed
         old_pid = self.pid
-        print(f"[!] PID {old_pid} gone — searching for new process...")
+        print(f"[!] PID {old_pid} gone , searching for new process...")
         if self.connect():
             print(f"[+] Reconnected to PID {self.pid} ({self.proc_name})")
             n = self.scan()
@@ -684,7 +684,7 @@ class ViewerState:
             for f in o["fields"]:
                 f["ptr"] = resolve_pointer(self.handle, f["u32"], self.rtti_cache,
                                            self.ptr_cache, by_start)
-        # Ownership, once the pointers are named. Only Planet needs it — it is
+        # Ownership, once the pointers are named. Only Planet needs it , it is
         # the only class the viewer splits by owner.
         for o in objs:
             if o["type"] != "Planet":
@@ -881,7 +881,7 @@ def _load_html():
 
 # ── Main ──────────────────────────────────────────────────────────────────────
 def main():
-    parser = argparse.ArgumentParser(description="EJBO Viewer — live game object browser")
+    parser = argparse.ArgumentParser(description="EJBO Viewer , live game object browser")
     parser.add_argument("--port", type=int, default=8080, help="HTTP port (default 8080)")
     parser.add_argument("--refresh", type=float, default=2.0,
                         help="Background refresh interval in seconds (default 2)")

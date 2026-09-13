@@ -1,5 +1,5 @@
 """
-inject_ship.py — give a civ a ship in a save blob
+inject_ship.py , give a civ a ship in a save blob
 ==========================================================
     python inject_ship.py ../saves/<capture>.b64 --civ Ceti --count 2 \
         -o ../loadgame_blob.b64 --dat ../../client/three_civ.dat

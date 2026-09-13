@@ -1,5 +1,5 @@
 """
-inject_design.py — Add a ship design to a save blob
+inject_design.py , Add a ship design to a save blob
 ===================================================
 Duplicates an existing `DSGN` record inside a civ's `OWNR` block, renames it and
 gives it a fresh object id, so the client builds the design itself on load.
@@ -289,7 +289,7 @@ def build_sdpr(name, parts, owner_id):
 def build_dsgn(new_id, name, parts, owner_id, dsgn_ver=4, sdpr_ver=0):
     """A complete DSGN section: header, object id, and its SDPR child.
 
-    Section versions are taken from real records rather than assumed — DSGN is
+    Section versions are taken from real records rather than assumed , DSGN is
     version 4 and SDPR version 0 in every capture examined, and the version
     occupies bits 26..31 of the length word.
     """

@@ -1,5 +1,5 @@
 """
-cs_server.py — Cosmic Supremacy local stub server
+cs_server.py , Cosmic Supremacy local stub server
 ==================================================
 Replaces the original cosmicsupremacy.com backend so the patched EXE can run
 locally.  Keeps the game open and responsive to its HTTP protocol so that the
@@ -29,7 +29,7 @@ PORT = int(os.environ.get('CSPORT', 8888))
 # the opt-in loadgame injection file.  Defaults to this file's own directory, so
 # `python cs_server.py` from a checkout behaves exactly as it always has.  The
 # release launcher overrides it because the frozen build imports this module out
-# of a temporary extraction directory that Windows deletes when the app exits —
+# of a temporary extraction directory that Windows deletes when the app exits ,
 # saves written relative to __file__ there would vanish with it.
 DATA_DIR = os.environ.get('CS_DATA_DIR') or os.path.dirname(os.path.abspath(__file__))
 os.makedirs(DATA_DIR, exist_ok=True)
@@ -108,7 +108,7 @@ def _raw_data_field(raw_body: str) -> 'str | None':
     Why not parse_qs: form decoding also turns '+' into a space, and base64 uses
     '+'.  Measured on a real 38,960-char capture, the client percent-encodes and
     emits '%2B' (748 of them) with no literal '+', so parse_qs would in fact have
-    survived this client — but unquote is correct either way, since it decodes
+    survived this client , but unquote is correct either way, since it decodes
     the escapes without touching a literal '+' should some path ever emit one.
     """
     marker = '&data='
@@ -161,7 +161,7 @@ def _load_injection_blob() -> 'str | None':
 # ── Save slots ────────────────────────────────────────────────────────────────
 # The capture files above are an append-only forensic record: one per POST,
 # never overwritten, so a series of saves can be diffed. They are the wrong
-# thing to answer savegamelist with, because the client thinks in *slots* — a
+# thing to answer savegamelist with, because the client thinks in *slots* , a
 # slot is saved over repeatedly and must appear once, under the name the player
 # typed. The index maps slot -> the most recent capture for that slot, which
 # keeps both properties: nothing is destroyed, and the list is accurate.
@@ -194,7 +194,7 @@ def _allocate_gameid(idx: dict) -> int:
     Lowest unused slot number, counting from 1.
 
     gameid=-1 is the client's "give me a new slot" sentinel, and it treats
-    negative IDs from savegamelist as invalid — so a save left under -1 is
+    negative IDs from savegamelist as invalid , so a save left under -1 is
     stored but unloadable, which is precisely the reported symptom of a save
     that appears to work and then is not in the list.
     """
@@ -430,7 +430,7 @@ def handle_action(action: str, params: dict, raw_body: str = '') -> tuple[int, s
         #
         # ── Why the response format matters (binary analysis) ────────────────────
         # The game's entertestbedgalaxy handler (0x577c00+) consumes the response:
-        #   • strstr(response, "OK|") must be non-NULL — else response string is shown
+        #   • strstr(response, "OK|") must be non-NULL , else response string is shown
         #     as an error dialog and galaxy join fails.
         #   • 0x576230 dequeues entries from the global pending-response queue at
         #     0x8714b8 (vector of 32-byte entries placed there by the HTTP thread).
@@ -455,13 +455,13 @@ def handle_action(action: str, params: dict, raw_body: str = '') -> tuple[int, s
         #
         # The patch makes the testbed load-game path skip 0x542850 entirely and
         # proceed directly to 0x541240 (the standard save loader), which works
-        # correctly regardless of TLS-tree state — matching the normal-mode path.
+        # correctly regardless of TLS-tree state , matching the normal-mode path.
         # With this patch, 'OK|0' is sufficient: the galaxy join succeeds and
         # loadgame no longer throws.
         #
         # Without the binary patch, a correct server response would need to supply
         # credential bytes matching [0x86f148] at offset 9+ of each queue entry so
-        # 0x576230 returns count > 0 — the full testbed session-setup protocol has
+        # 0x576230 returns count > 0 , the full testbed session-setup protocol has
         # not yet been reversed.
         import base64 as _b64
         userid   = params.get('userid', ['?'])[0]
@@ -488,7 +488,7 @@ def _log_unknown_action(action: str, params: dict):
     Log an unrecognised action with a highly visible separator so it stands out
     in the console / log file when scanning for new server interactions.
 
-    The separator line is a row of '!' characters — easy to grep for:
+    The separator line is a row of '!' characters , easy to grep for:
         grep '!!!' cs_server.log
     """
     sep = '!' * 60
@@ -539,7 +539,7 @@ class CSHandler(http.server.BaseHTTPRequestHandler):
         body   = self.rfile.read(length).decode('latin-1') if length else ''
         params = urllib.parse.parse_qs(body, keep_blank_values=True)
 
-        # Action can be in URL query string OR POST body — check both.
+        # Action can be in URL query string OR POST body , check both.
         # The game puts action= in the URL query string for most POST calls.
         url_qs = {}
         if '?' in self.path:

@@ -56,7 +56,7 @@
       "id": "sandbox",
       "title": "Sandbox",
       "short": "Sandbox",
-      "blurb": "Development galaxy — 16 seats, used by the AI harness. Not part of this release.",
+      "blurb": "Development galaxy , 16 seats, used by the AI harness. Not part of this release.",
       "exe": "CosmicSupremacy_Resurgence.exe",
       "galaxy": "SandboxGalaxy_local.csgalaxy",
       "needs_server": true,
