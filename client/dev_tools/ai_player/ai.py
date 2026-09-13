@@ -9,6 +9,13 @@ snapshots memory, runs every rule once in priority order, writes, and sleeps.
     python ai.py --apply --follow         # keep playing, every turn, forever
     python ai.py --apply --follow --turns 20
     python ai.py --apply --follow --drive 10   # also shorten turns to 10s
+    python ai.py --apply --follow --drive 10 --halt-on-contact
+
+`--halt-on-contact` stops the loop on the first turn an enemy planet is visible,
+after the rules have run — so R-XTM-03 has already committed the fleet — and
+restores the turn length on the way out. It exists because driving turns at 10s
+resolves a battle faster than a human can open the report: without it the first
+fight is over before anyone sees it.
 
 """
 import json
@@ -108,7 +115,8 @@ def read_pass_marker(civ_name):
 
 class Loop:
     def __init__(self, civ_name="GoodGuy", dry_run=True, vision="all",
-                 top=0, log=print, settle=1.5, state=None, skip=()):
+                 top=0, log=print, settle=1.5, state=None, skip=(),
+                 halt_on_contact=False):
         # `skip` names rules NOT to run, by their R-XXX-NN id. It exists for
         # bisecting a crash: the client died twice at the same turn from the
         # same saved state, which makes the fault deterministic and therefore
@@ -136,6 +144,15 @@ class Loop:
         self.history = sensors.History()
         # Seconds to let turn resolution finish before snapshotting.
         self.settle = settle
+        # Stop the loop the turn an enemy planet first becomes visible, so a
+        # human can drive the approach and read the battle report. Unattended
+        # turn driving would otherwise resolve the fight in seconds and leave
+        # nothing but the aftermath to look at.
+        self.halt_on_contact = halt_on_contact
+        self.halt_reason = None
+        # Set by run(); one_pass uses it to notice when it is outrunning the
+        # turn it is deciding for.
+        self.drive = None
 
     # -- turn clock -----------------------------------------------------
     def turn(self):
@@ -373,6 +390,27 @@ class Loop:
                  + (" , slowest: "
                     + ", ".join(f"{n} {t:.1f}s" for n, t in slow if t >= 0.05)
                     if any(t >= 0.05 for _n, t in slow) else ""))
+
+        # A pass that outlasts the driven turn is a pass that writes orders the
+        # engine is simultaneously resolving. That is how the first-contact run
+        # died: turns driven at 12s, and the pass that finally had two attack
+        # orders to issue made ~30 remote calls and overran the boundary. The
+        # actuator now rolls back a torn order, but rolling back every turn is
+        # not playing the game , the honest fix is to drive slower. Measured
+        # against scan plus rules, since the whole pass sits inside the turn.
+        total = self.last_scan_secs + elapsed
+        if self.drive and total > self.drive * 0.6:
+            self.log(f"    [!] this pass took {total:.1f}s against a "
+                     f"{self.drive}s turn. Orders are being written close to "
+                     f"the boundary; raise --drive to at least "
+                     f"{max(30, int(total * 3))}s.")
+
+        # Checked AFTER the rules, not before, so R-XTM-03 has already committed
+        # the fleet on this same pass. Halting first would leave the human to
+        # issue the attack by hand, which is not what handing over the approach
+        # means.
+        if self.halt_on_contact:
+            self._check_contact(snap, civ, act)
         return snap.turn
 
     def _mark_pass_done(self, turn):
@@ -389,9 +427,27 @@ class Loop:
             # is worse than exact but still playable. Never worth failing a pass.
             self.log(f"[loop] could not record the completed pass: {exc}")
 
+    def _check_contact(self, snap, civ, act):
+        """Set halt_reason once an enemy planet is legitimately visible."""
+        try:
+            foes = exterminate.enemies(snap, civ, act)
+            if not foes:
+                return
+            ranked = exterminate.target_planets(snap, civ, self.history, foes)
+        except Exception as e:
+            self.log(f"[loop] contact check raised {type(e).__name__}: {e}")
+            return
+        if not ranked:
+            return
+        weakness, target = ranked[0]
+        self.halt_reason = (
+            f"CONTACT on turn {snap.turn}: {len(ranked)} enemy planet(s) "
+            f"visible, weakest is {target} (weakness {weakness})")
+
     # -- drive ----------------------------------------------------------
     def run(self, follow=False, max_turns=None, drive=None, stall=None):
         original = None
+        self.drive = drive
         try:
             if drive:
                 original = self.read_turn_length()
@@ -405,7 +461,7 @@ class Loop:
                     self.set_turn_length(drive)
 
             t = self.one_pass()
-            if t is None or not follow:
+            if t is None or not follow or self.halt_reason:
                 return
             done = 1
             while max_turns is None or done < max_turns:
@@ -414,6 +470,8 @@ class Loop:
                     return
                 t = self.one_pass()
                 if t is None:
+                    return
+                if self.halt_reason:
                     return
                 done += 1
             self.log(f"[loop] finished {done} turn(s)")
@@ -430,6 +488,13 @@ class Loop:
                               "client is gone (it exited or crashed)")
             if self.remote is not None:
                 self.remote.close()
+            # Last, so it is the final thing on screen and so it can promise the
+            # turn length is back to normal — which the block above just did.
+            if self.halt_reason:
+                self.log(f"\n[loop] {self.halt_reason}\n"
+                         f"[loop] stopping here. The fleet has its orders and "
+                         f"turns are back to normal length — drive it yourself "
+                         f"from the client and read the battle report.")
 
 
 def wait_for_client(seconds, log=print):
@@ -472,7 +537,8 @@ def main():
                 dry_run=not cli.flag(args, "--apply"),
                 vision=opt("--vision", "known"),
                 top=opt("--top", 0, int),
-                settle=opt("--settle", 1.5, float))
+                settle=opt("--settle", 1.5, float),
+                halt_on_contact=cli.flag(args, "--halt-on-contact"))
     loop.run(follow=cli.flag(args, "--follow"),
              max_turns=opt("--turns", None, int),
              drive=opt("--drive", None, int),
