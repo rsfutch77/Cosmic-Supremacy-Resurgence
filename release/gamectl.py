@@ -1,25 +1,7 @@
 """
-gamectl.py — Next Turn, Save and Load, driven from outside the game
+gamectl.py , Next Turn, Save and Load, driven from outside the game
 ===================================================================
-The three buttons the TestBed dialog provides, reimplemented so the launcher can
-own them.
-
-WHY THE LAUNCHER HAS TO OWN THEM. The TestBed dialog only exists on the testbed
-JOIN path: launch the client on a `.csgalaxy` pass file and the dialog appears,
-launch it on a `.dat` save and it never does — measured over repeated 60-second
-samples and confirmed on screen. But a `.dat` launch is the only way to start a
-game whose ship designs were prepared in advance, because a design cannot be
-created in memory (STRATEGY.md §3, actuator I) and only the engine's own
-deserialiser registers one. So the choice is between a galaxy the AI can fight
-in and a dialog that can end a turn, unless the buttons move out here.
-
-Nothing in this module is new mechanism. Each button is a technique the dev
-tools already proved:
-
-  Next Turn  shorten the turn length and wait for the counter — advance_turns.py
-  Save       call the engine's own SaveGame in a remote thread — trigger_save.py
-  Load       relaunch the client on a .dat — game_cycle.py
-
+The three buttons the TestBed dialog provides, reimplemented
 """
 from __future__ import annotations
 
@@ -158,7 +140,7 @@ class Client:
         """
         before = self.turn()
         if before is None:
-            raise GameError("cannot read the turn counter — is the game still up?")
+            raise GameError("cannot read the turn counter , is the game still up?")
         original = self.turn_length()
         if original in (None, 0xFFFFFFFF):
             original = DEFAULT_LENGTH
@@ -195,7 +177,7 @@ class Client:
             kernel32.VirtualFreeEx(self.h, ctypes.c_void_p(addr), 0, MEM_RELEASE)
             raise GameError(
                 "the game process allocated above 4 GB, so it is not the "
-                "32-bit client — refusing to inject a 32-bit stub into it")
+                "32-bit client , refusing to inject a 32-bit stub into it")
         return addr
 
     def save_game(self, name: str = "singleplayer", gameid: int = 0,
@@ -307,7 +289,7 @@ def capture_to_dat(save_dir: str, out_path: str, since: float = 0.0) -> str:
         raise GameError(
             "the game reported a successful save but nothing arrived at the "
             "server. The launcher's own server has to be running for a save to "
-            "be stored — keep this window open while you play.")
+            "be stored , keep this window open while you play.")
     with open(cap, "r", encoding="ascii") as fh:
         blob = decode_blob(fh.read())
     tmp = out_path + ".tmp"

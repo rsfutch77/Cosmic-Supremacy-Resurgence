@@ -1,12 +1,9 @@
 """
-remote.py — Call the game's own functions in its own process
+remote.py , Call the game's own functions in its own process
 ============================================================
-Route 2 (STRATEGY.md §6a): external code cannot originate a ship order, because
-the order object owns engine-side allocations and the engine will not build one
-lazily. The way out is to stop imitating the engine and just *call* it.
 
 This module runs a short x86 stub inside the game via CreateRemoteThread, which
-lets us invoke any function with any calling convention — including __thiscall,
+lets us invoke any function with any calling convention , including __thiscall,
 which needs ECX and which a bare CreateRemoteThread cannot express (it passes
 exactly one stack argument and nothing in registers).
 
@@ -26,7 +23,7 @@ ADDRESSES (CosmicSupremacy_Resurgence.exe, image base 0x00400000)
               (this, origin*, target*, Owner*, float, int, ptr)
               Origin and target are ALLOCATION STARTS (EJBO tag - 8) and the
               Owner is its tag-52 primary form, not the tag-8 reference-node
-              form — mixing these up is the easiest way to crash this.
+              form , mixing these up is the easiest way to crash this.
   vftable+0x30 on a ship returns the float for argument 4, and takes no stack
               arguments (confirmed at two independent call sites).
 """
@@ -79,7 +76,7 @@ CHANGE_CITIZEN_JOBS = 0x00574180  # __cdecl(Planet* alloc, container* indices,
 GET_DRAFT_COST      = 0x00516060  # __thiscall(int count), ret 4
 DRAFT_COST_THIS     = 728         # ECX = Owner_primary + 0x30c == civ_tag + 728
 DRAFT_JOB           = 3           # job id 3 is crew/military
-CONTAINER_VECTOR    = 12          # a container holds its vector 12 bytes in —
+CONTAINER_VECTOR    = 12          # a container holds its vector 12 bytes in ,
                                   # the same wrapper idiom as Planet:132 and the
                                   # order object's +28/+52 list heads
 DRAFT_FREE_BELOW    = 0x0080AA00  # content version; < 150 and the engine skips
@@ -92,18 +89,6 @@ PLANET_ALLOC_FROM_TAG = -8        # Planet is single-inheritance: an 8-byte
 DESIGN_SIZE = 0x118           # 280 bytes
 DESIGN_CTOR = 0x00546EC0      # __thiscall, NO stack arguments. The real one.
 
-# 0x005470A0 IS NOT A COPY CONSTRUCTOR. It is ShipDesign::ShipDesign(Stream*),
-# a DESERIALIZING constructor that reads a design out of a save blob. Its call
-# site gives it away: immediately before allocating, the caller does
-#     push 4 ; push 0x4453474e ("DSGN") ; mov ecx, edi ; call 0x005E6400
-# so `edi` is a serialization stream positioned at the save format's DSGN
-# section, and that same `edi` is what gets passed here.
-#
-# It was once mistaken for a copy constructor purely because it takes one
-# argument. Passing it a ShipDesign* CRASHED THE CLIENT: the constructor treated
-# the design object as a stream, read nonsense through it, and left the new
-# object uninitialised — the 280-byte block still held stale UTF-16 UI text
-# afterwards. Do not call this without a real stream.
 DESIGN_STREAM_CTOR = 0x005470A0
 
 # ShipDesignData lives at ShipDesign allocation + 0x10, i.e. (EJBO tag) + 4.
@@ -147,7 +132,7 @@ class RemoteCallError(Exception):
 class RemoteThreadStuck(RemoteCallError):
     """A remote thread was created and did not finish in time.
 
-    Its stub page MUST be leaked, never freed — the thread is still inside it.
+    Its stub page MUST be leaked, never freed , the thread is still inside it.
     Subclasses RemoteCallError so existing handlers keep catching it; the
     distinction only matters to run_stub, which needs it to decide cleanup.
     """
@@ -169,37 +154,6 @@ ADD_ESP_16 = b"\x83\xC4\x10"      # four of them
 
 class Remote:
     """A privileged handle to the game plus the ability to run stubs in it."""
-
-    # ── Caches ───────────────────────────────────────────────────────────────
-    # EVERY ENGINE CALL COSTS A REMOTE THREAD, and that is the AI's real clock.
-    # Measured Aug 2026 over 22 passes: 571 stub calls, ~26 per pass, and a pass
-    # taking about 68 SECONDS of wall clock against the 1.8s the code used to
-    # claim. Turns then outrun decision passes at any sane turn length, which is
-    # the §1 contiguity hazard — the AI stops seeing most of the game it is
-    # playing. The counts that drove this:
-    #
-    #     138  firepower getter      immutable per design
-    #     127  production total      per planet, per turn
-    #     127  production done       per planet, per turn
-    #     127  hurry cost            per planet, per turn
-    #      60  draft cost            per civ, moves only when military does
-    #      25  relation code         per civ pair, moves only on a declaration
-    #
-    # Two lifetimes, because these are two different kinds of fact:
-    #
-    #   DESIGN cache — a design's speed, firepower and crew requirement are
-    #   functions of its fitted parts, and nothing in this AI ever refits a
-    #   design (actuator I is parked). They cannot change while the process
-    #   lives, so they are read once and kept.
-    #
-    #   PASS cache — everything else is true of one turn only. It is cleared at
-    #   the start of every decision pass by `begin_pass`, so a stale reading can
-    #   never outlive the snapshot it belongs to. Anything that MUTATES the
-    #   underlying quantity clears it immediately as well, because within a pass
-    #   we are the thing doing the changing.
-    #
-    # Nothing that writes is ever cached. A cache on a mutating call would not
-    # be a speed-up, it would be a silently skipped action.
     def __init__(self, pid, log=print):
         self.pid = pid
         self.log = log
@@ -221,21 +175,6 @@ class Remote:
 
     def _selftest(self):
         """Prove the remote-call machinery works, before any rule depends on it.
-
-        A BROKEN ENGINE HANDLE IS INDISTINGUISHABLE FROM AN IDLE AI, and that
-        cost two rounds of analysis. A bad edit once left this constructor
-        never reaching the OpenProcess line: every call then raised
-        AttributeError, every rule caught its own exception and moved on, and
-        the loop reported fast clean passes with 0% cache hits and "rules 0.0s"
-        — which reads as a healthy, quiet game rather than one where nothing
-        works. Several conclusions were drawn from those numbers and all of
-        them were wrong.
-
-        So the machinery proves itself once, here, on a stub that only returns a
-        constant: no game state is read and nothing is written, so it is safe on
-        any client at any moment. If this cannot run, nothing downstream could
-        have either, and saying so now is worth more than discovering it as
-        silence forty turns later.
         """
         probe = 0x5EE1F00D
         code = mov_eax_imm(probe) + RET_4
@@ -244,7 +183,7 @@ class Remote:
             raise RemoteCallError(
                 f"remote-call self-test failed: expected 0x{probe:08X}, got "
                 f"{got!r}. Engine calls do not work in this process, so every "
-                f"rule that needs one would fail silently — refusing to start "
+                f"rule that needs one would fail silently , refusing to start "
                 f"rather than play a hollow game.")
 
     def begin_pass(self):
@@ -307,17 +246,7 @@ class Remote:
         return n.value
 
     def _run(self, start, param, timeout_ms=15000):
-        """Start a thread at `start` and return its exit code (EAX).
-
-        A timeout raises RemoteThreadStuck rather than plain RemoteCallError,
-        because the two demand opposite cleanup: if no thread was created the
-        page is ours to free, but if a thread is still inside it, freeing is
-        fatal. See run_stub.
-
-        The wait was 5s and is now 15s. A getter returns instantly, but a call
-        that contends with the main thread mid-turn can take far longer than a
-        stopwatch suggests, and waiting is free while giving up is not.
-        """
+        """Start a thread at `start` and return its exit code (EAX)."""
         th = kernel32.CreateRemoteThread(self.h, None, 0,
                                          ctypes.c_void_p(start),
                                          ctypes.c_void_p(param), 0, None)
@@ -336,18 +265,7 @@ class Remote:
             kernel32.CloseHandle(th)
 
     def run_stub(self, code, what=""):
-        """Run a self-contained stub. Returns EAX at its `ret`.
-
-        THE PAGE IS NEVER FREED WHILE A THREAD MIGHT STILL BE IN IT. This used
-        to free in a `finally`, which also fired on the timeout path: the wait
-        gave up, we decommitted the page, and the still-running remote thread
-        carried on into nothing. Two client crashes were logged with
-        ACCESS_VIOLATION reading 0 AT instruction address 0, which is exactly
-        what executing a freed page looks like.
-
-        A leaked 4 KB page costs nothing. Killing the user's game costs a lot,
-        and it is the one thing this module must never do.
-        """
+        """Run a self-contained stub. Returns EAX at its `ret`."""
         page = self.alloc(max(len(code), 64), exec_=True)
         try:
             self.write(page, code)
@@ -398,7 +316,7 @@ class Remote:
 
         Leaves the five part vectors EMPTY, so the result is a valid but
         equipment-less design that almost certainly cannot be built as-is.
-        Populating those vectors is unsolved — see the report.
+        Populating those vectors is unsolved , see the report.
         """
         code = (mov_ecx_imm(block) +
                 mov_eax_imm(DESIGN_CTOR) +
@@ -408,15 +326,6 @@ class Remote:
 
     def verify_design(self, block):
         """Check that a block really is a constructed ShipDesign.
-
-        This exists because a constructor that silently does nothing is
-        indistinguishable from one that worked, until something else crashes.
-        Calling 0x005470A0 with the wrong argument type left a block full of
-        stale UTF-16 UI text, three writes went into it as though it were an
-        object, and the client died shortly after. Any construction call must be
-        checked before anything is written into its result.
-
-        Returns (ok, description).
         """
         raw = self.read(block, 16)
         if not raw or len(raw) < 16:
@@ -443,12 +352,6 @@ class Remote:
 
     def design_speed(self, design_tag):
         """Call the engine's speed getter for a design; returns the float bits.
-
-        A design whose derived block reads -1 is NOT invalid — the cache is cold.
-        Treating -1 as "unbuildable" froze the AI after every load, because a
-        load leaves the block invalidated and only a getter call fills it. This
-        both answers the question and warms the cache, so subsequent plain reads
-        of ShipDesign:36 return the real number.
         """
         def call():
             code = (mov_ecx_imm(design_tag + DESIGN_DATA_OFFSET) +
@@ -461,19 +364,6 @@ class Remote:
 
     def hurry_production(self, planet_tag):
         """Spend cash to finish this planet's current production immediately.
-
-        __thiscall on the PlanetProperties, no arguments. The engine does the
-        whole transaction: it prices the remainder, debits Owner:8 and completes
-        the build. Called rather than reproduced for the same reason as
-        sell_facility -- STRATEGY.md 1.1 forbids writing the treasury, and a
-        hurry that paid for itself would be indistinguishable from a free one.
-
-        The engine's own refusals, which the caller should pre-check so a
-        pointless remote thread is not spawned:
-          * production at least half finished (progress / total >= 0.5)
-          * cost <= Owner:8
-          * production kind != 7 (a planet generating wealth has nothing to
-            hurry), and Planet:300 == 0
         """
         code = (mov_ecx_imm(planet_tag + PLANET_PROPERTIES) +
                 mov_eax_imm(HURRY_PRODUCTION) +
@@ -494,7 +384,7 @@ class Remote:
         return self._cached(self._pass_cache, ("hurry_cost", planet_tag), call)
 
     def production_total(self, planet_tag, vftable_slot_addr):
-        """PP vftable[0x74] — the production this build needs in total."""
+        """PP vftable[0x74] , the production this build needs in total."""
         def call():
             code = (mov_ecx_imm(planet_tag + PLANET_PROPERTIES) +
                     mov_eax_imm(vftable_slot_addr) +
@@ -516,20 +406,9 @@ class Remote:
     def make_ship_command(self, block, order_type, target_alloc):
         """Run the engine's ShipCommand constructor on a block we hand it.
 
-        __thiscall(int orderType, EJBO* target), ret 8 — callee-cleaned, so the
+        __thiscall(int orderType, EJBO* target), ret 8 , callee-cleaned, so the
         stub pushes and forgets. Arguments go right to left, so the target is
         pushed first.
-
-        `target_alloc` is an ALLOCATION START, not a tag. The constructor reads
-        the object id at target[+4], which is tag-4 for every class we deal with,
-        and getting this wrong is the same crash that mistaking a stream
-        constructor for a copy constructor caused.
-
-        Why this exists at all: the constructor is what turns a target OBJECT
-        into the reference node that lands in Ship:56, via
-        GetReferenceNode(target->objectId). Nothing else we have populates that
-        field, and Ship::HasActiveTargetedOrder (0x004D9880) requires it to be
-        non-null for order types 1 (Move), 7 (MoveNear) and 4 (Attack).
         """
         code = (push_imm(target_alloc) +
                 push_imm(order_type) +
@@ -542,16 +421,12 @@ class Remote:
                   f"-> 0x{block:08X}")
 
     def ship_set_command(self, ship_tag, cmd_block):
-        """Ship::SetCommand — writes Ship:52/56/60/61 from the ShipCommand.
+        """Ship::SetCommand , writes Ship:52/56/60/61 from the ShipCommand.
 
         __thiscall, ret 4, ECX = the ship's ALLOCATION start (tag - 8), because
         the function writes the order type at [ecx+0x3c] and Ship:52 sits at
         allocation + 60.
 
-        The four fields are one value and the engine writes them together. Our
-        own retarget_order writes Ship:52 alone, which is fine for Colonize and
-        Scout — they carry coordinates and are not order types that consult
-        Ship:56 — but is not fine for Move or Attack.
         """
         code = (push_imm(cmd_block) +
                 mov_ecx_imm(ship_tag + SHIP_ALLOC_FROM_TAG) +
@@ -564,18 +439,9 @@ class Remote:
         """The diplomacy relation code between two civs, via the engine.
 
         0 Neutral, 1 War, 2 Cease-Fire, 3 Peace, 4 Alliance, and 0 also when
-        there is no record at all — the engine treats "absent" and "Neutral" as
+        there is no record at all , the engine treats "absent" and "Neutral" as
         the same thing.
 
-        This is an engine call for a read, which is normally the wrong trade, but
-        the container at Owner:248 is NOT a std::map: it holds four pointers
-        where a map would hold {head, size}, and a hand-rolled traversal walked
-        straight out of it into unrelated memory (one "node" it found contained
-        the string "IllegalPosition"). Rather than reverse a custom container,
-        ask the accessor that already knows how to search it.
-
-        ECX is the container, and `other` must be the OWNER PRIMARY form
-        (tag - 52), which is what the engine's own call sites pass.
         """
         code = (push_imm(other_tag + OWNER_PRIMARY_FROM_TAG) +
                 mov_ecx_imm(civ_tag + OWNER_RELATIONS) +
@@ -642,18 +508,7 @@ class Remote:
         return self.run_stub(code, f"reputation {delta:+d} vs 0x{other_tag:08X}")
 
     def design_min_crew(self, design_tag):
-        """ShipDesign:76 — the MINIMUM CREW a design needs to function.
-
-        The report called :76 a "payload-delivery flag" because it reads 2 on
-        the Colony Ship and troop designs and 1 on the weapon-only ones. The
-        combat code settles it: the firepower accumulator computes the ship's
-        crew count from its Ship:124 vector and SKIPS the ship entirely when
-        that count is below this value, so an undercrewed warship contributes
-        exactly zero damage. Read as a crew minimum, every observed value fits.
-
-        Called rather than read because :76 is part of the lazy derived-stat
-        block, which reads -1 until something asks for it. Our own Colony Ship
-        reads -1 right now while the rival's reads 2.
+        """ShipDesign:76 , the MINIMUM CREW a design needs to function.
         """
         def call():
             code = (mov_ecx_imm(design_tag + DESIGN_DATA_OFFSET) +
@@ -674,7 +529,7 @@ class Remote:
 
             cost = sum over k in 0..count-1 of  5 * (T + k) + 105
 
-        where T is the civ's military across the WHOLE empire — every planet's
+        where T is the civ's military across the WHOLE empire , every planet's
         Planet:168 count plus every owned ship's crew. So the price rises by 5
         per unit already owned and conscription is cheapest early.
 
@@ -720,27 +575,9 @@ class Remote:
         """Set the job of the listed citizens, letting the ENGINE do the rest.
 
         `__cdecl(Planet* allocation, container* indices, int newJobId,
-                 bool bFromMilitaryList)` — four args, caller-cleaned, so it
+                 bool bFromMilitaryList)` , four args, caller-cleaned, so it
         needs a stub: CreateRemoteThread passes exactly one.
 
-        Called rather than reproduced for the STRATEGY.md §7 reason. With
-        newJobId 3 the engine prices the draft, refuses outright if the cost
-        exceeds Owner:8 — `jg` before any list write, so a rejected draft
-        changes nothing — debits the treasury itself, and migrates the records
-        into the military vector. Reproducing that by hand would mean writing
-        Owner:8, which §1.1 forbids for exactly this reason: a draft that paid
-        for itself would be indistinguishable from a free one.
-
-        POINTER FORMS, both from the callee: arg1 is the planet's ALLOCATION
-        start (tag - 8), because the callee reaches PlanetProperties as
-        [arg1 + 0x60] and that is planet_tag + 88. arg2 is a CONTAINER whose
-        vector sits 12 bytes in — the callee reads _Myfirst/_Mylast at +0xc/+0x10
-        — not a bare vector.
-
-        The container is a foreign allocation, and that is safe HERE though it
-        was not for the order object: the original is a caller's stack local, so
-        the engine reads it and never takes ownership of it. It is freed after
-        the thread returns, never on the stuck path.
         """
         if not indices:
             raise RemoteCallError("no citizens selected to draft")

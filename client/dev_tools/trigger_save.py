@@ -1,43 +1,15 @@
 """
-trigger_save.py — Make the running client POST a savegame, with no user click
+trigger_save.py , Make the running client POST a savegame, with no user click
 ============================================================================
 Calls the game's own save routine in a remote thread.  The point is to capture
 real save blobs (`server/cs_server.py` now persists them to `server/saves/`) so
-the blob format — `ROUT` in particular — can be checked against bytes the engine
+the blob format , `ROUT` in particular , can be checked against bytes the engine
 actually produced instead of against a layout read out of the disassembly.
 
     python trigger_save.py                      # save into slot 0
     python trigger_save.py --name "rout probe"
     python trigger_save.py --gameid -1          # client's "new slot" sentinel
     python trigger_save.py --dry-run            # print the stub, touch nothing
-
-Why this is safe to call off-thread
------------------------------------
-`SaveGame` at 0x0048B350 is fully synchronous and self-contained: it serialises
-the game state (0x0056D310), base64+zlib encodes it (0x00482040), sprintfs the
-request body, POSTs it, and checks the reply for "DONE".  The POST is a direct
-call chain to WinInet's blocking `HttpSendRequestA`
-(0x0048B350 -> 0x00579DE0 -> 0x005F5160), so there is no message pump to service
-and no worker thread to hand off to — nothing about it needs the UI thread.
-
-Signature, from the call site at 0x0048BE23 and the `ret 8` epilogue:
-
-    bool __thiscall SaveGame(void *this, int gameid, std::string *gamename)
-
-`this` is never read: between the prologue and the first instruction that
-clobbers ECX the register is never stored anywhere, so any value will do.
-
-The gamename argument is a VC9 `std::string`.  0x0048B4C1 shows the short-string
-optimisation in the clear — `cmp [edi+0x18], 0x10` then either `mov eax,[edi+4]`
-or `lea eax,[edi+4]` — which pins the layout well enough to fabricate one:
-
-    +0x00  _Myproxy    (never read on this path)
-    +0x04  16-byte inline character buffer
-    +0x14  _Mysize
-    +0x18  _Myres      capacity; keep it under 16 to stay in the inline buffer
-
-CAUTION: the serialiser walks the whole object graph.  Trigger it while the turn
-pipeline is idle — mid-turn-resolution is a race against the main thread.
 """
 import argparse
 import ctypes
@@ -71,7 +43,7 @@ kernel32.CreateRemoteThread.restype = wintypes.HANDLE
 # player-facing launcher (release/) is CosmicSupremacyLauncher.exe and is a
 # 64-bit process: attaching to it and injecting this 32-bit stub gets as far as
 # VirtualAllocEx returning an address above 4 GB, which then fails to pack into
-# a `push imm32` — a confusing way to discover you are in the wrong process.
+# a `push imm32` , a confusing way to discover you are in the wrong process.
 NOT_THE_CLIENT = ("launcher",)
 
 
@@ -210,7 +182,7 @@ def main():
 
         rc = kernel32.WaitForSingleObject(th, args.timeout * 1000)
         if rc != 0:
-            print(f"  WARNING: wait returned {rc} — the thread has not finished. "
+            print(f"  WARNING: wait returned {rc} , the thread has not finished. "
                   f"Leaving its page allocated so it cannot execute freed memory.")
             kernel32.CloseHandle(th)
             kernel32.CloseHandle(h)
@@ -221,7 +193,7 @@ def main():
         kernel32.CloseHandle(th)
         ok = code.value & 0xFF
         print(f"  SaveGame returned {ok} "
-              f"({'saved' if ok else 'FAILED — client will have shown a dialog'})")
+              f"({'saved' if ok else 'FAILED , client will have shown a dialog'})")
         print("  check server/saves/ for the captured blob")
         kernel32.VirtualFreeEx(h, ctypes.c_void_p(remote), 0, MEM_RELEASE)
         return 0 if ok else 1

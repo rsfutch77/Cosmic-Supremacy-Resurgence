@@ -1,5 +1,5 @@
 """
-diff_saves.py — Compare two save blobs section by section
+diff_saves.py , Compare two save blobs section by section
 =========================================================
 Capture a save, load it into a fresh client, capture again, and diff.
 Any section that differs is state the save/load round trip does not carry, and
@@ -52,7 +52,7 @@ def main():
     print(f"A {os.path.basename(args.a)}: {len(ba):,} bytes")
     print(f"B {os.path.basename(args.b)}: {len(bb):,} bytes")
     if ba == bb:
-        print("\nIDENTICAL — the blob is a fixpoint across save -> load -> save")
+        print("\nIDENTICAL , the blob is a fixpoint across save -> load -> save")
         return 0
 
     ia, ib = index(ba), index(bb)

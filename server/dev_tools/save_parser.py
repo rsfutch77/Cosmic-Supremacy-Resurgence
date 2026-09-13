@@ -1,5 +1,5 @@
 """
-save_parser.py — Cosmic Supremacy save blob decoder
+save_parser.py , Cosmic Supremacy save blob decoder
 ====================================================
 Decodes the binary save format used by CosmicSupremacy.exe.
 
@@ -16,7 +16,7 @@ Wire format
 
 Section framing
 ---------------
-Every section — from the outermost SAVE down to the smallest leaf — carries the
+Every section , from the outermost SAVE down to the smallest leaf , carries the
 same 8-byte header:
 
     +0  char[4]  tag, e.g. 'ROUT'   (an MSVC multi-char constant, byte-swapped
@@ -266,14 +266,14 @@ def build_section(tag: bytes, version: int, payload: bytes) -> bytes:
     return tag + struct.pack('<I', (version << VERSION_SHIFT) | len(payload)) + payload
 
 
-# ── ROUT — the ship order / route record ──────────────────────────────────────
+# ── ROUT , the ship order / route record ──────────────────────────────────────
 #
 # Writer  Route::Write       0x004e5310, called from the ship writer at 0x0056ecc0
 # Reader  Route::ReadFields  0x004e6d40, via the factory at 0x004e6e90
 # Attach  Ship::SetOrder     0x004da450, stores the order at ship_base + 0x38
 #
-# The order object is a plain `operator new(0x60)` allocation — 96 bytes, with no
-# EJBO tag and no object id of its own — so these are raw offsets from the object
+# The order object is a plain `operator new(0x60)` allocation , 96 bytes, with no
+# EJBO tag and no object id of its own , so these are raw offsets from the object
 # base, not the tag-relative offsets the annotations use for EJBO classes.
 #
 # ROUT is optional: the ship writer emits it only when the order pointer is
@@ -365,7 +365,7 @@ def make_leg(origin, dest):
     return dict(zip(LEG_FIELDS, (ox, oy, oz, dx, dy, dz, length)))
 
 
-# ── GSET — galaxy settings key/value block ────────────────────────────────────
+# ── GSET , galaxy settings key/value block ────────────────────────────────────
 
 def parse_gset(blob: bytes, sec: 'Section') -> dict:
     """Parse a GSET payload. Returns {name: {type, value, custom}}."""

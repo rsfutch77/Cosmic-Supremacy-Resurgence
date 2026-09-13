@@ -13,7 +13,7 @@
 *.json text eol=lf
 
 # The client binaries and galaxy pass files are data. Never let newline
-# translation near them — it would corrupt an EXE.
+# translation near them , it would corrupt an EXE.
 *.exe      binary
 *.csgalaxy binary
 *.dat      binary

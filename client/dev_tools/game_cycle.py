@@ -1,5 +1,5 @@
 """
-game_cycle.py — save, close, edit the blob, relaunch, without a human
+game_cycle.py , save, close, edit the blob, relaunch, without a human
 =====================================================================
     # add two designs to the running game and come back up on the result
     python game_cycle.py --design "f1:chassis=0,scanner=0,engine=0,weapon=0" \
@@ -11,35 +11,11 @@ game_cycle.py — save, close, edit the blob, relaunch, without a human
 Ship designs cannot be created in memory: the object gets built and fitted, but
 nothing registers it with the civ and nothing computes its stat block, so it
 never reaches the UI. The blob route works because the engine's own deserialiser
-does the registration on load — confirmed live, an injected design appears in the
-design list and can be selected for building.
-
-The cost is a round trip through the disk: the client has to save, exit, and be
+does the registration on load , confirmed live, an injected design appears in the
+design list and can be selected for building, the client has to save, exit, and be
 relaunched on the edited file. This automates that so an experiment does not need
 a human at the keyboard between each step.
 
-── Why each step is the way it is ─────────────────────────────────────────────
-* SAVE goes through the engine's own SaveGame (trigger_save.py), so the blob is
-  bytes the engine produced rather than a layout we assembled.
-* CLOSE is a hard terminate. There is no clean-exit entry point we have found,
-  and the state we care about is already on disk by then.
-* ONE GAME PROCESS PER MACHINE. Launching a second client silently kills the
-  first, so this always closes before launching and never assumes it can run two.
-* RELAUNCH passes the .dat on the command line. `loadgame` is NOT the load path —
-  the client never requests it at startup — so the edited blob has to arrive as a
-  file argument.
-* After launching, this WAITS until the game state is actually readable rather
-  than sleeping a fixed time: a slow load otherwise looks exactly like a crash.
-
-A pushed state can re-open the home-world customisation popup, and confirming one
-IS destructive — it rewrites the click record and re-applies the +50 space commit
-over whatever was loaded. This never clicks anything.
-
-It does not need to. **An unanswered popup does not stop the game**: measured
-Aug 2026 on a fresh galaxy, turns 0, 1 and 2 all resolved with 'Customize Your
-Home World' up and untouched. The docs here previously said it "blocks turn
-resolution entirely", which sent readers to dismiss a dialog that was never in
-the way — and dismissing it is the one action that actually costs something.
 """
 import argparse
 import os
@@ -67,8 +43,8 @@ def client_pids():
     # The 'CosmicSupremacy*' wildcard also matches CosmicSupremacyLauncher.exe,
     # the player-facing launcher added in release/. close_client() force-kills
     # everything this returns, so without the exclusion a harness run with the
-    # launcher open would take the launcher — and the stub server living inside
-    # it — down with the client, mid-game.
+    # launcher open would take the launcher , and the stub server living inside
+    # it , down with the client, mid-game.
     out = subprocess.run(
         ["powershell", "-NoProfile", "-Command",
          "Get-Process -Name 'CosmicSupremacy*' -ErrorAction SilentlyContinue "
@@ -103,7 +79,7 @@ def launch(dat, timeout=90):
     40 seconds and a load that crashed look identical for the first 39.
     """
     if client_pids():
-        raise SystemExit("a client is already running; close it first — "
+        raise SystemExit("a client is already running; close it first , "
                          "launching a second silently kills the first")
     dat = os.path.abspath(dat)
     if not os.path.exists(dat):
@@ -143,7 +119,7 @@ def capture_save(name="cycle"):
     new = [f for f in os.listdir(SAVES) if f.endswith(".b64") and f not in before]
     if not new:
         raise SystemExit("SaveGame succeeded but no new capture appeared in "
-                         "server/saves — is cs_server.py running?")
+                         "server/saves , is cs_server.py running?")
     path = os.path.join(SAVES, sorted(new)[-1])
     log(f"  captured {os.path.basename(path)}")
     return path
@@ -231,7 +207,7 @@ def main():
                          "from the running client when omitted")
     ap.add_argument("--all-civs", action="store_true",
                     help="give every design to EVERY civ in the galaxy, not "
-                         "just the local player — an AI-vs-AI galaxy needs both "
+                         "just the local player , an AI-vs-AI galaxy needs both "
                          "sides able to build the same things")
     ap.add_argument("--name", default="cycle", help="save name (<=15 chars)")
     ap.add_argument("--dat", default=None, help="where to write the .dat")

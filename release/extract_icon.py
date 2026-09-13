@@ -1,24 +1,7 @@
 """
-extract_icon.py — lift the application icon out of a Win32 PE into a .ico file
+extract_icon.py , lift the application icon out of a Win32 PE into a .ico file
 ==============================================================================
     python extract_icon.py client\\CosmicSupremacy.exe release\\build\\cosmic.ico
-
-WHY THIS EXISTS. The launcher should carry the game's own icon, not PyInstaller's
-default, and the only copy of that icon we have is inside the client EXE. The
-obvious shortcut — .NET's Icon.ExtractAssociatedIcon — hands back a single 32×32
-image, which is what a launcher pinned to a modern taskbar would then look like.
-Walking the resource directory instead recovers every size the original artist
-shipped, at the cost of about a hundred lines of well-specified structure
-parsing and no dependencies at all.
-
-WHAT IT PARSES. Two resource types and the relationship between them. RT_ICON
-(3) holds the images; RT_GROUP_ICON (14) holds a directory listing which images
-form one logical icon and at what sizes. A .ico file on disk is very nearly the
-group resource verbatim — the only edit is that each entry's trailing 2-byte
-resource ID becomes a 4-byte file offset, which is the whole of build_ico below.
-
-Failure is a non-zero exit and a message, never a corrupt .ico: the build script
-treats this step as optional and falls back to no icon.
 """
 import os
 import struct
@@ -116,14 +99,6 @@ def collect(data: bytes, sections, res_off: int, want_type: int) -> dict:
 def build_ico(group: bytes, images: dict) -> bytes:
     """
     Turn a GRPICONDIR plus its RT_ICON images into a .ico file.
-
-    Both formats share a 6-byte header and a per-image entry that agrees on its
-    first 8 bytes (width, height, colour count, reserved, planes, bit count).
-    They diverge after that: the resource entry is 14 bytes ending in a 4-byte
-    size and a 2-byte icon ID, the file entry is 16 bytes ending in a 4-byte size
-    and a 4-byte offset. So the shared prefix to copy is 8 bytes, not 12 — take
-    12 and the size field gets written twice, producing 20-byte entries that
-    every reader then walks at the wrong stride.
     """
     reserved, kind, count = struct.unpack_from("<HHH", group, 0)
     if reserved != 0 or kind != 1:

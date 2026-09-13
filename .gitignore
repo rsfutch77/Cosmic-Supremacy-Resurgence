@@ -22,7 +22,7 @@ __pycache__/
 
 # ── Dev tool output ───────────────────────────────────────────────────────────
 client/dev_tools/snapshots/
-# the AI's persistent fog-of-war map: per machine, per galaxy, per civ — game
+# the AI's persistent fog-of-war map: per machine, per galaxy, per civ , game
 # state rather than source, and meaningless in another checkout
 client/dev_tools/ai_player/state/
 *.exe.bak
@@ -34,7 +34,7 @@ client/checkpoints/
 
 # ── Release build output ──────────────────────────────────────────────────────
 # The staged release folder duplicates the 8 MB client binaries that are already
-# tracked in client/ — it is an artifact of release/build.ps1, regenerable from
+# tracked in client/ , it is an artifact of release/build.ps1, regenerable from
 # the manifest, and belongs on a GitHub release rather than in the history.
 dist/
 release/build/

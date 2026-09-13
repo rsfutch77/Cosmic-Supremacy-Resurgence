@@ -1,5 +1,5 @@
 """
-advance_turns.py — Advance the game N turns unattended
+advance_turns.py , Advance the game N turns unattended
 ======================================================
 Shortens the turn length, watches the turn counter until it has advanced N
 times, then restores the original turn length. Unlike fast_turns.py this reads
@@ -15,26 +15,6 @@ Addresses (both .data, stable across launches):
     0x008578E8  turn counter, located by capturing every address holding the
                 UI's turn number and keeping those that incremented together
 
-DO NOT USE THIS TO PACE AN AI RUN — USE `ai.py --drive` INSTEAD.
-=================================================================
-This script re-asserts the turn length only AFTER it sees the counter move, and
-the engine rewrites that value to 3600 at every boundary. So for most of each
-interval the engine is sitting on an hour-long turn, and when the short value
-lands again it resolves SEVERAL turns at once to catch up on elapsed time.
-
-Measured Aug 2026, driving at 12s with an AI attached: decision passes landed on
-turns 247, 250, 252, 255, 257, 259 — two to three turns apart — while the AI's
-own work took 0.1s per pass (scan 0.1s, rules 0.0s). The AI was not slow and was
-not missing passes; the TURNS were arriving in bursts. Under `ai.py --drive 12`
-the same game produced 260, 261, 262, 263, 264: every turn, no gaps.
-
-That matters beyond tidiness. STRATEGY.md §1 warns that a turn range spanning a
-gap makes every per-turn measurement meaningless, and the deltas in
-`sensors.History` are normalised per turn, which hides it. Two rounds of
-performance work were spent here chasing a slow AI that did not exist.
-
-This script is still the right tool for advancing a game with NO controller
-attached, which is what it was written for.
 """
 import ctypes
 from ctypes import wintypes
@@ -113,7 +93,7 @@ def main():
     original = rd32(h, TURNLENGTH_ADDR)
     if original == 0xFFFFFFFF:
         kernel32.CloseHandle(h)
-        sys.exit("turn length is uninitialised — load a galaxy first")
+        sys.exit("turn length is uninitialised , load a galaxy first")
 
     if restore_only:
         wr32(h, TURNLENGTH_ADDR, DEFAULT_LENGTH)
@@ -149,7 +129,7 @@ def main():
                 print(f"reached turn {now}")
                 break
             if time.time() - stalled_since > stall_limit:
-                print(f"STALLED at turn {now} for {stall_limit}s — the turn "
+                print(f"STALLED at turn {now} for {stall_limit}s , the turn "
                       f"pipeline is not firing unattended.")
                 print("  If the game is showing a dialog, dismiss it and re-run.")
                 break

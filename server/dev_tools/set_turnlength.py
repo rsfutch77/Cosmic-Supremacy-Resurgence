@@ -1,5 +1,5 @@
 """
-set_turnlength.py — change a galaxy's CONFIGURED turn length in a save blob
+set_turnlength.py , change a galaxy's CONFIGURED turn length in a save blob
 ===========================================================================
     python set_turnlength.py <capture.b64|.dat> --secs 10 --dat out.dat
 

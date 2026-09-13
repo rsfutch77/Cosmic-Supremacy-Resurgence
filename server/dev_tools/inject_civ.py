@@ -1,5 +1,5 @@
 """
-inject_civ.py — Add a whole PLAYER to a save blob
+inject_civ.py , Add a whole PLAYER to a save blob
 =================================================
 Clones an existing civ's `OWNR` block under a new name and object id, and hands
 the new civ a homeworld by giving an uncolonised planet the donor homeworld's
@@ -15,18 +15,18 @@ pass: each new civ gets its own auto-picked homeworld, chosen to sit as far as
 possible from every planet already spoken for.
 
 `[ ]` NOT DONE: the new civ gets no ships. It gets a homeworld with whatever the
-donor's homeworld had — shipyard included — so it can build its own, but the
+donor's homeworld had , shipyard included , so it can build its own, but the
 `SHIP`/`DYNO` records are galaxy-level rather than per-civ and adding one is a
 separate job.
 
 `[ ]` **A CLONED CIV INHERITS THE DONOR'S EXPLORED MAP, AND THAT IS A CHEAT.**
 `EXSY` is copied verbatim, so injecting a civ off a developed donor hands the
-newcomer everything that donor had found — including, once anyone has met
+newcomer everything that donor had found , including, once anyone has met
 anyone, where the home planets are. Nobody should start a game knowing that.
 
 `[ ]` **Homeworld placement is one hardcoded policy, and it should be a choice.**
 `pick_homeworld` spreads civs as far apart as it can, which is the right default
-for testing the strategy — contact is then a thing the AI has to earn rather than
+for testing the strategy , contact is then a thing the AI has to earn rather than
 a thing the setup hands it. It is not the only placement anyone will want:
 RANDOM placement is the obvious second (it is what a real galaxy generator does,
 and it is the only way to test how the rules cope with a hostile neighbour two
@@ -274,8 +274,8 @@ def add_civ(blob, new_name, donor_name=None, home_id=None, taken=(),
                            struct.pack("<I", len(nb)) + nb))
     log(f"  name {donor['name']!r} -> {new_name!r}")
 
-    # Fresh ids for the cloned designs. Two civs may share a design NAME — both
-    # start with a 'Colony Ship' — but an object id is galaxy-wide.
+    # Fresh ids for the cloned designs. Two civs may share a design NAME , both
+    # start with a 'Colony Ship' , but an object id is galaxy-wide.
     next_id = new_id
     for off in idg.find_all(bytes(rec), DSGN):
         if rec[off + 12:off + 16] != SDPR:
@@ -306,7 +306,7 @@ def add_civ(blob, new_name, donor_name=None, home_id=None, taken=(),
     uid = (max(struct.unpack_from("<I", blob, o["end"] - 4)[0]
                for o in owners) + 1) if user_id is None else user_id
     struct.pack_into("<I", rec, len(rec) - 4, uid)
-    forced = "" if user_id is None else ("  (FORCED — a value already in use "
+    forced = "" if user_id is None else ("  (FORCED , a value already in use "
                                          "hides the civ from the highscore list)")
     log(f"  Owner:4 {donor_uid} -> {uid}{forced}")
 
