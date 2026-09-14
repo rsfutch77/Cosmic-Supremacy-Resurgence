@@ -265,11 +265,54 @@ def modernise_smileys(html):
     return _SMILEY_IMG_RE.sub(sub, html)
 
 
+# Anchors pointing at the two retired ToDo pages. Most are written relative
+# ("../dev.html"), so matching on a full path would miss them.
+_ANCHOR_RE = re.compile(
+    r"<a[^>]*href=(?:\"([^\"]*)\"|'([^']*)')[^>]*>.*?</a>", re.S | re.I)
+_LI_RE = re.compile(r"<li[^>]*>.*?</li>", re.S | re.I)
+_BCSEP_RE = re.compile(r"\s*<span class=\"bcsep\">[^<]*</span>", re.I)
+
+
+def _is_retired(href):
+    path = href.split("?")[0].split("#")[0].lower()
+    return path.endswith("/dev.html") or path == "dev.html" or "todo-guide" in path
+
+
+def remove_retired_links(html):
+    """Drop links to the retired ToDo pages.
+
+    Both were captured to cosmic_supremacy_original_todo.csv before removal.
+    A list entry goes whole, because the text beside it describes a page that
+    no longer exists. Anywhere else the anchor goes on its own, taking a
+    following breadcrumb separator with it so no trail ends in a chevron.
+    """
+
+    def li_holds_retired(m):
+        for am in _ANCHOR_RE.finditer(m.group(0)):
+            if _is_retired(am.group(1) or am.group(2) or ""):
+                return ""
+        return m.group(0)
+
+    html = _LI_RE.sub(li_holds_retired, html)
+
+    def drop_anchor(m):
+        if _is_retired(m.group(1) or m.group(2) or ""):
+            return ""
+        return m.group(0)
+
+    html = _ANCHOR_RE.sub(drop_anchor, html)
+    # A separator left stranded at the start of a trail or doubled up.
+    html = re.sub(r'(<span class="bcsep">[^<]*</span>\s*){2,}',
+                  lambda m: m.group(1), html, flags=re.I)
+    return html
+
+
 PATCHES = [
     ("remove the Live Chat tab", remove_live_chat),
     ("remove the Firewall sub-tab", remove_firewall_subtab),
     ("hide the Tools sub-tab", remove_tools_subtab),
     ("remove the ToDo List sub-tab", remove_todo_subtab),
+    ("remove links to retired ToDo pages", remove_retired_links),
     ("remove the Wallpapers sub-tab", remove_wallpapers_subtab),
     ("point contact links at GitHub", redirect_contact_links),
     ("localise absolute self-links", localise_self_links),
