@@ -2,13 +2,21 @@
 
 **A classic space strategy game, brought back online.**
 
-[Cosmic Supremacy](http://www.cosmicsupremacy.com) was a multiplayer 4X space
+**[cosmicresurgence.com](https://cosmicresurgence.com)** , the restored site,
+including the original manual and wiki.
+
+Cosmic Supremacy was a multiplayer 4X space
 strategy game released around 2006. You colonised planets, researched
 technology, designed your own fleets, and fought for a galaxy. Turns took hours,
 governors ran your empire while you slept, and players across every timezone
 commanded enormous custom-built fleets against each other.
 
 The servers went dark years ago and it appears the original backend was lost in an accident. This project brings the game back.
+
+The original site, `www.cosmicsupremacy.com`, is gone. Nothing there works, and
+links to it in old forum posts and search results are dead. The archived site is
+rebuilt and served at **[cosmicresurgence.com](https://cosmicresurgence.com)** ,
+use that one.
 
 ---
 

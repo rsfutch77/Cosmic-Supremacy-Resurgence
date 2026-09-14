@@ -5,6 +5,8 @@ A fan restoration of the 2006 multiplayer 4X space strategy game.
 This build plays entirely on your own computer. No account, no internet
 connection, nothing to install.
 
+    https://cosmicresurgence.com
+
 
 HOW TO PLAY
 -----------
@@ -49,6 +51,18 @@ Play Single Player  A full single-player galaxy against the computer. Turns
 Multiplayer         Coming soon. Persistent galaxies against other players,
                     the way the original was played. The button is greyed out
                     until it is ready.
+
+THE MANUAL AND THE ORIGINAL SITE
+--------------------------------
+
+The original site, www.cosmicsupremacy.com, is gone. Nothing there works any
+more, and links to it from old forum posts and search results are dead.
+
+The archived site has been rebuilt and is back online at a new address. Use
+this one - it has the full game manual and wiki:
+
+    https://cosmicresurgence.com
+
 
 IF SOMETHING GOES WRONG
 -----------------------
