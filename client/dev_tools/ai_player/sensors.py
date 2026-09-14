@@ -1,26 +1,7 @@
 """
-sensors.py — turn-over-turn observation (STRATEGY.md §2.5)
+sensors.py , turn-over-turn observation (STRATEGY.md §2.5)
 ==========================================================
-The engine's formulas are not in memory. Food output per farmer, income per
-citizen, production per worker — none of it is stored anywhere we can read, and
-the civ-trait fields only give modifiers to unknown bases. So the honest way to
-know whether a planet is gaining or losing food is to look at it twice.
 
-`History` holds one previous snapshot's worth of numbers and reports the deltas.
-Everything it returns is per turn, normalised by however many turns actually
-elapsed, because a loop that misses a tick would otherwise read a double-size
-delta as a doubled rate.
-
-TWO RULES THIS ENFORCES, both from hard experience elsewhere in this project:
-
-  * A delta is meaningless until there IS a previous observation. Every accessor
-    returns None rather than 0 in that case, so a rule cannot mistake "no data"
-    for "no change" — the same distinction that made the ShipDesign -1 sentinel
-    dangerous.
-  * A delta is STALE for one turn after we act on that planet. Changing a
-    citizen's job changes the very quantity being measured, and the effect only
-    shows up at the next turn boundary. Rules mark what they touched via
-    `mark_acted`, and this refuses to report a delta for it on the next pass.
 """
 
 
@@ -34,13 +15,20 @@ def _dist(a, b):
     return math.sqrt(sum((x - y) ** 2 for x, y in zip(a, b)))
 
 
-STATE_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "state")
+# Beside the source in a checkout, which is where every dev run expects it.
+# CS_AI_STATE_DIR overrides it because a FROZEN build has nowhere else to go:
+# PyInstaller unpacks the module into a temp directory that Windows deletes on
+# exit, so the discovery set would be written, lost, and rebuilt from scratch
+# every launch , which is precisely the restart bug §4.4 R-XTM-01 records, only
+# permanent. The launcher points this at its own data directory.
+STATE_DIR = (os.environ.get("CS_AI_STATE_DIR")
+             or os.path.join(os.path.dirname(os.path.abspath(__file__)), "state"))
 
 
 def _fingerprint(snap):
     """A stable id for THIS galaxy, so one galaxy's map is never read as another's.
 
-    Sun ids alone are not enough — two galaxies can both number their suns from
+    Sun ids alone are not enough , two galaxies can both number their suns from
     the same pool. Positions are the galaxy's identity, so this hashes the sorted
     (id, rounded position) pairs. Rounded because the coordinates are floats we
     only ever read, and an exact-bit dependency would be fragile for no gain.
@@ -56,7 +44,7 @@ class History:
 
     **Discovery is permanent in the game and must be permanent here.** It used to
     live only in this object, rebuilt each pass from where our planets and ships
-    are *now* plus scan reports — so it silently reset whenever the controller
+    are *now* plus scan reports , so it silently reset whenever the controller
     restarted. Measured: a process restart on an unchanged galaxy took the map
     from 105 explored systems down to 7, which cost ~170 turns of re-scouting and
     broke contact with the only rival, disabling every Exterminate rule. A galaxy
@@ -65,7 +53,7 @@ class History:
     So the set is written to `state/discovered_<galaxy>_<civ>.json` and reloaded
     on construction. Keyed by galaxy fingerprint AND civ, because one machine
     plays several galaxies and a map is per player. Persisting our own discoveries
-    is not omniscience — it is the opposite, and it is what stops a restart from
+    is not omniscience , it is the opposite, and it is what stops a restart from
     quietly handing the AI a fresh fog of war it then re-explores at full speed.
     """
 
@@ -85,8 +73,8 @@ class History:
         """Choose the file for this galaxy+civ and merge whatever is already in it.
 
         Bound lazily from `observe` when the caller did not pass a snapshot, so
-        every existing `History()` call site — the loop and each standalone rule
-        tool — gets a persistent map without being changed. Binding happens
+        every existing `History()` call site , the loop and each standalone rule
+        tool , gets a persistent map without being changed. Binding happens
         BEFORE `_discover`, so the loaded set and this pass's sightings union
         rather than one clobbering the other.
         """
@@ -170,7 +158,7 @@ class History:
 
         A system counts as discovered when we hold a planet in it, when one of
         our ships is inside it, or when a scan report names it. Nothing here
-        ever forgets — discovery is permanent, as it is in the game.
+        ever forgets , discovery is permanent, as it is in the game.
         """
         for p in snap.owned_planets(civ):
             s, _r = snap.nearest_sun(p)
@@ -254,12 +242,6 @@ class History:
 
     def note_military_stall(self, planet_id, advancing):
         """Count consecutive turns a planet's military store failed to advance.
-
-        Needed because a SINGLE non-advancing turn means nothing. The store
-        drops by the cost when a unit is recruited, and a unit can be produced
-        and then carried off as crew in the same turn, so any one-turn test can
-        be fooled from both directions. This detector fired twice on perfectly
-        healthy planets before it was made to require persistence.
         """
         if not hasattr(self, "_mil_stall"):
             self._mil_stall = {}
@@ -271,13 +253,6 @@ class History:
 
     def military_rate(self, planet_id):
         """Food per turn flowing into this planet's military store.
-
-        Corrected for the WRAP. Recruiting a unit subtracts the cost from the
-        store, so a raw difference across that turn is hugely negative — 259
-        became 2 on a 300-cost planet. The first version of this sensor read
-        that as "not moving" and reported a healthy planet as permanently
-        stalled, one turn after reporting a correct 1-turn ETA. The units
-        produced have to be added back before the rate means anything.
         """
         prev = getattr(self, "_prev_for_pass", None)
         if not prev or not self.turns:
@@ -337,7 +312,7 @@ class History:
 
         Owner:8 moves for two reasons: the empire earns, and we spend. Only the
         first is a signal. Hurrying a build is a deliberate purchase, and
-        counting it as lost income made R-XPL-08 oscillate — spend, see
+        counting it as lost income made R-XPL-08 oscillate , spend, see
         "negative income", refuse, recover, spend again.
         """
         d = self._civ_delta("cash")

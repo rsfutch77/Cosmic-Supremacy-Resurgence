@@ -1,11 +1,11 @@
 """
-facilities.py — the facility definition table
+facilities.py , the facility definition table
 =============================================
     python facilities.py          # dump the live table
 
 21 records of 0x8C bytes, selected by content version at [0x0080AA00] exactly the
 way the research table is. For version 565 the base is 0x00807DB0. The table is
-BSS — zero in the file image, built at startup — so it must be read from a
+BSS , zero in the file image, built at startup , so it must be read from a
 running client, which is a plain ReadProcessMemory and needs no engine call.
 
 21 entries is exactly facility ids 0..20, which independently matches the id
@@ -21,37 +21,6 @@ derived separately agreeing on the same range is decent evidence for both.
     +0x14  the PRODUCTION cost to build one, halved when GetGameOption(1) is set
     +0x1C  the value CanBuildFacility compares against something from 0x004F3100
 
-WHAT +0x14 IS, AND THE INFERENCE THAT WAS WRONG. Static analysis read this field
-as per-turn UPKEEP, on decent-looking evidence: it is reached through a different
-accessor than the build gate, it is halvable by a difficulty-style option, and
-the UI has a distinct "Facilities-Upkeep" line. This module repeated that
-reading. It is wrong, and two live observations settle it:
-
-  * a planet building facility type 6 (military camp) showed a production total
-    of 1500, and +0x14 for type 6 is 1500;
-  * a planet building its first farm showed a production total of 200, and
-    +0x14 for type 0 is 200.
-
-Exact matches on two different types. +0x14 is what a facility COSTS TO BUILD in
-production — the same quantity the PlanetProperties total-production virtual
-returns while it is under construction.
-
-FACILITY UPKEEP IS THEREFORE STILL UNLOCATED, and R-XPL-07 is still blocked on
-it. Ranking liquidation candidates by +0x14 would rank them by build cost, which
-is a different ordering, and would confidently sell the wrong buildings. The
-"Facilities-Upkeep" UI line and the warning that unpaid upkeep makes buildings
-"get lost" both exist, so the number is real and computed somewhere; turn stages
-42 (0x00543F70) and 49 (0x0052D0E0) remain the candidates.
-
-+0x1C is NOT known to be a cash cost. An earlier round claimed the build gate
-checked "cost <= treasury"; that was withdrawn. Builds consume PRODUCTION
-accumulated in Planet:120 (measured live: cash never moves across a whole build)
-and cash enters only through hurrying. The small values here — farm 7, shipyard
-25, military camp 14, defence agency 26 — look nothing like production totals,
-which run 200..2900 on the same planets. They are plausibly a required
-POPULATION, since they rise with how substantial the building is, but that is a
-guess and is marked as one. Do not gate anything on +0x1C until 0x004F3100 is
-read.
 """
 import struct
 import sys

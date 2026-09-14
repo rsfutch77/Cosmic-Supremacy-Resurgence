@@ -1,5 +1,5 @@
 """
-combat_watch.py — report every shot fired, as it happens
+combat_watch.py , report every shot fired, as it happens
 ========================================================
     python combat_watch.py                 # follow until Ctrl-C
     python combat_watch.py --turns 200 --out combat.csv
@@ -7,7 +7,7 @@ combat_watch.py — report every shot fired, as it happens
 Ships are DELETED on death rather than flagged, and `Ship:136` condition is the
 only per-ship damage state, so a battle leaves exactly two traces: a condition
 that fell, and a hull that stopped existing. Both are invisible in a standings
-line — two civs can fight, lose ships and rebuild between two samples of "score
+line , two civs can fight, lose ships and rebuild between two samples of "score
 and planet count" with nothing to show for it.
 
 This samples every ship each turn and prints only the differences, so a run can

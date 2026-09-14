@@ -1,5 +1,5 @@
 """
-fast_turns.py — Set the turn length to 60 seconds for testing
+fast_turns.py , Set the turn length to 60 seconds for testing
 ==============================================================
 Pokes the GSET turnlength value in memory from 3600 (60 min) to 60 (1 min).
 Run after the game has loaded a galaxy.
@@ -19,7 +19,7 @@ PROCESS_VM_WRITE     = 0x0020
 PROCESS_VM_OPERATION = 0x0008
 PROCESS_QUERY_INFORMATION = 0x0400
 
-TURNLENGTH_ADDR = 0x0080AA08  # .data section — stable across launches
+TURNLENGTH_ADDR = 0x0080AA08  # .data section , stable across launches
 
 psapi    = ctypes.WinDLL("psapi", use_last_error=True)
 kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)

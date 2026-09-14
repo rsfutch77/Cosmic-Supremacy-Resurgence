@@ -1,27 +1,10 @@
 """
-explore.py — the Explore rules (STRATEGY.md §4.1)
+explore.py , the Explore rules (STRATEGY.md §4.1)
 =================================================
 R-EXP-02  send a ship to an undiscovered star so its system is revealed
 
     python explore.py            # dry run, one pass
     python explore.py --apply
-
-── Why this exists, and why it is now the bottleneck ──────────────────────────
-Client memory holds every planet in the galaxy whether or not it has been found.
-Reading them all is cheating, so R-XPN-02 only considers systems in the
-discovery set. The honest consequence is that a civ sitting in a fully colonised
-home system has nowhere legal to go: it must physically send a ship somewhere
-new before it can expand again. That is the actual game.
-
-A SCOUT ORDER TARGETS A STAR, NOT A PLANET. `Ship:52 = 2` with the order's
-destination set to a Sun's exact coordinates — confirmed at 0.0000 against two
-independent scouts, with the nearest planet 12.6 away. That is precisely the
-mechanic that makes fog of war real: you fly to the sun, and the system's
-planets become visible.
-
-No new actuator is needed. `create_order` and `retarget_order` already take any
-object with coordinates at its allocation start, and `Sun` has them at the same
-+0xc/+0x10/+0x14 the constructor reads from a `Ship` or a `Planet`.
 """
 import sys
 
@@ -50,7 +33,7 @@ def scoutable(snap, civ, hist, act):
     """Ships we may send scouting.
 
     A ship busy with a purposeful order is left alone. A COLONIZE order whose
-    target we cannot legitimately see is not purposeful — it is a leftover from
+    target we cannot legitimately see is not purposeful , it is a leftover from
     before fog of war was enforced, and repurposing it is a correction, not an
     interruption.
     """
@@ -60,7 +43,7 @@ def scoutable(snap, civ, hist, act):
             continue
         # A TROOP hull never scouts. It is the most expensive ship in the empire
         # and the ONLY thing that can take a planet, and this rule took a freshly
-        # crewed one and sent it to a sun 409 units away — because nothing in
+        # crewed one and sent it to a sun 409 units away , because nothing in
         # Exterminate claimed it and "idle" was the only test. Colony ships are
         # held back conditionally below; a troop transport is held back always.
         if s.role == "TROOP":
@@ -173,15 +156,19 @@ def scout_designs(snap, civ):
     """Our own PURPOSE-BUILT scouts: a chassis, engines, and nothing else.
 
     Deliberately stricter than the SCOUT role, which is defined by absence and so
-    quietly includes any unarmed hull — a colony ship with its module stripped, a
+    quietly includes any unarmed hull , a colony ship with its module stripped, a
     half-finished experiment. Those are slow and expensive. A scout is a hull
     spending its whole cost on engines, which makes it both the cheapest ship in
     the empire and the fastest.
     """
+    import research
+    done = {t for t, _ in civ.completed}
     out = []
     for d in snap.designs:
         own = d.owner
         if own is None or own.addr != civ.addr:
+            continue
+        if not research.design_legal(d, done):
             continue
         # A SCANNER IS REQUIRED, not cosmetic. Every design the game itself
         # produced carries scanners=[0], and a synthesised design without
@@ -198,8 +185,8 @@ def scout_designs(snap, civ):
 def run_exp01(snap, civ, act, hist, log=print):
     """R-EXP-01: keep dedicated scouts in the field.
 
-    Exploration is the gate on everything under fog of war — expansion needs
-    targets and Exterminate needs an enemy — and doing the looking with colony
+    Exploration is the gate on everything under fog of war , expansion needs
+    targets and Exterminate needs an enemy , and doing the looking with colony
     ships is why a galaxy took hundreds of turns to survey. A scout is cheap
     enough to build several and fast enough that each one covers far more ground.
     """
@@ -228,7 +215,7 @@ def run_exp01(snap, civ, act, hist, log=print):
     # the tiebreak that still ranks sensibly on a cold cache.
     best = max(designs, key=lambda d: (d.speed or 0, len(d.engines)))
     planet = max(yards, key=lambda p: len(p.population))
-    log(f"R-EXP-01: {len(have)}/{SCOUT_TARGET} scout(s) — queueing "
+    log(f"R-EXP-01: {len(have)}/{SCOUT_TARGET} scout(s) , queueing "
         f"{best.design_name!r} (speed {best.speed}, {len(best.engines)} engine(s)) "
         f"at {planet}")
     try:
@@ -249,7 +236,7 @@ def main():
     civ = gs.resolve_civ(snap, cli.opt(args, "--civ"))
     if civ is None:
         return
-    print(f"\n=== Explore — turn {snap.turn} — {civ.civ_name!r} — "
+    print(f"\n=== Explore , turn {snap.turn} , {civ.civ_name!r} , "
           f"{'DRY RUN' if dry_run else 'APPLYING'} ===")
     hist = sensors.History().observe(snap, civ)
     print(f"  {len(hist.discovered)} system(s) discovered of {len(snap.suns)}")

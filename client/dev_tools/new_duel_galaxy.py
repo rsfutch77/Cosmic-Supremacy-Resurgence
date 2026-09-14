@@ -1,13 +1,10 @@
 """
-new_duel_galaxy.py — turn a fresh two-civ galaxy into an N-civ AI testbed
+new_duel_galaxy.py , turn a fresh two-civ galaxy into an N-civ AI testbed
 ========================================================================
     # with a brand-new galaxy already running (drag DemoGalaxy_local.csgalaxy
     # onto the EXE, or launch it with that as the argument):
     python new_duel_galaxy.py --add Ceti --secs 5
     python new_duel_galaxy.py --add Ceti --add Draco --secs 3 --no-relaunch
-
-Everything here is a composition of tools that already exist, in the one order
-that works. Doing it by hand is five commands and the order is not obvious:
 
   1. capture the running galaxy            trigger_save via game_cycle
   2. add each new civ                      inject_civ    (OWNR clone + homeworld)
@@ -15,18 +12,6 @@ that works. Doing it by hand is five commands and the order is not obvious:
   4. give EVERY civ a scout design         inject_design (via game_cycle)
   5. set the galaxy's own turn length      set_turnlength
   6. relaunch on the result
-
-WHY THE ORDER MATTERS. A civ has to exist before it can be given a ship, and a
-ship's SHPR names a design id, so the civ's designs have to exist first — but
-step 4 gives designs to "every civ", which means it has to run after the new civs
-are in. Ships are injected before designs only because inject_ship defaults to
-the civ's FIRST design, which is the cloned Colony Ship either way.
-
-WHAT IT DELIBERATELY DOES NOT DO. No armed design and no troop transport: at turn
-0 no weapon and no troop bay is researched, and fitting parts a civ has not
-unlocked is the §1.1 violation that produced illegal military camps once already.
-Those go in later, with `game_cycle.py --all-civs --design ...`, once R-XPL-04
-has bought the research. A scout is legal from turn 0 — chassis and engines only.
 
 The turn length is set in `GSET`, not driven: the engine re-applies it at every
 boundary, so the galaxy keeps its own time and the controller never races it.
@@ -99,7 +84,7 @@ def main():
         struct.pack_into("<i", buf, hit[2], a.secs)
         blob = bytes(buf)
         if a.secs < 60:
-            print("   (below the engine's 60s floor — needs "
+            print("   (below the engine's 60s floor , needs "
                   "patch_turn_floor.py --apply, or it will be clamped)")
 
     with open(a.dat, "wb") as f:

@@ -1,5 +1,5 @@
 """
-set_population.py — Set a planet's population, growing past capacity if needed
+set_population.py , Set a planet's population, growing past capacity if needed
 ==============================================================================
 Population is a std::vector of 16-byte citizen records at Planet:144, with
 begin/end/cap at +144/+148/+152 and the current count mirrored in the low half of
@@ -11,22 +11,11 @@ Three cases, in increasing risk:
   grow in capacity  write records into spare capacity, advance `end`.
   grow beyond       VirtualAllocEx a new buffer, copy, repoint begin/end/cap.
 
-The third case is made safe by sizing the new buffer to the planet's HARD MAXIMUM
-population (Planet:104 high half / 10). Population cannot legally exceed that, so
-the engine never needs to grow the vector, never reallocates, and therefore never
-calls its own free() on our foreign pointer. The planet's original buffer leaks —
-a leak, not a crash.
-
     python set_population.py --list
     python set_population.py --planet 41 --pop 35
     python set_population.py --planet 41 --pop 35 --job 0
 
 Job ids: 0 farmer, 1 worker, 2 scientist, 5 miner, 6 banker.
-
-VERIFIED against the UI: growing a homeworld from 18 to 35 through the
-VirtualAllocEx path showed 35 in game. The panel does NOT repaint on its own —
-alt-tab away and back (or otherwise force a redraw) before reading the UI, or the
-old figure stays on screen. Memory is correct immediately; only the display lags.
 
 The planet's original buffer leaks, one leak per beyond-capacity write. Harmless
 within a session.

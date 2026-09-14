@@ -1,102 +1,6 @@
 """
-research.py — the technology table, and what a player is allowed to select
+research.py , the technology table, and what a player is allowed to select
 ==========================================================================
-R-XPL-04 used to pick "the lowest id not already completed". That is not a move
-a human can make. The tech tree has prerequisites, the UI enforces them, and the
-FIELD WE WRITE DOES NOT — so the AI selected Astro Engineering (id 2) on a civ
-that had never researched Advanced Magnetism (id 12), and the engine happily
-researched it. Caught in the client's own tech screen: Astro Engineering showing
-complete above an unfinished prerequisite.
-
-That is cheating by STRATEGY.md §1.1, and it is the interesting kind: not a
-field a human cannot touch, but a legal field written to a value the UI would
-have refused. The no-cheating rule covers both.
-
-── Where this table comes from, and how far to trust it ───────────────────────
-READ OUT OF THE RUNNING CLIENT by research_dump.py, which walks the 80 records at
-[0x00857F08] -- the table the engine itself selected for this client's content
-version. Regenerate with `python research_dump.py --emit`, check with
-`python research_dump.py --diff`.
-
-This replaced a table extracted statically from 0x00857F10, the copy used when
-the content version is >= 688, on the theory that the two differed. They do not,
-and the reasoning that said they did is worth recording because it was wrong in
-an instructive way:
-
-    cost = round(scale * costFactor * multiplier), so with multiplier fixed at 1
-    the RATIO of two costs is independent of the unknown scale. Live, id 2 cost
-    4800 and id 3 cost 2400, a ratio of 2.0, while the static table gave factors
-    3.0 and 1.0, a ratio of 3.0. That looked like proof of drift.
-
-The live table gives factors 3.0 and 1.0 too -- identical, along with all 80
-names, all 80 factors and every exclusion list. The ratio argument was sound; its
-premise was not. `multiplier` was marked *inferred* as 1 by the analysis that
-produced it, and it is not 1.
-
-── The cost model, SOLVED ─────────────────────────────────────────────────────
-
-    cost = round(SCALE * costFactor) * (number of researches already completed)
-
-CONFIRMED VERBATIM BY THE OFFICIAL MANUAL, which states it as
-`Research-Cost = Difficulty-Factor * Number-Of-Already-Researched-Techs * 800`
-(cosmicsupremacy.com wiki, manual/research-screen, via web.archive.org).
-Derived independently first, then matched -- so the engine, four live
-observations and the documentation all agree.
-
-Recovered by asking the engine rather than guessing: GetScale (0x0054A6F0)
-returns 800 on this game, and GetCost (0x0054B140) called with multiplier=1
-returns round(800 * factor). The UI price is that figure times 4 on a civ with
-exactly 4 completed researches. Checked against four independent observations,
-two of them historical:
-
-    Astro Engineering   factor 3.0, 2 completed -> 2400*2 =  4800  observed 4800
-    Cold Fusion         factor 1.0, 3 completed ->  800*3 =  2400  observed 2400
-    Advanced Networking factor 1.0, 4 completed ->  800*4 =  3200  observed 3200
-    Particle Eng.       factor 8.0, 4 completed -> 6400*4 = 25600  observed 25600
-
-TWO THINGS THE MANUAL ADDS THAT THE BINARY DID NOT.
-
-1. "You are free to change the technology that you are researching at any time
-   with no penalty. All of the research that your empire has accumulated will be
-   reapplied to your new technology." So R-XPL-04 correcting an illegal topic
-   mid-flight costs nothing -- the stockpile is never lost.
-
-2. Selecting a tech DEEP in the tree is legal: "all prerequisite technologies
-   will be researched automatically along the way, in the order of least cost
-   technology first". That refines what our cheat actually was. Choosing Astro
-   Engineering without Advanced Magnetism is a legal CLICK; what a human could
-   never get is Astro Engineering COMPLETED while Advanced Magnetism is not,
-   because the engine would have researched and charged for the chain first.
-   selectable() is therefore slightly stricter than the UI -- it cannot express
-   a multi-step goal -- but it is right about outcomes, which is what matters.
-
-THE STRATEGIC CONSEQUENCE IS COUNTERINTUITIVE AND NOT YET ACTED ON. Because the
-multiplier is the count at the moment of purchase, the same tech costs more the
-later you buy it, and total spend over a planned set is minimised by buying the
-HIGHEST-factor techs FIRST -- the opposite of the cheapest-first tiebreak
-available() still uses. See the [ ] in STRATEGY.md 4.3 R-XPL-04.
-
-   Note the engine's own auto-path takes the WORST order here: the manual says
-   prerequisites are researched "least cost technology first", which pairs the
-   smallest factors with the smallest multipliers and maximises the total. An
-   AI that walks a chain deliberately, highest factor first, pays strictly less
-   than one that names the deep target and lets the engine fill in.
-
-
-Real differences between the two tables, for the record: two prerequisite lists
-where the static extraction deduped a repeated entry (55, 59), and trait deltas
-on four tier-3+ doctrines (54, 59, 62, 67). Nothing that touched a decision.
-
-
-── The rules the tree imposes ─────────────────────────────────────────────────
-* Prerequisites are AND for technologies and OR for doctrines. The engine picks
-  the predicate on the record's EXCLUSION COUNT (0x0054B9E0), so "has exclusions"
-  is the real class marker. An empty prerequisite list is satisfied either way.
-
-* Doctrines come in mutually exclusive tiers. Taking one permanently forecloses
-  its rivals, so ALLOW_DOCTRINES is off by default: a one-way door is not
-  something a heuristic should walk through on "it was the cheapest".
-* Ids 73-76 are empty stubs and must never be selected.
 """
 
 # id: (name, costFactor, prerequisites (satisfy ANY), excluded-by ids)
@@ -201,27 +105,6 @@ KIND_NAME = {
 #   Module   -> ShipDesign:224                           Weapon  -> ShipDesign:200
 #   Engine   -> ShipDesign:176                           Scanner -> ShipDesign:152
 #   Scan     -> Owner:200                                Trait   -> Owner:932+4*id
-#
-# The facility ids agree with observation: the report's confirmed 0 farm,
-# 2 shipyard, 4 university, 6 military camp, 8 defence agency, 9 light turret
-# all appear as Facility grants here, and the space runs to at least 20, not the
-# 9 we knew.
-#
-# THIS TABLE IS THE FACILITY LEGALITY GATE. A civ may build a facility type only
-# once it has completed a research that grants it. That is not obvious from
-# observation, and it was got wrong once, expensively:
-#
-#   A civ with completed research {0, 1, 2, 3} -- which unlocks only facilities
-#   {0, 1, 2} -- was seen with military camps (6) on three planets and a light
-#   turret (9) on the homeworld. The wrong conclusion, drawn first, was "so
-#   availability is not research-gated". The right one is that THE HOMEWORLD
-#   SHIPS WITH ONE MILITARY CAMP AND ONE LIGHT TURRET as a starting grant, and
-#   the camps on the other two planets were built by this AI through a memory
-#   write the UI would have refused.
-#
-# A STANDING FACILITY IS PROOF OF NOTHING. It may be a starting grant, or it may
-# be our own earlier cheat looking like evidence -- which is exactly how one
-# illegal build laundered itself into a rule that authorised more of them.
 #
 # tid: ((kind, object id, value), ...)   value is only meaningful for TRAIT.
 GRANTS = {
@@ -341,24 +224,6 @@ def is_doctrine_record(tid):
 
 def prereqs_met(tid, done):
     """AND for technologies, OR for doctrines.
-
-    This is NOT a global OR, which is what this module assumed until Round 3 of
-    the static analysis decoded 0x0054B9E0. Getting it wrong made the gate too
-    PERMISSIVE: Quantum Fields lists [3, 12] and needs BOTH, but an OR reading
-    called it selectable on a civ holding only Cold Fusion.
-
-    That error was visible in the game and we nearly explained it away. The UI
-    priced Quantum Fields at 3200 rather than the 8960 its own factor implies,
-    because it had silently built a plan and quoted the cheapest legal step --
-    Advanced Magnetism at 800 x 1.0 x 4. The number was evidence of the AND, and
-    it was briefly attributed to a misread instead.
-
-    An EMPTY list is satisfied either way. The disassembly of the OR branch
-    reads as though zero prerequisites falls through to FALSE, but the tier-1
-    doctrines (43-46) have no prerequisites and are demonstrably selectable from
-    turn one, so an empty list cannot mean "never". Treated as vacuously true,
-    and flagged here because it is the one place this function departs from a
-    literal reading of the bytes.
     """
     rec = TECHS.get(tid)
     if rec is None:
@@ -385,26 +250,7 @@ def selectable(tid, done, allow_doctrines=ALLOW_DOCTRINES):
     return prereqs_met(tid, done) and not locked_out(tid, done)
 
 
-# ── What the AI should want ───────────────────────────────────────────────────
-# THIS IS A POLICY, NOT A FINDING. Nothing in the binary says an engine is worth
-# more than a weapon; that judgement comes from what this AI currently does. It
-# expands, exploits and explores, and it has no combat rules at all, so:
-#
-#   * ENGINE is the single highest-value kind. Speed shortens every colonisation
-#     hop, and expansion rate is what the score actually tracks.
-#   * FACILITY is next, but only for the six ids we can recognise -- an unknown
-#     facility is a guess, and R-XPL-02 would not know to build it anyway.
-#   * SCANNER and SCAN serve Explore, which is the real bottleneck under fog of
-#     war, and they do it legitimately.
-#   * CHASSIS and MODULE are mid: bigger hulls and more module slots, both of
-#     which feed better colony ships, but the mapping is not yet pinned.
-#   * WEAPON, SHIELD and PLANDEF score low in the BASE table, but weapons are
-#     no longer optional: Exterminate exists, and a design cannot carry a
-#     weapon the civ has not researched. A civ with no unlocked weapon
-#     cannot build an armed ship at all, however much it wants one. That is
-#     handled by a BOOST rather than by raising the base weight, because it
-#     is a threshold and not a preference -- the first weapon is critical
-#     and the fifth is not.
+
 KIND_VALUE = {
     ENGINE: 10, FACILITY: 6, SCANNER: 5, SCAN: 5, CHASSIS: 4, MODULE: 4,
     HYPENERGY: 2, SHIELD: 1, WEAPON: 1, PLANDEF: 1, TRAIT: 3,
@@ -436,10 +282,52 @@ def unlocked(done, kind):
     A part can only be fitted to a design once some completed research grants
     it, so this is what decides whether an armed design is even legal. A fresh
     civ holds chassis 0, scanner 0, engine 0 and module 0 from the two granted
-    starting techs and NO weapon at all — the first weapon comes with Cold
+    starting techs and NO weapon at all , the first weapon comes with Cold
     Fusion (id 3).
     """
     return {oid for t in done for k, oid, _v in grants(t) if k == kind}
+
+
+# Which ShipDesign parts vector answers to which research kind. Shields are
+# absent deliberately: the design object exposes a shield STAT (ShipDesign:72)
+# but gamestate reads no fitted-shield vector, so there is nothing to check
+# against. No design this AI builds fits one, and inventing a check for a list
+# we do not read would be a gate that silently passes everything.
+DESIGN_PART_KINDS = (
+    ("chassis",  CHASSIS),
+    ("scanners", SCANNER),
+    ("engines",  ENGINE),
+    ("weapons",  WEAPON),
+    ("modules",  MODULE),
+)
+
+
+def illegal_parts(design, done):
+    """The fitted parts this civ has not researched , empty means buildable.
+
+    Returns a list of (part list name, object id) so a caller can say WHICH part
+    is missing rather than only that something is.
+    """
+    missing = []
+    for attr, kind in DESIGN_PART_KINDS:
+        have = unlocked(done, kind)
+        for oid in (getattr(design, attr, None) or []):
+            if oid not in have:
+                missing.append((attr, oid))
+    return missing
+
+
+def design_legal(design, done):
+    """Could this civ have built this design through the UI today?"""
+    return not illegal_parts(design, done)
+
+
+def explain_illegal(design, done):
+    """'weapon 10' , the missing parts, for a log line that names the blocker."""
+    kinds = dict(DESIGN_PART_KINDS)
+    return ", ".join(
+        f"{KIND_NAME.get(kinds[attr], attr).lower()} {oid}"
+        for attr, oid in illegal_parts(design, done)) or "nothing"
 
 
 def value(tid, boost=None):
@@ -453,7 +341,7 @@ def value(tid, boost=None):
 
 
 def unlocked_by(kind, obj_id):
-    """Which research grants a given object — 'how do I get a better engine'."""
+    """Which research grants a given object , 'how do I get a better engine'."""
     return [t for t in sorted(TECHS)
             if any(k == kind and o == obj_id for k, o, _v in grants(t))]
 
@@ -474,7 +362,7 @@ def available(done, allow_doctrines=ALLOW_DOCTRINES, by_value=True,
 
 
 def explain(tid, done):
-    """Why a topic is not selectable — for logging a correction."""
+    """Why a topic is not selectable , for logging a correction."""
     if tid in STUBS:
         return f"id {tid} is an unused stub"
     if tid not in TECHS:

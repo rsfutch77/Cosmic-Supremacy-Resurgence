@@ -1,39 +1,9 @@
 """
-research_dump.py — read the technology table out of the running client
+research_dump.py , read the technology table out of the running client
 ======================================================================
     python research_dump.py              # human-readable dump of all 80
     python research_dump.py --emit       # Python literals for research.py
     python research_dump.py --diff       # compare live against research.py
-
-Why this exists: research.py's table was extracted STATICALLY from the copy at
-0x00857F10, which the engine uses when the content version at [0x0080AA00] is
->= 688. This client reads 565 and uses 0x0085D410. Rather than guess whether the
-two agree, read the one the client is actually using.
-
-The whole table is plain memory. `0x0054AA70` maps an id to its record with
-`record = [0x00857F08] + id * 0x110`, and [0x857F08] is written by the table
-builder at startup — so the pointer read gives the live table for free, and the
-records are read directly. No engine call and no remote thread are needed, which
-makes this the safest possible way to get the data (see STRATEGY.md 7).
-
-── Record layout (0x110 bytes) ────────────────────────────────────────────────
-    +0x00  int   id (== the array index)
-    +0x04  int   flags; ids 73-76 carry 1 and are empty stubs, doctrines carry 2
-    +0x08  float costFactor
-    +0x10  std::string name          <- NOT +0x0C
-    +0x50  std::string description   <- NOT +0x4C
-    +0x6C  int countA, +0x70..0x7C  prerequisite list A (4 slots)
-    +0x80  int countB, +0x84..0x90  prerequisite list B (4 slots)
-    +0x94  int effectCount, +0x98.. effect[8], 12 bytes {kind, param, value}
-    +0xF8  int exclusionCount, +0xFC.. mutually exclusive ids (4 slots)
-
-The static analysis put the two strings at +0x0C and +0x4C. Live, both are four
-bytes further on: reading at +0x0C yields four leading NULs followed by the text
-and then the length, which is the signature of starting one field early. Every
-other offset in the layout reproduced exactly, so this is a correction to two
-fields, not to the layout.
-
-Prerequisites are satisfied by ANY one entry (lists A and B concatenated).
 """
 import struct
 import sys

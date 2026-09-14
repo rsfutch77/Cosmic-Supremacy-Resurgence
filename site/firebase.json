@@ -1,0 +1,122 @@
+{
+  "hosting": {
+    "public": "public",
+    "ignore": [
+      "firebase.json",
+      "**/.*"
+    ],
+    "cleanUrls": false,
+    "trailingSlash": false,
+    "headers": [
+      {
+        "source": "**/css*.php",
+        "headers": [
+          {
+            "key": "Content-Type",
+            "value": "text/css; charset=utf-8"
+          }
+        ]
+      },
+      {
+        "source": "**/js*.php",
+        "headers": [
+          {
+            "key": "Content-Type",
+            "value": "application/javascript; charset=utf-8"
+          }
+        ]
+      },
+      {
+        "source": "**/*feed*.php",
+        "headers": [
+          {
+            "key": "Content-Type",
+            "value": "application/rss+xml; charset=utf-8"
+          }
+        ]
+      }
+    ],
+    "rewrites": [
+      {
+        "source": "/community_galhistory.php",
+        "destination": "/community_galhistory.php.html"
+      },
+      {
+        "source": "/community_halloffame.php",
+        "destination": "/community_halloffame.php.html"
+      },
+      {
+        "source": "/download_client.php",
+        "destination": "/download_client.php.html"
+      },
+      {
+        "source": "/download_stability.php",
+        "destination": "/download_stability.php.html"
+      },
+      {
+        "source": "/forgotpw.php",
+        "destination": "/forgotpw.php.html"
+      },
+      {
+        "source": "/galaxy.php",
+        "destination": "/galaxy.php.html"
+      },
+      {
+        "source": "/galaxysettings.php",
+        "destination": "/galaxysettings.php.html"
+      },
+      {
+        "source": "/game_features.php",
+        "destination": "/game_features.php.html"
+      },
+      {
+        "source": "/game_news.php",
+        "destination": "/game_news.php.html"
+      },
+      {
+        "source": "/game_overview.php",
+        "destination": "/game_overview.php.html"
+      },
+      {
+        "source": "/game_team.php",
+        "destination": "/game_team.php.html"
+      },
+      {
+        "source": "/premiumoverview.php",
+        "destination": "/premiumoverview.php.html"
+      },
+      {
+        "source": "/premiumupgrade.php",
+        "destination": "/premiumupgrade.php.html"
+      },
+      {
+        "source": "/register.php",
+        "destination": "/register.php.html"
+      },
+      {
+        "source": "/screenshots.php",
+        "destination": "/screenshots.php.html"
+      },
+      {
+        "source": "/screenshots_logos.php",
+        "destination": "/screenshots_logos.php.html"
+      },
+      {
+        "source": "/support_contact.php",
+        "destination": "/support_contact.php.html"
+      },
+      {
+        "source": "/support_terms.php",
+        "destination": "/support_terms.php.html"
+      },
+      {
+        "source": "/tutorialgalaxy.php",
+        "destination": "/tutorialgalaxy.php.html"
+      },
+      {
+        "source": "/voting.php",
+        "destination": "/voting.php.html"
+      }
+    ]
+  }
+}

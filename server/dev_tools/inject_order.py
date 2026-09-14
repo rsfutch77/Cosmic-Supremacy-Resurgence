@@ -1,10 +1,8 @@
 """
-inject_order.py — Push a ship order into a save blob
+inject_order.py , Push a ship order into a save blob
 ====================================================
 Takes a captured savegame blob, gives a chosen ship an order it never had, and
-writes the result where `cs_server.py`'s `loadgame` will serve it.  The point is
-the multiplayer/AI capability: the server decides a ship's orders and the client
-picks them up on load with nobody at the keyboard.
+writes the result where `cs_server.py`'s `loadgame` will serve it. 
 
     python inject_order.py saves/<capture>.b64 --ship 649 \
         --target-x 516.7029 --target-y 333.0293 --target-z 278.5347 \
@@ -44,9 +42,7 @@ SHCO_HDR = 8
 def server_dir() -> str:
     """
     The directory holding cs_server.py, which is where relative output paths are
-    resolved.  Found by looking here and one level up, so this script works
-    whether it sits beside cs_server.py or in a dev_tools/ subdirectory next to
-    it — the default `loadgame_blob.b64` has to land where cs_server.py looks for
+    resolved. The default `loadgame_blob.b64` has to land where cs_server.py looks for
     it, not merely beside this file.
     """
     here = os.path.dirname(os.path.abspath(__file__))
@@ -139,7 +135,7 @@ def main():
                          'exists, then 0x0056DAD0 feeds it to the loader. That '
                          'path does NOT base64-decode or inflate '
                          '(0x005E53E0 only reads the file), so the .dat holds the '
-                         "raw blob starting with 'SAVE' — not the wire format.")
+                         "raw blob starting with 'SAVE' , not the wire format.")
     args = ap.parse_args()
 
     blob = sp.load_any(args.blob)
@@ -209,10 +205,10 @@ def main():
     check_ships = ship_sections(out_blob, check_tree)
     got = [t for t in check_ships if t[0] == args.ship]
     if not got:
-        sys.exit("re-parse lost the ship — refusing to write")
+        sys.exit("re-parse lost the ship , refusing to write")
     cd = parse_dyno(out_blob, got[0][4])
     if not cd['rout'] or cd['shco'][0] != args.order_type or cd['has_orders'] != 1:
-        sys.exit("re-parse did not see the injected order — refusing to write")
+        sys.exit("re-parse did not see the injected order , refusing to write")
     routs = [s for s in sp.flatten(check_tree) if s.tag == b'ROUT']
     print(f"  re-parse: {len(routs)} ROUT sections "
           f"(was {len([s for s in sp.flatten(tree) if s.tag == b'ROUT'])}), "
