@@ -45,3 +45,12 @@ release/data/
 # ── Claude Code local config ──────────────────────────────────────────────────
 # per-developer tool permissions and agent settings; not project source
 .claude/
+
+# ── Rehosted archive site ─────────────────────────────────────────────────────
+# site/ is tracked: the Firebase config, the 404 page, the staging script and
+# any hand-written page overrides are real source. What is NOT tracked is
+# public/, which stage.py rebuilds from scratch out of the untracked mirror
+# under tools/wayback/, and the Firebase CLI's local cache.
+site/public/
+site/.firebase/
+site/*.log
