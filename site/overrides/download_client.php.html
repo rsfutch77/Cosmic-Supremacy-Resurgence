@@ -34,22 +34,10 @@
         <table border='0' cellpadding='0' cellspacing='0' width='100%'>
 <tr><td valign='top' width='100%'>
 
-	<!-- [ ] TODO (zip): publish the rebuilt client.
-     Both links below still point at the original 2022 binaries recovered from
-     the web archive, not at anything this project built. Running
-     release/build.ps1 puts a .zip in dist/, which stage.py copies into
-     public/downloads/ automatically. Once that exists, repoint the two links
-     here and update File Name, Download Size and Date Published. -->
-<!-- [ ] TODO (MSI): decide whether to ship an installer at all.
-     The .msi existed to register the .csgalaxy file association for one-click
-     galaxy joining, plus Start Menu entries. The association does nothing until
-     multiplayer exists, and an unsigned MSI trips SmartScreen, which looks
-     worse to a cautious user than a plain zip. Revisit when multiplayer lands;
-     if it ships, it needs code signing. -->
-<table class='content_pane'>
+	<table class='content_pane' id='zipped'>
 		<tr>
 			<td class='content_heading' width='100%'>
-				Download Cosmic Supremacy Game Client
+				Playing Cosmic Supremacy without the Installer
 			</td>
 		</tr>
 	</table>
@@ -58,41 +46,44 @@
 		<tr>
 			<td valign='top' colspan='2'>
 				<p>
-					<p>
-In order to play Cosmic Supremacy you need to download the game client.
-We use Windows Installer as the Setup program, which should be part of your standard Windows installation.
+<p>
+This is the rebuilt Cosmic Supremacy client. There is no installer: unzip the
+archive wherever you like and run <b>CosmicSupremacyLauncher.exe</b> from the
+folder you unzipped it to.
 </p>
 <p>
 <table class='coloredtable' cellspacing='4' style='padding: 0 8px 0 8px; margin: 0 0 4px 20px;'>
     <tr>
         <td width='54'>
-            <a href='downloads/CosmicSupremacy.msi'><img src='/pageimages/download.png' /></a>
+            <a href='/downloads/CosmicSupremacy-Resurgence-v0.1.0.zip'><img src='/pageimages/download.png' /></a>
         </td>
         <td>
             <table>
-	            <tr><td width='100'><b>File Name:</b></td><td><a href='downloads/CosmicSupremacy.msi'>CosmicSupremacy.msi</a></td></tr>
-	            <tr><td width='100'><b>Download Size:</b></td><td>4,49 MB</td></tr>
-	            <tr><td width='100'><b>Date Published:</b></td><td>26.02.2019</td></tr>
+	            <tr><td width='100'><b>File Name:</b></td><td><a href='/downloads/CosmicSupremacy-Resurgence-v0.1.0.zip'>CosmicSupremacy-Resurgence-v0.1.0.zip</a></td></tr>
+	            <tr><td width='100'><b>Download Size:</b></td><td>30.1 MB</td></tr>
+	            <tr><td width='100'><b>Date Published:</b></td><td>13.09.2026</td></tr>
+	            <tr><td width='100'><b>SHA-256:</b></td><td style='font-family: monospace; font-size: 10px;'>83ece812f1601a5b417b789aecf8752b92d270a843c400872d2b83ada16f6f97</td></tr>
             </table>
         </td>
     </tr>
 </table>
 </p>
 <p>
-Download the file and double-click to install. Please follow the installation instructions.
-Also read the chapter on how to <a href='/download_client.php.html'>install Cosmic Supremacy without administration rights</a>.
+Windows will most likely warn you about an unrecognised publisher, because the
+build is not code-signed. The SHA-256 above lets you check that the file you
+downloaded is the one that was published.
 </p>
 <p>
-<b>Please Note:</b> Even though we constantly publish new versions here, you only need to download this file the very first
-time you register to Cosmic Supremacy. After that the game patches itself automatically every time you log into the server.
+To uninstall, delete the folder. Nothing is written outside it and nothing is
+registered with Windows.
 </p>
+
 				</p>
 			</td>
 		</tr>
 	</table>
 
-</td></tr>
-<tr><td valign='top' width='100%'>
+</td></tr><tr><td valign='top' width='100%'>
 
 	<table class='content_pane'>
 		<tr>
@@ -118,8 +109,7 @@ DirectX 9 compliant graphics-card with at least 128 MB of graphics-memory.
 		</tr>
 	</table>
 
-</td></tr>
-<tr><td valign='top' width='100%'>
+</td></tr><tr><td valign='top' width='100%'>
 
 	<table class='content_pane' id='adminrights'>
 		<tr>
@@ -178,13 +168,27 @@ Please note that the Galaxy-Pass is <b>only valid for 3 minutes!</b>
 		</tr>
 	</table>
 
-</td></tr>
+</td></tr><!-- [ ] TODO (MSI): section hidden until a signed installer ships.
+     Restore by removing this comment wrapper. See the MSI TODO above for
+     why the installer is on hold.
 <tr><td valign='top' width='100%'>
 
-	<table class='content_pane' id='zipped'>
+	<!- - [ ] TODO (zip): publish the rebuilt client.
+     Both links below still point at the original 2022 binaries recovered from
+     the web archive, not at anything this project built. Running
+     release/build.ps1 puts a .zip in dist/, which stage.py copies into
+     public/downloads/ automatically. Once that exists, repoint the two links
+     here and update File Name, Download Size and Date Published. - ->
+<!- - [ ] TODO (MSI): decide whether to ship an installer at all.
+     The .msi existed to register the .csgalaxy file association for one-click
+     galaxy joining, plus Start Menu entries. The association does nothing until
+     multiplayer exists, and an unsigned MSI trips SmartScreen, which looks
+     worse to a cautious user than a plain zip. Revisit when multiplayer lands;
+     if it ships, it needs code signing. - ->
+<table class='content_pane'>
 		<tr>
 			<td class='content_heading' width='100%'>
-				Playing Cosmic Supremacy without the Installer
+				Download Cosmic Supremacy Game Client
 			</td>
 		</tr>
 	</table>
@@ -194,20 +198,19 @@ Please note that the Galaxy-Pass is <b>only valid for 3 minutes!</b>
 			<td valign='top' colspan='2'>
 				<p>
 					<p>
-We also offer a version of the client that does not require a installer.
-Since <b>the client only consist of one single .EXE file</b>, all you need to do is <b>unzip this file to a save location, and run the application once</b>.
-This will set up the required file-association and mime-type needed to open a Galaxy-Pass from within your browser.
+In order to play Cosmic Supremacy you need to download the game client.
+We use Windows Installer as the Setup program, which should be part of your standard Windows installation.
 </p>
 <p>
 <table class='coloredtable' cellspacing='4' style='padding: 0 8px 0 8px; margin: 0 0 4px 20px;'>
     <tr>
         <td width='54'>
-            <a href='downloads/CosmicSupremacy.zip'><img src='/pageimages/download.png' /></a>
+            <a href='downloads/CosmicSupremacy.msi'><img src='/pageimages/download.png' /></a>
         </td>
         <td>
             <table>
-	            <tr><td width='100'><b>File Name:</b></td><td><a href='downloads/CosmicSupremacy.zip'>CosmicSupremacy.zip</a></td></tr>
-	            <tr><td width='100'><b>Download Size:</b></td><td>4,99 MB</td></tr>
+	            <tr><td width='100'><b>File Name:</b></td><td><a href='downloads/CosmicSupremacy.msi'>CosmicSupremacy.msi</a></td></tr>
+	            <tr><td width='100'><b>Download Size:</b></td><td>4,49 MB</td></tr>
 	            <tr><td width='100'><b>Date Published:</b></td><td>26.02.2019</td></tr>
             </table>
         </td>
@@ -215,20 +218,20 @@ This will set up the required file-association and mime-type needed to open a Ga
 </table>
 </p>
 <p>
-Please note that this version comes without a convenient uninstaller. However, all you need to uninstall the client is to
-delete the .EXE file and manually delete the file-association and mime-type (should that bother you).
+Download the file and double-click to install. Please follow the installation instructions.
+Also read the chapter on how to <a href='/download_client.php.html'>install Cosmic Supremacy without administration rights</a>.
 </p>
 <p>
-By the way, a <b>convenient method to recover from a failed patch/update attempt is to unzip this file right over the installed .EXE file</b>,
-which is usually located at 'C:\Program Files\Cosmic Supremacy'.
+<b>Please Note:</b> Even though we constantly publish new versions here, you only need to download this file the very first
+time you register to Cosmic Supremacy. After that the game patches itself automatically every time you log into the server.
 </p>
-
 				</p>
 			</td>
 		</tr>
 	</table>
 
-</td></tr>
+</td></tr>-->
+
 
 
 
