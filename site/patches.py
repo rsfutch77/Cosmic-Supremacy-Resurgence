@@ -20,6 +20,7 @@ import re
 
 GITHUB = "https://github.com/rsfutch77/Cosmic-Supremacy-Resurgence"
 GITHUB_ISSUES = GITHUB + "/issues"
+FACEBOOK_GROUP = "https://www.facebook.com/groups/145339627564"
 
 # The menu is a fixed-width strip. The eight original tabs were sized to total
 # exactly this; drop one and the remainder have to be resized or the bar ends
@@ -64,6 +65,32 @@ def remove_live_chat(html):
         resized.append(it)
 
     return html[:m.start()] + m.group(1) + "".join(resized) + m.group(3) + html[m.end():]
+
+
+# The tab keeps its width and its place at the end of the bar; only the label
+# and the destination change.
+_FORUM_TAB_RE = re.compile(
+    r"(<a\s[^>]*href=)(['\"])[^'\"]*forum/[^'\"]*(['\"])([^>]*>)\s*FORUM\s*(</a>)",
+    re.I)
+
+
+def repoint_forum_tab(html):
+    """Send the Forum tab to the Facebook group.
+
+    The forum is not republished, so the tab led to the "not restored yet" 404
+    on every page. The Facebook group is where the discussion actually happens,
+    which makes it the honest destination for the bar's discussion tab.
+    """
+    m = _MENU_RE.search(html)
+    if not m:
+        return html
+    menu = _FORUM_TAB_RE.sub(
+        lambda t: (t.group(1) + t.group(2) + FACEBOOK_GROUP + t.group(3)
+                   + " target='_blank'" + t.group(4) + "FACEBOOK" + t.group(5)),
+        m.group(0))
+    if menu == m.group(0):
+        return html
+    return html[:m.start()] + menu + html[m.end():]
 
 
 _MAILTO_RE = re.compile(
@@ -343,6 +370,7 @@ def remove_account_box(html):
 
 PATCHES = [
     ("remove the Live Chat tab", remove_live_chat),
+    ("point the Forum tab at the Facebook group", repoint_forum_tab),
     ("hide the dead account login", remove_account_box),
     ("remove the Firewall sub-tab", remove_firewall_subtab),
     ("hide the Tools sub-tab", remove_tools_subtab),
