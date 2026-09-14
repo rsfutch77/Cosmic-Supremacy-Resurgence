@@ -1,5 +1,5 @@
 """
-expand.py — the Expand rules (STRATEGY.md §4.2)
+expand.py , the Expand rules (STRATEGY.md §4.2)
 ===============================================
 R-XPN-01  build a colony ship when we have none and somewhere to send it
 R-XPN-02  score colony targets and dispatch every available colony ship
@@ -17,15 +17,6 @@ loop does.
 ── Scoring ────────────────────────────────────────────────────────────────────
     score(T) = space(T) - TURN_WEIGHT * eta(T) + SAME_SYSTEM_BONUS
 
-Distance is charged in TURNS, not raw units, because the two are not
-interchangeable at this galaxy's scale: coordinates run to ~1130, the closest
-two suns are 111 apart, and a colony ship moves 13.5 per turn, so the nearest
-neighbouring system is already an 8-turn trip while `space` only spans 156..450.
-Charging raw distance made distance swamp space about 4:1 and the rule
-degenerated to "always take the closest rock".
-
-`space` is used rather than `max_pop` because `max_pop = space/10` truncates and
-throws away the tie-break between, say, 288 and 281.
 """
 import math
 import struct
@@ -41,7 +32,7 @@ TURN_WEIGHT       = 10.0   # score points charged per turn of travel
 SAME_SYSTEM_BONUS = 30.0   # shared defence, no exposed transit
 
 # A colony ship counts as available when it is idle (0), merely moving (1) or
-# already colonising (3). Move carries no colonisation commitment — a colony
+# already colonising (3). Move carries no colonisation commitment , a colony
 # ship in transit is exactly the thing a human would redirect. Attack and
 # conquer are purposeful and are left alone.
 #
@@ -57,15 +48,6 @@ AVAILABLE_ORDERS = (0, 1, 3)
 def ship_speed(ship, act=None):
     """The ship's speed, warming the engine's cache if it is cold.
 
-    The derived stat block is a lazy cache, so a design reading -1 is valid and
-    merely uncached — the engine fills it on the first getter call. Skipping
-    such a ship froze the AI after every load. If an elevated handle is
-    available, call the getter (0x005480A0) which both answers and caches;
-    otherwise return None and let the caller skip this turn.
-
-    Never substitute a default. A silent fallback of 1.0 once turned a 24-unit
-    hop into a '24 turn' ETA and reordered the whole ranking while looking
-    perfectly plausible on screen.
     """
     d = ship.design
     if d is None:
@@ -101,12 +83,12 @@ def score_targets(snap, civ, ship, candidates, speed):
 def visible_targets(snap, civ, vision, hist=None):
     """Unowned planets the AI is allowed to consider.
 
-    'all'   — everything in client memory, including undiscovered systems.
-    'known' — DEFAULT. Only systems the civ has actually discovered: one it
+    'all'   , everything in client memory, including undiscovered systems.
+    'known' , DEFAULT. Only systems the civ has actually discovered: one it
               holds a planet in, one a ship has been inside, or one named by a
               scan report. Client memory holds every planet in the galaxy
               whether or not it has been found, so reading it directly is
-              cheating — in the real game a system's planets are revealed by
+              cheating , in the real game a system's planets are revealed by
               flying to its SUN, which is why the scout order targets a star.
     """
     unowned = snap.unowned_planets()
@@ -148,11 +130,11 @@ def _order_target(snap, ship):
 COLONY_SHIP_TARGET = 1     # colony ships to keep in existence
 
 
-def run_xpn01(snap, civ, act, log=print):
+def run_xpn01(snap, civ, act, hist=None, log=print):
     """Build a colony ship when we have none and somewhere to send it.
 
-    Uses only actuator D, which is two plain pointer writes — no allocation and
-    no remote calls — so this rule works even with no elevated handle.
+    Uses only actuator D, which is two plain pointer writes , no allocation and
+    no remote calls , so this rule works even with no elevated handle.
 
     Deliberately conservative about WHEN to build:
       * only when below the target count, so it does not spam shipyards
@@ -162,15 +144,35 @@ def run_xpn01(snap, civ, act, log=print):
         than having its progress silently replaced
     """
     colony_ships = [s for s in snap.owned_ships(civ) if s.role == "COLONY"]
-    if len(colony_ships) >= COLONY_SHIP_TARGET:
+    # COUNT THE ONES THAT CAN ACTUALLY SETTLE SOMETHING, not every colony hull
+    # in existence. The engine hands one of the two starting colony ships a
+    # SCOUT order on turn 0 and never clears it, and a scout order on a 13.5/turn
+    # hull is a commitment measured in dozens of turns. Counting it froze
+    # expansion outright in the launcher's Single Player galaxy: R-XPN-02 skipped
+    # the ship as busy, this rule saw 1/1 and declined to build a replacement,
+    # and the civ sat on two planets with an idle shipyard and 159 unowned
+    # planets from turn 3 to turn 25. Neither rule logged anything wrong.
+    #
+    # This is the same availability question R-XPN-02 asks, so it uses the same
+    # test: a scout order whose system is already discovered is finished.
+    settlers = [s for s in colony_ships
+                if (s.order_type or 0) != 2 or scout_finished(snap, s, hist)]
+    if len(settlers) >= COLONY_SHIP_TARGET:
         return 0
+    if colony_ships and not settlers:
+        log(f"R-XPN-01: {len(colony_ships)} colony ship(s), but every one is "
+            f"away on an unfinished scout order , building a replacement so "
+            f"expansion does not wait for it")
 
     # OURS ONLY. Every civ's designs are visible in memory, and filtering by
     # "has a warm stat cache" instead of by owner made this rule select the
-    # RIVAL's Colony Ship — ours was excluded merely because its cache was cold.
+    # RIVAL's Colony Ship , ours was excluded merely because its cache was cold.
+    import research
+    done = {t for t, _ in civ.completed}
     designs = [d for d in snap.designs
                if d.is_colony and d.owner is not None
-               and d.owner.addr == civ.addr and d.chassis and d.engines]
+               and d.owner.addr == civ.addr and d.chassis and d.engines
+               and research.design_legal(d, done)]
     if not designs:
         log("R-XPN-01: this civ has no COLONY design with parts")
         return 0
@@ -182,7 +184,7 @@ def run_xpn01(snap, civ, act, log=print):
 
     # NO CASH GATE. A ship is paid for in PRODUCTION: the build accumulates in
     # Planet:120 until it reaches the design cost, and cash is untouched
-    # throughout — watched across a whole build in an earlier game, cash rose
+    # throughout , watched across a whole build in an earlier game, cash rose
     # steadily and never dropped by the ship's price. Gating on cash stalled
     # this rule for turns at a time waiting for a currency that is not spent.
 
@@ -200,8 +202,9 @@ def run_xpn01(snap, civ, act, log=print):
     # Population is the available stand-in for production rate until the
     # derived-by-observation sensors (STRATEGY.md §2.5) are wired up.
     planet = max(idle, key=lambda p: len(p.population))
-    log(f"R-XPN-01: {len(colony_ships)}/{COLONY_SHIP_TARGET} colony ships — "
-        f"queueing {design.design_name!r} (cost {design.cost}) at {planet}")
+    log(f"R-XPN-01: {len(settlers)}/{COLONY_SHIP_TARGET} colony ships able to "
+        f"settle ({len(colony_ships)} owned) , queueing "
+        f"{design.design_name!r} (cost {design.cost}) at {planet}")
     act.queue_ship(planet, design)
     return 1
 
@@ -221,13 +224,13 @@ def run_xpn02(snap, civ, act, vision="known", top=10, forced=None,
     available = [s for s in available if act.is_crewed(s)]
     available.sort(key=lambda s: (not gs.is_ptr(s.order_ptr), s.id))
     for s in crewless:
-        log(f"  SKIP {s}: no crew — it cannot move, and the engine would "
+        log(f"  SKIP {s}: no crew , it cannot move, and the engine would "
             f"cancel any order at the next turn boundary")
 
     log(f"R-XPN-02: {len(colony)} colony ship(s), {len(available)} available "
         f"({sum(1 for s in available if gs.is_ptr(s.order_ptr))} retargetable)")
     if not colony:
-        log("  no colony ship — that is R-XPN-01, which needs a build rule")
+        log("  no colony ship , that is R-XPN-01, which needs a build rule")
         return 0
     if not available:
         log("  every colony ship is busy with a non-colonize order")
@@ -253,7 +256,7 @@ def run_xpn02(snap, civ, act, vision="known", top=10, forced=None,
         speed = ship_speed(ship, act)
         if speed is None:
             log(f"  SKIP {ship}: could not obtain a speed for "
-                f"{ship.design} — the stat cache is cold and no elevated "
+                f"{ship.design} , the stat cache is cold and no elevated "
                 f"handle is available to warm it, so every ETA would be junk")
             continue
         pool = [p for p in candidates if p.id not in claimed]
@@ -279,12 +282,12 @@ def run_xpn02(snap, civ, act, vision="known", top=10, forced=None,
                 forced = None       # the override applies to one ship only
                 log(f"    --target override: Planet #{best.id} "
                     f"(score {best_score:.1f})")
-        log(f"    choice: Planet #{best.id} — space {best.space}, "
+        log(f"    choice: Planet #{best.id} , space {best.space}, "
             f"{best_eta} turns{', same system' if best_same else ''}")
         claimed.add(best.id)
 
         # Already going there? Leave it alone. Rewriting an order every turn
-        # works — the ship still arrives — but it resets the route leg origin
+        # works , the ship still arrives , but it resets the route leg origin
         # to the ship's current position and zeroes progress each time, so the
         # progress field never accumulates and the writes are pure noise.
         if ship.order_type == 3:
@@ -326,7 +329,7 @@ def run_xpn03(snap, civ, act, log=print):
     """
     if snap.turn == 0:
         # Planet:92 reads 0 on a homeworld AND on every uncolonised planet, so
-        # at turn 0 "founded this turn" matches the homeworld — which starts
+        # at turn 0 "founded this turn" matches the homeworld , which starts
         # with a deliberate 4 farmer / 2 worker / 1 scientist mix that this rule
         # would flatten to all-farmers. A real colony cannot be founded before
         # turn 1, so turn 0 is never this rule's business.
@@ -369,8 +372,8 @@ def main():
     if civ is None:
         sys.exit(f"no civ named {civ_name!r}; saw "
                  f"{[c.civ_name for c in snap.civs]}")
-    print(f"\n=== Expand — turn {snap.turn} — civ {civ.civ_name!r} — "
-          f"{'DRY RUN' if dry_run else 'APPLYING'} — vision={vision} ===")
+    print(f"\n=== Expand , turn {snap.turn} , civ {civ.civ_name!r} , "
+          f"{'DRY RUN' if dry_run else 'APPLYING'} , vision={vision} ===")
 
     rem = None
     if not dry_run:

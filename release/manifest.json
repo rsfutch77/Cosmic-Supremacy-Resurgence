@@ -1,0 +1,66 @@
+{
+  "product": "Cosmic Supremacy: Resurgence",
+  "version": "0.1.0",
+  "server": {
+    "host": "127.0.0.1",
+    "port": 8888
+  },
+
+  "_comment_modes": [
+    "Each mode is a client EXE plus the .csgalaxy pass file handed to it as its",
+    "single command-line argument"
+  ],
+
+  "modes": [
+    {
+      "id": "tutorial",
+      "title": "Play the Tutorial",
+      "short": "Tutorial",
+      "blurb": "The original guided walkthrough. Start here if you have never played.",
+      "exe": "CosmicSupremacy.exe",
+      "galaxy": "TutorialGalaxy_local.csgalaxy",
+      "needs_server": true,
+      "show": true
+    },
+    {
+      "id": "demo",
+      "title": "View the Demo",
+      "short": "Demo",
+      "blurb": "The original demo galaxy. A look at the game in an advanced state.",
+      "exe": "CosmicSupremacy.exe",
+      "galaxy": "DemoGalaxy_local.csgalaxy",
+      "needs_server": false,
+      "show": true
+    },
+    {
+      "id": "testbed",
+      "title": "Play Single Player",
+      "short": "Single Player",
+      "blurb": "A full single-player galaxy against the new Resurgence AI. Turns run locally, on your machine, at your own pace.",
+      "exe": "CosmicSupremacy_Resurgence.exe",
+      "galaxy": "SinglePlayerGalaxy.dat",
+      "needs_server": true,
+      "show": true,
+      "controls": true,
+      "ai": { "civ": "BadGuy" }
+    },
+    {
+      "id": "multiplayer",
+      "title": "Multiplayer",
+      "short": "Multiplayer",
+      "blurb": "Persistent galaxies against other players, the way the original was played.",
+      "enabled": false,
+      "show": true
+    },
+    {
+      "id": "sandbox",
+      "title": "Sandbox",
+      "short": "Sandbox",
+      "blurb": "Development galaxy , 16 seats, used by the AI harness. Not part of this release.",
+      "exe": "CosmicSupremacy_Resurgence.exe",
+      "galaxy": "SandboxGalaxy_local.csgalaxy",
+      "needs_server": true,
+      "show": false
+    }
+  ]
+}

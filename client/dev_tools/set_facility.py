@@ -1,10 +1,10 @@
 """
-set_facility.py — List or set facility counts on a planet
+set_facility.py , List or set facility counts on a planet
 =========================================================
 Each planet's built facilities live in an MSVC std::map at Planet:204. Every node
 holds an embedded Facility at node+12, with the facility TYPE ID at node+16 and
 its COUNT at node+20. The count is a plain int, so raising it needs no
-allocation and changes no container structure — it is the one safe way to give a
+allocation and changes no container structure , it is the one safe way to give a
 planet more of something it already has.
 
     python set_facility.py --list

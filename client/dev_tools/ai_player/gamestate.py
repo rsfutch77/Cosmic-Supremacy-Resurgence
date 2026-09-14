@@ -1,25 +1,9 @@
 """
-gamestate.py — Read-only snapshot of the running game for the AI player
+gamestate.py , Read-only snapshot of the running game for the AI player
 =======================================================================
 Wraps ejbo_viewer's raw EJBO scan in the entity model the strategy rules are
 written against (see STRATEGY.md §2). Everything here is a READ; no method in
 this module writes to the game. Actuators live in actions.py.
-
-Three details from the annotations shape this file:
-
-  * Owner is MULTIPLE INHERITANCE. Its allocation starts at tag-52, the
-    reference-node idiom stores tag-8, and the .data known-players vector stores
-    tag-52. Any owner lookup has to accept both or it matches nothing.
-  * ShipDesign is also multiple-inheritance, front 12, so a design reference node
-    may hold tag-8 or tag-12. Same treatment.
-  * The read window is PER CLASS (ejbo_viewer.CLASS_EXTENTS). An offset outside a
-    class's window is absent from its field list, not zero — hence off() returning
-    None rather than raising.
-
-Systems are NOT stored: no field links a Planet to its Sun. Membership here is
-nearest-sun by distance, which is a heuristic. Snapshot.system_report() prints the
-grouping's radii so the assumption can be checked against a real galaxy before any
-rule leans on it.
 """
 import collections
 import math
@@ -35,7 +19,7 @@ TURN_COUNTER     = 0x008578E8
 LOCAL_PLAYER     = 0x00857904   # ref node -> the human civ's Owner
 
 # PlanetProperties is embedded in the Planet allocation at +0x60, which is
-# planet_tag + 88 — the same frame the annotations call Planet:88. Every
+# planet_tag + 88 , the same frame the annotations call Planet:88. Every
 # __thiscall on a PlanetProperties takes ECX = planet_tag + this.
 PLANET_PROPERTIES = 88
 
@@ -165,7 +149,7 @@ class Civ(Obj):
 
     @property
     def completed(self):
-        """[(techId, cost)] — technologies and doctrines share this vector."""
+        """[(techId, cost)] , technologies and doctrines share this vector."""
         return [struct.unpack("<Ii", r) for r in self.vec(108, 8)]
 
     @property
@@ -175,7 +159,7 @@ class Civ(Obj):
 
     @property
     def stocks(self):
-        """{resourceId: amount} — 0 metal, 1 deuterium, 2 radioactives,
+        """{resourceId: amount} , 0 metal, 1 deuterium, 2 radioactives,
         3 crystal, 4 exotics."""
         return {struct.unpack_from("<I", r, 0)[0]: struct.unpack_from("<i", r, 4)[0]
                 for r in self.vec(1128, 8)}
@@ -187,21 +171,7 @@ class Civ(Obj):
 
 class Design(Obj):
     """ShipDesign.
-
-    THE DERIVED STATS ARE A LAZY CACHE, NOT A VALIDITY FLAG. `-1` in a field's
-    own type (0xFFFFFFFF for ints, 0xBF800000 for the speed float) means "not
-    cached", and the engine writes it across the whole block whenever parts
-    change or a design is copied — `ShipDesignData::InvalidateDerivedStats` at
-    0x005471D0. Each stat then has a getter shaped
-    `if (cached == -1) { compute; cache; } return cached`, e.g. speed at
-    0x005480A0, and the UI shows correct numbers for a -1 design precisely
-    because the UI calls them.
-
-    So a design reading -1 IS buildable. Accessors return None to keep the
-    sentinel out of arithmetic, but None here means "ask the engine", not
-    "broken" — treating it as broken froze the AI after every load, since a load
-    leaves the block invalidated. remote.design_speed warms it.
-    """
+"""
 
     @staticmethod
     def _n(v):
@@ -228,17 +198,7 @@ class Design(Obj):
 
     @property
     def stats_cached(self):
-        """Whether the derived stat block is warm.
 
-        NOT a validity test. The block is a LAZY CACHE: the engine writes -1
-        across it whenever parts change or a design is copied, and each stat has
-        a getter of the form `if (cached == -1) { compute; cache; } return`. A
-        design reading -1 is perfectly buildable — the UI shows correct numbers
-        for exactly that design because the UI calls those getters.
-
-        Gating rules on this was wrong and froze the AI after every load, since
-        a load leaves the block invalidated. Use remote.design_speed to warm it.
-        """
         return self.speed is not None
 
     # Kept as an alias so nothing silently changes meaning; prefer stats_cached.
@@ -246,7 +206,7 @@ class Design(Obj):
 
     @property
     def firepower(self):
-        """(light, heavy, third) — the UI's #/#/# display. An uncomputed design
+        """(light, heavy, third) , the UI's #/#/# display. An uncomputed design
         reads (-1,-1,-1), which must not be mistaken for an unarmed hull."""
         return tuple(self._n(self.i32(o)) or 0 for o in (60, 64, 68))
 
@@ -267,7 +227,7 @@ class Design(Obj):
     # -- role taxonomy (ours, derived; see STRATEGY.md §2.4) ----------------
     @property
     def owner(self):
-        """The civ this design belongs to — ShipDesign:260, a reference node.
+        """The civ this design belongs to , ShipDesign:260, a reference node.
 
         Designs are PER CIV and every civ's are visible in memory, so anything
         choosing a design to build must filter on this. Without it a rule will
@@ -283,16 +243,6 @@ class Design(Obj):
     @property
     def is_warship(self):
         """Armed per its FITTED WEAPONS, not per its firepower numbers.
-
-        firepower reads (0,0,0) on a design whose derived stat block is cold,
-        because the block holds -1 until a getter warms it. Testing
-        max(firepower) > 0 therefore called a real warship unarmed whenever its
-        cache had not been touched — the same lazy-cache trap that had R-XPN-01
-        selecting the rival's colony design.
-
-        ShipDesign:200 is a parts vector, not a derived stat, so it is true
-        whatever the cache is doing. Use firepower to RANK armed designs, never
-        to decide whether a design is armed.
         """
         return bool(self.weapons) or max(self.firepower) > 0
 
@@ -328,14 +278,9 @@ class Ship(Obj):
 
     @property
     def crew(self):
-        """Crew aboard — 16-byte records at Ship:124, the same shape as the
+        """Crew aboard , 16-byte records at Ship:124, the same shape as the
         Planet:144 citizens, each carrying job id 3.
 
-        A SHIP WITH NO CREW CANNOT MOVE, and the engine cancels any order it is
-        given at the next turn boundary: it frees the order object and clears
-        Ship:48. A rule that does not check this re-issues an order every turn
-        forever and leaks one engine allocation each time, while every log line
-        reads like success.
         """
         return [struct.unpack_from("<I", r, 0)[0] for r in self.vec(124, 16)]
 
@@ -373,7 +318,7 @@ class Planet(Obj):
 
     @property
     def population(self):
-        """[jobId] per citizen — 16-byte records, job at +0."""
+        """[jobId] per citizen , 16-byte records, job at +0."""
         return [struct.unpack_from("<I", r, 0)[0] for r in self.vec(144, 16)]
 
     @property
@@ -382,7 +327,7 @@ class Planet(Obj):
 
     @property
     def military(self):
-        """Stationed military unit count — 16-byte records at Planet:168."""
+        """Stationed military unit count , 16-byte records at Planet:168."""
         return len(self.vec(168, 16))
 
     @property
@@ -409,7 +354,7 @@ class Planet(Obj):
 
     @property
     def production(self):
-        """Name of the class at Planet:296 — the current production mode."""
+        """Name of the class at Planet:296 , the current production mode."""
         p = self.u32(296)
         if p == PILING_UP_WEALTH:
             return "PilingUpWealth"
@@ -554,7 +499,7 @@ class Snapshot:
         return s, dist(planet.pos, s.pos)
 
     def systems(self):
-        """{Sun: [Planet]} by nearest-sun. A heuristic — see the module docstring
+        """{Sun: [Planet]} by nearest-sun. A heuristic , see the module docstring
         and system_report()."""
         groups = collections.defaultdict(list)
         for p in self.planets:

@@ -1,5 +1,5 @@
 """
-survey.py — Print what the AI player can see this turn
+survey.py , Print what the AI player can see this turn
 ======================================================
 Read-only. This is the AI's own view of the game, rendered for a human, and it
 is the first thing to run when a rule misbehaves: if the sensor table here is
@@ -19,7 +19,7 @@ def fmt_pos(p):
 
 
 def num(v, spec="", none="uncomputed"):
-    """An uncomputed ShipDesign field is None, not 0 — print it as such rather
+    """An uncomputed ShipDesign field is None, not 0 , print it as such rather
     than letting a format spec raise or a 0 masquerade as a real value."""
     return none if v is None else format(v, spec)
 

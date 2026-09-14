@@ -9,6 +9,10 @@ server/saves/
 server/loadgame_blob.b64
 # raw blobs handed to the client as its command-line argument at startup
 client/*.dat
+# ...except the Single Player galaxy, which is not a throwaway capture but a
+# shipped release asset: build.ps1 copies it into the zip, so a checkout without
+# it cannot build a release at all.
+!client/SinglePlayerGalaxy.dat
 
 # ── Build / debug leftovers ───────────────────────────────────────────────────
 *.hex
@@ -18,7 +22,7 @@ __pycache__/
 
 # ── Dev tool output ───────────────────────────────────────────────────────────
 client/dev_tools/snapshots/
-# the AI's persistent fog-of-war map: per machine, per galaxy, per civ — game
+# the AI's persistent fog-of-war map: per machine, per galaxy, per civ , game
 # state rather than source, and meaningless in another checkout
 client/dev_tools/ai_player/state/
 *.exe.bak
@@ -27,3 +31,26 @@ tools
 # named restore points (raw save blobs, big and regenerable)
 client/checkpoints/
 .vscode
+
+# ── Release build output ──────────────────────────────────────────────────────
+# The staged release folder duplicates the 8 MB client binaries that are already
+# tracked in client/ , it is an artifact of release/build.ps1, regenerable from
+# the manifest, and belongs on a GitHub release rather than in the history.
+dist/
+release/build/
+release/.venv-build/
+# written by launcher.py when it is run from a checkout rather than a release
+release/data/
+
+# ── Claude Code local config ──────────────────────────────────────────────────
+# per-developer tool permissions and agent settings; not project source
+.claude/
+
+# ── Rehosted archive site ─────────────────────────────────────────────────────
+# site/ is tracked: the Firebase config, the 404 page, the staging script and
+# any hand-written page overrides are real source. What is NOT tracked is
+# public/, which stage.py rebuilds from scratch out of the untracked mirror
+# under tools/wayback/, and the Firebase CLI's local cache.
+site/public/
+site/.firebase/
+site/*.log

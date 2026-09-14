@@ -1,12 +1,12 @@
 """
-read_minidump.py — what actually faulted, out of the game's own crash dump
+read_minidump.py , what actually faulted, out of the game's own crash dump
 ==========================================================================
     python read_minidump.py                       # newest dump beside the EXE
     python read_minidump.py <file.dmp>
 
 The client writes a minidump when it dies. That dump names the exception and the
 instruction that raised it, which is the difference between "the client crashed
-after we did X" and knowing which code was executing — and this project has
+after we did X" and knowing which code was executing , and this project has
 already spent a day on the first kind of statement.
 
 Reads the MINIDUMP directly: header, stream directory, the exception stream
@@ -100,7 +100,7 @@ def main():
         print(f"threads: {read_u32(data, rva)}")
 
     if STREAM_EXCEPTION not in streams:
-        print("no exception stream — the dump was not written for a crash")
+        print("no exception stream , the dump was not written for a crash")
         return
     _size, rva = streams[STREAM_EXCEPTION]
     thread_id = read_u32(data, rva)

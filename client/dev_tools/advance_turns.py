@@ -1,5 +1,5 @@
 """
-advance_turns.py — Advance the game N turns unattended
+advance_turns.py , Advance the game N turns unattended
 ======================================================
 Shortens the turn length, watches the turn counter until it has advanced N
 times, then restores the original turn length. Unlike fast_turns.py this reads
@@ -14,6 +14,7 @@ Addresses (both .data, stable across launches):
     0x0080AA08  turn length in seconds; writing it collapses the current turn
     0x008578E8  turn counter, located by capturing every address holding the
                 UI's turn number and keeping those that incremented together
+
 """
 import ctypes
 from ctypes import wintypes
@@ -92,7 +93,7 @@ def main():
     original = rd32(h, TURNLENGTH_ADDR)
     if original == 0xFFFFFFFF:
         kernel32.CloseHandle(h)
-        sys.exit("turn length is uninitialised — load a galaxy first")
+        sys.exit("turn length is uninitialised , load a galaxy first")
 
     if restore_only:
         wr32(h, TURNLENGTH_ADDR, DEFAULT_LENGTH)
@@ -128,7 +129,7 @@ def main():
                 print(f"reached turn {now}")
                 break
             if time.time() - stalled_since > stall_limit:
-                print(f"STALLED at turn {now} for {stall_limit}s — the turn "
+                print(f"STALLED at turn {now} for {stall_limit}s , the turn "
                       f"pipeline is not firing unattended.")
                 print("  If the game is showing a dialog, dismiss it and re-run.")
                 break
