@@ -199,6 +199,63 @@ def strip_indexer_beacons(html):
     return _BEACON_IMG_RE.sub("", html)
 
 
+# Fourteen of the twenty smiley GIFs this wiki used were never archived, and the
+# six that survive are 2008-era 15px GIFs. Mixing the two looks broken, most
+# obviously on the DokuWiki syntax page that lists them all in one table, so all
+# of them become Unicode emoji: nothing to host, nothing to license, and they
+# scale with the surrounding text.
+#
+# Keys are the image filename; values are (emoji, the alt text DokuWiki used).
+SMILEYS = {
+    "icon_smile.gif":     ("\N{SLIGHTLY SMILING FACE}", ":-)"),
+    "icon_smile2.gif":    ("\N{SMILING FACE WITH SMILING EYES}", "=)"),
+    "icon_biggrin.gif":   ("\N{GRINNING FACE WITH SMILING EYES}", ":-D"),
+    "icon_wink.gif":      ("\N{WINKING FACE}", ";-)"),
+    "icon_sad.gif":       ("\N{SLIGHTLY FROWNING FACE}", ":-("),
+    "icon_cool.gif":      ("\N{SMILING FACE WITH SUNGLASSES}", "8-)"),
+    "icon_confused.gif":  ("\N{CONFUSED FACE}", ":-?"),
+    "icon_doubt.gif":     ("\N{FACE WITH ONE EYEBROW RAISED}", ":-/"),
+    "icon_doubt2.gif":    ("\N{THINKING FACE}", ":-\\"),
+    "icon_eek.gif":       ("\N{FACE SCREAMING IN FEAR}", "8-O"),
+    "icon_surprised.gif": ("\N{FACE WITH OPEN MOUTH}", ":-O"),
+    "icon_neutral.gif":   ("\N{NEUTRAL FACE}", ":-|"),
+    "icon_lol.gif":       ("\N{FACE WITH TEARS OF JOY}", "LOL"),
+    "icon_razz.gif":      ("\N{FACE WITH STUCK-OUT TONGUE}", ":-P"),
+    "icon_fun.gif":       ("\N{GRINNING CAT FACE WITH SMILING EYES}", "^_^"),
+    "icon_silenced.gif":  ("\N{ZIPPER-MOUTH FACE}", ":-X"),
+    "icon_exclaim.gif":   ("\N{HEAVY EXCLAMATION MARK SYMBOL}", ":!:"),
+    "icon_question.gif":  ("\N{BLACK QUESTION MARK ORNAMENT}", ":?:"),
+    "fixme.gif":          ("\N{WARNING SIGN}", "FIXME"),
+    "delete.gif":         ("\N{CROSS MARK}", "DELETEME"),
+    "wink.gif":           ("\N{WINKING FACE}", ";-)"),
+}
+
+_SMILEY_IMG_RE = re.compile(
+    r'<img[^>]*?src\s*=\s*(?:"(?P<dq>[^"]*)"|\'(?P<sq>[^\']*)\')[^>]*>',
+    re.I)
+
+
+def modernise_smileys(html):
+    """Swap smiley images for the equivalent emoji."""
+
+    def sub(m):
+        src = m.group("dq")
+        if src is None:
+            src = m.group("sq")
+        low = src.lower()
+        if "/smileys/" not in low and "/smilies/" not in low:
+            return m.group(0)
+        name = low.rsplit("/", 1)[-1].split("?")[0]
+        entry = SMILEYS.get(name)
+        if not entry:
+            return m.group(0)
+        emoji, alt = entry
+        return ('<span class="smiley" title="%s" role="img" '
+                'aria-label="%s">%s</span>' % (alt, alt, emoji))
+
+    return _SMILEY_IMG_RE.sub(sub, html)
+
+
 PATCHES = [
     ("remove the Live Chat tab", remove_live_chat),
     ("remove the Firewall sub-tab", remove_firewall_subtab),
@@ -207,6 +264,7 @@ PATCHES = [
     ("point contact links at GitHub", redirect_contact_links),
     ("localise absolute self-links", localise_self_links),
     ("strip DokuWiki indexer beacons", strip_indexer_beacons),
+    ("modernise smileys", modernise_smileys),
     ("point support e-mail at GitHub", redirect_support_email),
 ]
 
