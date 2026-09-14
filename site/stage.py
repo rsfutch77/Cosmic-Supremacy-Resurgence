@@ -106,7 +106,8 @@ NOTICE = """
   site that went offline, rebuilt from public web archives so the work is not
   lost. No ownership is claimed and nothing here is sold.
   If you are the original owner and would like this taken down or handed over,
-  contact us in the Facebook group.
+  contact us in the <a href="https://www.facebook.com/groups/145339627564"
+  style="color:#a9c6e0;text-decoration:underline;">Facebook group</a>.
 </div>
 """
 
