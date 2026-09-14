@@ -307,8 +307,43 @@ def remove_retired_links(html):
     return html
 
 
+# The home page carries the same note inline, written when its override was made
+# by hand. Every other page gets it from here.
+ACCOUNT_NOTE = """<!-- [ ] TODO: restore the account login here when multiplayer is implemented.
+     Hidden for now because there is no server to authenticate against: the
+     original form posted to this page with action=login, and Register and
+     Forgot Password both pointed at pages that cannot work yet. -->"""
+
+_ACCOUNT_RE = re.compile(r"<div\s+class=['\"]section account['\"]\s*>", re.I)
+_DIV_TAG_RE = re.compile(r"<div\b[^>]*>|</div\s*>", re.I)
+
+
+def remove_account_box(html):
+    """Drop the Account panel from the right-hand column.
+
+    The form posts a login to a static host, and Register and Forgot Password
+    lead to archived pages that cannot do anything. Left in place it is the most
+    inviting thing on the page, so a new arrival's first action fails.
+
+    The panel wraps four nested divs, so the end is found by counting depth
+    rather than matching to the first `</div>`, which would close the header and
+    orphan the rest.
+    """
+    m = _ACCOUNT_RE.search(html)
+    if not m:
+        return html
+    depth = 0
+    for tag in _DIV_TAG_RE.finditer(html, m.start()):
+        depth += -1 if tag.group(0).startswith("</") else 1
+        if depth == 0:
+            return html[:m.start()] + ACCOUNT_NOTE + html[tag.end():]
+    # Unbalanced markup: leave the page alone rather than truncate it.
+    return html
+
+
 PATCHES = [
     ("remove the Live Chat tab", remove_live_chat),
+    ("hide the dead account login", remove_account_box),
     ("remove the Firewall sub-tab", remove_firewall_subtab),
     ("hide the Tools sub-tab", remove_tools_subtab),
     ("remove the ToDo List sub-tab", remove_todo_subtab),

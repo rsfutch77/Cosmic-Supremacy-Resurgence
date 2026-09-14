@@ -47,9 +47,10 @@
 			<td valign='top' colspan='2'>
 				<p>
 <p>
-This is the rebuilt Cosmic Supremacy client. There is no installer: unzip the
-archive wherever you like and run <b>CosmicSupremacyLauncher.exe</b> from the
-folder you unzipped it to.
+This is the original Cosmic Supremacy client, patched to talk to a server that
+runs on your own machine, packaged with a launcher that starts it. There is no
+installer: unzip the archive wherever you like and run
+<b>CosmicSupremacyLauncher.exe</b> from the folder you unzipped it to.
 </p>
 <p>
 <table class='coloredtable' cellspacing='4' style='padding: 0 8px 0 8px; margin: 0 0 4px 20px;'>
@@ -105,11 +106,17 @@ registered with Windows.
 DirectX 9 compliant graphics-card with at least 128 MB of graphics-memory.
 </p>
 <p>
-<b>Required Libraries:</b> None. The rebuilt client does not require DirectX 9 or the GdiPlus redistributable.<br /></td>
+<b>Required Libraries:</b> None to install. The client uses DirectX 9 and GdiPlus, and
+Windows 10 and 11 both ship with them, so neither redistributable is needed any more.<br /></td>
 		</tr>
 	</table>
 
-</td></tr><tr><td valign='top' width='100%'>
+</td></tr><!-- [ ] TODO (installer): section hidden while the zip is the only download.
+     It describes the MSI flow: user-rights warnings, choosing an install folder,
+     the .csgalaxy file association and the three-minute Galaxy-Pass. None of it
+     applies to a zip that installs nothing and registers nothing, and it
+     contradicts the section above. Restore it alongside the installer.
+<tr><td valign='top' width='100%'>
 
 	<table class='content_pane' id='adminrights'>
 		<tr>
@@ -168,7 +175,7 @@ Please note that the Galaxy-Pass is <b>only valid for 3 minutes!</b>
 		</tr>
 	</table>
 
-</td></tr><!-- [ ] TODO (MSI): section hidden until a signed installer ships.
+</td></tr>--><!-- [ ] TODO (MSI): section hidden until a signed installer ships.
      Restore by removing this comment wrapper. See the MSI TODO above for
      why the installer is on hold.
 <tr><td valign='top' width='100%'>

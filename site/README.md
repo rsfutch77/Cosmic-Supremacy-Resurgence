@@ -70,11 +70,12 @@ pages render unstyled.
 `forum/` out of the build because those pages carry real users' posts, names and
 avatars. It is enforced in code so that adding pages later cannot leak it.
 
-**The site is noindexed on purpose** while it is still mostly 404s: an
-`X-Robots-Tag` header on `**`, plus a meta tag injected into every page.
-`robots.txt` allows crawling on purpose — a `Disallow` would stop crawlers ever
-reading the noindex and could leave bare URLs listed anyway. Remove all three
-together, or none.
+**The site is indexable.** It was noindexed while it was still mostly 404s, by
+an `X-Robots-Tag` header on `**` plus a meta tag injected into every page. Both
+are gone and `robots.txt` allows crawling, so indexing is decided in
+`firebase.json` and `robots.txt` alone — `stage.py` still strips any robots tag
+the archive carried, so no page overrides them. The 404 page keeps its own
+`noindex`, which is about that page and nothing else.
 
 ## How links get fixed
 

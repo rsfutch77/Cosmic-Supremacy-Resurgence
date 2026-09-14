@@ -1,11 +1,3 @@
-The patched `CosmicSupremacy_patched.exe` launches, connects to our server, and renders exactly as the original. All the UI, 3D rendering, game logic, and assets are already compiled into the EXE. **We do not rebuild the frontend.** The reconstruction is a backend implementation only.
-
-### What this means
-- The EXE is the client. Players install and run `CosmicSupremacy_patched.exe` on Windows.
-- The server is the only new code we write. It must speak the game's original HTTP/1.0 protocol.
-- Bug fixes go in via targeted binary patches to the EXE
-- Source code extraction / recompilation is not pursued , not practical for a release-build MFC/C++ app.
-
 ### Minimum patch to run locally
 `CosmicSupremacy_patched.exe` , the original binary with four patches applied:
 1. `0x0017926c` , `JE` → `JMP`: forces debug server mode (localhost:8888)
@@ -45,9 +37,7 @@ The server also serves a minimal HTML portal at `GET /` (the game opens a browse
 1. Run the patched EXE against `cs_server.py`, load the Demo Galaxy, play several turns , capture every request/response pair in `cs_server.log`
 2. Decode the `data=` blob in `savegame` / `loadgame` , determine if it is opaque (store-and-return) or requires server-side parsing for multiplayer turn reconciliation
 3. Implement proper single-player save/load cycle: EXE saves → server persists → EXE reloads correctly
-4. Implement user registration and login against the real DB (SQLite in dev)
-5. Serve `.csgalaxy` files from the web portal for Tutorial and Demo galaxy types
-6. Confirm the 36-step tutorial walkthrough (Section 19) completes successfully
+4. Confirm the 36-step tutorial walkthrough (Section 19) completes successfully
 
 ---
 
