@@ -1,3 +1,4 @@
+[ ] merge original todo list into github
 task,category
 "BUG: scout admiral with more than one rule: first completely execute the first rule, then disable that if another scout rule exists",Bugs
 admiral box slow when >50 admirals (astax),Bugs
@@ -141,3 +142,21 @@ Earendel’s Corruption Reputation Morale Loyalty -> http://cosmicsupremacy.com/
 "manual: governor rules more detailed info (food-surplus, base food, food output, etc)","Webpage, Game Startup, and Tutorial Galaxy"
 "manual: more experienced steps: try (shared) prod-queues for production, use govs to manage your population (examples)","Webpage, Game Startup, and Tutorial Galaxy"
 "tutorial galaxy: adapt to work with new design (2 food bars, etc)","Webpage, Game Startup, and Tutorial Galaxy"
+Size based evasion & Rock-Paper-Scissor combat (http://cosmicsupremacy.com/forum/thread.php?postid=19017#post19017),Advanced Combat
+Ground Combat Rock-Paper-Scissors (http://cosmicsupremacy.com/forum/thread.php?postid=27316#post27316),Advanced Combat
+Ship based Attack Advantages (http://cosmicsupremacy.com/forum/thread.php?threadid=1097&hilight=combat+system),Advanced Combat
+Advanced Plant bombing mechanics (http://cosmicsupremacy.com/forum/thread.php?threadid=3991),Advanced Combat
+DeathStar/Space Stations (http://cosmicsupremacy.com/forum/thread.php?threadid=3977&hilight=death+star),Advanced Combat
+"Carriers, Fighters and other such (http://cosmicsupremacy.com/forum/thread.php?threadid=4166&hilight=death+star)",Advanced Combat
+Blockading planets (http://cosmicsupremacy.com/forum/thread.php?postid=43030#post43030),Advanced Combat
+Upgrading ships/Recycling (http://cosmicsupremacy.com/forum/thread.php?threadid=1627&threadview=0&hilight=&hilightuser=0&page=1),General/Misc
+Galaxy Score chart (http://cosmicsupremacy.com/forum/thread.php?threadid=4770),General/Misc
+RRS News / Phone Interface (http://cosmicsupremacy.com/forum/thread.php?postid=62237#post62237),General/Misc
+Colonizing Admirals (http://cosmicsupremacy.com/forum/thread.php?threadid=2893&hilight=Colonizing+Admirals),Admirals
+way-points (http://cosmicsupremacy.com/forum/thread.php?threadid=3275),Admirals
+Patrol Admiral (http://cosmicsupremacy.com/forum/thread.php?threadid=4909),Admirals
+Awards and honours have come up a couple of times... (http://cosmicsupremacy.com/forum/thread.php?threadid=4416),Profile
+Extended Hall of Fame stats. (http://cosmicsupremacy.com/forum/thread.php?threadid=4410),Profile
+Expanded ranking (http://cosmicsupremacy.com/forum/thread.php?threadid=3769&page=4),Profile
+Split production so more than 1 thing can be produce per turn.,Planetry
+Diplomacy Scans (http://cosmicsupremacy.com/forum/thread.php?threadid=5799),Scans / Tech

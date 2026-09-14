@@ -72,6 +72,13 @@ def is_asset(rel):
 # avatars. Nothing under these prefixes is staged, so they always 404.
 EXCLUDE_PREFIXES = ("forum/", "wiki/_export/")
 
+# The crawler turned fragments of the wiki's JavaScript into URLs and then
+# archived 404 pages under those names. They are not pages, they are parser
+# debris, and publishing them puts nonsense in the site tree.
+JUNK_PATH_RE = re.compile(
+    r"[+'()\[\]]|;|this\.|\.get\(|indexOf|className|DOKU_BASE|XMLHTTP"
+    r"|domLib|ajax_qsearch|=file", re.I)
+
 # Whole pages that are deliberately not republished. Their nav entries are
 # stripped by patches.py, and firebase.json must not rewrite anything to them.
 EXCLUDE_PAGES = {
@@ -80,6 +87,7 @@ EXCLUDE_PAGES = {
     "wiki/tools.html",           # hidden until the tools are worth shipping
     "wiki/wallpapers.html",      # only thumbnails survived; nothing to show
     "wiki/dev.html",             # retired; captured to the CSV at the repo root
+    "wiki/guides/todo-guide.html",  # ditto; it only described wiki/dev.html
 }
 
 NOINDEX = '<meta name="robots" content="noindex, nofollow" />'
@@ -139,7 +147,8 @@ def build_set(name):
     seen, uniq = set(), []
     for p in pages:
         if (p not in seen and not p.startswith(EXCLUDE_PREFIXES)
-                and p not in EXCLUDE_PAGES):
+                and p not in EXCLUDE_PAGES
+                and not JUNK_PATH_RE.search(p)):
             seen.add(p)
             uniq.append(p)
     return uniq
@@ -272,12 +281,28 @@ def rewrite_links(text, page_rel, staged):
     return REF_RE.sub(sub, text), count
 
 
+NOTICE_MARK = "property of their original creator"
+_ANY_ROBOTS_RE = re.compile(r"\s*<meta[^>]+name=[\"']robots[\"'][^>]*>", re.I)
+
+
 def inject(html):
-    """Add the robots tag inside <head> and the attribution before </body>."""
+    """Add the robots tag inside <head> and the attribution before </body>.
+
+    Must be idempotent. Overrides are made by copying a file out of public/,
+    which already carries both marks, and re-running the build would otherwise
+    stack a second copy onto every page each time.
+
+    Every pre-existing robots tag is dropped first: the archived DokuWiki pages
+    declare `index,follow`, which contradicts the noindex this site serves.
+    """
+    html = _ANY_ROBOTS_RE.sub("", html)
     m = re.search(r"<head[^>]*>", html, re.I)
     html = html[:m.end()] + "\n" + NOINDEX + html[m.end():] if m else NOINDEX + html
-    m = re.search(r"</body>", html, re.I)
-    return html[:m.start()] + NOTICE + html[m.start():] if m else html + NOTICE
+
+    if NOTICE_MARK not in html:
+        m = re.search(r"</body>", html, re.I)
+        html = html[:m.start()] + NOTICE + html[m.start():] if m else html + NOTICE
+    return html
 
 
 # --------------------------------------------------------------------------
@@ -285,7 +310,7 @@ def inject(html):
 # --------------------------------------------------------------------------
 
 def copy(rel, copied, missing):
-    if rel.startswith(EXCLUDE_PREFIXES):
+    if rel.startswith(EXCLUDE_PREFIXES) or JUNK_PATH_RE.search(rel):
         return False
     src = os.path.join(SRC, rel.replace("/", os.sep))
     if not os.path.isfile(src):
