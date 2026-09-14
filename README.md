@@ -78,7 +78,7 @@ I'm a fan of the original game and definitely did not grow up around the languag
 ## Licence
 
 Cosmic Supremacy was created by Erwin, and the original game assets remain their
-property. I have tried to reach out to involve them in the project, and would be happy to turn over the assets so that he can restore the server that was lost. 
+property. I have tried to reach out to involve them in the project, and would be happy to turn over the assets so that they can restore the server that was lost. 
 
 This is an unofficial restoration, not affiliated with or endorsed by the
 original author. It is free, in the spirit of the original game , it will never

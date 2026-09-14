@@ -90,7 +90,9 @@ EXCLUDE_PAGES = {
     "wiki/guides/todo-guide.html",  # ditto; it only described wiki/dev.html
 }
 
-NOINDEX = '<meta name="robots" content="noindex, nofollow" />'
+# No robots meta is injected: the site is indexable. The archived pages carry
+# DokuWiki's own `index,follow` tags, which are stripped anyway so that what a
+# crawler sees comes from firebase.json and robots.txt alone.
 
 # Injected into staged pages only; the mirror on disk is never modified. The
 # archived markup is someone else's work, so every served page says so and says
@@ -286,18 +288,17 @@ _ANY_ROBOTS_RE = re.compile(r"\s*<meta[^>]+name=[\"']robots[\"'][^>]*>", re.I)
 
 
 def inject(html):
-    """Add the robots tag inside <head> and the attribution before </body>.
+    """Strip stale robots tags and add the attribution before </body>.
 
     Must be idempotent. Overrides are made by copying a file out of public/,
-    which already carries both marks, and re-running the build would otherwise
+    which already carries the notice, and re-running the build would otherwise
     stack a second copy onto every page each time.
 
-    Every pre-existing robots tag is dropped first: the archived DokuWiki pages
-    declare `index,follow`, which contradicts the noindex this site serves.
+    Every robots tag is dropped, both the archived DokuWiki `index,follow` and
+    the `noindex` this site used to inject. Nothing replaces them, so indexing
+    is governed by firebase.json and robots.txt in one place.
     """
     html = _ANY_ROBOTS_RE.sub("", html)
-    m = re.search(r"<head[^>]*>", html, re.I)
-    html = html[:m.end()] + "\n" + NOINDEX + html[m.end():] if m else NOINDEX + html
 
     if NOTICE_MARK not in html:
         m = re.search(r"</body>", html, re.I)
@@ -470,8 +471,9 @@ def main():
                 shipped += 1
     print("  client builds published from dist/: %d" % shipped)
 
-    # Crawling is allowed on purpose: the noindex header and meta tag do the
-    # work, and a Disallow here would stop crawlers from ever reading them.
+    # Crawling and indexing are both allowed. The forum and everything else
+    # withheld is absent from public/ entirely, so there is nothing here that a
+    # Disallow would need to protect.
     with open(os.path.join(DST, "robots.txt"), "w", encoding="utf-8") as fh:
         fh.write("User-agent: *\nAllow: /\n")
     shutil.copy2(os.path.join(HERE, "404.html"), os.path.join(DST, "404.html"))
