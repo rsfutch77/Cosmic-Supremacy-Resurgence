@@ -77,6 +77,7 @@ EXCLUDE_PAGES = {
     "chat.php.html",             # live chat needs a server nobody is running
     "download_firewall.php.html",  # firewall rules for a server that is gone
     "wiki/tools.html",           # hidden until the tools are worth shipping
+    "wiki/wallpapers.html",      # only thumbnails survived; nothing to show
 }
 
 NOINDEX = '<meta name="robots" content="noindex, nofollow" />'
