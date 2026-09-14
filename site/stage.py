@@ -106,7 +106,8 @@ NOTICE = """
   site that went offline, rebuilt from public web archives so the work is not
   lost. No ownership is claimed and nothing here is sold.
   If you are the original owner and would like this taken down or handed over,
-  contact us in the Facebook group.
+  contact us in the <a href="https://www.facebook.com/groups/145339627564"
+  style="color:#a9c6e0;text-decoration:underline;">Facebook group</a>.
 </div>
 """
 
@@ -457,19 +458,10 @@ def main():
         with open(full, "w", encoding="utf-8") as fh:
             fh.write(inject(text))
 
-    # Ship the rebuilt client if a build exists. dist/ is gitignored, so the
-    # binaries never enter the repository; they are picked up at publish time.
-    dist = os.path.join(REPO, "dist")
-    shipped = 0
-    if os.path.isdir(dist):
-        downloads = os.path.join(DST, "downloads")
-        for fn in sorted(os.listdir(dist)):
-            if fn.lower().endswith((".msi", ".zip")):
-                os.makedirs(downloads, exist_ok=True)
-                shutil.copy2(os.path.join(dist, fn), os.path.join(downloads, fn))
-                copied["downloads/" + fn] = os.path.getsize(os.path.join(dist, fn))
-                shipped += 1
-    print("  client builds published from dist/: %d" % shipped)
+    # Release binaries are not staged here. The client zip is attached to the
+    # GitHub release for its tag, which serves the download and counts it, and
+    # download_client.php.html links there. Keeping the 30 MB build out of
+    # public/ also keeps it off this host's bandwidth and out of every re-stage.
 
     # Crawling and indexing are both allowed. The forum and everything else
     # withheld is absent from public/ entirely, so there is nothing here that a

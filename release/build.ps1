@@ -1,4 +1,4 @@
-#Requires -Version 5.1
+﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
     Builds the player-facing release: freezes the launcher and assembles the
@@ -294,6 +294,10 @@ Release built: $StageName  ($([math]::Round($total / 1MB, 1)) MB unpacked)
 Test it the way a player would - from the staged folder, not the repo:
     $Stage\CosmicSupremacyLauncher.exe
 
-Then attach the .zip to a GitHub release and tag it v$Version.
+Then publish the zip as the v$Version release asset. That release is the only
+copy of the download: the site's download page links straight at it.
+    gh release create v$Version "$Stage.zip" ``
+        --title "Cosmic Supremacy: Resurgence v$Version" ``
+        --notes-file "$ReleaseDir\RELEASE_NOTES_v$Version.md"
 ------------------------------------------------------------------
 "@ -ForegroundColor White

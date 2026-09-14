@@ -36,7 +36,7 @@ The server also serves a minimal HTML portal at `GET /` (the game opens a browse
 **Steps:**
 1. Run the patched EXE against `cs_server.py`, load the Demo Galaxy, play several turns , capture every request/response pair in `cs_server.log`
 2. Decode the `data=` blob in `savegame` / `loadgame` , determine if it is opaque (store-and-return) or requires server-side parsing for multiplayer turn reconciliation
-3. Implement proper single-player save/load cycle: EXE saves → server persists → EXE reloads correctly
+3. Implement proper single-player save/load cycle: EXE saves → server persists → EXE reloads correctly (plus new Smarter AI)
 4. Confirm the 36-step tutorial walkthrough (Section 19) completes successfully
 
 ---
