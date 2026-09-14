@@ -122,6 +122,15 @@ def remove_firewall_subtab(html):
     return _drop_subtab(html, r"download_firewall\.php")
 
 
+def remove_todo_subtab(html):
+    """The list is captured in cosmic_supremacy_original_todo.csv and retired.
+
+    It tracked a live game's backlog against a forum that is not published,
+    so every item linked somewhere that cannot be read.
+    """
+    return _drop_subtab(html, r"wiki/dev")
+
+
 def remove_tools_subtab(html):
     """Hidden for now: the tools were helper spreadsheets for a live game."""
     return _drop_subtab(html, r"wiki/tools")
@@ -260,6 +269,7 @@ PATCHES = [
     ("remove the Live Chat tab", remove_live_chat),
     ("remove the Firewall sub-tab", remove_firewall_subtab),
     ("hide the Tools sub-tab", remove_tools_subtab),
+    ("remove the ToDo List sub-tab", remove_todo_subtab),
     ("remove the Wallpapers sub-tab", remove_wallpapers_subtab),
     ("point contact links at GitHub", redirect_contact_links),
     ("localise absolute self-links", localise_self_links),

@@ -1,0 +1,143 @@
+task,category
+"BUG: scout admiral with more than one rule: first completely execute the first rule, then disable that if another scout rule exists",Bugs
+admiral box slow when >50 admirals (astax),Bugs
+BUG: main window deactivates briefly when clicking on either sort or filter icon -> entire frame is redrawn twice before menu opens...,Bugs
+BUG: mouse-wheel not working in planet-view screen after a tick happens -> needs to switch back to the planets screen to get the sorting right,Bugs
+"BUG: battle-calc: fight ships against PD (eg 20 LT), then subtract some LT -> average condition turns negative",Bugs
+in speed galaxies have the tooltips for production cost reflect the proper value -> http://www.spaceciv.com/forum/thread.php?threadid=1898,Bugs
+"when deleting a battle-report, colors seem to get mixed up, which can even lead to crash -> http://www.spaceciv.com/forum/thread.php?threadid=2510",Bugs
+"when ship moves to a sun (or planet?), that is then renamed by the owner, the new name is not reflected in ship-screen",Bugs
+copy/paste governor rules loses hierarchy information in case of groups,Bugs
+"BUG: a ship on the queue that is running out of resources is not built -> queue switches to wealth -> if resources are bought, the planets’ production is not updated immediately, but starts building 1 turn later",Bugs
+BUG: you can read ship names of an ally in battle report -> ship-names are shown for the first player included in the report,Bugs
+BUG: can’t assign admiral to ship in radar control window (radar marks),Bugs
+governor “create-group” does not correctly treat child-rules -> http://www.spaceciv.com/forum/thread.php?threadid=3619,Bugs
+dealing negative reputation when killing an neutral bystander (see BUG_savegame_turn_0455_before_inerz.dat) -> http://cosmicsupremacy.com/forum/thread.php?postid=41965#post41965,Bugs
+Admiral change with radar tool not working -> http://cosmicsupremacy.com/forum/thread.php?postid=44169#post44169,Bugs
+not able to declare war during havoc in a team galaxy -> http://cosmicsupremacy.com/forum/thread.php?postid=44704#post44704,Bugs
+in-game message sent twice under certain circumstances (see PM) -> http://cosmicsupremacy.com/forum/thread.php?threadid=4853,Bugs
+"more accurate PD destruction: put destroyed facilities back in, so that we don’t end up with more destroyed hitpoints than were actually inflicted -> http://cosmicsupremacy.com/forum/thread.php?postid=51868#post51868",Bugs
+Tick while synchronising -> http://cosmicsupremacy.com/forum/thread.php?postid=55813#post55813,Bugs
+Gov/Testbed/Assign Governor -> http://cosmicsupremacy.com/forum/thread.php?threadid=5466,Bugs
+Pop up error message when trying to save a governor while being disconnected,Bugs
+double bio-bombing news message sent -> http://cosmicsupremacy.com/forum/thread.php?postid=60941#post60941,Bugs
+governor: Conditions based on a planet’s current defense would also be nice. -> “If Planet Defense (as seen on the Planets screen icons) is lower than|higher than Poor|Good|Etc” -> “If Light Firepower|Heavy firepower|Shield Strength is lower than|higher than“) -> “If Shield Strength|Total Hitpoints|Total Units is lower than|higher than“,Governor Suggestions
+governor: Stop|Break processing rules,Governor Suggestions
+gov-condition: if total science is higher|lower than 0,Governor Suggestions
+governor: sell facility rule,Governor Suggestions
+new governor conditions: -> if number of turns till you gain population at current rate (food surplus / remaining capacity = 1 / number of turns to gain population) -> if total number of turns that it currently takes to increase population (food surplus / total food box capacity right now = 1 / number of turns it takes to gain population at current development stage) -> similar thing for production?,Governor Suggestions
+"NOT condition for the governors -> or even better, support an “else branch”",Governor Suggestions
+change the condition selection interface. use “add condition” use a small “delete” icon to remove certain conditions again,Governor Suggestions
+allow setting of tooltips/comments for a rule,Governor Suggestions
+governor: remaining turns on population growth http://www.spaceciv.com/forum/thread.php?postid=9533#post9533,Governor Suggestions
+"rename “population growth progress” condition to “food storage”, or clearer still to say “progress to next population growth”",Governor Suggestions
+Admiral / Governor suggestions by TerraNova -> http://www.spaceciv.com/forum/thread.php?threadid=1793,Governor Suggestions
+"gov-condition: allow to set food-surplus to make it dependent on food-storage-box (percentage of food-storage-size), to maintain a steady growth (new type for ConditionValue) -> http://www.spaceciv.com/forum/thread.php?threadid=2284 also see item #8 and #14",Governor Suggestions
+find a better solution for right clicking link-style paramaters in govs and admirals -> no one ever finds them -> possible popup a secondary menu (office style) with additional options -> or display a “additional options” icon (just like the filter and sort icons),Governor Suggestions
+governor: “if conditions” know if they should be “if” or “while” (as well as “all” or “a”) -> While currently no production ->->Convert a Worker to a Farmer,Governor Suggestions
+better solution for governor endless loop check -> http://cosmicsupremacy.com/forum/thread.php?postid=37894#post37894,Governor Suggestions
+"when loading a governor with the same name as one that’s existing, offer the option to replace the existing one",Governor Suggestions
+colonization admiral: tests for -> No other player in the system. -> commodity output at least x -> commodity quality at least x%,Admiral Suggestions
+extend the “number of ship-designs” condition by the following variants In the galaxy In the same solar system as the planet the governor is running on In orbit around the planet the governor is running on__ -> see http://www.spaceciv.com/forum/thread.php?postid=11666#post11666,Admiral Suggestions
+some more retreat options -> http://spaceciv.com/forum/thread.php?postid=34704#post34704,Admiral Suggestions
+intercept within certain radius from rally-point -> http://spaceciv.com/forum/thread.php?postid=35226#post35226,Admiral Suggestions
+transport to planet with the highest amount of unmanned ships first,Admiral Suggestions
+"For items that have a global count (#) check every turn if the condition is fulfilled, and switch to the next item if so. Avoid producing more items than the user requested",Production and Queues
+allow adding future facilities to the production queue,Production and Queues
+"production queue: instead of the 4 control icons left of the icon, show 4 tabs right above the item (in a separate window) when moving the mouse over",Production and Queues
+"route-scan: when scanning a ship that is following another ship, that is already located at the same location in space as the followed ship, extend the route (of the scan) by the part of the dotted line to the target of the followed ship -> http://www.spaceciv.com/forum/thread.php?threadid=1760",Scans
+"new scan suggestions (eg “surge scan”) http://www.spaceciv.com/forum/thread.php?threadid=1822 -> probably get rid of fleet scan altogether, instead always reveal the number of ships in a fleet -> replace fleet scan with surge scan",Scans
+improving scan discussion http://www.spaceciv.com/forum/thread.php?threadid=1477,Scans
+recon icon should flash when discovered new planets/ships (possibly bold them),Game-Play and User-Interface
+Flash the research icon when a new research is available. also send a news-message.,Game-Play and User-Interface
+check behaviour of flashing icons. also implement a timer to stop the flashing.,Game-Play and User-Interface
+InPlace PickCtrl: deactivated the vertical-scrollbar for skinned list-box since it causes graphical glitches,Game-Play and User-Interface
+fleet tooltip: display light/heavy hitpoints instead of total units/hitpoints also take ship-rank into account when displaying firepower also see bugs #17 Effective hit points of ships in fleets (”Ships” screen) is not displayed.,Game-Play and User-Interface
+known players: (in a tooltip) show the positions of the first ship(s) where they were first seen,Game-Play and User-Interface
+"mark the destination of the route in a route-scan (use a red selection-box) -> that is so that the user can see which object is actually targeted -> currently this is not possible, because the route knows only the target position, not which object is targeted -> i think we can do it, since either we follow a ship, or we are heading for a planet (or arbitrary position!)",Game-Play and User-Interface
+don’t allow fleets with a single ship (watch out for tutorial gal),Game-Play and User-Interface
+remember window frame and column settings -> store galaxy view options on the server -> save filter sorting options as well,Game-Play and User-Interface
+network commands that require optimization -> http://www.spaceciv.com/forum/thread.php?threadid=1741,Game-Play and User-Interface
+planets screen: extend context menu with “ship-crew” (same as ships-in-orbit-menu) that allows to (un)crew all ships in orbit at once -> possibly allow the same in the ships-screen?,Game-Play and User-Interface
+"list a planet as part of the ship-cluster selection menu, for when lots of ships are in orbit of a planet while being really far zoomed out",Game-Play and User-Interface
+"assign labels to ships and planets. Like “Scout”, “Bomber” & “Colonizer” for ships and “Breeder”, “Shipyard” & “Intel” for planets -> you can filter out planets (and ships) with the help of those labels.",Game-Play and User-Interface
+more sophisticated way to compute experience gained in ground combat,Game-Play and User-Interface
+should all military get trained by military camp/academy at the same time? -> http://www.spaceciv.com/forum/thread.php?threadid=3127,Game-Play and User-Interface
+"planet-view-screen: automatically set mouse-wheel focus to the control the mouse is over -> or, set focus to list-ctrl as soon as slider gets focus",Game-Play and User-Interface
+accept (prolong) a treaty when treaty with the same player (but proposed by me) was still active -> http://www.spaceciv.com/forum/thread.php?postid=29223#post29223,Game-Play and User-Interface
+resource treaty: loosen up check if we got enough resources (for treaties with a duration),Game-Play and User-Interface
+combo-box with scrollable drop-down list -> actually custom combo-box with (drop-down) menu,Game-Play and User-Interface
+text messages: turn coordinates (3/4/1-6) into links so that they can be clicked and the camera centers on them,Game-Play and User-Interface
+"Unbalanced Unmanned Orbital Ships http://www.spaceciv.com/forum/thread.php?threadid=2623 -> are too powerful for their cost -> either need to be manned to be destroyed, or shields are less effective (depending on crew aboard), or rebalance shield strengths",Game-Play and User-Interface
+planets screen: show which queue is currently assigned to a planet (in a separate column),Game-Play and User-Interface
+scan multiple ships/planets from recon screen,Game-Play and User-Interface
+feature that allows to include planet’s and sun’s names with coordinates into message just by dragging them from galaxy map,Game-Play and User-Interface
+"ability to add command-centers to the battle-calc, since they do influence a battle outcome.",Game-Play and User-Interface
+battle-calculator: set default tech levels for planetary defense,Minor Gameplay Suggestions
+ability to set waypoints,Minor Gameplay Suggestions
+battlecalc: form groups of ships with average and total summary displayed,Minor Gameplay Suggestions
+merge with fleet fleets/ships on the galaxy map (drag and drop?),Minor Gameplay Suggestions
+allied fleet -> http://www.spaceciv.com/forum/thread.php?threadid=2416,Minor Gameplay Suggestions
+manually delay eta of ships/fleets http://www.spaceciv.com/forum/thread.php?postid=8076#post8076,Minor Gameplay Suggestions
+"galaxy map options: separate system names and coordinates, so that they can be switched separately",Minor Gameplay Suggestions
+allow to change the player name inside a galaxy -> http://www.spaceciv.com/forum/thread.php?threadid=1820,Minor Gameplay Suggestions
+tech-tree set multiple goals (1. 2. 3. etc),Minor Gameplay Suggestions
+stealth technology: allow to fit (light) ships with more than one cloaking device. increases cloaking factor up to 75% (every subsequent cloaking device offers a higher cloaking protection) -> http://www.spaceciv.com/forum/thread.php?postid=10380#post10380,Minor Gameplay Suggestions
+"allow to design ship-designs with future ship-components. these ship-designs can than be selected into production queues, and would be automatically built as soon as the technology becomes available",Minor Gameplay Suggestions
+"rismagis’ improved shipyard and CDA idea, to strengthen ships in orbit, and add a little more stratgy -> http://www.spaceciv.com/forum/thread.php?postid=14101#post14101",Minor Gameplay Suggestions
+"PD piercer turret, kills 1% of the hostile ships in orbit per turn -> http://www.spaceciv.com/forum/thread.php?postid=14125#post14125",Minor Gameplay Suggestions
+inactives: implement “empire influence factor” -> http://www.spaceciv.com/forum/thread.php?postid=17839#post17839,Minor Gameplay Suggestions
+"challenges and rewards: manually edited challenges that are sent out via the news -> hold planet x/y/z for min 100 turns for +100 fame points -> ally up against (eg) phantom, and make sure he is not in the top 3 at the end of the galaxy, for +200 fame points -> ally up with phantom, and win the galaxy together with him (only up to 3 allies are allowed), for +100 fame points -> also you get a “challenge icon” added to the players profile",Minor Gameplay Suggestions
+"different science-wastage formula, one that affects larger empires more (more planets) than smaller empires (fewer planets)",Minor Gameplay Suggestions
+military classes http://www.spaceciv.com/forum/thread.php?threadid=3036,Minor Gameplay Suggestions
+"reputation should be a delta value in corruption, not a multiplier -> http://www.spaceciv.com/forum/thread.php?threadid=2986 -> maybe not... reputation should affect a larger empire more than a smaller one",Minor Gameplay Suggestions
+"galaxy-map: extend ship-cluster context menu to allow drag and drop on fleets, and other functions that are only possible from within the ships-screen",Minor Gameplay Suggestions
+don’t tick governor before the tick (auto-run them for all planets if rules changed),Minor Gameplay Suggestions
+"team galaxy: members vote for #1 and #2, and then they set up their wish list -> http://spaceciv.com/forum/thread.php?threadid=2811",Minor Gameplay Suggestions
+gain small reputation for completing trade agreements -> http://www.spaceciv.com/forum/thread.php?postid=26613#post26613,Minor Gameplay Suggestions
+blockades and piracy -> http://www.spaceciv.com/forum/thread.php?postid=26642#post26642,Minor Gameplay Suggestions
+"overall statistics, like how many ships destroyed, planets conquered, planets lost, etc, in the galaxy achievement sections -> http://www.spaceciv.com/forum/thread.php?postid=29760#post29760",Minor Gameplay Suggestions
+"PD scanner module, that allows you to see PD strength once you are close to a planet",Minor Gameplay Suggestions
+"when sharing line-of-sight share fleet and planet strengths/details as well -> either send the full info, or attach a info chunk -> something similar could be done for scans, instead of checking the scan-database, store the ship details with the ship itself",Minor Gameplay Suggestions
+"drive inhibitor, slows down foreign ships by 5% when in system range. can build one per planet, effect would add up to 25% -> http://www.spaceciv.com/forum/thread.php?threadid=2420",Minor Gameplay Suggestions
+attack with your ally against neutrals -> http://www.spaceciv.com/forum/thread.php?postid=31230#post31230,Minor Gameplay Suggestions
+significant battle only for large fleets (ignore single shuttle kills),Minor Gameplay Suggestions
+arcady’s wishlist -> http://www.spaceciv.com/forum/thread.php?postid=33625#post33625,Minor Gameplay Suggestions
+Earendel ideas -> http://spaceciv.com/forum/thread.php?threadid=3684,Minor Gameplay Suggestions
+progressive colony-module cost -> http://www.spaceciv.com/forum/thread.php?threadid=3560,Minor Gameplay Suggestions
+weapon research tree and new ship-components -> http://www.spaceciv.com/forum/thread.php?threadid=3401,Minor Gameplay Suggestions
+"test-bed custom galaxy settings, and switchable player -> http://cosmicsupremacy.com/forum/thread.php?postid=42139#post42139",Minor Gameplay Suggestions
+Eliminating hyperspace defense receiver energy split -> http://cosmicsupremacy.com/forum/thread.php?postid=42423#post42423,Minor Gameplay Suggestions
+earendel’s ground combat -> http://cosmicsupremacy.com/forum/thread.php?postid=47506#post47506,Minor Gameplay Suggestions
+new doctrine tree -> http://cosmicsupremacy.com/forum/thread.php?postid=57764#post57764,Minor Gameplay Suggestions
+suggestion: implement a real 2d style map galaxy,Major Gameplay Suggestions
+"ship-design attributes (agility, precision, aggressive/defensive, etc), can be assigned RPG-style from say 10 available points -> discuss with players -> one could be, instead of 1% per iteration some ships are allowed to shoot a higher percentage earlier (giving them an advantage against overwhelming enemy)",Major Gameplay Suggestions
+suggestion: ship-class firepower bonuses per ship-class -> see http://www.spaceciv.com/forum/thread.php?threadid=1097,Major Gameplay Suggestions
+"suggestion: exchange planets, see http://www.spaceciv.com/forum/thread.php?postid=7355#post7355",Major Gameplay Suggestions
+"suggestion: newbie gal, before you can play in the regular galaxies -> sandbox galaxy",Major Gameplay Suggestions
+"suggestion: forming real alliances that show in the highscore list, so that factions and counter factions can form early in the game",Major Gameplay Suggestions
+"Allow forming of Federations (extended alliances), allow resource pooling, sharing among members http://www.spaceciv.com/forum/thread.php?postid=9174#post9174",Major Gameplay Suggestions
+being able to set a marker (a beacon) in the 3d-galaxy and attach a note that your allies can see (prem only?),Major Gameplay Suggestions
+"firepower distribution / rpg style attributes -> “well, a rock-paper-scissor system would be awesome... I tried to find a good solution to it, saw a design idea couple years ago from freeorion, but can’t find anymore.” -> “Ship-classes have primary and secondary class-targets, which they pick first. They receive bonuses when attacking their primary/secondary target classes and, depending on size, penalties when attacking other classes (battleship -> shuttle/corvette)” -> missile-ships defeats heavy-ships, heavy-ships defeats light-ships, light-ships defs missiles from missile-ships (nullifying their damage (ie use FP to reduce opponents FP)) -> http://www.spaceciv.com/forum/thread.php?postid=19066#post19066",Major Gameplay Suggestions
+"empire-wide planetary defense system with added strategy, through transmitters and receivers (by ThePhantom) -> http://www.spaceciv.com/forum/thread.php?threadid=1530 -> http://spaceciv.com/forum/thread.php?postid=11818#post11818",Major Gameplay Suggestions
+"different sizes and shapes of galaxies, customizable by users -> allow editing number, type and size of solar-systems, as well as sector size -> prem only: http://www.spaceciv.com/forum/thread.php?postid=17593#post17593",Major Gameplay Suggestions
+"allow upgrading of ships: “upgrade ship” option to ships context menu, switches the planet into a ship-upgrade mode -> http://www.spaceciv.com/forum/thread.php?postid=13387#post13387",Major Gameplay Suggestions
+more sophisticated PD damage model,Major Gameplay Suggestions
+"improved territory calculation -> order player to leave territory (tell admiral to avoid territory), after warning period player can be attacked freely \\-> pirate ships can attack without rep loss or declaration of war -> http://www.spaceciv.com/forum/thread.php?postid=19874#post19874",Major Gameplay Suggestions
+"trade planets and technologies: stronger player can give to weaker, but not the other way around -> or actually it is possible to give away 10% of your planets your own planets, so that it is still possible to trade individual planets -> also a strong player should still be allowed (if he wants) to give several of his planets to a weaker planet, in order to support him",Major Gameplay Suggestions
+"planets with different hostile environment levels, that require you to develop more advanced colony modules to even colonize that planet -> reduce number of planets (and ships)",Major Gameplay Suggestions
+custom galaxies with flexible tick settings,Major Gameplay Suggestions
+Earendel’s tech tree -> http://spaceciv.com/forum/thread.php?postid=35127#post35127,Major Gameplay Suggestions
+Earendel’s Loyalty & Rebellion suggestion -> http://cosmicsupremacy.com/forum/thread.php?postid=36837#post36837,Major Gameplay Suggestions
+"improved combat (more variations, rpg style, initiative, scrips, etc?) -> change combat code so that every single ship has its target, shoots its firepower -> visualize battles (shields block shots, visualize that too, possible slow flying rockets?) -> speed, scanner range and stealth should have an effect within combat -> G104, Battle at Planet ‘Come and Get some’ (4/1/4-4) with Skinnyloser, jackjack, Ruger - rugers ships only making very little damage...",Major Gameplay Suggestions
+Earendel’s Event-Driven Output Bonus & Reputation -> http://cosmicsupremacy.com/forum/thread.php?threadid=4051,Major Gameplay Suggestions
+earendel’s different bombing mechanics -> http://cosmicsupremacy.com/forum/thread.php?threadid=3991,Major Gameplay Suggestions
+Earendel’s real combat -> http://cosmicsupremacy.com/forum/thread.php?postid=44420#post44420,Major Gameplay Suggestions
+Earendel’s always outnumbered -> http://cosmicsupremacy.com/forum/thread.php?postid=42567#post42567,Major Gameplay Suggestions
+Ideas for team galaxies -> http://cosmicsupremacy.com/forum/thread.php?postid=45813#post45813,Major Gameplay Suggestions
+Persistent galaxies -> http://cosmicsupremacy.com/forum/thread.php?threadid=4840,Major Gameplay Suggestions
+Earendel’s Corruption Reputation Morale Loyalty -> http://cosmicsupremacy.com/forum/thread.php?postid=48328#post48328,Major Gameplay Suggestions
+"when game starts for the first time, bring up a welcome screen, as well as a quick explanation how the game works (tick wise) -> http://www.spaceciv.com/forum/thread.php?postid=9364#post9364","Webpage, Game Startup, and Tutorial Galaxy"
+"manual: governor rules more detailed info (food-surplus, base food, food output, etc)","Webpage, Game Startup, and Tutorial Galaxy"
+"manual: more experienced steps: try (shared) prod-queues for production, use govs to manage your population (examples)","Webpage, Game Startup, and Tutorial Galaxy"
+"tutorial galaxy: adapt to work with new design (2 food bars, etc)","Webpage, Game Startup, and Tutorial Galaxy"
