@@ -19,7 +19,7 @@ marker naming the file, so they can be found while browsing.
 - [ ] `/wiki/_media/wiki/dokuwiki-128.png?w=50&amp;h=&amp;cache=cache`
   - 1 place(s), e.g. `wiki/howto/syntax.html`
 
-## Broken links (414 targets, 509 references)
+## Broken links (410 targets, 501 references)
 
 These resolve to pages the crawler never captured. Most are wiki
 sub-pages and DokuWiki image-detail viewers.
@@ -44,10 +44,6 @@ sub-pages and DokuWiki image-detail viewers.
 - [ ] `wiki/guides/nongolfguide/auxgovernors.html` — 3 reference(s)
 - [ ] `downloads/CosmicSupremacy-Resurgence-v0.1.0.zip.html` — 2 reference(s)
 - [ ] `downloads/CosmicSupremacy.msi.html` — 2 reference(s)
-- [ ] `downloads/CrashDump.reg.html` — 2 reference(s)
-- [ ] `downloads/DisablePlanetSurfaces.reg.html` — 2 reference(s)
-- [ ] `downloads/EnableTerritory.reg.html` — 2 reference(s)
-- [ ] `downloads/EnablePlanetSurfaces.reg.html` — 2 reference(s)
 - [ ] `wiki/faq@do=backlink.html` — 2 reference(s)
 - [ ] `wiki/getstarted@do=backlink.html` — 2 reference(s)
 - [ ] `wiki/_detail/getstarted/galaxypass@id=getstarted&cache=cache.png.html` — 2 reference(s)
