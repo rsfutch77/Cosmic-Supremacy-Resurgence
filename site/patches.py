@@ -127,10 +127,56 @@ def remove_tools_subtab(html):
     return _drop_subtab(html, r"wiki/tools")
 
 
+def remove_wallpapers_subtab(html):
+    """Only thumbnails survived the archive, so the page is not worth showing."""
+    return _drop_subtab(html, r"wiki/wallpapers")
+
+
+_CONTACT_RE = re.compile(
+    r"<a\s[^>]*href=['\"][^'\"]*(?:support_)?contact\.php[^'\"]*['\"][^>]*>(.*?)</a>",
+    re.S | re.I)
+
+
+def redirect_contact_links(html):
+    """Repoint every 'contact support' link at GitHub issues.
+
+    These are scattered through the wiki as absolute links to contact.php on the
+    original domain, which is dead. Doing it here rather than per page catches
+    the duplicate copies DokuWiki left behind under _export/ and */index.html.
+    """
+    return _CONTACT_RE.sub(
+        lambda m: '<a href="%s" target="_blank">%s</a>' % (GITHUB_ISSUES, m.group(1)),
+        html)
+
+
+# Only href/src/action are rewritten. title= and og:image content= keep the
+# original absolute URL: they are not clickable, and leaving them records what
+# the address used to be.
+_ABS_SELF_RE = re.compile(
+    r"(?P<attr>(?:href|src|action)\s*=\s*(?P<q>[\"']))"
+    r"https?://(?:www\.)?cosmicsupremacy\.com"
+    r"(?P<path>/[^\"']*)(?P=q)", re.I)
+
+
+def localise_self_links(html):
+    """Rewrite absolute links back to this site as site-relative paths.
+
+    The archive is full of links that spell out the original domain. Left alone
+    they point at a host that no longer answers, which is indistinguishable from
+    a broken site. Made relative, they either hit the restored page or land on
+    the "not restored yet" 404, which is the honest answer either way.
+    """
+    return _ABS_SELF_RE.sub(
+        lambda m: m.group("attr") + m.group("path") + m.group("q"), html)
+
+
 PATCHES = [
     ("remove the Live Chat tab", remove_live_chat),
     ("remove the Firewall sub-tab", remove_firewall_subtab),
     ("hide the Tools sub-tab", remove_tools_subtab),
+    ("remove the Wallpapers sub-tab", remove_wallpapers_subtab),
+    ("point contact links at GitHub", redirect_contact_links),
+    ("localise absolute self-links", localise_self_links),
     ("point support e-mail at GitHub", redirect_support_email),
 ]
 

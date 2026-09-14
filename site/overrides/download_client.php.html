@@ -35,7 +35,19 @@
         <table border='0' cellpadding='0' cellspacing='0' width='100%'>
 <tr><td valign='top' width='100%'>
 
-	<table class='content_pane'>
+	<!-- [ ] TODO (zip): publish the rebuilt client.
+     Both links below still point at the original 2022 binaries recovered from
+     the web archive, not at anything this project built. Running
+     release/build.ps1 puts a .zip in dist/, which stage.py copies into
+     public/downloads/ automatically. Once that exists, repoint the two links
+     here and update File Name, Download Size and Date Published. -->
+<!-- [ ] TODO (MSI): decide whether to ship an installer at all.
+     The .msi existed to register the .csgalaxy file association for one-click
+     galaxy joining, plus Start Menu entries. The association does nothing until
+     multiplayer exists, and an unsigned MSI trips SmartScreen, which looks
+     worse to a cautious user than a plain zip. Revisit when multiplayer lands;
+     if it ships, it needs code signing. -->
+<table class='content_pane'>
 		<tr>
 			<td class='content_heading' width='100%'>
 				Download Cosmic Supremacy Game Client
