@@ -33,6 +33,7 @@ REPO = os.path.dirname(HERE)
 WAYBACK = os.path.join(REPO, "tools", "wayback")
 sys.path.insert(0, WAYBACK)
 import wayback_grab as wg  # noqa: E402  (reuse the mirror's own path logic)
+import patches            # noqa: E402  site-wide edits, see patches.py
 
 HOST = "cosmicsupremacy.com"
 SRC = os.path.join(WAYBACK, "cosmicsupremacy_mirror", HOST)
@@ -70,6 +71,14 @@ def is_asset(rel):
 # avatars. Nothing under these prefixes is staged, so they always 404.
 EXCLUDE_PREFIXES = ("forum/",)
 
+# Whole pages that are deliberately not republished. Their nav entries are
+# stripped by patches.py, and firebase.json must not rewrite anything to them.
+EXCLUDE_PAGES = {
+    "chat.php.html",             # live chat needs a server nobody is running
+    "download_firewall.php.html",  # firewall rules for a server that is gone
+    "wiki/tools.html",           # hidden until the tools are worth shipping
+}
+
 NOINDEX = '<meta name="robots" content="noindex, nofollow" />'
 
 # Injected into staged pages only; the mirror on disk is never modified. The
@@ -100,7 +109,8 @@ def canonical_pages():
     site is almost always a session id, making it a duplicate of the clean page.
     """
     return [fn for fn in sorted(os.listdir(SRC))
-            if fn.endswith(".php.html") and "@" not in fn]
+            if fn.endswith(".php.html") and "@" not in fn
+            and fn not in EXCLUDE_PAGES]
 
 
 def wiki_pages():
@@ -125,7 +135,8 @@ def build_set(name):
         pages += wiki_pages()
     seen, uniq = set(), []
     for p in pages:
-        if p not in seen and not p.startswith(EXCLUDE_PREFIXES):
+        if (p not in seen and not p.startswith(EXCLUDE_PREFIXES)
+                and p not in EXCLUDE_PAGES):
             seen.add(p)
             uniq.append(p)
     return uniq
@@ -153,10 +164,19 @@ def candidates(ref, base_dir):
     Session ids make one page look like hundreds of URLs, so a link carrying a
     sid that was never captured should still find the clean copy of the page.
     """
-    if re.match(r"^(https?:|mailto:|javascript:|data:|#|//)", ref, re.I):
+    if re.match(r"^(mailto:|javascript:|data:|#)", ref, re.I):
         return []
     ref = ref.replace("&amp;", "&")  # the mirror's rewriter never decoded these
+    if ref.startswith("//"):
+        ref = "http:" + ref
     split = urllib.parse.urlsplit(ref)
+    if split.scheme or split.netloc:
+        # An absolute link back to the site's own host is still a local page.
+        # The archive is full of these and left alone they point at the dead
+        # original domain, which looks like a working link and is not.
+        host = split.netloc.lower().split("@")[-1].split(":")[0]
+        if host not in (HOST, "www." + HOST):
+            return []
     path, query = split.path, split.query
     if not path and not query:
         return []
@@ -246,7 +266,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--set", dest="setname", default="home",
                     choices=["home", "core", "full"])
-    ap.add_argument("--seed", default="index.html",
+    ap.add_argument("--seed", default="game_news.php.html",
                     help="page served at / (default: the archived home page)")
     ap.add_argument("--list", action="store_true", help="show the set and exit")
     args = ap.parse_args()
@@ -268,21 +288,29 @@ def main():
     if not os.path.isfile(seed_src):
         sys.exit("seed page not found: " + seed_src)
 
+    # Empty public/ rather than deleting it. On Windows an editor, indexer or
+    # dev server frequently holds a handle on the directory itself, which makes
+    # rmtree fail even though every file inside is removable.
     if os.path.isdir(DST):
-        shutil.rmtree(DST)
-    os.makedirs(DST)
+        for name in os.listdir(DST):
+            victim = os.path.join(DST, name)
+            if os.path.isdir(victim) and not os.path.islink(victim):
+                shutil.rmtree(victim, ignore_errors=True)
+            else:
+                try:
+                    os.remove(victim)
+                except OSError:
+                    pass
+        leftover = sum(len(f) for _r, _d, f in os.walk(DST))
+        if leftover:
+            print("  warning: %d file(s) in public/ could not be removed" % leftover)
+    else:
+        os.makedirs(DST)
 
     copied, missing, css_queue = {}, set(), []
 
     for rel in pages:
         copy(rel, copied, missing)
-
-    # The seed is also served at / so the site has a front page.
-    with open(seed_src, "r", encoding="utf-8", errors="replace") as fh:
-        seed_html = fh.read()
-    with open(os.path.join(DST, "index.html"), "w", encoding="utf-8") as fh:
-        fh.write(seed_html)
-    copied["index.html"] = len(seed_html)
 
     # Assets referenced by any staged page.
     for rel in list(copied):
@@ -325,9 +353,17 @@ def main():
                 copied[rel] = os.path.getsize(full)
                 override_count += 1
 
+    # The seed is also served at /. Copied after overrides so that editing the
+    # seed page updates the front page too, rather than only its own URL.
+    seed_staged = os.path.join(DST, args.seed.replace("/", os.sep))
+    if os.path.isfile(seed_staged):
+        shutil.copy2(seed_staged, os.path.join(DST, "index.html"))
+        copied["index.html"] = os.path.getsize(seed_staged)
+
     # Only now is the staged set final, so links can be pointed at it.
     staged = set(copied)
     rewritten = 0
+    patch_hits = {}
     for rel in sorted(copied):
         if os.path.splitext(rel)[1].lower() not in PAGE_EXT:
             continue
@@ -336,8 +372,25 @@ def main():
             text = fh.read()
         text, n = rewrite_links(text, rel, staged)
         rewritten += n
+        text, hit = patches.apply_all(text)
+        for name in hit:
+            patch_hits[name] = patch_hits.get(name, 0) + 1
         with open(full, "w", encoding="utf-8") as fh:
             fh.write(inject(text))
+
+    # Ship the rebuilt client if a build exists. dist/ is gitignored, so the
+    # binaries never enter the repository; they are picked up at publish time.
+    dist = os.path.join(REPO, "dist")
+    shipped = 0
+    if os.path.isdir(dist):
+        downloads = os.path.join(DST, "downloads")
+        for fn in sorted(os.listdir(dist)):
+            if fn.lower().endswith((".msi", ".zip")):
+                os.makedirs(downloads, exist_ok=True)
+                shutil.copy2(os.path.join(dist, fn), os.path.join(downloads, fn))
+                copied["downloads/" + fn] = os.path.getsize(os.path.join(dist, fn))
+                shipped += 1
+    print("  client builds published from dist/: %d" % shipped)
 
     # Crawling is allowed on purpose: the noindex header and meta tag do the
     # work, and a Disallow here would stop crawlers from ever reading them.
@@ -355,6 +408,11 @@ def main():
     print("  links repointed at staged pages: %d" % rewritten)
     if override_count:
         print("  hand-written overrides applied:  %d" % override_count)
+    for name, n in sorted(patch_hits.items()):
+        print("  site-wide patch: %-32s %d pages" % (name, n))
+    for name, _fn in patches.PATCHES:
+        if name not in patch_hits:
+            print("  site-wide patch MATCHED NOTHING: %s" % name)
     if missing:
         print("  referenced but absent from mirror: %d" % len(missing))
 

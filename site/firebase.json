@@ -47,10 +47,6 @@
     ],
     "rewrites": [
       {
-        "source": "/chat.php",
-        "destination": "/chat.php.html"
-      },
-      {
         "source": "/community_galhistory.php",
         "destination": "/community_galhistory.php.html"
       },
@@ -61,10 +57,6 @@
       {
         "source": "/download_client.php",
         "destination": "/download_client.php.html"
-      },
-      {
-        "source": "/download_firewall.php",
-        "destination": "/download_firewall.php.html"
       },
       {
         "source": "/download_stability.php",
