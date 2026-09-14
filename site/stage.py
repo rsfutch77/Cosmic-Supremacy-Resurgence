@@ -34,6 +34,7 @@ WAYBACK = os.path.join(REPO, "tools", "wayback")
 sys.path.insert(0, WAYBACK)
 import wayback_grab as wg  # noqa: E402  (reuse the mirror's own path logic)
 import patches            # noqa: E402  site-wide edits, see patches.py
+import inventory          # noqa: E402  writes TODO-content.md
 
 HOST = "cosmicsupremacy.com"
 SRC = os.path.join(WAYBACK, "cosmicsupremacy_mirror", HOST)
@@ -69,7 +70,7 @@ def is_asset(rel):
 
 # Held back deliberately: the forum carries real users' posts, names and
 # avatars. Nothing under these prefixes is staged, so they always 404.
-EXCLUDE_PREFIXES = ("forum/",)
+EXCLUDE_PREFIXES = ("forum/", "wiki/_export/")
 
 # Whole pages that are deliberately not republished. Their nav entries are
 # stripped by patches.py, and firebase.json must not rewrite anything to them.
@@ -190,6 +191,15 @@ def candidates(ref, base_dir):
             return []
     rel = rel.lstrip("/")
 
+    if rel.endswith("lib/exe/fetch.php") and query:
+        media = urllib.parse.parse_qs(query).get("media", [""])[0]
+        if media.startswith(("http://", "https://")):
+            mp = urllib.parse.urlsplit(media)
+            mhost = mp.netloc.lower().split(":")[0]
+            if mhost in (HOST, "www." + HOST):
+                return candidates(mp.path, "")
+        return []
+
     queries = [query]
     if query:
         kept = [kv for kv in urllib.parse.parse_qsl(query, keep_blank_values=True)
@@ -207,6 +217,41 @@ def candidates(ref, base_dir):
             if cand not in out:
                 out.append(cand)
     return out
+
+
+_IMG_RE = re.compile(
+    '<img[^>]*?src\\s*=\\s*(?:"(?P<dq>[^"]*)"|\'(?P<sq>[^\']*)\')[^>]*>',
+    re.I)
+
+
+def mark_missing_images(html, page_rel, staged):
+    """Replace images the archive never captured with a visible TODO marker.
+
+    A broken-image icon says nothing about what is missing. This names the file
+    so a replacement can be found, and makes the gaps countable while browsing.
+    """
+    base = posixpath.dirname(page_rel)
+    found = []
+
+    def sub(m):
+        src = m.group("dq")
+        if src is None:
+            src = m.group("sq")
+        for cand in candidates(src, base):
+            if cand in staged:
+                return m.group(0)
+        if not candidates(src, base):      # external image, not ours to judge
+            return m.group(0)
+        found.append(src)
+        return (
+            '<!-- [ ] TODO(image): not in the web archive, needs a replacement: '
+            + src.replace("--", "- -") + ' -->'
+            '<span style="display:inline-block;padding:4px 8px;border:1px dashed #b00;'
+            'color:#b00;font:11px Verdana,sans-serif;background:#fff5f5;">'
+            '[ ] missing image</span>'
+        )
+
+    return _IMG_RE.sub(sub, html), found
 
 
 def rewrite_links(text, page_rel, staged):
@@ -365,6 +410,7 @@ def main():
     staged = set(copied)
     rewritten = 0
     patch_hits = {}
+    image_todos = {}
     for rel in sorted(copied):
         if os.path.splitext(rel)[1].lower() not in PAGE_EXT:
             continue
@@ -373,7 +419,12 @@ def main():
             text = fh.read()
         text, n = rewrite_links(text, rel, staged)
         rewritten += n
+        # Patches run first: they strip the indexer beacon, which would
+        # otherwise be counted and marked as a missing image on every page.
         text, hit = patches.apply_all(text)
+        text, missing_imgs = mark_missing_images(text, rel, staged)
+        for src in missing_imgs:
+            image_todos.setdefault(src, []).append(rel)
         for name in hit:
             patch_hits[name] = patch_hits.get(name, 0) + 1
         with open(full, "w", encoding="utf-8") as fh:
@@ -411,6 +462,13 @@ def main():
         print("  hand-written overrides applied:  %d" % override_count)
     for name, n in sorted(patch_hits.items()):
         print("  site-wide patch: %-32s %d pages" % (name, n))
+    n_img, n_tgt, n_ref = inventory.write(
+        os.path.join(HERE, "TODO-content.md"), image_todos, DST, staged, candidates)
+    print("  TODO-content.md: %d missing images, %d broken link targets (%d refs)"
+          % (n_img, n_tgt, n_ref))
+    if image_todos:
+        print("  images marked TODO: %d distinct (%d places)"
+              % (len(image_todos), sum(len(v) for v in image_todos.values())))
     for name, _fn in patches.PATCHES:
         if name not in patch_hits:
             print("  site-wide patch MATCHED NOTHING: %s" % name)

@@ -137,16 +137,29 @@ _CONTACT_RE = re.compile(
     re.S | re.I)
 
 
+_TABSTRIP_RE = re.compile(r"<ul id='tab'>.*?</ul>", re.S)
+
+
 def redirect_contact_links(html):
-    """Repoint every 'contact support' link at GitHub issues.
+    """Repoint 'contact support' links in page bodies at GitHub issues.
 
     These are scattered through the wiki as absolute links to contact.php on the
     original domain, which is dead. Doing it here rather than per page catches
     the duplicate copies DokuWiki left behind under _export/ and */index.html.
+
+    The sub-tab strip is left alone. Its Contact tab is part of the site's
+    navigation and should keep both its label and its destination; the Contact
+    page it leads to is what carries the GitHub link.
     """
-    return _CONTACT_RE.sub(
-        lambda m: '<a href="%s" target="_blank">%s</a>' % (GITHUB_ISSUES, m.group(1)),
-        html)
+    strip = _TABSTRIP_RE.search(html)
+    if not strip:
+        return _CONTACT_RE.sub(_to_github, html)
+    head, tabs, tail = html[:strip.start()], strip.group(0), html[strip.end():]
+    return _CONTACT_RE.sub(_to_github, head) + tabs + _CONTACT_RE.sub(_to_github, tail)
+
+
+def _to_github(m):
+    return '<a href="%s" target="_blank">%s</a>' % (GITHUB_ISSUES, m.group(1))
 
 
 # Only href/src/action are rewritten. title= and og:image content= keep the
@@ -170,6 +183,22 @@ def localise_self_links(html):
         lambda m: m.group("attr") + m.group("path") + m.group("q"), html)
 
 
+_BEACON_RE = re.compile(
+    r"<div class=\"no\"><img[^>]*indexer\.php[^>]*/?>\s*</div>", re.I)
+_BEACON_IMG_RE = re.compile(r"<img[^>]*indexer\.php[^>]*/?>", re.I)
+
+
+def strip_indexer_beacons(html):
+    """Remove DokuWiki's indexer pixel.
+
+    It is a 1x1 tracking image pointing at a PHP endpoint that was never
+    archived. It renders as a broken-image icon and marks 165 references as
+    missing, drowning out the images that a reader would actually notice.
+    """
+    html = _BEACON_RE.sub("", html)
+    return _BEACON_IMG_RE.sub("", html)
+
+
 PATCHES = [
     ("remove the Live Chat tab", remove_live_chat),
     ("remove the Firewall sub-tab", remove_firewall_subtab),
@@ -177,6 +206,7 @@ PATCHES = [
     ("remove the Wallpapers sub-tab", remove_wallpapers_subtab),
     ("point contact links at GitHub", redirect_contact_links),
     ("localise absolute self-links", localise_self_links),
+    ("strip DokuWiki indexer beacons", strip_indexer_beacons),
     ("point support e-mail at GitHub", redirect_support_email),
 ]
 
