@@ -79,6 +79,7 @@ EXCLUDE_PAGES = {
     "download_firewall.php.html",  # firewall rules for a server that is gone
     "wiki/tools.html",           # hidden until the tools are worth shipping
     "wiki/wallpapers.html",      # only thumbnails survived; nothing to show
+    "wiki/dev.html",             # retired; captured to the CSV at the repo root
 }
 
 NOINDEX = '<meta name="robots" content="noindex, nofollow" />'

@@ -19,11 +19,12 @@ marker naming the file, so they can be found while browsing.
 - [ ] `/wiki/_media/wiki/dokuwiki-128.png?w=50&amp;h=&amp;cache=cache`
   - 1 place(s), e.g. `wiki/howto/syntax.html`
 
-## Broken links (448 targets, 545 references)
+## Broken links (447 targets, 704 references)
 
 These resolve to pages the crawler never captured. Most are wiki
 sub-pages and DokuWiki image-detail viewers.
 
+- [ ] `wiki/dev.html` — 161 reference(s)
 - [ ] `wiki/_detail/manual/resources/resource3@id=manual_ship-components&cache=cache.png.html` — 8 reference(s)
 - [ ] `wiki/_detail/manual/resources/resource4@id=manual_ship-components&cache=cache.png.html` — 8 reference(s)
 - [ ] `wiki/_detail/manual/resources/resource6@id=manual_ship-components&cache=cache.png.html` — 8 reference(s)
@@ -226,8 +227,6 @@ sub-pages and DokuWiki image-detail viewers.
 - [ ] `wiki/_detail/manual/resources/resource6@id=conceptart&cache=cache.png.html` — 1 reference(s)
 - [ ] `wiki/it/darkl.html` — 1 reference(s)
 - [ ] `wiki/it/darklstrike.html` — 1 reference(s)
-- [ ] `wiki/dev@do=backlink.html` — 1 reference(s)
-- [ ] `forum.html` — 1 reference(s)
 - [ ] `wiki/domlib_timeoutstates@do=backlink.get.html` — 1 reference(s)
 - [ ] `wiki/domlib_timeoutstates.get.html` — 1 reference(s)
 - [ ] `wiki/it/domlib_timeoutstates.get.html` — 1 reference(s)
