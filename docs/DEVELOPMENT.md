@@ -1,15 +1,15 @@
 # Development
 
 Everything needed to work on the project. If you only want to *play*, you do not
-need any of this , see the [README](../README.md) and download a release.
+need any of this, see the [README](../README.md) and download a release.
 
 ## Project goals
 
-1. **Understand the original client** , extract assets, map out the HTTP API it
+1. **Understand the original client**, extract assets, map out the HTTP API it
    expects, and document game mechanics (tech tree, ship design, galaxy rules).
-2. **Build a compatible server** , a Python backend that speaks the same
+2. **Build a compatible server**, a Python backend that speaks the same
    protocol so the unmodified (patched for localhost) client can connect.
-3. **Preserve and share** , make the findings, tools, and server code available
+3. **Preserve and share**, make the findings, tools, and server code available
    so anyone who remembers the game can help bring it back.
 
 ## Repository layout
@@ -43,7 +43,7 @@ Start the stub server:
 ```
 
 Then launch a client with a galaxy pass file. The client takes exactly one
-command-line argument , the path to a `.csgalaxy` , which is all that dragging
+command-line argument, the path to a `.csgalaxy`, which is all that dragging
 the file onto the EXE ever did:
 
 ```powershell
@@ -60,7 +60,7 @@ server\.venv\Scripts\python.exe release\launcher.py
 ## The three client EXEs
 
 All three are the same 8 MB original binary with different byte patches applied.
-**None of them is the pristine original** , `CosmicSupremacy.exe` is the least
+**None of them is the pristine original**, `CosmicSupremacy.exe` is the least
 modified, not unmodified. Its name is historical and misleading.
 
 | EXE | Server target | Modified to | Used for |
@@ -69,14 +69,14 @@ modified, not unmodified. Its name is historical and misleading.
 | `CosmicSupremacy_TestBed.exe` | `127.0.0.1:8888` | TestBed galaxy join and load paths | TestBed galaxies |
 | `CosmicSupremacy_Resurgence.exe` | `127.0.0.1:8888` | no "analyzing system" popup; works with custom turn lengths and the AI harness | Sandbox galaxy, AI harness |
 
-Neither Tutorial nor Demo reaches the internet , no DNS lookup for the old domain
+Neither Tutorial nor Demo reaches the internet, no DNS lookup for the old domain
 occurs, so the `www.cosmicsupremacy.com` string above is never contacted. They
 differ from each other on the local server, measured rather than assumed:
 
 | Mode | Contacts `localhost:8888`? |
 |------|----------------------------|
-| Tutorial | Yes , `testconnection` at startup, one of the checks this EXE was modified to take |
-| Demo | No , zero requests and zero connection attempts across a 45-second run with both loopback listeners up |
+| Tutorial | Yes, `testconnection` at startup, one of the checks this EXE was modified to take |
+| Demo | No, zero requests and zero connection attempts across a 45-second run with both loopback listeners up |
 
 ### `[ ]` Let the player name a save
 
@@ -89,7 +89,7 @@ number to tell them apart. Wants a name prompt, passed through to
 
 Single Player ships one pre-seeded `.dat`, so **every new game is the same
 galaxy**. That is a regression against the pass-file path, which generates a
-fresh galaxy on every launch , measured, two launches gave 170 vs 159 planets
+fresh galaxy on every launch, measured, two launches gave 170 vs 159 planets
 with different sun layouts and different homeworld positions.
 
 The fix reuses pieces that all already work: launch on the pass file to generate
@@ -97,7 +97,7 @@ a fresh galaxy, trigger `SaveGame`, inject the AI's designs into the blob
 (`make_single_player_galaxy.py` does exactly this), then relaunch on the result.
 Roughly a minute of "preparing your galaxy" at the start of a new game.
 
-Deferred deliberately , the fixed galaxy is playable, and the buttons and the
+Deferred deliberately, the fixed galaxy is playable, and the buttons and the
 seeding were worth proving first.
 
 ## Building a release
@@ -112,7 +112,7 @@ the player-facing folder, and zips it into `dist/`. Build dependencies live in
 `release/.venv-build`, kept separate from `server/.venv` so a build never
 perturbs the dev environment.
 
-**`release/manifest.json` is the single source of truth** for what a mode is ,
+**`release/manifest.json` is the single source of truth** for what a mode is,
 which EXE, which galaxy file, and whether it is shown. `build.ps1` reads it to
 decide which client binaries to copy, so adding or retargeting a mode is a data
 edit, not a code change.
@@ -130,7 +130,7 @@ the first thing anyone double-clicks.
 The build refuses to start while a launcher is running, since a live one holds
 its own exe and `data\` open and the staging wipe would fail on a file lock.
 
-Test the result from the staged folder rather than the repo , that is the only
+Test the result from the staged folder rather than the repo, that is the only
 layout a player will ever have.
 
 ### Pre-release tests
@@ -139,7 +139,7 @@ layout a player will ever have.
 powershell -ExecutionPolicy Bypass -File .\release\tests\run_all.ps1
 ```
 
-Five runs, a few minutes. Close the launcher first , one already holding port
+Five runs, a few minutes. Close the launcher first, one already holding port
 8888 makes the tests silently reuse it instead of exercising their own server.
 The last four start and kill the real game, so leave the machine alone.
 
@@ -152,7 +152,7 @@ The last four start and kill the real game, so leave the machine alone.
 ### Release checklist
 
 1. `build.ps1 -Clean` and confirm the version is right.
-2. Run `release\tests\run_all.ps1` , all green.
+2. Run `release\tests\run_all.ps1`, all green.
 3. Run the staged launcher and click through every visible mode.
 4. Confirm `data/` is created next to the launcher and both logs appear.
 5. Tag `v<version>` and attach the `.zip` to a GitHub release, with the
@@ -165,23 +165,23 @@ run. This is expected and is documented in the release's `README.txt`.
 
 `client/dev_tools/` reads and drives a live client by inspecting its memory:
 
-- `ejbo_viewer.py` / `ejbo_viewer.html` , live game-state viewer
-- `snapshot.py`, `checkpoint.py` , capture and restore game state
-- `game_cycle.py`, `fast_turns.py`, `advance_turns.py` , drive turns
-- `make_single_player_galaxy.py` , build a galaxy with the AI's designs seeded in
-- `xrefs.py` , static cross-references: who calls this address, and what else does that
+- `ejbo_viewer.py` / `ejbo_viewer.html`, live game-state viewer
+- `snapshot.py`, `checkpoint.py`, capture and restore game state
+- `game_cycle.py`, `fast_turns.py`, `advance_turns.py`, drive turns
+- `make_single_player_galaxy.py`, build a galaxy with the AI's designs seeded in
+- `xrefs.py`, static cross-references: who calls this address, and what else does that
   caller call. Decodes `E8 rel32` and 32-bit absolute operands only, so it is blind to
   virtual dispatch; a negative result is weak evidence, a positive one is checkable.
   Validate it on a known address before trusting it on a new one
-- `find_refs.py` , the runtime counterpart: who currently points at this object, searching
+- `find_refs.py`, the runtime counterpart: who currently points at this object, searching
   every reference form (`tag-8`, `tag-12`, `tag-52`) because searching one finds a fraction
-- `ai_player/` , the heuristic AI; see its [STRATEGY.md](../client/dev_tools/ai_player/STRATEGY.md)
+- `ai_player/`, the heuristic AI; see its [STRATEGY.md](../client/dev_tools/ai_player/STRATEGY.md)
 
 `server/dev_tools/` works on save blobs: `save_parser.py`, `diff_saves.py`, and
 the `inject_*.py` family for planting civs, designs, ships and orders.
 
 ## Reference
 
-- [Development_Plan.md](Development_Plan.md) , phases, priorities, backlog
-- [CosmicSupremacy_Reconstruction_Report.md](CosmicSupremacy_Reconstruction_Report.md) , the full reverse-engineering reference
-- [CosmicSupremacy_Memory_Reconstruction_Report.md](CosmicSupremacy_Memory_Reconstruction_Report.md) , memory layout and structures
+- [Development_Plan.md](Development_Plan.md), phases, priorities, backlog
+- [CosmicSupremacy_Reconstruction_Report.md](CosmicSupremacy_Reconstruction_Report.md), the full reverse-engineering reference
+- [CosmicSupremacy_Memory_Reconstruction_Report.md](CosmicSupremacy_Memory_Reconstruction_Report.md), memory layout and structures
