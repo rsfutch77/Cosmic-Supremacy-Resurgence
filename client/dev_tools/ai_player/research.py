@@ -193,10 +193,18 @@ GRANTS = {
 # and Doctrine: Habitat grants trait 38 +20.
 TRAIT_NAME = {18: "ship speed %", 38: "planet space %"}
 
-# Facility ids we have confirmed by observation. The rest of the space (up to
-# 20) is granted by the table but not yet identified in the UI.
-FACILITY_NAME = {0: "farm", 2: "shipyard", 4: "university", 6: "military camp",
-                 8: "defence agency", 9: "light turret"}
+# Facility names, the full id space. Six were confirmed by observation; the rest
+# were resolved by reading this GRANTS table against the manual's facility list,
+# since the tech that unlocks a facility usually shares its name, then verified
+# against the live facility table's build cost and space. See facilities.NAMES,
+# which is the same map, and docs/CosmicSupremacy_Stat_Tables.md.
+FACILITY_NAME = {0: "farm", 1: "factory", 2: "shipyard", 3: "automated factory",
+    4: "university", 5: "science lab", 6: "military camp",
+    7: "military academy", 8: "defence agency", 9: "light turret",
+    10: "heavy turret", 11: "shield generator", 12: "propaganda office",
+    13: "mine", 14: "robo mine", 15: "bunker", 16: "banking center",
+    17: "planetary fortress", 18: "hyperspace transmitter",
+    19: "hyperspace receiver", 20: "command center"}
 
 # A doctrine choice is permanent and locks out its whole tier. Off by default.
 ALLOW_DOCTRINES = False

@@ -279,7 +279,7 @@ def target_planets(snap, civ, hist, foes):
             continue
         defence = sum(tbl[t]["strength_1"] + tbl[t]["strength_2"]
                       for t, n in p.facilities.items()
-                      for _ in range(n) if t in tbl and tbl[t]["defence_class"])
+                      for _ in range(n) if t in tbl and tbl[t]["defence_units"])
         out.append((p.military + defence, p))
     out.sort(key=lambda x: x[0])
     return out
