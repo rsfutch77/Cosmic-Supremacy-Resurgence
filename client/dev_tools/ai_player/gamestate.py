@@ -39,17 +39,30 @@ PILING_UP_WEALTH = 0x0080B540            # shared "generating wealth" singleton
 FACILITY_VFTABLE = 0x00752BA4
 
 # ── Id tables (all CONFIRMED in the annotations unless marked) ─────────────
-# 3 = crew, first observed on a ship's crew vector (Ship:124). 4 is still
-# unobserved.
+# Names beyond the observed ids come from the wiki manual joined to the research
+# grants table, then checked against the live tables; see
+# docs/CosmicSupremacy_Stat_Tables.md for the derivation and the full stats.
+# 3 = crew, first observed on a ship's crew vector (Ship:124). 4 is "military",
+# which is NOT an observed read: it is the only free id in the citizen range, and
+# the UI string table at 0x0035209D lists a <MilitaryMed> / "Military" pair in the
+# same run as the five civilian jobs. Treat it as unconfirmed.
 JOBS       = {0: "farmer", 1: "worker", 2: "scientist", 3: "crew",
-              5: "miner", 6: "banker"}
+              4: "military", 5: "miner", 6: "banker"}
 CREW_JOB   = 3
-FACILITIES = {0: "farm", 2: "shipyard", 4: "university", 6: "military camp",
-              8: "defence agency", 9: "light turret"}
+FACILITIES = {0: "farm", 1: "factory", 2: "shipyard",
+              3: "automated factory", 4: "university", 5: "science lab",
+              6: "military camp", 7: "military academy", 8: "defence agency",
+              9: "light turret", 10: "heavy turret", 11: "shield generator",
+              12: "propaganda office", 13: "mine", 14: "robo mine",
+              15: "bunker", 16: "banking center", 17: "planetary fortress",
+              18: "hyperspace transmitter", 19: "hyperspace receiver",
+              20: "command center"}
 ORDERS     = {0: "none", 1: "move", 2: "scout", 3: "colonize", 4: "attack",
               5: "conquer", 7: "move-near"}
-MODULES    = {0: "colony module", 1: "troop bay", 2: "large pilot cabin"}
-CHASSIS    = {0: "shuttle", 1: "corvette"}
+MODULES    = {0: "colony module", 1: "troop bay", 2: "large pilot cabin",
+              3: "cloaking device", 4: "bio bombs", 5: "wormhole generator"}
+CHASSIS    = {0: "shuttle", 1: "corvette", 2: "frigate", 3: "destroyer",
+              4: "cruiser", 5: "battleship"}
 RESOURCES  = {0: "metal", 1: "deuterium", 2: "radioactives", 3: "crystal",
               4: "exotics"}
 
@@ -301,6 +314,15 @@ class Planet(Obj):
     def food(self):         return self.i32(112)
     @property
     def food_cap(self):     return self.i32(116)
+    @property
+    def rates(self):
+        """Per-unit output packed into Planet:96, one byte each: food per
+        farmer, production per worker, science per scientist. The homeworld
+        customisation writes byte 0 here, so this is the planet's real rate
+        rather than the base-table value."""
+        return (self.byte(96, 0), self.byte(96, 1), self.byte(96, 2))
+    @property
+    def food_rate(self):    return self.byte(96, 0)
     @property
     def build_progress(self): return self.i32(120)
     @property

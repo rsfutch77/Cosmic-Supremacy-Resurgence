@@ -1460,9 +1460,12 @@ new galaxy rather than inherited.
    previous turn's count rather than against zero.
 
 7. `[ ]` **The client must be relaunched to pick up a code change**, and doing so re-offers
-   the customisation popups and (before persistence) discarded the discovery map. A restart
-   also re-commits the homeworld click record over restored state, the report's data-loss
-   bug. Worth deciding whether the loop should hot-reload its rule modules instead.
+   the customisation popups and (before persistence) discarded the discovery map. Worth
+   deciding whether the loop should hot-reload its rule modules instead. The restart is not
+   destructive: the popup's commit adds to the current rates rather than resetting them, and
+   dismissing it with Decide Later writes nothing at all, so an unattended run that never
+   answers the dialog loses nothing. It does mean a run that *does* answer it inflates its own
+   homeworld, since each relaunch re-grants the full allowance.
 
 ---
 

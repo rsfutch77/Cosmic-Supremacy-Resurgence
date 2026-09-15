@@ -1138,28 +1138,41 @@ than per-galaxy-type, both were read in a single game, and galaxy type is known 
 parameters. The user's working assumption is that these defaults are constant for every galaxy.
 Partly corroborated: a TestBed galaxy customised in September 2026 gave space `350 = 300 + 50 + 0`
 and a base food rate of 32, matching the same table
-[ ] **`Planet:96` bytes 1 and 2 have not been varied by a control.** Byte 0 is confirmed by
-arithmetic. Bytes 1 and 2 read 30 and 40 on both homeworlds, which matches the base table and their
-position, and that is all the evidence there is. Customise production or science in a throwaway
-galaxy and watch those bytes to close it
-[ ] **suppress both customisation popups for a returning player.** Now confirmed to happen in
-practice, not just in theory: a client loaded from a server-authored `.dat` re-offered both popups,
-because the four click counters below are `.data` globals that no blob can restore, they read `0`
-against a budget of 30 while the homeworld already carried the benefit. The main report tracks both
-the data-loss bug (a zero-click confirm re-commits over server-restored state) and the trigger; this
-item holds the three implementation options below and the ordering constraint they all share,
-**a restore must run after the engine's commit, not before it.**
-The civ-trait and homeworld
-popups fire at game start, and a player rejoining a galaxy already has their traits and modifiers in
-the loaded state. This is not merely cosmetic: confirming the homeworld popup is what *writes* the
-click record and applies the `+50` space commit, so a returning player who is shown the popup and
-confirms it with zero clicks would silently reset their homeworld to base values and overwrite
-whatever the server restored. Options, in rough order of preference: (a) write the loaded traits and
-click counts into memory *before* the popup would appear and auto-confirm it, so the engine's own
-commit path produces a consistent result; (b) patch the client to skip the popup entirely, which
-risks leaving the commit-time side effects unapplied; (c) let it appear and re-write the state
-afterwards, which is the least safe because the commit also touched 425,677 words of galaxy setup.
-Whichever is chosen, the restore must run *after* the commit, not before it
+[x] **`Planet:96` bytes 1 and 2 varied by a control.** On a pushed state reading `[62,30,40]`,
+spending 15 homeworld increments on production and 15 on science gave `[62,45,55]`. Byte 1 is
+production per worker, byte 2 is science per scientist, each `base + clicks`. All three bytes are
+now confirmed rather than one
+
+[ ] **suppress both customisation popups for a returning player.** A client loaded from a
+server-authored `.dat` re-offers the homeworld popup on every load, because the four click counters
+are `.data` globals that no blob can restore: they read `0` against a budget of 30 while the
+homeworld already carries the benefit.
+
+**What the popup actually does, measured September 2026, replacing the data-loss reading this item
+used to carry.** The dialog's buttons are **OK** and **Decide Later**, and OK is unavailable until
+points are spent, so *there is no zero-click confirm to worry about*. Decide Later writes nothing at
+all and suppresses the prompt for at least two turns. A real confirm writes only the slots that were
+spent on, leaves the others alone, and **adds to the current value rather than recomputing from
+base**, so each push hands out another full 30 points and rates climb without bound. The hazard is
+therefore a re-grant exploit, not data loss, and **the ordering constraint this item used to impose,
+that a restore must run after the engine's commit, no longer follows from anything measured**.
+
+Three further facts that bear on a fix:
+
+- `Owner:360` is set to 1 by the civ-trait commit and **is carried in the blob**, yet a pushed state
+  with `Owner:360 = 1` still showed the homeworld popup. So it is not the gate.
+- The **civ-trait** popup did not reappear on either of two pushes, so whether its allowance
+  re-grants is untested.
+- The remaining gate candidates are the `.data` click record, which a pushed client reads as zero,
+  and the `listcivnames` / `coaid` answer, which the `.dat` path never asks for. Joining through
+  `cs_server.py` rather than a `.dat` distinguishes them and has not been tried.
+
+Options, in rough order of preference: (a) write the saved click counts back into memory after the
+galaxy loads, which `client/dev_tools/homeworld_clicks.py --restore` does today and which may
+suppress the popup by itself if the record is the gate; (b) answer `listcivnames` so the civ reads
+as configured, if that turns out to be the gate; (c) patch the client to skip the popup, which risks
+leaving commit-time side effects unapplied and is now the least attractive, since the popup is no
+longer destructive
 
 ### Registries are per class, not global (August 2026)
 

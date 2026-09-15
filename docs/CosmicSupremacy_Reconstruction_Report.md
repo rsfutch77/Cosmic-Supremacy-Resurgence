@@ -312,9 +312,11 @@ This also settles an asymmetry flagged earlier as unconfirmed: the loader adds `
 
 #### The gap: `.data` bookkeeping the blob does not serialise
 
-The four homeworld customisation click counters at `0x00842AE4`–`0x00842AF0` all read **0** after a load, against a `GSET homeworld_changes` budget of 30, while the *effect* is present, the homeworld (planet 257) carrying space 450 against a 300 base. So the client believes nothing has been spent and re-offers the whole allowance. This is the popup, and it is worse than a duplicated allowance: **confirming that popup is the engine's commit path, so a zero-click confirm resets the homeworld over whatever the server restored**, a data-loss bug, tracked as its own TODO below along with the trigger.
+The four homeworld customisation click counters at `0x00842AE4`–`0x00842AF0` all read **0** after a load, against a `GSET homeworld_changes` budget of 30, while the *effect* is present, the homeworld (planet 257) carrying space 450 against a 300 base. So the client believes nothing has been spent and re-offers the whole allowance. This was previously recorded here as worse than a duplicated allowance, on the reading that a zero-click confirm would reset the homeworld over whatever the server restored. **Measurement in September 2026 showed it is exactly a duplicated allowance, and that duplication is unbounded**, see the corrected TODO below.
 
-The general shape matters more than this instance: **game state living in `.data` rather than on an object cannot be in the blob**, because the blob serialises objects. Any other such counter has the same problem.
+**What is lost is narrower than it looked.** The counters are a record of what has been *spent*, and nothing in the economy reads them: rewriting them mid-game does not change the next tick. The customisation's whole effect lives on two per-planet fields that the blob does carry, space at `Planet:104` and the per-unit output rates at `Planet:96` (`PLPR+4` on the wire). So a pushed state comes up economically correct and only the allowance is wrong. The memory report's homeworld-customisation section has the controlled experiment.
+
+The general shape still matters more than this instance: **game state living in `.data` rather than on an object cannot be in the blob**, because the blob serialises objects. Any other such counter has the same problem, and this one turned out to be a bookkeeping counter rather than a gameplay input, which is a reason to enumerate the class rather than to relax about it.
 
 #### The caveat: the client never uploads state on its own
 
@@ -337,25 +339,40 @@ non-blob state is already at defaults on both sides. The homeworld click counter
 `0x00842AE4`–`0x00842AF0` are the one confirmed member of this class so far, found via the popup
 rather than by search.
 
-[ ] **BUG, DATA LOSS, confirming the customisation popup overwrites server-restored homeworld
-state.** The highest-severity known defect in the save-push path, and the reason the popup is not a
-cosmetic issue. Confirming the homeworld popup is the engine's *commit* path: it writes the click
-record and applies the `+50` space constant. A returning player who is shown the popup and confirms
-it **with zero clicks** therefore resets their homeworld to base values, silently destroying whatever
-the server had just restored. The commit is also heavy, the same step touched 425,677 words of
-galaxy setup, so it cannot be treated as a small local write.
+[x] **NOT A DATA-LOSS BUG. It is an unbounded re-grant exploit (measured September 2026).** This
+item previously read "BUG, DATA LOSS, confirming the customisation popup overwrites server-restored
+homeworld state" and called it the highest-severity defect in the save-push path. Both halves of
+that were wrong, and the correction came from working the dialog rather than the disassembly.
 
-Two consequences worth stating separately from the trigger. First, **this is destructive whenever the
-popup fires, however it got triggered**, suppressing the specific reappearance below removes one
-trigger, not the hazard. Second, it constrains every candidate fix: **any state restore must run
-after the engine's commit, not before it**, or the commit overwrites the restore. The memory report's
-"suppress both customisation popups" item holds the three implementation options and that ordering
-warning.
+*There is no zero-click confirm.* The homeworld popup's buttons are **OK** and **Decide Later**, and
+OK is not available until points have been spent. The accidental path is Decide Later, and Decide
+Later **writes nothing**: a full byte diff of both `Owner`s and both `Planet`s across it came back
+clean apart from `Planet:512`, which drifts on its own between snapshots and is a render counter.
+It also suppressed the prompt for at least the next two turns.
 
-Not yet measured: whether the civ-trait popup has the same commit-time destructiveness, and what
-exactly a zero-click confirm does to a homeworld whose space was restored to a customised value,
-the reset is inferred from the commit path, not yet observed end to end. Reproducing it deliberately
-on a throwaway state would settle both.
+*A confirm does not reset anything.* The commit writes only the slots that were spent on and leaves
+the others alone. On a pushed state carrying `[62, 30, 40]`, spending 15 production and 15 science
+produced `[62, 45, 55]`: food untouched at its customised value.
+
+*What it actually does is add, without bound.* Capturing that state, pushing it again, and spending
+30 more on production produced `[62, 75, 55]`, so the rule is `current + clicks`, not
+`base + clicks`. The full 30-point allowance is offered again on every push. A player who reloads
+repeatedly can drive a homeworld's rates arbitrarily high. Space stayed 350 across both commits, so
+the flat `+50` is not re-applied per commit either.
+
+*The civ-trait popup does not touch any of it.* Both `Owner` objects were byte-identical across the
+homeworld commits.
+
+**Severity depends entirely on the server architecture, which is the point worth carrying forward.**
+Under a server that stores what a client sends, this is fully exploitable and rates climb every
+turn. Under the order-merge design in `Multiplayer_Turn_Sync_Design.md`, `Planet:96` is not on the
+order whitelist, so the server rejects the change and the exploit is structurally contained; what
+remains is a cosmetic desync between what the player sees and what the referee computes, until the
+next push overwrites it. Suppressing the popup is still worth doing, and it is no longer urgent.
+
+Still open: whether the **civ-trait** allowance re-grants the same way. The trait popup did not
+reappear on either of the last two pushes, so it has not been possible to test, and its commit path
+is unmeasured beyond the fact that it writes `Owner:756` and `Owner:360` on first use.
 
 [ ] stop the **"Customize Your Home World" popup reappearing after a loaded save**, the trigger
 behind the bug above. Observed on the first successful `.dat` load: the galaxy came back correctly,
