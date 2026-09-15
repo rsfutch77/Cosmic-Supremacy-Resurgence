@@ -368,10 +368,51 @@ def remove_account_box(html):
     return html
 
 
+# The home page override was written with this note inline. The patch rewrites
+# it to the same text, so the wording lives here and every page follows it.
+GALAXIES_NOTE = (
+    "<p><b>Coming soon.</b><br><span class='small'>No galaxies are running "
+    "yet. This is where they will be listed once multiplayer is back."
+    "</span></p>")
+
+_GALAXIES_RE = re.compile(r"<div\s+class=['\"]section galaxies['\"]\s*>", re.I)
+_SECTION_CONTENT_RE = re.compile(
+    r"<div\s+class=['\"]section_content['\"]\s*>", re.I)
+
+
+def replace_galaxy_list(html):
+    """Replace the archived galaxy list with a coming-soon note.
+
+    The Galaxies panel lists whatever galaxies were running on the day the page
+    was captured, with a registered-player count and links into galaxy pages
+    that either 404 or show a snapshot of a game from 2023. Each page was
+    captured on a different day, so the counts disagree with each other as well
+    as with reality.
+
+    Only the panel's content is replaced. The header and footer divs carry the
+    panel's background art, so the box keeps its place in the column.
+    """
+    m = _GALAXIES_RE.search(html)
+    if not m:
+        return html
+    content = _SECTION_CONTENT_RE.search(html, m.end())
+    if not content:
+        return html
+    depth = 1
+    for tag in _DIV_TAG_RE.finditer(html, content.end()):
+        depth += -1 if tag.group(0).startswith("</") else 1
+        if depth == 0:
+            return (html[:content.end()] + "\n\t    " + GALAXIES_NOTE
+                    + "\n\t" + html[tag.start():])
+    # Unbalanced markup: leave the page alone rather than truncate it.
+    return html
+
+
 PATCHES = [
     ("remove the Live Chat tab", remove_live_chat),
     ("point the Forum tab at the Facebook group", repoint_forum_tab),
     ("hide the dead account login", remove_account_box),
+    ("replace the archived galaxy list", replace_galaxy_list),
     ("remove the Firewall sub-tab", remove_firewall_subtab),
     ("hide the Tools sub-tab", remove_tools_subtab),
     ("remove the ToDo List sub-tab", remove_todo_subtab),
