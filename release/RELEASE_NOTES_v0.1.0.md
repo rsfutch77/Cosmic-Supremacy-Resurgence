@@ -1,4 +1,4 @@
-Cosmic Supremacy: Resurgence v0.1.0 , the first playable build of the
+Cosmic Supremacy: Resurgence v0.1.0, the first playable build of the
 restoration. The 2006 client, patched to talk to a server that runs on your own
 machine, packaged with a launcher that starts both.
 
