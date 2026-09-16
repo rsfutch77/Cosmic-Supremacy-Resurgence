@@ -331,13 +331,71 @@ order-submission format, the missing half of the multiplayer loop. If it is what
 server learns player intent from a small `STCO` upload instead of a full save, and the remote-thread
 `SaveGame` call in `trigger_save.py` becomes a dev convenience rather than the mechanism.
 
-[ ] find the rest of the **`.data`-resident game state** the blob cannot carry. The fixpoint test is
-blind to it by construction, so the test that would close this is a **played-vs-loaded comparison**:
-take a client whose state arose from play, snapshot its objects and `.data` semantically, load a blob
-captured from it into a fresh client, and diff. Doing it after a load proves nothing, because the
-non-blob state is already at defaults on both sides. The homeworld click counters at
-`0x00842AE4`–`0x00842AF0` are the one confirmed member of this class so far, found via the popup
-rather than by search.
+[x] find the rest of the **state the blob cannot carry**. The played-vs-loaded comparison was run in
+September 2026, and paired with a **functional** test, because a structural diff on its own cannot
+say whether what it finds matters.
+
+Two arms from one fixture: arm P played turn 2 to 22; arm L loaded the blob P captured at 22. Both
+were then ticked onward and compared.
+
+| comparison | result |
+|---|---|
+| P vs L at turn 22, in memory | 205 objects each; the human civ differs in one field, the AI civ in about thirty |
+| P vs L at turn 32, blobs | 38,310 bytes each, 2 bytes differ |
+| P vs L at turn 62, blobs | 38,662 bytes each, 4 bytes differ |
+
+**Forty turns past the fork the simulation output is byte-identical**, apart from the `KNPL` field
+described below. So whatever the blob fails to carry, the tick does not read.
+
+What it fails to carry is derived rather than authoritative: the **engine AI's working block** on its
+own `Owner` (`+196`, `+224..268`, `+408..412`, `+456..460`, `+488..492`, `+524..540`, `+580..584`,
+`+604..608`, with `+1200..1236` going to `-1`), the **`ShipDesign` derived-stat cache** which
+invalidates to `-1` on load, and the **`Planet:20` / `Planet:512`** appearance and render counters.
+The human civ loses one field. The engine AI made identical decisions for 40 turns with its working
+block zeroed, so that block is rebuilt per turn rather than accumulated.
+
+The homeworld click counters at `0x00842AE4`–`0x00842AF0` remain a member of the class and are
+covered separately below; `client/dev_tools/homeworld_clicks.py` reads and restores them.
+
+Scope of the claim: one fixture, two civs, 40 turns, no combat and no diplomacy. A war is the obvious
+next stress, since combat is where an accumulated AI state would most plausibly show up.
+
+#### The engine is deterministic (September 2026)
+
+**A turn is a pure function of state plus orders.** Three separate process launches drove one fixture
+from turn 2 to turn 22, each with the clock frozen at the target before capture, and produced blobs
+of 38,190 bytes and 422 sections every time. The 20 turns are real work: **21,700 of 37,851 bytes
+change over them**, 57% of the blob, and three new sections appear. Across the three runs every one
+of those bytes agreed except a single dword.
+
+This is what makes replay, audit and dispute resolution available, and it means a referee can be
+**transient**: a turn can be recomputed on any host and checked against an archived hash.
+
+#### The trailing dword of every `KNPL` payload is unreliable
+
+**One field per civ, immediately before that civ's `EXSY` header, is not dependable data.** Measured
+across six captures:
+
+| | played | loaded from a blob |
+|---|---|---|
+| human civ | `0x004DC7F6`, stable across every run | `0xFF4DC7F6` |
+| AI civ | `0x09F63E88`, `0x0975F050`, `0x09F60C58`, `0x09F68FF0`, a different value every run | `0xFFF63E88` |
+
+The **low three bytes are carried faithfully** through a save and load; the **top byte** reads `0x00`
+or `0x09` in a client that played and `0xFF` in one that loaded, whatever the blob held. The AI civ's
+low bytes also vary between otherwise identical runs, and that is the only nondeterminism found
+anywhere in the format.
+
+Consequences. **Any blob comparison has to mask this dword**, or two honest computations of the same
+turn look different, which is exactly what a canonical hash must not do. The
+three-bytes-plus-a-top-byte split is suspicious enough that the record boundary may be off by one,
+with the final byte a flag in its own right. And it is worth sweeping the other sections for the same
+signature, which is cheap now that it is known: a field that changes between two otherwise identical
+runs, or whose top byte becomes `0xFF` after a load.
+
+`[ ]` `KNPL` is now doubly interesting: this field, and the fact that a `KNPL` still naming removed
+planets is the likely reason a fog-filtered blob fails to tick. Worth decoding properly rather than
+piecemeal.
 
 [x] **NOT A DATA-LOSS BUG. It is an unbounded re-grant exploit (measured September 2026).** This
 item previously read "BUG, DATA LOSS, confirming the customisation popup overwrites server-restored
