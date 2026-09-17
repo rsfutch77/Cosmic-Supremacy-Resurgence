@@ -94,6 +94,24 @@ The `CMND` protocol work is on `galaxy-protocol`.
   sufficient on its own if the counters are the trigger; the other candidate is
   the `listcivnames` / `coaid` answer.
   **Done when:** a returning player is not offered the allowance again.
+- `[x]` **B5. Tell a client which civ it plays.** Two clients sharing a galaxy
+  have to control different civs, and **the blob cannot say which**. Two
+  candidates were tested and both are dead: swapping the two `OWNR` sections'
+  order changed nothing, and swapping `Owner:4`, the trailing `u32` that reads 0
+  on one civ and 21 on the other, changed nothing.
+
+  The selection comes from a **TLS red-black tree of player slots**, the same
+  roster the testbed galaxy join populates. `0x0052DE10` walks it and takes the
+  first slot whose `+0x38` is non-zero, reading the civ's object id from `+0x30`;
+  `0x00537BF0` maps that id to a reference cell through the map at `0x00857C7C`,
+  and the cell is stored in `0x00857904`.
+
+  `client/dev_tools/set_local_player.py` performs that assignment directly,
+  calling the engine's own resolver in a remote thread. Confirmed live: a client
+  that loaded as DemoPlayer was switched to BadGuy and the UI followed, showing
+  BadGuy's homeworld.
+  `[ ]` **Reconstruct the join path that fills the slot tree**, so a player's
+  identity comes from the server rather than from a memory write.
 
 ## C. Orders, the hard part
 
@@ -101,16 +119,33 @@ The client applies orders locally in offline mode, so intent has to be recovered
 from the state it hands back. This is the part the `CMND` protocol would have
 made unnecessary.
 
-- `[ ]` **C1. Diff engine.** Compare the exact bytes handed to a player against
-  the save they return, over the section tree.
-  **Done when:** a diff of two blobs yields a field-level change list, not a byte
-  list. `server/dev_tools/diff_saves.py` is the seed.
-- `[ ]` **C2. Whitelist v1.** Accept only order-bearing fields on objects the
-  player owns: ship order bytes and `ROUT`, production queues, research topic
-  (`Owner:144`/`Owner:152`), job allocation, facility selection, ship designs,
-  governors and admirals, diplomacy proposals.
-  **Done when:** a change outside a player's own objects is dropped, and the drop
-  is logged.
+- `[x]` **C1. Diff engine.** Compare the exact bytes handed to a player against
+  the save they return, over the section tree. `server/dev_tools/diff_saves.py`
+  reports the change at section level and `merge_orders.py` reads the fields.
+
+  **A ship move order is three edits and they are contiguous.** A human given a
+  turn-2 galaxy, asked for one move and nothing else, changed exactly one section
+  of a 37,851-byte blob: that ship's `DYNO`, 38 bytes to 132. The edits are the
+  `SHCO` order-type byte (0 to 1), the has-orders byte `Ship:76` (0 to 1), and an
+  appended `ROUT` section plus its trailing `u32`. The `ROUT` payload is a
+  waypoint list of position triples ending in the destination object id. Nothing
+  else in the blob moved, and `inject_order.py` already writes exactly this
+  shape.
+- `[~]` **C2. Whitelist v1, ship orders only.** `server/dev_tools/merge_orders.py`
+  copies a submitted `DYNO` onto the authoritative blob for ships the
+  **authoritative** blob says the player owns, and names every other change it
+  drops. Ownership is never read from the submission, so a player cannot claim a
+  ship by rewriting the owner field in their own copy.
+
+  Verified both ways on the capture pair above: the owning civ's submission
+  rebuilt the returned blob byte for byte from the baseline, and the same file
+  submitted under the other civ's name was rejected with the owner named.
+
+  Still unhandled, each needing its own measurement before it can be accepted:
+  production queues, research topic (`Owner:144`/`Owner:152`), job allocation,
+  facility selection, ship designs, governors, admirals, diplomacy proposals.
+  Orders issued through an admiral are also out of scope, since the admiral id
+  sits inside `DYNO` and would be copied with the order.
 - `[ ]` **C3. Immediate-effect actions.** Hurry production, conscription, crew
   assignment and job reallocation take effect the moment they are clicked, so the
   diff shows the *effect* and not the intent. Each needs a reverse mapping, effect
