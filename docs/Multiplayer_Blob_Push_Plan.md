@@ -40,14 +40,52 @@ The `CMND` protocol work is on `galaxy-protocol`.
 
 ---
 
+## The two-player round, end to end (September 2026)
+
+**Two players took turns in one shared galaxy and each saw the other's action.**
+Run by hand from the command line, one machine, the two players sequentially:
+
+1. `player_turn.py serve turn3.b64 --civ DemoPlayer` stamped the state, started a
+   client and stopped its clock. The player ordered a colony ship.
+2. `player_turn.py collect` took the state back.
+3. The same two steps for `--civ Neighbor`, a second civ whose homeworld sits in
+   DemoPlayer's own star system.
+4. `referee.py duel3b.b64 --from DemoPlayer=... --from Neighbor=... --turns 4`
+   took three orders, dropped two changes, and advanced the galaxy to turn 7.
+5. Each player was served the result, stamped for their own civ.
+
+Planet 136 came back owned by DemoPlayer and planet 138 by Neighbor, each from an
+order given in a separate client session. Both players then saw the other's new
+colony in their own game, and once one player's ship came within scan range of
+the other's, that ship became visible too.
+
+What this does **not** yet show: the two clients ran one after another rather
+than at once, and on one machine rather than two; every step was a command typed
+by hand rather than the launcher's job (B1); only ship orders are extracted, and
+everything else in section C is untouched; and the customisation popup had to be
+dismissed by hand on every serve (B4).
+
+**Visibility is the engine's own, and better than feared.** A player sees every
+planet in a system they have entered, including who owns it, and sees another
+civ's ships only within scan range, about 30 units. So a full-state blob does not
+show a player their rivals' fleets, which is why the colony was the visible
+signal and why ship moves stayed invisible for most of the session. It remains
+true that the blob carries the whole galaxy and a modified client is a maphack,
+see D1.
+
+---
+
 ## A. Referee, the tick
 
-- `[ ]` **A1. Package the referee loop as a component.** Launch a client on a
-  `.dat`, wait for the galaxy, drive the turn clock, capture, exit. This ran
-  unattended many times during the experiments; it needs to become
-  `server/referee.py` behind two calls, `apply_orders(blob, orders)` and
-  `tick(blob)`, so a Python reimplementation could replace it later.
-  **Done when:** the server advances a galaxy by one turn with no human present.
+- `[x]` **A1. Package the referee loop as a component.** `server/referee.py`
+  exposes `apply_orders(blob, submissions)` and `tick(blob, turns)`, kept apart so
+  a Python reimplementation of the rules would replace `tick` alone and every
+  caller would keep working. `tick` writes the blob out, starts a client on it,
+  drives the clock, captures and closes. Confirmed advancing a three-civ galaxy
+  from turn 3 to turn 7 with no human present.
+  `[ ]` **The referee's client is stamped as one of the civs**, since every blob
+  names a local player. Whether the engine AI still plays that civ during a
+  referee tick is unmeasured, and if it does not, one civ silently stops acting.
 - `[ ]` **A2. Canonical hash.** Mask the trailing dword of every `KNPL` payload
   before hashing, or two honest computations of the same turn disagree.
   **Done when:** two independent runs of one turn produce the same hash.
@@ -84,6 +122,15 @@ The `CMND` protocol work is on `galaxy-protocol`.
   neither value. **Decision: NOP the in-game turn timer and show the real
   countdown in our launcher**, which owns the turn clock anyway.
 
+  **Holding the clock works, and it is required rather than optional.** A client
+  served turn 3 and left alone for a few minutes returned **turn 4**, and the diff
+  against what it was served showed **174 sections changed instead of one**. An
+  order cannot be recovered from that: the change list carries every consequence
+  of the tick, and copying a ship's `DYNO` out of it copies post-tick positions,
+  which is merging state. `player_turn.py serve` therefore writes a large turn
+  length to `0x0080AA08` after load, and the next two player turns both came back
+  still at turn 3 with a single section changed.
+
   **Done when:** a player's client left open past its turn boundary neither ticks
   nor bails, and the launcher shows the countdown.
 - `[ ]` **B3. Restore non-blob state after load.** Today that means the four
@@ -95,23 +142,35 @@ The `CMND` protocol work is on `galaxy-protocol`.
   the `listcivnames` / `coaid` answer.
   **Done when:** a returning player is not offered the allowance again.
 - `[x]` **B5. Tell a client which civ it plays.** Two clients sharing a galaxy
-  have to control different civs, and **the blob cannot say which**. Two
-  candidates were tested and both are dead: swapping the two `OWNR` sections'
-  order changed nothing, and swapping `Owner:4`, the trailing `u32` that reads 0
-  on one civ and 21 on the other, changed nothing.
+  have to control different civs, and **`GLOB` carries the answer**: one `u32`
+  holding the object id of the civ the loading client will play.
+  `server/dev_tools/set_blob_player.py` writes it. A blob stamped 198 came up as
+  DemoPlayer and the same blob stamped 202 came up as BadGuy, UI included, which
+  is what makes per-player distribution a data operation.
 
-  The selection comes from a **TLS red-black tree of player slots**, the same
-  roster the testbed galaxy join populates. `0x0052DE10` walks it and takes the
-  first slot whose `+0x38` is non-zero, reading the civ's object id from `+0x30`;
-  `0x00537BF0` maps that id to a reference cell through the map at `0x00857C7C`,
-  and the cell is stored in `0x00857904`.
+  **The field is not at a fixed offset**, and assuming it was produced a save the
+  client rejected with an exception dialog. `GLOB` holds a variable-length list of
+  the players the galaxy knows about, each entry a user id and a name, so the id
+  moves once any civ has met another: `+40` with no contact, `+65` once one entry
+  exists, and `GLOB` itself grew from 87 bytes to 112. The stable landmark is the
+  tag that follows it,
 
-  `client/dev_tools/set_local_player.py` performs that assignment directly,
-  calling the engine's own resolver in a remote thread. Confirmed live: a client
-  that loaded as DemoPlayer was switched to BadGuy and the UI followed, showing
-  BadGuy's homeworld.
-  `[ ]` **Reconstruct the join path that fills the slot tree**, so a player's
-  identity comes from the server rather than from a memory write.
+      ... u32 99999 ; u32 localPlayerObjectId ; 'TMGX' ...
+
+  so the tool finds `TMGX`, steps back four bytes, and checks the value against
+  the civs the blob contains before writing anything.
+
+  Two other candidates were tested first and are dead ends worth not retesting:
+  swapping the two `OWNR` sections' order changed nothing, and swapping `Owner:4`,
+  the trailing `u32` that reads 0 on one civ and 21 on the other, changed nothing.
+
+  At runtime the selection comes from a **TLS red-black tree of player slots**,
+  the roster the testbed galaxy join populates. `0x0052DE10` walks it and takes
+  the first slot whose `+0x38` is non-zero, reading the civ's object id from
+  `+0x30`; `0x00537BF0` maps that id to a reference cell through the map at
+  `0x00857C7C`, and the cell is stored in `0x00857904`.
+  `client/dev_tools/set_local_player.py` assigns that cell directly in a running
+  client, which is useful while testing and is not how a turn should be served.
 
 ## C. Orders, the hard part
 
@@ -131,6 +190,11 @@ made unnecessary.
   waypoint list of position triples ending in the destination object id. Nothing
   else in the blob moved, and `inject_order.py` already writes exactly this
   shape.
+
+  **Colonising is a ship order too**, not an immediate-effect action. In the UI it
+  is right-click a ship, colonize, pick the planet; in the blob it is the same
+  three edits with `SHCO` byte 0 reading **3** where a move writes **1**. So both
+  orders the two-player round needed share one extraction path.
 - `[~]` **C2. Whitelist v1, ship orders only.** `server/dev_tools/merge_orders.py`
   copies a submitted `DYNO` onto the authoritative blob for ships the
   **authoritative** blob says the player owns, and names every other change it
@@ -140,6 +204,14 @@ made unnecessary.
   Verified both ways on the capture pair above: the owning civ's submission
   rebuilt the returned blob byte for byte from the baseline, and the same file
   submitted under the other civ's name was rejected with the owner named.
+
+  `[ ]` **Diff each submission against the state served to that player**, not
+  against the authoritative blob as it evolves. Applying one player's orders first
+  moves the authoritative state under the next player, whose untouched copy then
+  looks like an attempt to change ships they do not own: the two-player round
+  logged two such drops and neither player had done anything. They were harmless,
+  being on ships the submitter did not own, but a log that cries wolf will hide a
+  real rejection, and the legality gate in C4 has to be able to trust it.
 
   Still unhandled, each needing its own measurement before it can be accepted:
   production queues, research topic (`Owner:144`/`Owner:152`), job allocation,
@@ -155,11 +227,11 @@ made unnecessary.
 - `[ ]` **C4. Legality gate.** Encode the rule the UI enforces rather than
   inferring legality from an observed state.
   **Done when:** the gate cites a rule for every accepted order type.
-- `[ ]` **C5. Get a player's state back without their help.** `SaveGame` at
+- `[x]` **C5. Get a player's state back without their help.** `SaveGame` at
   `0x0048B350` has exactly one caller, the Save/Load dialog, so the client never
-  uploads on its own. A companion process beside the client has to trigger it;
-  the launcher is the place.
-  **Done when:** a turn's orders arrive with the player having done nothing.
+  uploads on its own. `client/dev_tools/trigger_save.py` calls it in a remote
+  thread and `player_turn.py collect` wraps that. Every submission in the
+  two-player round arrived this way, the player having only given their order.
 
 ## D. The galaxy
 
@@ -203,9 +275,21 @@ made unnecessary.
   maphack.
   **Done when:** orders can be issued and captured in a filtered galaxy. A
   filtered blob surviving a turn boundary is a separate, lower-priority goal.
-- `[ ]` **D2. Per-player projection.** Follows from D1. Identity for now.
-  **Done when:** each player is handed a state derived from the authoritative one
-  rather than the authoritative one itself.
+- `[~]` **D2. Per-player projection.** Every player is now handed a state
+  *derived* from the authoritative one rather than the authoritative one itself,
+  because each copy is stamped with that player's own civ (B5). That is the whole
+  of the derivation so far: the content is identical and only the identity
+  differs.
+
+  **The engine hides more than expected on its own.** A player who holds the full
+  galaxy still sees only the planets in systems they have entered and only the
+  ships within scan range, roughly 30 units. Measured across a whole session: two
+  civs nine systems apart could see nothing of each other, two civs sharing a
+  system saw each other's planets but not each other's ships, and a ship became
+  visible the moment it closed the distance. So the leak in full-state
+  distribution is not what the UI shows, it is what a modified client could show.
+  **Done when:** a player's copy omits what that player has not discovered,
+  rather than relying on the client to decline to draw it.
 - `[ ]` **D3. Turn clock and absent players.** The turn advances on the clock and
   never waits for submissions; governors and admirals are the original's answer to
   a player who is not there, and they run inside the referee's tick.

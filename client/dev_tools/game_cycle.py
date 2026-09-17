@@ -96,7 +96,7 @@ def launch(dat, timeout=90):
         try:
             snap = gs.Snapshot()
             civ = gs.resolve_civ(snap, None)
-            if civ is not None and snap.owned_planets(civ) and len(snap.suns) > 50:
+            if civ is not None and snap.owned_planets(civ) and len(snap.suns) > 10:
                 log(f"  up: turn {snap.turn}, {civ.civ_name!r}, "
                     f"{len(snap.owned_planets(civ))} planet(s), "
                     f"{len(snap.designs)} design(s)")
