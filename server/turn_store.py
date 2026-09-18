@@ -1,0 +1,176 @@
+"""
+turn_store.py , where a galaxy's turns and submissions live
+===========================================================
+    from turn_store import TurnStore
+    store = TurnStore(root)
+    store.start(blob, civs=["DemoPlayer", "Neighbor"], turn_seconds=3600)
+
+    turn, deadline = store.current()          # what a player should be playing
+    blob = store.turn_blob(turn)              # the state for that turn
+    store.submit("DemoPlayer", turn, mine)    # what that player handed back
+    store.publish(turn + 1, next_blob)        # the referee moves the clock on
+
+Three processes need to agree about one galaxy: a player's launcher, another
+player's launcher, and the referee that computes turns. They agree through this,
+and nothing else. Keeping that agreement in one small interface is the point,
+because the deployment this is heading for puts the referee on another host and
+the shared state in Firebase. A Firebase adapter replaces this class and the
+callers do not change.
+
+The layout is a directory, which is enough for one machine and for a shared
+folder between two:
+
+    state.json              turn number, deadline, turn length, the civ roster
+    turns/0007.b64          the authoritative state for turn 7
+    submissions/0007/X.b64  what civ X handed back for turn 7
+    archive/0007.json       what the referee did, once it has done it
+
+Every write goes to a temporary file and is then renamed, so a reader never sees
+half a blob. That matters more than it looks: readers here are polling loops, and
+a torn read would look like a corrupt galaxy rather than a race.
+
+The deadline is an absolute epoch time rather than a countdown, so a launcher
+that was closed and reopened, or a second machine whose clock differs a little,
+still agrees about when the turn is due. It is the referee's to move, and nobody
+else writes it.
+"""
+import json
+import os
+import struct
+import sys
+import time
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.join(HERE, 'dev_tools'))
+
+import save_parser as sp
+
+
+def _atomic_write(path: str, data: bytes) -> None:
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = f'{path}.{os.getpid()}.tmp'
+    with open(tmp, 'wb') as f:
+        f.write(data)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, path)
+
+
+class TurnStore:
+    """One galaxy's turns, submissions and clock."""
+
+    def __init__(self, root: str):
+        self.root = os.path.abspath(root)
+
+    # ── paths ────────────────────────────────────────────────────────────────
+    @property
+    def state_path(self) -> str:
+        return os.path.join(self.root, 'state.json')
+
+    def turn_path(self, turn: int) -> str:
+        return os.path.join(self.root, 'turns', f'{turn:04d}.b64')
+
+    def submission_dir(self, turn: int) -> str:
+        return os.path.join(self.root, 'submissions', f'{turn:04d}')
+
+    def submission_path(self, civ: str, turn: int) -> str:
+        return os.path.join(self.submission_dir(turn), f'{civ}.b64')
+
+    def archive_path(self, turn: int) -> str:
+        return os.path.join(self.root, 'archive', f'{turn:04d}.json')
+
+    # ── state ────────────────────────────────────────────────────────────────
+    def exists(self) -> bool:
+        return os.path.exists(self.state_path)
+
+    def state(self) -> dict:
+        with open(self.state_path, encoding='utf-8') as f:
+            return json.load(f)
+
+    def _put_state(self, state: dict) -> None:
+        _atomic_write(self.state_path,
+                      json.dumps(state, indent=2).encode('utf-8'))
+
+    def current(self):
+        """(turn, deadline) for the turn players should be playing now."""
+        s = self.state()
+        return s['turn'], s['deadline']
+
+    def seconds_left(self) -> float:
+        """How long players have. Negative once the turn is overdue."""
+        return self.state()['deadline'] - time.time()
+
+    def civs(self) -> list:
+        return list(self.state().get('civs', []))
+
+    # ── turns ────────────────────────────────────────────────────────────────
+    def start(self, blob: bytes, civs, turn_seconds: int = 3600,
+              turn: int = None) -> int:
+        """Publish the first turn and start the clock.
+
+        `turn` defaults to the turn number the blob itself carries, so a galaxy
+        picked up mid-game keeps its own numbering rather than restarting at 1.
+        """
+        if turn is None:
+            turn = turn_of(blob)
+        _atomic_write(self.turn_path(turn), sp.encode_save(blob))
+        self._put_state({
+            'turn': int(turn),
+            'deadline': time.time() + turn_seconds,
+            'turn_seconds': int(turn_seconds),
+            'civs': list(civs),
+        })
+        os.makedirs(self.submission_dir(turn), exist_ok=True)
+        return turn
+
+    def turn_blob(self, turn: int) -> bytes:
+        return sp.load_any(self.turn_path(turn))
+
+    def has_turn(self, turn: int) -> bool:
+        return os.path.exists(self.turn_path(turn))
+
+    def publish(self, turn: int, blob: bytes, turn_seconds: int = None) -> None:
+        """The referee's move: a new turn exists, and the clock restarts."""
+        state = self.state()
+        seconds = turn_seconds or state['turn_seconds']
+        _atomic_write(self.turn_path(turn), sp.encode_save(blob))
+        state.update(turn=int(turn), deadline=time.time() + seconds,
+                     turn_seconds=int(seconds))
+        self._put_state(state)
+        os.makedirs(self.submission_dir(turn), exist_ok=True)
+
+    # ── submissions ──────────────────────────────────────────────────────────
+    def submit(self, civ: str, turn: int, blob: bytes) -> str:
+        """Hand a player's state back. Writing twice replaces, which is right:
+        a player may save several times in a turn and the last one is their
+        intent."""
+        path = self.submission_path(civ, turn)
+        _atomic_write(path, sp.encode_save(blob))
+        return path
+
+    def has_submitted(self, civ: str, turn: int) -> bool:
+        return os.path.exists(self.submission_path(civ, turn))
+
+    def submissions(self, turn: int) -> dict:
+        """{civ: blob} for everyone who handed something back for this turn."""
+        out = {}
+        d = self.submission_dir(turn)
+        if not os.path.isdir(d):
+            return out
+        for name in sorted(os.listdir(d)):
+            if not name.endswith('.b64'):
+                continue
+            out[name[:-4]] = sp.load_any(os.path.join(d, name))
+        return out
+
+    # ── archive ──────────────────────────────────────────────────────────────
+    def archive(self, turn: int, record: dict) -> None:
+        _atomic_write(self.archive_path(turn),
+                      json.dumps(record, indent=2).encode('utf-8'))
+
+
+def turn_of(blob: bytes) -> int:
+    """The turn number a blob carries, from GLOB payload +0."""
+    tree = sp.parse_blob(blob)
+    glob = next(tree[0].find('GLOB'))
+    return struct.unpack_from('<I', blob, glob.payload)[0]

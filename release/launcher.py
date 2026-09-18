@@ -49,8 +49,13 @@ def game_root_candidates() -> "list[str]":
 
 
 def find_game_root(modes) -> "str | None":
-    """First directory that holds every EXE the manifest asks for."""
-    wanted = {m["exe"] for m in modes if is_playable(m)}
+    """First directory that holds every EXE the manifest asks for.
+
+    A mode with a "session" names no EXE, because whatever runs the session
+    chooses the build. Asking for its EXE would decide the whole install is
+    broken over a file the manifest never claimed existed.
+    """
+    wanted = {m["exe"] for m in modes if is_playable(m) and m.get("exe")}
     for cand in game_root_candidates():
         if all(os.path.exists(os.path.join(cand, exe)) for exe in wanted):
             return cand
@@ -70,12 +75,21 @@ def is_playable(mode) -> bool:
     greyed-out card advertising what is coming. It must not be counted when
     looking for the game files, or a release that ships no multiplayer client
     would decide the whole install is broken.
+
+    A mode with a "session" names something that starts the game itself rather
+    than being an EXE plus a pass file. Multiplayer is one: the turn loop writes
+    the .dat for the turn and chooses the build, so there is no galaxy file to
+    name and naming one would be a fiction.
     """
-    return bool(mode.get("enabled", True) and mode.get("exe") and mode.get("galaxy"))
+    if not mode.get("enabled", True):
+        return False
+    if mode.get("session"):
+        return True
+    return bool(mode.get("exe") and mode.get("galaxy"))
 
 
 def find_galaxy_root(game_root: str, modes) -> "str | None":
-    wanted = {m["galaxy"] for m in modes if is_playable(m)}
+    wanted = {m["galaxy"] for m in modes if is_playable(m) and m.get("galaxy")}
     for cand in (os.path.join(game_root, "galaxies"), game_root):
         if all(os.path.exists(os.path.join(cand, g)) for g in wanted):
             return cand
@@ -367,6 +381,70 @@ def launch_mode(mode, game_root: str, galaxy_root: str) -> subprocess.Popen:
     return subprocess.Popen([exe, galaxy], cwd=game_root)
 
 
+# ── Multiplayer ───────────────────────────────────────────────────────────────
+# A multiplayer galaxy has a turn store, which is the one thing a player's
+# launcher, the other players' launchers and the referee all agree through. The
+# store says which turn is current and when it is due; the launcher's job is to
+# make the turn boundary invisible. The .dat push path is startup-only, so the
+# client has to restart every turn, and the only way that is acceptable is if
+# nobody has to think about it.
+#
+# `[ ]` NOT PACKAGED. This path imports from the checkout (server/player_turn.py
+# and its neighbours) and so works only when the launcher is run from a clone.
+# Shipping it means bundling save_parser, set_blob_player, turn_store and the
+# serve and collect logic into the frozen build, which is a build.ps1 change and
+# a separate job.
+MP_CONFIG = "multiplayer.json"
+
+# What the turn loop may start. Not in the manifest: the loop picks the build
+# itself, and a release does not ship the player build yet.
+MP_CLIENTS = ("CosmicSupremacy_Player.exe", "CosmicSupremacy_TestBed.exe")
+
+
+def multiplayer_config(data_dir: str):
+    """{"store": <dir>, "civ": <name>} for this player, or None.
+
+    Kept in the data directory rather than the manifest because it is per
+    player and per galaxy: the manifest ships to everyone, and which civ you
+    are is yours.
+    """
+    path = os.path.join(data_dir, MP_CONFIG)
+    if not os.path.exists(path):
+        return None
+    try:
+        with open(path, encoding="utf-8") as f:
+            cfg = json.load(f)
+    except (OSError, ValueError):
+        return None
+    if not cfg.get("store") or not cfg.get("civ"):
+        return None
+    return cfg
+
+
+def multiplayer_modules():
+    """The checkout's turn machinery, or None outside a checkout."""
+    root = _repo_root()
+    server = os.path.join(root, "server")
+    if not os.path.exists(os.path.join(server, "player_turn.py")):
+        return None
+    for d in (server, os.path.join(server, "dev_tools"),
+              os.path.join(root, "client", "dev_tools"),
+              os.path.join(root, "client", "dev_tools", "ai_player")):
+        if d not in sys.path:
+            sys.path.insert(0, d)
+    import player_turn
+    import turn_store
+    return player_turn, turn_store
+
+
+def fmt_left(seconds: float) -> str:
+    """A countdown a player can read at a glance."""
+    seconds = int(max(0, seconds))
+    if seconds >= 3600:
+        return f"{seconds // 3600}h {seconds % 3600 // 60:02d}m"
+    return f"{seconds // 60}:{seconds % 60:02d}"
+
+
 # ── UI ────────────────────────────────────────────────────────────────────────
 BG      = "#050a1a"
 PANEL   = "#080f22"
@@ -406,6 +484,15 @@ class Launcher:
         self._last_seen_turn = None
         self._ctl_busy = False
         self.running_mode = None
+        # The multiplayer session: a worker thread running the turn loop, the
+        # store it follows, and the flag that asks it to stop between turns
+        # rather than mid-capture.
+        self.mp_thread = None
+        self.mp_store = None
+        self.mp_civ = None
+        self.mp_stop = False
+        self.mp_note = ""
+        self.mp_turn = None
         # The status to fall back to whenever no game is running. Recorded when
         # the server settles so that a game exiting restores whatever was true
         # then , "server running", "port taken", "reusing the existing server" ,
@@ -418,6 +505,10 @@ class Launcher:
         # hidden mode's client is still a running game that a second launch
         # would kill.
         self.client_exes = {m["exe"] for m in cfg["modes"] if m.get("exe")}
+        # The multiplayer turn loop starts its own client, which the manifest
+        # therefore does not name. It still has to count as a running game, or
+        # a second launch would close someone's turn from under them.
+        self.client_exes |= set(MP_CLIENTS)
         # Diagnostics start before the data directory is known , where the game
         # was found, and whether it was found at all, are exactly the lines a
         # failed startup needs to leave behind , so they buffer until there is a
@@ -558,7 +649,7 @@ class Launcher:
         if not game_root:
             searched = "\n".join("    " + c for c in game_root_candidates())
             needed = ", ".join(sorted({m["exe"] for m in self.modes
-                                       if is_playable(m)}))
+                                       if is_playable(m) and m.get("exe")}))
             for line in ("game files not found; searched:", searched):
                 self.say(line)
             self.fail(
@@ -618,6 +709,9 @@ class Launcher:
     def on_play(self, mode):
         if not is_playable(mode):
             return
+        if mode.get("id") == "multiplayer":
+            self.start_multiplayer(mode)
+            return
         busy = running_clients(self.client_exes)
         if busy:
             self.warn("A Cosmic Supremacy game is already running "
@@ -641,6 +735,107 @@ class Launcher:
         self.set_status(f"{_short(mode)} is running", OK)
         if mode.get("ai"):
             self.start_ai(mode)
+
+    # ── Multiplayer session ──────────────────────────────────────────────────
+    def start_multiplayer(self, mode):
+        """Follow this galaxy's turns until the player stops or the launcher
+        closes."""
+        if self.mp_thread is not None and self.mp_thread.is_alive():
+            self.warn("A multiplayer galaxy is already running.")
+            return
+        busy = running_clients(self.client_exes)
+        if busy:
+            self.warn("A Cosmic Supremacy game is already running "
+                      f"({', '.join(busy)}).\n\nClose it first: a multiplayer "
+                      "turn starts the game itself.")
+            return
+
+        cfg = multiplayer_config(self.data_dir)
+        if cfg is None:
+            self.warn(
+                "This galaxy is not set up yet.\n\nMultiplayer needs a "
+                f"{MP_CONFIG} in\n{self.data_dir}\n\nholding the galaxy "
+                'folder and which civilisation you play, for example:\n\n'
+                '{"store": "C:\\\\galaxies\\\\demo", "civ": "DemoPlayer"}')
+            return
+
+        mods = multiplayer_modules()
+        if mods is None:
+            self.warn("Multiplayer is not in this build yet.\n\nIt currently "
+                      "runs only from a source checkout. Everything else in "
+                      "this launcher works as normal.")
+            return
+        player_turn, turn_store = mods
+
+        store = turn_store.TurnStore(cfg["store"])
+        if not store.exists():
+            self.warn(f"No galaxy in\n{cfg['store']}\n\nThe referee has to "
+                      "publish a first turn before anyone can play it.")
+            return
+
+        self.mp_store = store
+        self.mp_civ = cfg["civ"]
+        self.mp_stop = False
+        self.running_mode = mode
+        self.say(f"multiplayer: following {cfg['store']} as {cfg['civ']}")
+        self.set_status(f"Multiplayer , {cfg['civ']}", OK)
+        self._show_controls(True)
+
+        save_dir = os.path.join(self.data_dir, "saves")
+        os.makedirs(save_dir, exist_ok=True)
+
+        def work():
+            try:
+                player_turn.follow(
+                    store, cfg["civ"],
+                    poll=2.0,
+                    on_state=self._mp_state,
+                    save_dir=save_dir,
+                    stop=lambda: self.mp_stop,
+                    log=self.say_threadsafe)
+            except BaseException as exc:            # noqa: BLE001
+                # A dead worker must say so. Silence here reads as "my turn is
+                # still being set up", and the player waits forever.
+                self.say_threadsafe(f"multiplayer stopped: {exc}")
+                self._mp_state("failed", error=str(exc))
+
+        self.mp_thread = threading.Thread(target=work, daemon=True,
+                                          name="multiplayer")
+        self.mp_thread.start()
+
+    def _mp_state(self, kind, **facts):
+        """Called from the worker thread. Records a line for the turn readout."""
+        civ = facts.get("civ", self.mp_civ)
+        turn = facts.get("turn")
+        if turn is not None:
+            self.mp_turn = turn
+        self.mp_note = {
+            "serving": "starting your turn",
+            "playing": "",
+            "collecting": "time is up, orders are in",
+            "submitted": "orders sent",
+            "waiting": "waiting for the next turn",
+            "overtaken": "that turn closed without you",
+            "failed": f"stopped: {facts.get('error', 'unknown')}",
+            "stopped": "stopped",
+            "done": "finished",
+        }.get(kind, kind)
+        if kind in ("submitted", "waiting", "failed", "stopped", "done"):
+            self.say_threadsafe(f"multiplayer: {self.mp_note} ({civ})")
+
+    def stop_multiplayer(self, why: str = ""):
+        """Ask the turn loop to stop. It finishes the step it is on first."""
+        if self.mp_thread is None:
+            return
+        self.mp_stop = True
+        if why:
+            self.say(f"multiplayer: stopping , {why}")
+        self.mp_thread.join(timeout=20)
+        if self.mp_thread.is_alive():
+            self.say("multiplayer: the turn loop is still finishing a capture")
+        self.mp_thread = None
+        self.mp_note = ""
+        self.mp_turn = None
 
     def start_ai(self, mode):
         """Start the opponent, and say clearly if there is not one to start."""
@@ -774,6 +969,11 @@ class Launcher:
                 "since your last save will be lost. Continue?"):
             return
         mode = self.running_mode
+        if not (mode and mode.get("exe")):
+            self.warn("Load only applies to a game this launcher started "
+                      "directly. A multiplayer turn comes from the galaxy's "
+                      "turn store, not from a file on disk.")
+            return
         self.say(f"loading {os.path.basename(path)}")
         self.stop_ai("loading a save")
         if self.child is not None:
@@ -839,6 +1039,30 @@ class Launcher:
         """Update the turn readout
         """
         import gamectl
+        if self.mp_store is not None:
+            # In multiplayer the clock belongs to the store, not to the client:
+            # the client's own countdown is held far into the future so it can
+            # never compute a turn the referee has not.
+            try:
+                turn, _deadline = self.mp_store.current()
+                left = self.mp_store.seconds_left()
+                label = f"turn {turn} \u00b7 {fmt_left(left)} left"
+                if self.mp_note:
+                    label = f"turn {turn} \u00b7 {self.mp_note}"
+                if self.turn_label.cget("text") != label:
+                    self.turn_label.configure(text=label)
+            except Exception:
+                pass
+            for key, btn in self.ctl_buttons.items():
+                # Save and Next Turn are meaningless here. The launcher submits
+                # at the deadline, and a player who ends their own turn early
+                # would be asking for a state the referee has not computed.
+                want = "disabled" if key in ("turn", "load") else "normal"
+                if btn.cget("state") != want:
+                    btn.configure(state=want,
+                                  bg=BTN if want == "normal" else FAINT,
+                                  cursor="hand2" if want == "normal" else "")
+            return
         try:
             if self._ctl_client is None:
                 pid, _n = gamectl.find_client()
@@ -893,6 +1117,7 @@ class Launcher:
                     "local server, and TestBed needs it. Saving and loading "
                     "will fail from that point on.\n\nClose anyway?"):
                 return
+        self.stop_multiplayer("the launcher is closing")
         self.stop_ai("the launcher is closing")
         for srv in self.servers:
             try:
@@ -963,6 +1188,11 @@ class Launcher:
         # The controls belong to a running game, and only to a mode that asked
         # for them: Tutorial and Demo have their own UI and must not grow a
         # Next Turn button that means nothing there.
+        if self.mp_thread is not None and self.mp_thread.is_alive():
+            self._show_controls(True)
+            self._refresh_turn()
+            self.root.after(1000, self._watch_game)
+            return
         wants = bool(self.running_mode and self.running_mode.get("controls")
                      and self.child is not None)
         self._show_controls(wants)

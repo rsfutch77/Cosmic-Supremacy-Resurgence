@@ -61,6 +61,28 @@ The `data=` field in `savegame` POST requests contains a game state snapshot enc
 
 The parser recovered from git history (`1b4918c:prototype/server/save_parser.py`) now lives at `server/dev_tools/save_parser.py`. Its GSET key-value decoding still stands; its section discovery has been replaced, because the framing turned out to be self-describing.
 
+**A payload can hold more than one run of sections, separated by its own fields.** `DYNO` is the case that proved it: the writer at `0x004DA310` emits an orbit id, a `SHCO` section, three more own fields, and then, only when the ship carries an order, a `ROUT` section and a trailing word. Discovery scored each candidate start by its first run alone and kept whichever covered the most bytes, so in an ordered ship's 124-byte `DYNO` the 90-byte `ROUT` run beat the 17-byte `SHCO` run and `SHCO` was reported as absent, while the same ship's idle 30-byte `DYNO` reported `SHCO` correctly because there it was the only run. Fixed September 2026 by scoring each candidate by everything it can chain through small gaps; section counts rose from 419 to 443 on a two-civ turn-2 blob, so the loss was not confined to `DYNO`.
+
+Two consequences worth keeping in mind:
+
+- **A section's own bytes are not a prologue plus an epilogue.** Whatever sits in a gap between two children belongs to the parent, and for a `DYNO` that gap holds the has-orders byte and the admiral id, which is most of what an order consists of. `save_parser.own_ranges` and `own_bytes` return them correctly; three tools were rebuilding payloads as prologue, children, epilogue and silently dropping gap bytes.
+- **Children are ordered but not contiguous**, so anything rebuilding a payload from its children must copy the gaps. `filter_blob.py` now deletes the byte ranges it wants gone rather than reassembling from the children it keeps.
+
+**A payload that is mostly its own fields hides its trailing sections.** `PLPR` is about 160 bytes of planet fields followed by `PROD` and `ENLI`, which together cover 18% of it, far below the 50% coverage a run had to reach to be believed. Those sections were therefore invisible, and the production queue lives in `PROD`, so the one thing a build order changes could not be addressed. Ending exactly on the payload boundary is the evidence that replaces coverage: sizes are self-describing, so a chain of two or more sections whose last byte is the payload's last byte has agreed with the framing several times over. With that rule the discovered section count on the archive rose from 53,490 to 96,492, and the checks above still hold on all 73 readable blobs.
+
+### What a planet's `PLPR` holds (September 2026, partial)
+
+    +43 .. +132   ten nine-byte records, each beginning with the owner's
+                  object id, one per unit of population. Moving one farmer to
+                  a banker shifts values through this array rather than
+                  editing a count
+    +167          PROD, the production queue, 29 bytes; its payload carries
+                  the queue's own fields and a nested section naming what is
+                  queued, FCLT for a facility
+    +255          ENLI, 4 bytes
+
+`WLTH` appears inside `PROD`'s payload rather than beside it, and is replaced by `FCLT` when a facility is queued. The rest of `PLPR` is undecoded and mixes the planet's population, stores and derived economy with the job decision, which is why job allocation cannot yet be accepted as an order.
+
 #### Section framing, read out of the archive class, not inferred from blobs
 
 Every section, from the outermost `SAVE` down to the smallest leaf, carries the same 8-byte header:

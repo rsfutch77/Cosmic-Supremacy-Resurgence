@@ -101,15 +101,63 @@ see D1.
 
 ## B. Client lifecycle, once per turn
 
-- `[ ]` **B1. Push a turn and relaunch, launcher-driven.** The `.dat` path is
-  startup-only, so a player's client restarts each turn. Acceptable at 1 to 4 hour
-  turns, and it is the launcher's job to make it invisible: at 00:00 say "time is
-  up, orders are in", close the client, collect the turn, relaunch on it. That
-  also subsumes B2, since a client that is closed at the boundary never reaches
-  one.
-  **Done when:** a player gets turn N+1 without doing anything manual.
-- `[ ]` **B2. Stop the player's client ticking on its own.** A player's client
-  must never advance a turn, or it shows a future the referee has not computed.
+- `[x]` **B1. Push a turn and relaunch, launcher-driven.** Confirmed live on
+  18 September 2026: a player clicked Multiplayer once, played turn 8, walked
+  away, and came back to turn 9 open and playable. Nothing manual in between.
+
+  The pieces:
+
+  | | |
+  |---|---|
+  | `server/turn_store.py` | the one thing a player's launcher, the other players' launchers and the referee agree through |
+  | `server/player_turn.py follow` | the player-side loop: serve, hold the clock, collect at the deadline, submit, wait |
+  | `server/referee.py --loop` | resolves each turn as its deadline passes |
+  | `release/launcher.py` | runs `follow` on a worker thread and shows the countdown |
+
+  The measured handoff was **35 seconds** from "time is up" to the next turn
+  being playable:
+
+      00:03:05  serving turn 8
+      00:09:09  time is up, captured, submitted
+      00:09:42  the referee's tick capture arrives
+      00:09:44  serving turn 9
+      00:09:50  turn 9 up
+
+  The turn store is deliberately the whole interface. A directory is enough for
+  one machine and for a shared folder between two, and the Firebase adapter the
+  deployment wants replaces that class without changing a caller.
+
+  Three things this cost that are worth not rediscovering:
+
+  - **The referee and a player's launcher must agree where captures land.**
+    A capture arrives over `cs_server`'s `savegame` endpoint, so it lands in
+    whatever data directory that server was started with. The launcher hosts its
+    own against `release/data`, while the referee defaulted to the checkout's
+    `server/saves`, and the referee then waited for a file being written
+    somewhere else. Both take the directory explicitly now, `--save-dir`.
+  - **On one machine the referee and the players share a single game process.**
+    `tick` closes whatever is running before starting its own, so resolving the
+    instant a deadline passed closed the player's client mid-capture and lost the
+    orders it was writing. The referee now holds a grace period for submissions
+    and then waits for the client to exit. With the referee on another host both
+    waits become free.
+  - **A mode that starts the game itself names no EXE.** Making the multiplayer
+    card playable made `find_game_root` demand an EXE the manifest never claimed,
+    and the launcher decided the whole install was broken. `is_playable` now
+    recognises a `"session"` mode.
+
+  `[ ]` **Not packaged.** The launcher's multiplayer path imports from the
+  checkout, so it runs only from a clone. Shipping it means bundling
+  `save_parser`, `set_blob_player`, `turn_store` and the serve and collect logic
+  into the frozen build, which is a `build.ps1` change.
+- `[x]` **B2. Stop the player's client ticking on its own.** Confirmed live: a
+  player's client sat on a served turn for six minutes, never advanced, never
+  bailed, and the launcher showed the real countdown beside it. Two things get
+  that: the player build is the one without T1-T5, so the engine's own sync
+  checks are intact, and `player_turn.py serve` writes a day onto `0x0080AA08`
+  after load so no boundary arrives during a session. The in-game countdown then
+  reads about 24 hours, which is the artefact of the hold and is why the launcher
+  owns the display.
 
   **Mostly solved by build choice.** Patches **T1-T5** are what let a client tick
   without a server, and they are applied **only to the Resurgence EXE**. An
@@ -250,19 +298,72 @@ made unnecessary.
   rebuilt the returned blob byte for byte from the baseline, and the same file
   submitted under the other civ's name was rejected with the owner named.
 
-  `[ ]` **Diff each submission against the state served to that player**, not
-  against the authoritative blob as it evolves. Applying one player's orders first
-  moves the authoritative state under the next player, whose untouched copy then
-  looks like an attempt to change ships they do not own: the two-player round
-  logged two such drops and neither player had done anything. They were harmless,
-  being on ships the submitter did not own, but a log that cries wolf will hide a
-  real rejection, and the legality gate in C4 has to be able to trust it.
+  `[x]` **Every submission is judged against the state served**, not against the
+  authoritative blob as it evolves. Applying one player's orders first moved the
+  state under the next player, whose untouched copy of a ship then differed from
+  it and read as an attempt to change what they did not own: the two-player round
+  logged two such drops with neither player having done anything. Re-running that
+  same round now reports **3 orders taken and 0 dropped**, same merged size.
 
-  Still unhandled, each needing its own measurement before it can be accepted:
-  production queues, research topic (`Owner:144`/`Owner:152`), job allocation,
-  facility selection, ship designs, governors, admirals, diplomacy proposals.
-  Orders issued through an admiral are also out of scope, since the admiral id
-  sits inside `DYNO` and would be copied with the order.
+  `[x]` **A forged owner field cannot take a ship.** Ownership is read from the
+  served state, never from the submission. Tested by rewriting one of
+  DemoPlayer's ships to claim Neighbor owned it, planting a real order on it and
+  submitting as Neighbor: the change was dropped and named, `ship 201: DROPPED,
+  owned by DemoPlayer`, the ship came through the merge untouched, and Neighbor's
+  own legitimate order still applied.
+
+  `server/dev_tools/order_diff.py` is the measurement tool for everything below:
+  given the bytes served and the save returned, it reports which objects changed,
+  who owned each one at the start of the turn, and which section inside it moved.
+  Objects are matched by object id rather than by tree position, because the
+  client writes the civs back in its own order and a positional diff of one
+  galaxy reports every civ as changed.
+
+  **Three more order types were measured in September 2026**, each by serving a
+  turn, having a player perform exactly one action, and diffing. Two are
+  accepted and one is refused with a reason.
+
+  | action | where it lives | verdict |
+  |---|---|---|
+  | research topic | `OWNR > DATA > OWPR` `+32` and `+40` | accepted, field by field |
+  | production queue | `PLNT > PLPR > PROD` | accepted, whole section |
+  | job allocation | the citizen array in `PLPR`'s own bytes | refused |
+
+  **Research topic.** Setting one writes the technology id to both `OWPR+32` and
+  `OWPR+40`, eight bytes apart, matching the predicted `Owner:144`/`Owner:152`
+  pair. Confirmed against the AI's own table: the id written for "Advanced
+  Magnetism" was 12, which is what `research.py` calls it. Copied field by field
+  rather than by section, because `OWPR` is the civ's whole property block and
+  also holds the coat-of-arms count and several flag bytes.
+
+  **Production queue.** Queuing a facility changed only `PLPR > PROD`, whose
+  payload holds the queue's own fields and a nested section naming what is
+  queued, `FCLT` for a facility. Self-contained, so it is copied whole.
+
+  **Job allocation is refused.** Moving one farmer to a banker changed the
+  citizen array inside `PLPR`, ten nine-byte records each keyed by the owning
+  civ's object id, plus a flag byte in `OWPR`. That array sits in `PLPR`'s own
+  bytes alongside the planet's population, stores and derived economy, so
+  copying `PLPR` wholesale would let a player hand back an edited population,
+  and the records are not decoded well enough to copy field by field. This is
+  the first order type that is genuinely blocked rather than merely unmeasured.
+
+  **The rules were tested against a submission containing all three changes at
+  once.** Two were applied and nothing else: the job change, the `EXSY`/`KNPL`
+  movement and the `OWPR` flag byte were all left behind.
+
+  **`EXSY` and `KNPL` move on their own and must never be taken as orders.** A
+  player who only set a research topic still returned a changed explored-systems
+  table and a known-planets table that grew from 0 records to 1. Two captures
+  taken in the same session with nothing done between them were byte-identical,
+  so this is not drift: it is bookkeeping the client does when it loads. The
+  referee recomputes both when it ticks the authoritative state, so a player's
+  copy has no business overwriting them.
+
+  Still unmeasured, and therefore not accepted: facility selection outside the
+  queue, ship designs, governors, admirals, diplomacy proposals. Orders issued
+  through an admiral are also out of scope, since the admiral id sits inside
+  `DYNO` and would be copied with the order.
 - `[ ]` **C3. Immediate-effect actions.** Hurry production, conscription, crew
   assignment and job reallocation take effect the moment they are clicked, so the
   diff shows the *effect* and not the intent. Each needs a reverse mapping, effect

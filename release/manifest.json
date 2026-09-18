@@ -48,9 +48,12 @@
       "id": "multiplayer",
       "title": "Multiplayer",
       "short": "Multiplayer",
-      "blurb": "Persistent galaxies against other players, the way the original was played.",
-      "enabled": false,
-      "show": true
+      "blurb": "Persistent galaxies against other players, the way the original was played. The launcher takes your turn back when time is up and starts the next one for you.",
+      "enabled": true,
+      "show": true,
+      "needs_server": true,
+      "controls": true,
+      "session": "multiplayer"
     },
     {
       "id": "sandbox",
