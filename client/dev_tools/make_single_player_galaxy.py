@@ -182,9 +182,56 @@ def seed(capture, out_dat):
         blob = idg.make(blob, tid, name, parts, None, log=lambda m: None)
         log(f"  seeded {name!r} for {AI_CIV!r}")
 
+    blob = fix_player_civ_id(blob)
+
     with open(out_dat, "wb") as fh:
         fh.write(blob)
     log(f"  wrote {out_dat} ({len(blob)} bytes)")
+
+
+def fix_player_civ_id(blob):
+    """Give the human civ a non-zero Owner:4, or it is never empire-ticked.
+
+    THIS IS THE BUG v0.1 SHIPPED. Owner:4 is the last u32 of an OWNR payload,
+    and zero is a sentinel meaning "not simulated on this client" , the engine
+    skips the whole empire-level half of the turn for that civ. Research
+    (Owner:12), Owner:24 and the score (Owner:28) never move, while cash keeps
+    ticking, so from inside the game the empire looks alive and the tech tree is
+    simply unreachable for the entire game.
+
+    Every galaxy generated through the TestBed pass token carries 0 here for the
+    human civ, and this generator uses that token, so the fault is not
+    incidental to one build , it is produced fresh every time this script runs.
+    Confirmed causal on a live galaxy by an A/B differing only in these four
+    bytes; see docs/CosmicSupremacy_Memory_Reconstruction_Report.md,
+    "Research/science accrual".
+
+    The lowest unused positive id, which reproduces the 20/21 pairing every
+    healthy generated galaxy shows rather than inventing a third number.
+    """
+    import struct
+    sys.path.insert(0, os.path.join(REPO, "server", "dev_tools"))
+    import inject_civ as icv
+
+    owners = icv.owner_records(blob)
+    ids = {o["name"]: struct.unpack_from("<I", blob, o["end"] - 4)[0]
+           for o in owners}
+    log(f"  Owner:4 per civ: {ids}")
+    broken = [o for o in owners
+              if struct.unpack_from("<I", blob, o["end"] - 4)[0] == 0]
+    if not broken:
+        log("  every civ already has a non-zero Owner:4")
+        return blob
+
+    buf = bytearray(blob)
+    taken = {v for v in ids.values() if v}
+    for o in broken:
+        uid = next(i for i in range(20, 256) if i not in taken)
+        taken.add(uid)
+        struct.pack_into("<I", buf, o["end"] - 4, uid)
+        log(f"  {o['name']}: Owner:4 0 -> {uid}  "
+            f"(0 means the engine would never tick its research or score)")
+    return bytes(buf)
 
 
 def verify(snap):
@@ -218,6 +265,26 @@ def verify(snap):
             log(f"    {d.design_name!r:10} "
                 + ("buildable now" if research.design_legal(d, done)
                    else f"locked until researched: {missing}"))
+
+    # Read back from the LIVE galaxy, not from the blob fix_player_civ_id just
+    # wrote. A value that is correct on disk and zero in memory would mean the
+    # engine overwrites it at load, and that is the failure this has to catch.
+    seen = {}
+    for civ in snap.civs:
+        uid = civ.u32(4)
+        seen.setdefault(uid, []).append(civ.civ_name)
+        if not uid:
+            log(f"  [!] {civ.civ_name!r} has Owner:4 = 0, so the engine will "
+                f"never tick its research or its score. This galaxy is the "
+                f"v0.1 research bug; do not ship it.")
+            ok = False
+    for uid, names in seen.items():
+        if uid and len(names) > 1:
+            log(f"  [!] {names} share Owner:4 = {uid}; the score list holds one "
+                f"row per distinct value, so one of them is invisible")
+            ok = False
+    log(f"  Owner:4 live: "
+        + ", ".join(f"{c.civ_name}={c.u32(4)}" for c in snap.civs))
     return ok
 
 

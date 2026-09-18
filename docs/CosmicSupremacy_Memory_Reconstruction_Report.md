@@ -1643,6 +1643,98 @@ Incidental: `ShipDesign` #635 (the used-up Colony Ship) is progressively convert
 base template , `+36`/`+40` became `-1.0f` and `+56/60/64/68/72/112` became `0xFFFFFFFF`
 across two turns. That is how the FF-sentinel templates described earlier come to exist.
 
+#### The skip travels with the GALAXY, not the build, and `Owner:4 == 0` marks it (September 2026)
+
+Reported by players against the released v0.1 Single Player build: selecting a
+technology and ending the turn adds no research points. Reproduced on a live
+three-civ galaxy running on `CosmicSupremacy_Resurgence.exe` at turn 7, which
+separates the local player from two rivals that are otherwise comparable:
+
+| civ | local | `Owner:4` | `Owner:8` cash | `Owner:12` research | `Owner:24` | `Owner:28` score | planets | pop |
+|---|---|---|---|---|---|---|---|---|
+| Neighbor | no | 22 | 312 | **280** | 80 | 2513 | 2 | 9 |
+| DemoPlayer | **yes** | **0** | 398 | **0** | **0** | **0** | 2 | 11 |
+| BadGuy | no | 21 | 312 | **280** | 70 | 1586 | 1 | 7 |
+
+280 is 40/turn × 7 turns for both rivals. The local player has the largest
+population and the most cash, so this is not an economy difference: cash moves
+and every empire-level field stays at its initial value. **Research is
+unreachable for the human player for the whole game.**
+
+So the July reading above , "not ticked on TestBed, ticks correctly on
+Resurgence" , attributed the split to the wrong thing. Both halves were true
+and the build was not the variable. Reading the last u32 of every OWNR payload
+out of every galaxy blob in `client/` splits them perfectly on the galaxy
+instead:
+
+    SinglePlayerGalaxy.dat   DemoPlayer=0    BadGuy=21      <- shipped in v0.1
+    fog_test.dat             DemoPlayer=0    BadGuy=21
+    turn3.dat                DemoPlayer=0    BadGuy=21
+    clean.dat                GoodGuy=20      BadGuy=21
+    e2e.dat                  GoodGuy=20      BadGuy=21
+    probe1.dat               GoodGuy=20      BadGuy=21
+
+Every galaxy whose human civ carries `Owner:4 == 0` is one the July session
+called a TestBed galaxy; every one carrying 20 is one it called a Resurgence
+galaxy. The July measurements were taken on one of each, which is why the build
+looked like the variable. `server/dev_tools/set_civ_id.py` reads and rewrites
+this field, and `client/dev_tools/research_tick_check.py` takes the measurement.
+
+**RESOLVED , `Owner:4 == 0` is the cause, and it is a sentinel rather than a
+collision.** Four bytes, one control turn and one treatment turn on the live
+galaxy above, nothing else touched:
+
+| turn | what changed | Neighbor (22) | BadGuy (21) | local player |
+|---|---|---|---|---|
+| 7 → 8 | nothing (control) | +40 | +40 | **+0** |
+| 8 → 9 | local `Owner:4` 0 → 20 | +40 | +40 | **+40** |
+| 9 → 10 | nothing | +40 | +40 | **+40** |
+
+The control matters: it reproduces the fault in the same session, on the same
+galaxy, immediately before the fix, so the only variable between the two turns
+is those four bytes. Note 0 was already *distinct* here (22, 0, 21 are three
+different ids), so the field is not merely a uniqueness key , **zero means "not
+simulated on this client"**, which is exactly what the original architecture
+needed: the server owned the human player's empire-level results and shipped
+them down, so the client had no business recomputing them.
+
+The rest of the dead block came back in the same turn:
+
+- `Owner:12` research and `Owner:24` are **accumulators**, so both restarted
+  from 0 and have permanently lost the eight turns they sat out. `Owner:24`
+  resumed at exactly +10 per owned planet per turn, matching the rule above.
+- `Owner:28` score is **computed, not accumulated** , it snapped from 0 straight
+  to 2503, a value consistent with the civ's two planets and 14 population.
+- `Owner:8` cash moved the whole time, in both states. That is what makes the
+  skip easy to miss from inside the game: the treasury ticks, so the empire
+  looks alive.
+
+The other candidate , the all-zero block at `Owner:1180..1216`, where both
+rivals hold `-1` sentinels and an XYZ float triple , is therefore **not** the
+gate. It is still unexplained and still correlates with engine-driven civs, but
+it is downstream of this, not the cause.
+
+**Confirmed end to end on the shipped galaxy.** A live write proves causation
+but not shippability, because the engine could rebuild the field at load from
+whatever the roster says. It does not. `SinglePlayerGalaxy.dat` patched by the
+one byte, client restarted on it cold:
+
+| turn | DemoPlayer `Owner:4` | research | `Owner:24` | score | BadGuy research |
+|---|---|---|---|---|---|
+| 0 | **20** (survived the load) | 0 | 0 | 0 | 0 |
+| 1 | 20 | **40** | , | , | 40 |
+| 2 | 20 | **80** | , | , | 80 |
+| 3 | 20 | **120** | **30** | **1546** | 120 |
+
+At turn 3 the two civs are identical in every empire-level field, which is the
+symmetric reading the July session recorded on a healthy galaxy. The human
+player is now a simulated empire from its first turn.
+
+`release/build.ps1` copies this galaxy straight out of `client/`, so a rebuild
+picks the fix up with no change to the build. The v0.1.0 staging folder under
+`dist/` still reads `DemoPlayer=0`, which is the published zip: **every v0.1
+single-player game shipped with research disabled for the player.**
+
 ### `Planet:368` is a turn counter, and loyalty is STILL unlocated (August 2026)
 
 **RESOLVED: `Planet:368` == `min(8, currentTurn - Planet:92 + 1)`.** It is turns since the
