@@ -154,7 +154,7 @@ rather than read directly.
 | Construction progress | `Planet:120` | |
 | Population | `Planet:144`/`148`/`152` | 16-byte elems; `+0` = job id, `+12` low16 = turn added |
 | Population count | `(148-144)/16`, mirrored `Planet:352` low16 | |
-| Stationed military | `Planet:168`/`172`/`176` | 16-byte elems; `+0` upkeep, `+12` low16 turn added |
+| Stationed military | `Planet:168`/`172`/`176` | 16-byte elems, the same record as a citizen; `+0` is the job id and reads 3, `+12` low16 turn added |
 | Built facilities | `Planet:204` map, walk to `[typeId, count]` | 0 farm, 2 shipyard, 4 university, 6 military camp, 8 defence agency, 9 light turret |
 | Distinct facility types | `Planet:208` | == size of the `:204` map |
 | Selected building | `Planet:284` | type id, *last selected*, not current activity |

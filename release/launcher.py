@@ -890,7 +890,7 @@ class Launcher:
             if not messagebox.askokcancel(
                     "Quit launcher?",
                     "A game is still running.\n\nClosing the launcher stops the "
-                    "local server, and TestBed needs it , saving and loading "
+                    "local server, and TestBed needs it. Saving and loading "
                     "will fail from that point on.\n\nClose anyway?"):
                 return
         self.stop_ai("the launcher is closing")
