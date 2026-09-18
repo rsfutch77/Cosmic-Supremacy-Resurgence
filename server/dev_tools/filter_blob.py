@@ -94,16 +94,19 @@ def main():
     victim_starts = {s.start for s, _, _ in victims}
     print(f'dropping {len(victims)} system(s), {removed_objects} object(s)')
 
-    # Rebuild GLXY's payload without them. Its own leading bytes (the civ count)
-    # and every non-victim child are copied verbatim.
-    first_child = glxy.children[0].start
-    out = bytearray(blob[glxy.payload:first_child])
+    # Rebuild GLXY's payload by copying all of it except the victims' byte
+    # ranges. Copying "prologue, then each kept child, then epilogue" would be
+    # wrong: a payload's children are ordered but need not be contiguous, and
+    # anything sitting in a gap between two of them would be dropped. Deleting
+    # ranges keeps whatever we do not understand.
+    out = bytearray()
+    pos = glxy.payload
     for c in glxy.children:
-        if c.start in victim_starts:
+        if c.start not in victim_starts:
             continue
-        out += blob[c.start:c.end]
-    tail_start = glxy.children[-1].end
-    out += blob[tail_start:glxy.end]
+        out += blob[pos:c.start]
+        pos = c.end
+    out += blob[pos:glxy.end]
 
     new_blob = sp.replace_payload(blob, tree, glxy, bytes(out))
 

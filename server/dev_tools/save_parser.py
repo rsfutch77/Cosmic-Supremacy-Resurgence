@@ -126,6 +126,11 @@ def read_header(blob: bytes, off: int):
 # the parent as `prologue`/`epilogue` so it is visibly unparsed rather than lost.
 PROLOGUE_WINDOW = 256
 
+# How far past the end of one run to keep looking for the next. A payload that
+# interleaves sections with its own fields separates them by a few words, not by
+# hundreds; a wide window here would invite float data that spells a tag.
+GAP_WINDOW = 64
+
 # A candidate run has to tile most of the payload to be believed, which is what
 # keeps four bytes of float data that happen to spell a tag from being accepted.
 MIN_COVERAGE = 0.5
@@ -146,28 +151,69 @@ def _scan_run(blob: bytes, off: int, end: int):
     return out
 
 
-def _best_run(blob: bytes, start: int, end: int):
+def _chain(blob: bytes, first: int, end: int):
     """
-    Find where the sub-section run inside blob[start:end] begins.
+    Runs of sections starting at `first`, following on through small gaps.
 
-    Returns (run_start, sections) for the candidate covering the most bytes, or
-    (None, []) when nothing in the window yields a believable run.
+    The first run has to begin exactly at `first`; each later one is looked for
+    within `GAP_WINDOW` bytes of where the previous ended, which is how a payload
+    that puts its own fields between sections is followed.
+    """
+    runs = []
+    pos, anchored = first, True
+    while pos < end:
+        run = None
+        if anchored:
+            run = _scan_run(blob, pos, end)
+            anchored = False
+        else:
+            for off in range(pos, min(pos + GAP_WINDOW, end - 7)):
+                run = _scan_run(blob, off, end)
+                if run:
+                    break
+                run = None
+        if not run:
+            break
+        runs.append(run)
+        pos = run[-1].end
+    return runs
+
+
+def _all_runs(blob: bytes, start: int, end: int):
+    """
+    Every believable section in blob[start:end], in order, across all runs.
+
+    **A payload may hold more than one run of sections.** `DYNO` is the case that
+    proved it: its writer emits an orbit id, a `SHCO` section, three more own
+    fields, and then, only when the ship has an order, a `ROUT` section and a
+    trailing word. That is two runs separated by plain bytes.
+
+    Scoring a candidate start by its first run alone chooses between them and
+    silently drops the smaller. An ordered ship's 124-byte `DYNO` reported one
+    child, `ROUT`, and no `SHCO`, while the same ship's idle 30-byte `DYNO`
+    reported `SHCO` correctly, because there the small run was the only one.
+    Any field-level reading of orders built on that would have been wrong in
+    exactly the case that carries an order. So each candidate start is scored by
+    everything it can chain, and the earliest of the best-scoring wins.
+
+    Coverage is judged over the whole span, so the guard against four bytes of
+    float data happening to spell a tag is as strong as it was.
     """
     span = end - start
     if span < 8:
-        return None, []
-    best, best_cov = (None, []), 0
+        return []
+    best, best_cov = [], 0
     limit = min(start + PROLOGUE_WINDOW, end - 7)
     for off in range(start, limit):
-        run = _scan_run(blob, off, end)
-        if not run:
+        runs = _chain(blob, off, end)
+        if not runs:
             continue
-        cov = sum(s.size + 8 for s in run)
+        cov = sum(s.size + 8 for run in runs for s in run)
         if cov > best_cov:
-            best, best_cov = (off, run), cov
+            best, best_cov = runs, cov
     if best_cov < span * MIN_COVERAGE:
-        return None, []
-    return best
+        return []
+    return [s for run in best for s in run]
 
 
 def parse_sections(blob: bytes, start: int, end: int, depth: int = 0) -> list:
@@ -176,9 +222,13 @@ def parse_sections(blob: bytes, start: int, end: int, depth: int = 0) -> list:
 
     A payload with no believable run of sections in it is left as a leaf, so a
     partly-understood region degrades to unparsed bytes rather than to garbage.
+
+    Children are in order but **not necessarily contiguous**: a payload can put
+    its own fields between them. Anything rebuilding a payload from its children
+    has to copy the gaps too, which is what `own_ranges` is for.
     """
-    run_start, run = _best_run(blob, start, end)
-    if run_start is None:
+    run = _all_runs(blob, start, end)
+    if not run:
         return []
     for sec in run:
         if depth < 12:
@@ -193,6 +243,30 @@ def parse_sections(blob: bytes, start: int, end: int, depth: int = 0) -> list:
 def parse_blob(blob: bytes) -> list:
     """Parse a whole decompressed blob into a list of top-level sections."""
     return parse_sections(blob, 0, len(blob))
+
+
+def own_ranges(blob: bytes, sec: 'Section'):
+    """
+    [(start, end)] of a section's own bytes, the parts no child covers.
+
+    Children are ordered but may have gaps between them, so a section's own
+    bytes are not just a prologue and an epilogue. Rebuilding a payload as
+    prologue + children + epilogue drops whatever sat in a gap, which for a
+    `DYNO` is the has-orders byte and the admiral id.
+    """
+    out, pos = [], sec.payload
+    for c in sec.children:
+        if c.start > pos:
+            out.append((pos, c.start))
+        pos = c.end
+    if pos < sec.end:
+        out.append((pos, sec.end))
+    return out
+
+
+def own_bytes(blob: bytes, sec: 'Section') -> bytes:
+    """A section's own bytes, with every child cut out and the gaps kept."""
+    return b''.join(bytes(blob[a:b]) for a, b in own_ranges(blob, sec))
 
 
 def flatten(sections):

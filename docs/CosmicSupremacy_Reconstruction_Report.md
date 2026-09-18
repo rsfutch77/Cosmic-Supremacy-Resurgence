@@ -61,6 +61,13 @@ The `data=` field in `savegame` POST requests contains a game state snapshot enc
 
 The parser recovered from git history (`1b4918c:prototype/server/save_parser.py`) now lives at `server/dev_tools/save_parser.py`. Its GSET key-value decoding still stands; its section discovery has been replaced, because the framing turned out to be self-describing.
 
+**A payload can hold more than one run of sections, separated by its own fields.** `DYNO` is the case that proved it: the writer at `0x004DA310` emits an orbit id, a `SHCO` section, three more own fields, and then, only when the ship carries an order, a `ROUT` section and a trailing word. Discovery scored each candidate start by its first run alone and kept whichever covered the most bytes, so in an ordered ship's 124-byte `DYNO` the 90-byte `ROUT` run beat the 17-byte `SHCO` run and `SHCO` was reported as absent, while the same ship's idle 30-byte `DYNO` reported `SHCO` correctly because there it was the only run. Fixed September 2026 by scoring each candidate by everything it can chain through small gaps; section counts rose from 419 to 443 on a two-civ turn-2 blob, so the loss was not confined to `DYNO`.
+
+Two consequences worth keeping in mind:
+
+- **A section's own bytes are not a prologue plus an epilogue.** Whatever sits in a gap between two children belongs to the parent, and for a `DYNO` that gap holds the has-orders byte and the admiral id, which is most of what an order consists of. `save_parser.own_ranges` and `own_bytes` return them correctly; three tools were rebuilding payloads as prologue, children, epilogue and silently dropping gap bytes.
+- **Children are ordered but not contiguous**, so anything rebuilding a payload from its children must copy the gaps. `filter_blob.py` now deletes the byte ranges it wants gone rather than reassembling from the children it keeps.
+
 #### Section framing, read out of the archive class, not inferred from blobs
 
 Every section, from the outermost `SAVE` down to the smallest leaf, carries the same 8-byte header:

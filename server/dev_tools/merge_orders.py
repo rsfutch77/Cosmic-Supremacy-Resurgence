@@ -80,29 +80,40 @@ def replace_dyno(blob, ship_oid, new_dyno):
 
 
 def merge(blob, submissions, log=print):
-    """submissions: [(civ_name, submitted_blob)]. Returns the merged blob."""
+    """submissions: [(civ_name, submitted_blob)]. Returns the merged blob.
+
+    Every submission is judged against the state as it was at the start of the
+    turn, which is what each player was served, and never against the blob as it
+    accumulates other players' orders. Judging against the accumulating blob
+    makes the first player's orders look like the second player's edits: the
+    authoritative state moves under them, and their untouched copy of a ship they
+    do not own then differs from it. A two-player round logged two such drops
+    with neither player having done anything. They were harmless, being on ships
+    the submitter did not own, but a drop log that cries wolf hides a real
+    rejection, and the legality gate has to be able to trust it.
+    """
+    served = ship_index(blob)
+    names = {o['oid']: o['name'] for o in icv.owner_records(blob)}
     accepted = dropped = 0
     for civ_name, sub in submissions:
         civ = civ_by_name(blob, civ_name)
         log(f"{civ_name} (object {civ['oid']}):")
-        theirs = ship_index(sub)
-        for ship_oid, (_sub_owner, dyno) in sorted(theirs.items()):
-            authoritative = ship_index(blob)
-            if ship_oid not in authoritative:
-                log(f"    ship {ship_oid}: DROPPED, not in the authoritative blob")
+        for ship_oid, (_claimed_owner, dyno) in sorted(ship_index(sub).items()):
+            if ship_oid not in served:
+                log(f"    ship {ship_oid}: DROPPED, not in the state served")
                 dropped += 1
                 continue
-            owner, current = authoritative[ship_oid]
+            owner, as_served = served[ship_oid]
+            if dyno == as_served:
+                continue                        # untouched, nothing to say
             if owner != civ['oid']:
-                if dyno != current:
-                    log(f"    ship {ship_oid}: DROPPED, owned by object {owner}")
-                    dropped += 1
-                continue
-            if dyno == current:
+                log(f"    ship {ship_oid}: DROPPED, owned by "
+                    f"{names.get(owner, owner)}")
+                dropped += 1
                 continue
             blob = replace_dyno(blob, ship_oid, dyno)
             log(f"    ship {ship_oid}: order taken "
-                f"({len(current)} -> {len(dyno)} bytes)")
+                f"({len(as_served)} -> {len(dyno)} bytes)")
             accepted += 1
     log(f"{accepted} order(s) taken, {dropped} change(s) dropped")
     return blob

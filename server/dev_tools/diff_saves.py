@@ -73,8 +73,11 @@ def main():
         # a container's own bytes are what matters; children are compared
         # separately under their own paths
         if sa.children or sb.children:
-            pa = pa[:sa.children[0].start - sa.payload] if sa.children else pa
-            pb = pb[:sb.children[0].start - sb.payload] if sb.children else pb
+            # A section's own bytes are whatever no child covers, which is
+            # not simply the prologue: children are ordered but can have gaps
+            # between them, and a DYNO keeps its has-orders byte in one.
+            pa = sp.own_bytes(ba, sa)
+            pb = sp.own_bytes(bb, sb)
         if sa.version != sb.version or pa != pb:
             diffs.append((p, sa, sb, pa, pb))
 

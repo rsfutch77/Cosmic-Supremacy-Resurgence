@@ -298,13 +298,26 @@ made unnecessary.
   rebuilt the returned blob byte for byte from the baseline, and the same file
   submitted under the other civ's name was rejected with the owner named.
 
-  `[ ]` **Diff each submission against the state served to that player**, not
-  against the authoritative blob as it evolves. Applying one player's orders first
-  moves the authoritative state under the next player, whose untouched copy then
-  looks like an attempt to change ships they do not own: the two-player round
-  logged two such drops and neither player had done anything. They were harmless,
-  being on ships the submitter did not own, but a log that cries wolf will hide a
-  real rejection, and the legality gate in C4 has to be able to trust it.
+  `[x]` **Every submission is judged against the state served**, not against the
+  authoritative blob as it evolves. Applying one player's orders first moved the
+  state under the next player, whose untouched copy of a ship then differed from
+  it and read as an attempt to change what they did not own: the two-player round
+  logged two such drops with neither player having done anything. Re-running that
+  same round now reports **3 orders taken and 0 dropped**, same merged size.
+
+  `[x]` **A forged owner field cannot take a ship.** Ownership is read from the
+  served state, never from the submission. Tested by rewriting one of
+  DemoPlayer's ships to claim Neighbor owned it, planting a real order on it and
+  submitting as Neighbor: the change was dropped and named, `ship 201: DROPPED,
+  owned by DemoPlayer`, the ship came through the merge untouched, and Neighbor's
+  own legitimate order still applied.
+
+  `server/dev_tools/order_diff.py` is the measurement tool for everything below:
+  given the bytes served and the save returned, it reports which objects changed,
+  who owned each one at the start of the turn, and which section inside it moved.
+  Objects are matched by object id rather than by tree position, because the
+  client writes the civs back in its own order and a positional diff of one
+  galaxy reports every civ as changed.
 
   Still unhandled, each needing its own measurement before it can be accepted:
   production queues, research topic (`Owner:144`/`Owner:152`), job allocation,
