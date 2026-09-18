@@ -89,15 +89,82 @@ see D1.
   `[ ]` **The referee's client is stamped as one of the civs**, since every blob
   names a local player. Whether the engine AI still plays that civ during a
   referee tick is unmeasured, and if it does not, one civ silently stops acting.
-- `[ ]` **A2. Canonical hash.** Mask the trailing dword of every `KNPL` payload
-  before hashing, or two honest computations of the same turn disagree.
-  **Done when:** two independent runs of one turn produce the same hash.
-- `[ ]` **A3. Archive every turn** as blob plus orders plus hash.
-  **Done when:** any past turn can be recomputed and checked against its hash.
-- `[ ]` **A4. Determinism under combat.** The 40-turn agreement above covered a
-  two-civ galaxy with no war, and combat is where an accumulated AI state would
-  most plausibly diverge. **Done when:** a played-versus-loaded pair agrees
-  across a war.
+- `[x]` **A2. Canonical hash.** `server/canonical.py` zeroes the trailing `u32`
+  of every `KNPL` payload and hashes what is left. Two independent ticks of
+  turn 9, in separate processes, produced the same canonical hash. As it
+  happened they produced the same raw hash too, so the volatile field did not
+  move in that pair; the mask still earns its place from the six captures that
+  first found it, where an AI civ's low bytes differed between otherwise
+  identical runs and the top byte read `0xFF` after any load.
+
+  **The mask is deliberately narrow: 8 to 12 bytes, 0.03% of a blob**, measured
+  across the archive. Everything else is compared, so a divergence anywhere else
+  shows up rather than being quietly forgiven. Passing two blobs compares them
+  after masking and names where they still differ, which is how a second
+  volatile field would be found.
+- `[x]` **A3. Archive every turn** as blob plus orders plus hash. Each turn the
+  referee closes writes a record holding the canonical hash of the state it
+  started from, of the state it published, and of every submission it used.
+  Hashing the submissions matters: without them a rerun that disagrees cannot be
+  told apart from a rerun given different orders.
+
+  `referee.py --store <dir> --verify <turn>` asks two questions that fail
+  differently. Does the stored blob still match the hash written when it was
+  published, which catches an archive that has been corrupted or edited; and
+  does running the turn again produce the same answer, which catches a referee
+  that computed something different. The second costs a real tick, so
+  `--no-recompute` skips it.
+
+  **Verified with orders that actually apply.** The first run verified a turn
+  whose merge took nothing, which is a weaker claim than it looks: a
+  recomputation that applies no orders cannot show that applying them is
+  reproducible. Redone by submitting the capture holding a research topic, a
+  production queue and a job reassignment: both the close and the recomputation
+  took 3 orders and produced `c2f1e1e08bd7cd48`.
+
+  A turn archived before hashes existed reports that rather than passing
+  vacuously.
+- `[x]` **A4. Determinism under combat.** A played-versus-loaded pair agrees
+  across a war, and so does a loaded-versus-loaded pair, which is the case the
+  referee actually exercises.
+
+  The setup: `cycle.dat` at turn 110, war declared between the two civs through
+  the AI's own `declare_war` actuator, and both of GoodGuy's warships sent at
+  BadGuy's only planet some 450 units away. Both branches then ran 70 turns with
+  **no external driver**: the orders were already in the state, so the engine
+  alone decided the outcome. Combat happened, GoodGuy losing a warship in every
+  branch.
+
+  | comparison | result |
+  |---|---|
+  | loaded against loaded | identical, reproduced three times across separate invocations |
+  | played against loaded | 756 bytes apart, and identical once star names are removed |
+
+  **Those 756 bytes are not a divergence.** Every `SUN` section is 43 bytes in a
+  client that has been running and 36 in one that just loaded, because a
+  long-running client materialises the default display name `Unnamed` where the
+  blob holds an empty string. 108 suns times 7 bytes is exactly 756. Strip the
+  names and the two branches are byte-identical, same canonical hash, after 70
+  turns and a war.
+
+  It was never about combat: a control on the same fixture with **no war and no
+  actuator writes** produced the same 756-byte difference. Running the war
+  experiment without that control would have recorded "combat diverges", which
+  was the available and wrong conclusion.
+
+  `[ ]` **The engagement was one-sided**, an armed attacker against an unarmed
+  defender and its planet. It exercises targeting, damage and destruction, not a
+  pitched two-sided battle, and BadGuy had no warship design to fight back with.
+  Worth repeating once both sides can shoot.
+
+  Star names are deliberately **not** masked in `canonical.py`, because masking
+  a name field to forgive a default would also forgive a change to it.
+
+  `Unnamed` is what a running client puts in a `SUN ` section when the blob
+  leaves the name empty. Each civ's `EXSY` also holds names, which briefly
+  looked like evidence that naming is per player; it is not. `EXSY` is that
+  civ's cache of names it has seen, and renaming is gated in game on owning the
+  majority of a planet, so a name is authoritative rather than private.
 
 ## B. Client lifecycle, once per turn
 
@@ -327,7 +394,7 @@ made unnecessary.
   |---|---|---|
   | research topic | `OWNR > DATA > OWPR` `+32` and `+40` | accepted, field by field |
   | production queue | `PLNT > PLPR > PROD` | accepted, whole section |
-  | job allocation | the citizen array in `PLPR`'s own bytes | refused |
+  | job allocation | the citizen array at `PLPR+40` | accepted, array only |
 
   **Research topic.** Setting one writes the technology id to both `OWPR+32` and
   `OWPR+40`, eight bytes apart, matching the predicted `Owner:144`/`Owner:152`
@@ -340,25 +407,91 @@ made unnecessary.
   payload holds the queue's own fields and a nested section naming what is
   queued, `FCLT` for a facility. Self-contained, so it is copied whole.
 
-  **Job allocation is refused.** Moving one farmer to a banker changed the
-  citizen array inside `PLPR`, ten nine-byte records each keyed by the owning
-  civ's object id, plus a flag byte in `OWPR`. That array sits in `PLPR`'s own
-  bytes alongside the planet's population, stores and derived economy, so
-  copying `PLPR` wholesale would let a player hand back an edited population,
-  and the records are not decoded well enough to copy field by field. This is
-  the first order type that is genuinely blocked rather than merely unmeasured.
+  **Job allocation, once `PLPR` was decoded.** `PLPR+36` is a `u32` population
+  count and `PLPR+40` begins that many nine-byte records: `+0` the job id, `+3`
+  the owning civ's object id, `+7` a per-citizen value. Confirmed by having a
+  player move one farmer to a banker, which took the array from seven farmers,
+  two workers and a scientist to six farmers, two workers, a scientist and a
+  banker, matching the live population vector at `Planet:144` exactly. The
+  array is kept sorted by job, so a reassignment reorders it rather than editing
+  one byte, which is why the first diff looked like values shifting along.
+
+  Only the array is copied, never the rest of `PLPR`, which carries the planet's
+  stores and derived economy. Four checks gate it, each tested by forging a
+  submission that breaks it:
+
+  | forged | refused with |
+  |---|---|
+  | a citizen changes hands | the citizens changed hands |
+  | population invented | population changed, 10 to 9 |
+  | an unknown job id | unknown job id(s) [99] |
+  | a per-citizen value invented | values were invented rather than reordered |
+  | an unknown byte written | unknown bytes in a citizen record were written |
+
+  All five refused, with the honest submission still accepted.
+
+  **What the per-citizen owner id is for is not established, and it is not
+  shared populations.** It equals the planet's owner on every naturally created
+  planet measured. One colony held citizens carrying another civ's id, which was
+  briefly written up here as evidence that a population can be split between
+  empires. It is not: the planet's owner owns the working population, and that
+  colony was founded by a ship `inject_ship.py` had cloned, which kept the donor
+  civ's id at two places the tool rewrote nothing at. Fixed, and the fixture
+  galaxy still carries the artifact. The field may exist for mid-tick
+  bookkeeping, ownership of soldiers during a battle being the obvious
+  candidate, but that is a guess and nothing depends on it.
+
+  The checks still compare per-owner job multisets, because whatever the field
+  means, a turn in which a citizen changes hands is not a job reassignment.
 
   **The rules were tested against a submission containing all three changes at
   once.** Two were applied and nothing else: the job change, the `EXSY`/`KNPL`
   movement and the `OWPR` flag byte were all left behind.
 
-  **`EXSY` and `KNPL` move on their own and must never be taken as orders.** A
+  **`EXSY` and `KNPL` move on their own**, so they cannot be taken wholesale. A
   player who only set a research topic still returned a changed explored-systems
   table and a known-planets table that grew from 0 records to 1. Two captures
   taken in the same session with nothing done between them were byte-identical,
-  so this is not drift: it is bookkeeping the client does when it loads. The
-  referee recomputes both when it ticks the authoritative state, so a player's
-  copy has no business overwriting them.
+  so this is not drift: it is bookkeeping the client does when it loads.
+
+  **`EXSY` holds names, but it is a cache rather than a record of decisions.**
+  Each civ's `EXSY` pairs an object id with that civ's name for it, defaulting
+  to `Unnamed`, which briefly looked like per-player naming and is not. One
+  player's table gained `Neighbor's HQ` purely from loading a turn, with that
+  player having done nothing: it is what the civ has seen, and the referee
+  recomputes it. It stays excluded.
+
+  **A rename is authored on the object.** `PLNT` own payload `+24` is a `u32`
+  length then the characters, measured by having a player rename a colony, which
+  changed that field and nothing else on the object. The game gates it, refusing
+  with "you need to own the majority of the planet to rename", so a name is
+  authoritative galaxy data, not a private label. Carried for planets the
+  submitter owns, with the name checked for length and for printable bytes.
+
+  | forged | refused with |
+  |---|---|
+  | rename another civ's planet | rename DROPPED, owned by Neighbor |
+  | control bytes in the name | name holds bytes outside printable ASCII |
+  | a 200-byte name | the name field is unreadable or longer than 63 bytes |
+
+  **Renaming a system** writes the `SUN ` section's name, at the same `+24` in
+  its own payload. Measured on a galaxy where one civ held five of a system's
+  six planets: the name appeared on the `SUN `, and **the renamer's own `EXSY`
+  cache picked it up while the other civ's did not**, which is why another
+  player keeps seeing the old name until they observe the change. A system
+  belongs to nobody, so the right to rename it is the game's own rule, owning
+  more than half its planets, read from the served state.
+
+  | forged | refused with |
+  |---|---|
+  | a minority holder renames it | BadGuy holds 0 of 6 planets, not a majority |
+  | control bytes in the name | name holds bytes outside printable ASCII |
+  | a 200-byte name | the name field is unreadable or longer than 63 bytes |
+
+  **`order_diff.py` could not see this change at all** until `SUN ` was indexed.
+  It keyed objects on `OWNR`, `PLNT` and `SHIP`, so a system rename showed up as
+  a change to the renamer's `EXSY` and nothing else, hiding the write that
+  actually mattered. Galaxy-level objects are now reported as unowned.
 
   Still unmeasured, and therefore not accepted: facility selection outside the
   queue, ship designs, governors, admirals, diplomacy proposals. Orders issued

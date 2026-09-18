@@ -111,11 +111,17 @@ def resolve_exe(which=None):
                      f"{sorted(BUILDS)}, or a path to an exe")
 
 
-def launch(dat, timeout=90, exe=None):
+def launch(dat, timeout=180, exe=None):
     """Start the client on a .dat and wait until its state is readable.
 
     Waiting on the STATE rather than on a timer is the point: a load that takes
     40 seconds and a load that crashed look identical for the first 39.
+
+    The timeout is generous because the cost of the two mistakes is not
+    symmetric. Waiting too long for a client that died wastes a minute; giving
+    up on one that was merely slow fails a turn, and unattended runs saw that
+    happen at 90 seconds on a machine that was also running a client for
+    something else.
     """
     if client_pids():
         raise SystemExit("a client is already running; close it first , "

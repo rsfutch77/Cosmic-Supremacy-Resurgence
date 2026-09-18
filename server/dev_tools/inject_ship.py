@@ -91,6 +91,7 @@ def add_ship(blob, civ_name, design_id=None, home_id=None, log=print):
 
     rec = bytearray(blob[donor["off"]:donor["end"]])
     base = 8                                   # payload start within rec
+    donor_owner = struct.unpack_from("<I", rec, base + 16)[0]
     struct.pack_into("<I", rec, base, new_id)
     struct.pack_into("<fff", rec, base + 4, *home["pos"])
     struct.pack_into("<I", rec, base + 16, civ["oid"])
@@ -99,6 +100,27 @@ def add_ship(blob, civ_name, design_id=None, home_id=None, log=print):
     log(f"  owner -> {civ['oid']}, orbit -> #{home['id']}, "
         f"position -> ({home['pos'][0]:.0f}, {home['pos'][1]:.0f}, "
         f"{home['pos'][2]:.0f})")
+
+    # The owner id appears in a SHIP record more than once, and rewriting only
+    # the one at +16 leaves the clone half-owned. The consequence is not
+    # cosmetic: a colony founded by such a ship comes up with citizens carrying
+    # the DONOR civ's id, which looks exactly like a planet whose population
+    # belongs to two empires. It is not, it is this bug.
+    #
+    # Offsets are not fixed, so every remaining occurrence is repointed rather
+    # than two known ones, the same idiom inject_civ uses when it clones an
+    # OWNR. Matches are unaligned because the format is packed, so each one is
+    # logged and can be checked.
+    repointed = []
+    for off in range(base, len(rec) - 3):
+        if off == base + 16:
+            continue
+        if struct.unpack_from("<I", rec, off)[0] == donor_owner:
+            struct.pack_into("<I", rec, off, civ["oid"])
+            repointed.append(off - base)
+    if repointed:
+        log(f"  repointed {len(repointed)} further owner reference(s) at "
+            f"payload offset(s) {repointed}")
 
     at = max(s["end"] for s in ships)
     log(f"  inserting {len(rec)} bytes at {at}:")

@@ -72,10 +72,32 @@ Two consequences worth keeping in mind:
 
 ### What a planet's `PLPR` holds (September 2026, partial)
 
-    +43 .. +132   ten nine-byte records, each beginning with the owner's
-                  object id, one per unit of population. Moving one farmer to
-                  a banker shifts values through this array rather than
-                  editing a count
+    +36           u32 population count
+    +40 .. +40+9n nine-byte citizen records, one per unit of population:
+                      +0  u8   job id, 0 farmer, 1 worker, 2 scientist,
+                               5 miner, 6 banker
+                      +3  u32  the owning civ's object id
+                      +7  u8   a per-citizen value, permuted by a
+                               reassignment rather than changed
+                      +1, +2, +8  zero in every record seen
+                  The array is kept sorted by job, so moving one farmer to a
+                  banker reorders the whole list rather than editing one byte,
+                  which is why a naive diff reads as values shifting along.
+                  Verified against the live population vector at `Planet:144`,
+                  and across every colonised planet in a three-civ galaxy:
+                  populations of 4, 7, 7 and 10, each record's owner matching
+                  the planet's owner, every job id recognised.
+
+                  The owner id equals the planet's owner on every naturally
+                  created planet measured, and what else it is for is not
+                  established. A colony founded by a ship that
+                  `inject_ship.py` had cloned came up with citizens carrying
+                  the DONOR civ's id, because that tool rewrote the ship's
+                  owner at payload `+16` and left it at `+77` and `+86`. That
+                  is a bug in the tool rather than a property of the game:
+                  **the planet's owner owns the working population.** Fixed
+                  September 2026 by repointing every remaining reference, but
+                  galaxies generated before the fix still carry it.
     +167          PROD, the production queue, 29 bytes; its payload carries
                   the queue's own fields and a nested section naming what is
                   queued, FCLT for a facility
@@ -392,6 +414,61 @@ of those bytes agreed except a single dword.
 
 This is what makes replay, audit and dispute resolution available, and it means a referee can be
 **transient**: a turn can be recomputed on any host and checked against an archived hash.
+
+#### A running client invents a default star name
+
+`SUN ` payload, 36 bytes with no name:
+
+    +0   u32  object id
+    +4   f32  x
+    +8   f32  z
+    +12  f32  y
+    +16  u32  zero in every sun seen
+    +20  f32  a radius or magnitude
+    +24  u32  name length
+    +28  char name[length]
+    then u32, u32
+
+A blob carries an empty name, length zero. A client that has been running for a
+while writes `Unnamed`, seven characters, and the section grows to 43 bytes. A
+client that has just loaded writes the empty name back faithfully.
+
+Measured September 2026 while testing determinism across a war: a played branch
+and a loaded branch, 70 turns from one fork, came out 756 bytes apart, which is
+exactly 108 suns times 7 bytes, and **byte-identical once the names are
+stripped**. The same 756-byte difference appears with no war at all, so it is a
+property of the client's display defaults rather than of the simulation.
+
+The practical consequence is small and worth knowing: a galaxy captured from a
+long-running client shrinks by that much on its first tick and is stable after.
+`canonical.py` does not mask it, because masking a name field to forgive a
+default would also forgive a change to it.
+
+`Unnamed` is the default a running client writes into this field when the blob
+leaves it empty.
+
+### `EXSY`, a civ's explored systems and what it calls them
+
+    +0   u32  record count
+    then, per record
+         u32  object id
+         u32  a second id, equal to the first in the rows seen
+         u32  name length
+         char name[length]
+         ...  further fields, undecoded
+
+A three-civ galaxy gave tables of 111, 159 and 266 bytes, one per civ, holding
+`Unnamed` for things nobody has renamed and `BadGuy's HQ` for one that has been.
+
+**These are cached, not authored.** One civ's table gained `Neighbor's HQ`
+purely from loading a turn, with that player having taken no action, so `EXSY`
+records what a civ has seen rather than what it has decided. A rename is
+authored on the object: `PLNT` own payload `+24` is a `u32` length then the
+characters, and renaming is gated in game on owning the majority of the planet,
+which makes a name authoritative galaxy data rather than a private label.
+
+Renaming a **system** is unmeasured: the attempt was refused for want of
+majority ownership, so the write was never observed.
 
 #### The trailing dword of every `KNPL` payload is unreliable
 
