@@ -363,15 +363,19 @@ made unnecessary.
 
   All five refused, with the honest submission still accepted.
 
-  **A planet's population can belong to more than one civ**, so the per-citizen
-  owner id is load-bearing: one colony in the test galaxy holds citizens of two
-  different civs. The checks therefore compare per-owner job multisets and drop
-  any submission that reassigns a citizen the submitter does not own, even on a
-  planet they do.
-  `[ ]` **Citizens a player owns on someone else's planet cannot be managed**,
-  since only planets the submitter owns are considered. Allowing it is probably
-  right, the per-citizen owner already says whose it is, but it has not been
-  measured.
+  **What the per-citizen owner id is for is not established, and it is not
+  shared populations.** It equals the planet's owner on every naturally created
+  planet measured. One colony held citizens carrying another civ's id, which was
+  briefly written up here as evidence that a population can be split between
+  empires. It is not: the planet's owner owns the working population, and that
+  colony was founded by a ship `inject_ship.py` had cloned, which kept the donor
+  civ's id at two places the tool rewrote nothing at. Fixed, and the fixture
+  galaxy still carries the artifact. The field may exist for mid-tick
+  bookkeeping, ownership of soldiers during a battle being the obvious
+  candidate, but that is a guess and nothing depends on it.
+
+  The checks still compare per-owner job multisets, because whatever the field
+  means, a turn in which a citizen changes hands is not a job reassignment.
 
   **The rules were tested against a submission containing all three changes at
   once.** Two were applied and nothing else: the job change, the `EXSY`/`KNPL`

@@ -64,11 +64,18 @@ stores and derived economy. Four things must hold or the change is dropped:
                                             not invent
     every job id is one the game defines
 
-**A planet's population can belong to more than one civ.** The per-citizen
-owner id is load-bearing: one colony in the test galaxy holds citizens of two
-different civs. So the checks above compare per-owner job multisets and drop any
-submission that reassigns a citizen the submitter does not own, even on a planet
-they do.
+**What the per-citizen owner id is for is not established.** It equals the
+planet's owner on every naturally created planet measured. One colony in the
+test galaxy held citizens carrying another civ's id, which looked like evidence
+that a population can be shared between empires; it is not. That colony was
+founded by a ship `inject_ship.py` had cloned, and the clone kept the donor
+civ's id in two places the tool did not rewrite. The planet's owner owns the
+working population. The field may exist for mid-tick bookkeeping, ownership of
+soldiers during a battle being the obvious candidate, but that is a guess and
+nothing here depends on it.
+
+The checks still compare per-owner job multisets, because whatever the field
+means, a turn in which a citizen changes hands is not a job reassignment.
 
 What is refused, and why
 ------------------------

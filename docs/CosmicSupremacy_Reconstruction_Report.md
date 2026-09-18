@@ -88,9 +88,16 @@ Two consequences worth keeping in mind:
                   populations of 4, 7, 7 and 10, each record's owner matching
                   the planet's owner, every job id recognised.
 
-                  **A planet's population can belong to more than one civ.**
-                  One colony holds citizens of two different civs, so the
-                  per-citizen owner id is not redundant with the planet's.
+                  The owner id equals the planet's owner on every naturally
+                  created planet measured, and what else it is for is not
+                  established. A colony founded by a ship that
+                  `inject_ship.py` had cloned came up with citizens carrying
+                  the DONOR civ's id, because that tool rewrote the ship's
+                  owner at payload `+16` and left it at `+77` and `+86`. That
+                  is a bug in the tool rather than a property of the game:
+                  **the planet's owner owns the working population.** Fixed
+                  September 2026 by repointing every remaining reference, but
+                  galaxies generated before the fix still carry it.
     +167          PROD, the production queue, 29 bytes; its payload carries
                   the queue's own fields and a nested section naming what is
                   queued, FCLT for a facility
