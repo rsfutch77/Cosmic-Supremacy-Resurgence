@@ -39,6 +39,7 @@ import save_parser as sp
 import set_blob_player
 
 HOLD_SECONDS = 86400          # a day; long enough that no boundary arrives
+PLAYER_BUILD = "player"       # see game_cycle.resolve_exe for why
 
 
 def hold_clock(seconds=HOLD_SECONDS, log=print):
@@ -63,7 +64,8 @@ def hold_clock(seconds=HOLD_SECONDS, log=print):
         at.kernel32.CloseHandle(h)
 
 
-def serve(blob: bytes, civ: str, work_dir=None, hold=HOLD_SECONDS, log=print):
+def serve(blob: bytes, civ: str, work_dir=None, hold=HOLD_SECONDS,
+          exe=PLAYER_BUILD, log=print):
     """Stamp, launch, hold. Returns the path served."""
     import game_cycle as gc
     work_dir = work_dir or os.path.join(HERE, "referee_work")
@@ -73,7 +75,7 @@ def serve(blob: bytes, civ: str, work_dir=None, hold=HOLD_SECONDS, log=print):
     with open(dat, "wb") as f:
         f.write(stamped)
     gc.close_client()
-    snap = gc.launch(dat)
+    snap = gc.launch(dat, exe=exe)
     local = snap.local_civ()
     if local is None or local.civ_name != civ:
         raise SystemExit(f"served {civ} but the client came up as "
@@ -99,13 +101,15 @@ def main():
     s.add_argument("--civ", required=True)
     s.add_argument("--hold", type=int, default=HOLD_SECONDS,
                    help="turn length to write after load; 0 leaves it alone")
+    s.add_argument("--exe", default=PLAYER_BUILD,
+                   help="client build: testbed, resurgence, or a path")
 
     c = sub.add_parser("collect")
     c.add_argument("--name", default="player")
 
     a = ap.parse_args()
     if a.cmd == "serve":
-        print(serve(sp.load_any(a.blob), a.civ, hold=a.hold))
+        print(serve(sp.load_any(a.blob), a.civ, hold=a.hold, exe=a.exe))
     else:
         print(collect(a.name))
 

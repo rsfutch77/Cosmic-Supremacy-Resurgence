@@ -72,7 +72,46 @@ def close_client(timeout=20):
     return False
 
 
-def launch(dat, timeout=90):
+TESTBED_EXE = os.path.join(CLIENT_DIR, "CosmicSupremacy_TestBed.exe")
+PLAYER_EXE = os.path.join(CLIENT_DIR, "CosmicSupremacy_Player.exe")
+
+BUILDS = {"resurgence": EXE, "testbed": TESTBED_EXE, "player": PLAYER_EXE}
+
+
+def resolve_exe(which=None):
+    """Pick a client build.
+
+    Resurgence and TestBed are the same binary apart from 22 bytes at six sites,
+    the T1-T5 turn pipeline bypasses. Those are what let a client advance a turn
+    with no server, and two of the six also land on the guards for the homeworld
+    setup prompt, which is why that prompt appeared on every served turn. So the
+    choice is not cosmetic:
+
+        resurgence   ticks without a server, offers the setup prompts always
+        testbed      waits for a server tick, gates the prompts as shipped
+        player       testbed, plus one byte that silences the coat-of-arms
+                     prompt; built by patch_hide_setup_prompts.py --build
+                     and gitignored, so no tracked binary is ever modified
+
+    A player's client wants player, or testbed if that has not been built, since
+    a player must never compute a turn. The referee wants resurgence, since
+    computing turns is its whole job.
+    """
+    if which is None:
+        which = "resurgence"
+    if which == "player" and not os.path.exists(PLAYER_EXE):
+        log("  no CosmicSupremacy_Player.exe; falling back to testbed. Run "
+            "patch_hide_setup_prompts.py --build to silence the last prompt.")
+        return TESTBED_EXE
+    if which in BUILDS:
+        return BUILDS[which]
+    if os.path.exists(which):
+        return os.path.abspath(which)
+    raise SystemExit(f"unknown client build {which!r}; want one of "
+                     f"{sorted(BUILDS)}, or a path to an exe")
+
+
+def launch(dat, timeout=90, exe=None):
     """Start the client on a .dat and wait until its state is readable.
 
     Waiting on the STATE rather than on a timer is the point: a load that takes
@@ -84,8 +123,11 @@ def launch(dat, timeout=90):
     dat = os.path.abspath(dat)
     if not os.path.exists(dat):
         raise SystemExit(f"no such file: {dat}")
-    log(f"  launching on {dat}")
-    subprocess.Popen([EXE, dat], cwd=CLIENT_DIR,
+    exe_path = resolve_exe(exe)
+    if not os.path.exists(exe_path):
+        raise SystemExit(f"no such client: {exe_path}")
+    log(f"  launching {os.path.basename(exe_path)} on {dat}")
+    subprocess.Popen([exe_path, dat], cwd=CLIENT_DIR,
                      creationflags=getattr(subprocess, "DETACHED_PROCESS", 0))
     import gamestate as gs
     deadline = time.time() + timeout

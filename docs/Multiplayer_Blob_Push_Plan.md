@@ -30,13 +30,16 @@ The `CMND` protocol work is on `galaxy-protocol`.
   byte for byte. What the blob does not carry is the engine AI's working block,
   the `ShipDesign` derived-stat cache and render counters, none of which the tick
   reads back.
-- **The homeworld customisation allowance is the one piece of player state no
-  blob can carry.** Its *effects* are in the blob (`Planet:104` space,
-  `Planet:96` the per-unit rates) but the four spent-counters at `0x00842AE4`
-  are `.data` globals. `client/dev_tools/homeworld_clicks.py` reads and restores
-  them.
-- **Re-spending that allowance is additive and unbounded**, so a pushed state
-  that re-offers it lets a player ratchet their economy upward every turn.
+- **The homeworld customisation allowance was never the problem it looked like.**
+  Its *effects* are in the blob (`Planet:104` space, `Planet:96` the per-unit
+  rates), and re-spending it is additive and unbounded, so a state that re-offers
+  it would let a player ratchet their economy upward every turn. But the four
+  spent-counters at `0x00842AE4` are **not `.data` globals**: they have no
+  absolute references in `.text` and are fields of the prompt's own singleton at
+  `0x00840BC8 + 0x1F1C`, which `0x00498E10` clears every time the prompt opens.
+  They read zero after a load because the dialog is built once per process, not
+  because a save failed to carry them. And the prompt only appeared at all
+  because we had NOPped its guards, see B4.
 
 ---
 
@@ -133,14 +136,56 @@ see D1.
 
   **Done when:** a player's client left open past its turn boundary neither ticks
   nor bails, and the launcher shows the countdown.
-- `[ ]` **B3. Restore non-blob state after load.** Today that means the four
-  homeworld allowance counters, via `homeworld_clicks.py --restore`.
-  **Done when:** a pushed state comes up with the right allowance spent.
-- `[ ]` **B4. Neutralise the customisation popup on the served path.** It re-offers
-  a spent allowance on every push, and re-spending is additive. B3 may be
-  sufficient on its own if the counters are the trigger; the other candidate is
-  the `listcivnames` / `coaid` answer.
-  **Done when:** a returning player is not offered the allowance again.
+- `[x]` **B3. Restore non-blob state after load.** Nothing needs restoring. The
+  four homeworld allowance counters were the only candidate, and they turned out
+  to be the prompt's own UI state rather than game state, cleared whenever the
+  prompt opens. On the player build the prompt does not open, so there is no
+  allowance to re-offer and nothing to put back. `homeworld_clicks.py` remains
+  useful for driving the prompt deliberately.
+- `[x]` **B4. Neutralise the setup prompts on the served path.** Confirmed live
+  in September 2026: a served turn now comes up straight into the galaxy with no
+  prompt of any kind, from a blob with nothing faked, and is playable.
+
+  There are **three** prompts, not one, each its own Win32 dialog resource. They
+  are real dialogs rather than in-engine overlays, and a child dialog leaves the
+  main window's title reading `Galaxy Map`, so
+  `client/dev_tools/list_dialogs.py` walks the process's windows instead. That
+  turns "is a prompt up" into a command rather than a question for a human.
+
+  | id | prompt | how it is handled |
+  |---|---|---|
+  | 210 | Customize Your Home World | gated as shipped, no patch needed |
+  | 218 | Customize Your Civilization | gated as shipped, no patch needed |
+  | 225 | Civilization Name and Coat of Arms | one byte, `0x0056E700` returns |
+
+  **210 and 218 needed no fix at all, because the bug was ours.** Their decision
+  routine `0x0056E0D0` has two guards, and two of the six T1-T5 bypasses land
+  exactly on them: `0x0056E0EF` (`JNZ`, 6 bytes) and `0x0056E133` (`JZ`, 2
+  bytes). With both NOPped the prompt is offered unconditionally. A player's
+  client should be `CosmicSupremacy_TestBed.exe`, which is the same binary
+  without T1-T5, so this and B2 have one answer. `game_cycle.resolve_exe` makes
+  the build a parameter and `player_turn.py` defaults players to testbed while
+  the referee keeps resurgence.
+
+  **225 is gated on the local civ's `Owner:384`, and that field is a count, not a
+  flag.** A civ's `OWPR` section is exactly `138 + Owner:384` bytes, measured at
+  0, 1 and 7, so writing a value appends that many one-byte records of undecoded
+  meaning; civilisation traits are the obvious candidate, `GSET
+  .civilization_changes` being 5. Setting it to 1 does silence the prompt and
+  does survive a save and reload, and it was still rejected as the fix: it
+  fabricates per-civ state to suppress a cosmetic dialog.
+  `client/dev_tools/patch_hide_setup_prompts.py` returns from the decision
+  routine instead.
+
+  A `coaid` answer was also tried and is **not** the gate: the client fetched
+  `getcoa&coaid=1` happily and offered the prompt anyway, so `cs_server.py` is
+  unchanged.
+  `[ ]` **Build the one-time civilisation setup step the prompt exists for.** In
+  the original a player chose a name and coat of arms once and the blob carried
+  it forever, which is why the field was non-zero and the prompt never returned.
+  Our galaxies are generated locally and skip that flow entirely. The patch
+  stands in for it; the launcher or the site should eventually offer it, and then
+  `Owner:384` would be set by the engine rather than guessed at.
 - `[x]` **B5. Tell a client which civ it plays.** Two clients sharing a galaxy
   have to control different civs, and **`GLOB` carries the answer**: one `u32`
   holding the object id of the civ the loading client will play.

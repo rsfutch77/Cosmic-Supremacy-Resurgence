@@ -26,6 +26,12 @@ client/dev_tools/snapshots/
 # state rather than source, and meaningless in another checkout
 client/dev_tools/ai_player/state/
 *.exe.bak
+# patch-script backups, which name the patch they precede
+*.exe.*.bak
+# the player client: CosmicSupremacy_TestBed.exe with the coat-of-arms prompt
+# patched out, built by client/dev_tools/patch_hide_setup_prompts.py --build.
+# A patched binary belongs beside the tracked one, never in place of it.
+client/CosmicSupremacy_Player.exe
 tools
 
 # named restore points (raw save blobs, big and regenerable)
