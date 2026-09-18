@@ -15,8 +15,8 @@ gitignored, so a fresh clone does not carry it. The same pages are published und
 
 ## 3. Ship components
 
-These are the stats the released game uses, **read out of the client's own definition
-tables**, not transcribed from the manual. `components.py` dumps them.
+These are the intended released stats, **read out of the client's own definition
+tables**, not transcribed from the manual. Section 4a covers which modes select them. `components.py` dumps them.
 
 Six categories, one table each, laid out exactly like the facility table of section 4 and
 selected by content version the same way (section 4a). Names are stored in the record, so
@@ -140,7 +140,7 @@ plan costed from the manual would come out under budget.
 
 ## 4. Planetary facilities
 
-These are the stats the released game uses. See section 4a for why that needs saying.
+These are the intended released stats. Section 4a covers which modes actually select this table today, because two of them do not.
 
 The client holds a facility definition table of 21 records at 0x8C bytes each, ids 0 to
 20. Every column below is read straight out of that table by `facilities.py`, including
@@ -225,56 +225,39 @@ months should not have its economy rewritten when the developer shipped a client
 so a galaxy carries the content version it started under and keeps the stat table that
 goes with it. New galaxies get the new one.
 
-**Every shipped mode uses `0x00807DB0`, which is the table in section 4.** The version is
-not a build constant: the `.data` image holds 565, and a setter at `0x0052A7C4` can
-overwrite it (it selects the research table at `0x00857F08` in the same breath). Only two
-values are ever passed to that setter, 99999 and 171, and measured behaviour is:
+**Two shipped modes currently select the WRONG table.** Measured by launching each mode
+and reading `[0x0080AA00]` and the picker's answer:
 
-| Mode | EXE | Content version | Table |
-|---|---|---|---|
-| Sandbox, Single Player | `CosmicSupremacy_Resurgence.exe` | 565 (the image default) | `0x00807DB0` |
-| Tutorial, Demo | `CosmicSupremacy.exe` | 171 | `0x00807DB0` |
-| TestBed | `CosmicSupremacy_TestBed.exe` | 99999 | `0x008066B0` |
-
-171 and 565 are both below 646, so they land on the same table. **TestBed is the only
-outlier, and `release/manifest.json` does not ship it** — it is a development harness. So
-the released game already serves the intended stats and nothing needs patching.
-
-The one thing to know when working in TestBed: its table is identical to the released one
-except that the Light Turret costs 400 and takes 2 space rather than 600 and 3, and the
-Heavy Turret 2000 and 4 rather than 3000 and 6. Four fields, nothing else.
-
-Older stat sets are not reproduced here, because the galaxies that used them are gone.
-The addresses above are the record of where they live; anyone who needs one can read it
-out of a running client the same way, and a changelog can be written then.
-
-### The components work the same way
-
-Each of the six component categories has its own picker and its own ladder, built to the
-same shape. Every one of them returns the last branch for any content version below 639,
-which is what all three released modes run, so section 3 is the released stat set for all
-of them.
-
-| Category | Picker | Stride | Released table | Superseded tables |
+| Mode | Started as | Content version | Table | Correct |
 |---|---|---|---|---|
-| chassis | `0x0055E630` | `0x94` | `0x0080B5A8` | 7 |
-| engines | `0x0055F080` | `0x8C` | `0x0080D168` | 5 |
-| modules | `0x0055F520` | `0xA8` | `0x0080E878` | 3 |
-| scanners | `0x0055FE20` | `0x8C` | `0x0080F838` | 4 |
-| shields | `0x00560336` | `0x8C` | `0x00810328` | 7 |
-| weapons | `0x00560A01` | `0x94` | `0x00811BE8` | 3 |
+| Tutorial, Demo | `CosmicSupremacy.exe` + `.csgalaxy` | 171 | `0x00807DB0` | yes |
+| Sandbox | `CosmicSupremacy_Resurgence.exe` + `.csgalaxy` | 565 | `0x00807DB0` | yes |
+| **Single Player** | `CosmicSupremacy_Resurgence.exe` + `SinglePlayerGalaxy.dat` | **99999** | `0x008066B0` | **no** |
+| **Multiplayer** | `CosmicSupremacy_Player.exe` + a served turn blob | **99999** | `0x008066B0` | **no** |
 
-`components.py` carries the superseded base addresses in its `OLDER` map. They are not
-read by anything; they are there so a stat set can be recovered without repeating the
-search. The rebalancing between eras was large, not cosmetic: the oldest weapon table
-prices the Plasma Bomb at 220 against 3550 today.
+### Where the version actually comes from
 
-**A galaxy created through the TestBed entry path runs at 99999 and therefore does NOT get
-the released tables.** That matters beyond the dev harness, because the multiplayer work
-reuses that entry path: a two-player galaxy observed during this work reported content
-version 99999 and the engine selected `0x008066B0`, the cheap-turret facility table. Any
-galaxy the server creates for real players needs a content version below 639, or the
-balance silently differs from the released game.
+Not the EXE, and not the entry action. **The save blob carries it.** In the `GLOB` section
+it is the dword immediately before the trailing local-player id, the one
+`set_blob_player.set_player` rewrites. In `client/SinglePlayerGalaxy.dat` that field sits at
+file offset 900 and reads 99999.
+
+That splits the modes cleanly:
+
+- A `.csgalaxy` pass file carries no blob, so the client keeps whatever the version already
+  is: the `.data` image default of 565, or 171 where the Tutorial and Demo entry path calls
+  the setter at `0x0052A7C4`. Both are below 639, so both get the released table.
+- A `.dat` blob push takes the version **from the blob**. Every blob this project has
+  generated was captured from a TestBed session, so they all carry 99999, and 99999 selects
+  the unreleased table.
+
+Single Player and Multiplayer are both blob-push modes, which is why both are wrong.
+
+**The fix is one dword, and it is verified.** Patching that field from 99999 to 565 in a
+copy of `SinglePlayerGalaxy.dat` and launching it moved the client to `0x00807DB0` with the
+Light Turret at 600/3 and the Heavy Turret at 3000/6. It belongs in two places: the shipped
+`SinglePlayerGalaxy.dat`, and whatever authors or stamps a blob server-side, so that every
+galaxy served to a player carries a content version below 639.
 
 ## 5. Facility cost escalation
 
@@ -367,10 +350,11 @@ wrong answers were written down first:
 
 What is left is not stat recovery:
 
-1. **Which content version the server sends.** See the end of section 4a. This is now a
-   live issue rather than a theoretical one: multiplayer galaxies are being created through
-   an entry path that sets 99999, which selects the unreleased tables. A galaxy for real
-   players wants a version below 639.
+1. **Stamp a content version below 639 into every served blob.** See section 4a. This is
+   a live bug, not a theoretical one: Single Player and Multiplayer both run at 99999 today
+   and get the unreleased stat tables. The field is one dword in the blob's `GLOB` section,
+   the fix is verified, and it wants doing in two places, the shipped
+   `client/SinglePlayerGalaxy.dat` and the server-side blob authoring path.
 2. **Research cost model.** `research.cost` implements the manual's
    `round(800 * costFactor) * completed-count`, but `research.available` still calls the
    cost model unsolved, and `research.py`'s table was extracted at a different content
