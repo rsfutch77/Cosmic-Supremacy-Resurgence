@@ -15,83 +15,80 @@ gitignored, so a fresh clone does not carry it. The same pages are published und
 
 ## 3. Ship components
 
-Units is the hitpoint contribution. Prod cost is production, and the resource columns are
-in addition to it. Firepower is three separate columns in the source, against light ships,
-heavy ships, and planets, which is the `ShipDesign:60/64/68` triple.
+These are the stats the released game uses, **read out of the client's own definition
+tables**, not transcribed from the manual. `components.py` dumps them.
+
+Six categories, one table each, laid out exactly like the facility table of section 4 and
+selected by content version the same way (section 4a). Names are stored in the record, so
+the ids below are the record's own position, which is what a `ShipDesign` part vector
+stores. Every id order previously derived from the manual's page order is confirmed
+correct by this read, all 43 records.
+
+Units is the hitpoint contribution. Cost is production, and the resource columns are in
+addition to it. Weapons carry three separate firepower values, against light ships, heavy
+ships and planets, which is the `ShipDesign:60/64/68` triple.
 
 ### Engines (`ShipDesign:176`)
 
-| Id | Name | Units | Space | Prod cost | Upkeep | Thrust | Metal | Deut | Radio | Cryst | Exot |
+| Id | Name | Units | Space | Cost | Upkeep | Thrust | Metal | Deut | Radio | Cryst | Exot |
 |---|---|---|---|---|---|---|---|---|---|---|---|
 | 0 | Nuclear Drive | 5 | 10 | 120 | 1 | 270 | 4 | - | 6 | - | - |
 | 1 | Fusion Drive | 10 | 20 | 450 | 2 | 820 | 5 | 15 | - | - | - |
 | 2 | Quantum Drive | 40 | 80 | 2400 | 8 | 4450 | 40 | - | - | 40 | - |
 | 3 | Gravity Drive | 70 | 120 | 4500 | 12 | 9200 | 30 | - | 90 | - | - |
-| 4 | Anti-Matter Drive | 20 | 30 | 1300 | 3 | 3200 | 5 | 25 | - | 10 | - |
+| 4 | Anti-Matter Drive | 20 | 30 | 1300 | 3 | 3200 | - | 20 | - | 10 | - |
 | 5 | Dark-Matter Drive | 50 | 60 | 3000 | 7 | 9000 | - | - | 50 | - | 10 |
 | 6 | Singularity Drive | 280 | 280 | 16000 | 35 | 60000 | 100 | - | - | - | 180 |
 
-### Weapons, light (`ShipDesign:200`)
+### Weapons (`ShipDesign:200`)
 
-| Id | Name | Units | Space | Prod cost | Upkeep | FP light | FP heavy | FP planet | Metal | Deut | Radio | Cryst | Exot |
+One id space across light weapons, heavy weapons and bombs. Ids 0-3 are the light weapons, 4-9 the heavy, 10-14 the bombs.
+
+| Id | Name | Units | Space | Cost | Upkeep | FP light | FP heavy | FP planet | Metal | Deut | Radio | Cryst | Exot |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | 0 | Mass Driver | 12 | 20 | 300 | 2 | 35 | 10 | 0 | 20 | - | - | - | - |
 | 1 | Pulse Laser | 6 | 10 | 180 | 1 | 30 | 0 | 0 | 4 | - | 6 | - | - |
 | 2 | Beam Laser | 48 | 80 | 1900 | 10 | 285 | 50 | 0 | 30 | 50 | - | - | - |
 | 3 | Proton Laser | 30 | 50 | 1500 | 7 | 240 | 50 | 0 | 10 | - | 40 | - | - |
-
-### Weapons, heavy
-
-Same id space as the light weapons.
-
-| Id | Name | Units | Space | Prod cost | Upkeep | FP light | FP heavy | FP planet | Metal | Deut | Radio | Cryst | Exot |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | 4 | Photon Cannon | 24 | 30 | 600 | 4 | 20 | 50 | 0 | 30 | - | - | - | - |
 | 5 | Ion-Pulse Cannon | 96 | 120 | 3250 | 18 | 125 | 350 | 0 | 40 | 80 | - | - | - |
 | 6 | Proton Torpedo | 64 | 80 | 2650 | 13 | 0 | 435 | 0 | 20 | - | 60 | - | - |
 | 7 | Anti-Matter Torpedo | 32 | 40 | 1350 | 6 | 0 | 260 | 0 | 10 | 30 | - | - | - |
 | 8 | Particle Cannon | 160 | 200 | 8700 | 39 | 500 | 1550 | 0 | - | 140 | - | 60 | - |
 | 9 | Wormhole Infiltrator | 48 | 60 | 3000 | 13 | 0 | 850 | 0 | - | - | 30 | - | 30 |
-
-### Weapons, bombs
-
-Same id space again. Id 10 is the Fusion Bomb, matching the observed value.
-
-| Id | Name | Units | Space | Prod cost | Upkeep | FP light | FP heavy | FP planet | Metal | Deut | Radio | Cryst | Exot |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|---|
 | 10 | Fusion Bomb | 50 | 50 | 750 | 4 | 0 | 0 | 500 | 10 | 40 | - | - | - |
-| 11 | Plasma Bomb | 200 | 200 | 2700 | 20 | 0 | 0 | 2700 | - | 40 | 160 | - | - |
-| 12 | Anti-Matter Bomb | 80 | 80 | 1350 | 10 | 0 | 0 | 1350 | - | 60 | - | 20 | - |
-| 13 | Dark-Matter Bomb | 120 | 120 | 2700 | 18 | 0 | 0 | 2700 | - | - | 90 | - | 30 |
+| 11 | Plasma Bomb | 200 | 200 | 3550 | 20 | 0 | 0 | 2700 | - | 40 | 160 | - | - |
+| 12 | Anti-Matter Bomb | 80 | 80 | 1650 | 10 | 0 | 0 | 1350 | - | 60 | - | 20 | - |
+| 13 | Dark-Matter Bomb | 120 | 120 | 3000 | 18 | 0 | 0 | 2700 | - | - | 90 | - | 30 |
 | 14 | Planet Buster | 250 | 250 | 7500 | 43 | 0 | 0 | 7500 | - | - | - | 50 | 200 |
 
 ### Chassis (`ShipDesign:128`)
 
-| Id | Name | Units | Prod cost | Upkeep | Space | Crew | Class | Metal | Deut | Radio | Cryst | Exot |
-|---|---|---|---|---|---|---|---|---|---|---|---|---|
-| 0 | Shuttle | 20 | 225 | 2 | 120 | 1-2 | Light | 60 | - | - | - | - |
-| 1 | Corvette | 80 | 600 | 4 | 210 | 1-3 | Light | 105 | - | - | - | - |
-| 2 | Frigate | 180 | 1950 | 12 | 400 | 1-4 | Light | 200 | - | - | - | - |
-| 3 | Destroyer | 400 | 5700 | 20 | 650 | 3-7 | Heavy | 200 | - | - | 125 | - |
-| 4 | Cruiser | 900 | 10800 | 45 | 1050 | 4-10 | Heavy | 275 | - | - | 250 | - |
-| 5 | Battleship | 1800 | 27000 | 100 | 1500 | 5-14 | Heavy | 300 | - | - | 450 | - |
+For a chassis the Space column is space PROVIDED, not consumed. Chassis 0-2 are the light size class and 3-5 the heavy, which is what the turrets' two firepower columns discriminate on.
+
+| Id | Name | Units | Space | Cost | Upkeep | Crew | Metal | Deut | Radio | Cryst | Exot |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| 0 | Shuttle | 20 | 120 | 225 | 2 | 1-2 | 60 | - | - | - | - |
+| 1 | Corvette | 80 | 210 | 600 | 4 | 1-3 | 105 | - | - | - | - |
+| 2 | Frigate | 180 | 400 | 1950 | 12 | 1-4 | 200 | - | - | - | - |
+| 3 | Destroyer | 400 | 650 | 5700 | 20 | 3-7 | 200 | - | - | 125 | - |
+| 4 | Cruiser | 900 | 1050 | 10800 | 45 | 4-10 | 275 | - | - | 250 | - |
+| 5 | Battleship | 1800 | 1500 | 27000 | 100 | 5-14 | 300 | - | - | 450 | - |
 
 ### Modules (`ShipDesign:224`)
 
-The description column is omitted here; the manual page carries it.
-
-| Id | Name | Units | Space | Prod cost | Upkeep | Metal | Deut | Radio | Cryst | Exot |
-|---|---|---|---|---|---|---|---|---|---|---|
-| 0 | Colony Module | 20 | 90 | 150 | 4 | 90 | - | - | - | - |
-| 1 | Troop Bay | 30 | 90 | 450 | 10 | 90 | - | - | - | - |
-| 2 | Large Pilot Cabin | 50 | 100 | 600 | 10 | 100 | - | - | - | - |
-| 3 | Cloaking Device | 20 | 30 | 2400 | 5 | - | - | - | 90 | - |
-| 4 | Bio Bombs | 100 | 100 | 4200 | 14 | - | - | 100 | - | 100 |
-| 5 | Wormhole Generator | 300 | 200 | 30000 | 12 | - | 80 | 100 | 100 | 1000 |
+| Id | Name | Units | Space | Cost | Upkeep |  | Metal | Deut | Radio | Cryst | Exot |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| 0 | Colony Module | 20 | 90 | 150 | 4 |  | 90 | - | - | - | - |
+| 1 | Troop Bay | 30 | 90 | 450 | 10 |  | 90 | - | - | - | - |
+| 2 | Large Pilot Cabin | 50 | 100 | 600 | 10 |  | 100 | - | - | - | - |
+| 3 | Cloaking Device | 20 | 30 | 2400 | 5 |  | - | - | - | 90 | - |
+| 4 | Bio Bombs | 100 | 100 | 4200 | 14 |  | - | - | 100 | - | 100 |
+| 5 | Wormhole Generator | 300 | 200 | 30000 | 12 |  | - | 80 | 100 | 100 | 1000 |
 
 ### Scanners (`ShipDesign:152`)
 
-| Id | Name | Units | Space | Prod cost | Upkeep | Range | Metal | Deut | Radio | Cryst | Exot |
+| Id | Name | Units | Space | Cost | Upkeep | Range | Metal | Deut | Radio | Cryst | Exot |
 |---|---|---|---|---|---|---|---|---|---|---|---|
 | 0 | Neutron Scanner | 5 | 0 | 100 | 1 | 30 | 2 | - | - | - | - |
 | 1 | Tachyon Scanner | 10 | 10 | 300 | 2 | 50 | 2 | - | 8 | - | - |
@@ -102,24 +99,55 @@ The description column is omitted here; the manual page carries it.
 
 No fitted-shield vector is read from a design yet, only the `ShipDesign:72` shield stat.
 
-| Id | Name | Units | Space | Prod cost | Upkeep | Strength | Metal | Deut | Radio | Cryst | Exot |
+| Id | Name | Units | Space | Cost | Upkeep | Strength | Metal | Deut | Radio | Cryst | Exot |
 |---|---|---|---|---|---|---|---|---|---|---|---|
 | 0 | Magneto Shield | 20 | 20 | 450 | 2 | 10 | 20 | - | - | - | - |
 | 1 | Quantum Shield | 50 | 30 | 1000 | 4 | 25 | - | - | - | 30 | - |
 | 2 | Anti-Grav Shield | 80 | 40 | 1650 | 6 | 50 | - | - | 40 | - | - |
 | 3 | Gaussian Shield | 350 | 140 | 7350 | 24 | 250 | 80 | - | - | 60 | - |
 | 4 | Warp Shield | 200 | 80 | 5100 | 15 | 200 | - | - | 60 | - | 20 |
+
+### Field map
+
+Shared by every category: `+0x00` id, `+0x04` units, `+0x0C` production cost, `+0x10`
+**upkeep as a float** where every other field is an int. Then a category-specific block,
+then five int resource costs in the canonical order metal, deuterium, radioactives,
+crystal, exotics.
+
+| Category | Stride | Category block | Resources | Name |
+|---|---|---|---|---|
+| engines, scanners, shields | `0x8C` | `+0x08` space, `+0x14` thrust / range / strength | `+0x18` | `+0x30` |
+| weapons | `0x94` | `+0x08` space, `+0x14/+0x18/+0x1C` firepower light / heavy / planet | `+0x20` | `+0x38` |
+| chassis | `0x94` | `+0x14` space provided, `+0x18/+0x1C` crew min and max | `+0x20` | `+0x38` |
+| modules | `0xA8` | `+0x08` space | `+0x14` | `+0x4C` |
+
+### Where the manual is wrong
+
+The manual matches the client on 43 records and every field but five numbers. The client
+wins on all five; none of the manual's values appears in **any** of the superseded tables
+in the client, so these are errors in the wiki rather than an older content version.
+
+| Component | Field | Client | Manual |
+|---|---|---|---|
+| Anti-Matter Drive | metal | 0 | 5 |
+| Anti-Matter Drive | deuterium | 20 | 25 |
+| Plasma Bomb | cost | 3550 | 2700 |
+| Anti-Matter Bomb | cost | 1650 | 1350 |
+| Dark-Matter Bomb | cost | 3000 | 2700 |
+
+Four of the five make bombs and the anti-matter drive cheaper than they really are, so a
+plan costed from the manual would come out under budget.
+
 ## 4. Planetary facilities
+
+These are the stats the released game uses. See section 4a for why that needs saying.
 
 The client holds a facility definition table of 21 records at 0x8C bytes each, ids 0 to
 20. Every column below is read straight out of that table by `facilities.py`, including
 **the facility names, which are stored in the record** as an MSVC `std::string` at `+0x30`.
-That makes the id map a direct read rather than a derivation. The names confirmed the
-grants-table derivation 21 out of 21, the only wording difference being id 8, whose real
-name is "Central Defense Agency" where the code uses the shorthand "defence agency".
-
-Where two values are shown as `a / b`, they are content-version dependent; see section 4a.
-`a` is what a modern galaxy uses and `b` is what the manual documents.
+That makes the id map a direct read rather than a derivation, and it confirmed the
+grants-table derivation 21 out of 21. The only wording difference is id 8, really
+"Central Defense Agency" where the code uses the shorthand "defence agency".
 
 | Id | Facility | Unlocked by | Space | Cost | Upkeep | Effect | 1/planet |
 |---|---|---|---|---|---|---|---|
@@ -132,8 +160,8 @@ Where two values are shown as `a / b`, they are content-version dependent; see s
 | 6 | Military Camp | 18 Advanced Networking | 14 | 1500 | 12 | +20% max recruitment rate |  |
 | 7 | Military Academy | 20 Advanced Tactics | 34 | 9000 | 28 | military rank up to 6 | yes |
 | 8 | Central Defense Agency | 23 Basic Scanning | 26 | 6000 | 30 | allows scans to be built | yes |
-| 9 | Light Turret | 27 Planetary Defense Lvl 1 | 2 / 3 | 400 / 600 | 8 | 1000 units, 400/100 FP |  |
-| 10 | Heavy Turret | 30 Planetary Defense Lvl 4 | 4 / 6 | 2000 / 3000 | 32 | 2000 units, 200/1000 FP |  |
+| 9 | Light Turret | 27 Planetary Defense Lvl 1 | 3 | 600 | 8 | 1000 units, 400/100 firepower |  |
+| 10 | Heavy Turret | 30 Planetary Defense Lvl 4 | 6 | 3000 | 32 | 2000 units, 200/1000 firepower |  |
 | 11 | Shield Generator | 29 Planetary Defense Lvl 3 | 14 | 2000 | 45 | 3000 units, +40% shield |  |
 | 12 | Propaganda Office | 36 Propaganda | 9 | 1200 | 12 | +10% loyalty for 10 citizens |  |
 | 13 | Mine | 35 Mining | 6 | 600 | 13 | +40% resources per miner |  |
@@ -148,6 +176,10 @@ Where two values are shown as `a / b`, they are content-version dependent; see s
 Upkeep is per turn. Effect summarises the `+0x20` bonus magnitude joined to the manual's
 description of what it does. "1/planet" marks the facilities that may only be built once
 per planet, which are exactly the ones exempt from the cost escalation in section 5.
+
+Every published value here matches the wiki manual exactly. Three did not come from the
+manual at all and are reads: the Command Center's space, cost and upkeep, which the manual
+never printed.
 
 ### Field map
 
@@ -171,12 +203,11 @@ any caller used it for. `+0x1C` was described only as the value `CanBuildFacilit
 against something from `0x004F3100`; it is planet space, and `0x004F3100` supplies the
 planet's free space, so the old note was right without knowing what it had.
 
-## 4a. Content versions, and why the table address is not fixed
+## 4a. Content versions, and where the other tables are
 
-**The stats are content-version dependent.** `[0x0080AA00]` holds a content version, and
-the picker at `0x00529CB0` uses it to choose among **eight** different facility tables
-before returning `base + id * 0x8C`. All eight are present in a running client and all
-eight are fully populated with different numbers:
+The table address is not fixed. `[0x0080AA00]` holds a content version, and the picker at
+`0x00529CB0` uses it to choose among **eight** facility tables before returning
+`base + id * 0x8C`. All eight are present and populated in a running client.
 
 | Selected when | Base |
 |---|---|
@@ -189,34 +220,61 @@ eight are fully populated with different numbers:
 | version < 646 | `0x00807DB0` |
 | otherwise | `0x008066B0` |
 
-The version is not a build constant. The binary's `.data` image holds 565, a setter at
-`0x0052A7C4` overwrites it at runtime (and picks the research table at `0x00857F08` in the
-same breath), and a TestBed galaxy against the stub server runs at **99999**, which selects
-`0x008066B0`.
+This is almost certainly a galaxy-freeze mechanism. A galaxy that had been running for
+months should not have its economy rewritten when the developer shipped a client update,
+so a galaxy carries the content version it started under and keeps the stat table that
+goes with it. New galaxies get the new one.
 
-`facilities.py` previously hardcoded `0x00807DB0`, the version 57..645 table, and named the
-constant `TABLE_565`. It now ports the ladder. The practical damage was small but real:
-the two tables differ in exactly four fields.
+**Every shipped mode uses `0x00807DB0`, which is the table in section 4.** The version is
+not a build constant: the `.data` image holds 565, and a setter at `0x0052A7C4` can
+overwrite it (it selects the research table at `0x00857F08` in the same breath). Only two
+values are ever passed to that setter, 99999 and 171, and measured behaviour is:
 
-| Facility | Field | version < 646 | version >= 646 |
+| Mode | EXE | Content version | Table |
 |---|---|---|---|
-| Light Turret | cost | 600 | 400 |
-| Light Turret | space | 3 | 2 |
-| Heavy Turret | cost | 3000 | 2000 |
-| Heavy Turret | space | 6 | 4 |
+| Sandbox, Single Player | `CosmicSupremacy_Resurgence.exe` | 565 (the image default) | `0x00807DB0` |
+| Tutorial, Demo | `CosmicSupremacy.exe` | 171 | `0x00807DB0` |
+| TestBed | `CosmicSupremacy_TestBed.exe` | 99999 | `0x008066B0` |
 
-Everything else is identical across the two, and `0x00807230` is byte-identical to
-`0x008066B0` over every field read here, so the `GetGameOption(3)` branch cannot change an
-answer and is not ported.
+171 and 565 are both below 646, so they land on the same table. **TestBed is the only
+outlier, and `release/manifest.json` does not ship it** — it is a development harness. So
+the released game already serves the intended stats and nothing needs patching.
 
-**The wiki manual documents the version < 646 stats.** It was last edited in 2012 and
-gives 600/3 and 3000/6 for the turrets. That is a useful calibration on the manual
-generally: it is accurate for the content version it was written against, and this project
-is running a later one.
+The one thing to know when working in TestBed: its table is identical to the released one
+except that the Light Turret costs 400 and takes 2 space rather than 600 and 3, and the
+Heavy Turret 2000 and 4 rather than 3000 and 6. Four fields, nothing else.
 
-**This is a Phase 2 decision, not just a bug.** A replacement server chooses what content
-version it serves, and that choice changes the game's balance. Nothing yet decides it, and
-the stub does not send a version at all, which is why the client sits at 99999.
+Older stat sets are not reproduced here, because the galaxies that used them are gone.
+The addresses above are the record of where they live; anyone who needs one can read it
+out of a running client the same way, and a changelog can be written then.
+
+### The components work the same way
+
+Each of the six component categories has its own picker and its own ladder, built to the
+same shape. Every one of them returns the last branch for any content version below 639,
+which is what all three released modes run, so section 3 is the released stat set for all
+of them.
+
+| Category | Picker | Stride | Released table | Superseded tables |
+|---|---|---|---|---|
+| chassis | `0x0055E630` | `0x94` | `0x0080B5A8` | 7 |
+| engines | `0x0055F080` | `0x8C` | `0x0080D168` | 5 |
+| modules | `0x0055F520` | `0xA8` | `0x0080E878` | 3 |
+| scanners | `0x0055FE20` | `0x8C` | `0x0080F838` | 4 |
+| shields | `0x00560336` | `0x8C` | `0x00810328` | 7 |
+| weapons | `0x00560A01` | `0x94` | `0x00811BE8` | 3 |
+
+`components.py` carries the superseded base addresses in its `OLDER` map. They are not
+read by anything; they are there so a stat set can be recovered without repeating the
+search. The rebalancing between eras was large, not cosmetic: the oldest weapon table
+prices the Plasma Bomb at 220 against 3550 today.
+
+**A galaxy created through the TestBed entry path runs at 99999 and therefore does NOT get
+the released tables.** That matters beyond the dev harness, because the multiplayer work
+reuses that entry path: a two-player galaxy observed during this work reported content
+version 99999 and the engine selected `0x008066B0`, the cheap-turret facility table. Any
+galaxy the server creates for real players needs a content version below 639, or the
+balance silently differs from the released game.
 
 ## 5. Facility cost escalation
 
@@ -291,29 +349,34 @@ of 1.2 rather than 1.0.
 
 ## 8. What is still open
 
-The facility side is closed. The table carries its own names, upkeep, bonus magnitudes and
-one-per-planet flags, and `facilities.py` now reads all of them from whichever table the
-content version selects. Command Center upkeep is **13**, which the manual never published.
+The stats are closed. Both the facility table and all six component tables are read out of
+the running client by `facilities.py` and `components.py`, names included, and they agree
+with the manual everywhere except the five numbers in section 3 where the client wins.
+Nothing in sections 3 to 6 is a derivation any more.
 
-1. **Which content version the server should serve.** See section 4a. This is a design
-   decision for Phase 2 rather than a gap: the stub sends no version, the client falls back
-   to 99999, and that silently picks the cheapest-turret balance. Worth deciding
-   deliberately and writing into the server.
-2. **Whether the ship-component stats are also version-dependent.** Very likely, by
-   symmetry: the research table is chosen the same way (`research_dump.py` calls it "six
-   tables"), and the same setter picks it. The component tables in section 3 come from the
-   manual, so if they vary they describe the version < 646 content. Nothing has been read
-   out of the client to check, and there is no equivalent of `facilities.py` for components
-   yet.
-3. **Citizen job id 4.** Not resolved by observation. A live scan found only jobs 0, 1 and
-   2 on planets and 3 on ship crew, because miner and banker need techs the TestBed galaxy
-   has not researched. The inference is **"military"**: the UI string table at `0x0035209D`
-   holds a `<MilitaryMed>` / `Military` pair in the same contiguous run as the five civilian
-   jobs and their icons, and 4 is the only free id in the citizen range. `gamestate.JOBS[4]`
-   carries that caveat in the source.
-4. **Research cost model.** `research.cost` implements the manual's
+Two of the earlier open items closed along the way, and are recorded here because the
+wrong answers were written down first:
+
+- **Command Center upkeep is 13.** The manual has no stat block for that facility at all.
+- **Citizen job ids.** A stationed military unit and a ship crew member are the same
+  16-byte citizen record with **job 3**, confirmed by drafting a citizen and reading
+  `Planet:168` back as job id 3. The UI string table at `0x0035209D` lists exactly six
+  jobs, Military / Banker / Scientist / Miner / Worker / Farmer, which are ids 3/6/2/5/1/0.
+  **Id 4 is in no table and no UI list.** An earlier revision of this document guessed id 4
+  was "military"; that was wrong, because 3 already is.
+
+What is left is not stat recovery:
+
+1. **Which content version the server sends.** See the end of section 4a. This is now a
+   live issue rather than a theoretical one: multiplayer galaxies are being created through
+   an entry path that sets 99999, which selects the unreleased tables. A galaxy for real
+   players wants a version below 639.
+2. **Research cost model.** `research.cost` implements the manual's
    `round(800 * costFactor) * completed-count`, but `research.available` still calls the
    cost model unsolved, and `research.py`'s table was extracted at a different content
-   version from the one this client runs. Both are worth revisiting together.
-5. **Player-Rank thresholds above rank 2**, and the ranked-galaxy fame bonus. Neither is in
+   version from the one the released client runs. The research table is selected by the
+   same setter through a pointer at `0x00857F08`, so the version ladder is the likely
+   explanation for the table having looked wrong. Re-dumping it against a released-version
+   client is the obvious next step, and `research_dump.py` already exists to do it.
+3. **Player-Rank thresholds above rank 2**, and the ranked-galaxy fame bonus. Neither is in
    the manual and neither is in the client, since both were server-side. Ours to choose.

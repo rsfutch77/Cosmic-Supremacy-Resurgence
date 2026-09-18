@@ -42,12 +42,13 @@ FACILITY_VFTABLE = 0x00752BA4
 # Names beyond the observed ids come from the wiki manual joined to the research
 # grants table, then checked against the live tables; see
 # docs/CosmicSupremacy_Stat_Tables.md for the derivation and the full stats.
-# 3 = crew, first observed on a ship's crew vector (Ship:124). 4 is "military",
-# which is NOT an observed read: it is the only free id in the citizen range, and
-# the UI string table at 0x0035209D lists a <MilitaryMed> / "Military" pair in the
-# same run as the five civilian jobs. Treat it as unconfirmed.
-JOBS       = {0: "farmer", 1: "worker", 2: "scientist", 3: "crew",
-              4: "military", 5: "miner", 6: "banker"}
+# Job 3 is the UI's "Military": a stationed military unit and a ship crew member
+# are the same citizen record with job 3, confirmed by drafting one and reading
+# Planet:168 back as job id 3. The UI string table at 0x0035209D lists exactly six
+# jobs, Military / Banker / Scientist / Miner / Worker / Farmer, which are ids
+# 3/6/2/5/1/0. Id 4 is in no table and no UI list; treat it as unused.
+JOBS       = {0: "farmer", 1: "worker", 2: "scientist", 3: "military/crew",
+              5: "miner", 6: "banker"}
 CREW_JOB   = 3
 FACILITIES = {0: "farm", 1: "factory", 2: "shipyard",
               3: "automated factory", 4: "university", 5: "science lab",
