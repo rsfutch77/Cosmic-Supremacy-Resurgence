@@ -672,7 +672,36 @@ Seven conditional branches in the save/load validation path (near `0x00175xxx`) 
 
 ### Patches 12–17, Turn pipeline bypasses (T1–T5, 22 bytes)
 
-Six patch sites bypass server sync checks in the turn pipeline so turns can fire without a real game server. These are applied only to the Resurgence EXE (not TestBed). See Section 11 for full patch table.
+Six patch sites bypass server sync checks in the turn pipeline so turns can fire without a real game server. These are applied only to the Resurgence EXE (not TestBed).
+
+**`CosmicSupremacy_Resurgence.exe` is `CosmicSupremacy_TestBed.exe` plus exactly these 22 bytes and nothing else**, measured by a whole-file comparison in September 2026. The two builds are otherwise identical, so the choice between them is exactly the choice of whether a client may compute a turn.
+
+| file | VA | TestBed | Resurgence | what it is |
+|---|---|---|---|---|
+| `0x16CFF0` | `0x0056DBF0` | `80 7C 24 04 00 75 0C` | `B0 01 C3 90 90 90 90` | a predicate rewritten to `mov al,1; ret`, so a sync check always passes |
+| `0x16D4EF` | `0x0056E0EF` | `0F 85 94 00 00 00` | `90` × 6 | `JNZ 0x56E189`, the first guard on the homeworld prompt |
+| `0x16D533` | `0x0056E133` | `74 54` | `90 90` | `JZ 0x56E189`, the second guard on the homeworld prompt |
+| `0x17701A` | `0x00577C1A` | `51 7C 85` | `A0 F1 86` | an operand repointed from `0x857C51` to `0x86F1A0` |
+| `0x17702A` | `0x00577C2A` | `74 58` | `90 90` | a galaxy-join branch removed |
+| `0x17902D` | `0x00579C2D` | `74 0E` | `90 90` | a load-path branch removed |
+
+**Two of the six land on the homeworld customisation prompt, not on the turn pipeline at all.** `0x0056E0D0` is the routine that decides whether to offer the prompt; with both of its guards NOPped it offers it unconditionally, on every session. That is the whole explanation for the prompt appearing on every pushed turn, and it was ours rather than the engine's.
+
+### The three one-time setup prompts (September 2026)
+
+Each is a Win32 dialog resource, not an in-engine overlay, so the main window's title still reads `Galaxy Map` while one is up. `client/dev_tools/list_dialogs.py` enumerates them by walking the process's windows, since the title cannot be trusted.
+
+| id | title | decision routine | gate |
+|---|---|---|---|
+| 210 | Customize Your Home World | `0x0056E0D0` | `[session+0x19B]`, and `0x00508C60(session)` |
+| 218 | Customize Your Civilization | — | — |
+| 225 | Pick your Civilization Name and Coat of Arms | `0x0056E700` | the local civ's `Owner:384` must be non-zero |
+
+`0x0052A8D0`, the "session" those guards read, is **the local player's `Owner` object**: it loads `[0x00857904]`, dereferences it and returns the object address minus `0x2C`. Since the reference cell holds the object address minus 8, a guard reading `[session+0x1B4]` is reading `Owner:384`.
+
+**`Owner:384` is a count, not a flag.** A civ's `OWPR` section is exactly `138 + Owner:384` bytes long, measured at values 0, 1 and 7, so writing a value appends that many one-byte records. Their meaning is undecoded and the civilisation traits are the obvious candidate, `GSET.civilization_changes` being 5. Setting the field does silence prompt 225 and does survive a save and reload, and it is still the wrong fix, because it fabricates per-civ state to suppress a cosmetic dialog. `client/dev_tools/patch_hide_setup_prompts.py` returns from `0x0056E700` instead, one byte, fabricating nothing.
+
+**The homeworld click counters are not `.data` globals.** `0x00842AE4` through `0x00842AF0` have no absolute references in `.text`. They are fields of the prompt's own singleton, which lives at `0x00840BC8`, at offsets `0x1F1C` through `0x1F28`, and `0x00498E10` zeroes all four every time the prompt is prepared. So they read zero after a load because the dialog is constructed once per process and cleared on every open, not because a save failed to carry them.
 
 **Side effect:** Applying T1–T5 removes the Next Turn button from the UI. This is intentional for the multiplayer build, turns are advanced externally via `fast_turns.py`, not by player clicks.
 

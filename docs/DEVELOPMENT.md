@@ -69,6 +69,31 @@ modified, not unmodified. Its name is historical and misleading.
 | `CosmicSupremacy_TestBed.exe` | `127.0.0.1:8888` | TestBed galaxy join and load paths | TestBed galaxies |
 | `CosmicSupremacy_Resurgence.exe` | `127.0.0.1:8888` | no "analyzing system" popup; works with custom turn lengths and the AI harness | Sandbox galaxy, AI harness |
 
+A fourth exists but is not tracked: **`CosmicSupremacy_Player.exe`**, built by
+`client/dev_tools/patch_hide_setup_prompts.py --build`. It is
+`CosmicSupremacy_TestBed.exe` plus one byte that stops the coat-of-arms prompt
+opening, and it is what a served multiplayer turn runs on. It is gitignored
+because a patched client in the working tree is one `git commit -a` away from
+entering the history.
+
+**Resurgence is TestBed plus exactly 22 bytes at six sites** and nothing else,
+measured by whole-file comparison. Those six are the T1-T5 turn-pipeline
+bypasses, enumerated in the reconstruction report, and they are what let a client
+advance a turn with no server. Two of them also sit on the guards for the
+homeworld setup prompt, which is why that prompt appears on every session in the
+Resurgence build and is correctly gated everywhere else. So the choice of build
+is really the choice of whether a client may compute a turn:
+
+| build | ticks without a server | setup prompts | role |
+|-------|------------------------|---------------|------|
+| Resurgence | yes | always offered | the referee, the AI harness |
+| TestBed | no | gated as shipped | , |
+| Player | no | none | a player's served turn |
+
+`client/dev_tools/game_cycle.py` takes the build as a parameter
+(`resolve_exe("player")`), and `server/player_turn.py` defaults players to the
+player build while `server/referee.py` keeps Resurgence.
+
 Neither Tutorial nor Demo reaches the internet, no DNS lookup for the old domain
 occurs, so the `www.cosmicsupremacy.com` string above is never contacted. They
 differ from each other on the local server, measured rather than assumed:
