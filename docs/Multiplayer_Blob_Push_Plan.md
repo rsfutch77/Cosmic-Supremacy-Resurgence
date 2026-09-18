@@ -327,7 +327,7 @@ made unnecessary.
   |---|---|---|
   | research topic | `OWNR > DATA > OWPR` `+32` and `+40` | accepted, field by field |
   | production queue | `PLNT > PLPR > PROD` | accepted, whole section |
-  | job allocation | the citizen array in `PLPR`'s own bytes | refused |
+  | job allocation | the citizen array at `PLPR+40` | accepted, array only |
 
   **Research topic.** Setting one writes the technology id to both `OWPR+32` and
   `OWPR+40`, eight bytes apart, matching the predicted `Owner:144`/`Owner:152`
@@ -340,13 +340,38 @@ made unnecessary.
   payload holds the queue's own fields and a nested section naming what is
   queued, `FCLT` for a facility. Self-contained, so it is copied whole.
 
-  **Job allocation is refused.** Moving one farmer to a banker changed the
-  citizen array inside `PLPR`, ten nine-byte records each keyed by the owning
-  civ's object id, plus a flag byte in `OWPR`. That array sits in `PLPR`'s own
-  bytes alongside the planet's population, stores and derived economy, so
-  copying `PLPR` wholesale would let a player hand back an edited population,
-  and the records are not decoded well enough to copy field by field. This is
-  the first order type that is genuinely blocked rather than merely unmeasured.
+  **Job allocation, once `PLPR` was decoded.** `PLPR+36` is a `u32` population
+  count and `PLPR+40` begins that many nine-byte records: `+0` the job id, `+3`
+  the owning civ's object id, `+7` a per-citizen value. Confirmed by having a
+  player move one farmer to a banker, which took the array from seven farmers,
+  two workers and a scientist to six farmers, two workers, a scientist and a
+  banker, matching the live population vector at `Planet:144` exactly. The
+  array is kept sorted by job, so a reassignment reorders it rather than editing
+  one byte, which is why the first diff looked like values shifting along.
+
+  Only the array is copied, never the rest of `PLPR`, which carries the planet's
+  stores and derived economy. Four checks gate it, each tested by forging a
+  submission that breaks it:
+
+  | forged | refused with |
+  |---|---|
+  | a citizen changes hands | the citizens changed hands |
+  | population invented | population changed, 10 to 9 |
+  | an unknown job id | unknown job id(s) [99] |
+  | a per-citizen value invented | values were invented rather than reordered |
+  | an unknown byte written | unknown bytes in a citizen record were written |
+
+  All five refused, with the honest submission still accepted.
+
+  **A planet's population can belong to more than one civ**, so the per-citizen
+  owner id is load-bearing: one colony in the test galaxy holds citizens of two
+  different civs. The checks therefore compare per-owner job multisets and drop
+  any submission that reassigns a citizen the submitter does not own, even on a
+  planet they do.
+  `[ ]` **Citizens a player owns on someone else's planet cannot be managed**,
+  since only planets the submitter owns are considered. Allowing it is probably
+  right, the per-citizen owner already says whose it is, but it has not been
+  measured.
 
   **The rules were tested against a submission containing all three changes at
   once.** Two were applied and nothing else: the job change, the `EXSY`/`KNPL`

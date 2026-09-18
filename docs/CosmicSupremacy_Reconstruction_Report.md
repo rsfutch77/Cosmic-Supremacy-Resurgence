@@ -72,10 +72,25 @@ Two consequences worth keeping in mind:
 
 ### What a planet's `PLPR` holds (September 2026, partial)
 
-    +43 .. +132   ten nine-byte records, each beginning with the owner's
-                  object id, one per unit of population. Moving one farmer to
-                  a banker shifts values through this array rather than
-                  editing a count
+    +36           u32 population count
+    +40 .. +40+9n nine-byte citizen records, one per unit of population:
+                      +0  u8   job id, 0 farmer, 1 worker, 2 scientist,
+                               5 miner, 6 banker
+                      +3  u32  the owning civ's object id
+                      +7  u8   a per-citizen value, permuted by a
+                               reassignment rather than changed
+                      +1, +2, +8  zero in every record seen
+                  The array is kept sorted by job, so moving one farmer to a
+                  banker reorders the whole list rather than editing one byte,
+                  which is why a naive diff reads as values shifting along.
+                  Verified against the live population vector at `Planet:144`,
+                  and across every colonised planet in a three-civ galaxy:
+                  populations of 4, 7, 7 and 10, each record's owner matching
+                  the planet's owner, every job id recognised.
+
+                  **A planet's population can belong to more than one civ.**
+                  One colony holds citizens of two different civs, so the
+                  per-citizen owner id is not redundant with the planet's.
     +167          PROD, the production queue, 29 bytes; its payload carries
                   the queue's own fields and a nested section naming what is
                   queued, FCLT for a facility
