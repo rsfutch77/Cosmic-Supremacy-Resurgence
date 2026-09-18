@@ -157,10 +157,15 @@ see D1.
   pitched two-sided battle, and BadGuy had no warship design to fight back with.
   Worth repeating once both sides can shoot.
 
-  Star names are deliberately **not** masked in `canonical.py`. The difference
-  is a default the client fills in, but the field is also where a genuine rename
-  would live, and a mask that forgives a rename is worse than a first tick that
-  shrinks a fixture by 756 bytes once and is stable thereafter.
+  Star names are deliberately **not** masked in `canonical.py`, because masking
+  a name field to forgive a default would also forgive a change to it.
+
+  **The name in a `SUN ` section is not the one a player sees.** System names are
+  **per player**, held in each civ's `EXSY` table, so two players in one system
+  can call it different things and each keeps their own. The `SUN ` field is the
+  galaxy-level one, and `Unnamed` is what a running client puts there when the
+  blob leaves it empty. This entry first described it as though it were the
+  naming feature, which it is not.
 
 ## B. Client lifecycle, once per turn
 
@@ -444,13 +449,23 @@ made unnecessary.
   once.** Two were applied and nothing else: the job change, the `EXSY`/`KNPL`
   movement and the `OWPR` flag byte were all left behind.
 
-  **`EXSY` and `KNPL` move on their own and must never be taken as orders.** A
+  **`EXSY` and `KNPL` move on their own**, so they cannot be taken wholesale. A
   player who only set a research topic still returned a changed explored-systems
   table and a known-planets table that grew from 0 records to 1. Two captures
   taken in the same session with nothing done between them were byte-identical,
-  so this is not drift: it is bookkeeping the client does when it loads. The
-  referee recomputes both when it ticks the authoritative state, so a player's
-  copy has no business overwriting them.
+  so this is not drift: it is bookkeeping the client does when it loads.
+
+  `[ ]` **But `EXSY` also carries the names a player gives things, and those are
+  decisions no referee can recompute.** Each civ's `EXSY` pairs an object id with
+  that civ's own name for it, defaulting to `Unnamed`; one civ's table in the
+  test galaxy holds `BadGuy's HQ`. Names are **per player**: two players in one
+  system each name it for themselves and each keeps their own name. Dropping
+  `EXSY` therefore discards every rename a player makes, which is a silent loss
+  of a real action rather than the harmless exclusion recorded here first.
+
+  So `EXSY` is mixed in the same way `PLPR` is, decisions sitting alongside
+  derived state, and needs the same treatment: measure a rename, carry the name
+  fields, leave the exploration bookkeeping alone. Not yet measured.
 
   Still unmeasured, and therefore not accepted: facility selection outside the
   queue, ship designs, governors, admirals, diplomacy proposals. Orders issued

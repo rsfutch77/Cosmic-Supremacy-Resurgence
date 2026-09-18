@@ -441,8 +441,30 @@ property of the client's display defaults rather than of the simulation.
 
 The practical consequence is small and worth knowing: a galaxy captured from a
 long-running client shrinks by that much on its first tick and is stable after.
-`canonical.py` does not mask it, because the same field is where a genuine star
-rename would live.
+`canonical.py` does not mask it, because masking a name field to forgive a
+default would also forgive a change to it.
+
+**This is not the name a player sees.** System and planet names are per player:
+each civ's `EXSY` table pairs an object id with that civ's own name for it, so
+two players sharing a system can call it different things and each keeps their
+own across loads. The `SUN ` field is the galaxy-level name and `Unnamed` is the
+default a running client writes into it.
+
+### `EXSY`, a civ's explored systems and what it calls them
+
+    +0   u32  record count
+    then, per record
+         u32  object id
+         u32  a second id, equal to the first in the rows seen
+         u32  name length
+         char name[length]
+         ...  further fields, undecoded
+
+A three-civ galaxy gave tables of 111, 159 and 266 bytes, one per civ, holding
+`Unnamed` for systems nobody has renamed and `BadGuy's HQ` for one that has
+been. The table therefore mixes exploration bookkeeping, which a referee can
+recompute, with names, which it cannot: a name is a decision and only the player
+who made it knows it.
 
 #### The trailing dword of every `KNPL` payload is unreliable
 
