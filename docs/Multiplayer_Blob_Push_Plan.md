@@ -89,11 +89,41 @@ see D1.
   `[ ]` **The referee's client is stamped as one of the civs**, since every blob
   names a local player. Whether the engine AI still plays that civ during a
   referee tick is unmeasured, and if it does not, one civ silently stops acting.
-- `[ ]` **A2. Canonical hash.** Mask the trailing dword of every `KNPL` payload
-  before hashing, or two honest computations of the same turn disagree.
-  **Done when:** two independent runs of one turn produce the same hash.
-- `[ ]` **A3. Archive every turn** as blob plus orders plus hash.
-  **Done when:** any past turn can be recomputed and checked against its hash.
+- `[x]` **A2. Canonical hash.** `server/canonical.py` zeroes the trailing `u32`
+  of every `KNPL` payload and hashes what is left. Two independent ticks of
+  turn 9, in separate processes, produced the same canonical hash. As it
+  happened they produced the same raw hash too, so the volatile field did not
+  move in that pair; the mask still earns its place from the six captures that
+  first found it, where an AI civ's low bytes differed between otherwise
+  identical runs and the top byte read `0xFF` after any load.
+
+  **The mask is deliberately narrow: 8 to 12 bytes, 0.03% of a blob**, measured
+  across the archive. Everything else is compared, so a divergence anywhere else
+  shows up rather than being quietly forgiven. Passing two blobs compares them
+  after masking and names where they still differ, which is how a second
+  volatile field would be found.
+- `[x]` **A3. Archive every turn** as blob plus orders plus hash. Each turn the
+  referee closes writes a record holding the canonical hash of the state it
+  started from, of the state it published, and of every submission it used.
+  Hashing the submissions matters: without them a rerun that disagrees cannot be
+  told apart from a rerun given different orders.
+
+  `referee.py --store <dir> --verify <turn>` asks two questions that fail
+  differently. Does the stored blob still match the hash written when it was
+  published, which catches an archive that has been corrupted or edited; and
+  does running the turn again produce the same answer, which catches a referee
+  that computed something different. The second costs a real tick, so
+  `--no-recompute` skips it.
+
+  **Verified with orders that actually apply.** The first run verified a turn
+  whose merge took nothing, which is a weaker claim than it looks: a
+  recomputation that applies no orders cannot show that applying them is
+  reproducible. Redone by submitting the capture holding a research topic, a
+  production queue and a job reassignment: both the close and the recomputation
+  took 3 orders and produced `c2f1e1e08bd7cd48`.
+
+  A turn archived before hashes existed reports that rather than passing
+  vacuously.
 - `[ ]` **A4. Determinism under combat.** The 40-turn agreement above covered a
   two-civ galaxy with no war, and combat is where an accumulated AI state would
   most plausibly diverge. **Done when:** a played-versus-loaded pair agrees

@@ -45,6 +45,7 @@ sys.path.insert(0, os.path.join(HERE, "dev_tools"))
 
 import save_parser as sp
 import merge_orders
+import canonical
 from turn_store import TurnStore
 
 
@@ -144,9 +145,85 @@ def resolve_turn(store: TurnStore, save_dir=None, log=print) -> int:
         "bytes_in": len(blob),
         "bytes_out": len(nxt),
         "closed_at": time.time(),
+        # Enough to recompute this turn later and check the answer. The
+        # submissions are hashed too, so a rerun that disagrees can be told
+        # apart from a rerun given different orders.
+        "hash_in": canonical.canonical_hash(blob),
+        "hash_out": canonical.canonical_hash(nxt),
+        "hash_submissions": {civ: canonical.canonical_hash(s)
+                             for civ, s in taken},
     })
-    log(f"  referee: published turn {new_turn}")
+    log(f"  referee: published turn {new_turn}, "
+        f"canonical {canonical.canonical_hash(nxt)[:16]}")
     return new_turn
+
+
+def verify_turn(store: TurnStore, turn: int, recompute: bool = True,
+                save_dir=None, log=print) -> bool:
+    """Check a past turn against what the referee recorded for it.
+
+    Two questions, and they fail differently. Does the stored blob still match
+    the hash written when it was published, which catches an archive that has
+    been corrupted or edited; and does running the turn again produce the same
+    answer, which catches a referee that computed something different. The
+    second costs a real tick, so it can be turned off.
+    """
+    import json
+    path = store.archive_path(turn)
+    if not os.path.exists(path):
+        log(f"  verify: turn {turn} has no archive record")
+        return False
+    with open(path, encoding="utf-8") as f:
+        rec = json.load(f)
+    if "hash_out" not in rec:
+        log(f"  verify: turn {turn} was archived before hashes were recorded")
+        return False
+
+    published = rec["published"]
+    ok = True
+
+    if store.has_turn(published):
+        stored = canonical.canonical_hash(store.turn_blob(published))
+        same = stored == rec["hash_out"]
+        log(f"  verify: stored turn {published} "
+            f"{'matches' if same else 'does NOT match'} its record "
+            f"({stored[:16]} against {rec['hash_out'][:16]})")
+        ok &= same
+    else:
+        log(f"  verify: turn {published} is not in the store")
+        ok = False
+
+    if not recompute:
+        return ok
+
+    blob = store.turn_blob(turn)
+    if canonical.canonical_hash(blob) != rec["hash_in"]:
+        log(f"  verify: turn {turn}'s own blob no longer matches what was "
+            f"closed; a rerun would not be comparable")
+        return False
+
+    subs = store.submissions(turn)
+    for civ, want in rec.get("hash_submissions", {}).items():
+        if civ not in subs:
+            log(f"  verify: {civ}'s submission is missing")
+            return False
+        if canonical.canonical_hash(subs[civ]) != want:
+            log(f"  verify: {civ}'s submission is not the one that was used")
+            return False
+
+    taken = [(civ, subs[civ]) for civ in sorted(rec.get("hash_submissions", {}))]
+    log(f"  verify: recomputing turn {turn} with {len(taken)} submission(s)")
+    merged = apply_orders(blob, taken, log=log)
+    again = tick(merged, turns=1, save_dir=save_dir, log=log)
+    got = canonical.canonical_hash(again)
+    same = got == rec["hash_out"]
+    log(f"  verify: recomputation {'agrees' if same else 'DISAGREES'} "
+        f"({got[:16]} against {rec['hash_out'][:16]})")
+    if not same:
+        for off, x, y in canonical.differences(store.turn_blob(published), again):
+            log(f"    {off:#08x}  {x:#04x} -> {y:#04x}   "
+                f"{canonical.locate(again, off)}")
+    return ok and same
 
 
 def wait_for_client_free(timeout: float = 180.0, poll: float = 2.0,
@@ -228,6 +305,10 @@ def main():
                     help="with --store, resolve turns as their deadlines pass")
     ap.add_argument("--once", action="store_true",
                     help="with --store, resolve at most one turn and exit")
+    ap.add_argument("--verify", type=int, metavar="TURN",
+                    help="with --store, check a past turn against its record")
+    ap.add_argument("--no-recompute", action="store_true",
+                    help="with --verify, check hashes only, do not run a tick")
     ap.add_argument("--grace", type=float, default=20.0,
                     help="seconds past the deadline to keep taking submissions")
     ap.add_argument("--save-dir",
@@ -253,12 +334,18 @@ def main():
             return 0
         if not store.exists():
             raise SystemExit(f"no galaxy in {a.store}; run --start first")
+        if a.verify is not None:
+            ok = verify_turn(store, a.verify, recompute=not a.no_recompute,
+                             save_dir=a.save_dir)
+            print('verified' if ok else 'NOT verified')
+            return 0 if ok else 1
         if a.loop or a.once:
             loop(store, once=a.once, grace=a.grace, save_dir=a.save_dir)
             return 0
         turn, deadline = store.current()
         print(f"turn {turn}, {store.seconds_left():.0f}s left, "
               f"submitted: {sorted(store.submissions(turn)) or '(none)'}")
+        print(f"canonical {canonical.canonical_hash(store.turn_blob(turn))}")
         return 0
 
     if not a.authoritative:

@@ -113,12 +113,14 @@ class TurnStore:
         """
         if turn is None:
             turn = turn_of(blob)
+        import canonical
         _atomic_write(self.turn_path(turn), sp.encode_save(blob))
         self._put_state({
             'turn': int(turn),
             'deadline': time.time() + turn_seconds,
             'turn_seconds': int(turn_seconds),
             'civs': list(civs),
+            'hash': canonical.canonical_hash(blob),
         })
         os.makedirs(self.submission_dir(turn), exist_ok=True)
         return turn
@@ -131,11 +133,13 @@ class TurnStore:
 
     def publish(self, turn: int, blob: bytes, turn_seconds: int = None) -> None:
         """The referee's move: a new turn exists, and the clock restarts."""
+        import canonical
         state = self.state()
         seconds = turn_seconds or state['turn_seconds']
         _atomic_write(self.turn_path(turn), sp.encode_save(blob))
         state.update(turn=int(turn), deadline=time.time() + seconds,
-                     turn_seconds=int(seconds))
+                     turn_seconds=int(seconds),
+                     hash=canonical.canonical_hash(blob))
         self._put_state(state)
         os.makedirs(self.submission_dir(turn), exist_ok=True)
 
