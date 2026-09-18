@@ -36,6 +36,11 @@ tools
 
 # named restore points (raw save blobs, big and regenerable)
 client/checkpoints/
+
+# a live galaxy's turn store: every turn's blob, every submission, the clock.
+# Game state rather than source, it grows with every turn, and a checkout is
+# not where a running galaxy belongs. server/turn_store.py describes the layout.
+server/galaxy_*/
 .vscode
 
 # ── Release build output ──────────────────────────────────────────────────────

@@ -3,9 +3,17 @@ player_turn.py , serve one player their turn, and collect it back
 =================================================================
     python player_turn.py serve   turn3.b64 --civ DemoPlayer
     python player_turn.py collect --name playerA
+    python player_turn.py follow  --store <dir> --civ DemoPlayer
 
 `serve` stamps the state with the civ this player controls, starts a client on
 it, and stops the clock. `collect` takes the state back.
+
+`follow` is the whole player-side loop, and it is what the launcher drives: wait
+for the turn a `TurnStore` says is current, serve it, let the player play, and at
+the deadline take their state back, submit it, and wait for the next turn. A
+player does nothing manual between turns, which is the point: the `.dat` push
+path is startup-only, so their client has to restart every turn, and the only way
+that is acceptable is if nobody has to think about it.
 
 Stopping the clock is not a nicety. A player's client that reaches a turn
 boundary computes its own turn, and the state it hands back then mixes the
@@ -26,7 +34,9 @@ Requires `cs_server.py` on port 8888, which is where `collect` receives the blob
 import argparse
 import ctypes
 import os
+import subprocess
 import sys
+import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
@@ -37,6 +47,7 @@ sys.path.insert(0, os.path.join(HERE, "dev_tools"))
 
 import save_parser as sp
 import set_blob_player
+from turn_store import TurnStore
 
 HOLD_SECONDS = 86400          # a day; long enough that no boundary arrives
 PLAYER_BUILD = "player"       # see game_cycle.resolve_exe for why
@@ -86,10 +97,117 @@ def serve(blob: bytes, civ: str, work_dir=None, hold=HOLD_SECONDS,
     return dat
 
 
-def collect(name="player", log=print) -> str:
-    """Take the player's state back. Returns the capture path."""
+def collect(name="player", save_dir=None, log=print) -> str:
+    """Take the player's state back. Returns the capture path.
+
+    `save_dir` is where the capture will land, which is wherever the stub server
+    was told to keep its data. The launcher runs the server against its own data
+    directory rather than the checkout's, so the caller has to say.
+    """
     import game_cycle as gc
-    return gc.capture_save(name[:15])
+    if save_dir is None:
+        return gc.capture_save(name[:15])
+
+    before = time.time() - 1
+    r = subprocess.run([sys.executable, os.path.join(DEV, "trigger_save.py"),
+                        "--name", name[:15]],
+                       capture_output=True, text=True, cwd=DEV)
+    if "saved" not in r.stdout:
+        log(r.stdout + r.stderr)
+        raise SystemExit("SaveGame did not report success")
+    fresh = [os.path.join(save_dir, f) for f in os.listdir(save_dir)
+             if f.endswith(".b64")
+             and os.path.getmtime(os.path.join(save_dir, f)) >= before]
+    if not fresh:
+        raise SystemExit(f"SaveGame succeeded but no capture appeared in "
+                         f"{save_dir}; is the launcher's server running?")
+    path = max(fresh, key=os.path.getmtime)
+    log(f"  captured {os.path.basename(path)}")
+    return path
+
+
+def close():
+    import game_cycle as gc
+    gc.close_client()
+
+
+def follow(store: TurnStore, civ: str, poll: float = 5.0, rounds: int = 0,
+           on_state=None, exe=PLAYER_BUILD, save_dir=None, stop=None,
+           log=print):
+    """Play one civ's turns as the store publishes them.
+
+    One pass is: serve the current turn, wait until its deadline, take the
+    player's state back, submit it, then wait for the referee to publish the
+    next one. `rounds` of 0 means keep going.
+
+    `on_state(kind, **facts)` is called at each step so a UI can narrate without
+    this function knowing what a UI is. The launcher passes one; the command line
+    does not.
+
+    `stop()` is checked wherever this would otherwise sleep, so a UI can end the
+    loop between turns without killing the thread mid-capture and losing the
+    player's orders.
+    """
+    def emit(kind, **facts):
+        if on_state:
+            on_state(kind, **facts)
+
+    def halted():
+        return bool(stop and stop())
+
+    def nap(seconds):
+        """Sleep, but wake early if asked to stop."""
+        end = time.time() + seconds
+        while time.time() < end:
+            if halted():
+                return
+            time.sleep(min(0.5, max(0.0, end - time.time())))
+
+    played = 0
+    while not halted():
+        turn, deadline = store.current()
+        blob = store.turn_blob(turn)
+        emit("serving", turn=turn, civ=civ)
+        log(f"[{civ}] turn {turn}: serving")
+        serve(blob, civ, hold=HOLD_SECONDS, exe=exe, log=log)
+
+        while not halted():
+            left = store.seconds_left()
+            cur, _d = store.current()
+            if cur != turn:
+                # The referee moved on without us, which happens if this player
+                # joined late or the machine slept. Nothing to submit for a turn
+                # that is already closed.
+                log(f"[{civ}] turn {turn} closed while playing; skipping submit")
+                emit("overtaken", turn=turn, current=cur)
+                break
+            if left <= 0:
+                emit("collecting", turn=turn, civ=civ)
+                log(f"[{civ}] turn {turn}: time is up, collecting")
+                capture = collect(f"{civ[:8]}t{turn}", save_dir=save_dir,
+                                  log=log)
+                store.submit(civ, turn, sp.load_any(capture))
+                log(f"[{civ}] turn {turn}: submitted")
+                emit("submitted", turn=turn, civ=civ)
+                break
+            emit("playing", turn=turn, civ=civ, seconds_left=left)
+            nap(min(poll, left))
+
+        close()
+        played += 1
+        if rounds and played >= rounds:
+            emit("done", turns=played)
+            return played
+        if halted():
+            break
+
+        emit("waiting", turn=turn, civ=civ)
+        log(f"[{civ}] waiting for the referee to publish past turn {turn}")
+        while store.current()[0] == turn and not halted():
+            nap(poll)
+
+    emit("stopped", turns=played)
+    return played
 
 
 def main():
@@ -106,12 +224,27 @@ def main():
 
     c = sub.add_parser("collect")
     c.add_argument("--name", default="player")
+    c.add_argument("--save-dir", help="where the capture will land; defaults "
+                                      "to the checkout's server/saves")
+
+    f = sub.add_parser("follow")
+    f.add_argument("--store", required=True)
+    f.add_argument("--civ", required=True)
+    f.add_argument("--rounds", type=int, default=0,
+                   help="stop after this many turns; 0 keeps going")
+    f.add_argument("--poll", type=float, default=5.0)
+    f.add_argument("--exe", default=PLAYER_BUILD)
 
     a = ap.parse_args()
     if a.cmd == "serve":
         print(serve(sp.load_any(a.blob), a.civ, hold=a.hold, exe=a.exe))
+    elif a.cmd == "collect":
+        print(collect(a.name, save_dir=a.save_dir))
     else:
-        print(collect(a.name))
+        store = TurnStore(a.store)
+        if not store.exists():
+            raise SystemExit(f"no galaxy in {a.store}")
+        follow(store, a.civ, poll=a.poll, rounds=a.rounds, exe=a.exe)
 
 
 if __name__ == "__main__":

@@ -101,15 +101,63 @@ see D1.
 
 ## B. Client lifecycle, once per turn
 
-- `[ ]` **B1. Push a turn and relaunch, launcher-driven.** The `.dat` path is
-  startup-only, so a player's client restarts each turn. Acceptable at 1 to 4 hour
-  turns, and it is the launcher's job to make it invisible: at 00:00 say "time is
-  up, orders are in", close the client, collect the turn, relaunch on it. That
-  also subsumes B2, since a client that is closed at the boundary never reaches
-  one.
-  **Done when:** a player gets turn N+1 without doing anything manual.
-- `[ ]` **B2. Stop the player's client ticking on its own.** A player's client
-  must never advance a turn, or it shows a future the referee has not computed.
+- `[x]` **B1. Push a turn and relaunch, launcher-driven.** Confirmed live on
+  18 September 2026: a player clicked Multiplayer once, played turn 8, walked
+  away, and came back to turn 9 open and playable. Nothing manual in between.
+
+  The pieces:
+
+  | | |
+  |---|---|
+  | `server/turn_store.py` | the one thing a player's launcher, the other players' launchers and the referee agree through |
+  | `server/player_turn.py follow` | the player-side loop: serve, hold the clock, collect at the deadline, submit, wait |
+  | `server/referee.py --loop` | resolves each turn as its deadline passes |
+  | `release/launcher.py` | runs `follow` on a worker thread and shows the countdown |
+
+  The measured handoff was **35 seconds** from "time is up" to the next turn
+  being playable:
+
+      00:03:05  serving turn 8
+      00:09:09  time is up, captured, submitted
+      00:09:42  the referee's tick capture arrives
+      00:09:44  serving turn 9
+      00:09:50  turn 9 up
+
+  The turn store is deliberately the whole interface. A directory is enough for
+  one machine and for a shared folder between two, and the Firebase adapter the
+  deployment wants replaces that class without changing a caller.
+
+  Three things this cost that are worth not rediscovering:
+
+  - **The referee and a player's launcher must agree where captures land.**
+    A capture arrives over `cs_server`'s `savegame` endpoint, so it lands in
+    whatever data directory that server was started with. The launcher hosts its
+    own against `release/data`, while the referee defaulted to the checkout's
+    `server/saves`, and the referee then waited for a file being written
+    somewhere else. Both take the directory explicitly now, `--save-dir`.
+  - **On one machine the referee and the players share a single game process.**
+    `tick` closes whatever is running before starting its own, so resolving the
+    instant a deadline passed closed the player's client mid-capture and lost the
+    orders it was writing. The referee now holds a grace period for submissions
+    and then waits for the client to exit. With the referee on another host both
+    waits become free.
+  - **A mode that starts the game itself names no EXE.** Making the multiplayer
+    card playable made `find_game_root` demand an EXE the manifest never claimed,
+    and the launcher decided the whole install was broken. `is_playable` now
+    recognises a `"session"` mode.
+
+  `[ ]` **Not packaged.** The launcher's multiplayer path imports from the
+  checkout, so it runs only from a clone. Shipping it means bundling
+  `save_parser`, `set_blob_player`, `turn_store` and the serve and collect logic
+  into the frozen build, which is a `build.ps1` change.
+- `[x]` **B2. Stop the player's client ticking on its own.** Confirmed live: a
+  player's client sat on a served turn for six minutes, never advanced, never
+  bailed, and the launcher showed the real countdown beside it. Two things get
+  that: the player build is the one without T1-T5, so the engine's own sync
+  checks are intact, and `player_turn.py serve` writes a day onto `0x0080AA08`
+  after load so no boundary arrives during a session. The in-game countdown then
+  reads about 24 hours, which is the artefact of the hold and is why the launcher
+  owns the display.
 
   **Mostly solved by build choice.** Patches **T1-T5** are what let a client tick
   without a server, and they are applied **only to the Resurgence EXE**. An
