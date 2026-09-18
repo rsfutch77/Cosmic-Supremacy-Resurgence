@@ -269,16 +269,64 @@ def newest_capture(save_dir: str, since: float = 0.0):
 AI_READY_TIMEOUT = 45.0     # after this, let the player play anyway
 
 
+def _safe_civ(civ: str) -> str:
+    """The opponent's name as its state files spell it (sensors.py, ai.py)."""
+    return "".join(c if c.isalnum() else "_" for c in (civ or "unknown"))
+
+
 def ai_pass_marker(state_dir: str, civ: str):
     """(turn, stamp) of the opponent's last completed pass, or (None, None)."""
-    safe = "".join(c if c.isalnum() else "_" for c in (civ or "unknown"))
-    path = os.path.join(state_dir, f"pass_{safe}.json")
+    path = os.path.join(state_dir, f"pass_{_safe_civ(civ)}.json")
     try:
         with open(path, "r", encoding="utf-8") as fh:
             data = json.load(fh)
         return data.get("turn"), data.get("stamp")
     except (OSError, ValueError):
         return None, None
+
+
+def reset_ai_state(state_dir: str, civ: str, keep_discovery: bool = False):
+    """Forget what the opponent learned in an earlier game. Returns what it removed.
+
+    Two of the opponent's files outlive the game that produced them.
+
+    `discovered_<galaxy>_<civ>.json` is its fog-of-war map, keyed by galaxy
+    geometry and civ name. Single Player always launches the same shipped
+    galaxy, so the key is identical in every game, and a second game starts the
+    opponent already holding the map it built in the first. Everything it may
+    colonise or attack is filtered through that set, so it can send a colony
+    ship straight into the player's home system on turn 1 without ever having
+    scouted it.
+
+    `pass_<civ>.json` records the last turn it finished deciding, and is not
+    keyed by galaxy at all. The launcher's readiness gate opens whenever that
+    turn is at or past the current one, so a marker left at turn 180 satisfies
+    the gate for the whole of the next game's first 180 turns and the player
+    never waits for the opponent to move.
+
+    `keep_discovery` is for Load, which resumes the galaxy the map belongs to.
+    The pass marker goes either way: a loaded save reopens at a turn the marker
+    has already passed.
+    """
+    safe = _safe_civ(civ)
+    victims = [os.path.join(state_dir, f"pass_{safe}.json")]
+    if not keep_discovery:
+        try:
+            victims += [
+                os.path.join(state_dir, name)
+                for name in os.listdir(state_dir)
+                if name.startswith("discovered_") and name.endswith(f"_{safe}.json")
+            ]
+        except OSError:
+            pass            # no state directory yet, which is nothing to clear
+    removed = []
+    for path in victims:
+        try:
+            os.remove(path)
+            removed.append(os.path.basename(path))
+        except OSError:
+            pass            # absent, or held open; neither is worth failing on
+    return removed
 
 
 def capture_to_dat(save_dir: str, out_path: str, since: float = 0.0) -> str:

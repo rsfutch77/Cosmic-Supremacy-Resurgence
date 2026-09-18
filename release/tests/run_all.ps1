@@ -22,6 +22,10 @@
                            executable with a throwaway self-signed certificate
                            in the current user's store when signtool is
                            installed. No game and no window.
+      test_ai_state_reset  File handling only, no game and no server. Covers
+                           the opponent's fog-of-war map and pass marker being
+                           cleared when a new game starts and kept when a save
+                           is loaded.
       test_save_protocol   Speaks the wire protocol to cs_server directly. No
                            game needed, ~2 seconds. Covers slot allocation from
                            the gameid=-1 sentinel, the savegamelist format, and
@@ -81,6 +85,7 @@ Invoke-Test 'test_identity.py'
 Invoke-Test 'test_packaging.py'
 Invoke-Test 'test_signing.py'
 Invoke-Test 'test_build_and_log.py'
+Invoke-Test 'test_ai_state_reset.py'
 Invoke-Test 'test_save_protocol.py'
 Invoke-Test 'test_save_message_path.py'
 Invoke-Test 'test_minimised_poll.py'
