@@ -274,7 +274,29 @@ if (-not $SkipZip) {
     Write-Step "Creating archive"
     $Zip = "$Stage.zip"
     if (Test-Path $Zip) { Remove-Item -Force $Zip }
-    Compress-Archive -Path $Stage -DestinationPath $Zip -CompressionLevel Optimal
+
+    # Retry, because this step races the virus scanner. The three client EXEs
+    # are 8 MB each and were written seconds earlier, so Defender is often still
+    # holding one open when Compress-Archive reaches it: "the process cannot
+    # access the file ... because it is being used by another process", on a
+    # file no process of ours has touched since the copy. It clears in a second
+    # or two. Failing the whole build over it means a hand-made zip is what gets
+    # published, which is a worse artifact than a retried one.
+    $zipped = $false
+    foreach ($attempt in 1..5) {
+        try {
+            Compress-Archive -Path $Stage -DestinationPath $Zip `
+                -CompressionLevel Optimal -ErrorAction Stop
+            $zipped = $true
+            break
+        } catch {
+            if (Test-Path $Zip) { Remove-Item -Force $Zip -ErrorAction SilentlyContinue }
+            if ($attempt -eq 5) { throw }
+            Write-Warn2 "archive attempt $attempt failed ($($_.Exception.Message.Split([char]10)[0])); retrying in 3s"
+            Start-Sleep -Seconds 3
+        }
+    }
+    if (-not $zipped) { throw 'Compress-Archive did not produce the zip' }
     Write-Ok "$Zip  ($([math]::Round((Get-Item $Zip).Length / 1MB, 1)) MB)"
 
     # Published in the release notes so a player can verify the download, and so
