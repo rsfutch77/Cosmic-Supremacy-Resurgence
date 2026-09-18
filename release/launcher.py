@@ -642,8 +642,20 @@ class Launcher:
         if mode.get("ai"):
             self.start_ai(mode)
 
-    def start_ai(self, mode):
-        """Start the opponent, and say clearly if there is not one to start."""
+    def start_ai(self, mode, fresh_galaxy: bool = True):
+        """Start the opponent, and say clearly if there is not one to start.
+
+        `fresh_galaxy` is false only for Load, which reopens the galaxy the
+        opponent's map was built on. Every other path starts the shipped galaxy
+        over from its first turn, and the opponent must start over with it.
+        """
+        import gamectl
+        dropped = gamectl.reset_ai_state(
+            os.path.join(self.data_dir, "ai_state"), mode["ai"]["civ"],
+            keep_discovery=not fresh_galaxy)
+        if dropped:
+            self.say("cleared opponent state from an earlier game: "
+                     + ", ".join(sorted(dropped)))
         try:
             self.ai_child = launch_ai(mode, self.data_dir)
         except OSError as exc:
@@ -794,7 +806,7 @@ class Launcher:
         self.running_mode = mode
         self.set_status(f"{_short(mode)} is running", OK)
         if mode.get("ai"):
-            self.start_ai(mode)
+            self.start_ai(mode, fresh_galaxy=False)
 
     def _on_control_done(self, label, result, err, done):
         if err is not None:

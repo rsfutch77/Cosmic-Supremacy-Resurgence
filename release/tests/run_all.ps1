@@ -4,8 +4,12 @@
     Pre-release smoke tests. Run before tagging.
 
 .DESCRIPTION
-    Three checks, in rising cost. Each is here because it caught a real bug:
+    Four checks, in rising cost. Each is here because it caught a real bug:
 
+      test_ai_state_reset  File handling only, no game and no server. Covers
+                           the opponent's fog-of-war map and pass marker being
+                           cleared when a new game starts and kept when a save
+                           is loaded.
       test_save_protocol   Speaks the wire protocol to cs_server directly. No
                            game needed, ~2 seconds. Covers slot allocation from
                            the gameid=-1 sentinel, the savegamelist format, and
@@ -54,6 +58,7 @@ function Invoke-Test {
     Start-Sleep -Seconds 2
 }
 
+Invoke-Test 'test_ai_state_reset.py'
 Invoke-Test 'test_save_protocol.py'
 foreach ($mode in @('tutorial', 'demo', 'testbed')) {
     Invoke-Test 'test_status_cycle.py' @($mode)
