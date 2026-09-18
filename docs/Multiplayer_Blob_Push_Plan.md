@@ -124,10 +124,43 @@ see D1.
 
   A turn archived before hashes existed reports that rather than passing
   vacuously.
-- `[ ]` **A4. Determinism under combat.** The 40-turn agreement above covered a
-  two-civ galaxy with no war, and combat is where an accumulated AI state would
-  most plausibly diverge. **Done when:** a played-versus-loaded pair agrees
-  across a war.
+- `[x]` **A4. Determinism under combat.** A played-versus-loaded pair agrees
+  across a war, and so does a loaded-versus-loaded pair, which is the case the
+  referee actually exercises.
+
+  The setup: `cycle.dat` at turn 110, war declared between the two civs through
+  the AI's own `declare_war` actuator, and both of GoodGuy's warships sent at
+  BadGuy's only planet some 450 units away. Both branches then ran 70 turns with
+  **no external driver**: the orders were already in the state, so the engine
+  alone decided the outcome. Combat happened, GoodGuy losing a warship in every
+  branch.
+
+  | comparison | result |
+  |---|---|
+  | loaded against loaded | identical, reproduced three times across separate invocations |
+  | played against loaded | 756 bytes apart, and identical once star names are removed |
+
+  **Those 756 bytes are not a divergence.** Every `SUN` section is 43 bytes in a
+  client that has been running and 36 in one that just loaded, because a
+  long-running client materialises the default display name `Unnamed` where the
+  blob holds an empty string. 108 suns times 7 bytes is exactly 756. Strip the
+  names and the two branches are byte-identical, same canonical hash, after 70
+  turns and a war.
+
+  It was never about combat: a control on the same fixture with **no war and no
+  actuator writes** produced the same 756-byte difference. Running the war
+  experiment without that control would have recorded "combat diverges", which
+  was the available and wrong conclusion.
+
+  `[ ]` **The engagement was one-sided**, an armed attacker against an unarmed
+  defender and its planet. It exercises targeting, damage and destruction, not a
+  pitched two-sided battle, and BadGuy had no warship design to fight back with.
+  Worth repeating once both sides can shoot.
+
+  Star names are deliberately **not** masked in `canonical.py`. The difference
+  is a default the client fills in, but the field is also where a genuine rename
+  would live, and a mask that forgives a rename is worse than a first tick that
+  shrinks a fixture by 756 bytes once and is stable thereafter.
 
 ## B. Client lifecycle, once per turn
 

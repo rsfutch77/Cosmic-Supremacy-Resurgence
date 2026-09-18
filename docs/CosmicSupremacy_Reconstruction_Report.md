@@ -415,6 +415,35 @@ of those bytes agreed except a single dword.
 This is what makes replay, audit and dispute resolution available, and it means a referee can be
 **transient**: a turn can be recomputed on any host and checked against an archived hash.
 
+#### A running client invents a default star name
+
+`SUN ` payload, 36 bytes with no name:
+
+    +0   u32  object id
+    +4   f32  x
+    +8   f32  z
+    +12  f32  y
+    +16  u32  zero in every sun seen
+    +20  f32  a radius or magnitude
+    +24  u32  name length
+    +28  char name[length]
+    then u32, u32
+
+A blob carries an empty name, length zero. A client that has been running for a
+while writes `Unnamed`, seven characters, and the section grows to 43 bytes. A
+client that has just loaded writes the empty name back faithfully.
+
+Measured September 2026 while testing determinism across a war: a played branch
+and a loaded branch, 70 turns from one fork, came out 756 bytes apart, which is
+exactly 108 suns times 7 bytes, and **byte-identical once the names are
+stripped**. The same 756-byte difference appears with no war at all, so it is a
+property of the client's display defaults rather than of the simulation.
+
+The practical consequence is small and worth knowing: a galaxy captured from a
+long-running client shrinks by that much on its first tick and is stable after.
+`canonical.py` does not mask it, because the same field is where a genuine star
+rename would live.
+
 #### The trailing dword of every `KNPL` payload is unreliable
 
 **One field per civ, immediately before that civ's `EXSY` header, is not dependable data.** Measured
