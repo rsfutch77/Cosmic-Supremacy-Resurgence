@@ -9,28 +9,57 @@ The design rule is merge orders, never states. A player is handed a state, plays
 offline, and hands a whole state back; only the parts of it that express that
 player's intent may be taken, and only for objects that player owns.
 
-This implements that rule for ship movement, which is the one order type whose
-blob representation is fully measured. A move is three coordinated edits and all
-three live inside the ship's `DYNO` section:
+Every submission is judged against **the state as it was served**, never against
+the blob as it accumulates other players' orders. Judging against the
+accumulating blob makes the first player's orders look like the second player's
+edits: the authoritative state moves under them, and their untouched copy of a
+ship they do not own then differs from it.
 
-    SHCO byte 0     the order type, 0 when idle
-    has-orders      Ship:76
-    ROUT + u32      appended, and present only when an order exists
+Ownership is likewise decided by the served blob. A submission that rewrites an
+owner field must not thereby acquire the object. Tested by rewriting one civ's
+ship to claim another owned it, planting a real order on it and submitting: the
+change is dropped and named, and the submitter's own orders still apply.
 
-Because they are contiguous, taking a player's order is copying their `DYNO`
-over the authoritative one. Nothing outside `DYNO` is read, so a player who
-edits their planets, their research or another civ's ships changes nothing.
+What is accepted
+----------------
+Each rule below was measured by serving a turn, having a player perform exactly
+one action, and diffing with `order_diff.py`.
 
-Ownership is decided by the AUTHORITATIVE blob, never by the submitted one, so
-a player cannot claim a ship by rewriting the owner field in their own copy.
-Every ship the submission changed that the player does not own is dropped and
-named.
+**Ship orders**, `SHIP > DYNO`. A move or a colonise is three coordinated edits
+and all three live inside the ship's `DYNO`: the `SHCO` order-type byte (1 for
+move, 3 for colonise), the has-orders byte, and an appended `ROUT` plus `u32`.
+Because they are contiguous, taking the order is copying the `DYNO`.
 
-Not yet handled, and each needs its own measurement before it can be accepted:
-production queues, research topic, job allocation, facility selection, ship
-designs, governors, admirals and diplomacy. Ship orders issued through an
-admiral are also out of scope, since the admiral id lives in `DYNO` and would
-be copied with the rest.
+**Research topic**, `OWNR > DATA > OWPR` at `+32` and `+40`. Setting a topic
+writes the technology id to both, eight bytes apart, and nothing else outside
+this civ moves. Copied field by field rather than by section: `OWPR` is the
+civ's whole property block and also holds the coat-of-arms count and several
+flags, so taking all of it would take far more than a research decision.
+
+**Production queue**, `PLNT > PLPR > PROD`. Queuing a build changes only this
+section, whose payload holds the queue's own fields and a nested section naming
+what is queued, `FCLT` for a facility. It is self-contained, so it is copied
+whole.
+
+What is refused, and why
+------------------------
+**Job allocation.** Measured: moving one farmer to a banker changes the citizen
+array inside `PLNT > PLPR`, ten nine-byte records each keyed by the owning civ's
+object id, plus a flag byte in `OWPR`. The array is in `PLPR`'s own bytes, which
+also carry the planet's population, stores and derived economy. Copying `PLPR`
+wholesale would let a player hand back an edited population, and the citizen
+records are not decoded well enough to copy field by field yet. Refused until
+`PLPR` is decoded.
+
+**Everything else**: facility selection outside the queue, ship designs,
+governors, admirals, diplomacy proposals. Not measured, so not accepted. An
+order type nobody has measured is not a gap in a list, it is a change of unknown
+extent being copied between players.
+
+`[ ]` **Nothing here checks that an order is legal**, only that it is the
+player's own. A submission naming a technology the civ cannot research, or a
+queue entry it cannot afford, is copied as given. That is C4, the legality gate,
+and it needs the rule the UI enforces rather than an inference from the state.
 """
 import argparse
 import os
@@ -41,7 +70,11 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import save_parser as sp
 import inject_civ as icv
 
+# Fields inside a civ's OWPR that carry the research topic, as (offset, length).
+RESEARCH_FIELDS = ((32, 4), (40, 4))
 
+
+# ── reading the blob ─────────────────────────────────────────────────────────
 def ship_index(blob):
     """{shipObjectId: (owner, dyno_bytes)} for every ship carrying a DYNO."""
     tree = sp.parse_blob(blob)
@@ -55,6 +88,47 @@ def ship_index(blob):
     return out
 
 
+def planet_index(blob):
+    """{planetObjectId: (owner, prod_bytes_or_None)}."""
+    tree = sp.parse_blob(blob)
+    glxy = next(tree[0].find('GLXY'))
+    out = {}
+    for sola in (c for c in glxy.children if c.tag == b'SOLA'):
+        for sec in sola.find('PLNT'):
+            oid, _x, _z, _y, owner = struct.unpack_from('<IfffI', blob,
+                                                        sec.payload)
+            plpr = next(sec.find('PLPR'), None)
+            prod = next(plpr.find('PROD'), None) if plpr else None
+            out[oid] = (owner,
+                        bytes(blob[prod.start:prod.end]) if prod else None)
+    return out
+
+
+def research_of(blob, civ_oid):
+    """The bytes of a civ's research fields, or None when OWPR is unreadable."""
+    owpr = _owpr(blob, civ_oid)
+    if owpr is None:
+        return None
+    return tuple(bytes(blob[owpr.payload + off:owpr.payload + off + n])
+                 for off, n in RESEARCH_FIELDS)
+
+
+def _owpr(blob, civ_oid):
+    tree = sp.parse_blob(blob)
+    glxy = next(tree[0].find('GLXY'))
+    for o in glxy.children:
+        if o.tag != b'OWNR':
+            continue
+        n = struct.unpack_from('<I', blob, o.payload)[0]
+        if struct.unpack_from('<I', blob, o.payload + 4 + n)[0] != civ_oid:
+            continue
+        owpr = next(o.find('OWPR'), None)
+        if owpr is None or owpr.size < max(off + n2 for off, n2 in RESEARCH_FIELDS):
+            return None
+        return owpr
+    return None
+
+
 def civ_by_name(blob, name):
     for o in icv.owner_records(blob):
         if o['name'] == name:
@@ -63,50 +137,81 @@ def civ_by_name(blob, name):
                      f"{[o['name'] for o in icv.owner_records(blob)]}")
 
 
-def replace_dyno(blob, ship_oid, new_dyno):
-    """Swap one ship's DYNO section, correcting every enclosing section size."""
+# ── writing the blob ─────────────────────────────────────────────────────────
+def _replace_child(blob, parent_finder, new_bytes):
+    """Swap one section for bytes of any length, fixing every enclosing size."""
     tree = sp.parse_blob(blob)
-    glxy = next(tree[0].find('GLXY'))
-    for sec in glxy.find('SHIP'):
-        if struct.unpack_from('<I', blob, sec.payload)[0] != ship_oid:
-            continue
-        dyno = next(sec.find('DYNO'), None)
-        if dyno is None:
-            raise SystemExit(f"ship {ship_oid} has no DYNO to replace")
-        body = (bytes(blob[sec.payload:dyno.start]) + new_dyno +
-                bytes(blob[dyno.end:sec.end]))
-        return sp.replace_payload(blob, tree, sec, body)
-    raise SystemExit(f"ship {ship_oid} not found in the authoritative blob")
+    target = parent_finder(blob, tree)
+    if target is None:
+        raise SystemExit('the section to replace is not in this blob')
+    parent, sec = target
+    body = (bytes(blob[parent.payload:sec.start]) + new_bytes +
+            bytes(blob[sec.end:parent.end]))
+    return sp.replace_payload(blob, tree, parent, body)
 
 
+def replace_dyno(blob, ship_oid, new_dyno):
+    def find(b, tree):
+        glxy = next(tree[0].find('GLXY'))
+        for sec in glxy.find('SHIP'):
+            if struct.unpack_from('<I', b, sec.payload)[0] != ship_oid:
+                continue
+            dyno = next(sec.find('DYNO'), None)
+            return (sec, dyno) if dyno else None
+        return None
+    return _replace_child(blob, find, new_dyno)
+
+
+def replace_prod(blob, planet_oid, new_prod):
+    def find(b, tree):
+        glxy = next(tree[0].find('GLXY'))
+        for sola in (c for c in glxy.children if c.tag == b'SOLA'):
+            for sec in sola.find('PLNT'):
+                if struct.unpack_from('<I', b, sec.payload)[0] != planet_oid:
+                    continue
+                plpr = next(sec.find('PLPR'), None)
+                if plpr is None:
+                    return None
+                prod = next(plpr.find('PROD'), None)
+                return (plpr, prod) if prod else None
+        return None
+    return _replace_child(blob, find, new_prod)
+
+
+def set_research(blob, civ_oid, values):
+    """Write a civ's research fields in place. Sizes do not change."""
+    owpr = _owpr(blob, civ_oid)
+    if owpr is None:
+        raise SystemExit(f'civ {civ_oid} has no readable OWPR')
+    out = bytearray(blob)
+    for (off, n), value in zip(RESEARCH_FIELDS, values):
+        out[owpr.payload + off:owpr.payload + off + n] = value
+    return bytes(out)
+
+
+# ── the rules ────────────────────────────────────────────────────────────────
 def merge(blob, submissions, log=print):
-    """submissions: [(civ_name, submitted_blob)]. Returns the merged blob.
-
-    Every submission is judged against the state as it was at the start of the
-    turn, which is what each player was served, and never against the blob as it
-    accumulates other players' orders. Judging against the accumulating blob
-    makes the first player's orders look like the second player's edits: the
-    authoritative state moves under them, and their untouched copy of a ship they
-    do not own then differs from it. A two-player round logged two such drops
-    with neither player having done anything. They were harmless, being on ships
-    the submitter did not own, but a drop log that cries wolf hides a real
-    rejection, and the legality gate has to be able to trust it.
-    """
-    served = ship_index(blob)
+    """submissions: [(civ_name, submitted_blob)]. Returns the merged blob."""
+    served_ships = ship_index(blob)
+    served_planets = planet_index(blob)
     names = {o['oid']: o['name'] for o in icv.owner_records(blob)}
     accepted = dropped = 0
+
     for civ_name, sub in submissions:
         civ = civ_by_name(blob, civ_name)
-        log(f"{civ_name} (object {civ['oid']}):")
-        for ship_oid, (_claimed_owner, dyno) in sorted(ship_index(sub).items()):
-            if ship_oid not in served:
+        mine = civ['oid']
+        log(f"{civ_name} (object {mine}):")
+
+        # ship orders
+        for ship_oid, (_claimed, dyno) in sorted(ship_index(sub).items()):
+            if ship_oid not in served_ships:
                 log(f"    ship {ship_oid}: DROPPED, not in the state served")
                 dropped += 1
                 continue
-            owner, as_served = served[ship_oid]
+            owner, as_served = served_ships[ship_oid]
             if dyno == as_served:
-                continue                        # untouched, nothing to say
-            if owner != civ['oid']:
+                continue
+            if owner != mine:
                 log(f"    ship {ship_oid}: DROPPED, owned by "
                     f"{names.get(owner, owner)}")
                 dropped += 1
@@ -115,6 +220,47 @@ def merge(blob, submissions, log=print):
             log(f"    ship {ship_oid}: order taken "
                 f"({len(as_served)} -> {len(dyno)} bytes)")
             accepted += 1
+
+        # production queues
+        for planet_oid, (_claimed, prod) in sorted(planet_index(sub).items()):
+            if planet_oid not in served_planets:
+                log(f"    planet {planet_oid}: DROPPED, not in the state served")
+                dropped += 1
+                continue
+            owner, as_served = served_planets[planet_oid]
+            if prod == as_served:
+                continue
+            if owner != mine:
+                log(f"    planet {planet_oid}: production DROPPED, owned by "
+                    f"{names.get(owner, owner)}")
+                dropped += 1
+                continue
+            if prod is None or as_served is None:
+                log(f"    planet {planet_oid}: production DROPPED, no PROD "
+                    f"section on one side")
+                dropped += 1
+                continue
+            blob = replace_prod(blob, planet_oid, prod)
+            log(f"    planet {planet_oid}: production queue taken")
+            accepted += 1
+
+        # research topic
+        theirs = research_of(sub, mine)
+        served = research_of(blob, mine)
+        if theirs is not None and served is not None and theirs != served:
+            blob = set_research(blob, mine, theirs)
+            topic = struct.unpack_from('<I', theirs[0], 0)[0]
+            log(f"    research: topic taken (id {topic})")
+            accepted += 1
+
+        # research belonging to anyone else
+        for other in (o for o in icv.owner_records(blob) if o['oid'] != mine):
+            a = research_of(sub, other['oid'])
+            b = research_of(blob, other['oid'])
+            if a is not None and b is not None and a != b:
+                log(f"    research: DROPPED, belongs to {other['name']}")
+                dropped += 1
+
     log(f"{accepted} order(s) taken, {dropped} change(s) dropped")
     return blob
 
@@ -127,16 +273,26 @@ def main():
     ap.add_argument('--dat', help='write the decompressed result here')
     ap.add_argument('-o', '--out', help='write a .b64 capture here')
     ap.add_argument('--list', action='store_true',
-                    help='show ships and owners, change nothing')
+                    help='show what the rules can see, change nothing')
     a = ap.parse_args()
 
     blob = sp.load_any(a.authoritative)
     names = {o['oid']: o['name'] for o in icv.owner_records(blob)}
     if a.list:
         for oid, (owner, dyno) in sorted(ship_index(blob).items()):
-            print(f"  ship {oid:<5} owner {names.get(owner, owner):<14} "
+            print(f"  ship   {oid:<5} owner {names.get(owner, owner):<14} "
                   f"DYNO {len(dyno)} bytes "
                   f"{'(under orders)' if len(dyno) > 38 else '(idle)'}")
+        for oid, (owner, prod) in sorted(planet_index(blob).items()):
+            if not owner:
+                continue
+            print(f"  planet {oid:<5} owner {names.get(owner, owner):<14} "
+                  f"PROD {len(prod) if prod else 'none'} bytes")
+        for o in icv.owner_records(blob):
+            r = research_of(blob, o['oid'])
+            topic = struct.unpack_from('<I', r[0], 0)[0] if r else None
+            print(f"  civ    {o['oid']:<5} {o['name']:<14} "
+                  f"research topic {topic}")
         return
 
     submissions = []
@@ -158,7 +314,7 @@ def main():
         open(a.dat, 'wb').write(merged)
         print(f"wrote {a.dat}")
     if a.out:
-        open(a.out, 'w').write(sp.encode_save(merged))
+        open(a.out, 'wb').write(sp.encode_save(merged))
         print(f"wrote {a.out}")
 
 

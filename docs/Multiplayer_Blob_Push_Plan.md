@@ -319,11 +319,51 @@ made unnecessary.
   client writes the civs back in its own order and a positional diff of one
   galaxy reports every civ as changed.
 
-  Still unhandled, each needing its own measurement before it can be accepted:
-  production queues, research topic (`Owner:144`/`Owner:152`), job allocation,
-  facility selection, ship designs, governors, admirals, diplomacy proposals.
-  Orders issued through an admiral are also out of scope, since the admiral id
-  sits inside `DYNO` and would be copied with the order.
+  **Three more order types were measured in September 2026**, each by serving a
+  turn, having a player perform exactly one action, and diffing. Two are
+  accepted and one is refused with a reason.
+
+  | action | where it lives | verdict |
+  |---|---|---|
+  | research topic | `OWNR > DATA > OWPR` `+32` and `+40` | accepted, field by field |
+  | production queue | `PLNT > PLPR > PROD` | accepted, whole section |
+  | job allocation | the citizen array in `PLPR`'s own bytes | refused |
+
+  **Research topic.** Setting one writes the technology id to both `OWPR+32` and
+  `OWPR+40`, eight bytes apart, matching the predicted `Owner:144`/`Owner:152`
+  pair. Confirmed against the AI's own table: the id written for "Advanced
+  Magnetism" was 12, which is what `research.py` calls it. Copied field by field
+  rather than by section, because `OWPR` is the civ's whole property block and
+  also holds the coat-of-arms count and several flag bytes.
+
+  **Production queue.** Queuing a facility changed only `PLPR > PROD`, whose
+  payload holds the queue's own fields and a nested section naming what is
+  queued, `FCLT` for a facility. Self-contained, so it is copied whole.
+
+  **Job allocation is refused.** Moving one farmer to a banker changed the
+  citizen array inside `PLPR`, ten nine-byte records each keyed by the owning
+  civ's object id, plus a flag byte in `OWPR`. That array sits in `PLPR`'s own
+  bytes alongside the planet's population, stores and derived economy, so
+  copying `PLPR` wholesale would let a player hand back an edited population,
+  and the records are not decoded well enough to copy field by field. This is
+  the first order type that is genuinely blocked rather than merely unmeasured.
+
+  **The rules were tested against a submission containing all three changes at
+  once.** Two were applied and nothing else: the job change, the `EXSY`/`KNPL`
+  movement and the `OWPR` flag byte were all left behind.
+
+  **`EXSY` and `KNPL` move on their own and must never be taken as orders.** A
+  player who only set a research topic still returned a changed explored-systems
+  table and a known-planets table that grew from 0 records to 1. Two captures
+  taken in the same session with nothing done between them were byte-identical,
+  so this is not drift: it is bookkeeping the client does when it loads. The
+  referee recomputes both when it ticks the authoritative state, so a player's
+  copy has no business overwriting them.
+
+  Still unmeasured, and therefore not accepted: facility selection outside the
+  queue, ship designs, governors, admirals, diplomacy proposals. Orders issued
+  through an admiral are also out of scope, since the admiral id sits inside
+  `DYNO` and would be copied with the order.
 - `[ ]` **C3. Immediate-effect actions.** Hurry production, conscription, crew
   assignment and job reallocation take effect the moment they are clicked, so the
   diff shows the *effect* and not the intent. Each needs a reverse mapping, effect

@@ -211,9 +211,24 @@ def _all_runs(blob: bytes, start: int, end: int):
         cov = sum(s.size + 8 for run in runs for s in run)
         if cov > best_cov:
             best, best_cov = runs, cov
-    if best_cov < span * MIN_COVERAGE:
+    if not best:
         return []
-    return [s for run in best for s in run]
+    flat = [s for run in best for s in run]
+    if best_cov >= span * MIN_COVERAGE:
+        return flat
+    # A payload that is mostly its own fields, with a few sections at the tail,
+    # never reaches the coverage bar. `PLPR` is the case: about 160 bytes of
+    # planet fields, then `PROD` and `ENLI`, which together cover 18% of it. The
+    # tail sections were therefore invisible, and the production queue lives in
+    # `PROD`, so the one thing a build order changes could not be addressed.
+    #
+    # Ending exactly on the payload boundary is the evidence that replaces
+    # coverage. Sizes are self-describing, so a chain of two or more sections
+    # whose last byte is the payload's last byte has agreed with the framing
+    # several times over; random bytes that spell a tag do not land there.
+    if len(flat) >= 2 and flat[-1].end == end:
+        return flat
+    return []
 
 
 def parse_sections(blob: bytes, start: int, end: int, depth: int = 0) -> list:
