@@ -605,10 +605,22 @@ made unnecessary.
   | research | one civ held its topic, the other had **none and never chose one** |
   | ships, colonies | unchanged, nothing built, nothing settled |
 
-  So an absent player is not destroyed, and they are not played for either:
-  their economy drifts toward farmers, their factories go idle and their
-  research stops. That is survivable for a turn or two and is a slow death over
-  a week, which is exactly what governors existed to prevent.
+  So an absent player is not destroyed, and in this fixture they were not
+  played for either: their economy drifts toward farmers, their factories go
+  idle and their research stops. That is survivable for a turn or two and is a
+  slow death over a week, which is exactly what governors existed to prevent.
+
+  `[ ]` **Unreconciled.** The agent on the second machine reports the opposite
+  from a different galaxy, that an unplayed civ issues new `ROUT`s and rewrites
+  production. Both observations are real and only one can be general. In this
+  fixture an unplayed civ's ship sat idle for all 40 turns and its only planet
+  drained its queue and never refilled it, which is a strange way for an AI to
+  show itself; in theirs the same civ appears to act. The question that
+  separates them is whether the `ROUT` they saw was already present before the
+  tick, since a ship advancing along an order it already had looks identical to
+  a new one unless the `DYNO` is compared against the state served. Recorded
+  rather than resolved, because the honest version is narrow and the clean
+  version might be wrong.
 
   **The same is true of every civ with no human in it, and by design that case
   does not arise.** A multiplayer galaxy is humans only: no `BadGuy`, no engine
