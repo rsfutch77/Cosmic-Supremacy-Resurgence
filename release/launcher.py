@@ -389,7 +389,7 @@ def launch_mode(mode, game_root: str, galaxy_root: str) -> subprocess.Popen:
 # client has to restart every turn, and the only way that is acceptable is if
 # nobody has to think about it.
 #
-# `[ ]` NOT PACKAGED. This path imports from the checkout (server/player_turn.py
+# [ ] NOT PACKAGED. This path imports from the checkout (server/player_turn.py
 # and its neighbours) and so works only when the launcher is run from a clone.
 # Shipping it means bundling save_parser, set_blob_player, turn_store and the
 # serve and collect logic into the frozen build, which is a build.ps1 change and

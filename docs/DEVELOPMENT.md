@@ -103,14 +103,14 @@ differ from each other on the local server, measured rather than assumed:
 | Tutorial | Yes, `testconnection` at startup, one of the checks this EXE was modified to take |
 | Demo | No, zero requests and zero connection attempts across a 45-second run with both loopback listeners up |
 
-### `[ ]` Let the player name a save
+### [ ] Let the player name a save
 
 Save writes `data\games\savegame_turn<N>.dat` and the name the engine records is
 always `singleplayer`. A player with several games in flight has only the turn
 number to tell them apart. Wants a name prompt, passed through to
 `gamectl.Client.save_game` (which already takes one) and used for the filename.
 
-### `[ ]` Per-session galaxy generation, for replayability
+### [ ] Per-session galaxy generation, for replayability
 
 Single Player ships one pre-seeded `.dat`, so **every new game is the same
 galaxy**. That is a regression against the pass-file path, which generates a

@@ -21,7 +21,7 @@ What this document is still for:
   counters at `0x00842AE4`–`0x00842AF0` are the confirmed case, and finding the
   rest needs the techniques here.
 
-The open `[ ]` items below are field-annotation work and are kept deliberately:
+The open [ ] items below are field-annotation work and are kept deliberately:
 they remain useful for in-process AI work even though the multiplayer motivation
 for some of them has gone.
 
@@ -691,7 +691,7 @@ later natural discovery would reallocate and discard whatever we had written.
 
 #### Creating a third player, no longer blocked, and no longer a memory problem (August 2026)
 
-This section used to carry a CRITICAL `[ ]` for creating a civ, on the grounds that it needs an
+This section used to carry a CRITICAL [ ] for creating a civ, on the grounds that it needs an
 `Owner` allocation with the multiple-inheritance layout *plus* an insertion into the red-black
 registry at `0x02D48740`, keyed by a hash nobody had derived. All of that is true of memory and
 none of it is necessary: **a civ is now added as an `OWNR` section in the save blob**, and the
@@ -1704,13 +1704,13 @@ Identical, +1 per turn, on the same turns. This was written up a few hours earli
 the turn-counter hypothesis recorded as the open question. Per-turn sampling answers it against
 the more interesting reading, which is the way that usually goes.
 
-`[ ]` **Loyalty and corruption are still not located**, the conquest A/B that made this field
+[ ] **Loyalty and corruption are still not located**, the conquest A/B that made this field
 findable did not turn up either of them. What it DID rule out: `Planet:100` bytes 0-2, the
 long-standing candidate, read `100/100/100` on freshly captured planets exactly as on planets
 held for 268 turns. Whatever the client is rendering as loyalty is derived, held off-object, or
 in a field that does not move on capture.
 
-`[ ]` A single out-of-trend sample here is a TORN READ, not a signal: #476 read 8, 8, 7, 8 on
+[ ] A single out-of-trend sample here is a TORN READ, not a signal: #476 read 8, 8, 7, 8 on
 consecutive turns with nothing happening to it.
 
 The historical observations below still hold and were the first clue.
@@ -1738,14 +1738,14 @@ planets on some turns, 1/525 on others): it only moves on planets that are still
 This is the memory side of what the client shows as loyalty, and of the "civil disorder"
 readout that replaces corruption on a freshly conquered planet.
 
-`[ ]` **NOT disambiguated from a plain "turns since acquisition, capped at 8" counter.** Both
+[ ] **NOT disambiguated from a plain "turns since acquisition, capped at 8" counter.** Both
 fit every reading taken. The discriminating test is whether anything but time moves it: sample
 it EVERY turn on two fresh captures, one garrisoned and one not, and compare the climb rates.
 The two above recovered within 11 turns while carrying garrisons of 6 and 0, which is weak
 evidence against the garrison mattering, but the samples were 11 turns apart and could not
 have seen a rate difference.
 
-`[ ]` `Planet:396` read 1 on the captured planet and 0 once it had settled, and 0 on the
+[ ] `Planet:396` read 1 on the captured planet and 0 once it had settled, and 0 on the
 controls throughout. Its annotation calls it "likely appearance / render data" because every
 non-zero value decodes as a plausible float; a 1/0 that tracks conquest does not. Worth a look
 as a "recently taken" flag.

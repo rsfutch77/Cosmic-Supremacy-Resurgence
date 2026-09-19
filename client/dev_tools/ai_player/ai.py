@@ -268,7 +268,7 @@ class Loop:
         so a controller that scans per civ pays it N times for one turn's worth
         of information. duel.py passes one snapshot to every civ instead.
 
-        `[ ]` **THAT 1.8s FIGURE IS NO LONGER TRUE AND THE SHARING ARGUMENT NOW
+        [ ] **THAT 1.8s FIGURE IS NO LONGER TRUE AND THE SHARING ARGUMENT NOW
         UNDERSTATES ITS OWN CASE.** Measured Aug 2026 over 22 passes: 2.73 turns
         elapsed per pass at a 25-second turn length, i.e. roughly 68 SECONDS of
         wall clock each, against 571 remote-thread engine calls in the run , some

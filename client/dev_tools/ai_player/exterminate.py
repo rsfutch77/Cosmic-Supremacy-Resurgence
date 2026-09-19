@@ -494,7 +494,7 @@ def run_xtm06(snap, civ, act, hist, log=print):
     repair is occupying infantry. The invasion leaves exactly one unit as the
     garrison, which is the minimum the engine takes, not a sufficient one.
 
-    `[ ]` STILL NOT MEASURED, and the one measurable proxy came back NEGATIVE.
+    [ ] STILL NOT MEASURED, and the one measurable proxy came back NEGATIVE.
     `Planet:368` looked like the sensor this rule needed , it drops when a planet
     changes hands and climbs back over turns , but per-turn sampling showed it is
     exactly `min(8, turn - Planet:92 + 1)`, and that a garrison does not change
@@ -630,7 +630,7 @@ def run_xtm00(snap, civ, act, hist, log=print):
     outward-facing and effectively irreversible for the rest of a galaxy's life,
     so which of the two was right is not a detail.
 
-    `[ ]` **It is now enabled against a HUMAN, which §4.4 flagged in advance as a
+    [ ] **It is now enabled against a HUMAN, which §4.4 flagged in advance as a
     §1.1 violation.** Declaring through a raw relation write costs no reputation
     and generates no news item, so the AI pays nothing for a declaration a player
     is charged for, and the player is never notified. That was tolerable when

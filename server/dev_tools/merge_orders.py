@@ -79,7 +79,7 @@ means, a turn in which a citizen changes hands is not a job reassignment.
 
 What is refused, and why
 ------------------------
-`[ ]` **Citizens a player owns on someone else's planet cannot be managed.**
+[ ] **Citizens a player owns on someone else's planet cannot be managed.**
 Only planets the submitter owns are considered, so a player with population on a
 rival's colony cannot reassign it. Correct behaviour is probably to allow it,
 since the per-citizen owner already says whose it is, but it has not been
@@ -110,7 +110,7 @@ governors, admirals, diplomacy proposals. Not measured, so not accepted. An
 order type nobody has measured is not a gap in a list, it is a change of unknown
 extent being copied between players.
 
-`[ ]` **Nothing here checks that an order is legal**, only that it is the
+[ ] **Nothing here checks that an order is legal**, only that it is the
 player's own. A submission naming a technology the civ cannot research, or a
 queue entry it cannot afford, is copied as given. That is C4, the legality gate,
 and it needs the rule the UI enforces rather than an inference from the state.
