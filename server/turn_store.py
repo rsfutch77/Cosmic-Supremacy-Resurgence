@@ -17,6 +17,11 @@ because the deployment this is heading for puts the referee on another host and
 the shared state in Firebase. A Firebase adapter replaces this class and the
 callers do not change.
 
+Two implementations exist. `TurnStore` is a directory, which is enough for one
+machine and for a shared folder between two. `HttpTurnStore` talks to
+`turn_server.py`, which is enough for a referee on another host. `open_store`
+takes either, so a caller is given a string and never learns which it got.
+
 The layout is a directory, which is enough for one machine and for a shared
 folder between two:
 
@@ -39,6 +44,7 @@ import os
 import struct
 import sys
 import time
+import urllib.parse
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, 'dev_tools'))
@@ -171,6 +177,125 @@ class TurnStore:
     def archive(self, turn: int, record: dict) -> None:
         _atomic_write(self.archive_path(turn),
                       json.dumps(record, indent=2).encode('utf-8'))
+
+    def archive_record(self, turn: int):
+        """What the referee recorded for a turn, or None.
+
+        Callers ask for the record rather than the path, because a store that is
+        not a directory has no path to give them.
+        """
+        path = self.archive_path(turn)
+        if not os.path.exists(path):
+            return None
+        with open(path, encoding='utf-8') as f:
+            return json.load(f)
+
+
+class HttpTurnStore:
+    """The same interface, over `turn_server.py`.
+
+    Blobs move as raw decompressed bytes. The base64 the directory holds is the
+    directory's business, and a caller that had to know about it is a caller the
+    next adapter would break.
+    """
+
+    def __init__(self, base: str, timeout: float = 30.0):
+        self.base = base.rstrip('/')
+        self.timeout = timeout
+
+    # -- plumbing --
+    def _get(self, path, want_json=True):
+        import urllib.error
+        import urllib.request
+        try:
+            with urllib.request.urlopen(self.base + path,
+                                        timeout=self.timeout) as r:
+                body = r.read()
+        except urllib.error.HTTPError as exc:
+            if exc.code == 404:
+                return None
+            raise
+        return json.loads(body) if want_json else body
+
+    def _post(self, path, body=b'', want_json=True):
+        import urllib.request
+        req = urllib.request.Request(self.base + path, data=body, method='POST')
+        req.add_header('Content-Type', 'application/octet-stream')
+        with urllib.request.urlopen(req, timeout=self.timeout) as r:
+            out = r.read()
+        return json.loads(out) if want_json and out else out
+
+    # -- state --
+    def exists(self) -> bool:
+        return self._get('/state') is not None
+
+    def state(self) -> dict:
+        s = self._get('/state')
+        if s is None:
+            raise FileNotFoundError(f'no galaxy at {self.base}')
+        return s
+
+    def current(self):
+        s = self.state()
+        return s['turn'], s['deadline']
+
+    def seconds_left(self) -> float:
+        return self.state()['deadline'] - time.time()
+
+    def civs(self) -> list:
+        return list(self.state().get('civs', []))
+
+    # -- turns --
+    def start(self, blob: bytes, civs, turn_seconds: int = 3600,
+              turn: int = None) -> int:
+        q = '&'.join([f'seconds={int(turn_seconds)}'] +
+                     [f'civ={urllib.parse.quote(c)}' for c in civs])
+        return self._post(f'/start?{q}', blob)['turn']
+
+    def turn_blob(self, turn: int) -> bytes:
+        blob = self._get(f'/turn/{turn}', want_json=False)
+        if blob is None:
+            raise FileNotFoundError(f'no turn {turn} at {self.base}')
+        return blob
+
+    def has_turn(self, turn: int) -> bool:
+        return self._get(f'/turn/{turn}', want_json=False) is not None
+
+    def publish(self, turn: int, blob: bytes, turn_seconds: int = None) -> None:
+        q = f'?seconds={int(turn_seconds)}' if turn_seconds else ''
+        self._post(f'/turn/{turn}{q}', blob)
+
+    # -- submissions --
+    def submit(self, civ: str, turn: int, blob: bytes) -> str:
+        self._post(f'/submission/{turn}/{urllib.parse.quote(civ)}', blob)
+        return f'{self.base}/submission/{turn}/{civ}'
+
+    def has_submitted(self, civ: str, turn: int) -> bool:
+        return civ in (self._get(f'/submissions/{turn}') or [])
+
+    def submissions(self, turn: int) -> dict:
+        out = {}
+        for civ in (self._get(f'/submissions/{turn}') or []):
+            blob = self._get(f'/submission/{turn}/{urllib.parse.quote(civ)}',
+                             want_json=False)
+            if blob is not None:
+                out[civ] = blob
+        return out
+
+    # -- archive --
+    def archive(self, turn: int, record: dict) -> None:
+        self._post(f'/archive/{turn}',
+                   json.dumps(record).encode('utf-8'), want_json=False)
+
+    def archive_record(self, turn: int):
+        return self._get(f'/archive/{turn}')
+
+
+def open_store(spec: str):
+    """A store from a directory path or a base URL, whichever this is."""
+    if spec.startswith('http://') or spec.startswith('https://'):
+        return HttpTurnStore(spec)
+    return TurnStore(spec)
 
 
 def turn_of(blob: bytes) -> int:

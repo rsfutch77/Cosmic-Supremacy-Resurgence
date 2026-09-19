@@ -46,7 +46,7 @@ sys.path.insert(0, os.path.join(HERE, "dev_tools"))
 import save_parser as sp
 import merge_orders
 import canonical
-from turn_store import TurnStore
+from turn_store import TurnStore, open_store
 
 
 def turn_of(blob: bytes) -> int:
@@ -168,13 +168,10 @@ def verify_turn(store: TurnStore, turn: int, recompute: bool = True,
     answer, which catches a referee that computed something different. The
     second costs a real tick, so it can be turned off.
     """
-    import json
-    path = store.archive_path(turn)
-    if not os.path.exists(path):
+    rec = store.archive_record(turn)
+    if rec is None:
         log(f"  verify: turn {turn} has no archive record")
         return False
-    with open(path, encoding="utf-8") as f:
-        rec = json.load(f)
     if "hash_out" not in rec:
         log(f"  verify: turn {turn} was archived before hashes were recorded")
         return False
@@ -300,7 +297,9 @@ def main():
     ap.add_argument("--dat", help="also write it decompressed, for a client")
     ap.add_argument("--no-tick", action="store_true",
                     help="apply orders only, do not run the engine")
-    ap.add_argument("--store", help="a TurnStore directory to run against")
+    ap.add_argument("--store",
+                    help="a turn store: a directory, or the base URL of a "
+                         "turn_server.py")
     ap.add_argument("--loop", action="store_true",
                     help="with --store, resolve turns as their deadlines pass")
     ap.add_argument("--once", action="store_true",
@@ -323,7 +322,7 @@ def main():
     a = ap.parse_args()
 
     if a.store:
-        store = TurnStore(a.store)
+        store = open_store(a.store)
         if a.start:
             if not a.authoritative:
                 raise SystemExit("--start needs a blob to publish")

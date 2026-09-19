@@ -47,7 +47,7 @@ sys.path.insert(0, os.path.join(HERE, "dev_tools"))
 
 import save_parser as sp
 import set_blob_player
-from turn_store import TurnStore
+from turn_store import TurnStore, open_store
 
 HOLD_SECONDS = 86400          # a day; long enough that no boundary arrives
 PLAYER_BUILD = "player"       # see game_cycle.resolve_exe for why
@@ -241,9 +241,9 @@ def main():
     elif a.cmd == "collect":
         print(collect(a.name, save_dir=a.save_dir))
     else:
-        store = TurnStore(a.store)
+        store = open_store(a.store)
         if not store.exists():
-            raise SystemExit(f"no galaxy in {a.store}")
+            raise SystemExit(f"no galaxy at {a.store}")
         follow(store, a.civ, poll=a.poll, rounds=a.rounds, exe=a.exe)
 
 
