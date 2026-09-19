@@ -619,34 +619,104 @@ made unnecessary.
 
 ## D. The galaxy
 
-- `[~]` **D1. Fog of war: a filtered blob LOADS but does not TICK.** Tested
-  September 2026 with `server/dev_tools/filter_blob.py`, which drops whole
-  uncolonised star systems (a `SOLA` subtree, self-contained, so no dangling
-  owner references) and corrects the two counts that matter, `SAVE`'s object
-  count and every enclosing section size.
+- `[~]` **D1. Fog of war: orders survive filtering; a real projection does not
+  load.** Two results, and they do not generalise to each other.
 
-  Three systems and 19 objects removed from a turn-2 two-civ galaxy, 37,851 bytes
-  down to 34,570:
+  **What works.** Three uncolonised systems removed from live galaxy1 at turn
+  15, served to a real client, orders given, captured and merged against the
+  **unfiltered** authoritative blob, with an unfiltered control run beside it:
 
-  | | result |
-  |---|---|
-  | blob re-parses | yes, 381 sections, full byte coverage |
-  | client loads it | **yes** , 2 civs, 149 planets, 29 suns, both homeworlds intact with correct rates |
-  | first turn boundary | **no** , diagnostic minidump (no exception stream, so a deliberate bail) and exit |
+  | | served | systems | objects |
+  |---|---|---|---|
+  | control | 39,520 | 32 | 209 |
+  | filtered | 36,239 | 29 | 190 |
 
-  So projection is not impossible, but removing galaxy content is not sufficient
-  on its own: something still refers to what was removed. The likely culprits are
-  the **per-civ reference tables**, `EXSY` (explored systems) and `KNPL` (known
-  planets, 36-byte records keyed by object id), which would still name systems
-  and planets that no longer exist. `EXSY`'s record layout is undecoded and is
-  already an open item in the reconstruction report; its leading `u32` read 63 for
-  a civ that had explored 105 systems, so it is not a plain count.
+  Both took **4 orders, dropped 0**, and produced **byte-identical** merged
+  results. The orders covered a ship order, two production queues and a research
+  topic, so it is four order types through the filtered path at once, not the
+  one-ship case. The captures came back at 29 systems and 190 objects, matching
+  what was served, which is what proves the client ran the smaller galaxy rather
+  than rebuilding what was removed; without that check the run prints the same
+  pass and means nothing.
+
+  **What does not work.** A projection built from what a civ has actually
+  entered does not load at all. `server/dev_tools/project_blob.py` keeps the
+  systems a civ owns plus those named in its `EXSY`; on machine A's three-civ
+  fixture that is 1 system for Alice and 3 for Carol, and every such blob makes
+  the client exit.
+
+  The boundary is **positional, not a count**:
+
+      drop 1 system, anywhere (1, 8, 14, 130)      LOADS
+      drop [180, 186] / [186, 193]                  LOADS
+      truncate systems >= 142, nine of them         LOADS
+      drop [1, 14] / [8, 14] / [124, 130]           fails
+      any projection keeping 1 or 3 systems         fails
+
+  Nine systems can go; two can fail. Hole size is not it either: the surviving
+  `[180, 186]` hole is 13 objects and the fatal `[124, 130]` hole is 11.
+
+  **The failure is a deliberate bail, not a crash.** The client exits with code
+  1 about four seconds in and writes a minidump with no exception stream. Every
+  thread is in a shutdown wait, so there is no faulting instruction to chase;
+  `client/dev_tools/dump_threads.py` reads thread contexts and stacks, and the
+  worker stacks do carry in-module return addresses, but a successful load
+  writes no dump so there is no control to diff against.
+
+  **Object ids tile the galaxy contiguously**, which is the structural fact this
+  turns on. Each system's id IS the first id of its block: system 1 owns 1..7,
+  system 8 owns 8..13, up to 193 owning 193..197, with civs and ships at
+  198..209. Deleting a `SOLA` in the middle punches a hole in that space;
+  deleting from the end truncates it. So **renumbering rather than deleting** ,
+  rebuilding the kept systems as a contiguous block from 1 and rewriting every
+  reference , would turn every projection into the case that already works.
+  That is a direction and **not** a conclusion; it has not been tried.
+
+  **Hypotheses killed, which is most of what this cost:**
+
+  - Not `EXSY`. Dropping 29 systems with the tables left untouched fails the
+    same way. `exsy.py` decodes and rewrites them anyway, verified by 21 of 21
+    tables round-tripping byte for byte across 7 blobs.
+  - Not `KNPL`. Its records are keyed by **civ** id, not planet id, despite the
+    name , galaxy1's only record is `[198, 198, 3, ...]`, DemoPlayer contacted
+    at turn 3. Dropping systems removes no civs, so it cannot dangle. Half the
+    suspected cause, cleared without launching anything.
+  - Not `SAVE+12`, which reads 32 in every blob before and after filtering and
+    changed nothing when set to the surviving system count.
+  - Not a ship in transit. `SHIP` sections are children of `GLXY`, not `SOLA`,
+    so dropping a system can never drop a ship; dropping the system a ship is
+    flying through loads fine. An orphaned orbit reference is survivable too ,
+    `[186, 193]` removes the planet both of Bob's ships orbit and still loads.
+  - Not the splice. Failing and loading blobs re-parse identically,
+    `OWNR 3, SOLA 30, SHIP 6, NEBU 1`, with no overlapping or out-of-parent
+    sections.
+
+  **One earlier round of these results was scored by a broken harness** and had
+  to be retracted: `game_cycle.launch` accepted a client only once it could see
+  more than ten suns, so any galaxy of ten or fewer systems was reported as "did
+  not become readable" whether or not it loaded. Fixed, with `min_suns` now a
+  parameter; the re-test with it at 1 confirmed the projections genuinely fail.
+  `launch` also waited out its full 180 seconds for a process that had already
+  exited, which is most of why this took a day.
+
+  **Two commit titles in the history assert things this entry withdraws.**
+  `ee61a17` says "does not load at scale" and `f15be27` says the boundary is
+  position rather than count; the first is wrong, since scale was never the
+  axis, and the second was measured with the eleven-sun harness still in place.
+  Titles cannot be corrected without a rewrite, so they are named here instead.
+  This entry is the record, not the log.
+
+  **Status: partially possible, mechanism not understood, general case blocked.**
+  A projection that hides arbitrary systems does not work today. One that hides
+  only the top of the id range works and hides 9 of 32 systems, which is poor
+  fog: what a player has explored has nothing to do with where their systems sit
+  in the id space.
 
   **This matters less than it first appeared.** Players' clients do not need to
-  tick, the referee does, and it gets the **full** unfiltered state. A client that
-  can only view and issue orders is all the design asks for, and the launcher
-  closes it at the boundary anyway (B1). Filtering also gives correct fog
-  behaviour for free: a player cannot order a ship to a system that is not in
+  tick, the referee does, and it gets the **full** unfiltered state. A client
+  that can only view and issue orders is all the design asks for, and the
+  launcher closes it at the boundary anyway (B1). Filtering also gives correct
+  fog behaviour for free: a player cannot order a ship to a system that is not in
   their blob, because it genuinely is not there.
 
   **So the open question narrows to: can orders be issued in a filtered galaxy?**
