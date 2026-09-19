@@ -594,7 +594,7 @@ made unnecessary.
 
 ## G. Operating it
 
-- `[ ]` **One machine, one game process, and no lock.** A machine that both
+- `[x]` **One machine, one game process, now with a lock.** A machine that both
   plays and referees has two things wanting the single client, and nothing
   arbitrates. `referee.tick` closes whatever is running before starting its
   own, and `wait_for_client_free` gives up after 180 seconds and ticks anyway,
@@ -603,9 +603,18 @@ made unnecessary.
   once a referee loop and an unrelated experiment were started against the same
   machine, and it was luck that the player loop had already exited.
 
-  A lock in the store, held by whoever holds the client, would settle it. On
-  separate machines the problem does not exist, which is why it survived this
-  long unnoticed.
+  `game_cycle.take_client_lock` settles it. `launch` claims the machine's one
+  game process naming what it is for, `close_client` releases it, and a second
+  tool is refused with the holder's pid and purpose rather than silently winning
+  the race. The referee passes `wait_for_lock=240`, because it can afford to
+  wait and a player mid-turn cannot afford for it not to; a player's serve
+  refuses at once. A holder that died leaves a stale lock, cleared by asking
+  whether the pid is alive rather than by a timeout, since a legitimate hold
+  lasts a whole turn.
+
+  It is advisory: nothing stops a tool calling `Popen` itself, and every path in
+  this project goes through `launch`. On separate machines the problem does not
+  exist, which is why it survived this long unnoticed.
 
 ## F. Off one machine
 

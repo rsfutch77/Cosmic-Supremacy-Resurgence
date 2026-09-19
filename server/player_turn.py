@@ -168,7 +168,7 @@ def serve(blob: bytes, civ: str, work_dir=None, hold=HOLD_SECONDS,
     with open(dat, "wb") as f:
         f.write(stamped)
     gc.close_client()
-    snap = gc.launch(dat, exe=exe)
+    snap = gc.launch(dat, exe=exe, purpose=f"serving {civ}")
     local = snap.local_civ()
     if local is None or local.civ_name != civ:
         raise SystemExit(f"served {civ} but the client came up as "
