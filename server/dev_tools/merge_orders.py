@@ -444,6 +444,34 @@ def progress_of(plpr):
     return struct.unpack_from('<I', plpr, PROGRESS_OFF)[0]
 
 
+def design_ids(blob):
+    """Every ship design object id in a blob."""
+    out = set()
+    for sec in sp.flatten(sp.parse_blob(blob)):
+        if sec.tag == b'DSGN':
+            out.add(struct.unpack_from('<I', blob, sec.payload)[0])
+    return out
+
+
+def prod_builds(prod):
+    """The design a queue entry names, or None if it names none.
+
+    A `PROD` payload ends with a nested section saying what is queued: `FCLT`
+    with an empty payload for a facility, `WLTH` for nothing, and `SHIP` with a
+    four-byte payload holding the **design's object id**. That id is the whole
+    of the problem this exists to catch.
+    """
+    if prod is None or len(prod) < 8 + 33:
+        return None
+    body = prod[8:]
+    if body[21:25] != b'SHIP':
+        return None
+    size = struct.unpack_from('<I', body, 25)[0] & sp.SIZE_MASK
+    if size < 4 or len(body) < 33:
+        return None
+    return struct.unpack_from('<I', body, 29)[0]
+
+
 def military_of(plpr):
     """(offset of the count, [records]) for a planet's stationed military.
 
@@ -752,6 +780,7 @@ def merge(blob, submissions, log=print):
     """submissions: [(civ_name, submitted_blob)]. Returns the merged blob."""
     served_ships = ship_index(blob)
     served_planets = planet_index(blob)
+    served_designs = design_ids(blob)
     names = {o['oid']: o['name'] for o in icv.owner_records(blob)}
     accepted = dropped = 0
 
@@ -822,6 +851,20 @@ def merge(blob, submissions, log=print):
                 elif prod is None or prod_served is None:
                     log(f"    planet {planet_oid}: production DROPPED, no PROD "
                         f"section on one side")
+                    dropped += 1
+                elif (prod_builds(prod) is not None
+                      and prod_builds(prod) not in served_designs):
+                    # A queue that names a design the served state does not
+                    # have is a dangling reference, and the engine refuses the
+                    # whole galaxy rather than the order: the client started,
+                    # read it, and exited in four seconds. Designs are not
+                    # carried by this whitelist, so a player who designs a ship
+                    # and queues it produces exactly this. Refusing the queue
+                    # keeps the galaxy loadable; carrying designs is the real
+                    # fix and is not measured yet.
+                    log(f"    planet {planet_oid}: production DROPPED, it "
+                        f"builds design {prod_builds(prod)}, which is not in "
+                        f"the state served. Ship designs are not carried yet")
                     dropped += 1
                 elif is_hurried(prod) and not is_hurried(prod_served):
                     # A hurry takes effect the moment it is clicked, so the
