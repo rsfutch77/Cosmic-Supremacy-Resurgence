@@ -34,6 +34,17 @@ Every write goes to a temporary file and is then renamed, so a reader never sees
 half a blob. That matters more than it looks: readers here are polling loops, and
 a torn read would look like a corrupt galaxy rather than a race.
 
+**That is true of the contents and not of the file's existence, and only on a
+local volume.** This paragraph originally claimed the rename made the store safe
+for concurrent readers, which is wrong over SMB: the redirector may implement
+replace-over-existing as delete then rename, so a reader on another machine sees
+the file briefly absent, or gets a sharing violation opening one that is pending
+delete. Measured, not reasoned about, by the second machine, whose player loop
+died on `state.json` at the moment this machine's referee republished it. There
+is no cross-machine atomic replace to reach for, so readers retry, and the
+retry has to catch `PermissionError` as well as `FileNotFoundError`, because on
+Windows the sharing violation is the *common* outcome of that race.
+
 The deadline is an absolute epoch time rather than a countdown, so a launcher
 that was closed and reopened, or a second machine whose clock differs a little,
 still agrees about when the turn is due. It is the referee's to move, and nobody
