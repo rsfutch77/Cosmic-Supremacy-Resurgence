@@ -639,8 +639,17 @@ class CSHandler(http.server.BaseHTTPRequestHandler):
 
 # ── Entry point ───────────────────────────────────────────────────────────────
 if __name__ == '__main__':
-    server = http.server.HTTPServer(('0.0.0.0', PORT), CSHandler)
-    log(f'Cosmic Supremacy stub server listening on port {PORT}')
+    # Loopback, not 0.0.0.0. The client only ever talks to 127.0.0.1, so binding
+    # every interface buys nothing and costs the player a Windows Firewall
+    # prompt the moment the launcher starts, asking them to allow "Python"
+    # through the network. A prompt nobody can answer correctly is worse than no
+    # prompt, and this one is not needed at all.
+    #
+    # CSHOST exists for the case where it genuinely is wanted, such as pointing
+    # a client on another machine at this server.
+    HOST = os.environ.get('CSHOST', '127.0.0.1')
+    server = http.server.HTTPServer((HOST, PORT), CSHandler)
+    log(f'Cosmic Supremacy stub server listening on {HOST}:{PORT}')
     log(f'All traffic logged to: {LOGFILE}')
     log(f'Start: double-click DemoGalaxy_local.csgalaxy (after starting patched EXE)')
     log('-' * 60)

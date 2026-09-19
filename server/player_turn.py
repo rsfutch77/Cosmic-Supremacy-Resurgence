@@ -133,7 +133,7 @@ def close():
 
 def follow(store: TurnStore, civ: str, poll: float = 5.0, rounds: int = 0,
            on_state=None, exe=PLAYER_BUILD, save_dir=None, stop=None,
-           log=print):
+           submit_every: float = 20.0, log=print):
     """Play one civ's turns as the store publishes them.
 
     One pass is: serve the current turn, wait until its deadline, take the
@@ -147,6 +147,20 @@ def follow(store: TurnStore, civ: str, poll: float = 5.0, rounds: int = 0,
     `stop()` is checked wherever this would otherwise sleep, so a UI can end the
     loop between turns without killing the thread mid-capture and losing the
     player's orders.
+
+    **A player's state is submitted throughout the turn, every `submit_every`
+    seconds, not once at the deadline.** Submitting once put the whole turn on a
+    single write landing in a narrow window, and the first time two machines
+    played, one player's orders were lost to exactly that: their submission
+    never reached the store, and the referee closed the turn reporting a missing
+    player, which reads as somebody who did not turn up rather than a write that
+    failed. Writing continuously means the worst case is losing the last few
+    seconds of thought rather than the whole turn, and the store already treats
+    a second submission as replacing the first, since the latest is the
+    player's intent.
+
+    A submission identical to the one already sent is skipped, so an idle turn
+    costs one write rather than one every interval.
     """
     def emit(kind, **facts):
         if on_state:
@@ -171,6 +185,30 @@ def follow(store: TurnStore, civ: str, poll: float = 5.0, rounds: int = 0,
         log(f"[{civ}] turn {turn}: serving")
         serve(blob, civ, hold=HOLD_SECONDS, exe=exe, log=log)
 
+        sent = None                     # the last blob this turn actually stored
+        last_try = 0.0
+
+        def push(final):
+            """Capture and store, returning what landed. Quiet unless it moves."""
+            nonlocal sent
+            capture = collect(f"{civ[:8]}t{turn}", save_dir=save_dir, log=log)
+            mine = sp.load_any(capture)
+            if mine == sent:
+                return True
+            store.submit(civ, turn, mine)
+            landed = store.submissions(turn).get(civ)
+            if landed != mine:
+                raise RuntimeError(
+                    f"submission for turn {turn} did not land in the store: "
+                    f"wrote {len(mine):,} bytes, read back "
+                    + (f"{len(landed):,}" if landed is not None else "nothing")
+                    + ". Can this machine WRITE to the store?")
+            sent = mine
+            log(f"[{civ}] turn {turn}: submitted {len(mine):,} bytes"
+                + (" (final)" if final else ""))
+            emit("submitted", turn=turn, civ=civ, final=final)
+            return True
+
         while not halted():
             left = store.seconds_left()
             cur, _d = store.current()
@@ -184,12 +222,19 @@ def follow(store: TurnStore, civ: str, poll: float = 5.0, rounds: int = 0,
             if left <= 0:
                 emit("collecting", turn=turn, civ=civ)
                 log(f"[{civ}] turn {turn}: time is up, collecting")
-                capture = collect(f"{civ[:8]}t{turn}", save_dir=save_dir,
-                                  log=log)
-                store.submit(civ, turn, sp.load_any(capture))
-                log(f"[{civ}] turn {turn}: submitted")
-                emit("submitted", turn=turn, civ=civ)
+                push(final=True)
                 break
+
+            if time.time() - last_try >= submit_every:
+                last_try = time.time()
+                try:
+                    push(final=False)
+                except Exception as exc:                    # noqa: BLE001
+                    # A failed interim write is worth saying and not worth
+                    # stopping for: the next one is seconds away, and the one at
+                    # the deadline still has to succeed or raise.
+                    log(f"[{civ}] turn {turn}: interim submit failed, {exc}")
+
             emit("playing", turn=turn, civ=civ, seconds_left=left)
             nap(min(poll, left))
 
@@ -234,6 +279,9 @@ def main():
                    help="stop after this many turns; 0 keeps going")
     f.add_argument("--poll", type=float, default=5.0)
     f.add_argument("--exe", default=PLAYER_BUILD)
+    f.add_argument("--submit-every", type=float, default=20.0,
+                   help="seconds between interim submissions during a turn, so "
+                        "a turn never rests on one write at the deadline")
 
     a = ap.parse_args()
     if a.cmd == "serve":
@@ -244,7 +292,8 @@ def main():
         store = open_store(a.store)
         if not store.exists():
             raise SystemExit(f"no galaxy at {a.store}")
-        follow(store, a.civ, poll=a.poll, rounds=a.rounds, exe=a.exe)
+        follow(store, a.civ, poll=a.poll, rounds=a.rounds, exe=a.exe,
+               submit_every=a.submit_every)
 
 
 if __name__ == "__main__":
