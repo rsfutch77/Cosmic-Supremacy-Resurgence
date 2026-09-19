@@ -444,11 +444,8 @@ long-running client shrinks by that much on its first tick and is stable after.
 `canonical.py` does not mask it, because masking a name field to forgive a
 default would also forgive a change to it.
 
-**This is not the name a player sees.** System and planet names are per player:
-each civ's `EXSY` table pairs an object id with that civ's own name for it, so
-two players sharing a system can call it different things and each keeps their
-own across loads. The `SUN ` field is the galaxy-level name and `Unnamed` is the
-default a running client writes into it.
+`Unnamed` is the default a running client writes into this field when the blob
+leaves it empty.
 
 ### `EXSY`, a civ's explored systems and what it calls them
 
@@ -461,10 +458,17 @@ default a running client writes into it.
          ...  further fields, undecoded
 
 A three-civ galaxy gave tables of 111, 159 and 266 bytes, one per civ, holding
-`Unnamed` for systems nobody has renamed and `BadGuy's HQ` for one that has
-been. The table therefore mixes exploration bookkeeping, which a referee can
-recompute, with names, which it cannot: a name is a decision and only the player
-who made it knows it.
+`Unnamed` for things nobody has renamed and `BadGuy's HQ` for one that has been.
+
+**These are cached, not authored.** One civ's table gained `Neighbor's HQ`
+purely from loading a turn, with that player having taken no action, so `EXSY`
+records what a civ has seen rather than what it has decided. A rename is
+authored on the object: `PLNT` own payload `+24` is a `u32` length then the
+characters, and renaming is gated in game on owning the majority of the planet,
+which makes a name authoritative galaxy data rather than a private label.
+
+Renaming a **system** is unmeasured: the attempt was refused for want of
+majority ownership, so the write was never observed.
 
 #### The trailing dword of every `KNPL` payload is unreliable
 

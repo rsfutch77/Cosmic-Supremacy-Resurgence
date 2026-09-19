@@ -160,12 +160,11 @@ see D1.
   Star names are deliberately **not** masked in `canonical.py`, because masking
   a name field to forgive a default would also forgive a change to it.
 
-  **The name in a `SUN ` section is not the one a player sees.** System names are
-  **per player**, held in each civ's `EXSY` table, so two players in one system
-  can call it different things and each keeps their own. The `SUN ` field is the
-  galaxy-level one, and `Unnamed` is what a running client puts there when the
-  blob leaves it empty. This entry first described it as though it were the
-  naming feature, which it is not.
+  `Unnamed` is what a running client puts in a `SUN ` section when the blob
+  leaves the name empty. Each civ's `EXSY` also holds names, which briefly
+  looked like evidence that naming is per player; it is not. `EXSY` is that
+  civ's cache of names it has seen, and renaming is gated in game on owning the
+  majority of a planet, so a name is authoritative rather than private.
 
 ## B. Client lifecycle, once per turn
 
@@ -455,17 +454,30 @@ made unnecessary.
   taken in the same session with nothing done between them were byte-identical,
   so this is not drift: it is bookkeeping the client does when it loads.
 
-  `[ ]` **But `EXSY` also carries the names a player gives things, and those are
-  decisions no referee can recompute.** Each civ's `EXSY` pairs an object id with
-  that civ's own name for it, defaulting to `Unnamed`; one civ's table in the
-  test galaxy holds `BadGuy's HQ`. Names are **per player**: two players in one
-  system each name it for themselves and each keeps their own name. Dropping
-  `EXSY` therefore discards every rename a player makes, which is a silent loss
-  of a real action rather than the harmless exclusion recorded here first.
+  **`EXSY` holds names, but it is a cache rather than a record of decisions.**
+  Each civ's `EXSY` pairs an object id with that civ's name for it, defaulting
+  to `Unnamed`, which briefly looked like per-player naming and is not. One
+  player's table gained `Neighbor's HQ` purely from loading a turn, with that
+  player having done nothing: it is what the civ has seen, and the referee
+  recomputes it. It stays excluded.
 
-  So `EXSY` is mixed in the same way `PLPR` is, decisions sitting alongside
-  derived state, and needs the same treatment: measure a rename, carry the name
-  fields, leave the exploration bookkeeping alone. Not yet measured.
+  **A rename is authored on the object.** `PLNT` own payload `+24` is a `u32`
+  length then the characters, measured by having a player rename a colony, which
+  changed that field and nothing else on the object. The game gates it, refusing
+  with "you need to own the majority of the planet to rename", so a name is
+  authoritative galaxy data, not a private label. Carried for planets the
+  submitter owns, with the name checked for length and for printable bytes.
+
+  | forged | refused with |
+  |---|---|
+  | rename another civ's planet | rename DROPPED, owned by Neighbor |
+  | control bytes in the name | name holds bytes outside printable ASCII |
+  | a 200-byte name | the name field is unreadable or longer than 63 bytes |
+
+  `[ ]` **Renaming a system is not measured.** The attempt was refused in game
+  for want of majority ownership, so the write was never seen. The galaxy-level
+  system name is the one in a `SUN ` section; whether renaming writes there, and
+  what else moves, is untested.
 
   Still unmeasured, and therefore not accepted: facility selection outside the
   queue, ship designs, governors, admirals, diplomacy proposals. Orders issued

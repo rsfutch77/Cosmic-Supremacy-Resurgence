@@ -86,6 +86,18 @@ since the per-citizen owner already says whose it is, but it has not been
 measured and letting one player write into another's `PLPR` deserves more care
 than a guess.
 
+**Planet renaming**, `PLNT` own payload `+24`: a `u32` length then the
+characters. Measured by having a player rename a colony, which changed that
+field and nothing else on the object. The game gates it, refusing with "you
+need to own the majority of the planet to rename", so a name is authoritative
+galaxy data rather than a private label, and it is carried for planets the
+submitter owns.
+
+`EXSY` is **not** where a rename is authored, though it holds names. Each civ's
+`EXSY` is that civ's cache of the names it has seen: one player's table gained
+`Neighbor's HQ` purely from loading a turn, with no action by that player. It
+is knowledge the referee recomputes, so it stays excluded.
+
 **Everything else**: facility selection outside the queue, ship designs,
 governors, admirals, diplomacy proposals. Not measured, so not accepted. An
 order type nobody has measured is not a gap in a list, it is a change of unknown
@@ -107,6 +119,10 @@ import inject_civ as icv
 
 # Fields inside a civ's OWPR that carry the research topic, as (offset, length).
 RESEARCH_FIELDS = ((32, 4), (40, 4))
+
+# A planet's name, in PLNT's own payload: a u32 length then the characters.
+PLANET_NAME_OFF = 24
+MAX_NAME = 63
 
 # The citizen array inside a planet's PLPR.
 POP_COUNT_OFF = 36
@@ -130,7 +146,7 @@ def ship_index(blob):
 
 
 def planet_index(blob):
-    """{planetObjectId: (owner, prod_bytes_or_None, plpr_payload_or_None)}."""
+    """{planetObjectId: (owner, prod, plpr_payload, (len, name))}."""
     tree = sp.parse_blob(blob)
     glxy = next(tree[0].find('GLXY'))
     out = {}
@@ -142,7 +158,8 @@ def planet_index(blob):
             prod = next(plpr.find('PROD'), None) if plpr else None
             out[oid] = (owner,
                         bytes(blob[prod.start:prod.end]) if prod else None,
-                        bytes(blob[plpr.payload:plpr.end]) if plpr else None)
+                        bytes(blob[plpr.payload:plpr.end]) if plpr else None,
+                        planet_name(blob, sec))
     return out
 
 
@@ -193,6 +210,42 @@ def jobs_acceptable(served, submitted, civ_oid):
     if others_a != others_b:
         return False, "another civ's citizens were reassigned"
     return True, ''
+
+
+def planet_name(blob, sec):
+    """(length, name_bytes) from a PLNT section, or None if unreadable."""
+    own = sp.own_bytes(blob, sec)
+    if len(own) < PLANET_NAME_OFF + 4:
+        return None
+    n = struct.unpack_from('<I', own, PLANET_NAME_OFF)[0]
+    if n > MAX_NAME or PLANET_NAME_OFF + 4 + n > len(own):
+        return None
+    return n, bytes(own[PLANET_NAME_OFF + 4:PLANET_NAME_OFF + 4 + n])
+
+
+def name_acceptable(name: bytes):
+    """(ok, reason) for a submitted planet name."""
+    if len(name) > MAX_NAME:
+        return False, f'name is {len(name)} bytes, over {MAX_NAME}'
+    if any(b < 0x20 or b > 0x7e for b in name):
+        return False, 'name holds bytes outside printable ASCII'
+    return True, ''
+
+
+def set_planet_name(blob, planet_oid, name: bytes):
+    """Write a planet's name. Its length may change, so sizes are corrected."""
+    tree = sp.parse_blob(blob)
+    glxy = next(tree[0].find('GLXY'))
+    for sola in (c for c in glxy.children if c.tag == b'SOLA'):
+        for sec in sola.find('PLNT'):
+            if struct.unpack_from('<I', blob, sec.payload)[0] != planet_oid:
+                continue
+            at = sec.payload + PLANET_NAME_OFF
+            old = struct.unpack_from('<I', blob, at)[0]
+            body = (bytes(blob[sec.payload:at]) + struct.pack('<I', len(name))
+                    + name + bytes(blob[at + 4 + old:sec.end]))
+            return sp.replace_payload(blob, tree, sec, body)
+    raise SystemExit(f'planet {planet_oid} not found')
 
 
 def research_of(blob, civ_oid):
@@ -338,13 +391,39 @@ def merge(blob, submissions, log=print):
             accepted += 1
 
         # production queues and job allocation
-        for planet_oid, (_claimed, prod, plpr) in sorted(
+        for planet_oid, (_claimed, prod, plpr, name) in sorted(
                 planet_index(sub).items()):
             if planet_oid not in served_planets:
                 log(f"    planet {planet_oid}: DROPPED, not in the state served")
                 dropped += 1
                 continue
-            owner, prod_served, plpr_served = served_planets[planet_oid]
+            owner, prod_served, plpr_served, name_served = \
+                served_planets[planet_oid]
+
+            if name is None and name_served is not None:
+                # planet_name refuses a length it cannot trust, so a submission
+                # with a corrupt or overlong name arrives as None. Say that,
+                # rather than letting the next rule report whatever it happens
+                # to notice about the same wreckage.
+                log(f"    planet {planet_oid}: rename DROPPED, the name field "
+                    f"is unreadable or longer than {MAX_NAME} bytes")
+                dropped += 1
+            elif name is not None and name_served is not None and name != name_served:
+                if owner != mine:
+                    log(f"    planet {planet_oid}: rename DROPPED, owned by "
+                        f"{names.get(owner, owner)}")
+                    dropped += 1
+                else:
+                    ok, why = name_acceptable(name[1])
+                    if not ok:
+                        log(f"    planet {planet_oid}: rename DROPPED, {why}")
+                        dropped += 1
+                    else:
+                        blob = set_planet_name(blob, planet_oid, name[1])
+                        log(f"    planet {planet_oid}: renamed "
+                            f"{name_served[1].decode('latin1')!r} -> "
+                            f"{name[1].decode('latin1')!r}")
+                        accepted += 1
 
             if prod != prod_served:
                 if owner != mine:
@@ -422,12 +501,13 @@ def main():
             print(f"  ship   {oid:<5} owner {names.get(owner, owner):<14} "
                   f"DYNO {len(dyno)} bytes "
                   f"{'(under orders)' if len(dyno) > 38 else '(idle)'}")
-        for oid, (owner, prod, plpr) in sorted(planet_index(blob).items()):
+        for oid, (owner, prod, plpr, nm) in sorted(planet_index(blob).items()):
             if not owner:
                 continue
             cz = citizens_of(plpr) if plpr else None
+            label = nm[1].decode('latin1') if nm and nm[0] else '(unnamed)'
             print(f"  planet {oid:<5} owner {names.get(owner, owner):<14} "
-                  f"PROD {len(prod) if prod else 'none'} bytes, "
+                  f"{label!r:<20} PROD {len(prod) if prod else 'none'} bytes, "
                   f"{_tally([c[0] for c in cz]) if cz else 'no population'}")
         for o in icv.owner_records(blob):
             r = research_of(blob, o['oid'])
