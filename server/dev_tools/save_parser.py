@@ -121,10 +121,18 @@ def read_header(blob: bytes, off: int):
 # A container's payload does not necessarily start with its first child: SAVE
 # opens with a uint32 object count, and other sections carry their own fields
 # ahead of any sub-sections.  Rather than hardcode every prologue, the walker
-# searches a short window for the offset where a contiguous run of sections
-# begins.  PROLOGUE_WINDOW bounds that search; anything skipped is recorded on
-# the parent as `prologue`/`epilogue` so it is visibly unparsed rather than lost.
-PROLOGUE_WINDOW = 256
+# searches for the offset where a contiguous run of sections begins; anything
+# skipped is recorded on the parent as `prologue`/`epilogue` so it is visibly
+# unparsed rather than lost.
+#
+# That search covers the whole payload.  It used to stop after 256 bytes, which
+# is fine for every prologue in a young galaxy (`PLNT` +34, `PLPR` +53, `SOLA`
+# +16) and wrong for a developed planet: a `PLPR` carrying nine citizens runs
+# 316 bytes of its own fields before `PROD`, so the production queue and `ENLI`
+# were invisible on exactly the planets a player has been building up.  A
+# production order on such a planet parsed as no order at all.  The cost of
+# dropping the bound is 2.5x more candidate offsets tested, each of them one
+# header read that fails immediately on an unknown tag.
 
 # How far past the end of one run to keep looking for the next. A payload that
 # interleaves sections with its own fields separates them by a few words, not by
@@ -149,6 +157,24 @@ def _scan_run(blob: bytes, off: int, end: int):
         out.append(Section(tag, version, off, off + 8, size))
         off += 8 + size
     return out
+
+
+def _tag_offsets(blob: bytes, start: int, end: int):
+    """Offsets in blob[start:end] that spell a known tag, in order.
+
+    A run can only begin where a header does, so these are the only candidate
+    starts worth chaining from. Finding them with a search per tag keeps the
+    unbounded prologue search cheap: the alternative, one header read per byte,
+    costs four times the parse.
+    """
+    hits = []
+    for tag in KNOWN_TAGS:
+        at = blob.find(tag, start, end)
+        while at >= 0:
+            hits.append(at)
+            at = blob.find(tag, at + 1, end)
+    hits.sort()
+    return hits
 
 
 def _chain(blob: bytes, first: int, end: int):
@@ -203,8 +229,7 @@ def _all_runs(blob: bytes, start: int, end: int):
     if span < 8:
         return []
     best, best_cov = [], 0
-    limit = min(start + PROLOGUE_WINDOW, end - 7)
-    for off in range(start, limit):
+    for off in _tag_offsets(blob, start, end - 7):
         runs = _chain(blob, off, end)
         if not runs:
             continue

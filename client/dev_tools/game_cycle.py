@@ -54,7 +54,26 @@ def client_pids():
     return [int(x) for x in out.split() if x.strip().isdigit()]
 
 
-def close_client(timeout=20):
+def close_client(timeout=20, force=False):
+    """Stop the machine's client. Refuses to kill one somebody else holds.
+
+    The lock did not protect anything on its own, because every caller closed
+    the running client and only then launched, and `launch` is where the lock
+    is taken. The loser of a race was force-killed rather than refused, which
+    is the exact outcome the lock exists to prevent, and in the case that
+    matters that is a player mid-turn. Checking here covers every caller,
+    including the dev tools that will never be revisited.
+
+    `force` is for the caller that knows the holder is gone in a way `_pid_alive`
+    cannot see, and should be rare enough to be conspicuous.
+    """
+    held = lock_holder()
+    if (held and not force and held[0] != os.getpid()
+            and _pid_alive(held[0]) and client_pids()):
+        raise SystemExit(
+            f"the client is held by pid {held[0]} ({held[1]}). Closing it now "
+            f"would destroy whatever that is doing, which if it is a player's "
+            f"turn leaves no trace. Wait for it, or stop that process.")
     # Releasing here rather than only on the happy path: close_client is what
     # every caller runs when it is finished with the client, including the
     # finally blocks, so this is where the lock actually stops being needed.
@@ -193,6 +212,24 @@ def resolve_exe(which=None):
                      f"{sorted(BUILDS)}, or a path to an exe")
 
 
+def restart(dat, purpose, wait_for_lock=0.0, timeout=180, exe=None):
+    """Take the client, close whatever is on it, and launch on `dat`.
+
+    The order is the point. Taking the lock first means a caller that cannot
+    have the client is refused before it kills anybody's session; closing first
+    and locking second, which is what serve and tick used to do, hands the
+    client to whoever moves second.
+    """
+    take_client_lock(purpose, wait=wait_for_lock)
+    try:
+        close_client()
+        return launch(dat, timeout=timeout, exe=exe, purpose=purpose,
+                      wait_for_lock=wait_for_lock)
+    except BaseException:
+        release_client_lock()
+        raise
+
+
 def launch(dat, timeout=180, exe=None, purpose=None, wait_for_lock=0.0):
     """Start the client on a .dat and wait until its state is readable.
 
@@ -250,13 +287,47 @@ def launch(dat, timeout=180, exe=None, purpose=None, wait_for_lock=0.0):
 
 
 # ── the pieces ────────────────────────────────────────────────────────────────
+def trigger_save(name, gameid=0, timeout=30):
+    """Make the running client save. Returns (exit code, the tool's output).
+
+    In process rather than `sys.executable trigger_save.py`. In the frozen
+    launcher sys.executable is the launcher itself, so that command line starts
+    a second launcher and hands it a script path it has no use for, and the
+    save never happens. trigger_save does its work in a remote thread inside
+    the game client, so the only thing a separate process ever contributed was
+    an argument parser.
+
+    trigger_save.main() reads its arguments from sys.argv, so sys.argv is what
+    it is given. The machine's one client is held by whoever is calling this,
+    which is what keeps two of these from overlapping.
+    """
+    import contextlib
+    import io
+    import trigger_save as ts
+
+    out = io.StringIO()
+    argv = sys.argv
+    sys.argv = ["trigger_save.py", "--name", name[:15],
+                "--gameid", str(gameid), "--timeout", str(timeout)]
+    try:
+        with contextlib.redirect_stdout(out):
+            rc = ts.main()
+    except SystemExit as exc:
+        # trigger_save reports a missing client or a refused handle by exiting
+        # with a message. It is kept as output so the caller logs the reason.
+        rc = exc.code if isinstance(exc.code, int) else 1
+        if exc.code and not isinstance(exc.code, int):
+            print(exc.code, file=out)
+    finally:
+        sys.argv = argv
+    return rc, out.getvalue()
+
+
 def capture_save(name="cycle"):
     before = set(os.listdir(SAVES)) if os.path.isdir(SAVES) else set()
-    r = subprocess.run([sys.executable, os.path.join(HERE, "trigger_save.py"),
-                        "--name", name[:15]],
-                       capture_output=True, text=True, cwd=HERE)
-    if "saved" not in r.stdout:
-        log(r.stdout + r.stderr)
+    rc, out = trigger_save(name)
+    if rc != 0:
+        log(out)
         raise SystemExit("SaveGame did not report success")
     new = [f for f in os.listdir(SAVES) if f.endswith(".b64") and f not in before]
     if not new:

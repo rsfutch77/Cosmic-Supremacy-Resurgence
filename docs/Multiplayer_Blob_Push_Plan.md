@@ -228,10 +228,52 @@ see D1.
     and the launcher decided the whole install was broken. `is_playable` now
     recognises a `"session"` mode.
 
-  [ ] **Not packaged.** The launcher's multiplayer path imports from the
-  checkout, so it runs only from a clone. Shipping it means bundling
-  `save_parser`, `set_blob_player`, `turn_store` and the serve and collect logic
-  into the frozen build, which is a `build.ps1` change.
+  [x] **Packaged.** Measured on 19 September 2026 against a throwaway copy of
+  `server/galaxy_demo`: the built launcher, run from a copy of `dist\` outside
+  the checkout, showed the Multiplayer card as playable, read its own
+  `multiplayer.json`, opened the store, stamped turn 11 for `DemoPlayer`,
+  started `CosmicSupremacy_Player.exe` out of its own `game\`, held the clock,
+  and submitted 39,161 bytes seven seconds after the click.
+
+      01:38:43  serving turn 11, local player 202 (BadGuy) -> 198 (DemoPlayer)
+      01:38:50  client up, clock held, captured, submitted
+      01:40:56  time is up, captured, unchanged, so nothing rewritten
+      01:40:58  waiting for the referee to publish past turn 11
+
+  What ships that did not before:
+
+  - Four `--paths` directories and fourteen `--hidden-import`s in `build.ps1`.
+    Every module in the turn path is imported inside a function, so nothing
+    else in the repo notices one going missing.
+  - A multiplayer client in `game\`. A `session` mode names no EXE, so the loop
+    that copies clients never reached it, and every release so far shipped a
+    playable card with no client for it to start. `CosmicSupremacy_Player.exe`
+    when the checkout has built one, otherwise `CosmicSupremacy_TestBed.exe`,
+    which is the fallback `resolve_exe` already makes and one prompt worse.
+
+  Two things that were not flags:
+
+  - **A frozen build must not re-run `sys.executable`.** It is the launcher and
+    not an interpreter, so `player_turn.collect` and `game_cycle.capture_save`
+    starting `trigger_save.py` as a subprocess started a second launcher and
+    took no save. `game_cycle.trigger_save` calls it in process instead. The
+    work is a remote thread inside the game client, so the subprocess only ever
+    supplied an argument parser.
+  - **Every module works out where it is from `__file__`.** Frozen, that is the
+    temporary directory PyInstaller unpacks into: no client executables in it,
+    and deleted when the launcher exits. `bind_multiplayer_paths` repoints
+    `game_cycle` at the game folder and `player_turn` at the data directory.
+
+  `release/tests/test_packaging.py` holds the line. It reads the flags out of
+  `build.ps1` rather than restating them, so a misspelled hidden import fails a
+  test instead of building cleanly and going missing at the first turn.
+
+  [~] **The referee is not packaged, and is not meant to be.** `referee.py:99`
+  still starts `advance_turns.py` with `sys.executable`, which is correct where
+  it runs. The referee runs from a checkout, where that is a real interpreter;
+  the release freezes `release/launcher.py`, which reaches `player_turn` and
+  `game_cycle` and never reaches `referee`. Computing turns stays a checkout
+  job.
 - [x] **B2. Stop the player's client ticking on its own.** Confirmed live: a
   player's client sat on a served turn for six minutes, never advanced, never
   bailed, and the launcher showed the real countdown beside it. Two things get
@@ -310,12 +352,25 @@ see D1.
   A `coaid` answer was also tried and is **not** the gate: the client fetched
   `getcoa&coaid=1` happily and offered the prompt anyway, so `cs_server.py` is
   unchanged.
-  [ ] **Build the one-time civilisation setup step the prompt exists for.** In
+  [~] **Build the one-time civilisation setup step the prompt exists for.** In
   the original a player chose a name and coat of arms once and the blob carried
   it forever, which is why the field was non-zero and the prompt never returned.
   Our galaxies are generated locally and skip that flow entirely. The patch
   stands in for it; the launcher or the site should eventually offer it, and then
-  `Owner:384` would be set by the engine rather than guessed at.
+  `Owner:384` would be set by the engine rather than guessed at. deferred for a later phase, for now we should just set the player name as their user id and ignore the coat of arms image until we come back to this feature. 
+
+  **The name half of that exists now, in the launcher.** `release/launcher.py`
+  keeps one name per player in `identity.json` in the data directory, asks for
+  it in a dialog the first time a player opens a multiplayer galaxy, and uses it
+  as the civ it follows and submits under. A player's user id and their
+  civilisation name are therefore the same string, which is what this bullet
+  asked for. The coat of arms is still untouched and `Owner:384` is still the
+  patch's business, not the launcher's.
+
+  What the launcher does **not** do is write the name into the blob. The name a
+  player enters has to match a seat the galaxy was generated with, and the
+  launcher checks it against `TurnStore.civs()` before it starts anything.
+  Renaming a seat from the client is the part still waiting on this feature.
 - [x] **B5. Tell a client which civ it plays.** Two clients sharing a galaxy
   have to control different civs, and **`GLOB` carries the answer**: one `u32`
   holding the object id of the civ the loading client will play.
@@ -518,9 +573,9 @@ made unnecessary.
   back to intent, which the referee then performs itself so it applies the cost.
   **Done when:** each action is either mapped or explicitly refused, with a list
   of which.
-- [ ] **C4. Legality gate.** Encode the rule the UI enforces rather than
+- [~] **C4. Legality gate.** Encode the rule the UI enforces rather than
   inferring legality from an observed state.
-  **Done when:** the gate cites a rule for every accepted order type.
+  **Done when:** the gate cites a rule for every accepted order type. defferred for a later cheat prevention phase. 
 - [x] **C5. Get a player's state back without their help.** `SaveGame` at
   `0x0048B350` has exactly one caller, the Save/Load dialog, so the client never
   uploads on its own. `client/dev_tools/trigger_save.py` calls it in a remote
@@ -725,12 +780,32 @@ made unnecessary.
   and `HttpTurnStore` keeps working, or replaces `HttpTurnStore` and the service
   is no longer needed. Nothing above the store changes either way.
 
-  [ ] **There is no authentication.** Anyone who can reach the port can
+  [~] **There is no authentication.** Anyone who can reach the port can
   publish a turn or submit as any civ. Deliberate for a closed beta among people
   who know each other, and the first thing that has to change before a galaxy is
   open to strangers. The ownership rules in `merge_orders.py` still hold, so the
   worst a stranger can do through this door is submit nonsense as someone else,
-  not acquire their ships.
+  not acquire their ships. we don't need auth in the client just yet, but we will at least need people to identify themselves by a username within the launcher. it could be something very simply. no password. no hashing. eventually we'll have a google login in the launcher or login on the website.
+
+  **The username half exists now.** The launcher asks for a name once, keeps it
+  in `identity.json` beside its other per-player state, and shows it as "Playing
+  as" with a link to change it. There is still no password, no hashing and no
+  account: the name is a claim, not a credential, and anyone who can reach the
+  store can still submit as anyone. What it buys is that a player types their
+  name in one place instead of hand-writing `civ` into `multiplayer.json`, and
+  that a name which is not in the galaxy's roster is refused before anything
+  starts rather than submitting into a void.
+
+  **The refusal does not name the other players.** A launcher pointed at a store
+  can read the whole roster, and printing it would make "does this galaxy have a
+  seat for me" into a way for anyone who can reach a galaxy to list who is in
+  it, which is the same open door this bullet is about. The player is told how
+  many seats there are and nothing else. The one name the message will echo is
+  the one they just typed, spelled the way the galaxy spells it, for the case
+  where the only difference is capitalisation.
+
+  A Google login in the launcher or on the website replaces where the name comes
+  from and nothing else: everything above `player_name()` already takes a string.
 - [x] **F2. Two machines.** Done, 18 September 2026. Two PCs played one
   galaxy over a shared folder, each with its own client, its own `cs_server`
   and its own launcher config, sharing only the store. Turn 12 closed with both
@@ -772,7 +847,7 @@ made unnecessary.
   **This is the shape of bug F2 will keep finding.** Nothing about the store
   seam is wrong; the callers above it were written when a store was always a
   folder, and each one has to be looked at rather than assumed.
-- [ ] **F4. A Firebase adapter**, replacing either side of the seam.
+- [~] **F4. A Firebase adapter**, replacing either side of the seam. deffered until we prove it works using my own PC as the server with some real beta players. 
 
 ## E. Not applicable on this path
 
