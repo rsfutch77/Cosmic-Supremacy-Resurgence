@@ -506,24 +506,30 @@ def player_name(data_dir: str):
 def roster_problem(name: str, civs):
     """Why this name cannot play this galaxy, or None. Written for the player.
 
-    The launcher can see the roster, so the answer to a name that does not match
-    is the list of names that do, rather than a turn quietly submitted into a
-    void. A seat that differs only in case is called out on its own, because
-    that is the mistake a player makes when they were told their name out loud.
+    The other players' names are not in the answer. A launcher pointed at a
+    store can read the whole roster, so printing it would let anyone who can
+    reach a galaxy list who is in it, and someone who has mistyped their own
+    name has no need to know that. What they get instead is how many seats the
+    galaxy has, which says whether they are at the wrong galaxy or merely
+    spelling their own name differently, and names nobody.
+
+    A seat that differs only in case is the exception, because the name it
+    echoes back is the one the player just typed. It reveals nobody new, and it
+    is the mistake a player makes when they were told their name out loud.
     """
     seats = list(civs)
     if name in seats:
         return None
-    listed = "\n".join("    " + str(c) for c in seats) or "    (nobody)"
     near = next((c for c in seats if str(c).lower() == name.lower()), None)
     if near is not None:
         return (f"This galaxy spells your seat {near!r} and you are calling "
                 f"yourself {name!r}.\n\nNames are matched exactly, so orders "
-                f"sent as {name!r} would be ignored.\n\nThe seats in this "
-                f"galaxy are:\n\n{listed}")
-    return (f"This galaxy has no seat for {name!r}.\n\nThe seats in this "
-            f"galaxy are:\n\n{listed}\n\nUse the name you were given, or "
-            "ask whoever made the galaxy to add one for you.")
+                f"sent as {name!r} would be ignored.")
+    count = ("no seats at all" if not seats else
+             "one seat" if len(seats) == 1 else f"{len(seats)} seats")
+    return (f"This galaxy has no seat for {name!r}.\n\nIt has {count}, and "
+            "names are matched exactly. Check the spelling of the name you "
+            "were given, or ask whoever made the galaxy to add a seat for you.")
 
 
 # ── Multiplayer ───────────────────────────────────────────────────────────────
@@ -1125,9 +1131,10 @@ class Launcher:
             return
 
         # The roster is the galaxy's list of seats, and the referee matches
-        # submissions to it by exact name and discards anything else. The
-        # launcher can read it, so a name that does not match is answered here
-        # with the names that do, rather than as a turn played and thrown away.
+        # submissions to it by exact name and discards anything else. Checking
+        # here turns a turn played and thrown away into a message before
+        # anything starts. The other players' names stay in the store: see
+        # roster_problem.
         try:
             seats = store.civs()
         except (OSError, ValueError, KeyError) as exc:
@@ -1136,7 +1143,10 @@ class Launcher:
         if seats is not None:
             problem = roster_problem(civ, seats)
             if problem:
-                self.say(f"multiplayer: {civ!r} is not in the roster {seats}")
+                # The count, not the names. launcher.log is a file the player
+                # can open, so it is one more place the roster would leak from.
+                self.say(f"multiplayer: {civ!r} is not one of this galaxy's "
+                         f"{len(seats)} seat(s)")
                 from tkinter import messagebox
                 if messagebox.askyesno(
                         self.cfg["product"],

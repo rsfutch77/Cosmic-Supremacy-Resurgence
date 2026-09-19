@@ -124,22 +124,32 @@ check("still refused without a store", L.multiplayer_config(no_store), None)
 check("and refused when there is no file", L.multiplayer_config(fresh_dir()),
       None)
 
-print("\n8. a name that is not in the roster is told which seats exist")
+print("\n8. a name that is not in the roster is refused without naming anyone")
 seats = ["Alice", "Bob", "Carol"]
 check("a seat that exists is no problem", L.roster_problem("Alice", seats), None)
 
 missing = L.roster_problem("Dave", seats)
 check("a stranger is refused", bool(missing), True)
 for seat in seats:
-    check(f"names the seat {seat!r}", seat in missing, True)
-check("and says which name was used", "'Dave'" in missing, True)
+    check(f"does not name the seat {seat!r}", seat in missing, False)
+check("says which name was used", "'Dave'" in missing, True)
+check("and how many seats there are", "3 seats" in missing, True)
 
+check("one seat reads as one seat",
+      "one seat" in L.roster_problem("Dave", ["Alice"]), True)
+
+# The only name it will echo is the one the player just typed, spelled the way
+# the galaxy spells it. That discloses nobody new and is the mistake a player
+# makes when they were told their name out loud.
 wrong_case = L.roster_problem("alice", seats)
 check("a case mismatch is called out on its own",
       "spells your seat 'Alice'" in wrong_case, True)
+for seat in ("Bob", "Carol"):
+    check(f"and still does not name {seat!r}", seat in wrong_case, False)
 
 empty = L.roster_problem("Alice", [])
 check("an empty roster still answers", bool(empty), True)
+check("and says so without listing nobody", "no seats at all" in empty, True)
 
 print("\n9. the roster comes out of a real store")
 root = fresh_dir()

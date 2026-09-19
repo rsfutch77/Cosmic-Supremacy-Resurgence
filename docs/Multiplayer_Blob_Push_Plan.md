@@ -369,9 +369,8 @@ see D1.
 
   What the launcher does **not** do is write the name into the blob. The name a
   player enters has to match a seat the galaxy was generated with, and the
-  launcher checks it against `TurnStore.civs()` and names the seats that exist
-  when it does not. Renaming a seat from the client is the part still waiting on
-  this feature.
+  launcher checks it against `TurnStore.civs()` before it starts anything.
+  Renaming a seat from the client is the part still waiting on this feature.
 - [x] **B5. Tell a client which civ it plays.** Two clients sharing a galaxy
   have to control different civs, and **`GLOB` carries the answer**: one `u32`
   holding the object id of the civ the loading client will play.
@@ -794,8 +793,16 @@ made unnecessary.
   account: the name is a claim, not a credential, and anyone who can reach the
   store can still submit as anyone. What it buys is that a player types their
   name in one place instead of hand-writing `civ` into `multiplayer.json`, and
-  that a name which is not in the galaxy's roster is refused with the list of
-  seats that are, rather than submitting into a void.
+  that a name which is not in the galaxy's roster is refused before anything
+  starts rather than submitting into a void.
+
+  **The refusal does not name the other players.** A launcher pointed at a store
+  can read the whole roster, and printing it would make "does this galaxy have a
+  seat for me" into a way for anyone who can reach a galaxy to list who is in
+  it, which is the same open door this bullet is about. The player is told how
+  many seats there are and nothing else. The one name the message will echo is
+  the one they just typed, spelled the way the galaxy spells it, for the case
+  where the only difference is capitalisation.
 
   A Google login in the launcher or on the website replaces where the name comes
   from and nothing else: everything above `player_name()` already takes a string.
