@@ -767,7 +767,9 @@ class Launcher:
             return
         player_turn, turn_store = mods
 
-        store = turn_store.TurnStore(cfg["store"])
+        # open_store, not TurnStore: the config may hold a directory or
+        # a base URL, and the caller is not meant to know which.
+        store = turn_store.open_store(cfg["store"])
         if not store.exists():
             self.warn(f"No galaxy in\n{cfg['store']}\n\nThe referee has to "
                       "publish a first turn before anyone can play it.")
