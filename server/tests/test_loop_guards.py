@@ -51,14 +51,19 @@ def fresh_store(turn=12):
 
 
 # ── guard 2: push refuses to clobber a stranger's order-carrying submission ──
-def run_push(store, turn, civ, capture, sent, orders):
-    """The body of follow's push, with the guard under test."""
+def run_push(store, turn, civ, capture, sent, orders, existing_orders=True):
+    """The body of follow's push, with the guard under test.
+
+    `existing_orders` says whether the submission already in the store carries
+    orders, which is what separates a refusal worth shouting about from a
+    no-op: replacing one empty submission with another is not a save.
+    """
     submitted = []
     if capture == sent:
         return 'unchanged', submitted
     existing = store.submissions(turn).get(civ)
     if existing is not None and existing != sent and not orders:
-        return 'refused', submitted
+        return ('refused' if existing_orders else 'left alone'), submitted
     store.submit(civ, turn, capture)
     submitted.append(capture)
     return 'submitted', submitted
@@ -100,6 +105,16 @@ def test_push_guard():
     verdict, _ = run_push(s, 12, 'Neighbor', ORDER, sent=None, orders=True)
     check('a capture WITH orders replaces a stranger submission',
           verdict, 'submitted')
+
+    # Empty over empty. The store is unchanged either way, so this must not be
+    # reported as a refusal , it fired on the first live turn after the guard
+    # went in, and a warning that cries wolf on a no-op stops being read.
+    s = fresh_store()
+    s.submit('Neighbor', 12, EMPTY)
+    verdict, _ = run_push(s, 12, 'Neighbor', EMPTY + b'x', sent=None,
+                          orders=False, existing_orders=False)
+    check('an empty capture over an EMPTY submission is a quiet no-op',
+          verdict, 'left alone')
 
 
 # ── guard 1: follow does not re-serve an already-submitted turn ──────────────
