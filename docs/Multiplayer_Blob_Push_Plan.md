@@ -610,6 +610,19 @@ made unnecessary.
   idle and their research stops. That is survivable for a turn or two and is a
   slow death over a week, which is exactly what governors existed to prevent.
 
+  **The design settles what an unplayed civ should get, and it is nothing.** In
+  multiplayer no civ receives orders unless a human sent them, whether that civ
+  is an absent player or a leftover `BadGuy`. Single player is the opposite and
+  already built: `BadGuy` there is driven by the external order generator in
+  `client/dev_tools/ai_player/`, which is published and does not depend on the
+  engine deciding anything.
+
+  **That reframes the open question rather than closing it.** If the engine
+  issues nothing for an unplayed civ, the design holds for free. If it does
+  issue orders, then an absent player's empire is acting on decisions nobody
+  authorised, which is a fault to suppress rather than a feature to keep. So
+  the answer still matters; what changed is which answer is the bad one.
+
   `[ ]` **Unreconciled.** The agent on the second machine reports the opposite
   from a different galaxy, that an unplayed civ issues new `ROUT`s and rewrites
   production. Both observations are real and only one can be general. In this
