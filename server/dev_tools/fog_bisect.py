@@ -72,7 +72,7 @@ def loads(blob, civ, timeout=45):
     gc.close_client()
     try:
         snap = gc.launch(dat, timeout=timeout, exe='player',
-                         purpose='fog bisect')
+                         purpose='fog bisect', min_suns=1)
         ok = snap.local_civ() is not None
     except SystemExit:
         ok = False
