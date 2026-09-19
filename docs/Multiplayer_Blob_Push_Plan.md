@@ -310,12 +310,26 @@ see D1.
   A `coaid` answer was also tried and is **not** the gate: the client fetched
   `getcoa&coaid=1` happily and offered the prompt anyway, so `cs_server.py` is
   unchanged.
-  [ ] **Build the one-time civilisation setup step the prompt exists for.** In
+  [~] **Build the one-time civilisation setup step the prompt exists for.** In
   the original a player chose a name and coat of arms once and the blob carried
   it forever, which is why the field was non-zero and the prompt never returned.
   Our galaxies are generated locally and skip that flow entirely. The patch
   stands in for it; the launcher or the site should eventually offer it, and then
-  `Owner:384` would be set by the engine rather than guessed at.
+  `Owner:384` would be set by the engine rather than guessed at. deferred for a later phase, for now we should just set the player name as their user id and ignore the coat of arms image until we come back to this feature. 
+
+  **The name half of that exists now, in the launcher.** `release/launcher.py`
+  keeps one name per player in `identity.json` in the data directory, asks for
+  it in a dialog the first time a player opens a multiplayer galaxy, and uses it
+  as the civ it follows and submits under. A player's user id and their
+  civilisation name are therefore the same string, which is what this bullet
+  asked for. The coat of arms is still untouched and `Owner:384` is still the
+  patch's business, not the launcher's.
+
+  What the launcher does **not** do is write the name into the blob. The name a
+  player enters has to match a seat the galaxy was generated with, and the
+  launcher checks it against `TurnStore.civs()` and names the seats that exist
+  when it does not. Renaming a seat from the client is the part still waiting on
+  this feature.
 - [x] **B5. Tell a client which civ it plays.** Two clients sharing a galaxy
   have to control different civs, and **`GLOB` carries the answer**: one `u32`
   holding the object id of the civ the loading client will play.
@@ -518,9 +532,9 @@ made unnecessary.
   back to intent, which the referee then performs itself so it applies the cost.
   **Done when:** each action is either mapped or explicitly refused, with a list
   of which.
-- [ ] **C4. Legality gate.** Encode the rule the UI enforces rather than
+- [~] **C4. Legality gate.** Encode the rule the UI enforces rather than
   inferring legality from an observed state.
-  **Done when:** the gate cites a rule for every accepted order type.
+  **Done when:** the gate cites a rule for every accepted order type. defferred for a later cheat prevention phase. 
 - [x] **C5. Get a player's state back without their help.** `SaveGame` at
   `0x0048B350` has exactly one caller, the Save/Load dialog, so the client never
   uploads on its own. `client/dev_tools/trigger_save.py` calls it in a remote
@@ -725,12 +739,24 @@ made unnecessary.
   and `HttpTurnStore` keeps working, or replaces `HttpTurnStore` and the service
   is no longer needed. Nothing above the store changes either way.
 
-  [ ] **There is no authentication.** Anyone who can reach the port can
+  [~] **There is no authentication.** Anyone who can reach the port can
   publish a turn or submit as any civ. Deliberate for a closed beta among people
   who know each other, and the first thing that has to change before a galaxy is
   open to strangers. The ownership rules in `merge_orders.py` still hold, so the
   worst a stranger can do through this door is submit nonsense as someone else,
-  not acquire their ships.
+  not acquire their ships. we don't need auth in the client just yet, but we will at least need people to identify themselves by a username within the launcher. it could be something very simply. no password. no hashing. eventually we'll have a google login in the launcher or login on the website.
+
+  **The username half exists now.** The launcher asks for a name once, keeps it
+  in `identity.json` beside its other per-player state, and shows it as "Playing
+  as" with a link to change it. There is still no password, no hashing and no
+  account: the name is a claim, not a credential, and anyone who can reach the
+  store can still submit as anyone. What it buys is that a player types their
+  name in one place instead of hand-writing `civ` into `multiplayer.json`, and
+  that a name which is not in the galaxy's roster is refused with the list of
+  seats that are, rather than submitting into a void.
+
+  A Google login in the launcher or on the website replaces where the name comes
+  from and nothing else: everything above `player_name()` already takes a string.
 - [x] **F2. Two machines.** Done, 18 September 2026. Two PCs played one
   galaxy over a shared folder, each with its own client, its own `cs_server`
   and its own launcher config, sharing only the store. Turn 12 closed with both
@@ -772,7 +798,7 @@ made unnecessary.
   **This is the shape of bug F2 will keep finding.** Nothing about the store
   seam is wrong; the callers above it were written when a store was always a
   folder, and each one has to be looked at rather than assumed.
-- [ ] **F4. A Firebase adapter**, replacing either side of the seam.
+- [~] **F4. A Firebase adapter**, replacing either side of the seam. deffered until we prove it works using my own PC as the server with some real beta players. 
 
 ## E. Not applicable on this path
 

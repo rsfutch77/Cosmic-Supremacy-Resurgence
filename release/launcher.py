@@ -381,6 +381,151 @@ def launch_mode(mode, game_root: str, galaxy_root: str) -> subprocess.Popen:
     return subprocess.Popen([exe, galaxy], cwd=game_root)
 
 
+# ── Player identity ───────────────────────────────────────────────────────────
+# One name, typed once. It is who this launcher says you are and it is the name
+# of your civilisation in a galaxy, because those are the same thing until there
+# are accounts to tell them apart.
+#
+# It lives in the data directory, not in manifest.json: the manifest ships to
+# everyone and an upgrade replaces it, while the data directory is this player's
+# and survives.
+IDENTITY_FILE = "identity.json"
+
+# The engine's civilisation name buffer. make_multiplayer_galaxy.py enforces the
+# same ceiling when it builds a roster, so a name that fits here fits a seat.
+NAME_LIMIT = 15
+
+# Characters Windows refuses in a file name. A civ name is one: TurnStore keeps
+# a player's orders in submissions\<turn>\<civ>.b64, so a name holding any of
+# these either writes somewhere else or does not write at all.
+NAME_FORBIDDEN = r'\/:*?"<>|'
+
+NAME_RULES = (f"Up to {NAME_LIMIT} characters. Letters, digits and ordinary "
+              f"punctuation, but not {' '.join(NAME_FORBIDDEN)}")
+
+
+def validate_player_name(raw):
+    """(name, None) for a name that can be used, or (None, why not).
+
+    The reason is written for the player, because it is shown next to the field
+    they are typing in. Surrounding spaces are trimmed rather than rejected,
+    which is the one correction a player never wants to be told about.
+    """
+    name = (raw or "").strip()
+    if not name:
+        return None, "Enter a name."
+    if len(name) > NAME_LIMIT:
+        return None, (f"That is {len(name)} characters. The game's civilisation "
+                      f"name holds {NAME_LIMIT}.")
+    if any(not (" " <= c <= "~") for c in name):
+        return None, ("Letters, digits and ordinary punctuation only. The "
+                      "game's name field is ASCII.")
+    bad = sorted({c for c in name if c in NAME_FORBIDDEN})
+    if bad:
+        return None, ("A name cannot contain " + " ".join(bad) + ", because it "
+                      "is also the name of the file a galaxy keeps your orders "
+                      "in.")
+    if name.endswith("."):
+        return None, "A name cannot end in a full stop."
+    return name, None
+
+
+def identity_path(data_dir: str) -> str:
+    return os.path.join(data_dir, IDENTITY_FILE)
+
+
+def load_identity(data_dir: str):
+    """The name this player entered, or None.
+
+    A file that is missing, unreadable or holds a name the rules reject counts
+    as no name at all. Asking again is cheap; submitting a whole turn under a
+    name no galaxy can accept is not.
+    """
+    try:
+        with open(identity_path(data_dir), encoding="utf-8") as fh:
+            stored = json.load(fh)
+    except (OSError, ValueError):
+        return None
+    name = stored.get("name") if isinstance(stored, dict) else None
+    name, _why = validate_player_name(name if isinstance(name, str) else "")
+    return name
+
+
+def save_identity(data_dir: str, name: str) -> None:
+    with open(identity_path(data_dir), "w", encoding="utf-8") as fh:
+        json.dump({"name": name}, fh, indent=2)
+
+
+def legacy_civ(data_dir: str):
+    """The `civ` a player hand-wrote into multiplayer.json before this existed.
+
+    Taken as typed, without the rules above. Those rules govern what a player
+    may enter; a name already sitting in a live galaxy's roster is that galaxy's
+    fact, and rejecting it here would lock a beta player out of a game they are
+    part way through. Only the length ceiling and the file name characters are
+    checked, because those are the two ways a name breaks rather than displeases.
+    """
+    try:
+        with open(os.path.join(data_dir, MP_CONFIG), encoding="utf-8") as fh:
+            cfg = json.load(fh)
+    except (OSError, ValueError):
+        return None
+    civ = cfg.get("civ") if isinstance(cfg, dict) else None
+    if not isinstance(civ, str):
+        return None
+    civ = civ.strip()
+    if not civ or len(civ) > NAME_LIMIT:
+        return None
+    if any(c in NAME_FORBIDDEN or not (" " <= c <= "~") for c in civ):
+        return None
+    return civ
+
+
+def player_name(data_dir: str):
+    """This player's name, adopting an older multiplayer.json's `civ` once.
+
+    Before the launcher asked, a player hand-wrote `civ` into multiplayer.json.
+    Upgrading must not make them type it again, so the first run after the
+    upgrade copies it across and from then on there is one place it is typed.
+    The `civ` key is left in the file rather than removed, so downgrading to a
+    launcher that still requires it works.
+    """
+    name = load_identity(data_dir)
+    if name:
+        return name
+    civ = legacy_civ(data_dir)
+    if not civ:
+        return None
+    try:
+        save_identity(data_dir, civ)
+    except OSError:
+        pass                # usable this run; asked for again on the next one
+    return civ
+
+
+def roster_problem(name: str, civs):
+    """Why this name cannot play this galaxy, or None. Written for the player.
+
+    The launcher can see the roster, so the answer to a name that does not match
+    is the list of names that do, rather than a turn quietly submitted into a
+    void. A seat that differs only in case is called out on its own, because
+    that is the mistake a player makes when they were told their name out loud.
+    """
+    seats = list(civs)
+    if name in seats:
+        return None
+    listed = "\n".join("    " + str(c) for c in seats) or "    (nobody)"
+    near = next((c for c in seats if str(c).lower() == name.lower()), None)
+    if near is not None:
+        return (f"This galaxy spells your seat {near!r} and you are calling "
+                f"yourself {name!r}.\n\nNames are matched exactly, so orders "
+                f"sent as {name!r} would be ignored.\n\nThe seats in this "
+                f"galaxy are:\n\n{listed}")
+    return (f"This galaxy has no seat for {name!r}.\n\nThe seats in this "
+            f"galaxy are:\n\n{listed}\n\nUse the name you were given, or "
+            "ask whoever made the galaxy to add one for you.")
+
+
 # ── Multiplayer ───────────────────────────────────────────────────────────────
 # A multiplayer galaxy has a turn store, which is the one thing a player's
 # launcher, the other players' launchers and the referee all agree through. The
@@ -402,11 +547,15 @@ MP_CLIENTS = ("CosmicSupremacy_Player.exe", "CosmicSupremacy_TestBed.exe")
 
 
 def multiplayer_config(data_dir: str):
-    """{"store": <dir>, "civ": <name>} for this player, or None.
+    """{"store": <dir or URL>} for this galaxy, or None.
 
     Kept in the data directory rather than the manifest because it is per
-    player and per galaxy: the manifest ships to everyone, and which civ you
-    are is yours.
+    player and per galaxy: the manifest ships to everyone, and which galaxy you
+    joined is yours.
+
+    Only `store` is required. `civ` used to be, and a file that still carries
+    one is read once by `legacy_civ` to seed the player's name, after which the
+    name comes from identity.json and this file names only the galaxy.
     """
     path = os.path.join(data_dir, MP_CONFIG)
     if not os.path.exists(path):
@@ -416,7 +565,7 @@ def multiplayer_config(data_dir: str):
             cfg = json.load(f)
     except (OSError, ValueError):
         return None
-    if not cfg.get("store") or not cfg.get("civ"):
+    if not cfg.get("store"):
         return None
     return cfg
 
@@ -493,6 +642,10 @@ class Launcher:
         self.mp_stop = False
         self.mp_note = ""
         self.mp_turn = None
+        # This player's name, read from the data directory at boot. None until
+        # they have entered one, which is a state the launcher runs in happily:
+        # only multiplayer needs to know who you are.
+        self.player = None
         # The status to fall back to whenever no game is running. Recorded when
         # the server settles so that a game exiting restores whatever was true
         # then , "server running", "port taken", "reusing the existing server" ,
@@ -601,6 +754,19 @@ class Launcher:
                  bg=BG, fg=FAINT, font=("Segoe UI", 8)).pack(anchor="w",
                                                              pady=(6, 0), **pad)
 
+        ident = tk.Frame(self.root, bg=BG)
+        ident.pack(fill="x", pady=(10, 0), **pad)
+        tk.Label(ident, text="Playing as", bg=BG, fg=FAINT,
+                 font=("Segoe UI", 8)).pack(side="left")
+        self.name_label = tk.Label(ident, text="", bg=BG, fg=TEXT,
+                                   font=("Segoe UI", 9, "bold"))
+        self.name_label.pack(side="left", padx=(6, 0))
+        self.name_btn = tk.Label(ident, text="set name", bg=BG, fg=FAINT,
+                                 font=("Segoe UI", 8, "underline"),
+                                 cursor="hand2")
+        self.name_btn.pack(side="left", padx=(8, 0))
+        self.name_btn.bind("<Button-1>", lambda e: self.on_change_name())
+
         status = tk.Frame(self.root, bg=BG)
         status.pack(fill="x", pady=(12, 0), **pad)
         self.dot = tk.Label(status, text="●", bg=BG, fg=WARN,
@@ -630,6 +796,10 @@ class Launcher:
         self._open_log(self.data_dir)
         self.say(f"{self.cfg['product']} v{self.cfg['version']}")
         self.say(f"data    {self.data_dir}")
+
+        self.player = player_name(self.data_dir)
+        self._show_identity()
+        self.say(f"player  {self.player or 'not set yet'}")
 
         icon = find_icon(self.data_dir)
         if icon:
@@ -736,6 +906,112 @@ class Launcher:
         if mode.get("ai"):
             self.start_ai(mode)
 
+    # ── Who you are ───────────────────────────────────────────────────────────
+    def _show_identity(self):
+        self.name_label.configure(text=self.player or "nobody yet",
+                                  fg=TEXT if self.player else FAINT)
+        self.name_btn.configure(text="change" if self.player else "set name")
+
+    def ask_player_name(self, reason: str = ""):
+        """Ask for the player's name, store it, and return it. None if cancelled.
+
+        Modal, and it validates in place: a name that does not fit is answered
+        beside the field the player is typing in. That is the whole point of
+        this dialog existing rather than a JSON file they edit, where the same
+        mistake surfaces as a turn that quietly went nowhere.
+        """
+        tk = self.tk
+        win = tk.Toplevel(self.root)
+        win.title("Your name")
+        win.configure(bg=BG)
+        win.resizable(False, False)
+        win.transient(self.root)
+
+        text = ("This is the name other players see, and the name of your "
+                "civilisation in a galaxy. You enter it once.")
+        if reason:
+            text = reason + "\n\n" + text
+        tk.Label(win, text=text, bg=BG, fg=DIM, justify="left", wraplength=360,
+                 font=("Segoe UI", 9)).pack(anchor="w", padx=20, pady=(18, 10))
+
+        var = tk.StringVar(value=self.player or "")
+        entry = tk.Entry(win, textvariable=var, bg=PANEL, fg=TEXT, width=22,
+                         insertbackground=TEXT, relief="flat",
+                         highlightbackground=EDGE, highlightthickness=1,
+                         font=("Segoe UI", 12))
+        entry.pack(anchor="w", padx=20, ipady=3)
+        tk.Label(win, text=NAME_RULES, bg=BG, fg=FAINT, justify="left",
+                 wraplength=360, font=("Segoe UI", 8)).pack(anchor="w", padx=20,
+                                                            pady=(6, 0))
+        why = tk.Label(win, text="", bg=BG, fg=BAD, justify="left",
+                       wraplength=360, font=("Segoe UI", 8))
+        why.pack(anchor="w", padx=20, pady=(4, 0))
+
+        picked = {}
+
+        def accept(_evt=None):
+            name, problem = validate_player_name(var.get())
+            if problem:
+                why.configure(text=problem)
+                return
+            picked["name"] = name
+            win.destroy()
+
+        row = tk.Frame(win, bg=BG)
+        row.pack(fill="x", padx=20, pady=(14, 18))
+        for label, cmd in (("Cancel", win.destroy), ("Save", accept)):
+            tk.Button(row, text=label, bg=BTN, fg="#ffffff",
+                      activebackground=BTN_HI, activeforeground="#ffffff",
+                      relief="flat", bd=0, cursor="hand2", width=9,
+                      font=("Segoe UI", 9, "bold"), command=cmd).pack(
+                          side="right", padx=(6, 0))
+        entry.bind("<Return>", accept)
+        win.bind("<Escape>", lambda e: win.destroy())
+        entry.focus_set()
+        # grab_set after the window is mapped: grabbing a window that is not yet
+        # on screen fails on Windows and leaves the dialog non-modal.
+        win.update_idletasks()
+        try:
+            win.grab_set()
+        except tk.TclError:
+            pass
+        self.root.wait_window(win)
+
+        name = picked.get("name")
+        if not name:
+            return None
+        try:
+            save_identity(self.data_dir, name)
+        except OSError as exc:
+            self.warn(f"Could not save your name:\n\n{exc}\n\nIt will "
+                      "be used for this session and asked for again next time.")
+        self.player = name
+        self._show_identity()
+        self.say(f"player  {name}")
+        return name
+
+    def on_change_name(self):
+        """Let a player change their name, except out from under a live galaxy.
+
+        Changing it is allowed because a beta player will spell it wrong, and
+        the only cost of changing it outside a galaxy is that the next galaxy
+        knows them by the new name.
+
+        Mid-galaxy is different. A galaxy's roster is fixed when it is generated
+        and the referee matches submissions to it by exact name, so a launcher
+        that renamed itself mid-turn would carry on playing and carry on being
+        ignored. Stopping first makes that a decision rather than a discovery at
+        the next deadline.
+        """
+        if self.mp_thread is not None and self.mp_thread.is_alive():
+            self.warn("You are playing a galaxy right now.\n\nYour name "
+                      "is the name of your civilisation in it, and a "
+                      "galaxy's "
+                      f"roster cannot be renamed from here. Close {self.cfg['product']} "
+                      "to leave the galaxy, then change it.")
+            return
+        self.ask_player_name()
+
     # ── Multiplayer session ──────────────────────────────────────────────────
     def start_multiplayer(self, mode):
         """Follow this galaxy's turns until the player stops or the launcher
@@ -754,9 +1030,21 @@ class Launcher:
         if cfg is None:
             self.warn(
                 "This galaxy is not set up yet.\n\nMultiplayer needs a "
-                f"{MP_CONFIG} in\n{self.data_dir}\n\nholding the galaxy "
-                'folder and which civilisation you play, for example:\n\n'
-                '{"store": "C:\\\\galaxies\\\\demo", "civ": "DemoPlayer"}')
+                f"{MP_CONFIG} in\n{self.data_dir}\n\nnaming the galaxy "
+                "folder or the referee's address, for example:\n\n"
+                '{"store": "C:\\\\galaxies\\\\demo"}\n\n'
+                "Your own name does not go in that file. The launcher asks you "
+                "for it.")
+            return
+
+        # Asked for here and not at first run: a player who only ever opens the
+        # Tutorial should not be interrogated for a name nothing will use. This
+        # is the first moment one is genuinely needed.
+        civ = self.player or self.ask_player_name(
+            "Before you can join a galaxy, this launcher needs to know who you "
+            "are.")
+        if not civ:
+            self.say("multiplayer: no player name entered, not starting")
             return
 
         mods = multiplayer_modules()
@@ -766,7 +1054,6 @@ class Launcher:
                       "this launcher works as normal.")
             return
         player_turn, turn_store = mods
-
         # `open_store`, not `TurnStore`: the store is a directory on one machine
         # and a base URL once the referee is on another, and which one it is is
         # the player's to write in multiplayer.json. Naming the class here made
@@ -777,12 +1064,32 @@ class Launcher:
                       "publish a first turn before anyone can play it.")
             return
 
+        # The roster is the galaxy's list of seats, and the referee matches
+        # submissions to it by exact name and discards anything else. The
+        # launcher can read it, so a name that does not match is answered here
+        # with the names that do, rather than as a turn played and thrown away.
+        try:
+            seats = store.civs()
+        except (OSError, ValueError, KeyError) as exc:
+            seats = None
+            self.say(f"multiplayer: could not read the roster ({exc})")
+        if seats is not None:
+            problem = roster_problem(civ, seats)
+            if problem:
+                self.say(f"multiplayer: {civ!r} is not in the roster {seats}")
+                from tkinter import messagebox
+                if messagebox.askyesno(
+                        self.cfg["product"],
+                        problem + "\n\nChange your name now?"):
+                    self.on_change_name()
+                return
+
         self.mp_store = store
-        self.mp_civ = cfg["civ"]
+        self.mp_civ = civ
         self.mp_stop = False
         self.running_mode = mode
-        self.say(f"multiplayer: following {cfg['store']} as {cfg['civ']}")
-        self.set_status(f"Multiplayer , {cfg['civ']}", OK)
+        self.say(f"multiplayer: following {cfg['store']} as {civ}")
+        self.set_status(f"Multiplayer , {civ}", OK)
         self._show_controls(True)
 
         save_dir = os.path.join(self.data_dir, "saves")
@@ -791,7 +1098,7 @@ class Launcher:
         def work():
             try:
                 player_turn.follow(
-                    store, cfg["civ"],
+                    store, civ,
                     poll=2.0,
                     on_state=self._mp_state,
                     save_dir=save_dir,
