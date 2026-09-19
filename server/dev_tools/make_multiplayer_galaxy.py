@@ -34,6 +34,7 @@ What it does:
     give added civs matching ships      so seat three is not a worse start
     clear every ship's order            generation seeds one; see below
     equalise homeworlds                 generation does not; see below
+    empty every civ's EXSY              an added civ inherits its donor's
     publish, optionally                 to a turn store, with the roster set
 
 It expects a **freshly generated** galaxy. Run on a game in progress it would
@@ -52,6 +53,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import save_parser as sp
+import exsy
 import inject_civ as icv
 import inject_order as ino
 import inject_ship as ish
@@ -192,6 +194,50 @@ def equalise_homeworlds(blob: bytes, players, log=print) -> bytes:
     return blob
 
 
+def reset_exsy(blob: bytes, players, log=print) -> bytes:
+    """Forget what an added civ inherited from the civ it was cloned from.
+
+    `inject_civ` copies `EXSY` verbatim, so a civ added from a donor starts
+    knowing every system the donor had entered. On a fresh galaxy that is one
+    row, the donor's own home system, which is precisely the thing a new player
+    should not be handed: seat three opens the map and knows where seat two
+    lives.
+
+    Every row is dropped rather than the donor's one, because a civ that has
+    just been created has entered nothing. The engine writes the row for its own
+    system when the galaxy is loaded, which is measured: a civ built this way
+    came back knowing exactly its own system after one turn.
+    """
+    for _ in range(64):                      # one rewrite per table, bounded
+        tree = sp.parse_blob(blob)
+        glxy = next(tree[0].find('GLXY'))
+        by_off = {r['off']: r['name'] for r in icv.owner_records(blob)}
+        target = None
+        for ownr in glxy.find('OWNR'):
+            name = by_off.get(ownr.start)
+            if name is None:
+                continue
+            sec = next(ownr.find('EXSY'), None)
+            if sec is None:
+                continue
+            payload = bytes(blob[sec.payload:sec.end])
+            try:
+                ids = exsy.systems_known(payload)
+            except Exception as exc:
+                log(f'  {name}: EXSY unreadable, left alone ({exc})')
+                continue
+            if not ids:
+                continue
+            target = (tree, sec, name, ids)
+            break
+        if target is None:
+            break
+        tree, sec, name, ids = target
+        blob = sp.replace_payload(blob, tree, sec, exsy.build([]))
+        log(f'  {name}: forgot {len(ids)} inherited system(s) {ids}')
+    return blob
+
+
 def clear_ship_orders(blob: bytes, log=print) -> bytes:
     """Start every ship idle, because orders belong to players.
 
@@ -289,6 +335,7 @@ def build(blob: bytes, players, log=print) -> bytes:
     # last, so they cover ships and worlds that came from a civ that had one
     blob = clear_ship_orders(blob, log=log)
     blob = equalise_homeworlds(blob, players, log=log)
+    blob = reset_exsy(blob, players, log=log)
 
     final = [o['name'] for o in icv.owner_records(blob)]
     if sorted(final) != sorted(players):
