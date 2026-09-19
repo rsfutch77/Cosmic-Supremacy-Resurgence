@@ -635,7 +635,7 @@ made unnecessary.
   the client plays.
 
   What the second machine saw is explained without the engine acting. **Every
-  generation gives the second civ's first ship order type 2 with an 82-byte
+  generation gives the second civ's first ship a Scout order, type 2, with an 82-byte
   `ROUT` at turn 0**, before anyone has played, in all five generations captured
   here. A ship advancing along that order looks exactly like a ship being given
   one, unless the `DYNO` is compared against the state served, which is the
