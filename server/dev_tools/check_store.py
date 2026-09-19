@@ -12,11 +12,22 @@ eaten somewhere between being typed and being parsed. This separates them.
 
 Run it on the machine that is failing. It reports what the config actually
 holds, byte for byte, then walks the path from the top down so the first
-component that cannot be reached is named.
+component that cannot be reached is named, with the operating system's own
+error rather than a bare "missing".
+
+**A host spelled as an address and the same host spelled by name are different
+SMB targets.** Windows keeps sessions per target, so a machine holding an
+authenticated session to `\\POWERHOUSE1` falls back to anonymous for
+`\\192.168.0.4` and is refused, while the other machine, which reaches the
+share locally, sees nothing wrong at all. That cost a round of wrong guesses
+between two machines, so when a UNC target fails this tries the other spelling
+and says whether it works.
 """
 import argparse
 import json
 import os
+import socket
+import subprocess
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -47,6 +58,70 @@ def show_config(data_dir):
     return cfg
 
 
+# Windows error codes worth translating, because the number alone sends people
+# to the wrong fix.
+WINERR = {
+    3: 'that path does not exist on the share, so the store has probably not '
+       'been created there yet',
+    5: 'access denied',
+    53: 'network path not found, the host did not answer',
+    64: 'the specified network name is no longer available',
+    67: 'the share name was not found on that host',
+    86: 'the network password is not correct',
+    1326: 'the user name or password is incorrect, which for a share usually '
+          'means this machine has no authenticated session to that target',
+    1219: 'multiple connections to a server by the same user are not allowed, '
+          'an existing session to the other spelling of this host is in the way',
+}
+
+
+def explain(exc):
+    code = getattr(exc, 'winerror', None) or getattr(exc, 'errno', None)
+    why = WINERR.get(code)
+    return f'error {code}' + (f', {why}' if why else f': {exc}')
+
+
+def unc_target(p):
+    """The host component of a UNC path, or None."""
+    if not p.startswith(os.sep * 2):
+        return None
+    rest = p[2:].split(os.sep)
+    return rest[0] if rest and rest[0] else None
+
+
+def other_spellings(host):
+    """The same host spelled the other way, for a second attempt."""
+    out = []
+    try:
+        socket.inet_aton(host)
+        is_ip = True
+    except OSError:
+        is_ip = False
+    try:
+        if is_ip:
+            name = socket.gethostbyaddr(host)[0]
+            out.append(name.split('.')[0])
+        else:
+            out.append(socket.gethostbyname(host))
+    except Exception:
+        pass
+    return [o for o in out if o and o.lower() != host.lower()]
+
+
+def sessions():
+    """Existing SMB sessions, so a session to another spelling is visible."""
+    try:
+        r = subprocess.run(['net', 'use'], capture_output=True, text=True,
+                           timeout=15)
+    except Exception:
+        return []
+    out = []
+    for line in (r.stdout or '').splitlines():
+        if os.sep * 2 in line:
+            out.append(line.strip())
+    return out
+
+
 def walk_path(p):
     """Name the first component that cannot be reached."""
     p = os.path.abspath(p)
@@ -68,13 +143,54 @@ def walk_path(p):
     for stem in stems:
         try:
             ok = os.path.exists(stem)
-        except Exception as exc:
-            print(f'  {"error":<7} {stem}   ({exc})')
-            return False
-        print(f'  {"ok" if ok else "MISSING":<7} {stem}')
+            err = None
+        except OSError as exc:
+            ok, err = False, exc
+        # os.path.exists swallows the reason, so ask again when it says no
+        if not ok and err is None and stem.startswith(os.sep * 2):
+            try:
+                os.listdir(stem)
+                ok = True
+            except OSError as exc:
+                err = exc
+        print(f'  {"ok" if ok else "NO":<7} {stem}'
+              + (f'   {explain(err)}' if err is not None else ''))
         if not ok:
+            _suggest(stem)
             return False
     return True
+
+
+def _suggest(stem):
+    """When a UNC component fails, try the host spelled the other way."""
+    host = unc_target(stem)
+    if host is None:
+        return
+    live = sessions()
+    if live:
+        print('\n  existing SMB sessions on this machine:')
+        for s in live:
+            print(f'    {s}')
+    alts = other_spellings(host)
+    if not alts:
+        print(f'\n  {host} has no other spelling to try.')
+        return
+    tail = stem[2 + len(host):]
+    for alt in alts:
+        cand = os.sep * 2 + alt + tail
+        try:
+            os.listdir(cand)
+            reachable = True
+        except OSError as exc:
+            reachable, why = False, explain(exc)
+        if reachable:
+            print(f'\n  BUT {cand} WORKS.')
+            print('  A host spelled as an address and the same host spelled by '
+                  'name are different\n  SMB targets, and Windows keeps '
+                  'sessions per target. Point the config at the\n  spelling '
+                  'that works.')
+        else:
+            print(f'\n  {cand} also fails: {why}')
 
 
 def main():
@@ -102,10 +218,12 @@ def main():
         print(f'  root: {store.root!r}')
         print('  walking the path:')
         if not walk_path(store.root):
-            print('\nThe first MISSING line above is the problem. If it is the '
-                  'share itself,\nthis machine cannot reach it: check the host '
-                  'is on, that you can open it\nin Explorer, and that a VPN is '
-                  'not capturing the local network.')
+            print('\nThe first NO line above is the problem, and its error '
+                  'says which kind:\n'
+                  '  the host      unreachable, or no session to that '
+                  'spelling of it\n'
+                  '  the share     a wrong name, or no permission on it\n'
+                  '  a subfolder   the store has not been created there')
             return 1
     else:
         print(f'  base: {store.base}')
