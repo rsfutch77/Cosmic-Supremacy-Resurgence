@@ -41,6 +41,25 @@ section, whose payload holds the queue's own fields and a nested section naming
 what is queued, `FCLT` for a facility. It is self-contained, so it is copied
 whole.
 
+**People**, the citizen array in `PLNT > PLPR`, the stationed military array
+that follows it, and a ship's crew in `SHPR`. Judged as one thing, because a
+player can move somebody between them: conscription turns a citizen into a
+soldier and crewing a ship moves that soldier onto it, and in the first
+two-machine rehearsal a turn that did both was refused twice over and lost, by
+two rules that were each correct about their own half.
+
+A submission never ticks, so within one turn the total number of people a civ
+holds cannot change. That is the check, along with: no soldier's existing
+record may be altered, nobody changes hands, no per-citizen value is invented,
+and the civ may not come back with fewer soldiers than it was served, which is
+what retiring from service looks like and is not carried yet.
+
+The total is a claim about a **submission**, not about the galaxy. The engine's
+own recruitment makes soldiers out of food without costing a citizen, measured
+at 60%: the population held at nine across the turn a soldier appeared. A rule
+that assumed the total was invariant across a tick would refuse every turn
+after the first.
+
 **Job allocation**, the citizen array in `PLNT > PLPR`. `PLPR+36` is a `u32`
 population count and `PLPR+40` begins that many nine-byte records:
 
@@ -168,6 +187,11 @@ POP_ARRAY_OFF = 40
 POP_RECORD = 9
 JOB_IDS = {0: 'farmer', 1: 'worker', 2: 'scientist', 5: 'miner', 6: 'banker'}
 
+# A soldier is the same nine-byte record with this job id, kept in a second
+# array rather than among the citizens. Conscription rewrites a citizen into
+# one, which is why jobs and military cannot be judged by separate rules.
+MILITARY_JOB = 3
+
 # Hurrying production, measured 19 September 2026 with a player clicking it.
 # A farm 110 points into a 200-point build was offered at 360 credits; the
 # player's credits went 10065 -> 9705 and three fields moved:
@@ -260,27 +284,104 @@ def citizen_bytes(raw):
     return raw[POP_ARRAY_OFF:POP_ARRAY_OFF + n * POP_RECORD]
 
 
-def jobs_acceptable(served, submitted, civ_oid):
-    """(ok, reason) for a proposed citizen array."""
+def population(blob, civ_oid):
+    """({planet: (citizens, military)}, {ship: crew}) for one civ, or None."""
+    planets, ships = {}, {}
+    for oid, (owner, _prod, plpr, _nm) in planet_index(blob).items():
+        if owner != civ_oid:
+            continue
+        cz = citizens_of(plpr)
+        _at, mil = military_of(plpr)
+        if cz is None or mil is None:
+            return None, None
+        planets[oid] = (cz, mil)
+    for oid, (owner, shpr) in _ship_crew_index(blob).items():
+        if owner != civ_oid:
+            continue
+        crew = crew_of(shpr or b'')
+        if crew is None:
+            return None, None
+        ships[oid] = crew
+    return planets, ships
+
+
+def _owner_of(record):
+    return struct.unpack_from('<I', record, 3)[0]
+
+
+def _everyone(planets, ships):
+    citizens, soldiers = [], []
+    for _oid, (cz, mil) in planets.items():
+        citizens += cz
+        soldiers += mil
+    for _oid, crew in ships.items():
+        soldiers += crew
+    return citizens, soldiers
+
+
+def people_acceptable(served, submitted, civ_oid):
+    """(ok, reason) for everything a civ did to its own people in one turn.
+
+    Jobs and military were separate rules and each was right about its own
+    narrow case: jobs insisted the population was unchanged, military insisted
+    the soldier records were identical. Conscription turns a citizen into a
+    soldier, which breaks both, and the client lets a player do it. Refusing it
+    twice cost a player a turn in the first two-machine rehearsal, silently.
+
+    What a submission may do, given that it never ticks:
+
+        move soldiers between the civ's own planets and ships
+        turn a citizen into a soldier
+        reassign jobs among citizens
+
+    What it may not do:
+
+        change the total number of people it holds
+        come back with fewer soldiers than it was served
+        alter an existing soldier's record
+        change who owns anybody
+        invent per-citizen values
+
+    The total is deliberately a claim about a **submission**, not about the
+    galaxy. The engine's own recruitment creates soldiers out of food without
+    costing a citizen, measured at 60%: population held at nine across the turn
+    a soldier appeared. So the total is not invariant across a tick, and a rule
+    that assumed it was would refuse every turn after one.
+    """
     import collections
-    a, b = citizens_of(served), citizens_of(submitted)
-    if a is None or b is None:
-        return False, 'the citizen array is unreadable on one side'
-    if len(a) != len(b):
-        return False, f'population changed, {len(a)} to {len(b)}'
-    if collections.Counter(c[1] for c in a) != collections.Counter(c[1] for c in b):
-        return False, 'the citizens changed hands'
-    if collections.Counter(c[2] for c in a) != collections.Counter(c[2] for c in b):
-        return False, 'per-citizen values were invented rather than reordered'
-    bad = {c[0] for c in b} - set(JOB_IDS)
+    pa, sa = population(served, civ_oid)
+    pb, sb = population(submitted, civ_oid)
+    if pa is None or pb is None:
+        return False, 'the citizen or military array is unreadable'
+    if set(pa) != set(pb) or set(sa) != set(sb):
+        return False, 'the set of planets or ships changed within the turn'
+
+    cit_a, sol_a = _everyone(pa, sa)
+    cit_b, sol_b = _everyone(pb, sb)
+    if len(sol_b) < len(sol_a):
+        return (False, f'{len(sol_a)} soldier(s) served and {len(sol_b)} came '
+                f'back; retiring from service is not carried yet')
+    if len(cit_a) + len(sol_a) != len(cit_b) + len(sol_b):
+        return (False, f'{len(cit_a) + len(sol_a)} people served and '
+                f'{len(cit_b) + len(sol_b)} came back')
+    if collections.Counter(sol_a) - collections.Counter(sol_b):
+        return (False, "an existing soldier's record was rewritten rather than "
+                "moved")
+    owners_a = collections.Counter([c[1] for c in cit_a]
+                                   + [_owner_of(r) for r in sol_a])
+    owners_b = collections.Counter([c[1] for c in cit_b]
+                                   + [_owner_of(r) for r in sol_b])
+    if owners_a != owners_b:
+        return False, 'somebody changed hands'
+    bad = {c[0] for c in cit_b} - set(JOB_IDS)
     if bad:
         return False, f'unknown job id(s) {sorted(bad)}'
-    if any(c[3] != b'\x00\x00\x00' for c in b):
+    if any(c[3] != b'\x00\x00\x00' for c in cit_b):
         return False, 'unknown bytes in a citizen record were written'
-    others_a = collections.Counter((c[1], c[0]) for c in a if c[1] != civ_oid)
-    others_b = collections.Counter((c[1], c[0]) for c in b if c[1] != civ_oid)
-    if others_a != others_b:
-        return False, "another civ's citizens were reassigned"
+    vals_a = collections.Counter(c[2] for c in cit_a)
+    vals_b = collections.Counter(c[2] for c in cit_b)
+    if vals_b - vals_a:
+        return False, 'per-citizen values were invented rather than reordered'
     return True, ''
 
 
@@ -675,6 +776,36 @@ def set_citizens(blob, planet_oid, new_array):
     raise SystemExit(f'planet {planet_oid} not found')
 
 
+def set_people(blob, planet_oid, citizens: bytes, military):
+    """Write both of a planet's people arrays. Sizes change.
+
+    They are adjacent and each is length-prefixed, so the second cannot be
+    written without knowing the first: conscription shortens the citizens and
+    lengthens the soldiers in the same turn, and patching one in place would
+    leave the other's count pointing into the middle of a record.
+    """
+    tree = sp.parse_blob(blob)
+    glxy = next(tree[0].find('GLXY'))
+    for sola in (c for c in glxy.children if c.tag == b'SOLA'):
+        for sec in sola.find('PLNT'):
+            if struct.unpack_from('<I', blob, sec.payload)[0] != planet_oid:
+                continue
+            plpr = next(sec.find('PLPR'), None)
+            if plpr is None:
+                raise SystemExit(f'planet {planet_oid} has no PLPR')
+            raw = bytes(blob[plpr.payload:plpr.end])
+            at, old = military_of(raw)
+            if at is None:
+                raise SystemExit(f'planet {planet_oid} has no readable military')
+            tail = raw[at + 4 + len(old) * POP_RECORD:]
+            body = (raw[:POP_COUNT_OFF]
+                    + struct.pack('<I', len(citizens) // POP_RECORD) + citizens
+                    + struct.pack('<I', len(military)) + b''.join(military)
+                    + tail)
+            return sp.replace_payload(blob, tree, plpr, body)
+    raise SystemExit(f'planet {planet_oid} not found')
+
+
 def set_research(blob, civ_oid, values):
     """Write a civ's research fields in place. Sizes do not change."""
     owpr = _owpr(blob, civ_oid)
@@ -910,39 +1041,40 @@ def merge(blob, submissions, log=print):
                         f"{rate_served}% -> {rate}%")
                     accepted += 1
 
-            new_array = citizen_bytes(plpr)
-            old_array = citizen_bytes(plpr_served)
-            if new_array is None or old_array is None or new_array == old_array:
-                continue
-            if owner != mine:
-                log(f"    planet {planet_oid}: jobs DROPPED, owned by "
-                    f"{names.get(owner, owner)}")
-                dropped += 1
-                continue
-            ok, why = jobs_acceptable(plpr_served, plpr, mine)
-            if not ok:
-                log(f"    planet {planet_oid}: jobs DROPPED, {why}")
-                dropped += 1
-                continue
-            blob = set_citizens(blob, planet_oid, new_array)
-            before = [c[0] for c in citizens_of(plpr_served)]
-            after = [c[0] for c in citizens_of(plpr)]
-            log(f"    planet {planet_oid}: jobs taken "
-                f"({_tally(before)} -> {_tally(after)})")
-            accepted += 1
-
-        # military moving between a planet and a ship in its orbit
-        moved, why = military_transfer(blob, sub, mine)
-        if why:
-            log(f"    military DROPPED, {why}")
+        # Everybody this civ holds, judged together. Jobs and military used to
+        # be two rules and a turn that did both, conscripting a citizen and
+        # posting the new soldier to a ship, was refused twice over.
+        ok, why = people_acceptable(blob, sub, mine)
+        planets_before, ships_before = population(blob, mine)
+        planets_after, ships_after = population(sub, mine)
+        if planets_after is None:
+            pass                              # unreadable; people_acceptable said so
+        elif not ok:
+            log(f"    people DROPPED, {why}")
             dropped += 1
-        for kind, oid, before, after, records in moved:
-            if kind == 'planet':
-                blob = set_military(blob, oid, records)
-            else:
-                blob = set_crew(blob, oid, records)
-            log(f"    {kind} {oid}: military {before} -> {after}")
-            accepted += 1
+        else:
+            for oid in sorted(planets_after):
+                cz_b, mil_b = planets_before[oid]
+                cz_a, mil_a = planets_after[oid]
+                if (cz_b, mil_b) == (cz_a, mil_a):
+                    continue
+                blob = set_people(blob, oid, citizen_bytes(
+                    planet_index(sub)[oid][2]), mil_a)
+                what = []
+                if [c[0] for c in cz_b] != [c[0] for c in cz_a]:
+                    what.append(f'{_tally([c[0] for c in cz_b])} -> '
+                                f'{_tally([c[0] for c in cz_a])}')
+                if len(mil_b) != len(mil_a):
+                    what.append(f'{len(mil_b)} -> {len(mil_a)} stationed')
+                log(f"    planet {oid}: {'; '.join(what) or 'people moved'}")
+                accepted += 1
+            for oid in sorted(ships_after):
+                if ships_before[oid] == ships_after[oid]:
+                    continue
+                blob = set_crew(blob, oid, ships_after[oid])
+                log(f"    ship {oid}: crew {len(ships_before[oid])} -> "
+                    f"{len(ships_after[oid])}")
+                accepted += 1
 
         # system names, which belong to whoever holds most of the system
         served_systems = systems(blob)
