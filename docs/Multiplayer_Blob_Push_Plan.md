@@ -576,11 +576,29 @@ made unnecessary.
 
   | action | state |
   |---|---|
-  | job reallocation | **mapped**, C2: the citizen array only, behind four integrity checks |
-  | hurry production | **mapped**, below |
-  | crew assignment | **mapped**, below: a transfer, checked by conservation |
+  | job reallocation | **mapped**, and now judged with the soldiers, below |
+  | hurry production | **mapped** |
+  | crew assignment | **mapped**, and now judged with the citizens, below |
+  | conscription | **mapped**, a citizen becomes a soldier within one turn |
   | recruitment rate | **mapped**, `PLPR+27`, a percentage in one byte |
   | retiring from service | **refused and named**, because it destroys soldiers and also cuts upkeep, and only the destroying half has been measured |
+
+  **Jobs and military were two rules and had to become one.** Conscription
+  turns a citizen into a soldier, so the jobs rule refused it for changing the
+  population and the military rule refused it for producing a soldier with no
+  prior record. In the first two-machine rehearsal a player conscripted a
+  worker and posted the new soldier to a ship, and the turn was refused twice
+  over and lost, with nothing in the client to say so.
+
+  The replacement judges everybody a civ holds at once. A submission never
+  ticks, so the total cannot change within a turn; soldiers may not decrease;
+  an existing soldier's record may not be altered; nobody changes hands.
+
+  **The total is not invariant across a tick**, which is the trap. The engine's
+  own recruitment makes soldiers out of food without costing a citizen,
+  measured at 60%: the population held at nine across the turn a soldier
+  appeared. A rule stated as a conservation law rather than as a limit on
+  submissions would refuse every turn after the first.
 
   "Conscription" turned out to be two different things in the client's own
   words: a **Recruitment Rate** slider that diverts food into military growth
