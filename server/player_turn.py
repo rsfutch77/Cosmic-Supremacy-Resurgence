@@ -261,7 +261,26 @@ def follow(store: TurnStore, civ: str, poll: float = 5.0, rounds: int = 0,
 
     played = 0
     while not halted():
-        turn, deadline = store.current()
+        def current_or_wait():
+            """(turn, deadline), waiting out a store that cannot be read.
+
+            Every call into the store crosses a network share that another
+            machine rewrites, so any of them can fail for a moment. Returning
+            None lets the caller keep waiting instead of unwinding the loop.
+            """
+            while not halted():
+                try:
+                    return store.current()
+                except OSError as exc:
+                    log(f"[{civ}] store unreadable ({exc.__class__.__name__}), "
+                        f"retrying in {poll}s")
+                    nap(poll)
+            return None
+
+        got = current_or_wait()
+        if got is None:
+            break
+        turn, deadline = got
 
         # Never re-serve a turn this civ has already submitted for.
         #
@@ -365,8 +384,21 @@ def follow(store: TurnStore, civ: str, poll: float = 5.0, rounds: int = 0,
             return True
 
         while not halted():
-            left = store.seconds_left()
-            cur, _d = store.current()
+            # A store read can fail transiently , the store lives on an SMB
+            # share and the referee rewrites it from another machine. `state()`
+            # already retries for a couple of seconds, and when an outage
+            # outlasts that the right answer is still not to exit: this loop
+            # dying is how a player silently stops taking turns. Measured, a
+            # `FileNotFoundError` on `state.json` here killed the loop at turn
+            # 18 and the galaxy was at turn 20 before anyone noticed.
+            try:
+                left = store.seconds_left()
+                cur, _d = store.current()
+            except OSError as exc:
+                log(f"[{civ}] turn {turn}: store unreadable ({exc.__class__.__name__}), "
+                    f"retrying in {poll}s")
+                nap(poll)
+                continue
             if cur != turn:
                 # The referee moved on without us, which happens if this player
                 # joined late or the machine slept. Nothing to submit for a turn
@@ -411,7 +443,10 @@ def follow(store: TurnStore, civ: str, poll: float = 5.0, rounds: int = 0,
 
         emit("waiting", turn=turn, civ=civ)
         log(f"[{civ}] waiting for the referee to publish past turn {turn}")
-        while store.current()[0] == turn and not halted():
+        while not halted():
+            got = current_or_wait()
+            if got is None or got[0] != turn:
+                break
             nap(poll)
 
     emit("stopped", turns=played)
