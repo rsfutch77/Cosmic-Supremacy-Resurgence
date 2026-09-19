@@ -584,10 +584,78 @@ made unnecessary.
   distribution is not what the UI shows, it is what a modified client could show.
   **Done when:** a player's copy omits what that player has not discovered,
   rather than relying on the client to decline to draw it.
-- `[ ]` **D3. Turn clock and absent players.** The turn advances on the clock and
-  never waits for submissions; governors and admirals are the original's answer to
-  a player who is not there, and they run inside the referee's tick.
-  **Done when:** a galaxy advances on schedule with a player missing.
+- `[~]` **D3. Turn clock and absent players.** The clock half is done and the
+  absent-player half has an answer nobody had asked for.
+
+  **The galaxy advances on schedule with a player missing.** Measured repeatedly
+  during the two-machine runs: turn 11 closed with one player's submission never
+  arriving and the referee logged `no submission from ['Neighbor']; the clock
+  does not wait`, published the next turn, and the other player carried on.
+
+  **An absent empire coasts, and then stalls.** Governors and admirals are the
+  original's answer and they are not in the beta, so what an absent player
+  actually gets is worth knowing rather than assuming. One galaxy ticked 40
+  turns with no orders from anyone:
+
+  | | |
+  |---|---|
+  | population | grew on every planet, 15 to 19 and so on |
+  | new citizens | **all went to farming**, the default, never rebalanced |
+  | production | the queued facility completed and the queue went to the empty marker, never refilled |
+  | research | one civ held its topic, the other had **none and never chose one** |
+  | ships, colonies | unchanged, nothing built, nothing settled |
+
+  So an absent player is not destroyed, and in this fixture they were not
+  played for either: their economy drifts toward farmers, their factories go
+  idle and their research stops. That is survivable for a turn or two and is a
+  slow death over a week, which is exactly what governors existed to prevent.
+
+  **The design settles what an unplayed civ should get, and it is nothing.** In
+  multiplayer no civ receives orders unless a human sent them, whether that civ
+  is an absent player or a leftover `BadGuy`. Single player is the opposite and
+  already built: `BadGuy` there is driven by the external order generator in
+  `client/dev_tools/ai_player/`, which is published and does not depend on the
+  engine deciding anything.
+
+  **That reframes the open question rather than closing it.** If the engine
+  issues nothing for an unplayed civ, the design holds for free. If it does
+  issue orders, then an absent player's empire is acting on decisions nobody
+  authorised, which is a fault to suppress rather than a feature to keep. So
+  the answer still matters; what changed is which answer is the bad one.
+
+  `[ ]` **Unreconciled.** The agent on the second machine reports the opposite
+  from a different galaxy, that an unplayed civ issues new `ROUT`s and rewrites
+  production. Both observations are real and only one can be general. In this
+  fixture an unplayed civ's ship sat idle for all 40 turns and its only planet
+  drained its queue and never refilled it, which is a strange way for an AI to
+  show itself; in theirs the same civ appears to act. The question that
+  separates them is whether the `ROUT` they saw was already present before the
+  tick, since a ship advancing along an order it already had looks identical to
+  a new one unless the `DYNO` is compared against the state served. Recorded
+  rather than resolved, because the honest version is narrow and the clean
+  version might be wrong.
+
+  **The same is true of every civ with no human in it, and by design that case
+  does not arise.** A multiplayer galaxy is humans only: no `BadGuy`, no engine
+  opponent, one civ per player. So the fact that an unplayed civ is scenery
+  rather than an opponent costs nothing, and the finding narrows to the case
+  that does matter, a human who misses their turn.
+
+  `BadGuy` is present in the test galaxies on this branch because they were
+  grown from single-player fixtures. It holds a seat and does nothing, which is
+  harmless for testing and would be wrong in a real galaxy, so galaxy creation
+  for multiplayer should make exactly as many civs as there are players.
+  Single-player is unaffected: there the external `ai_player` is the opponent,
+  and it does not rely on the engine deciding anything.
+
+  `[ ]` **Whether this is the engine or our own patching is untested, and it
+  matters.** The referee ticks on the Resurgence build, which carries the six
+  T1-T5 sites in the turn pipeline, and whether one of them skips an AI phase is
+  unknown. The obvious control, ticking the same galaxy on the unpatched build,
+  is not available: without T1-T5 a client will not advance a turn without a
+  server, which is the whole reason those patches exist. If our patches are the
+  cause it is fixable; if the engine simply does not run AI down this path, the
+  empty seats need filling another way.
 - `[x]` **D4. More than two civs in a galaxy.** `server/dev_tools/inject_civ.py`
   adds a whole player to a blob, confirmed live with a third civ that owned a
   homeworld and played four turns.
