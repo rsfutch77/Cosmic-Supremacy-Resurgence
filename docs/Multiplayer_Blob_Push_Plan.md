@@ -612,7 +612,7 @@ made unnecessary.
           ship 208: order taken (38 -> 132 bytes)
       submitted: ['DemoPlayer', 'Neighbor']   missing: []
 
-  The store was addressed as `\HOST\Sharing\cosmic\galaxy1` from one side
+  The store was addressed as `\\HOST\Sharing\cosmic\galaxy1` from one side
   and by a different spelling of the same host from the other, which is itself
   a finding: **a host spelled as an address and the same host spelled by name
   are different SMB targets**, and a machine holding a session to one is
