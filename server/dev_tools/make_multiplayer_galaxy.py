@@ -197,7 +197,7 @@ def clear_ship_orders(blob: bytes, log=print) -> bytes:
 
     A freshly generated galaxy is not order-free. Every generation captured on
     this machine, at turn 0 and before anyone has played, gives the second civ's
-    first ship order type 2 with an 82-byte `ROUT`, while its other ship and
+    first ship order type 2, Scout, with an 82-byte `ROUT`, while its other ship and
     both of the first civ's are idle. In single player that is the engine
     getting its opponent moving. In a humans-only galaxy it is an order nobody
     issued, handed to whoever draws seat two, and it also travels into any civ
