@@ -664,6 +664,13 @@ made unnecessary.
   `launch` also waited out its full 180 seconds for a process that had already
   exited, which is most of why this took a day.
 
+  **Two commit titles in the history assert things this entry withdraws.**
+  `ee61a17` says "does not load at scale" and `f15be27` says the boundary is
+  position rather than count; the first is wrong, since scale was never the
+  axis, and the second was measured with the eleven-sun harness still in place.
+  Titles cannot be corrected without a rewrite, so they are named here instead.
+  This entry is the record, not the log.
+
   **Status: partially possible, mechanism not understood, general case blocked.**
   A projection that hides arbitrary systems does not work today. One that hides
   only the top of the id range works and hides 9 of 32 systems, which is poor
