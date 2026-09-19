@@ -334,11 +334,19 @@ def follow(store: TurnStore, civ: str, poll: float = 5.0, rounds: int = 0,
             existing = store.submissions(turn).get(civ)
             if (existing is not None and existing != sent
                     and not carries_orders(blob, mine, civ)):
-                log(f"[{civ}] turn {turn}: REFUSING to submit, this capture "
-                    f"carries no orders and would overwrite a "
-                    f"{len(existing):,}-byte submission this loop did not "
-                    f"write. Leaving that one standing.")
-                emit("refused", turn=turn, civ=civ)
+                # Both are orderless: nothing is at stake, so say so quietly.
+                # Shouting about a no-op is how a warning that matters gets
+                # read past, and this fired on the first live turn after the
+                # guard went in, replacing one empty submission with another.
+                if carries_orders(blob, existing, civ):
+                    log(f"[{civ}] turn {turn}: REFUSING to submit, this "
+                        f"capture carries no orders and would overwrite a "
+                        f"{len(existing):,}-byte submission carrying orders "
+                        f"that this loop did not write. Leaving it standing.")
+                    emit("refused", turn=turn, civ=civ)
+                else:
+                    log(f"[{civ}] turn {turn}: nothing played yet, leaving the "
+                        f"existing empty submission alone")
                 return True
 
             store.submit(civ, turn, mine)
