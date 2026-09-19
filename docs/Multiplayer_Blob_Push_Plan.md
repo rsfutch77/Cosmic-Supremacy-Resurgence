@@ -86,9 +86,24 @@ see D1.
   caller would keep working. `tick` writes the blob out, starts a client on it,
   drives the clock, captures and closes. Confirmed advancing a three-civ galaxy
   from turn 3 to turn 7 with no human present.
-  `[ ]` **The referee's client is stamped as one of the civs**, since every blob
-  names a local player. Whether the engine AI still plays that civ during a
-  referee tick is unmeasured, and if it does not, one civ silently stops acting.
+  `[x]` **The referee's client is stamped as one of the civs**, since every blob
+  names a local player, and it does not matter. If the engine had stopped
+  playing whoever the client is, every tick would quietly disadvantage one
+  empire, and in a hosted galaxy that empire is whoever `GLOB` happens to name.
+
+  Measured: one state ticked 40 turns three times, twice stamped as the same civ
+  and once as the other. The control reproduced exactly, and the two stamps came
+  out **byte-identical once the stamp itself is normalised away**. Normalising
+  matters, because stamping two runs differently guarantees the local-player
+  field differs and a differing hash on its own says nothing; the first reading
+  of this experiment was "DIFFERENT" and meant only that.
+
+  Scope, since the galaxy has to be able to show a difference for the absence of
+  one to mean anything: the blob grew 544 bytes over those turns, so research,
+  production and stores all progressed, but ship and planet counts never moved.
+  This covers economic decisions, not expansion or combat. An 8-turn version ran
+  first and proved less than it appeared to, since nothing in the galaxy changed
+  at all over that span.
 - `[x]` **A2. Canonical hash.** `server/canonical.py` zeroes the trailing `u32`
   of every `KNPL` payload and hashes what is left. Two independent ticks of
   turn 9, in separate processes, produced the same canonical hash. As it
@@ -576,6 +591,30 @@ made unnecessary.
 - `[x]` **D4. More than two civs in a galaxy.** `server/dev_tools/inject_civ.py`
   adds a whole player to a blob, confirmed live with a third civ that owned a
   homeworld and played four turns.
+
+## G. Operating it
+
+- `[x]` **One machine, one game process, now with a lock.** A machine that both
+  plays and referees has two things wanting the single client, and nothing
+  arbitrates. `referee.tick` closes whatever is running before starting its
+  own, and `wait_for_client_free` gives up after 180 seconds and ticks anyway,
+  so a referee waking on its deadline will close a player's client mid-turn, or
+  an experiment will close the referee's. Nearly happened twice in one session:
+  once a referee loop and an unrelated experiment were started against the same
+  machine, and it was luck that the player loop had already exited.
+
+  `game_cycle.take_client_lock` settles it. `launch` claims the machine's one
+  game process naming what it is for, `close_client` releases it, and a second
+  tool is refused with the holder's pid and purpose rather than silently winning
+  the race. The referee passes `wait_for_lock=240`, because it can afford to
+  wait and a player mid-turn cannot afford for it not to; a player's serve
+  refuses at once. A holder that died leaves a stale lock, cleared by asking
+  whether the pid is alive rather than by a timeout, since a legitimate hold
+  lasts a whole turn.
+
+  It is advisory: nothing stops a tool calling `Popen` itself, and every path in
+  this project goes through `launch`. On separate machines the problem does not
+  exist, which is why it survived this long unnoticed.
 
 ## F. Off one machine
 
