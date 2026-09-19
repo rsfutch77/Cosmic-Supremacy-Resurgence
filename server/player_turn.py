@@ -112,6 +112,23 @@ def describe_orders(served: bytes, submitted: bytes, civ: str) -> str:
     return f'{mine} of yours ({what}){extra}'
 
 
+def carries_orders(served: bytes, submitted: bytes, civ: str) -> bool:
+    """Does this submission change anything of this civ's?
+
+    Deliberately conservative: anything that cannot be summarised counts as
+    carrying orders, because the only thing this answer is used for is deciding
+    whether a submission may be thrown away, and an unreadable blob is not one
+    to discard.
+    """
+    try:
+        import order_diff
+        mine, _theirs, _galaxy = order_diff.compare(
+            served, submitted, civ, log=lambda *a: None)
+        return bool(mine)
+    except Exception:                                       # noqa: BLE001
+        return True
+
+
 def save_path_ready(host='127.0.0.1', port=8888, timeout=2.0):
     """(ok, why) for the path a captured turn has to travel.
 
@@ -245,10 +262,52 @@ def follow(store: TurnStore, civ: str, poll: float = 5.0, rounds: int = 0,
     played = 0
     while not halted():
         turn, deadline = store.current()
+
+        # Never re-serve a turn this civ has already submitted for.
+        #
+        # Serving is destructive: it closes whatever client is running and
+        # relaunches on the store's pristine turn blob. If the player has
+        # already played this turn, that throws away what they played AND the
+        # orderless state that replaces it then overwrites their submission,
+        # because `submit` is last-write-wins. Measured: a loop restarted with
+        # 22 seconds left on turn 12 took the player's client away, submitted
+        # 39,128 bytes reading NOTHING CHANGED over a 39,222-byte submission
+        # carrying their colonise order, and only an unclosed turn and a copy
+        # still on disk got it back.
+        #
+        # Waiting is always safe and redoing never is, so wait. The player has
+        # submitted; that submission is their turn.
         blob = store.turn_blob(turn)
+
+        # `blob` stays the authoritative turn throughout: it is the baseline
+        # every diff and summary is measured against. `to_load` is only what
+        # goes into the client, and on a restart those are not the same thing.
+        to_load = blob
+        prior = store.submissions(turn).get(civ)
+        if prior is not None:
+            if carries_orders(blob, prior, civ):
+                # Resume, do not restart. The submission is a complete blob of
+                # this turn carrying what the player played, so loading it puts
+                # them back where they were. Loading `blob` instead would take
+                # their orders away and then overwrite the submission holding
+                # them, which is how turn 12 was nearly lost: a loop restarted
+                # 22 seconds before the deadline served the pristine turn and
+                # submitted 39,128 orderless bytes over a 39,222-byte colonise
+                # order.
+                to_load = prior
+                log(f"[{civ}] turn {turn}: resuming from your submission "
+                    f"({len(prior):,} bytes, it carries orders)")
+                emit("resuming", turn=turn, civ=civ)
+            else:
+                # An orderless submission is the interim write of a turn nobody
+                # has played yet. There is nothing in it to preserve, so a
+                # plain serve is correct and refusing here would strand a
+                # player whose client died with their turn still open.
+                log(f"[{civ}] turn {turn}: a submission exists but carries no "
+                    f"orders, serving the turn fresh")
         emit("serving", turn=turn, civ=civ)
         log(f"[{civ}] turn {turn}: serving")
-        serve(blob, civ, hold=HOLD_SECONDS, exe=exe, log=log)
+        serve(to_load, civ, hold=HOLD_SECONDS, exe=exe, log=log)
 
         sent = None                     # the last blob this turn actually stored
         last_try = 0.0
@@ -260,6 +319,28 @@ def follow(store: TurnStore, civ: str, poll: float = 5.0, rounds: int = 0,
             mine = sp.load_any(capture)
             if mine == sent:
                 return True
+
+            # Refuse to replace a submission we did not write with one that
+            # carries nothing. `sent` is what THIS pass stored, so `existing`
+            # differing from it means the submission came from somewhere else:
+            # an earlier run, another process, a restart mid-turn. Overwriting
+            # that with an empty capture is the one failure today that
+            # destroyed rather than dropped, and it is silent because
+            # last-write-wins has no opinion about what it is replacing.
+            #
+            # A player who genuinely cancels their order is still served: the
+            # submission we wrote ourselves is `sent`, so replacing our own
+            # with an empty one is allowed. Only a stranger's is protected.
+            existing = store.submissions(turn).get(civ)
+            if (existing is not None and existing != sent
+                    and not carries_orders(blob, mine, civ)):
+                log(f"[{civ}] turn {turn}: REFUSING to submit, this capture "
+                    f"carries no orders and would overwrite a "
+                    f"{len(existing):,}-byte submission this loop did not "
+                    f"write. Leaving that one standing.")
+                emit("refused", turn=turn, civ=civ)
+                return True
+
             store.submit(civ, turn, mine)
             landed = store.submissions(turn).get(civ)
             if landed != mine:
