@@ -61,6 +61,11 @@ import merge_orders as mo
 
 NAME_LIMIT = 15          # the engine's name buffer
 
+# The two PLPR bytes homeworld customisation writes, which is the whole of what
+# a generated galaxy hands one civ and not the other. PLPR+4 is Planet:96, the
+# per-unit output rates.
+RATE_OFFSETS = (4, 11)
+
 
 def rename_civ(blob: bytes, old: str, new: str, log=print) -> bytes:
     """Rename a civ in place. The name is length-prefixed, so sizes move."""
@@ -160,8 +165,14 @@ def equalise_homeworlds(blob: bytes, players, log=print) -> bytes:
     other two at 7, and the same run stamped as the second civ gave the same
     answer, so it is the planets and not who the tick client plays.
 
-    Only the bytes before the population count are copied, which in a fresh
-    galaxy is exactly those two. Anything more is reported.
+    **Only the rate pair is copied, never the head it sits in.** On a fresh
+    galaxy those are the only two bytes that differ, so copying the whole head
+    before the population count looks equivalent, and on a played galaxy it is
+    not: at turn 17 of the live galaxy the two human homeworlds differed at
+    indices 4, 11, 15, 16, 19, 20 and 23, and the other five are seventeen turns
+    of legitimate divergence in stores and production. Copying the head there
+    would hand one player the other's stockpiles. Everything outside the pair is
+    reported and left alone.
     """
     ref_civ = players[0]
     ref_home = homeworld(blob, ref_civ)
@@ -182,15 +193,19 @@ def equalise_homeworlds(blob: bytes, players, log=print) -> bytes:
         if sec is None:
             continue
         head = bytes(blob[sec.payload:sec.payload + mo.POP_COUNT_OFF])
-        diff = [i for i in range(len(ref)) if head[i] != ref[i]]
-        if not diff:
-            continue
-        out = bytearray(blob)
-        out[sec.payload:sec.payload + mo.POP_COUNT_OFF] = ref
-        blob = bytes(out)
-        log(f'  {civ}: homeworld {target} matched to {ref_civ}\'s, '
-            f'{len(diff)} byte(s) at ' +
-            ', '.join(f'+{i} {head[i]}->{ref[i]}' for i in diff[:6]))
+        mine = [i for i in RATE_OFFSETS if head[i] != ref[i]]
+        theirs = [i for i in range(len(ref))
+                  if head[i] != ref[i] and i not in RATE_OFFSETS]
+        if mine:
+            out = bytearray(blob)
+            for i in mine:
+                out[sec.payload + i] = ref[i]
+            blob = bytes(out)
+            log(f'  {civ}: homeworld {target} rates matched to {ref_civ}\'s, ' +
+                ', '.join(f'+{i} {head[i]}->{ref[i]}' for i in mine))
+        if theirs:
+            log(f'  {civ}: left {len(theirs)} other differing byte(s) alone at '
+                + ', '.join(f'+{i}' for i in theirs))
     return blob
 
 
