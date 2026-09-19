@@ -602,10 +602,31 @@ made unnecessary.
   open to strangers. The ownership rules in `merge_orders.py` still hold, so the
   worst a stranger can do through this door is submit nonsense as someone else,
   not acquire their ships.
-- `[ ]` **F2. Two machines.** Nothing is known to be missing: the store is
-  reachable over the network, the referee runs against a URL, and a player's
-  launcher takes the same string. Untested, because it has only ever been run
-  against `127.0.0.1`.
+- `[x]` **F2. Two machines.** Done, 18 September 2026. Two PCs played one
+  galaxy over a shared folder, each with its own client, its own `cs_server`
+  and its own launcher config, sharing only the store. Turn 12 closed with both
+  submissions present and the other machine's colonise applied:
+
+      referee: closing turn 12 with 2 submission(s)
+      Neighbor (object 206):
+          ship 208: order taken (38 -> 132 bytes)
+      submitted: ['DemoPlayer', 'Neighbor']   missing: []
+
+  The store was addressed as `\\HOST\Sharing\cosmic\galaxy1` from one side
+  and by a different spelling of the same host from the other, which is itself
+  a finding: **a host spelled as an address and the same host spelled by name
+  are different SMB targets**, and a machine holding a session to one is
+  refused on the other. That cost a round of wrong guesses between the two
+  machines, and `check_store.py` now tries the other spelling and says so.
+
+  Turn 11 was lost first: that machine's `cs_server` was not running, so
+  `SaveGame` failed and there was nothing to submit, and the referee reported a
+  missing player, which reads as somebody who did not turn up rather than a
+  write that failed. Three changes came out of it, all in `player_turn.py`:
+  the save path is checked **before** a turn is served rather than at the
+  deadline when it is already spent; submissions go every 20 seconds through
+  the turn instead of once at the end; and each one reports what it carries, so
+  an empty turn is visible as an empty turn.
 - `[x]` **F3. The launcher takes a URL.** It does now. It did not: the plan said
   the `store` string was "passed to `open_store`", and the launcher in fact
   named `turn_store.TurnStore` directly, so a URL meant a directory called
