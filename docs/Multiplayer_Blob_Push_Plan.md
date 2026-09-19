@@ -610,10 +610,18 @@ made unnecessary.
   research stops. That is survivable for a turn or two and is a slow death over
   a week, which is exactly what governors existed to prevent.
 
-  **The same is true of every civ with no human in it.** The nominal AI
-  opponent in these galaxies is not an opponent, it is scenery. A beta galaxy
-  therefore needs enough humans, or the empty seats want the external
-  `ai_player` rather than an engine AI that does not run here.
+  **The same is true of every civ with no human in it, and by design that case
+  does not arise.** A multiplayer galaxy is humans only: no `BadGuy`, no engine
+  opponent, one civ per player. So the fact that an unplayed civ is scenery
+  rather than an opponent costs nothing, and the finding narrows to the case
+  that does matter, a human who misses their turn.
+
+  `BadGuy` is present in the test galaxies on this branch because they were
+  grown from single-player fixtures. It holds a seat and does nothing, which is
+  harmless for testing and would be wrong in a real galaxy, so galaxy creation
+  for multiplayer should make exactly as many civs as there are players.
+  Single-player is unaffected: there the external `ai_player` is the opponent,
+  and it does not rely on the engine deciding anything.
 
   `[ ]` **Whether this is the engine or our own patching is untested, and it
   matters.** The referee ticks on the Resurgence build, which carries the six
