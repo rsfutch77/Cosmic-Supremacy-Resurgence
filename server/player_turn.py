@@ -75,6 +75,43 @@ def hold_clock(seconds=HOLD_SECONDS, log=print):
         at.kernel32.CloseHandle(h)
 
 
+def describe_orders(served: bytes, submitted: bytes, civ: str) -> str:
+    """A short account of what this submission actually carries.
+
+    A submission that writes cleanly and reads back byte for byte can still be
+    a turn where the player's click never reached the blob, and a log line
+    saying only that some bytes were stored cannot tell the two apart. This
+    says what changed and whose it is, so an empty turn is visible as an empty
+    turn while it can still be acted on.
+    """
+    try:
+        import order_diff
+        lines = []
+        mine, theirs, galaxy = order_diff.compare(
+            served, submitted, civ, log=lines.append)
+    except Exception as exc:                                # noqa: BLE001
+        return f'could not summarise it ({type(exc).__name__})'
+    if not (mine or theirs or galaxy):
+        return 'NOTHING CHANGED, this turn carries no orders'
+    # order_diff prefixes each object with a blank line, so strip before
+    # matching: testing startswith on the raw line quietly matched nothing and
+    # the summary said "changes" for everything.
+    objs = []
+    for line in lines:
+        bare = line.lstrip('\n')
+        if ' owner ' in bare and bare.startswith('  '):
+            parts = bare.split()
+            if len(parts) >= 2:
+                objs.append(f'{parts[0]} {parts[1]}')
+    what = ', '.join(objs[:4]) or 'changes'
+    extra = ''
+    if theirs:
+        extra += f", {theirs} on another civ's objects, which will be dropped"
+    if galaxy:
+        extra += f', {galaxy} galaxy-level'
+    return f'{mine} of yours ({what}){extra}'
+
+
 def save_path_ready(host='127.0.0.1', port=8888, timeout=2.0):
     """(ok, why) for the path a captured turn has to travel.
 
@@ -233,7 +270,8 @@ def follow(store: TurnStore, civ: str, poll: float = 5.0, rounds: int = 0,
                     + ". Can this machine WRITE to the store?")
             sent = mine
             log(f"[{civ}] turn {turn}: submitted {len(mine):,} bytes"
-                + (" (final)" if final else ""))
+                + (" (final)" if final else "")
+                + f", {describe_orders(blob, mine, civ)}")
             emit("submitted", turn=turn, civ=civ, final=final)
             return True
 
