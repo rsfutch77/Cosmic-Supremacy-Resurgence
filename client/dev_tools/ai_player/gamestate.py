@@ -398,17 +398,24 @@ WRAPPERS = {"Owner": Civ, "Planet": Planet, "Ship": Ship,
             "ShipDesign": Design, "Sun": Sun}
 
 
-def resolve_civ(snap, name=None):
+def resolve_civ(snap, name=None, quiet=False):
     """The civ a tool should act for, or None with a printed reason.
 
     Wraps Snapshot.our_civ so every entry point behaves the same: an explicit
     --civ must exist, and with no --civ we take the local player rather than
     guessing at a name that customisation may have changed.
+
+    `quiet` is for callers that are polling a client which is still starting.
+    A client that has not yet filled its player slot fails this read two or
+    three times before succeeding, and printing `error:` each time makes a
+    normal launch look like a fault in every log anyone reads afterwards. The
+    caller polling knows the difference; this function does not.
     """
     try:
         return snap.our_civ(name)
     except LookupError as e:
-        print(f"error: {e}")
+        if not quiet:
+            print(f"error: {e}")
         return None
 
 

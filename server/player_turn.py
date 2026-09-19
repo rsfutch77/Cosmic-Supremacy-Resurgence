@@ -75,10 +75,38 @@ def hold_clock(seconds=HOLD_SECONDS, log=print):
         at.kernel32.CloseHandle(h)
 
 
+def save_path_ready(host='127.0.0.1', port=8888, timeout=2.0):
+    """(ok, why) for the path a captured turn has to travel.
+
+    A turn is lost anywhere along serve, play, save, capture, submit, and the
+    save link is the one nothing was watching. `SaveGame` posts to the stub
+    server, so if nothing is listening the capture fails, and it fails at the
+    deadline, when the turn has already been played and cannot be replayed.
+    That is exactly how a player lost a turn the first time two machines ran
+    together: the run looked healthy for its whole length because serving never
+    touches the save path.
+
+    Checked before serving rather than at collect, because the only useful time
+    to find out is before the turn is spent.
+    """
+    import socket
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return True, ''
+    except OSError as exc:
+        return False, (f'nothing is listening on {host}:{port} ({exc.strerror or exc}), '
+                       f'so SaveGame would fail and the turn would be lost at '
+                       f'the deadline. Start it with: python server/cs_server.py')
+
+
 def serve(blob: bytes, civ: str, work_dir=None, hold=HOLD_SECONDS,
-          exe=PLAYER_BUILD, log=print):
+          exe=PLAYER_BUILD, check_save_path=True, log=print):
     """Stamp, launch, hold. Returns the path served."""
     import game_cycle as gc
+    if check_save_path:
+        ok, why = save_path_ready()
+        if not ok:
+            raise SystemExit(f'refusing to serve {civ}: {why}')
     work_dir = work_dir or os.path.join(HERE, "referee_work")
     os.makedirs(work_dir, exist_ok=True)
     stamped = set_blob_player.set_player(blob, civ, log=log)
@@ -222,7 +250,15 @@ def follow(store: TurnStore, civ: str, poll: float = 5.0, rounds: int = 0,
             if left <= 0:
                 emit("collecting", turn=turn, civ=civ)
                 log(f"[{civ}] turn {turn}: time is up, collecting")
-                push(final=True)
+                try:
+                    push(final=True)
+                except Exception as exc:                    # noqa: BLE001
+                    # This turn is forfeit either way, but stopping here also
+                    # abandons every turn after it, which is how one bad
+                    # collect became a player who had simply stopped. Say it
+                    # loudly, then carry on to the next turn.
+                    log(f"[{civ}] turn {turn}: LOST, {exc}")
+                    emit("lost", turn=turn, civ=civ, error=str(exc))
                 break
 
             if time.time() - last_try >= submit_every:
