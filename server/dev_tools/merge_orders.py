@@ -114,8 +114,10 @@ growth each turn. Measured by a player moving the slider from 0 to 50.
 own payload. Measured by having a player rename the system they hold five of six
 planets in: the name appeared on the `SUN `, and the renamer's own `EXSY` cache
 picked it up while the other civ's did not. A system belongs to nobody, so the
-right to rename it is the game's own rule, **owning more than half its
-planets**, read from the served state.
+right to rename it is the game's own rule, **owning more than half of its
+settled planets**, read from the served state. Unowned planets do not count
+toward the denominator: one settled planet in an otherwise empty system is a
+majority of one, and the client lets its owner name the system.
 
 **Planet renaming**, `PLNT` own payload `+24`: a `u32` length then the
 characters. Measured by having a player rename a colony, which changed that
@@ -924,10 +926,20 @@ def merge(blob, submissions, log=print):
                 # player buries the drops that mean something: the first live
                 # merge of the rehearsal reported 65 drops, 64 of them this.
                 continue
+            # The majority is of the planets that have an owner, not of every
+            # rock in the system. A player holding the only settled planet in a
+            # system of six may name it, which is what the client allows and
+            # what the first live rehearsal caught us refusing: both players
+            # named their own home system on turn 2 and both were dropped,
+            # holding 1 of 6 and 1 of 4. The rule was inherited by analogy from
+            # planet renaming, where the client's own refusal names a majority,
+            # and the analogy was wrong.
             held = owners.get(mine, 0)
-            if held * 2 <= total:
+            settled = sum(owners.values())
+            if held * 2 <= settled:
                 log(f"    system {sun_oid}: rename DROPPED, {civ_name} holds "
-                    f"{held} of {total} planets, not a majority")
+                    f"{held} of the {settled} settled planet(s) in a system of "
+                    f"{total}, not a majority")
                 dropped += 1
                 continue
             ok, why = name_acceptable(name[1])
