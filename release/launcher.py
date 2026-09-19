@@ -767,7 +767,11 @@ class Launcher:
             return
         player_turn, turn_store = mods
 
-        store = turn_store.TurnStore(cfg["store"])
+        # `open_store`, not `TurnStore`: the store is a directory on one machine
+        # and a base URL once the referee is on another, and which one it is is
+        # the player's to write in multiplayer.json. Naming the class here made
+        # a URL silently mean "a folder called http:".
+        store = turn_store.open_store(cfg["store"])
         if not store.exists():
             self.warn(f"No galaxy in\n{cfg['store']}\n\nThe referee has to "
                       "publish a first turn before anyone can play it.")

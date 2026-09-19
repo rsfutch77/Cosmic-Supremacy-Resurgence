@@ -606,8 +606,22 @@ made unnecessary.
   reachable over the network, the referee runs against a URL, and a player's
   launcher takes the same string. Untested, because it has only ever been run
   against `127.0.0.1`.
-- `[ ]` **F3. The launcher takes a URL.** `multiplayer.json` holds a `store`
-  which is passed to `open_store`, so a URL should already work. Not yet tried.
+- `[x]` **F3. The launcher takes a URL.** It does now. It did not: the plan said
+  the `store` string was "passed to `open_store`", and the launcher in fact
+  named `turn_store.TurnStore` directly, so a URL meant a directory called
+  `http:` and the player was told there was no galaxy there. One line, now
+  `open_store`.
+
+  Verified through the launcher's own path rather than around it:
+  `multiplayer_config` read a `multiplayer.json` holding
+  `"store": "http://127.0.0.1:8907"`, `multiplayer_modules` supplied the
+  checkout's `turn_store`, and `open_store` returned an `HttpTurnStore` that
+  reported `exists`, turn 8, both civs and the live countdown off a
+  `turn_server.py` in front of a throwaway store.
+
+  **This is the shape of bug F2 will keep finding.** Nothing about the store
+  seam is wrong; the callers above it were written when a store was always a
+  folder, and each one has to be looked at rather than assumed.
 - `[ ]` **F4. A Firebase adapter**, replacing either side of the seam.
 
 ## E. Not applicable on this path
