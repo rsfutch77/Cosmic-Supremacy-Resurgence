@@ -577,6 +577,39 @@ made unnecessary.
   adds a whole player to a blob, confirmed live with a third civ that owned a
   homeworld and played four turns.
 
+## F. Off one machine
+
+- `[x]` **F1. Address the turn store over HTTP.** `server/turn_server.py` puts a
+  store behind a URL and `HttpTurnStore` speaks to it, so
+  `open_store("http://host:8899")` and `open_store("some/dir")` are
+  interchangeable. Every caller takes a string and never learns which it got.
+
+  Verified two ways. An equivalence test runs the same sequence against a
+  directory and against the service in front of that same directory and checks
+  the directory's own view agrees, 24 checks covering start, publish, submit,
+  the submission list, the archive, missing turns and the factory. Then the
+  referee resolved a real turn **entirely over HTTP**: it read the state,
+  fetched the turn, read submissions, ticked, published turn 11 and archived
+  turn 10, and the directory and the URL then reported the same canonical hash.
+
+  This is the seam the deployment needs. A Firebase adapter replaces the service
+  and `HttpTurnStore` keeps working, or replaces `HttpTurnStore` and the service
+  is no longer needed. Nothing above the store changes either way.
+
+  `[ ]` **There is no authentication.** Anyone who can reach the port can
+  publish a turn or submit as any civ. Deliberate for a closed beta among people
+  who know each other, and the first thing that has to change before a galaxy is
+  open to strangers. The ownership rules in `merge_orders.py` still hold, so the
+  worst a stranger can do through this door is submit nonsense as someone else,
+  not acquire their ships.
+- `[ ]` **F2. Two machines.** Nothing is known to be missing: the store is
+  reachable over the network, the referee runs against a URL, and a player's
+  launcher takes the same string. Untested, because it has only ever been run
+  against `127.0.0.1`.
+- `[ ]` **F3. The launcher takes a URL.** `multiplayer.json` holds a `store`
+  which is passed to `open_store`, so a URL should already work. Not yet tried.
+- `[ ]` **F4. A Firebase adapter**, replacing either side of the seam.
+
 ## E. Not applicable on this path
 
 - The `CMND` command protocol, `RQSV`'s reply format, and live-versus-replay
