@@ -228,10 +228,52 @@ see D1.
     and the launcher decided the whole install was broken. `is_playable` now
     recognises a `"session"` mode.
 
-  [ ] **Not packaged.** The launcher's multiplayer path imports from the
-  checkout, so it runs only from a clone. Shipping it means bundling
-  `save_parser`, `set_blob_player`, `turn_store` and the serve and collect logic
-  into the frozen build, which is a `build.ps1` change.
+  [x] **Packaged.** Measured on 19 September 2026 against a throwaway copy of
+  `server/galaxy_demo`: the built launcher, run from a copy of `dist\` outside
+  the checkout, showed the Multiplayer card as playable, read its own
+  `multiplayer.json`, opened the store, stamped turn 11 for `DemoPlayer`,
+  started `CosmicSupremacy_Player.exe` out of its own `game\`, held the clock,
+  and submitted 39,161 bytes seven seconds after the click.
+
+      01:38:43  serving turn 11, local player 202 (BadGuy) -> 198 (DemoPlayer)
+      01:38:50  client up, clock held, captured, submitted
+      01:40:56  time is up, captured, unchanged, so nothing rewritten
+      01:40:58  waiting for the referee to publish past turn 11
+
+  What ships that did not before:
+
+  - Four `--paths` directories and fourteen `--hidden-import`s in `build.ps1`.
+    Every module in the turn path is imported inside a function, so nothing
+    else in the repo notices one going missing.
+  - A multiplayer client in `game\`. A `session` mode names no EXE, so the loop
+    that copies clients never reached it, and every release so far shipped a
+    playable card with no client for it to start. `CosmicSupremacy_Player.exe`
+    when the checkout has built one, otherwise `CosmicSupremacy_TestBed.exe`,
+    which is the fallback `resolve_exe` already makes and one prompt worse.
+
+  Two things that were not flags:
+
+  - **A frozen build must not re-run `sys.executable`.** It is the launcher and
+    not an interpreter, so `player_turn.collect` and `game_cycle.capture_save`
+    starting `trigger_save.py` as a subprocess started a second launcher and
+    took no save. `game_cycle.trigger_save` calls it in process instead. The
+    work is a remote thread inside the game client, so the subprocess only ever
+    supplied an argument parser.
+  - **Every module works out where it is from `__file__`.** Frozen, that is the
+    temporary directory PyInstaller unpacks into: no client executables in it,
+    and deleted when the launcher exits. `bind_multiplayer_paths` repoints
+    `game_cycle` at the game folder and `player_turn` at the data directory.
+
+  `release/tests/test_packaging.py` holds the line. It reads the flags out of
+  `build.ps1` rather than restating them, so a misspelled hidden import fails a
+  test instead of building cleanly and going missing at the first turn.
+
+  [~] **The referee is not packaged, and is not meant to be.** `referee.py:99`
+  still starts `advance_turns.py` with `sys.executable`, which is correct where
+  it runs. The referee runs from a checkout, where that is a real interpreter;
+  the release freezes `release/launcher.py`, which reaches `player_turn` and
+  `game_cycle` and never reaches `referee`. Computing turns stays a checkout
+  job.
 - [x] **B2. Stop the player's client ticking on its own.** Confirmed live: a
   player's client sat on a served turn for six minutes, never advanced, never
   bailed, and the launcher showed the real countdown beside it. Two things get
