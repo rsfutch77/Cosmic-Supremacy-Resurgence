@@ -66,3 +66,4 @@ site/public/
 site/.firebase/
 site/*.log
 referee_work/
+server/fog_work/
