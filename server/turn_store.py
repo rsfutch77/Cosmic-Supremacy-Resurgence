@@ -51,6 +51,10 @@ sys.path.insert(0, os.path.join(HERE, 'dev_tools'))
 
 import save_parser as sp
 
+# How long a reader waits for a `state.json` that is missing because someone is
+# replacing it. See TurnStore.state.
+STATE_RETRY_SECONDS = 2.0
+
 
 def _atomic_write(path: str, data: bytes) -> None:
     os.makedirs(os.path.dirname(path), exist_ok=True)
@@ -90,8 +94,47 @@ class TurnStore:
         return os.path.exists(self.state_path)
 
     def state(self) -> dict:
-        with open(self.state_path, encoding='utf-8') as f:
-            return json.load(f)
+        """The galaxy's clock and roster, tolerating a writer mid-replace.
+
+        `os.replace` is atomic on a local volume and **is not over SMB**: the
+        redirector can implement replace-over-existing as a delete followed by
+        a rename, and a reader on another machine sees `state.json` briefly
+        absent. Measured live , machine B's player loop died with
+        `FileNotFoundError` on `state.json` at the moment machine A's referee
+        republished it, in a galaxy that was healthy before and after.
+
+        This cannot be fixed from the writer's side, because there is no
+        cross-machine atomic replace to reach for. So the reader retries: a
+        file that is missing because someone is writing it reappears in
+        milliseconds, and one that is missing because the galaxy is not there
+        stays missing and still raises.
+
+        A turn is 1800 seconds and this waits at most 2, so a caller that polls
+        the clock cannot be pushed off its deadline by the retry.
+        """
+        deadline = time.time() + STATE_RETRY_SECONDS
+        while True:
+            try:
+                with open(self.state_path, encoding='utf-8') as f:
+                    return json.load(f)
+            except (FileNotFoundError, PermissionError, ValueError):
+                # All three, and the second is the one that matters most.
+                # Windows reports an open against a delete-pending file as a
+                # sharing violation, so the common outcome of this race is
+                # `PermissionError`, not `FileNotFoundError`. Catching only the
+                # obvious one left 3 reads in 300 still failing under a churning
+                # writer; catching this one took it to 0.
+                #
+                # ValueError covers the narrower window where the file is
+                # present but half written, which yields a partial JSON object
+                # rather than no file. That is not a state worth acting on
+                # either.
+                #
+                # A share that genuinely refuses us still raises, two seconds
+                # later, and `exists()` stays honest throughout.
+                if time.time() >= deadline:
+                    raise
+                time.sleep(0.05)
 
     def _put_state(self, state: dict) -> None:
         _atomic_write(self.state_path,
