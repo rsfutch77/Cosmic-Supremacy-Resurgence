@@ -13,6 +13,7 @@ import ctypes
 from ctypes import wintypes
 import struct
 import sys
+from client_proc import find_pid, NOT_THE_CLIENT  # one copy, see client_proc.py
 
 PROCESS_VM_READ      = 0x0010
 PROCESS_VM_WRITE     = 0x0020
@@ -24,28 +25,6 @@ TURNLENGTH_ADDR = 0x0080AA08  # .data section , stable across launches
 psapi    = ctypes.WinDLL("psapi", use_last_error=True)
 kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
 
-
-def find_pid(exe_substr="CosmicSupremacy"):
-    arr = (wintypes.DWORD * 4096)()
-    cb  = ctypes.c_ulong()
-    if not psapi.EnumProcesses(ctypes.byref(arr), ctypes.sizeof(arr), ctypes.byref(cb)):
-        raise OSError("EnumProcesses failed")
-    count = cb.value // ctypes.sizeof(wintypes.DWORD)
-    for i in range(count):
-        pid = arr[i]
-        if pid == 0:
-            continue
-        h = kernel32.OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, False, pid)
-        if not h:
-            continue
-        try:
-            buf = ctypes.create_unicode_buffer(260)
-            n = psapi.GetModuleBaseNameW(h, None, buf, 260)
-            if n and exe_substr.lower() in buf.value.lower():
-                return pid, buf.value
-        finally:
-            kernel32.CloseHandle(h)
-    return None, None
 
 
 def main():
