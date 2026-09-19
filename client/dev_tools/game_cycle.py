@@ -55,6 +55,10 @@ def client_pids():
 
 
 def close_client(timeout=20):
+    # Releasing here rather than only on the happy path: close_client is what
+    # every caller runs when it is finished with the client, including the
+    # finally blocks, so this is where the lock actually stops being needed.
+    release_client_lock()
     pids = client_pids()
     if not pids:
         log("  client is not running")
@@ -72,10 +76,88 @@ def close_client(timeout=20):
     return False
 
 
+import tempfile
+
+# One machine has one game process, and more than one tool wants it. A referee
+# waking on its deadline calls close_client and takes it; so does an experiment;
+# so does a player's loop serving a turn. Whoever moves second destroys what the
+# first was doing, and in the case that matters that is a player's turn, mid
+# play, with no trace afterwards beyond a client that vanished.
+#
+# The lock is a file naming the holder and its pid. It is advisory, since
+# nothing stops a tool calling Popen itself, but every path in this project goes
+# through launch() and close_client(). A holder that has died leaves a stale
+# lock, which is detected by asking whether the pid is still alive rather than
+# by a timeout, because a legitimate hold can last a whole turn.
+CLIENT_LOCK = os.path.join(tempfile.gettempdir(), "cosmic_client.lock")
+
 TESTBED_EXE = os.path.join(CLIENT_DIR, "CosmicSupremacy_TestBed.exe")
 PLAYER_EXE = os.path.join(CLIENT_DIR, "CosmicSupremacy_Player.exe")
 
 BUILDS = {"resurgence": EXE, "testbed": TESTBED_EXE, "player": PLAYER_EXE}
+
+
+def _pid_alive(pid):
+    try:
+        out = subprocess.run(["tasklist", "/FI", f"PID eq {int(pid)}", "/NH"],
+                             capture_output=True, text=True, timeout=15)
+        return str(pid) in (out.stdout or "")
+    except Exception:
+        return True          # cannot tell, so assume the holder is alive
+
+
+def lock_holder():
+    """(pid, purpose) currently holding the client, or None."""
+    try:
+        raw = open(CLIENT_LOCK, encoding="utf-8").read().strip()
+        pid, _, purpose = raw.partition(" ")
+        return int(pid), purpose
+    except (OSError, ValueError):
+        return None
+
+
+def take_client_lock(purpose, wait=0.0, poll=2.0):
+    """Claim the machine's one game process. Returns True when held.
+
+    `wait` is how long to wait for a current holder to finish. Zero refuses at
+    once, which is what an interactive tool wants; a referee that can afford to
+    wait passes a real number.
+    """
+    deadline = time.time() + wait
+    while True:
+        held = lock_holder()
+        if held is None or not _pid_alive(held[0]):
+            if held is not None:
+                log(f"  clearing a stale client lock from pid {held[0]} "
+                    f"({held[1]})")
+            try:
+                fd = os.open(CLIENT_LOCK, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            except FileExistsError:
+                try:
+                    os.remove(CLIENT_LOCK)
+                except OSError:
+                    pass
+                continue
+            with os.fdopen(fd, "w") as f:
+                f.write(f"{os.getpid()} {purpose}")
+            return True
+        if held[0] == os.getpid():
+            return True                      # already ours, reentrant
+        if time.time() >= deadline:
+            raise SystemExit(
+                f"the game client is held by pid {held[0]} ({held[1]}). "
+                f"Starting one now would close theirs, which if it is a "
+                f"player's turn destroys it. Wait, or stop that process.")
+        time.sleep(poll)
+
+
+def release_client_lock():
+    held = lock_holder()
+    if held and held[0] == os.getpid():
+        try:
+            os.remove(CLIENT_LOCK)
+        except OSError:
+            pass
 
 
 def resolve_exe(which=None):
@@ -111,8 +193,13 @@ def resolve_exe(which=None):
                      f"{sorted(BUILDS)}, or a path to an exe")
 
 
-def launch(dat, timeout=180, exe=None):
+def launch(dat, timeout=180, exe=None, purpose=None, wait_for_lock=0.0):
     """Start the client on a .dat and wait until its state is readable.
+
+    Takes the machine's client lock first, so a second tool cannot close this
+    client out from under whoever started it. `purpose` is what the other tool
+    will be told is holding it, so make it something a person can act on.
+    `wait_for_lock` of zero refuses immediately when somebody else holds it.
 
     Waiting on the STATE rather than on a timer is the point: a load that takes
     40 seconds and a load that crashed look identical for the first 39.
@@ -129,8 +216,11 @@ def launch(dat, timeout=180, exe=None):
     dat = os.path.abspath(dat)
     if not os.path.exists(dat):
         raise SystemExit(f"no such file: {dat}")
+    take_client_lock(purpose or f"launch {os.path.basename(dat)}",
+                     wait=wait_for_lock)
     exe_path = resolve_exe(exe)
     if not os.path.exists(exe_path):
+        release_client_lock()
         raise SystemExit(f"no such client: {exe_path}")
     log(f"  launching {os.path.basename(exe_path)} on {dat}")
     subprocess.Popen([exe_path, dat], cwd=CLIENT_DIR,
