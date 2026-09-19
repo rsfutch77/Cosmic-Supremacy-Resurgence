@@ -60,7 +60,7 @@ at 60%: the population held at nine across the turn a soldier appeared. A rule
 that assumed the total was invariant across a tick would refuse every turn
 after the first.
 
-**Job allocation**, the citizen array in `PLNT > PLPR`. `PLPR+36` is a `u32`
+The layout, which is what the rule is written against. `PLPR+36` is a `u32`
 population count and `PLPR+40` begins that many nine-byte records:
 
     +0  u8   job id, 0 farmer, 1 worker, 2 scientist, 5 miner, 6 banker
@@ -74,14 +74,8 @@ exactly. The array is kept sorted by job, so a reassignment reorders it rather
 than editing one byte in place, which is why the diff looked like values
 shifting along.
 
-Only the array is copied, never the rest of `PLPR`, which carries the planet's
-stores and derived economy. Four things must hold or the change is dropped:
-
-    the count is unchanged                  no inventing population
-    the multiset of owner ids is unchanged  no citizen changes hands
-    the multiset of +7 values is unchanged  a reassignment permutes, it does
-                                            not invent
-    every job id is one the game defines
+Only the two arrays are copied, never the rest of `PLPR`, which carries the
+planet's stores and derived economy.
 
 **What the per-citizen owner id is for is not established.** It equals the
 planet's owner on every naturally created planet measured. One colony in the
@@ -105,25 +99,16 @@ since the per-citizen owner already says whose it is, but it has not been
 measured and letting one player write into another's `PLPR` deserves more care
 than a guess.
 
-**Military transfers**, a planet's stationed array and a ship's `SHPR` crew.
-Soldiers are the same nine-byte record as citizens, kept in a second array that
-starts where the citizen array ends: a `u32` count at `PLPR+40+9*citizens`, then
-that many records. A ship keeps its crew the same way, counted at `SHPR+4` with
-the records at `SHPR+8`.
+**Where the soldiers are.** They are the same nine-byte record with job id 3,
+in a second array starting where the citizen array ends: a `u32` count at
+`PLPR+40+9*citizens`, then that many records. A ship keeps its crew the same
+way, counted at `SHPR+4` with the records at `SHPR+8`.
 
 Measured by a player dismissing a colony ship's two crew: the ship's payload
 went 38 bytes to 20 and its count 2 to 0, the planet's grew by the same 18 bytes
-with its count 19 to 21, and **the two records arrived byte for byte**. So this
-is a transfer, not an edit, and that is what makes it carryable without
-decoding what a soldier is: the multiset of a civ's military records must be
-identical before and after, across their whole empire. A player may rearrange
-their army; they may not come back with a soldier they did not have.
-
-Refused, and named as such: a record that was rewritten rather than moved, and a
-submission that comes back with fewer soldiers than it was served. The second is
-what **retiring from service** looks like, which is a real thing a player can
-click; it is not carried because retiring also cuts upkeep and nobody has
-measured that half of it.
+with its count 19 to 21, and **the two records arrived byte for byte**. Moving
+somebody does not rewrite them, which is why an existing soldier's record
+appearing changed is refused.
 
 **Military recruitment rate**, `PLPR+27`, a percentage in one byte. A setting
 rather than an immediate effect: the manual says it diverts food into military
