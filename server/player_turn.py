@@ -153,8 +153,15 @@ def save_path_ready(host='127.0.0.1', port=8888, timeout=2.0):
 
 
 def serve(blob: bytes, civ: str, work_dir=None, hold=HOLD_SECONDS,
-          exe=PLAYER_BUILD, check_save_path=True, log=print):
-    """Stamp, launch, hold. Returns the path served."""
+          exe=PLAYER_BUILD, check_save_path=True, wait_for_lock=0.0,
+          log=print):
+    """Stamp, launch, hold. Returns the path served.
+
+    `wait_for_lock` is how long to wait for another tool to finish with the
+    client. Zero refuses at once, which is what somebody at a command line
+    wants; `follow` passes a real number, because a player's loop that gives up
+    because the referee was mid-tick has failed their turn over a few seconds.
+    """
     import game_cycle as gc
     if check_save_path:
         ok, why = save_path_ready()
@@ -166,8 +173,11 @@ def serve(blob: bytes, civ: str, work_dir=None, hold=HOLD_SECONDS,
     dat = os.path.join(work_dir, f"serve_{civ}.dat")
     with open(dat, "wb") as f:
         f.write(stamped)
-    gc.close_client()
-    snap = gc.launch(dat, exe=exe, purpose=f"serving {civ}")
+    # Lock first, close second. Serving a turn used to close whatever was
+    # running before `launch` reached the lock, so two tools racing ended with
+    # one client killed rather than one caller refused.
+    snap = gc.restart(dat, purpose=f"serving {civ}", exe=exe,
+                      wait_for_lock=wait_for_lock)
     local = snap.local_civ()
     if local is None or local.civ_name != civ:
         raise SystemExit(f"served {civ} but the client came up as "
@@ -326,7 +336,8 @@ def follow(store: TurnStore, civ: str, poll: float = 5.0, rounds: int = 0,
                     f"orders, serving the turn fresh")
         emit("serving", turn=turn, civ=civ)
         log(f"[{civ}] turn {turn}: serving")
-        serve(to_load, civ, hold=HOLD_SECONDS, exe=exe, log=log)
+        serve(to_load, civ, hold=HOLD_SECONDS, exe=exe, wait_for_lock=240.0,
+              log=log)
 
         sent = None                     # the last blob this turn actually stored
         last_try = 0.0

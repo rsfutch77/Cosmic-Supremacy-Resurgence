@@ -88,11 +88,12 @@ def tick(blob: bytes, turns: int = 1, secs: int = 10, work_dir=None,
         f.write(blob)
     log(f"  referee: {len(blob):,} bytes -> {os.path.basename(dat)}")
 
-    gc.close_client()
     # The referee can afford to wait; a player mid-turn cannot afford
     # for it not to. wait_for_client_free already watched for the client
     # to exit, and this closes the gap between that check and the launch.
-    snap = gc.launch(dat, purpose="referee tick", wait_for_lock=240.0)
+    # `restart` takes the lock before closing anything, so a referee that
+    # cannot have the client is refused rather than ending someone's turn.
+    snap = gc.restart(dat, purpose="referee tick", wait_for_lock=240.0)
     start = snap.turn
     log(f"  referee: galaxy up at turn {start}, advancing {turns}")
 

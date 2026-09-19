@@ -54,7 +54,26 @@ def client_pids():
     return [int(x) for x in out.split() if x.strip().isdigit()]
 
 
-def close_client(timeout=20):
+def close_client(timeout=20, force=False):
+    """Stop the machine's client. Refuses to kill one somebody else holds.
+
+    The lock did not protect anything on its own, because every caller closed
+    the running client and only then launched, and `launch` is where the lock
+    is taken. The loser of a race was force-killed rather than refused, which
+    is the exact outcome the lock exists to prevent, and in the case that
+    matters that is a player mid-turn. Checking here covers every caller,
+    including the dev tools that will never be revisited.
+
+    `force` is for the caller that knows the holder is gone in a way `_pid_alive`
+    cannot see, and should be rare enough to be conspicuous.
+    """
+    held = lock_holder()
+    if (held and not force and held[0] != os.getpid()
+            and _pid_alive(held[0]) and client_pids()):
+        raise SystemExit(
+            f"the client is held by pid {held[0]} ({held[1]}). Closing it now "
+            f"would destroy whatever that is doing, which if it is a player's "
+            f"turn leaves no trace. Wait for it, or stop that process.")
     # Releasing here rather than only on the happy path: close_client is what
     # every caller runs when it is finished with the client, including the
     # finally blocks, so this is where the lock actually stops being needed.
@@ -191,6 +210,24 @@ def resolve_exe(which=None):
         return os.path.abspath(which)
     raise SystemExit(f"unknown client build {which!r}; want one of "
                      f"{sorted(BUILDS)}, or a path to an exe")
+
+
+def restart(dat, purpose, wait_for_lock=0.0, timeout=180, exe=None):
+    """Take the client, close whatever is on it, and launch on `dat`.
+
+    The order is the point. Taking the lock first means a caller that cannot
+    have the client is refused before it kills anybody's session; closing first
+    and locking second, which is what serve and tick used to do, hands the
+    client to whoever moves second.
+    """
+    take_client_lock(purpose, wait=wait_for_lock)
+    try:
+        close_client()
+        return launch(dat, timeout=timeout, exe=exe, purpose=purpose,
+                      wait_for_lock=wait_for_lock)
+    except BaseException:
+        release_client_lock()
+        raise
 
 
 def launch(dat, timeout=180, exe=None, purpose=None, wait_for_lock=0.0):
