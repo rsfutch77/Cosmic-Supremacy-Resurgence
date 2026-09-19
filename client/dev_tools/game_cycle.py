@@ -143,7 +143,11 @@ def launch(dat, timeout=180, exe=None):
             continue
         try:
             snap = gs.Snapshot()
-            civ = gs.resolve_civ(snap, None)
+            # quiet: this is a poll, and a client that has not finished
+            # populating its player slot fails the read a few times before it
+            # succeeds. Reporting each attempt makes every healthy launch look
+            # like a failure in the log.
+            civ = gs.resolve_civ(snap, None, quiet=True)
             if civ is not None and snap.owned_planets(civ) and len(snap.suns) > 10:
                 log(f"  up: turn {snap.turn}, {civ.civ_name!r}, "
                     f"{len(snap.owned_planets(civ))} planet(s), "
