@@ -534,11 +534,13 @@ def roster_problem(name: str, civs):
 # client has to restart every turn, and the only way that is acceptable is if
 # nobody has to think about it.
 #
-# [ ] NOT PACKAGED. This path imports from the checkout (server/player_turn.py
-# and its neighbours) and so works only when the launcher is run from a clone.
-# Shipping it means bundling save_parser, set_blob_player, turn_store and the
-# serve and collect logic into the frozen build, which is a build.ps1 change and
-# a separate job.
+# The turn machinery ships inside the frozen build: build.ps1 names
+# player_turn, turn_store and the modules they reach from inside functions as
+# hidden imports, and copies the player client into game\ alongside the
+# single-player one. multiplayer_modules() imports them directly when frozen
+# and off sys.path when run from a clone; bind_multiplayer_paths() then points
+# them at the player's folders, because every one of them derives its paths
+# from __file__ and __file__ in a frozen build is a temporary directory.
 MP_CONFIG = "multiplayer.json"
 
 # What the turn loop may start. Not in the manifest: the loop picks the build
@@ -571,19 +573,62 @@ def multiplayer_config(data_dir: str):
 
 
 def multiplayer_modules():
-    """The checkout's turn machinery, or None outside a checkout."""
-    root = _repo_root()
-    server = os.path.join(root, "server")
-    if not os.path.exists(os.path.join(server, "player_turn.py")):
+    """The turn machinery, or None if this build cannot reach it.
+
+    Frozen, the modules are in the bundle and the checkout directories do not
+    exist, so the import is direct. From a clone they are found by putting
+    their four directories on sys.path first. A build that was frozen without
+    them still imports cleanly as a launcher, so the failure is reported rather
+    than raised: the rest of the launcher works.
+    """
+    if not getattr(sys, "frozen", False):
+        root = _repo_root()
+        server = os.path.join(root, "server")
+        if not os.path.exists(os.path.join(server, "player_turn.py")):
+            return None
+        for d in (server, os.path.join(server, "dev_tools"),
+                  os.path.join(root, "client", "dev_tools"),
+                  os.path.join(root, "client", "dev_tools", "ai_player")):
+            if d not in sys.path:
+                sys.path.insert(0, d)
+    try:
+        import player_turn
+        import turn_store
+    except ImportError:
         return None
-    for d in (server, os.path.join(server, "dev_tools"),
-              os.path.join(root, "client", "dev_tools"),
-              os.path.join(root, "client", "dev_tools", "ai_player")):
-        if d not in sys.path:
-            sys.path.insert(0, d)
-    import player_turn
-    import turn_store
     return player_turn, turn_store
+
+
+def bind_multiplayer_paths(game_root: str, data_dir: str):
+    """Point the turn machinery at the folders this player actually has.
+
+    game_cycle and player_turn compute their paths from __file__ at import
+    time. In a frozen build __file__ names the directory PyInstaller unpacks
+    into, which holds no client executables and is deleted when the launcher
+    exits, so every one of those paths is wrong. They are rebound here: the
+    clients and the client working directory come from the game folder, and
+    anything written during a turn goes to the data directory, which is the
+    same place the stub server keeps its saves.
+
+    Done in a checkout too. There the game folder is client\\ and the paths
+    agree, except for the saves directory: the launcher runs the server against
+    its own data directory rather than the checkout's server\\saves.
+    """
+    import game_cycle as gc
+    import player_turn
+
+    gc.HERE = game_root
+    gc.CLIENT_DIR = game_root
+    gc.EXE = os.path.join(game_root, "CosmicSupremacy_Resurgence.exe")
+    gc.TESTBED_EXE = os.path.join(game_root, "CosmicSupremacy_TestBed.exe")
+    gc.PLAYER_EXE = os.path.join(game_root, "CosmicSupremacy_Player.exe")
+    gc.BUILDS = {"resurgence": gc.EXE, "testbed": gc.TESTBED_EXE,
+                 "player": gc.PLAYER_EXE}
+    gc.SAVES = os.path.join(data_dir, "saves")
+    # serve() writes each turn's .dat under HERE before handing it to the
+    # client, and the client has to be able to read it after the launcher that
+    # wrote it is gone.
+    player_turn.HERE = data_dir
 
 
 def fmt_left(seconds: float) -> str:
@@ -1049,11 +1094,26 @@ class Launcher:
 
         mods = multiplayer_modules()
         if mods is None:
-            self.warn("Multiplayer is not in this build yet.\n\nIt currently "
-                      "runs only from a source checkout. Everything else in "
-                      "this launcher works as normal.")
+            self.warn("This build cannot play multiplayer.\n\nThe turn "
+                      "machinery is missing from it. Everything else in this "
+                      "launcher works as normal.")
             return
         player_turn, turn_store = mods
+        # Before anything asks them for a path. The modules were imported with
+        # the wrong idea of where they are, and serving a turn is the first
+        # thing that acts on it.
+        bind_multiplayer_paths(self.game_root, self.data_dir)
+
+        # The turn loop needs a client that never computes a turn of its own,
+        # which is not the one the single player modes use. Checked here rather
+        # than left to the worker thread, where a missing file surfaces as a
+        # failed turn several steps after the player pressed the button.
+        if not any(os.path.exists(os.path.join(self.game_root, e))
+                   for e in MP_CLIENTS):
+            self.warn("This build ships no multiplayer client.\n\nExpected one "
+                      f"of\n{', '.join(MP_CLIENTS)}\n\nin\n{self.game_root}")
+            return
+
         # `open_store`, not `TurnStore`: the store is a directory on one machine
         # and a base URL once the referee is on another, and which one it is is
         # the player's to write in multiplayer.json. Naming the class here made

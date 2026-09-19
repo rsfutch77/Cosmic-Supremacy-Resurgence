@@ -10,6 +10,11 @@
                            kept, how an older multiplayer.json is carried over,
                            and what a galaxy with no seat for it says back. No
                            game and no window, under a second.
+      test_packaging       That the multiplayer path survives freezing: every
+                           --hidden-import names a module that exists, nothing
+                           in the player's path re-runs sys.executable, and the
+                           turn machinery can be pointed at a release layout.
+                           No game and no window.
       test_save_protocol   Speaks the wire protocol to cs_server directly. No
                            game needed, ~2 seconds. Covers slot allocation from
                            the gameid=-1 sentinel, the savegamelist format, and
@@ -59,6 +64,7 @@ function Invoke-Test {
 }
 
 Invoke-Test 'test_identity.py'
+Invoke-Test 'test_packaging.py'
 Invoke-Test 'test_save_protocol.py'
 foreach ($mode in @('tutorial', 'demo', 'testbed')) {
     Invoke-Test 'test_status_cycle.py' @($mode)

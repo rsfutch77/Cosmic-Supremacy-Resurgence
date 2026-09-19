@@ -250,13 +250,47 @@ def launch(dat, timeout=180, exe=None, purpose=None, wait_for_lock=0.0):
 
 
 # ── the pieces ────────────────────────────────────────────────────────────────
+def trigger_save(name, gameid=0, timeout=30):
+    """Make the running client save. Returns (exit code, the tool's output).
+
+    In process rather than `sys.executable trigger_save.py`. In the frozen
+    launcher sys.executable is the launcher itself, so that command line starts
+    a second launcher and hands it a script path it has no use for, and the
+    save never happens. trigger_save does its work in a remote thread inside
+    the game client, so the only thing a separate process ever contributed was
+    an argument parser.
+
+    trigger_save.main() reads its arguments from sys.argv, so sys.argv is what
+    it is given. The machine's one client is held by whoever is calling this,
+    which is what keeps two of these from overlapping.
+    """
+    import contextlib
+    import io
+    import trigger_save as ts
+
+    out = io.StringIO()
+    argv = sys.argv
+    sys.argv = ["trigger_save.py", "--name", name[:15],
+                "--gameid", str(gameid), "--timeout", str(timeout)]
+    try:
+        with contextlib.redirect_stdout(out):
+            rc = ts.main()
+    except SystemExit as exc:
+        # trigger_save reports a missing client or a refused handle by exiting
+        # with a message. It is kept as output so the caller logs the reason.
+        rc = exc.code if isinstance(exc.code, int) else 1
+        if exc.code and not isinstance(exc.code, int):
+            print(exc.code, file=out)
+    finally:
+        sys.argv = argv
+    return rc, out.getvalue()
+
+
 def capture_save(name="cycle"):
     before = set(os.listdir(SAVES)) if os.path.isdir(SAVES) else set()
-    r = subprocess.run([sys.executable, os.path.join(HERE, "trigger_save.py"),
-                        "--name", name[:15]],
-                       capture_output=True, text=True, cwd=HERE)
-    if "saved" not in r.stdout:
-        log(r.stdout + r.stderr)
+    rc, out = trigger_save(name)
+    if rc != 0:
+        log(out)
         raise SystemExit("SaveGame did not report success")
     new = [f for f in os.listdir(SAVES) if f.endswith(".b64") and f not in before]
     if not new:

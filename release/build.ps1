@@ -40,6 +40,12 @@ $ReleaseDir = Split-Path -Parent $MyInvocation.MyCommand.Definition
 $RepoRoot   = Split-Path -Parent $ReleaseDir
 $ClientDir  = Join-Path $RepoRoot 'client'
 $ServerDir  = Join-Path $RepoRoot 'server'
+# The four directories the multiplayer turn machinery lives in. They are flat
+# module directories rather than packages, so each has to be on the analysis
+# path in its own right.
+$ServerTools = Join-Path $ServerDir 'dev_tools'
+$ClientTools = Join-Path $ClientDir 'dev_tools'
+$AiPlayerDir = Join-Path $ClientTools 'ai_player'
 $BuildDir   = Join-Path $ReleaseDir 'build'
 $DistRoot   = Join-Path $RepoRoot 'dist'
 $Manifest   = Join-Path $ReleaseDir 'manifest.json'
@@ -176,6 +182,33 @@ $piArgs = @(
     # the handlers, not at module scope, so name it rather than rely on the
     # import graph walker finding it.
     '--hidden-import', 'gamectl',
+    # The multiplayer turn machinery. multiplayer_modules() imports player_turn
+    # and turn_store once a galaxy is configured, and from there every module
+    # is reached from inside a function: save_parser and set_blob_player stamp
+    # the turn blob, game_cycle starts and closes the client, gamestate and
+    # ejbo_viewer read the running client to confirm it came up as the right
+    # civ, advance_turns holds the turn clock, trigger_save takes the capture
+    # back, canonical and order_diff decide whether a capture carries orders.
+    # inject_civ and inject_design are pulled in by save_parser's neighbours.
+    # merge_orders is the referee's, named here so a checkout and a release
+    # agree about what a store-aware build contains.
+    '--paths', $ServerTools,
+    '--paths', $ClientTools,
+    '--paths', $AiPlayerDir,
+    '--hidden-import', 'player_turn',
+    '--hidden-import', 'turn_store',
+    '--hidden-import', 'save_parser',
+    '--hidden-import', 'set_blob_player',
+    '--hidden-import', 'inject_civ',
+    '--hidden-import', 'inject_design',
+    '--hidden-import', 'canonical',
+    '--hidden-import', 'order_diff',
+    '--hidden-import', 'merge_orders',
+    '--hidden-import', 'game_cycle',
+    '--hidden-import', 'gamestate',
+    '--hidden-import', 'ejbo_viewer',
+    '--hidden-import', 'advance_turns',
+    '--hidden-import', 'trigger_save',
     '--distpath', $Stage,
     '--workpath', (Join-Path $BuildDir 'work'),
     '--specpath', $BuildDir
@@ -266,6 +299,41 @@ foreach ($m in $playable) {
         Copy-Item (Join-Path $ClientDir $m.galaxy) (Join-Path $GalaxyDir $m.galaxy)
         $copied[$m.galaxy] = $true
         Write-Ok "game\galaxies\$($m.galaxy)"
+    }
+}
+
+# ── 7b. The multiplayer client ────────────────────────────────────────────────
+# A session mode names no EXE, because the turn loop writes the .dat for each
+# turn and picks the build itself, so the copy above never reaches it. It still
+# needs a client on disk, and not the single player one: a player's client must
+# never compute a turn the referee has not, or the state it hands back mixes
+# their orders with a simulation nobody authorised.
+#
+# Player is TestBed plus one byte that silences the coat-of-arms prompt. It is
+# gitignored, being a patched copy of a tracked binary, so a checkout that has
+# not run patch_hide_setup_prompts.py --build ships TestBed instead. That is the
+# same fallback game_cycle.resolve_exe makes, one prompt worse.
+$mpModes = @($modes | Where-Object { $_.session -eq 'multiplayer' })
+if ($mpModes.Count -gt 0) {
+    Write-Step "Adding the multiplayer client"
+    $mpExe = $null
+    foreach ($name in @('CosmicSupremacy_Player.exe', 'CosmicSupremacy_TestBed.exe')) {
+        $cand = Join-Path $ClientDir $name
+        if (Test-Path $cand) { $mpExe = $cand; break }
+    }
+    if ($mpExe) {
+        Copy-Item $mpExe (Join-Path $GameDir (Split-Path -Leaf $mpExe))
+        Write-Ok "game\$(Split-Path -Leaf $mpExe)"
+        if ((Split-Path -Leaf $mpExe) -ne 'CosmicSupremacy_Player.exe') {
+            Write-Warn2 ('shipping TestBed: players will see the coat-of-arms ' +
+                         'prompt every turn. Build the player client with ' +
+                         'patch_hide_setup_prompts.py --build and re-run')
+        }
+    } else {
+        # Not fatal: the rest of the release is still worth shipping. The
+        # launcher checks for this client before it starts a turn and says so.
+        Write-Warn2 ('no multiplayer client in client\ - the Multiplayer card ' +
+                     'will refuse to start')
     }
 }
 

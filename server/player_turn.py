@@ -34,7 +34,6 @@ Requires `cs_server.py` on port 8888, which is where `collect` receives the blob
 import argparse
 import ctypes
 import os
-import subprocess
 import sys
 import time
 
@@ -191,11 +190,12 @@ def collect(name="player", save_dir=None, log=print) -> str:
         return gc.capture_save(name[:15])
 
     before = time.time() - 1
-    r = subprocess.run([sys.executable, os.path.join(DEV, "trigger_save.py"),
-                        "--name", name[:15]],
-                       capture_output=True, text=True, cwd=DEV)
-    if "saved" not in r.stdout:
-        log(r.stdout + r.stderr)
+    # game_cycle.trigger_save rather than a subprocess on trigger_save.py:
+    # sys.executable is the launcher executable in a frozen build, so that
+    # command line starts a second launcher and no save is taken.
+    rc, out = gc.trigger_save(name)
+    if rc != 0:
+        log(out)
         raise SystemExit("SaveGame did not report success")
     fresh = [os.path.join(save_dir, f) for f in os.listdir(save_dir)
              if f.endswith(".b64")

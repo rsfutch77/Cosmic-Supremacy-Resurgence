@@ -96,6 +96,11 @@ def tick(blob: bytes, turns: int = 1, secs: int = 10, work_dir=None,
     start = snap.turn
     log(f"  referee: galaxy up at turn {start}, advancing {turns}")
 
+    # A subprocess on sys.executable is safe here and is not in the frozen
+    # build. The referee runs from a checkout, where sys.executable is a real
+    # interpreter; the release freezes release/launcher.py, which reaches
+    # player_turn and game_cycle but never this module. Computing turns stays
+    # a checkout job.
     r = subprocess.run([sys.executable, os.path.join(DEV, "advance_turns.py"),
                         str(turns), "--secs", str(secs)],
                        capture_output=True, text=True, cwd=DEV)
