@@ -112,18 +112,34 @@ def describe_orders(served: bytes, submitted: bytes, civ: str) -> str:
 
 
 def carries_orders(served: bytes, submitted: bytes, civ: str) -> bool:
-    """Does this submission change anything of this civ's?
+    """Would the referee take anything out of this submission?
 
-    Deliberately conservative: anything that cannot be summarised counts as
-    carrying orders, because the only thing this answer is used for is deciding
-    whether a submission may be thrown away, and an unreadable blob is not one
-    to discard.
+    Asks the **merge**, not the diff. A client changes a blob for reasons that
+    have nothing to do with the player: it populates the civ's `EXSY` cache the
+    first time it opens a galaxy, it materialises the default star name
+    `Unnamed` over every empty one, and `KNPL` carries a field that is not
+    deterministic. `order_diff` counts all of those as changes, so a turn
+    nobody played reports as a turn with orders in it.
+
+    That matters because of what this answer is used for. The guard in `follow`
+    refuses to replace someone else's submission with one that carries nothing;
+    if every capture "carries orders", the guard never fires and the turn-12
+    failure it exists to prevent is live again. Measured in the 19 September
+    rehearsal: an unplayed turn 0 reported `1 of yours (OWNR 202)`, and it was
+    the `EXSY` cache filling in.
+
+    The merge already knows the difference, because deciding what is an order
+    is its whole job. If merging changes the authoritative blob, there was an
+    order in here; if it does not, there was not.
+
+    Still conservative on failure: a submission that cannot be merged counts as
+    carrying orders, because this answer only ever licenses throwing one away.
     """
     try:
-        import order_diff
-        mine, _theirs, _galaxy = order_diff.compare(
-            served, submitted, civ, log=lambda *a: None)
-        return bool(mine)
+        import merge_orders
+        merged = merge_orders.merge(served, [(civ, submitted)],
+                                    log=lambda *a: None)
+        return merged != served
     except Exception:                                       # noqa: BLE001
         return True
 
