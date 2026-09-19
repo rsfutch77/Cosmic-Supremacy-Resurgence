@@ -193,7 +193,8 @@ def resolve_exe(which=None):
                      f"{sorted(BUILDS)}, or a path to an exe")
 
 
-def launch(dat, timeout=180, exe=None, purpose=None, wait_for_lock=0.0):
+def launch(dat, timeout=180, exe=None, purpose=None, wait_for_lock=0.0,
+           min_suns=11):
     """Start the client on a .dat and wait until its state is readable.
 
     Takes the machine's client lock first, so a second tool cannot close this
@@ -227,10 +228,24 @@ def launch(dat, timeout=180, exe=None, purpose=None, wait_for_lock=0.0):
                      creationflags=getattr(subprocess, "DETACHED_PROCESS", 0))
     import gamestate as gs
     deadline = time.time() + timeout
+    seen_alive = False
     while time.time() < deadline:
         if not client_pids():
+            # A client that started and then went away has DECIDED something,
+            # and waiting out the rest of the timeout only delays the news. The
+            # engine bails on a galaxy it will not accept in about four
+            # seconds, writing a minidump with no exception stream, and this
+            # loop used to sit for the remaining 176 wondering.
+            if seen_alive:
+                release_client_lock()
+                raise SystemExit(
+                    "the client started and exited without opening the "
+                    "galaxy. That is the engine refusing the blob, not a slow "
+                    "load; read the newest .dmp beside the EXE with "
+                    "dump_threads.py")
             time.sleep(0.5)
             continue
+        seen_alive = True
         try:
             snap = gs.Snapshot()
             # quiet: this is a poll, and a client that has not finished
@@ -238,7 +253,15 @@ def launch(dat, timeout=180, exe=None, purpose=None, wait_for_lock=0.0):
             # succeeds. Reporting each attempt makes every healthy launch look
             # like a failure in the log.
             civ = gs.resolve_civ(snap, None, quiet=True)
-            if civ is not None and snap.owned_planets(civ) and len(snap.suns) > 10:
+            # `min_suns` guards against reading a half-populated galaxy, where
+            # the suns arrive progressively. It is a heuristic about LOADING,
+            # not a fact about galaxies, and a caller deliberately serving a
+            # small one has to be able to lower it. Left at 10 it silently
+            # rejects any filtered galaxy with ten or fewer systems, which
+            # reads as "the client would not load it" and is not the same
+            # claim at all , that confusion cost a day of fog-of-war results.
+            if (civ is not None and snap.owned_planets(civ)
+                    and len(snap.suns) >= min_suns):
                 log(f"  up: turn {snap.turn}, {civ.civ_name!r}, "
                     f"{len(snap.owned_planets(civ))} planet(s), "
                     f"{len(snap.designs)} design(s)")
