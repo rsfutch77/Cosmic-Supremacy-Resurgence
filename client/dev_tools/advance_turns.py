@@ -21,6 +21,7 @@ from ctypes import wintypes
 import struct
 import sys
 import time
+from client_proc import find_pid, NOT_THE_CLIENT  # one copy, see client_proc.py
 
 PROCESS_VM_READ           = 0x0010
 PROCESS_VM_WRITE          = 0x0020
@@ -35,36 +36,7 @@ psapi    = ctypes.WinDLL("psapi", use_last_error=True)
 kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
 
 
-# Names that contain the substring below but are not the game client. The same
-# list trigger_save.py keeps, for the same reason and a different symptom:
-# attaching to CosmicSupremacyLauncher.exe reads a turn number out of a process
-# that has none, and the referee's tick then died on "unsupported operand
-# type(s) for +: 'NoneType' and 'int'" the first time a packaged launcher and a
-# referee ran on one machine.
-NOT_THE_CLIENT = ("launcher",)
 
-
-def find_pid(exe_substr="CosmicSupremacy"):
-    arr = (wintypes.DWORD * 4096)()
-    cb  = ctypes.c_ulong()
-    if not psapi.EnumProcesses(ctypes.byref(arr), ctypes.sizeof(arr), ctypes.byref(cb)):
-        raise OSError("EnumProcesses failed")
-    for i in range(cb.value // ctypes.sizeof(wintypes.DWORD)):
-        pid = arr[i]
-        if not pid:
-            continue
-        h = kernel32.OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, False, pid)
-        if not h:
-            continue
-        try:
-            buf = ctypes.create_unicode_buffer(260)
-            name = buf.value if psapi.GetModuleBaseNameW(h, None, buf, 260) else ""
-            low = name.lower()
-            if exe_substr.lower() in low and not any(x in low for x in NOT_THE_CLIENT):
-                return pid, name
-        finally:
-            kernel32.CloseHandle(h)
-    return None, None
 
 
 def rd32(h, addr):

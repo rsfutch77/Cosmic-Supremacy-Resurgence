@@ -16,6 +16,7 @@ import ctypes
 import struct
 import sys
 from ctypes import wintypes
+from client_proc import find_pid, NOT_THE_CLIENT  # one copy, see client_proc.py
 
 PROCESS_VM_READ           = 0x0010
 PROCESS_VM_WRITE          = 0x0020
@@ -39,35 +40,7 @@ kernel32.VirtualAllocEx.restype  = ctypes.c_void_p
 kernel32.CreateRemoteThread.restype = wintypes.HANDLE
 
 
-# Names that contain the substring below but are not the game client. The
-# player-facing launcher (release/) is CosmicSupremacyLauncher.exe and is a
-# 64-bit process: attaching to it and injecting this 32-bit stub gets as far as
-# VirtualAllocEx returning an address above 4 GB, which then fails to pack into
-# a `push imm32` , a confusing way to discover you are in the wrong process.
-NOT_THE_CLIENT = ("launcher",)
 
-
-def find_pid(exe_substr="CosmicSupremacy"):
-    arr = (wintypes.DWORD * 4096)()
-    cb  = ctypes.c_ulong()
-    if not psapi.EnumProcesses(ctypes.byref(arr), ctypes.sizeof(arr), ctypes.byref(cb)):
-        raise OSError("EnumProcesses failed")
-    for i in range(cb.value // ctypes.sizeof(wintypes.DWORD)):
-        pid = arr[i]
-        if not pid:
-            continue
-        h = kernel32.OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, False, pid)
-        if not h:
-            continue
-        try:
-            buf = ctypes.create_unicode_buffer(260)
-            name = buf.value if psapi.GetModuleBaseNameW(h, None, buf, 260) else ""
-            low = name.lower()
-            if exe_substr.lower() in low and not any(x in low for x in NOT_THE_CLIENT):
-                return pid, name
-        finally:
-            kernel32.CloseHandle(h)
-    return None, None
 
 
 def build_string(name: str) -> bytes:

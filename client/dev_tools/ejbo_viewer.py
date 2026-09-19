@@ -31,6 +31,7 @@ import threading
 from datetime import datetime
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
+from client_proc import find_pid, NOT_THE_CLIENT  # one copy, see client_proc.py
 
 # ── Windows API ────────────────────────────────────────────────────────────
 PROCESS_VM_READ           = 0x0010
@@ -69,28 +70,6 @@ class MEMORY_BASIC_INFORMATION(ctypes.Structure):
 NOT_THE_GAME = ("cosmicsupremacylauncher.exe",)
 
 
-def find_pid(exe_substr="CosmicSupremacy"):
-    arr = (wintypes.DWORD * 4096)()
-    cb  = ctypes.c_ulong()
-    if not psapi.EnumProcesses(ctypes.byref(arr), ctypes.sizeof(arr), ctypes.byref(cb)):
-        raise OSError("EnumProcesses failed")
-    count = cb.value // ctypes.sizeof(wintypes.DWORD)
-    for i in range(count):
-        pid = arr[i]
-        if pid == 0:
-            continue
-        h = kernel32.OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, False, pid)
-        if not h:
-            continue
-        try:
-            buf = ctypes.create_unicode_buffer(260)
-            n = psapi.GetModuleBaseNameW(h, None, buf, 260)
-            if (n and exe_substr.lower() in buf.value.lower()
-                    and buf.value.lower() not in NOT_THE_GAME):
-                return pid, buf.value
-        finally:
-            kernel32.CloseHandle(h)
-    return None, None
 
 def enum_writable_regions(h):
     writable = PAGE_READWRITE | PAGE_WRITECOPY | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY
