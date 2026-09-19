@@ -137,6 +137,29 @@ POP_ARRAY_OFF = 40
 POP_RECORD = 9
 JOB_IDS = {0: 'farmer', 1: 'worker', 2: 'scientist', 5: 'miner', 6: 'banker'}
 
+# Hurrying production, measured 19 September 2026 with a player clicking it.
+# A farm 110 points into a 200-point build was offered at 360 credits; the
+# player's credits went 10065 -> 9705 and three fields moved:
+#
+#     PLPR+23, u32   production points accumulated, 110 -> 200
+#     PROD payload byte 0     0 -> 1
+#     OWNR, id_at+20, u32     credits, 10065 -> 9705
+#
+# 360 = 4 * (200 - 110), which is the manual's rule verbatim: "The cost of
+# hurrying production is 4 credits per production point left", and "the current
+# production needs to be at least half finished, in order to hurry it". 110 of
+# 200 is 55%.
+#
+# The total cost of the item is nowhere in the blob, so the referee cannot price
+# a hurry from the served state alone. It does not need to: the points bought
+# are the distance the submission moved the progress field, and that is a
+# difference between two states it holds. See hurry_acceptable.
+PROGRESS_OFF = 23
+PROD_HURRIED_OFF = 8            # PROD's own payload begins after its header
+CREDITS_AFTER_ID = 20           # past the object id, which is itself past
+                                # OWNR's length-prefixed name
+HURRY_PER_POINT = 4
+
 
 # ── reading the blob ─────────────────────────────────────────────────────────
 def ship_index(blob):
@@ -372,6 +395,91 @@ def replace_prod(blob, planet_oid, new_prod):
     return _replace_child(blob, find, new_prod)
 
 
+def progress_of(plpr):
+    """Production points accumulated on a planet, or None."""
+    if plpr is None or len(plpr) < PROGRESS_OFF + 4:
+        return None
+    return struct.unpack_from('<I', plpr, PROGRESS_OFF)[0]
+
+
+def is_hurried(prod):
+    """Has the current item been paid off? None when there is no PROD."""
+    if prod is None or len(prod) <= PROD_HURRIED_OFF:
+        return None
+    return bool(prod[PROD_HURRIED_OFF])
+
+
+def credits_of(blob, civ_oid):
+    """A civ's credits, or None when the civ is not in this blob."""
+    rec = next((o for o in icv.owner_records(blob) if o['oid'] == civ_oid), None)
+    if rec is None:
+        return None
+    at = rec['id_at'] + CREDITS_AFTER_ID
+    if at + 4 > len(blob):
+        return None
+    return struct.unpack_from('<I', blob, at)[0]
+
+
+def set_credits(blob, civ_oid, value):
+    """Write a civ's credits. Size does not change."""
+    rec = next((o for o in icv.owner_records(blob) if o['oid'] == civ_oid), None)
+    if rec is None:
+        raise SystemExit(f'civ {civ_oid} is not in this blob')
+    out = bytearray(blob)
+    struct.pack_into('<I', out, rec['id_at'] + CREDITS_AFTER_ID,
+                     int(value))
+    return bytes(out)
+
+
+def set_progress(blob, planet_oid, value):
+    """Write a planet's accumulated production points. Size does not change."""
+    tree = sp.parse_blob(blob)
+    glxy = next(tree[0].find('GLXY'))
+    for sola in (c for c in glxy.children if c.tag == b'SOLA'):
+        for sec in sola.find('PLNT'):
+            if struct.unpack_from('<I', blob, sec.payload)[0] != planet_oid:
+                continue
+            plpr = next(sec.find('PLPR'), None)
+            if plpr is None:
+                raise SystemExit(f'planet {planet_oid} has no PLPR')
+            out = bytearray(blob)
+            struct.pack_into('<I', out, plpr.payload + PROGRESS_OFF, int(value))
+            return bytes(out)
+    raise SystemExit(f'planet {planet_oid} not found')
+
+
+def hurry_acceptable(served_plpr, submitted_plpr, credits):
+    """(ok, why, cost, points) for a claimed hurry.
+
+    The rule is the manual's, not one inferred from what the client did. The
+    points bought are how far the submission advanced the progress field, which
+    both sides of the diff carry, and the price is four credits each. Two things
+    make it refusable: an item less than half finished cannot be hurried, and a
+    civ cannot spend credits it was not served.
+
+    Judging "half finished" against the submitted total rather than a cost the
+    blob does not record is sound in the direction that matters: hurrying
+    completes the item, so the submitted progress *is* the total, and a client
+    that understates it buys fewer points and pays for exactly those.
+    """
+    before, after = progress_of(served_plpr), progress_of(submitted_plpr)
+    if before is None or after is None:
+        return False, 'the progress field is unreadable', 0, 0
+    points = after - before
+    if points <= 0:
+        return False, f'no progress was bought ({before} -> {after})', 0, 0
+    if before * 2 < after:
+        return (False, f'only {before} of {after} points were done, and the '
+                f'engine requires half', 0, points)
+    cost = points * HURRY_PER_POINT
+    if credits is None:
+        return False, 'the civ has no readable credit field', cost, points
+    if credits < cost:
+        return (False, f'{cost} credits needed and {credits} served', cost,
+                points)
+    return True, '', cost, points
+
+
 def set_citizens(blob, planet_oid, new_array):
     """Write a planet's citizen array in place. Its length does not change."""
     tree = sp.parse_blob(blob)
@@ -484,6 +592,27 @@ def merge(blob, submissions, log=print):
                     log(f"    planet {planet_oid}: production DROPPED, no PROD "
                         f"section on one side")
                     dropped += 1
+                elif is_hurried(prod) and not is_hurried(prod_served):
+                    # A hurry takes effect the moment it is clicked, so the
+                    # submission carries the outcome rather than the request:
+                    # the item complete and the credits already gone. The
+                    # referee prices it from the state it served and spends the
+                    # credits itself, so a client that edited its own balance
+                    # gains nothing.
+                    ok, why, cost, points = hurry_acceptable(
+                        plpr_served, plpr, credits_of(blob, mine))
+                    if not ok:
+                        log(f"    planet {planet_oid}: hurry DROPPED, {why}")
+                        dropped += 1
+                    else:
+                        blob = replace_prod(blob, planet_oid, prod)
+                        blob = set_progress(blob, planet_oid,
+                                            progress_of(plpr))
+                        blob = set_credits(blob, mine,
+                                           credits_of(blob, mine) - cost)
+                        log(f"    planet {planet_oid}: production hurried, "
+                            f"{points} point(s) for {cost} credits")
+                        accepted += 1
                 else:
                     blob = replace_prod(blob, planet_oid, prod)
                     log(f"    planet {planet_oid}: production queue taken")
