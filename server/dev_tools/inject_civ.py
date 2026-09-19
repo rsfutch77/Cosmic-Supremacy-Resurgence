@@ -14,17 +14,17 @@ the same way `inject_design.py` gets a ship design built.
 pass: each new civ gets its own auto-picked homeworld, chosen to sit as far as
 possible from every planet already spoken for.
 
-`[ ]` NOT DONE: the new civ gets no ships. It gets a homeworld with whatever the
+[ ] NOT DONE: the new civ gets no ships. It gets a homeworld with whatever the
 donor's homeworld had , shipyard included , so it can build its own, but the
 `SHIP`/`DYNO` records are galaxy-level rather than per-civ and adding one is a
 separate job.
 
-`[ ]` **A CLONED CIV INHERITS THE DONOR'S EXPLORED MAP, AND THAT IS A CHEAT.**
+[ ] **A CLONED CIV INHERITS THE DONOR'S EXPLORED MAP, AND THAT IS A CHEAT.**
 `EXSY` is copied verbatim, so injecting a civ off a developed donor hands the
 newcomer everything that donor had found , including, once anyone has met
 anyone, where the home planets are. Nobody should start a game knowing that.
 
-`[ ]` **Homeworld placement is one hardcoded policy, and it should be a choice.**
+[ ] **Homeworld placement is one hardcoded policy, and it should be a choice.**
 `pick_homeworld` spreads civs as far apart as it can, which is the right default
 for testing the strategy , contact is then a thing the AI has to earn rather than
 a thing the setup hands it. It is not the only placement anyone will want:

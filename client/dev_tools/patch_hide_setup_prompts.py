@@ -44,7 +44,7 @@ One byte, no instruction lengths change, no branch targets move. The dialog and
 every path that builds it are left intact, so a caller that wants to open it can
 still do so.
 
-`[ ]` **The real fix is a one-time civilisation setup step.** In the original, a
+[ ] **The real fix is a one-time civilisation setup step.** In the original, a
 player chose their name and coat of arms once and the blob carried it forever,
 which is why the field was non-zero and the prompt never came back. Our galaxies
 are generated locally and never go through that flow. Until the launcher or the

@@ -80,13 +80,13 @@ see D1.
 
 ## A. Referee, the tick
 
-- `[x]` **A1. Package the referee loop as a component.** `server/referee.py`
+- [x] **A1. Package the referee loop as a component.** `server/referee.py`
   exposes `apply_orders(blob, submissions)` and `tick(blob, turns)`, kept apart so
   a Python reimplementation of the rules would replace `tick` alone and every
   caller would keep working. `tick` writes the blob out, starts a client on it,
   drives the clock, captures and closes. Confirmed advancing a three-civ galaxy
   from turn 3 to turn 7 with no human present.
-  `[x]` **The referee's client is stamped as one of the civs**, since every blob
+  [x] **The referee's client is stamped as one of the civs**, since every blob
   names a local player, and it does not matter. If the engine had stopped
   playing whoever the client is, every tick would quietly disadvantage one
   empire, and in a hosted galaxy that empire is whoever `GLOB` happens to name.
@@ -104,7 +104,7 @@ see D1.
   This covers economic decisions, not expansion or combat. An 8-turn version ran
   first and proved less than it appeared to, since nothing in the galaxy changed
   at all over that span.
-- `[x]` **A2. Canonical hash.** `server/canonical.py` zeroes the trailing `u32`
+- [x] **A2. Canonical hash.** `server/canonical.py` zeroes the trailing `u32`
   of every `KNPL` payload and hashes what is left. Two independent ticks of
   turn 9, in separate processes, produced the same canonical hash. As it
   happened they produced the same raw hash too, so the volatile field did not
@@ -117,7 +117,7 @@ see D1.
   shows up rather than being quietly forgiven. Passing two blobs compares them
   after masking and names where they still differ, which is how a second
   volatile field would be found.
-- `[x]` **A3. Archive every turn** as blob plus orders plus hash. Each turn the
+- [x] **A3. Archive every turn** as blob plus orders plus hash. Each turn the
   referee closes writes a record holding the canonical hash of the state it
   started from, of the state it published, and of every submission it used.
   Hashing the submissions matters: without them a rerun that disagrees cannot be
@@ -139,7 +139,7 @@ see D1.
 
   A turn archived before hashes existed reports that rather than passing
   vacuously.
-- `[x]` **A4. Determinism under combat.** A played-versus-loaded pair agrees
+- [x] **A4. Determinism under combat.** A played-versus-loaded pair agrees
   across a war, and so does a loaded-versus-loaded pair, which is the case the
   referee actually exercises.
 
@@ -167,7 +167,7 @@ see D1.
   experiment without that control would have recorded "combat diverges", which
   was the available and wrong conclusion.
 
-  `[ ]` **The engagement was one-sided**, an armed attacker against an unarmed
+  [ ] **The engagement was one-sided**, an armed attacker against an unarmed
   defender and its planet. It exercises targeting, damage and destruction, not a
   pitched two-sided battle, and BadGuy had no warship design to fight back with.
   Worth repeating once both sides can shoot.
@@ -183,7 +183,7 @@ see D1.
 
 ## B. Client lifecycle, once per turn
 
-- `[x]` **B1. Push a turn and relaunch, launcher-driven.** Confirmed live on
+- [x] **B1. Push a turn and relaunch, launcher-driven.** Confirmed live on
   18 September 2026: a player clicked Multiplayer once, played turn 8, walked
   away, and came back to turn 9 open and playable. Nothing manual in between.
 
@@ -228,11 +228,11 @@ see D1.
     and the launcher decided the whole install was broken. `is_playable` now
     recognises a `"session"` mode.
 
-  `[ ]` **Not packaged.** The launcher's multiplayer path imports from the
+  [ ] **Not packaged.** The launcher's multiplayer path imports from the
   checkout, so it runs only from a clone. Shipping it means bundling
   `save_parser`, `set_blob_player`, `turn_store` and the serve and collect logic
   into the frozen build, which is a `build.ps1` change.
-- `[x]` **B2. Stop the player's client ticking on its own.** Confirmed live: a
+- [x] **B2. Stop the player's client ticking on its own.** Confirmed live: a
   player's client sat on a served turn for six minutes, never advanced, never
   bailed, and the launcher showed the real countdown beside it. Two things get
   that: the player build is the one without T1-T5, so the engine's own sync
@@ -266,13 +266,13 @@ see D1.
 
   **Done when:** a player's client left open past its turn boundary neither ticks
   nor bails, and the launcher shows the countdown.
-- `[x]` **B3. Restore non-blob state after load.** Nothing needs restoring. The
+- [x] **B3. Restore non-blob state after load.** Nothing needs restoring. The
   four homeworld allowance counters were the only candidate, and they turned out
   to be the prompt's own UI state rather than game state, cleared whenever the
   prompt opens. On the player build the prompt does not open, so there is no
   allowance to re-offer and nothing to put back. `homeworld_clicks.py` remains
   useful for driving the prompt deliberately.
-- `[x]` **B4. Neutralise the setup prompts on the served path.** Confirmed live
+- [x] **B4. Neutralise the setup prompts on the served path.** Confirmed live
   in September 2026: a served turn now comes up straight into the galaxy with no
   prompt of any kind, from a blob with nothing faked, and is playable.
 
@@ -310,13 +310,13 @@ see D1.
   A `coaid` answer was also tried and is **not** the gate: the client fetched
   `getcoa&coaid=1` happily and offered the prompt anyway, so `cs_server.py` is
   unchanged.
-  `[ ]` **Build the one-time civilisation setup step the prompt exists for.** In
+  [ ] **Build the one-time civilisation setup step the prompt exists for.** In
   the original a player chose a name and coat of arms once and the blob carried
   it forever, which is why the field was non-zero and the prompt never returned.
   Our galaxies are generated locally and skip that flow entirely. The patch
   stands in for it; the launcher or the site should eventually offer it, and then
   `Owner:384` would be set by the engine rather than guessed at.
-- `[x]` **B5. Tell a client which civ it plays.** Two clients sharing a galaxy
+- [x] **B5. Tell a client which civ it plays.** Two clients sharing a galaxy
   have to control different civs, and **`GLOB` carries the answer**: one `u32`
   holding the object id of the civ the loading client will play.
   `server/dev_tools/set_blob_player.py` writes it. A blob stamped 198 came up as
@@ -353,7 +353,7 @@ The client applies orders locally in offline mode, so intent has to be recovered
 from the state it hands back. This is the part the `CMND` protocol would have
 made unnecessary.
 
-- `[x]` **C1. Diff engine.** Compare the exact bytes handed to a player against
+- [x] **C1. Diff engine.** Compare the exact bytes handed to a player against
   the save they return, over the section tree. `server/dev_tools/diff_saves.py`
   reports the change at section level and `merge_orders.py` reads the fields.
 
@@ -380,14 +380,14 @@ made unnecessary.
   rebuilt the returned blob byte for byte from the baseline, and the same file
   submitted under the other civ's name was rejected with the owner named.
 
-  `[x]` **Every submission is judged against the state served**, not against the
+  [x] **Every submission is judged against the state served**, not against the
   authoritative blob as it evolves. Applying one player's orders first moved the
   state under the next player, whose untouched copy of a ship then differed from
   it and read as an attempt to change what they did not own: the two-player round
   logged two such drops with neither player having done anything. Re-running that
   same round now reports **3 orders taken and 0 dropped**, same merged size.
 
-  `[x]` **A forged owner field cannot take a ship.** Ownership is read from the
+  [x] **A forged owner field cannot take a ship.** Ownership is read from the
   served state, never from the submission. Tested by rewriting one of
   DemoPlayer's ships to claim Neighbor owned it, planting a real order on it and
   submitting as Neighbor: the change was dropped and named, `ship 201: DROPPED,
@@ -512,16 +512,16 @@ made unnecessary.
   queue, ship designs, governors, admirals, diplomacy proposals. Orders issued
   through an admiral are also out of scope, since the admiral id sits inside
   `DYNO` and would be copied with the order.
-- `[ ]` **C3. Immediate-effect actions.** Hurry production, conscription, crew
+- [ ] **C3. Immediate-effect actions.** Hurry production, conscription, crew
   assignment and job reallocation take effect the moment they are clicked, so the
   diff shows the *effect* and not the intent. Each needs a reverse mapping, effect
   back to intent, which the referee then performs itself so it applies the cost.
   **Done when:** each action is either mapped or explicitly refused, with a list
   of which.
-- `[ ]` **C4. Legality gate.** Encode the rule the UI enforces rather than
+- [ ] **C4. Legality gate.** Encode the rule the UI enforces rather than
   inferring legality from an observed state.
   **Done when:** the gate cites a rule for every accepted order type.
-- `[x]` **C5. Get a player's state back without their help.** `SaveGame` at
+- [x] **C5. Get a player's state back without their help.** `SaveGame` at
   `0x0048B350` has exactly one caller, the Save/Load dialog, so the client never
   uploads on its own. `client/dev_tools/trigger_save.py` calls it in a remote
   thread and `player_turn.py collect` wraps that. Every submission in the
@@ -623,7 +623,7 @@ made unnecessary.
   authorised, which is a fault to suppress rather than a feature to keep. So
   the answer still matters; what changed is which answer is the bad one.
 
-  `[x]` **Measured: the engine issues nothing during a tick, and the `ROUT` was
+  [x] **Measured: the engine issues nothing during a tick, and the `ROUT` was
   there before it.** The instrument is a galaxy built by
   `server/dev_tools/make_multiplayer_galaxy.py`, where every ship starts with
   order type 0, no `ROUT` and has-orders clear, so anything non-zero afterwards
@@ -670,7 +670,7 @@ made unnecessary.
   9, 9, 9. A civ added by `inject_civ` inherits its donor's world, so it
   inherits whichever of the two it was cloned from.
 
-  `[ ]` **Whether this is the engine or our own patching is untested, and it
+  [ ] **Whether this is the engine or our own patching is untested, and it
   matters.** The referee ticks on the Resurgence build, which carries the six
   T1-T5 sites in the turn pipeline, and whether one of them skips an AI phase is
   unknown. The obvious control, ticking the same galaxy on the unpatched build,
@@ -678,13 +678,13 @@ made unnecessary.
   server, which is the whole reason those patches exist. If our patches are the
   cause it is fixable; if the engine simply does not run AI down this path, the
   empty seats need filling another way.
-- `[x]` **D4. More than two civs in a galaxy.** `server/dev_tools/inject_civ.py`
+- [x] **D4. More than two civs in a galaxy.** `server/dev_tools/inject_civ.py`
   adds a whole player to a blob, confirmed live with a third civ that owned a
   homeworld and played four turns.
 
 ## G. Operating it
 
-- `[x]` **One machine, one game process, now with a lock.** A machine that both
+- [x] **One machine, one game process, now with a lock.** A machine that both
   plays and referees has two things wanting the single client, and nothing
   arbitrates. `referee.tick` closes whatever is running before starting its
   own, and `wait_for_client_free` gives up after 180 seconds and ticks anyway,
@@ -708,7 +708,7 @@ made unnecessary.
 
 ## F. Off one machine
 
-- `[x]` **F1. Address the turn store over HTTP.** `server/turn_server.py` puts a
+- [x] **F1. Address the turn store over HTTP.** `server/turn_server.py` puts a
   store behind a URL and `HttpTurnStore` speaks to it, so
   `open_store("http://host:8899")` and `open_store("some/dir")` are
   interchangeable. Every caller takes a string and never learns which it got.
@@ -725,13 +725,13 @@ made unnecessary.
   and `HttpTurnStore` keeps working, or replaces `HttpTurnStore` and the service
   is no longer needed. Nothing above the store changes either way.
 
-  `[ ]` **There is no authentication.** Anyone who can reach the port can
+  [ ] **There is no authentication.** Anyone who can reach the port can
   publish a turn or submit as any civ. Deliberate for a closed beta among people
   who know each other, and the first thing that has to change before a galaxy is
   open to strangers. The ownership rules in `merge_orders.py` still hold, so the
   worst a stranger can do through this door is submit nonsense as someone else,
   not acquire their ships.
-- `[x]` **F2. Two machines.** Done, 18 September 2026. Two PCs played one
+- [x] **F2. Two machines.** Done, 18 September 2026. Two PCs played one
   galaxy over a shared folder, each with its own client, its own `cs_server`
   and its own launcher config, sharing only the store. Turn 12 closed with both
   submissions present and the other machine's colonise applied:
@@ -756,7 +756,7 @@ made unnecessary.
   deadline when it is already spent; submissions go every 20 seconds through
   the turn instead of once at the end; and each one reports what it carries, so
   an empty turn is visible as an empty turn.
-- `[x]` **F3. The launcher takes a URL.** It does now. It did not: the plan said
+- [x] **F3. The launcher takes a URL.** It does now. It did not: the plan said
   the `store` string was "passed to `open_store`", and the launcher in fact
   named `turn_store.TurnStore` directly, so a URL meant a directory called
   `http:` and the player was told there was no galaxy there. One line, now
@@ -772,7 +772,7 @@ made unnecessary.
   **This is the shape of bug F2 will keep finding.** Nothing about the store
   seam is wrong; the callers above it were written when a store was always a
   folder, and each one has to be looked at rather than assumed.
-- `[ ]` **F4. A Firebase adapter**, replacing either side of the seam.
+- [ ] **F4. A Firebase adapter**, replacing either side of the seam.
 
 ## E. Not applicable on this path
 

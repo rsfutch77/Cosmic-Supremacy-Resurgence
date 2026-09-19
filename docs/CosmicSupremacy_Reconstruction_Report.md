@@ -319,13 +319,13 @@ So the score list holds one row per distinct `Owner:4`, and the collision, not t
 
 #### Open items
 
-`[ ]` **The score list is built at a turn boundary, not at load, so a civ with a correct `Owner:4` is still missing for the whole of a galaxy's first turn.** Confirmed on the B galaxy: parked at turn 185 straight off the `.dat`, the score list showed two rows; after one boundary it showed three, with no other change. This is the residual limitation of the fix and it is **not addressed**, it bites every freshly injected galaxy until its first tick, and a galaxy parked at 3600s turns stays wrong for an hour. Two ways round it, neither implemented: tick one boundary before showing the list (`fast_turns.py <secs>` collapses the current turn, one write starts the clock), or render the standing somewhere else entirely, since the numbers are readable per civ off `Owner:28` without the client's table. Worth revisiting properly: find what the boundary path does to the table that the load path does not, which is also the question of whether anything *else* the UI shows is only refreshed at a boundary.
+[ ] **The score list is built at a turn boundary, not at load, so a civ with a correct `Owner:4` is still missing for the whole of a galaxy's first turn.** Confirmed on the B galaxy: parked at turn 185 straight off the `.dat`, the score list showed two rows; after one boundary it showed three, with no other change. This is the residual limitation of the fix and it is **not addressed**, it bites every freshly injected galaxy until its first tick, and a galaxy parked at 3600s turns stays wrong for an hour. Two ways round it, neither implemented: tick one boundary before showing the list (`fast_turns.py <secs>` collapses the current turn, one write starts the clock), or render the standing somewhere else entirely, since the numbers are readable per civ off `Owner:28` without the client's table. Worth revisiting properly: find what the boundary path does to the table that the load path does not, which is also the question of whether anything *else* the UI shows is only refreshed at a boundary.
 
-`[ ]` **`EXSY` is cloned, not reset, and that is a cheat rather than a cosmetic defect.** An injected civ inherits the donor's explored-systems map, so cloning a developed donor tells the newcomer where the home planets are. Two things keep it from mattering yet and neither is a fix: the AI player does not read `EXSY` (it keeps its own discovery set, persisted per civ name), and cloning from a turn-1 capture inherits an empty map, so only the developed-donor fixture leaks. The fix needs the record layout, which is not decoded, the leading `u32` reads 63 on a civ that had explored 105 systems, so it is not a plain count and the obvious guess is already falsified. **That `EXSY` is the explored-systems map is itself inferred** from the tag and from its size tracking exploration across two civs; confirm it while decoding it.
+[ ] **`EXSY` is cloned, not reset, and that is a cheat rather than a cosmetic defect.** An injected civ inherits the donor's explored-systems map, so cloning a developed donor tells the newcomer where the home planets are. Two things keep it from mattering yet and neither is a fix: the AI player does not read `EXSY` (it keeps its own discovery set, persisted per civ name), and cloning from a turn-1 capture inherits an empty map, so only the developed-donor fixture leaks. The fix needs the record layout, which is not decoded, the leading `u32` reads 63 on a civ that had explored 105 systems, so it is not a plain count and the obvious guess is already falsified. **That `EXSY` is the explored-systems map is itself inferred** from the tag and from its size tracking exploration across two civs; confirm it while decoding it.
 
-`[ ]` **An injected civ gets no ships.** `SHIP`/`DYNO` records are galaxy-level rather than per-civ, so a starting colony ship is a separate job. Against civs that start with two, that is a real handicap at turn 1, the civ can build its own only if the donor's homeworld had a shipyard.
+[ ] **An injected civ gets no ships.** `SHIP`/`DYNO` records are galaxy-level rather than per-civ, so a starting colony ship is a separate job. Against civs that start with two, that is a real handicap at turn 1, the civ can build its own only if the donor's homeworld had a shipyard.
 
-`[ ]` **Homeworld placement is one hardcoded policy.** New civs are placed as far from every claimed planet as possible, which is the right default for testing an AI (contact becomes something it has to earn) but not the only one worth having, random placement is what a real generator does and is the only way to test a hostile neighbour two systems away, and clustered or per-team placement follow from it. Wants a `--placement` option rather than a second function.
+[ ] **Homeworld placement is one hardcoded policy.** New civs are placed as far from every claimed planet as possible, which is the right default for testing an AI (contact becomes something it has to earn) but not the only one worth having, random placement is what a real generator does and is the only way to test a hostile neighbour two systems away, and clustered or per-team placement follow from it. Wants a `--placement` option rather than a second function.
 
 ### Audit: is memory editing still needed for multiplayer? (August 2026)
 
@@ -492,7 +492,7 @@ with the final byte a flag in its own right. And it is worth sweeping the other 
 signature, which is cheap now that it is known: a field that changes between two otherwise identical
 runs, or whose top byte becomes `0xFF` after a load.
 
-`[ ]` `KNPL` is now doubly interesting: this field, and the fact that a `KNPL` still naming removed
+[ ] `KNPL` is now doubly interesting: this field, and the fact that a `KNPL` still naming removed
 planets is the likely reason a fog-filtered blob fails to tick. Worth decoding properly rather than
 piecemeal.
 
@@ -590,9 +590,9 @@ premium 1   waronly 1     autoattack 1
 
 **`primetime` and `primetime_turnlength` are a scheduled fast window.** A galaxy could run at its normal slow rate most of the day and switch to a much shorter turn during peak hours, early evening, when most players are home and want to see things happen. `primetime` is the `(start, end)` pair and `primetime_turnlength` the rate inside it; all three read `-1` here, meaning unused. Not needed for single-player or AI work, recorded because a faithful server has to implement it and nothing else documents it.
 
-`[ ]` **Not yet mapped to behaviour:** `speed`, `density`, `rank`, `startticks`, `premium`, `score_breakeven`, `civilization_changes`, `hse_multiplier`, `colonymodule_multiplier`. `civilization_changes = 5` is a good guess at the civ-trait budget, matching the trait block at `Owner:744…940`, but that is inference.
+[ ] **Not yet mapped to behaviour:** `speed`, `density`, `rank`, `startticks`, `premium`, `score_breakeven`, `civilization_changes`, `hse_multiplier`, `colonymodule_multiplier`. `civilization_changes = 5` is a good guess at the civ-trait budget, matching the trait block at `Owner:744…940`, but that is inference.
 
-`[ ]` **`corruption_multiplier = 100` is the first handle on corruption we have.** Corruption has resisted location in memory entirely, see the memory report, and here is a galaxy-level knob for it. Changing it and watching what moves is a far cheaper search than diffing planets, and it is the same trick that finally located `Planet:368`: make the thing vary.
+[ ] **`corruption_multiplier = 100` is the first handle on corruption we have.** Corruption has resisted location in memory entirely, see the memory report, and here is a galaxy-level knob for it. Changing it and watching what moves is a far cheaper search than diffing planets, and it is the same trick that finally located `Planet:368`: make the thing vary.
 
 **`turnlength` drives the game's clock, and the engine re-applies it AT EVERY TURN BOUNDARY.** A galaxy set to 75 was observed writing 75 back over a driven 15 at each boundary, so a galaxy configured above the floor runs at its configured rate with nothing driving it, `ai.py --drive` is only needed to go faster than the game wants to.
 
@@ -832,7 +832,7 @@ Two things cost time here and are worth passing on:
 * **Patching the two obvious sites did nothing.** Only #20 and #27 write the immediate straight to memory; the rest load 60 into a REGISTER first (`mov ecx, 60 ; mov [0x0080AA08], ecx`), which does not match a search for `mov [addr], imm`. The live value kept coming up 60 on a client whose patched bytes verified correct on disk.
 * **Read the RUNNING process to tell the two failures apart.** "The patch does not work" and "the patch is not where I think it is" present identically. Reading the bytes back out of the live process settled it in one step.
 
-`[ ]` The same function also carries an **upper** bound, `cmp ebx, 0xA8C0` (43,200 = 12 hours) at `0x0052D34F`. Untouched, and presumably the longest turn the original game offered.
+[ ] The same function also carries an **upper** bound, `cmp ebx, 0xA8C0` (43,200 = 12 hours) at `0x0052D34F`. Untouched, and presumably the longest turn the original game offered.
 
 ### Summary
 
@@ -1122,7 +1122,7 @@ the same idiom as the order object's `+28`/`+52` list heads.
 **Drafting is FREE below content version 150.** The gate is `[0x0080AA00] >= 150`;
 under it the engine skips the whole cost block.
 
-`[ ]` **HAZARD, `CommitPopulation` auto-conscripts any population above `space/10`.**
+[ ] **HAZARD, `CommitPopulation` auto-conscripts any population above `space/10`.**
 Anything calling it must expect the citizen vector to shift underneath a stale index,
 which is why `actions.conscript` re-reads the list live rather than trusting the
 snapshot.
