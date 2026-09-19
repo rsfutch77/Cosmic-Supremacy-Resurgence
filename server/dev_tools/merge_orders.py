@@ -155,6 +155,11 @@ RESEARCH_FIELDS = ((32, 4), (40, 4))
 PLANET_NAME_OFF = 24
 MAX_NAME = 63
 
+# What a client writes into a SUN whose stored name is empty. See A4 in the
+# plan: 108 suns times seven bytes is the whole of a 756-byte difference
+# that once looked like combat diverging.
+DEFAULT_SUN_NAME = b'Unnamed'
+
 # The citizen array inside a planet's PLPR.
 POP_COUNT_OFF = 36
 POP_ARRAY_OFF = 40
@@ -910,6 +915,14 @@ def merge(blob, submissions, log=print):
                 dropped += 1
                 continue
             if name == name_served:
+                continue
+            if name_served[0] == 0 and name[1] == DEFAULT_SUN_NAME:
+                # Not a rename. A running client materialises `Unnamed` into
+                # every SUN the blob left empty, so a fresh galaxy comes back
+                # from each player with a "rename" on every system they do not
+                # own. Dropping it is correct and saying so 32 times a turn per
+                # player buries the drops that mean something: the first live
+                # merge of the rehearsal reported 65 drops, 64 of them this.
                 continue
             held = owners.get(mine, 0)
             if held * 2 <= total:
