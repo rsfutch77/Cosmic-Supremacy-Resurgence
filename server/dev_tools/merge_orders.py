@@ -86,6 +86,13 @@ since the per-citizen owner already says whose it is, but it has not been
 measured and letting one player write into another's `PLPR` deserves more care
 than a guess.
 
+**System renaming**, the `SUN ` section's name, at the same `+24` offset in its
+own payload. Measured by having a player rename the system they hold five of six
+planets in: the name appeared on the `SUN `, and the renamer's own `EXSY` cache
+picked it up while the other civ's did not. A system belongs to nobody, so the
+right to rename it is the game's own rule, **owning more than half its
+planets**, read from the served state.
+
 **Planet renaming**, `PLNT` own payload `+24`: a `u32` length then the
 characters. Measured by having a player rename a colony, which changed that
 field and nothing else on the object. The game gates it, refusing with "you
@@ -212,8 +219,46 @@ def jobs_acceptable(served, submitted, civ_oid):
     return True, ''
 
 
-def planet_name(blob, sec):
-    """(length, name_bytes) from a PLNT section, or None if unreadable."""
+def systems(blob):
+    """{sunObjectId: (planet_owner_counts, planet_total, (len, name))}."""
+    tree = sp.parse_blob(blob)
+    glxy = next(tree[0].find('GLXY'))
+    out = {}
+    for sola in (c for c in glxy.children if c.tag == b'SOLA'):
+        sun = next((s for s in sola.children if s.tag == b'SUN '), None)
+        if sun is None:
+            continue
+        oid = struct.unpack_from('<I', blob, sun.payload)[0]
+        owners, total = {}, 0
+        for sec in sola.find('PLNT'):
+            total += 1
+            o = struct.unpack_from('<I', blob, sec.payload + 16)[0]
+            if o:
+                owners[o] = owners.get(o, 0) + 1
+        out[oid] = (owners, total, object_name(blob, sun))
+    return out
+
+
+def set_system_name(blob, sun_oid, name: bytes):
+    """Write a system's name onto its SUN section."""
+    tree = sp.parse_blob(blob)
+    glxy = next(tree[0].find('GLXY'))
+    for sola in (c for c in glxy.children if c.tag == b'SOLA'):
+        for sun in sola.children:
+            if sun.tag != b'SUN ':
+                continue
+            if struct.unpack_from('<I', blob, sun.payload)[0] != sun_oid:
+                continue
+            at = sun.payload + PLANET_NAME_OFF
+            old = struct.unpack_from('<I', blob, at)[0]
+            body = (bytes(blob[sun.payload:at]) + struct.pack('<I', len(name))
+                    + name + bytes(blob[at + 4 + old:sun.end]))
+            return sp.replace_payload(blob, tree, sun, body)
+    raise SystemExit(f'system {sun_oid} not found')
+
+
+def object_name(blob, sec):
+    """(length, name_bytes) from a PLNT or SUN section, or None."""
     own = sp.own_bytes(blob, sec)
     if len(own) < PLANET_NAME_OFF + 4:
         return None
@@ -221,6 +266,11 @@ def planet_name(blob, sec):
     if n > MAX_NAME or PLANET_NAME_OFF + 4 + n > len(own):
         return None
     return n, bytes(own[PLANET_NAME_OFF + 4:PLANET_NAME_OFF + 4 + n])
+
+
+def planet_name(blob, sec):
+    """(length, name_bytes) from a PLNT section, or None if unreadable."""
+    return object_name(blob, sec)
 
 
 def name_acceptable(name: bytes):
@@ -460,6 +510,40 @@ def merge(blob, submissions, log=print):
             after = [c[0] for c in citizens_of(plpr)]
             log(f"    planet {planet_oid}: jobs taken "
                 f"({_tally(before)} -> {_tally(after)})")
+            accepted += 1
+
+        # system names, which belong to whoever holds most of the system
+        served_systems = systems(blob)
+        for sun_oid, (_o, _t, name) in sorted(systems(sub).items()):
+            if sun_oid not in served_systems:
+                log(f"    system {sun_oid}: DROPPED, not in the state served")
+                dropped += 1
+                continue
+            owners, total, name_served = served_systems[sun_oid]
+            if name_served is None:
+                continue
+            if name is None:
+                log(f"    system {sun_oid}: rename DROPPED, the name field is "
+                    f"unreadable or longer than {MAX_NAME} bytes")
+                dropped += 1
+                continue
+            if name == name_served:
+                continue
+            held = owners.get(mine, 0)
+            if held * 2 <= total:
+                log(f"    system {sun_oid}: rename DROPPED, {civ_name} holds "
+                    f"{held} of {total} planets, not a majority")
+                dropped += 1
+                continue
+            ok, why = name_acceptable(name[1])
+            if not ok:
+                log(f"    system {sun_oid}: rename DROPPED, {why}")
+                dropped += 1
+                continue
+            blob = set_system_name(blob, sun_oid, name[1])
+            log(f"    system {sun_oid}: renamed "
+                f"{name_served[1].decode('latin1')!r} -> "
+                f"{name[1].decode('latin1')!r}")
             accepted += 1
 
         # research topic

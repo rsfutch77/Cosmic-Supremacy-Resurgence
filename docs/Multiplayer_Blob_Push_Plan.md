@@ -474,10 +474,24 @@ made unnecessary.
   | control bytes in the name | name holds bytes outside printable ASCII |
   | a 200-byte name | the name field is unreadable or longer than 63 bytes |
 
-  `[ ]` **Renaming a system is not measured.** The attempt was refused in game
-  for want of majority ownership, so the write was never seen. The galaxy-level
-  system name is the one in a `SUN ` section; whether renaming writes there, and
-  what else moves, is untested.
+  **Renaming a system** writes the `SUN ` section's name, at the same `+24` in
+  its own payload. Measured on a galaxy where one civ held five of a system's
+  six planets: the name appeared on the `SUN `, and **the renamer's own `EXSY`
+  cache picked it up while the other civ's did not**, which is why another
+  player keeps seeing the old name until they observe the change. A system
+  belongs to nobody, so the right to rename it is the game's own rule, owning
+  more than half its planets, read from the served state.
+
+  | forged | refused with |
+  |---|---|
+  | a minority holder renames it | BadGuy holds 0 of 6 planets, not a majority |
+  | control bytes in the name | name holds bytes outside printable ASCII |
+  | a 200-byte name | the name field is unreadable or longer than 63 bytes |
+
+  **`order_diff.py` could not see this change at all** until `SUN ` was indexed.
+  It keyed objects on `OWNR`, `PLNT` and `SHIP`, so a system rename showed up as
+  a change to the renamer's `EXSY` and nothing else, hiding the write that
+  actually mattered. Galaxy-level objects are now reported as unowned.
 
   Still unmeasured, and therefore not accepted: facility selection outside the
   queue, ship designs, governors, admirals, diplomacy proposals. Orders issued

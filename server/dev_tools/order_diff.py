@@ -28,6 +28,11 @@ Layouts used, from the writers:
     PLNT payload    u32 objectId ; f32 x, z, y ; u32 ownerObjectId ; ...
     SHIP payload    u32 objectId ; f32 x, z, y ; u32 ownerObjectId ; ...
 
+`SUN ` carries an object id but no owner, so it is indexed and reported as
+galaxy-level. That matters: a system's name lives there, and without indexing it
+a player renaming a system produced a diff that mentioned only their own `EXSY`
+cache, hiding the write that actually counted.
+
 Anything else is attributed to whatever object encloses it, so a `DYNO` under a
 `SHIP` is that ship's, and a section under `GLXY` is nobody's and shows as
 galaxy-level. Galaxy-level changes are worth seeing: a player's client has no
@@ -44,7 +49,8 @@ import save_parser as sp
 import inject_civ as icv
 
 OWNED = {b'PLNT', b'SHIP'}          # payload carries an object id then an owner
-OBJECT_TAGS = OWNED | {b'OWNR'}
+UNOWNED = {b'SUN '}                 # an object id, but belonging to no civ
+OBJECT_TAGS = OWNED | UNOWNED | {b'OWNR'}
 
 
 def owner_of_ownr(blob, sec):
@@ -62,7 +68,7 @@ def objects(blob):
             if s.tag == b'OWNR':
                 oid = owner_of_ownr(blob, s)
                 out[(s.tag, oid)] = s
-            elif s.tag in OWNED:
+            elif s.tag in OWNED or s.tag in UNOWNED:
                 oid = struct.unpack_from('<I', blob, s.payload)[0]
                 out[(s.tag, oid)] = s
             visit(s.children)
