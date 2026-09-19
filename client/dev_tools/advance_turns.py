@@ -35,6 +35,15 @@ psapi    = ctypes.WinDLL("psapi", use_last_error=True)
 kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
 
 
+# Names that contain the substring below but are not the game client. The same
+# list trigger_save.py keeps, for the same reason and a different symptom:
+# attaching to CosmicSupremacyLauncher.exe reads a turn number out of a process
+# that has none, and the referee's tick then died on "unsupported operand
+# type(s) for +: 'NoneType' and 'int'" the first time a packaged launcher and a
+# referee ran on one machine.
+NOT_THE_CLIENT = ("launcher",)
+
+
 def find_pid(exe_substr="CosmicSupremacy"):
     arr = (wintypes.DWORD * 4096)()
     cb  = ctypes.c_ulong()
@@ -49,9 +58,10 @@ def find_pid(exe_substr="CosmicSupremacy"):
             continue
         try:
             buf = ctypes.create_unicode_buffer(260)
-            if psapi.GetModuleBaseNameW(h, None, buf, 260) and \
-               exe_substr.lower() in buf.value.lower():
-                return pid, buf.value
+            name = buf.value if psapi.GetModuleBaseNameW(h, None, buf, 260) else ""
+            low = name.lower()
+            if exe_substr.lower() in low and not any(x in low for x in NOT_THE_CLIENT):
+                return pid, name
         finally:
             kernel32.CloseHandle(h)
     return None, None

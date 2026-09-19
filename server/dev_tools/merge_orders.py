@@ -114,8 +114,10 @@ growth each turn. Measured by a player moving the slider from 0 to 50.
 own payload. Measured by having a player rename the system they hold five of six
 planets in: the name appeared on the `SUN `, and the renamer's own `EXSY` cache
 picked it up while the other civ's did not. A system belongs to nobody, so the
-right to rename it is the game's own rule, **owning more than half its
-planets**, read from the served state.
+right to rename it is the game's own rule, **owning more than half of its
+settled planets**, read from the served state. Unowned planets do not count
+toward the denominator: one settled planet in an otherwise empty system is a
+majority of one, and the client lets its owner name the system.
 
 **Planet renaming**, `PLNT` own payload `+24`: a `u32` length then the
 characters. Measured by having a player rename a colony, which changed that
@@ -154,6 +156,11 @@ RESEARCH_FIELDS = ((32, 4), (40, 4))
 # A planet's name, in PLNT's own payload: a u32 length then the characters.
 PLANET_NAME_OFF = 24
 MAX_NAME = 63
+
+# What a client writes into a SUN whose stored name is empty. See A4 in the
+# plan: 108 suns times seven bytes is the whole of a 756-byte difference
+# that once looked like combat diverging.
+DEFAULT_SUN_NAME = b'Unnamed'
 
 # The citizen array inside a planet's PLPR.
 POP_COUNT_OFF = 36
@@ -435,6 +442,34 @@ def progress_of(plpr):
     if plpr is None or len(plpr) < PROGRESS_OFF + 4:
         return None
     return struct.unpack_from('<I', plpr, PROGRESS_OFF)[0]
+
+
+def design_ids(blob):
+    """Every ship design object id in a blob."""
+    out = set()
+    for sec in sp.flatten(sp.parse_blob(blob)):
+        if sec.tag == b'DSGN':
+            out.add(struct.unpack_from('<I', blob, sec.payload)[0])
+    return out
+
+
+def prod_builds(prod):
+    """The design a queue entry names, or None if it names none.
+
+    A `PROD` payload ends with a nested section saying what is queued: `FCLT`
+    with an empty payload for a facility, `WLTH` for nothing, and `SHIP` with a
+    four-byte payload holding the **design's object id**. That id is the whole
+    of the problem this exists to catch.
+    """
+    if prod is None or len(prod) < 8 + 33:
+        return None
+    body = prod[8:]
+    if body[21:25] != b'SHIP':
+        return None
+    size = struct.unpack_from('<I', body, 25)[0] & sp.SIZE_MASK
+    if size < 4 or len(body) < 33:
+        return None
+    return struct.unpack_from('<I', body, 29)[0]
 
 
 def military_of(plpr):
@@ -745,6 +780,7 @@ def merge(blob, submissions, log=print):
     """submissions: [(civ_name, submitted_blob)]. Returns the merged blob."""
     served_ships = ship_index(blob)
     served_planets = planet_index(blob)
+    served_designs = design_ids(blob)
     names = {o['oid']: o['name'] for o in icv.owner_records(blob)}
     accepted = dropped = 0
 
@@ -815,6 +851,20 @@ def merge(blob, submissions, log=print):
                 elif prod is None or prod_served is None:
                     log(f"    planet {planet_oid}: production DROPPED, no PROD "
                         f"section on one side")
+                    dropped += 1
+                elif (prod_builds(prod) is not None
+                      and prod_builds(prod) not in served_designs):
+                    # A queue that names a design the served state does not
+                    # have is a dangling reference, and the engine refuses the
+                    # whole galaxy rather than the order: the client started,
+                    # read it, and exited in four seconds. Designs are not
+                    # carried by this whitelist, so a player who designs a ship
+                    # and queues it produces exactly this. Refusing the queue
+                    # keeps the galaxy loadable; carrying designs is the real
+                    # fix and is not measured yet.
+                    log(f"    planet {planet_oid}: production DROPPED, it "
+                        f"builds design {prod_builds(prod)}, which is not in "
+                        f"the state served. Ship designs are not carried yet")
                     dropped += 1
                 elif is_hurried(prod) and not is_hurried(prod_served):
                     # A hurry takes effect the moment it is clicked, so the
@@ -911,10 +961,28 @@ def merge(blob, submissions, log=print):
                 continue
             if name == name_served:
                 continue
+            if name_served[0] == 0 and name[1] == DEFAULT_SUN_NAME:
+                # Not a rename. A running client materialises `Unnamed` into
+                # every SUN the blob left empty, so a fresh galaxy comes back
+                # from each player with a "rename" on every system they do not
+                # own. Dropping it is correct and saying so 32 times a turn per
+                # player buries the drops that mean something: the first live
+                # merge of the rehearsal reported 65 drops, 64 of them this.
+                continue
+            # The majority is of the planets that have an owner, not of every
+            # rock in the system. A player holding the only settled planet in a
+            # system of six may name it, which is what the client allows and
+            # what the first live rehearsal caught us refusing: both players
+            # named their own home system on turn 2 and both were dropped,
+            # holding 1 of 6 and 1 of 4. The rule was inherited by analogy from
+            # planet renaming, where the client's own refusal names a majority,
+            # and the analogy was wrong.
             held = owners.get(mine, 0)
-            if held * 2 <= total:
+            settled = sum(owners.values())
+            if held * 2 <= settled:
                 log(f"    system {sun_oid}: rename DROPPED, {civ_name} holds "
-                    f"{held} of {total} planets, not a majority")
+                    f"{held} of the {settled} settled planet(s) in a system of "
+                    f"{total}, not a majority")
                 dropped += 1
                 continue
             ok, why = name_acceptable(name[1])

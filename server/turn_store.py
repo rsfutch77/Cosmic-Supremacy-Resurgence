@@ -67,14 +67,49 @@ import save_parser as sp
 STATE_RETRY_SECONDS = 2.0
 
 
+# How long a writer keeps retrying a replace that a reader is holding open. See
+# _atomic_write: this is the other half of STATE_RETRY_SECONDS, and it is the
+# side that was missing.
+WRITE_RETRY_SECONDS = 10.0
+
+
 def _atomic_write(path: str, data: bytes) -> None:
+    """Write, then replace, retrying while a reader holds the target.
+
+    `os.replace` is not atomic over SMB and it is not even reliable: a reader
+    with the file open makes the rename fail outright, as WinError 5 on a
+    delete-pending handle. With two players polling `state.json` every few
+    seconds that is not a rare race, it is most turns.
+
+    This killed two referees before it was understood. Both died at
+    `store.publish`, after the turn's blob had been written and before the state
+    naming it was, so the galaxy stopped with a turn on disk that nothing
+    pointed at. The first death was invisible because that referee's output went
+    to DEVNULL; the second was caught two turns into a live rehearsal.
+
+    Retrying rather than failing is right because the write is idempotent: the
+    same bytes, to the same path, from a process that already holds the turn it
+    is publishing.
+    """
     os.makedirs(os.path.dirname(path), exist_ok=True)
     tmp = f'{path}.{os.getpid()}.tmp'
     with open(tmp, 'wb') as f:
         f.write(data)
         f.flush()
         os.fsync(f.fileno())
-    os.replace(tmp, path)
+    deadline = time.time() + WRITE_RETRY_SECONDS
+    while True:
+        try:
+            os.replace(tmp, path)
+            return
+        except PermissionError:
+            if time.time() >= deadline:
+                try:
+                    os.remove(tmp)
+                except OSError:
+                    pass
+                raise
+            time.sleep(0.25)
 
 
 class TurnStore:

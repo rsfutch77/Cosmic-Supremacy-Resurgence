@@ -336,8 +336,29 @@ def follow(store: TurnStore, civ: str, poll: float = 5.0, rounds: int = 0,
                     f"orders, serving the turn fresh")
         emit("serving", turn=turn, civ=civ)
         log(f"[{civ}] turn {turn}: serving")
-        serve(to_load, civ, hold=HOLD_SECONDS, exe=exe, wait_for_lock=240.0,
-              log=log)
+        try:
+            serve(to_load, civ, hold=HOLD_SECONDS, exe=exe,
+                  wait_for_lock=240.0, log=log)
+        except BaseException as exc:                        # noqa: BLE001
+            # A serve that fails costs THIS turn. Letting it end the loop costs
+            # every turn after it, and nobody is watching a player's loop at
+            # 03:00. Measured: a client that came up but never became readable
+            # killed this loop at turn 28, and the galaxy reached turn 47 with
+            # the player absent from all nineteen.
+            log(f"[{civ}] turn {turn}: COULD NOT SERVE, {exc}")
+            emit("serve_failed", turn=turn, civ=civ, error=str(exc))
+            try:
+                close()
+            except BaseException:                           # noqa: BLE001
+                pass
+            # Wait this turn out rather than spinning on a client that may be
+            # wedged, then try again on the next one.
+            while not halted():
+                got = current_or_wait()
+                if got is None or got[0] != turn:
+                    break
+                nap(poll)
+            continue
 
         sent = None                     # the last blob this turn actually stored
         last_try = 0.0
