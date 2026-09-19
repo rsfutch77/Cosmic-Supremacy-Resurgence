@@ -573,6 +573,41 @@ made unnecessary.
   back to intent, which the referee then performs itself so it applies the cost.
   **Done when:** each action is either mapped or explicitly refused, with a list
   of which.
+
+  | action | state |
+  |---|---|
+  | job reallocation | **mapped**, C2: the citizen array only, behind four integrity checks |
+  | hurry production | **mapped**, below |
+  | conscription | not measured, and dropped meanwhile |
+  | crew assignment | not measured, and dropped meanwhile |
+
+  **Hurry production, measured 19 September 2026 with a player clicking it.** A
+  farm 110 points into a 200-point build was offered at 360 credits; the
+  player's credits went 10065 to 9705 and exactly three fields moved:
+
+      PLPR+23, u32          production points accumulated, 110 -> 200
+      PROD payload byte 0   0 -> 1
+      OWNR, id_at+20, u32   credits, 10065 -> 9705
+
+  `360 = 4 * (200 - 110)` reproduces the manual verbatim: "The cost of hurrying
+  production is 4 credits per production point left", and "the current
+  production needs to be at least half finished". 110 of 200 is 55%.
+
+  **The total cost of an item is nowhere in the blob**, so the referee cannot
+  price a hurry from the served state alone. It does not need to. The points
+  bought are the distance the submission moved the progress field, and the
+  referee holds both ends of that; the price is four credits each, and it
+  spends them itself rather than believing the balance it was handed. A
+  submission claiming 999999 credits comes out of the merge with 9705.
+
+  Refused, each with a reason naming the rule: an item less than half finished,
+  a civ that cannot afford the charge, and a progress field that did not move.
+
+  Honoured by the engine, with a control on the same turn: the merged state
+  ticks to a finished farm and production back to `WLTH`, while the same turn
+  without the hurry leaves the farm still building at 164 of 200. Both civs
+  earned the same 189 credits over that turn, so the referee's charge is the
+  whole of the difference.
 - [~] **C4. Legality gate.** Encode the rule the UI enforces rather than
   inferring legality from an observed state.
   **Done when:** the gate cites a rule for every accepted order type. defferred for a later cheat prevention phase. 
