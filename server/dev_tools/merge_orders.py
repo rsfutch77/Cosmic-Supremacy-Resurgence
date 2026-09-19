@@ -86,6 +86,30 @@ since the per-citizen owner already says whose it is, but it has not been
 measured and letting one player write into another's `PLPR` deserves more care
 than a guess.
 
+**Military transfers**, a planet's stationed array and a ship's `SHPR` crew.
+Soldiers are the same nine-byte record as citizens, kept in a second array that
+starts where the citizen array ends: a `u32` count at `PLPR+40+9*citizens`, then
+that many records. A ship keeps its crew the same way, counted at `SHPR+4` with
+the records at `SHPR+8`.
+
+Measured by a player dismissing a colony ship's two crew: the ship's payload
+went 38 bytes to 20 and its count 2 to 0, the planet's grew by the same 18 bytes
+with its count 19 to 21, and **the two records arrived byte for byte**. So this
+is a transfer, not an edit, and that is what makes it carryable without
+decoding what a soldier is: the multiset of a civ's military records must be
+identical before and after, across their whole empire. A player may rearrange
+their army; they may not come back with a soldier they did not have.
+
+Refused, and named as such: a record that was rewritten rather than moved, and a
+submission that comes back with fewer soldiers than it was served. The second is
+what **retiring from service** looks like, which is a real thing a player can
+click; it is not carried because retiring also cuts upkeep and nobody has
+measured that half of it.
+
+**Military recruitment rate**, `PLPR+27`, a percentage in one byte. A setting
+rather than an immediate effect: the manual says it diverts food into military
+growth each turn. Measured by a player moving the slider from 0 to 50.
+
 **System renaming**, the `SUN ` section's name, at the same `+24` offset in its
 own payload. Measured by having a player rename the system they hold five of six
 planets in: the name appeared on the `SUN `, and the renamer's own `EXSY` cache
@@ -136,6 +160,40 @@ POP_COUNT_OFF = 36
 POP_ARRAY_OFF = 40
 POP_RECORD = 9
 JOB_IDS = {0: 'farmer', 1: 'worker', 2: 'scientist', 5: 'miner', 6: 'banker'}
+
+# Hurrying production, measured 19 September 2026 with a player clicking it.
+# A farm 110 points into a 200-point build was offered at 360 credits; the
+# player's credits went 10065 -> 9705 and three fields moved:
+#
+#     PLPR+23, u32   production points accumulated, 110 -> 200
+#     PROD payload byte 0     0 -> 1
+#     OWNR, id_at+20, u32     credits, 10065 -> 9705
+#
+# 360 = 4 * (200 - 110), which is the manual's rule verbatim: "The cost of
+# hurrying production is 4 credits per production point left", and "the current
+# production needs to be at least half finished, in order to hurry it". 110 of
+# 200 is 55%.
+#
+# The total cost of the item is nowhere in the blob, so the referee cannot price
+# a hurry from the served state alone. It does not need to: the points bought
+# are the distance the submission moved the progress field, and that is a
+# difference between two states it holds. See hurry_acceptable.
+# The military recruitment rate, a percentage in one byte, measured by a player
+# moving the slider from 0 to 50 and touching nothing else: PLPR+27 read 0 and
+# came back 0x32. It is a setting rather than an immediate effect, so it is
+# copied like any other decision, and it was being dropped in silence, which for
+# this field means a player gets no army and no message saying why.
+# A ship's crew, inside SHPR: a u32 count then the same nine-byte records the
+# planet keeps its soldiers in.
+CREW_COUNT_OFF = 4
+CREW_ARRAY_OFF = 8
+
+RECRUIT_OFF = 27
+PROGRESS_OFF = 23
+PROD_HURRIED_OFF = 8            # PROD's own payload begins after its header
+CREDITS_AFTER_ID = 20           # past the object id, which is itself past
+                                # OWNR's length-prefixed name
+HURRY_PER_POINT = 4
 
 
 # ── reading the blob ─────────────────────────────────────────────────────────
@@ -372,6 +430,198 @@ def replace_prod(blob, planet_oid, new_prod):
     return _replace_child(blob, find, new_prod)
 
 
+def progress_of(plpr):
+    """Production points accumulated on a planet, or None."""
+    if plpr is None or len(plpr) < PROGRESS_OFF + 4:
+        return None
+    return struct.unpack_from('<I', plpr, PROGRESS_OFF)[0]
+
+
+def military_of(plpr):
+    """(offset of the count, [records]) for a planet's stationed military.
+
+    Soldiers are the same nine-byte record as citizens, in a second array that
+    begins where the citizen array ends: a `u32` count, then that many records,
+    then the rest of the planet's fields. There is no fixed offset for it,
+    because the citizen array in front of it grows with the population.
+    """
+    if plpr is None or len(plpr) < POP_ARRAY_OFF + 4:
+        return None, None
+    pop = struct.unpack_from('<I', plpr, POP_COUNT_OFF)[0]
+    at = POP_ARRAY_OFF + pop * POP_RECORD
+    if at + 4 > len(plpr):
+        return None, None
+    n = struct.unpack_from('<I', plpr, at)[0]
+    end = at + 4 + n * POP_RECORD
+    if end > len(plpr):
+        return None, None
+    return at, [bytes(plpr[at + 4 + i * POP_RECORD:
+                           at + 4 + (i + 1) * POP_RECORD]) for i in range(n)]
+
+
+def crew_of(shpr):
+    """[records] for a ship's crew, or None.
+
+    `SHPR+4` is the count and the records follow at `+8`. Measured by a player
+    dismissing two: the payload went 38 bytes to 20, the count 2 to 0, and the
+    two records turned up on the planet byte for byte.
+    """
+    if shpr is None or len(shpr) < CREW_ARRAY_OFF:
+        return None
+    n = struct.unpack_from('<I', shpr, CREW_COUNT_OFF)[0]
+    end = CREW_ARRAY_OFF + n * POP_RECORD
+    if end > len(shpr):
+        return None
+    return [bytes(shpr[CREW_ARRAY_OFF + i * POP_RECORD:
+                       CREW_ARRAY_OFF + (i + 1) * POP_RECORD]) for i in range(n)]
+
+
+def set_military(blob, planet_oid, records):
+    """Write a planet's stationed military. The section's size changes."""
+    tree = sp.parse_blob(blob)
+    glxy = next(tree[0].find('GLXY'))
+    for sola in (c for c in glxy.children if c.tag == b'SOLA'):
+        for sec in sola.find('PLNT'):
+            if struct.unpack_from('<I', blob, sec.payload)[0] != planet_oid:
+                continue
+            plpr = next(sec.find('PLPR'), None)
+            if plpr is None:
+                raise SystemExit(f'planet {planet_oid} has no PLPR')
+            raw = bytes(blob[plpr.payload:plpr.end])
+            at, old = military_of(raw)
+            if at is None:
+                raise SystemExit(f'planet {planet_oid} has no readable military')
+            tail = raw[at + 4 + len(old) * POP_RECORD:]
+            body = (raw[:at] + struct.pack('<I', len(records))
+                    + b''.join(records) + tail)
+            return sp.replace_payload(blob, tree, plpr, body)
+    raise SystemExit(f'planet {planet_oid} not found')
+
+
+def set_crew(blob, ship_oid, records):
+    """Write a ship's crew. The section's size changes."""
+    tree = sp.parse_blob(blob)
+    glxy = next(tree[0].find('GLXY'))
+    for sec in glxy.find('SHIP'):
+        if struct.unpack_from('<I', blob, sec.payload)[0] != ship_oid:
+            continue
+        shpr = next(sec.find('SHPR'), None)
+        if shpr is None:
+            raise SystemExit(f'ship {ship_oid} has no SHPR')
+        raw = bytes(blob[shpr.payload:shpr.end])
+        old = crew_of(raw)
+        if old is None:
+            raise SystemExit(f'ship {ship_oid} has no readable crew')
+        tail = raw[CREW_ARRAY_OFF + len(old) * POP_RECORD:]
+        body = (raw[:CREW_COUNT_OFF] + struct.pack('<I', len(records))
+                + raw[CREW_COUNT_OFF + 4:CREW_ARRAY_OFF]
+                + b''.join(records) + tail)
+        return sp.replace_payload(blob, tree, shpr, body)
+    raise SystemExit(f'ship {ship_oid} not found')
+
+
+def recruit_of(plpr):
+    """A planet's military recruitment rate as a percentage, or None."""
+    if plpr is None or len(plpr) <= RECRUIT_OFF:
+        return None
+    return plpr[RECRUIT_OFF]
+
+
+def set_recruit(blob, planet_oid, value):
+    """Write a planet's recruitment rate. Size does not change."""
+    tree = sp.parse_blob(blob)
+    glxy = next(tree[0].find('GLXY'))
+    for sola in (c for c in glxy.children if c.tag == b'SOLA'):
+        for sec in sola.find('PLNT'):
+            if struct.unpack_from('<I', blob, sec.payload)[0] != planet_oid:
+                continue
+            plpr = next(sec.find('PLPR'), None)
+            if plpr is None:
+                raise SystemExit(f'planet {planet_oid} has no PLPR')
+            out = bytearray(blob)
+            out[plpr.payload + RECRUIT_OFF] = int(value) & 0xFF
+            return bytes(out)
+    raise SystemExit(f'planet {planet_oid} not found')
+
+
+def is_hurried(prod):
+    """Has the current item been paid off? None when there is no PROD."""
+    if prod is None or len(prod) <= PROD_HURRIED_OFF:
+        return None
+    return bool(prod[PROD_HURRIED_OFF])
+
+
+def credits_of(blob, civ_oid):
+    """A civ's credits, or None when the civ is not in this blob."""
+    rec = next((o for o in icv.owner_records(blob) if o['oid'] == civ_oid), None)
+    if rec is None:
+        return None
+    at = rec['id_at'] + CREDITS_AFTER_ID
+    if at + 4 > len(blob):
+        return None
+    return struct.unpack_from('<I', blob, at)[0]
+
+
+def set_credits(blob, civ_oid, value):
+    """Write a civ's credits. Size does not change."""
+    rec = next((o for o in icv.owner_records(blob) if o['oid'] == civ_oid), None)
+    if rec is None:
+        raise SystemExit(f'civ {civ_oid} is not in this blob')
+    out = bytearray(blob)
+    struct.pack_into('<I', out, rec['id_at'] + CREDITS_AFTER_ID,
+                     int(value))
+    return bytes(out)
+
+
+def set_progress(blob, planet_oid, value):
+    """Write a planet's accumulated production points. Size does not change."""
+    tree = sp.parse_blob(blob)
+    glxy = next(tree[0].find('GLXY'))
+    for sola in (c for c in glxy.children if c.tag == b'SOLA'):
+        for sec in sola.find('PLNT'):
+            if struct.unpack_from('<I', blob, sec.payload)[0] != planet_oid:
+                continue
+            plpr = next(sec.find('PLPR'), None)
+            if plpr is None:
+                raise SystemExit(f'planet {planet_oid} has no PLPR')
+            out = bytearray(blob)
+            struct.pack_into('<I', out, plpr.payload + PROGRESS_OFF, int(value))
+            return bytes(out)
+    raise SystemExit(f'planet {planet_oid} not found')
+
+
+def hurry_acceptable(served_plpr, submitted_plpr, credits):
+    """(ok, why, cost, points) for a claimed hurry.
+
+    The rule is the manual's, not one inferred from what the client did. The
+    points bought are how far the submission advanced the progress field, which
+    both sides of the diff carry, and the price is four credits each. Two things
+    make it refusable: an item less than half finished cannot be hurried, and a
+    civ cannot spend credits it was not served.
+
+    Judging "half finished" against the submitted total rather than a cost the
+    blob does not record is sound in the direction that matters: hurrying
+    completes the item, so the submitted progress *is* the total, and a client
+    that understates it buys fewer points and pays for exactly those.
+    """
+    before, after = progress_of(served_plpr), progress_of(submitted_plpr)
+    if before is None or after is None:
+        return False, 'the progress field is unreadable', 0, 0
+    points = after - before
+    if points <= 0:
+        return False, f'no progress was bought ({before} -> {after})', 0, 0
+    if before * 2 < after:
+        return (False, f'only {before} of {after} points were done, and the '
+                f'engine requires half', 0, points)
+    cost = points * HURRY_PER_POINT
+    if credits is None:
+        return False, 'the civ has no readable credit field', cost, points
+    if credits < cost:
+        return (False, f'{cost} credits needed and {credits} served', cost,
+                points)
+    return True, '', cost, points
+
+
 def set_citizens(blob, planet_oid, new_array):
     """Write a planet's citizen array in place. Its length does not change."""
     tree = sp.parse_blob(blob)
@@ -409,6 +659,88 @@ def _tally(jobs):
 
 
 # ── the rules ────────────────────────────────────────────────────────────────
+def military_transfer(served, sub, civ_oid):
+    """([(kind, oid, before, after, records)], why_refused) for one civ.
+
+    Assigning crew moves soldiers between a planet's stationed array and a
+    ship's, and the records arrive byte for byte, so this is a transfer and not
+    an edit. That is what makes it safe to carry without decoding a soldier:
+    **the multiset of a civ's military records must be identical before and
+    after**. A player may rearrange their army however they like; they may not
+    come back with a soldier they did not have.
+
+    The check is over the civ's whole empire rather than over one planet and one
+    ship, because a submission carries every object and there is no reason to
+    assume a transfer involves only the pair a person happened to click on.
+
+    Ownership, as everywhere here, is read from the served state.
+    """
+    import collections
+
+    before_recs, after_recs, changed = [], [], []
+    for oid, (owner, _prod, plpr_served, _nm) in planet_index(served).items():
+        if owner != civ_oid:
+            continue
+        entry = planet_index(sub).get(oid)
+        if entry is None:
+            continue
+        _at, mine_served = military_of(plpr_served)
+        _at2, mine_sub = military_of(entry[2])
+        if mine_served is None or mine_sub is None:
+            return [], f'planet {oid} has no readable military array'
+        before_recs += mine_served
+        after_recs += mine_sub
+        if mine_served != mine_sub:
+            changed.append(('planet', oid, len(mine_served), len(mine_sub),
+                            mine_sub))
+
+    for oid, (owner, shpr_served) in _ship_crew_index(served).items():
+        if owner != civ_oid:
+            continue
+        entry = _ship_crew_index(sub).get(oid)
+        if entry is None:
+            continue
+        crew_served, crew_sub = crew_of(shpr_served), crew_of(entry[1])
+        if crew_served is None or crew_sub is None:
+            return [], f'ship {oid} has no readable crew array'
+        before_recs += crew_served
+        after_recs += crew_sub
+        if crew_served != crew_sub:
+            changed.append(('ship', oid, len(crew_served), len(crew_sub),
+                            crew_sub))
+
+    if not changed:
+        return [], ''
+    if collections.Counter(before_recs) != collections.Counter(after_recs):
+        if len(after_recs) < len(before_recs):
+            # Retiring from military service is a real thing a player can click,
+            # and it destroys soldiers rather than moving them, so it fails this
+            # check honestly. It is refused rather than carried because nobody
+            # has measured what else it writes: retiring cuts upkeep, and a rule
+            # that takes the disappearance without the rest of it would be
+            # guessing at the part that costs money.
+            return ([], f'{len(before_recs)} soldier(s) served and '
+                    f'{len(after_recs)} came back. Retiring from service is not '
+                    f'carried yet, and nothing else should lose soldiers')
+        return ([], f'{len(before_recs)} soldier(s) served and '
+                f'{len(after_recs)} came back, or their records were rewritten; '
+                f'a transfer moves them, it does not mint them')
+    return changed, ''
+
+
+def _ship_crew_index(blob):
+    """{shipObjectId: (owner, SHPR payload bytes)}"""
+    tree = sp.parse_blob(blob)
+    glxy = next(tree[0].find('GLXY'))
+    out = {}
+    for sec in glxy.find('SHIP'):
+        oid, _x, _z, _y, owner = struct.unpack_from('<IfffI', blob, sec.payload)
+        shpr = next(sec.find('SHPR'), None)
+        out[oid] = (owner,
+                    bytes(blob[shpr.payload:shpr.end]) if shpr else None)
+    return out
+
+
 def merge(blob, submissions, log=print):
     """submissions: [(civ_name, submitted_blob)]. Returns the merged blob."""
     served_ships = ship_index(blob)
@@ -484,6 +816,27 @@ def merge(blob, submissions, log=print):
                     log(f"    planet {planet_oid}: production DROPPED, no PROD "
                         f"section on one side")
                     dropped += 1
+                elif is_hurried(prod) and not is_hurried(prod_served):
+                    # A hurry takes effect the moment it is clicked, so the
+                    # submission carries the outcome rather than the request:
+                    # the item complete and the credits already gone. The
+                    # referee prices it from the state it served and spends the
+                    # credits itself, so a client that edited its own balance
+                    # gains nothing.
+                    ok, why, cost, points = hurry_acceptable(
+                        plpr_served, plpr, credits_of(blob, mine))
+                    if not ok:
+                        log(f"    planet {planet_oid}: hurry DROPPED, {why}")
+                        dropped += 1
+                    else:
+                        blob = replace_prod(blob, planet_oid, prod)
+                        blob = set_progress(blob, planet_oid,
+                                            progress_of(plpr))
+                        blob = set_credits(blob, mine,
+                                           credits_of(blob, mine) - cost)
+                        log(f"    planet {planet_oid}: production hurried, "
+                            f"{points} point(s) for {cost} credits")
+                        accepted += 1
                 else:
                     blob = replace_prod(blob, planet_oid, prod)
                     log(f"    planet {planet_oid}: production queue taken")
@@ -491,6 +844,22 @@ def merge(blob, submissions, log=print):
 
             if plpr is None or plpr_served is None:
                 continue
+            rate, rate_served = recruit_of(plpr), recruit_of(plpr_served)
+            if rate is not None and rate != rate_served:
+                if owner != mine:
+                    log(f"    planet {planet_oid}: recruitment rate DROPPED, "
+                        f"owned by {names.get(owner, owner)}")
+                    dropped += 1
+                elif not 0 <= rate <= 100:
+                    log(f"    planet {planet_oid}: recruitment rate DROPPED, "
+                        f"{rate} is not a percentage")
+                    dropped += 1
+                else:
+                    blob = set_recruit(blob, planet_oid, rate)
+                    log(f"    planet {planet_oid}: recruitment rate "
+                        f"{rate_served}% -> {rate}%")
+                    accepted += 1
+
             new_array = citizen_bytes(plpr)
             old_array = citizen_bytes(plpr_served)
             if new_array is None or old_array is None or new_array == old_array:
@@ -510,6 +879,19 @@ def merge(blob, submissions, log=print):
             after = [c[0] for c in citizens_of(plpr)]
             log(f"    planet {planet_oid}: jobs taken "
                 f"({_tally(before)} -> {_tally(after)})")
+            accepted += 1
+
+        # military moving between a planet and a ship in its orbit
+        moved, why = military_transfer(blob, sub, mine)
+        if why:
+            log(f"    military DROPPED, {why}")
+            dropped += 1
+        for kind, oid, before, after, records in moved:
+            if kind == 'planet':
+                blob = set_military(blob, oid, records)
+            else:
+                blob = set_crew(blob, oid, records)
+            log(f"    {kind} {oid}: military {before} -> {after}")
             accepted += 1
 
         # system names, which belong to whoever holds most of the system
