@@ -623,17 +623,27 @@ made unnecessary.
   authorised, which is a fault to suppress rather than a feature to keep. So
   the answer still matters; what changed is which answer is the bad one.
 
-  `[ ]` **Unreconciled.** The agent on the second machine reports the opposite
-  from a different galaxy, that an unplayed civ issues new `ROUT`s and rewrites
-  production. Both observations are real and only one can be general. In this
-  fixture an unplayed civ's ship sat idle for all 40 turns and its only planet
-  drained its queue and never refilled it, which is a strange way for an AI to
-  show itself; in theirs the same civ appears to act. The question that
-  separates them is whether the `ROUT` they saw was already present before the
-  tick, since a ship advancing along an order it already had looks identical to
-  a new one unless the `DYNO` is compared against the state served. Recorded
-  rather than resolved, because the honest version is narrow and the clean
-  version might be wrong.
+  `[x]` **Measured: the engine issues nothing during a tick, and the `ROUT` was
+  there before it.** The instrument is a galaxy built by
+  `server/dev_tools/make_multiplayer_galaxy.py`, where every ship starts with
+  order type 0, no `ROUT` and has-orders clear, so anything non-zero afterwards
+  was issued during the tick rather than carried in. Eight turns, three civs,
+  nothing submitted by anyone: no ship gained an order, no production queue
+  changed, no research field was set, and the only movement in the whole blob
+  was population growth. Stamping the tick client as the second civ rather than
+  the first gave the same answer, so the result is not an artefact of which seat
+  the client plays.
+
+  What the second machine saw is explained without the engine acting. **Every
+  generation gives the second civ's first ship order type 2 with an 82-byte
+  `ROUT` at turn 0**, before anyone has played, in all five generations captured
+  here. A ship advancing along that order looks exactly like a ship being given
+  one, unless the `DYNO` is compared against the state served, which is the
+  discriminator that was asked for. The generator now clears it.
+
+  Narrow where it should be: this was a fresh galaxy whose queues were the ones
+  generation left. A mid-game empire whose queue drains to nothing is the case
+  the 40-turn fixture covered, and there too nothing refilled it.
 
   **The same is true of every civ with no human in it, and by design that case
   does not arise.** A multiplayer galaxy is humans only: no `BadGuy`, no engine
@@ -644,9 +654,21 @@ made unnecessary.
   `BadGuy` is present in the test galaxies on this branch because they were
   grown from single-player fixtures. It holds a seat and does nothing, which is
   harmless for testing and would be wrong in a real galaxy, so galaxy creation
-  for multiplayer should make exactly as many civs as there are players.
-  Single-player is unaffected: there the external `ai_player` is the opponent,
-  and it does not rely on the engine deciding anything.
+  for multiplayer makes exactly as many civs as there are players:
+  `server/dev_tools/make_multiplayer_galaxy.py`. Single-player is unaffected:
+  there the external `ai_player` is the opponent, and it does not rely on the
+  engine deciding anything.
+
+  **A generation does not hand its two civs equal worlds.** The second civ's
+  homeworld reads the same two `PLPR` bytes in every generation captured here,
+  `+4` = 32 and `+11` = 44, while the first civ's read 62/94 or 42/194: the
+  first carries the homeworld customisation the setup screens apply and the
+  second gets the engine's opponent default. `PLPR+4` is `Planet:96`, the
+  per-unit output rates. It is worth two bytes of attention because it decides
+  games: eight turns with no orders from anyone grew seat one from 7 citizens
+  to 9 and left the other seats at 7, and after levelling the same run gives
+  9, 9, 9. A civ added by `inject_civ` inherits its donor's world, so it
+  inherits whichever of the two it was cloned from.
 
   `[ ]` **Whether this is the engine or our own patching is untested, and it
   matters.** The referee ticks on the Resurgence build, which carries the six
