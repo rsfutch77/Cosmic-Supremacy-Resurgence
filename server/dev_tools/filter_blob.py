@@ -31,6 +31,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import save_parser as sp
+import exsy
 
 
 def sola_planets(blob, sola):
@@ -54,6 +55,95 @@ def describe(blob):
     print(f'{len(blob):,} bytes, {objects} objects, {civs} civ(s), '
           f'{len(solas)} system(s)')
     return tree, save, glxy, solas, objects
+
+
+def droppable_systems(blob, tree=None):
+    """[(SOLA section, object count, planet count)] for systems nothing owns."""
+    tree = tree or sp.parse_blob(blob)
+    glxy = next(tree[0].find('GLXY'))
+    out = []
+    for s in (c for c in glxy.children if c.tag == b'SOLA'):
+        planets = sola_planets(blob, s)
+        if any(owner for _, _, owner in planets):
+            continue
+        out.append((s, 1 + len(planets), len(planets)))
+    return out
+
+
+def drop_systems(blob: bytes, count: int, log=lambda *a: None) -> bytes:
+    """Remove `count` uncolonised systems, and the rows that named them.
+
+    Dropping a `SOLA` subtree is clean for the galaxy tree, because a system is
+    self-contained. It is NOT clean for `EXSY`, which is each civ's record of
+    the systems it has entered and names them by id from outside `GLXY`. Left
+    alone, every dropped system leaves a row pointing at nothing.
+
+    `EXSY` rows are a cache of observations, not a record of decisions , the
+    same planet reads different values in different civs' tables, and renames
+    live on the object at `PLNT`/`SUN ` +24. So a pruned row loses a stale
+    observation and no player's choice, which is what makes this safe.
+
+    `KNPL` is deliberately untouched: its records are keyed by CIV id, not
+    planet id, so dropping systems cannot dangle it.
+    """
+    tree = sp.parse_blob(blob)
+    save = tree[0]
+    glxy = next(save.find('GLXY'))
+    objects, = struct.unpack_from('<I', blob, save.payload)
+
+    droppable = droppable_systems(blob, tree)
+    if count > len(droppable):
+        raise ValueError(f'asked to drop {count} system(s), only '
+                         f'{len(droppable)} hold no owned planet')
+    # From the end, so the earliest systems, which a player is likeliest to
+    # have explored, are the ones kept.
+    victims = droppable[-count:] if count else []
+    removed_objects = sum(n for _, n, _ in victims)
+    victim_starts = {s.start for s, _, _ in victims}
+    victim_ids = set()
+    for s, _, _ in victims:
+        for sun in s.find('SUN '):
+            victim_ids.add(struct.unpack_from('<I', blob, sun.payload)[0])
+    log(f'dropping {len(victims)} system(s), {removed_objects} object(s), '
+        f'ids {sorted(victim_ids)}')
+
+    # Delete the victims' byte ranges rather than rebuilding from the children
+    # we keep: a payload's children are ordered but need not be contiguous, and
+    # anything sitting in a gap we do not understand would be lost.
+    out = bytearray()
+    pos = glxy.payload
+    for c in glxy.children:
+        if c.start not in victim_starts:
+            continue
+        out += blob[pos:c.start]
+        pos = c.end
+    out += blob[pos:glxy.end]
+
+    new_blob = sp.replace_payload(blob, tree, glxy, bytes(out))
+    new_blob = bytearray(new_blob)
+    struct.pack_into('<I', new_blob, save.payload, objects - removed_objects)
+    new_blob = bytes(new_blob)
+
+    # Now the per-civ tables. Re-parsed, because every offset moved above.
+    for _ in range(64):                 # one rewrite per table, bounded
+        tree2 = sp.parse_blob(new_blob)
+        target = None
+        for ownr in tree2[0].find('OWNR'):
+            for sec in ownr.find('EXSY'):
+                payload = new_blob[sec.payload:sec.end]
+                pruned = exsy.drop_systems(payload, victim_ids)
+                if pruned != payload:
+                    target = (tree2, sec, pruned)
+                    break
+            if target:
+                break
+        if target is None:
+            break
+        tree2, sec, pruned = target
+        log(f'  EXSY {sec.size} -> {len(pruned)} bytes')
+        new_blob = sp.replace_payload(new_blob, tree2, sec, pruned)
+
+    return new_blob
 
 
 def main():
