@@ -1259,14 +1259,37 @@ made unnecessary.
   9, 9, 9. A civ added by `inject_civ` inherits its donor's world, so it
   inherits whichever of the two it was cloned from.
 
-  [ ] **Whether this is the engine or our own patching is untested, and it
-  matters.** The referee ticks on the Resurgence build, which carries the six
-  T1-T5 sites in the turn pipeline, and whether one of them skips an AI phase is
-  unknown. The obvious control, ticking the same galaxy on the unpatched build,
-  is not available: without T1-T5 a client will not advance a turn without a
-  server, which is the whole reason those patches exist. If our patches are the
-  cause it is fixable; if the engine simply does not run AI down this path, the
-  empty seats need filling another way.
+  [x] **Neither: the patches remove no code, and the client carries no AI for
+  them to skip.** The control this item called unavailable does not require
+  running the unpatched build. `CosmicSupremacy.exe` is a file, and what each
+  site bypasses can be read out of it.
+
+  **Four sites, not six.** `0x0056E0EF` and `0x0056E133` both sit inside
+  `0x0056E0D0`, the homeworld prompt decision routine, as recorded above.
+
+  **None of the six removes a call.** T5 at `0x00579C2D` NOPs a `JZ` whose
+  target `0x00579C3D` is the next basic block, so both paths converge and its
+  only effect is that `0x0056DE20` may now run. That routine reads the turn
+  counter at `0x008578E8`, increments it and announces, which is the turn
+  advance itself and the reason T5 is what lets a client tick. T1 replaces the
+  body of `0x0056DBF0`, a leaf predicate whose only two calls, `0x00561D00` and
+  `0x00562CC0`, are getters; of its two callers one selects the string
+  `Connected` over `Disconnected` and the other runs a block it would otherwise
+  skip. T4a redirects a single store. T4b's skipped target `0x00577C84` is the
+  join rejection path, which pushes `LocalPort`.
+
+  **The engine carries no opponent AI.** 333 RTTI class names cover the whole
+  game model, `Owner`, `Planet`, `Ship`, `Fleet`, `Production`, `Treaty` and
+  `ShipDesign` among them, and not one is an AI. The only decision machinery is
+  the 57 `Governor*` and `Admiral*` classes, which run rules a player wrote.
+  Absence from RTTI is not proof, since a non-polymorphic AI would leave no type
+  descriptor, but every other system here is a polymorphic class and the
+  decision machinery that does exist is richly so.
+
+  **There are no empty seats to fill.** A civ whose player enters no orders and
+  set no governors drifts, and that is the design rather than a fault. Players
+  are expected to set governors up before a day away and already know it, so the
+  clause this item ended on assumed a gap that does not exist.
 - [x] **D4. More than two civs in a galaxy.** `server/dev_tools/inject_civ.py`
   adds a whole player to a blob, confirmed live with a third civ that owned a
   homeworld and played four turns.
@@ -1294,6 +1317,34 @@ made unnecessary.
   It is advisory: nothing stops a tool calling `Popen` itself, and every path in
   this project goes through `launch`. On separate machines the problem does not
   exist, which is why it survived this long unnoticed.
+
+- [x] **A player's client offers no Next Turn control, measured on the player
+  build.** Multiplayer wants a client that never computes a turn, and the build
+  choice provides it: `resolve_exe` hands players a build without T1-T5, so no
+  countdown boundary fires an advance on its own. What that argument did not
+  cover was the TestBed dialog's three buttons, Next Turn, Load and Save, which
+  are resource 222 and which the player build inherits unpatched.
+
+  They do not reach the screen. A player build on a two-player galaxy at turn
+  110 has no window carrying control `0x0425`, `0x0426` or `0x0483`, and no
+  control whose text contains "Next Turn", so dialog 222 is never created down
+  this path and a player has nothing to click.
+
+  `patch_hide_next_turn.py` clears `WS_VISIBLE` in that template and has been
+  applied to nothing, which is why every binary in the tree still reads `0x50`
+  at file offset `0x007D6BD3`. A template's visibility bit only matters to a
+  dialog something creates, so the script is dead code unless a path turns up
+  that creates this one. What gates dialog 222 is not established.
+
+- [ ] **The lock records who last claimed the client, not who is using it.**
+  `take_client_lock` clears a stale lock by asking whether the holder's pid is
+  alive, which was written for a holder that died mid-hold. A holder that exits
+  normally and deliberately leaves the client running produces the same stale
+  lock, and the next tool through is waved past it. Seen live: a script that
+  opened a galaxy for inspection finished, left the client up, and left a lock
+  naming a dead pid while other work was still in flight on that machine. A free
+  lock and a free machine are independent facts, and the tooling cannot tell
+  them apart.
 
 ## F. Off one machine
 
