@@ -87,9 +87,16 @@ def set_record_bytes(blob, planet, idx, rest):
 def conscript(blob, planet, idx):
     """Draft one citizen: out of the citizen array, into the military array.
 
-    The record is carried across with only the job byte rewritten, which is
-    what the client's own draft does and what makes a soldier's bytes traceable
-    back to the citizen they were.
+    The record is carried across with only the job byte rewritten. That is the
+    engine's own behaviour and not an assumption the tests make: a player
+    drafted a citizen on 20 September 2026 and the record arrived in the ship's
+    crew with one byte different,
+
+        citizen  000000940200001500
+        crew     030000940200001500
+
+    which is what makes a soldier traceable back to the citizen they were, and
+    why the checks on what a record carries have to read all three arrays.
     """
     plpr = mo.planet_index(blob)[planet][2]
     arr = mo.citizen_bytes(plpr)

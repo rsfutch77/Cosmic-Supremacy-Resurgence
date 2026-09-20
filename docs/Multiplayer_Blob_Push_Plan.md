@@ -877,7 +877,7 @@ made unnecessary.
   260 -> 272. A value derived from the design would have been the same all
   three times, so none of the four is a function of the design. What they are
   is not established, and the two ticks say nothing needs them.
-- [ ] **C3. Immediate-effect actions.** Hurry production, conscription, crew
+- [x] **C3. Immediate-effect actions.** Hurry production, conscription, crew
   assignment and job reallocation take effect the moment they are clicked, so the
   diff shows the *effect* and not the intent. Each needs a reverse mapping, effect
   back to intent, which the referee then performs itself so it applies the cost.
@@ -889,33 +889,53 @@ made unnecessary.
   | job reallocation | **mapped**, and now judged with the soldiers, below |
   | hurry production | **mapped** |
   | crew assignment | **mapped**, and now judged with the citizens, below |
-  | conscription | **mapped**, a citizen becomes a soldier within one turn, and see the gap below |
+  | conscription | **mapped**, a citizen becomes a soldier within one turn, and a player did it |
   | recruitment rate | **mapped**, `PLPR+27`, a percentage in one byte |
   | retiring from service | **refused and named**, because it destroys soldiers and also cuts upkeep, and only the destroying half has been measured |
 
-  **The one row without a capture behind it is conscription's accept path.**
-  Every other row was measured by serving a turn, having a person click exactly
-  one thing and diffing. Conscription's refusals are measured, and so is the
-  rule accepting a drafted record built by hand, but no capture yet shows the
-  fixed rule accepting a submission in which a **player** drafted a citizen and
-  posted the new soldier to a ship, which is the turn the rule was rewritten to
-  stop refusing.
+  **And a person drafted one, 20 September 2026, which is the turn the rule was
+  rewritten to stop refusing.** BadGuy was served turn 110 of the two-sided
+  galaxy with the clock held, on the player build, which cannot advance a turn
+  without a server. A player drafted a citizen on planet 384 and posted the new
+  unit to ship 677, and the capture came back at turn 110, the same turn it was
+  served, so no tick is inside the diff:
 
-  Two near misses are worth recording so they are not mistaken for it later.
-  The AI player's `conscript_to_crew` produces the right shape but writes the
-  vectors itself rather than calling the engine, and it has no player
-  equivalent at all, since it bypasses the garrison: a capture from it is
-  evidence about the tool, not about the client. And a live capture taken on 20
-  September 2026 spans a turn boundary, `t110` to `t111`, which is the one
-  comparison `people_acceptable` is documented not to survive; its other civ
-  duly came out `69 people served and 70 came back`, the engine's own
-  recruitment, and it is not evidence either way.
+      planet 384   15 farmer, 2 worker, 1 scientist -> 14 farmer, ...
+      ship 677     crew 0 -> 1
+      total        22 people served, 22 came back
 
-  What would settle it is an ordinary turn of the real pipeline: `player_turn
-  serve` already holds the clock at `0x0080AA08` for a day so no boundary
-  arrives mid-session, and the blob it hands out is the served baseline by
-  construction, so the run needs only a person, one draft, one loading, and a
-  capture before the turn ends.
+  `people_acceptable` returns `(True, '')` and the merge reports **2 orders
+  taken**, the draft and the crewing, each logged separately. The other civ,
+  which the player never touched, comes out `(True, '')` as well.
+
+  **The engine moves the record rather than rebuilding it**, which is the
+  property the whole rule rests on and which until now had only been measured
+  on records the AI tooling wrote itself:
+
+      citizen  000000940200001500
+      crew     030000940200001500
+
+  One byte differs, the job, `0` to `3`. That is what makes a soldier traceable
+  back to the citizen they were, and it is why the checks on what a record
+  carries have to read citizens, soldiers and crew as one population: a record
+  that keeps its bytes across the move would otherwise leave the rule's sight
+  the moment somebody drafted it.
+
+  Two near misses are recorded so they are not mistaken for this later. The AI
+  player's `conscript_to_crew` produces the right shape but writes the vectors
+  itself rather than calling the engine, and it has no player equivalent at
+  all, since it bypasses the garrison: a capture from it is evidence about the
+  tool, not about the client. And an earlier capture the same day spans a turn
+  boundary, `t110` to `t111`, which is the one comparison `people_acceptable`
+  is documented not to survive; its other civ duly came out `69 people served
+  and 70 came back`, the engine's own recruitment, and it is evidence neither
+  way.
+
+  One unrelated drop rode along and is **not** a people finding: the capture's
+  `scout` design came back a byte longer with a length field at `+4` reading 82
+  rather than 81, and the design rule refused it as an edit. Nobody edited a
+  design. It sits with the trailing byte a client writes after a design's
+  `SDPR`, and it belongs to C2 rather than here.
 
   **Jobs and military were two rules and had to become one.** Conscription
   turns a citizen into a soldier, so the jobs rule refused it for changing the
