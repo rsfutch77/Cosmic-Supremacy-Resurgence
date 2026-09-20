@@ -1487,7 +1487,7 @@ keyboard. Four routes, evaluated.
 - **The movement model is fully solved**, which any of these routes needs:
   `position = leg_origin + route_unit_vector × progress`, verified to 0.000009.
 
-### Route 1, `loadgame` blob injection ★ recommended
+### Route 1, `loadgame` blob injection  recommended
 
 The client already reconstructs an entire galaxy from a `loadgame` response
 (`DONE#VER#<6-char>#DATA#<base64>`, parsed at `0x0048b5d0`), allocating every object
@@ -1507,7 +1507,7 @@ it, then save a game while a ship is under a known order. We know that order's e
 numbers, origin, destination, length, and progress as a clean multiple of 13.5, so
 locating `ROUT`'s layout inside the blob is a search for known floats, not a blind parse.
 
-### Route 2, call the engine's own order constructor ★ CONFIRMED AND SHIPPED
+### Route 2, call the engine's own order constructor  CONFIRMED AND SHIPPED
 
 **This is solved.** Don't imitate the engine, ask it.
 
