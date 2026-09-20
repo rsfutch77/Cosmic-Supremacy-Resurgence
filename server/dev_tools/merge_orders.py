@@ -673,11 +673,20 @@ def designs_of(blob, civ_oid):
 def next_object_id(blob):
     """An object id nothing in this blob is using.
 
-    `inject_design.max_object_id` takes the larger of `SAVE`'s counter and every
-    id a scan can find, so one past it is free under either reading of `SAVE+0`,
-    the highest id in use or the number of objects. The two readings coincide in
-    practice because ids are allocated densely from that counter, and a design
-    placed at max + 1 satisfies both.
+    `SAVE+0` is the highest object id in use, not a count of objects. The two
+    readings give the same answer whenever ids are dense, which is why this was
+    open for a while; the rehearsal galaxy has two gaps, so the count and the
+    highest id differ by two, and the field tracks the id. Measured across a
+    design being carried and a hull then being built from it: 205 with 203
+    objects, 206 with 204, 207 with 205.
+
+    Raising it is not cosmetic. The engine allocates its next object at this
+    value plus one, so a carried design left uncounted is an id the engine
+    hands to the next thing it creates. The hull built from `testscout` came
+    out as object 207 precisely because the merge had moved the field to 206.
+
+    `inject_design.max_object_id` takes the larger of the field and every id a
+    scan can find, so one past it is free even if some future blob disagrees.
     """
     return idg.max_object_id(blob) + 1
 

@@ -582,7 +582,7 @@ made unnecessary.
         +1 trailing byte, zero, counted by the DSGN length word
 
       the civ's design count, a u32 in DATA's own bytes before its first DSGN
-      SAVE+0, the object counter, 205 -> 206
+      SAVE+0, the highest object id in use, 205 -> 206
 
   The existing `DSGN` is untouched and the subtree is copied whole, because it
   is self-contained and all of it is the design.
@@ -657,8 +657,36 @@ made unnecessary.
   only by being spliced in by the referee is a manufacturing option the client
   offers, which is the claim the byte-level work could not make on its own.
 
-  Still not shown: a hull coming out the other end. Queuing it is not building
-  it, and nobody has run the turns to completion and seen the ship.
+  **And the ship was built.** That merged turn was ticked forward with nothing
+  else done to it: the galaxy went 6 to 9, planet 139's queue emptied, and
+  `SHIP` 207 appeared owned by Powerhouse with its `SHPR` design pointer
+  reading 206, resolving to the carried `testscout`. The design record in the
+  turn-9 blob is byte-identical to the one the merge spliced in at turn 6. So a
+  design that existed only in a player's submission became a hull the engine
+  built, through the whitelist, with no step of it hand-made.
+
+  **The engine allocated that hull as object 207, which is what makes
+  `SAVE+0` worth writing.** The merge had raised the counter from 205 to 206
+  for the design, and the next object the engine created took 207. Had the
+  counter been left alone, the engine's next allocation would have been 206,
+  the id the carried design is using, and the galaxy would have held two
+  objects under one id. That is the same failure two players designing on one
+  turn produce, arriving by a different route.
+
+  **`SAVE+0` is the highest object id in use, not a count of objects**, which
+  had been left open because the two readings give the same answer whenever ids
+  are dense. This galaxy's are not: it has two gaps, so the count and the
+  highest id differ by two, and the counter tracks the id.
+
+  | state | `SAVE+0` | objects | highest id |
+  |---|---|---|---|
+  | turn 5 as served | 205 | 203 | 205 |
+  | merged and ticked to turn 6 | 206 | 204 | 206 |
+  | ticked to turn 9, hull built | 207 | 205 | 207 |
+
+  It follows the highest id at every step and is never the count. Allocating a
+  carried design at `max(id) + 1` is therefore right for the reason it looked
+  right, and `inject_design`'s reading of the field was the correct one.
 
   Replayed over all 18 turns of the rehearsal, the merge is byte-identical to
   the old one on 15 of them. The three that differ are turns 5, 6 and 7, the
