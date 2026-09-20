@@ -240,12 +240,24 @@ see D1.
   to pull first.
 
   **`NEWS` is how contact is established, and a missing hull is not.** A `NEWS`
-  payload is a fixed 44-byte record: the turn at `+8`, a category at `+20`, an
-  ascending per-civ item id at `+24`, and a position at `+32`. Categories 1 and
-  3 carry no position; 8 to 11 do. An engagement raises **two** items on one
-  turn at one position, one in each civ's `OWNR` under a different category,
-  which reads as each side's own view of it. `two_sided_war.py contacts` diffs
-  them between two blobs.
+  payload is a fixed 44-byte record. What is settled: the **turn** at `+8`, and
+  a **position** at `+32` which is zero for items that have no place. An
+  engagement raises a positioned item on the turn it resolves, at the
+  coordinates it resolved at. `two_sided_war.py contacts` diffs them between two
+  blobs, which is what turns "a ship is missing" into "an event happened here,
+  then".
+
+  What is **not** settled is `+20` and `+24`. Both are small ascending per-civ
+  numbers and `+20` is often `+24` minus one, so they read more like a chain
+  than like a category and an id. An early guess that `+20` was a category with
+  fixed meanings did not survive a second galaxy: the value that carried no
+  position in one carried one in the other. Do not read meaning into them.
+
+  How many items an engagement raises is also unsettled. The `cycle.dat` battle
+  raised two on one turn at one position, one in each civ's `OWNR`, which looked
+  like each side's own view of it. The two-player battle raised one, for the
+  side that lost both hulls. One of those is a special case and it is not yet
+  known which.
 
   This exists because a hull going missing was read as combat and is not
   evidence of it: a warship can be lost in transit having met nothing. The

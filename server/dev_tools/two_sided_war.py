@@ -110,8 +110,22 @@ def set_relation(act, a, b, code):
                  f"{act.RELATION_NAMES.get(code, code)}")
 
 
-def stage(blob, attacker="GoodGuy", defender="BadGuy"):
+# Units a one-engine fighter covers in a turn, measured on `cycle.dat`: `f1`
+# made about 6.4 and the heavier `b1` about 3.4. Speed follows the parts, so a
+# hull built from the same list moves at the same rate whatever galaxy it is in.
+# It is a rate rather than a constant of the format, so a stage placed by it
+# lands within a turn either way rather than exactly.
+UNITS_PER_TURN = 6.4
+
+
+def stage(blob, attacker="GoodGuy", defender="BadGuy", turns_away=0.0):
     """Move the attacker's armed hulls onto the defender's largest planet.
+
+    `turns_away` backs them off along the line they came in on, so contact falls
+    that many turns into the run instead of immediately. Nought puts them on top
+    of it, which is what the determinism measurement wants; two leaves room for
+    a player to give orders and submit them BEFORE the battle resolves, which is
+    the case the end-to-end loop has never run.
 
     WITHOUT THIS THERE IS NO BATTLE TO MEASURE. Sent from where `cycle.dat`
     leaves them, the attacker's warships cover about 3.4 units per turn against
@@ -132,13 +146,31 @@ def stage(blob, attacker="GoodGuy", defender="BadGuy"):
     for s in ish.ship_records(blob):
         if s["owner"] != atk["oid"] or s["design"] not in armed:
             continue
-        struct.pack_into("<fff", out, s["payload"] + 4, *home["pos"])
+        struct.pack_into("<fff", out, s["payload"] + 4,
+                         *_back_off(home["pos"], s["pos"],
+                                    turns_away * UNITS_PER_TURN))
         moved.append(s["id"])
+    away = (f", {turns_away:g} turn(s) short of it" if turns_away else "")
     log(f"  staged {attacker} hull(s) {moved} onto planet #{home['id']} "
-        f"at ({home['pos'][0]:.0f}, {home['pos'][1]:.0f}, {home['pos'][2]:.0f})")
+        f"at ({home['pos'][0]:.0f}, {home['pos'][1]:.0f}, {home['pos'][2]:.0f})"
+        f"{away}")
     if not moved:
         raise SystemExit(f"{attacker} has no armed hull to stage")
     return bytes(out)
+
+
+def _back_off(target, origin, distance):
+    """`distance` units from `target` back along the line to `origin`.
+
+    Falls back to the target itself when the two coincide or the distance is
+    nought, so a hull already in orbit is not pushed somewhere arbitrary.
+    """
+    d = [o - t for t, o in zip(target, origin)]
+    length = sum(c * c for c in d) ** 0.5
+    if not distance or length < 1e-6:
+        return tuple(target)
+    k = min(distance, length) / length
+    return tuple(t + c * k for t, c in zip(target, d))
 
 
 def _largest_planet(blob, civ_name):
@@ -195,21 +227,23 @@ def arm(dat, attacker="GoodGuy", defender="BadGuy", declare=True,
                                                     act.CITIZEN_STRIDE)))
         log(f"\n  {defender}'s planet under attack: {home}")
 
-        # The defender's hulls come out of the blob with no crew, because the
-        # donor record they were cloned from carries none. A crewless ship loses
-        # its orders at every boundary and has nobody to fight with.
-        armed = []
-        for sh in snap.ships:
-            if sh.owner is None or sh.owner.addr != dfn.addr:
-                continue
-            if getattr(sh.design, "name", None) != DESIGN_NAME:
-                continue
-            act.conscript_to_crew(home, sh, CREW, dfn)
-            armed.append(sh)
+        # An injected hull comes out of the blob with no crew, because the donor
+        # record it was cloned from carries none. A crewless ship loses its
+        # orders at every boundary and has nobody to fight with.
+        #
+        # Both civs are crewed, not just the defender. In the A4 fixture only
+        # the defender has injected hulls and the attacker's own warships are
+        # already crewed, so this is the same work there; where BOTH sides were
+        # armed by injection, which is what a two-player galaxy needs, crewing
+        # one of them would leave the other unable to sail.
+        armed = _crew_injected(act, snap, dfn, home)
         log(f"  crewed {len(armed)} {defender} warship(s)")
         if not armed:
             raise SystemExit(f"{defender} has no {DESIGN_NAME!r} hull to crew; "
                              f"run the fixture phase first")
+        theirs = _crew_injected(act, snap, atk)
+        if theirs:
+            log(f"  crewed {len(theirs)} {attacker} warship(s)")
 
         if declare:
             act.declare_war(atk, dfn)
@@ -267,6 +301,37 @@ def arm(dat, attacker="GoodGuy", defender="BadGuy", declare=True,
     return fork, played_blob
 
 
+def _crew_injected(act, snap, civ, home=None):
+    """Crew every `DESIGN_NAME` hull `civ` owns, drafting from `home`.
+
+    `home` defaults to the civ's most populous planet, which is where a draft
+    can actually come from. Returns the hulls crewed, empty when it owns none.
+    """
+    if home is None:
+        mine = snap.owned_planets(civ)
+        if not mine:
+            return []
+        home = max(mine, key=lambda p: len(p.vec(act.CITIZEN_LIST,
+                                                 act.CITIZEN_STRIDE)))
+    done = []
+    for sh in snap.ships:
+        if sh.owner is None or sh.owner.addr != civ.addr:
+            continue
+        if getattr(sh.design, "name", None) != DESIGN_NAME:
+            continue
+        # A clone carries whatever crew its donor had, and the donor is whichever
+        # unordered hull the blob offered. `cycle.dat` supplies an empty colony
+        # ship and a generated galaxy supplies a crewed one, so both cases turn
+        # up. conscript_to_crew fills an empty vector only, by design, so an
+        # already-crewed hull is left alone rather than topped up.
+        if sh.crewed:
+            done.append(sh)
+            continue
+        act.conscript_to_crew(home, sh, CREW, civ)
+        done.append(sh)
+    return done
+
+
 def _advance(turns, secs):
     """`turns` turn boundaries in the client that is already running."""
     import subprocess
@@ -317,17 +382,22 @@ def compare(a, b, label_a="A", label_b="B"):
 
 # ── combat evidence ──────────────────────────────────────────────────────────
 # A `NEWS` payload is a fixed 44-byte record, eleven dwords, the last three of
-# which are a position. Read across cycle.dat and several branches of it:
+# which are a position:
 #
-#     +0   u32  varies with the category, 0, 2 or 66
-#     +8   u32  the turn the item was raised
-#     +20  u32  category
-#     +24  u32  item id, unique and ascending within a civ
+#     +8   u32    the turn the item was raised
+#     +20  u32    small, ascending per civ, ROLE UNKNOWN
+#     +24  u32    small, ascending per civ, ROLE UNKNOWN
 #     +32  3xf32  where it happened, zero for items with no place
 #
-# Categories seen: 1 and 3 carry no position, 8 to 11 carry one. An engagement
-# raises TWO items on one turn at one position, one in each civ's OWNR, under
-# different categories, which reads as each side's own view of it.
+# Only the turn and the position are established. +20 and +24 were first read as
+# a category and an item id, which a second galaxy contradicted: the value that
+# carried no position in one carried one in the other, and +20 is often +24
+# minus one, which reads more like a chain. They are reported raw and nothing
+# here branches on them.
+#
+# How many items an engagement raises is also unsettled: two in one measured
+# battle, one in another. `contacts` therefore tests only that a positioned item
+# appeared, which is the claim the experiment needs.
 NEWS_LEN = 44
 
 
@@ -393,9 +463,10 @@ def phase_fixture(args):
     blob = sp.load_any(args.source)
     log(f"{args.source}: {len(blob):,} bytes")
     blob = build_fixture(blob, civ=args.defender, count=args.hulls)
-    if args.stage:
+    if args.stage or args.turns_away:
         log()
-        blob = stage(blob, attacker=args.attacker, defender=args.defender)
+        blob = stage(blob, attacker=args.attacker, defender=args.defender,
+                     turns_away=args.turns_away)
     with open(args.out, "wb") as f:
         f.write(blob)
     log(f"\nwrote {args.out} ({len(blob):,} bytes)")
@@ -449,7 +520,7 @@ def phase_run(args):
     log("=== did an engagement happen ===")
     seen = contacts(fork, loaded[0])
     for who, turn, cat, oid, pos in seen:
-        log(f"  {who:8} turn {turn:<5} category {cat:<3} item {oid:<4} "
+        log(f"  {who:8} turn {turn:<5} fields {cat},{oid} "
             f"at ({pos[0]:.1f}, {pos[1]:.1f}, {pos[2]:.1f})")
     if not seen:
         log("  NO positioned news was raised, so nothing met anything")
@@ -461,6 +532,21 @@ def phase_run(args):
     stripped = [without_sun_names(o) for o in loaded]
     for i, (raw, flat) in enumerate(zip(loaded, stripped)):
         log(f"  L{i + 1}: {len(raw):,} -> {len(flat):,} bytes with names cleared")
+
+
+def phase_publish(args):
+    """Put a prepared galaxy into a turn store as turn 1, ready to play.
+
+    The roster matters as much as the blob: the launcher refuses a name that is
+    not on it, so the civs named here are the names the two players have to
+    type.
+    """
+    from turn_store import open_store
+    blob = sp.load_any(args.blob)
+    store = open_store(args.store)
+    turn = store.start(blob, civs=args.player, turn_seconds=args.turn_seconds)
+    log(f"published turn {turn} to {args.store}, {len(blob):,} bytes, "
+        f"{args.turn_seconds}s per turn, roster {args.player}")
 
 
 def phase_compare(args):
@@ -483,6 +569,9 @@ def main():
     f.add_argument("--stage", action="store_true",
                    help="put the attacker's warships on the defender's planet, "
                         "so the branch measures the battle and not the approach")
+    f.add_argument("--turns-away", type=float, default=0.0,
+                   help="stage them this many turns' travel short of it, so a "
+                        "player can order and submit before contact")
     f.add_argument("-o", "--out", default=os.path.join(REPO, "client",
                                                        "twosided.dat"))
     f.set_defaults(func=phase_fixture)
@@ -515,6 +604,16 @@ def main():
     r.add_argument("-o", "--out", default=os.path.join(SERVER, "referee_work",
                                                        "twosided"))
     r.set_defaults(func=phase_run)
+
+    p = sub.add_parser("publish", help="put a prepared galaxy into a store")
+    p.add_argument("blob")
+    p.add_argument("--store", required=True,
+                   help="a directory, a share, or a turn server URL")
+    p.add_argument("--player", action="append", default=[], required=True,
+                   help="a civ name, repeatable; these are the names the "
+                        "players must type into their launchers")
+    p.add_argument("--turn-seconds", type=int, default=3600)
+    p.set_defaults(func=phase_publish)
 
     c = sub.add_parser("compare", help="two blobs, with and without names")
     c.add_argument("a")
