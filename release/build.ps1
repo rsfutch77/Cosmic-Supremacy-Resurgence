@@ -168,12 +168,26 @@ Write-Ok "created $Stage"
 
 # ── 6. Freeze the launcher ────────────────────────────────────────────────────
 Write-Step "Freezing launcher (PyInstaller)"
+
+# The build name is decided here and nowhere else, so it has to be carried into
+# the exe rather than left for the launcher to guess. stamp_build writes it to
+# build.json and launcher.build_info() reads it back through bundled(). Without
+# this a build made with -Version 0.1.1 ships a launcher calling itself
+# whatever manifest.json says, and the version gate compares the wrong number.
+& $VenvPy (Join-Path $ReleaseDir 'stamp_build.py') $Version $BuildDir | Out-Null
+if ($LASTEXITCODE -ne 0) { throw 'stamp_build failed' }
+$BuildStamp = Join-Path $BuildDir 'build.json'
+if (-not (Test-Path $BuildStamp)) { throw "stamp_build reported success but $BuildStamp is missing" }
+Write-Ok "stamped build $Version"
+
 $piArgs = @(
     '--noconfirm', '--onefile', '--windowed',
     '--name', 'CosmicSupremacyLauncher',
     # manifest.json rides inside the exe: it is the build's own definition of
     # what the modes are, not something a player is meant to retune.
     '--add-data', "$Manifest;.",
+    # build.json rides beside it, written a few lines above by stamp_build.
+    '--add-data', "$BuildStamp;.",
     # cs_server is imported inside a function after its environment is set, so
     # name it explicitly rather than relying on the import graph walker.
     '--paths', $ServerDir,

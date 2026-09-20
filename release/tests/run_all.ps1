@@ -65,6 +65,7 @@ function Invoke-Test {
 
 Invoke-Test 'test_identity.py'
 Invoke-Test 'test_packaging.py'
+Invoke-Test 'test_build_and_log.py'
 Invoke-Test 'test_save_protocol.py'
 foreach ($mode in @('tutorial', 'demo', 'testbed')) {
     Invoke-Test 'test_status_cycle.py' @($mode)

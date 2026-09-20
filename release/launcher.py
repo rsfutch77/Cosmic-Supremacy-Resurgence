@@ -6,6 +6,7 @@ from __future__ import annotations
 import json
 import os
 import queue
+import re
 import socket
 import subprocess
 import sys
@@ -532,6 +533,126 @@ def roster_problem(name: str, civs):
             "were given, or ask whoever made the galaxy to add a seat for you.")
 
 
+# ── Which build this is ───────────────────────────────────────────────────────
+# A build has to be able to name itself. A galaxy refuses one that is too old
+# (version_problem below), and a log from a failure nobody watched is worth much
+# less if it does not say which build wrote it.
+#
+# The name is stamped at package time rather than kept as a constant here,
+# because the packaging step is what decides it: build.ps1 takes the version
+# from its -Version switch, or from manifest.json when the switch is not given.
+# The switch is why dist\ holds a CosmicSupremacy-Resurgence-v0.1.1 that
+# manifest.json never mentioned, so the manifest on its own cannot answer which
+# build a player is running.
+#
+# stamp_build.py writes that decision to build.json and the spec packs it into
+# the frozen build beside manifest.json, which is the route manifest.json and
+# cosmic.ico already take: a data file read back through bundled().
+#
+# A build with no build.json reports the manifest's version with a marker, so a
+# checkout and an unstamped package are never mistaken for a release.
+BUILD_FILE = "build.json"
+DEV_MARK = "dev"                # run from a clone; no packaging step involved
+UNSTAMPED_MARK = "unstamped"    # packaged, but the stamp did not reach the bundle
+
+# Where a launcher that is too old is told to go. The site's download page and
+# this link both resolve to the same GitHub release asset.
+UPDATE_URL = "https://github.com/rsfutch77/Cosmic-Supremacy-Resurgence/releases/latest"
+
+# The key a galaxy's state carries its minimum build in. Optional: a galaxy
+# without one is played by any build, which is every galaxy that predates it.
+MIN_BUILD_KEY = "min_build"
+
+
+def _read_json(path: str):
+    """A JSON object from `path`, or None if there is not one there."""
+    try:
+        with open(path, encoding="utf-8") as fh:
+            data = json.load(fh)
+    except (OSError, ValueError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def build_info() -> dict:
+    """What the packaging step recorded about this build.
+
+    Always carries "build". A stamped build also carries "stamped_at", when it
+    was packaged, and "commit", the checkout it came from, with a trailing +
+    when that checkout had uncommitted changes.
+    """
+    info = _read_json(bundled(BUILD_FILE))
+    if info and isinstance(info.get("build"), str) and info["build"].strip():
+        return info
+    cfg = _read_json(bundled("manifest.json")) or {}
+    version = str(cfg.get("version") or "0.0.0")
+    mark = UNSTAMPED_MARK if getattr(sys, "frozen", False) else DEV_MARK
+    return {"build": f"{version}+{mark}"}
+
+
+def build_id() -> str:
+    """This launcher's build, as the player sees it and as a galaxy reads it."""
+    return build_info()["build"]
+
+
+def build_parts(build: str) -> "tuple[int, ...]":
+    """The orderable part of a build name: "0.1.10+dev" gives (0, 1, 10).
+
+    Only the leading dotted number counts. What follows it says how a build was
+    made rather than how new it is, and ordering on it would put a stamped
+    0.1.1 and a development 0.1.1 on opposite sides of a gate neither is meant
+    to be caught by.
+    """
+    lead = re.match(r"\d+(?:\.\d+)*", (build or "").strip())
+    if lead is None:
+        return ()
+    return tuple(int(p) for p in lead.group(0).split("."))
+
+
+def build_is_below(build: str, minimum: str) -> bool:
+    """Is `build` older than `minimum`?
+
+    Shorter names are padded with zeros, so 0.2 and 0.2.0 are the same build. A
+    minimum with no number in it orders nothing and holds nobody back; a build
+    with no number in it is below every minimum, because a launcher that cannot
+    say what it is cannot claim to be current.
+    """
+    want = build_parts(minimum)
+    if not want:
+        return False
+    have = build_parts(build)
+    width = max(len(have), len(want))
+    have += (0,) * (width - len(have))
+    want += (0,) * (width - len(want))
+    return have < want
+
+
+def version_problem(build: str, state) -> "str | None":
+    """Why this build cannot play this galaxy, or None. Written for the player.
+
+    The minimum is `min_build` in the galaxy's state, and it is optional: a
+    galaxy that names none is played by any build.
+
+    The message names both builds and where the new one is, because the failure
+    it prevents is a silent one. A turn resolved by a client the referee does
+    not match produces a blob whose symptom is a mystery rather than an error,
+    and a player told only "no" has nothing to act on.
+
+    A minimum that cannot be read as a build is not enforced. That is the
+    referee's mistake, and a typo in one galaxy's state must not shut every
+    player out of it.
+    """
+    minimum = (state or {}).get(MIN_BUILD_KEY)
+    if not isinstance(minimum, str) or not build_parts(minimum):
+        return None
+    if not build_is_below(build, minimum):
+        return None
+    return (f"This galaxy needs build {minimum} or newer.\n\nThis launcher is "
+            f"build {build}.\n\nAn older build can hand the galaxy a turn the "
+            "referee cannot use, and that goes wrong quietly, so the galaxy "
+            "stops here instead.\n\nThe current release is at\n" + UPDATE_URL)
+
+
 # ── Multiplayer ───────────────────────────────────────────────────────────────
 # A multiplayer galaxy has a turn store, which is the one thing a player's
 # launcher, the other players' launchers and the referee all agree through. The
@@ -645,6 +766,179 @@ def fmt_left(seconds: float) -> str:
     return f"{seconds // 60}:{seconds % 60:02d}"
 
 
+# ── The log, made fit to send ─────────────────────────────────────────────────
+# launcher.log is the only account of a failure nobody was watching, and it
+# cannot be sent anywhere as it stands. The launcher tees the stub server's own
+# logging into it, and that includes the HTTP bodies of the save protocol: a
+# save blob is base64 in the `data=` field and arrives in 400-character chunks
+# tagged `body+`. cs_server holds a savegame body to its first 4000 characters,
+# so it is around 4 KB per save request rather than the whole blob, and a
+# multiplayer turn makes two of those. They diagnose nothing , the same blob is
+# written to saves\ in full , and they are still most of the file: 12,744 bytes
+# of the 23,310-byte log this was measured against, from three requests.
+#
+# redact_log_text() produces the copy that can be sent: body dumps replaced by
+# a count, the player's Windows account name taken out of the paths, and the
+# tail kept to a cap.
+#
+# WHAT THE REDACTED COPY STILL CONTAINS. Written out rather than summarised,
+# because the text a player is shown before they agree to send one has to be
+# written from this list rather than from a guess.
+#
+#   , The player's name, which is also their civilisation's name in a galaxy.
+#     It is on every multiplayer line: "[Alice] turn 12: submitted".
+#   , The galaxy: the store's path or URL exactly as multiplayer.json names it.
+#     For a directory store on another machine that is a UNC path and therefore
+#     that machine's name. The scrubbing covers this player's own account name,
+#     not a referee's machine.
+#   , The game name, turn number and action of each save request, from the head
+#     of the body that is kept: "gamename='DemoPlayt8'&turn=8&version=1". A
+#     `passhash` sits there too and is always empty; the engine sends a
+#     credential field that the stub server does not use.
+#   , Which modes were started and which exited, with exit codes, process ids
+#     and the names of the game executables.
+#   , The install's directory layout with the account name replaced:
+#     "C:\Users\<user>\Desktop\...". The rest of each path survives, so a folder
+#     a player named after themselves is still readable.
+#   , The whole of the AI opponent's reasoning in single player, which names
+#     planets, ships, research and engine addresses, and nothing about the
+#     machine it ran on.
+#   , Timestamps, to the second, of all of the above.
+LOG_NAME = "launcher.log"
+REDACTED_LOG_NAME = "launcher-redacted.log"
+
+# The ceiling on a copy meant to be sent. Several turns of a multiplayer
+# session fit once the body dumps are gone, and it is small enough to leave a
+# home connection without anyone thinking about it.
+LOG_UPLOAD_CAP = 256 * 1024
+
+# Room held back from the cap for the line that says what the cap dropped.
+_CAP_NOTE = 200
+
+# A line as launcher.log writes it: the stub server's own indented text with
+# the launcher's timestamp in front of it.
+_STAMP = r"(?:\[\d\d:\d\d:\d\d\]\s*)?\s*"
+
+# The continuation chunks of a request body, and the line that closes a
+# truncated one. cs_server tags chunk 0 `body` and every chunk after it `body+`.
+_BODY_MORE = re.compile(_STAMP + r"body(?:\+|\u2026)\s*[:(]")
+
+# Chunk 0, which is worth keeping as far as `data=`: ahead of that field it
+# carries the user, the game, the turn and the version. After it is the blob.
+_BODY_HEAD = re.compile("(" + _STAMP + r"body:\s*.*?\bdata=)(.+)$")
+
+# Any \Users\<name>\ in a path. The account name is the identifying part; the
+# rest of the path says where the install is, which is what a diagnostic needs.
+# Public and Default are Windows' own shared profiles and name nobody.
+_USER_DIR = re.compile(r"([A-Za-z]:[\\/]+Users[\\/]+)(?!Public\b|Default\b)"
+                       r"([^\\/\s\"']+)", re.I)
+USER_MARK = "<user>"
+
+
+def scrub_paths(text: str) -> str:
+    """Replace the Windows account name in any path with <user>.
+
+    Generalised rather than matched against this machine's account name. The
+    copy is written on the player's machine and read on somebody else's, and a
+    log can carry paths from a second profile or an older install that the
+    account name in force right now would not match.
+
+    A profile directory that is not under \\Users , a redirected domain profile,
+    say , is matched by its own literal path instead.
+    """
+    text = _USER_DIR.sub(lambda m: m.group(1) + USER_MARK, text)
+    home = os.path.expanduser("~")
+    if home and _USER_DIR.match(home) is None:
+        parent, leaf = os.path.split(home)
+        if parent and leaf:
+            masked = os.path.join(parent, USER_MARK)
+            text = re.sub(re.escape(home), lambda m: masked, text, flags=re.I)
+    return text
+
+
+def _keep_tail(text: str, cap: int) -> str:
+    """The last `cap` bytes of a log, cut at a line boundary and labelled."""
+    data = text.encode("utf-8", "replace")
+    if len(data) <= cap:
+        return text
+    kept = data[-max(0, cap - _CAP_NOTE):]
+    cut = kept.find(b"\n")
+    if cut >= 0:
+        kept = kept[cut + 1:]
+    return (f"[{len(data) - len(kept)} bytes of older log dropped, keeping the "
+            f"most recent {len(kept)}]\n") + kept.decode("utf-8", "replace")
+
+
+def redact_log_text(text: str, cap: int = LOG_UPLOAD_CAP) -> str:
+    """An uploadable copy of a launcher log.
+
+    Each run of body lines becomes one line naming how many bytes went with it.
+    The count is kept rather than dropped because it is the one thing those
+    lines were ever good for: it separates a turn that sent a 300 KB save from
+    a turn that sent nothing, and that distinction is a diagnosis.
+
+    The cap keeps the tail, because the failure being reported is the last
+    thing that happened, and the line saying what was dropped goes at the top.
+    """
+    out = []
+    elided = 0
+
+    def close_run():
+        nonlocal elided
+        if elided:
+            out.append(f"  [{elided} bytes of request body elided]")
+            elided = 0
+
+    for line in text.splitlines():
+        head = _BODY_HEAD.match(line)
+        if head is not None:
+            close_run()
+            out.append(scrub_paths(head.group(1)) + "\u2026")
+            elided += len(head.group(2).encode("utf-8", "replace"))
+            continue
+        if _BODY_MORE.match(line) is not None:
+            elided += len(line.encode("utf-8", "replace"))
+            continue
+        close_run()
+        out.append(scrub_paths(line))
+    close_run()
+
+    body = "\n".join(out)
+    if body:
+        body += "\n"
+    return _keep_tail(body, cap)
+
+
+def redacted_log(data_dir: str, cap: int = LOG_UPLOAD_CAP) -> str:
+    """The uploadable copy of this install's launcher.log.
+
+    A missing or unreadable log answers with a copy that says so rather than
+    raising. Whatever asks for this wants something to send either way, and
+    "there was no log" is itself a report.
+    """
+    path = os.path.join(data_dir, LOG_NAME)
+    try:
+        with open(path, encoding="utf-8", errors="replace") as fh:
+            text = fh.read()
+    except OSError as exc:
+        return scrub_paths(f"[no launcher log to send: {exc}]") + "\n"
+    return redact_log_text(text, cap)
+
+
+def write_redacted_log(data_dir: str, out_path: "str | None" = None,
+                       cap: int = LOG_UPLOAD_CAP) -> str:
+    """Write the uploadable copy beside the log and return where it went.
+
+    Nothing sends it. The file is the deliverable: a player can be pointed at
+    it and asked to attach it, and whatever uploads it later reads this file
+    rather than redacting a second time in its own way.
+    """
+    out_path = out_path or os.path.join(data_dir, REDACTED_LOG_NAME)
+    with open(out_path, "w", encoding="utf-8", newline="\n") as fh:
+        fh.write(redacted_log(data_dir, cap))
+    return out_path
+
+
 # ── UI ────────────────────────────────────────────────────────────────────────
 BG      = "#050a1a"
 PANEL   = "#080f22"
@@ -741,7 +1035,10 @@ class Launcher:
         # window sizes itself to its widest child.
         tk.Label(self.root, text=self.cfg["product"], bg=BG, fg=ACCENT,
                  font=("Segoe UI", 20, "bold")).pack(anchor="w", pady=(22, 0), **pad)
-        tk.Label(self.root, text=f"v{self.cfg['version']}",
+        # The build, not the manifest's version: a build made with build.ps1's
+        # -Version switch carries a name the manifest does not hold, and this
+        # line is where a player reads back what a galaxy is about to refuse.
+        tk.Label(self.root, text=f"v{build_id()}",
                  bg=BG, fg=DIM, font=("Segoe UI", 10)).pack(anchor="w", **pad)
 
         body = tk.Frame(self.root, bg=BG)
@@ -845,7 +1142,15 @@ class Launcher:
     def _boot(self):
         self.data_dir = find_data_dir()
         self._open_log(self.data_dir)
-        self.say(f"{self.cfg['product']} v{self.cfg['version']}")
+        info = build_info()
+        self.say(f"{self.cfg['product']} v{info['build']}")
+        # When and from what the build was packaged. Absent from a checkout and
+        # from a package the stamp did not reach, which is itself the answer to
+        # "which build produced this log".
+        made = " ".join(f"{k} {info[k]}" for k in ("stamped_at", "commit")
+                        if info.get(k))
+        if made:
+            self.say(f"build   {made}")
         self.say(f"data    {self.data_dir}")
 
         self.player = player_name(self.data_dir)
@@ -1129,6 +1434,23 @@ class Launcher:
             self.warn(f"No galaxy in\n{cfg['store']}\n\nThe referee has to "
                       "publish a first turn before anyone can play it.")
             return
+
+        # Ahead of the roster, and ahead of anything being served. A galaxy can
+        # require a minimum build, and this launcher being too old for it is a
+        # reason the roster or the turn itself might look wrong further down,
+        # so it is the first thing answered.
+        try:
+            state = store.state()
+        except (OSError, ValueError, KeyError) as exc:
+            state = None
+            self.say(f"multiplayer: could not read the galaxy's state ({exc})")
+        if state is not None:
+            problem = version_problem(build_id(), state)
+            if problem:
+                self.say(f"multiplayer: build {build_id()} is below this "
+                         f"galaxy's minimum {state.get(MIN_BUILD_KEY)!r}")
+                self.warn(problem)
+                return
 
         # The roster is the galaxy's list of seats, and the referee matches
         # submissions to it by exact name and discards anything else. Checking

@@ -1,0 +1,75 @@
+// beta_firestore.rules , proposed Firestore rules for the beta relay
+// ===================================================================
+// NOT DEPLOYED. These are written for review and are item H4's to deploy.
+// There is deliberately no firebase.json beside them, because the only
+// firebase.json in this repo is site/firebase.json and it configures the live
+// public website: a deploy that picked up a config from this directory is a
+// deploy that could touch Hosting.
+//
+// What these rules cover is the layout firebase_store.py writes:
+//
+//     beta/<galaxy>                  the clock, the roster, the hash, the name
+//     beta/<galaxy>/archive/<turn>   what the referee recorded for a turn
+//
+// The worker holds a service account. A service account bypasses security
+// rules entirely, so there is no allow rule for the worker anywhere below.
+// Everything here describes what a player's launcher may do, and a player's
+// launcher never writes a turn.
+//
+// Three properties, which is what H4 asks for:
+//   1. a client may write only its own submission, for the current turn
+//   2. a client may never write a published turn
+//   3. a client may never delete anything
+//
+// Property 1 is a Cloud Storage property and is in beta_storage.rules, where
+// there is also a note about the part of it the current layout cannot express.
+//
+// Two things these rules do NOT do, named here rather than discovered later.
+//
+// **The roster is readable.** The galaxy document carries `civs`, so any
+// authenticated client that reads the row reads who is playing. J4 says a
+// refused name must not name the other players, and that is not achievable
+// while the roster is a field of a document clients read. The launcher reads
+// it today, at release/launcher.py:1461, to decide roster_problem. Closing
+// this means either moving the roster to a document clients cannot read and
+// answering the seat question through a per-player document, or accepting that
+// the roster is public. It is a J4 decision and not a rules bug.
+//
+// **This is not an anti-cheat measure.** Cheating is an accepted property of
+// this beta. These rules exist because a store with no rules can be emptied by
+// anyone who finds it, and because upload and egress are metered.
+
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Anything not named below is denied, which is the default and is left as
+    // the default rather than restated, so that a path added later is denied
+    // until someone decides otherwise.
+
+    match /beta/{galaxy} {
+      // Every launcher reads this: it is the clock, the deadline the launcher
+      // polls against, and the row the Games tab shows. One document read.
+      allow read: if request.auth != null;
+
+      // Only the worker publishes a turn, and the worker is not subject to
+      // these rules. No client writes this document for any reason.
+      allow write: if false;
+
+      match /archive/{turn} {
+        // Readable so that a launcher can show what happened in a turn, and
+        // so that K3's abandonment count can be taken from the archive by
+        // anything that can read it.
+        allow read: if request.auth != null;
+        allow write: if false;
+      }
+    }
+
+    // J3 will add a join request path under beta/<galaxy>, written by the
+    // client and applied by the worker at a turn boundary. It is not written
+    // here because its shape is not decided, and a rule that guesses at a
+    // schema is a rule that will be wrong. It will need: create and update by
+    // the owning uid only, no delete, and a size cap on the claimed name.
+  }
+}

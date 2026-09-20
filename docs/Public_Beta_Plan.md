@@ -1,0 +1,672 @@
+# Public beta, plan
+
+The strategy: one permanent sandbox galaxy, relayed through Firebase, refereed
+by one PC at home. Players join whenever they arrive, are merged into the live
+galaxy at the next turn boundary, and play 4-hour turns. Identity is a username
+and nothing more.
+
+This is the phase after the blob push plan, which established that a turn is a
+pure function of state plus orders, that a referee can resolve one unattended,
+and that two machines can share a galaxy over a store. All of that ran on a LAN
+between machines that trusted each other. This phase puts a stranger at the
+other end of it.
+
+That plan is finished and is no longer in the tree. Its findings that outlive it
+are in `docs/CosmicSupremacy_Reconstruction_Report.md`; the plan itself, and the
+item ids this document cites, read at
+`git show ae2b06b:docs/Multiplayer_Blob_Push_Plan.md`.
+
+**What this phase is not.** Turns are still resolved on one PC with a real game
+client attached. Moving the referee to a cloud VM is the phase after this one,
+and every item here is written so that move is a deployment change rather than a
+rearchitecture.
+
+Each item names what "done" looks like.
+
+---
+
+## What this phase inherits
+
+These are measured, in the blob push plan at the commit named above, and this
+plan depends on them. The letters in brackets are that plan's item ids.
+
+- **The store seam holds.** `open_store(spec)` takes a directory or a URL and
+  every caller above it takes a string and never learns which it got. A third
+  implementation is the whole of the Firebase work. (F1, F3)
+- **An unplayed civ is scenery.** The engine issues no orders for a civ nobody
+  plays: no ship order, no production, no research, only population growth. So
+  an abandoned empire drifts rather than acting. (D3)
+- **A player's client cannot tick.** The player build carries no turn-advance
+  patches and offers no Next Turn control. (B, G)
+- **Every player holds the whole galaxy.** Per-player projection does not load,
+  so distribution is full-state and a modified client is a maphack. The engine's
+  own visibility rules hide rivals' planets and ships from an unmodified one.
+  (D1, D2)
+- **A civ can be added to a live blob.** `inject_civ.add_civ` clones a donor
+  `OWNR`, places a homeworld, and maintains the `GLXY` civ count and the
+  high-water object id. Confirmed live with a third civ that played four turns.
+  (D4)
+- **One game process per machine, with an advisory lock.** Every tick serialises
+  through it. (G)
+
+`F4` in that plan, the Firebase adapter, is deferred there and is `H1` here.
+
+---
+
+## Decisions this plan is built on
+
+Settled before writing it, and recorded so an item that contradicts one is
+visibly wrong rather than quietly inconsistent.
+
+| | |
+|---|---|
+| galaxies | one permanent sandbox, ended at the operator's discretion, no season timer |
+| turn length | 4 hours |
+| joining | civs merged into the live galaxy on demand, never pre-generated as empty seats |
+| identity | a username, plus an anonymous per-install UID the player never sees |
+| abandonment | the civ is wiped from the galaxy; the seat is not passed to anyone |
+| cheating | possible and accepted, and players are told so |
+
+Inheriting an abandoned empire rather than wiping it is a future game mode and
+is out of scope here.
+
+---
+
+## H. The relay
+
+- [ ] **H0. Provision the project, which is a billing decision.** Nothing in this
+  section can be finished until it is made, and neither H1 nor H5 as first
+  written knew it existed.
+
+  **`cs-resurgence` has no Firestore database and no Cloud Storage bucket.**
+  `firestore.googleapis.com` is not enabled on the project, and neither
+  `cs-resurgence.firebasestorage.app` nor `cs-resurgence.appspot.com` exists.
+
+  **Cloud Storage for Firebase has required the Blaze plan since 3 February
+  2026.** On Spark every cell reads "not applicable" and the API answers 402 or
+  403. So a beta that keeps blobs in Cloud Storage cannot be a Spark project: it
+  is a Blaze project kept inside the no-cost allowances, which needs a billing
+  account attached to a project that also serves the live public website.
+
+  Two irreversible choices sit inside this. A Firestore database's location is
+  permanent. And a bucket created now gets the Cloud Storage Always Free
+  allowance, 5,000 Class A operations per *month*, rather than the far larger
+  legacy `appspot.com` allowance of 20,000 uploads per *day*, and only in
+  `us-central1`, `us-west1` or `us-east1`.
+
+  **The alternative is Firestore only, which keeps the beta on Spark.** Measured
+  blobs are 13 to 53 KB base64 against a 1 MiB document ceiling, roughly 20 times
+  the headroom, and Firestore's 20,000 writes a day is about 120 times the
+  Storage allowance that H5 shows is the binding constraint. What it costs is the
+  ceiling itself: a galaxy that outgrows 1 MiB has nowhere to go, and nothing
+  here has measured how a blob grows over a long sandbox.
+
+  **Done when:** the plan is chosen and the services exist, or the Firestore-only
+  variant is chosen and H1's layout is revised to match.
+
+- [~] **H1. A Firebase store adapter.** `server/firebase_store.py` implements the
+  `turn_store` interface as `FirebaseTurnStore`, and `open_store` dispatches on a
+  `firebase://<project>/<galaxy>` spec. Everything lives under a `beta/` prefix in
+  both services so it cannot collide with the website on the same project.
+
+      Firestore   beta/<galaxy>                  clock, roster, hash, directory row
+                  beta/<galaxy>/archive/<turn>   the referee's record, as one JSON string
+      Storage     beta/<galaxy>/turns/0007.b64
+                  beta/<galaxy>/submissions/0007/<civ>.b64
+                  beta/<galaxy>/notes/0007/<civ>.txt
+
+  Three choices worth naming. **One document per galaxy holds both the store's
+  state and the directory's row**, so a publish is a field merge rather than a
+  whole-document replace and the referee cannot clobber a name or status the
+  operator set mid-turn. **Anything keyed by a civ name is a Storage object and
+  never a Firestore field or document id**, because a civ name is a username a
+  player typed and Firestore restricts both, which is also why the archive record
+  is stored as a JSON string rather than a map. **Objects hold the same base64
+  wire bytes the directory store writes**, so a galaxy moves between a folder and
+  Firebase by copying, at the cost of about a third more egress.
+
+  One class of bug disappears rather than being ported. `TurnStore.state` retries
+  for two seconds because `os.replace` is not atomic over SMB and a reader can
+  see `state.json` briefly absent. A Firestore document replace is atomic, so the
+  adapter has no equivalent, and says so rather than omitting it silently.
+
+  **The equivalence test this item's done-when referred to did not exist.** F1
+  claimed a 24-check equivalence run against a directory and the HTTP service,
+  and that run was ad hoc and never committed, so the plan cited a test nothing
+  could execute. `server/tests/test_store_equivalence.py` is that test now, 131
+  checks across all three implementations, with 88 when Firebase is skipped and a
+  skip that says so. `server/tests/test_galaxy_directory.py` adds 59.
+
+  | | result |
+  |---|---|
+  | directory, HTTP and Firebase on the emulator | 131 passed, 0 failed |
+  | directory and HTTP, Firebase skipped | 88 passed, 0 failed |
+  | `referee.py --start` and status against a Firebase spec | resolved, `referee.py` unchanged |
+
+  **The two existing implementations were already not equivalent.**
+  `HttpTurnStore.start` cannot take a `turn` argument because the service has no
+  such parameter. The test therefore drives `start` through the blob-derived
+  path, which is the one the referee uses.
+
+  **All of this ran on the emulator.** Nothing was created in the live project,
+  because nothing could be: see H0.
+
+  **Done when:** the equivalence test passes against the live project, and a
+  referee resolves a real turn end to end through it with the directory and the
+  Firebase store reporting the same canonical hash.
+
+- [ ] **H2. The referee machine is pull-only.** It opens outbound connections to
+  Firebase and accepts nothing inbound: no port forward, no dynamic DNS, no
+  router change. This is the property that keeps a home address out of the beta,
+  and it is a constraint rather than a consequence, because the first "just
+  expose `turn_server.py`" shortcut removes it without anything failing.
+
+  **Done when:** a full turn resolves with the machine's inbound ports closed and
+  no forwarding rule anywhere, confirmed by reading the router's configuration
+  rather than by the turn having worked.
+
+- [ ] **H3. Firebase is the record; the PC is a worker.** State, turns,
+  submissions, notes and the archive live in Firebase. The PC holds the game
+  client, the client lock, and files it is free to lose.
+
+  Two payoffs, and the second is the reason for the first. A machine that reboots
+  for Windows Update loses nothing and resumes. And the cloud offload later swaps
+  which machine runs the worker, with no data to migrate.
+
+  **Done when:** the referee is killed mid-galaxy and the machine rebooted, and
+  the loop resumes and closes the next turn with nothing restored by hand.
+
+- [ ] **H4. Anonymous auth and security rules.** Firebase Anonymous Auth gives
+  each install a stable UID with no login screen, no password and no account.
+  The username stays exactly what it is today, a claim typed into the launcher.
+
+  This is not an anti-cheat measure and does not pretend to be. It is there
+  because a publicly addressable store with no rules can be emptied by anyone who
+  finds it, and because upload and egress are metered.
+
+  The rules: a client may write only its own submission for the current turn; may
+  never write a published turn; may never delete. The worker holds a service
+  account and is the only writer of turns. Object size is capped and a budget
+  alert is set before the first stranger has the launcher.
+
+  **"Its own submission" is not expressible as H1 stores them.** A rule can test
+  `request.auth.uid`; a submission object is named for the civ, which is a
+  username the player typed, and there is no relation between the two that a rule
+  can evaluate. Until one of two things is done, the rule is a size cap and a
+  deletion refusal rather than an ownership rule:
+
+  - name the submission object for the uid rather than the civ, and keep the
+    mapping in the galaxy document, or
+  - mint a custom claim carrying the civ name when a seat is claimed at J4, and
+    have the rule compare against the claim.
+
+  The second fits J4's seat binding and is probably the one to take, since that
+  binding has to exist anyway.
+
+  `server/beta_firestore.rules` and `server/beta_storage.rules` hold drafts for
+  review. They are deliberately not accompanied by a `firebase.json`, so no
+  deploy can pick them up from beside them; this project serves the live website
+  and rules are deployed by hand, deliberately, once.
+
+  **Done when:** a test client authenticated as one player is refused writing
+  another player's submission, refused publishing a turn, and refused deleting
+  anything, each by the rules rather than by the application declining to try.
+
+- [ ] **H6. A store fetches one submission, not all of them.** `player_turn.py`
+  reaches its own submission through `store.submissions(turn).get(civ)` at three
+  sites, which lists and downloads every player's submission and throws all but
+  one away. On a folder that was free. On Firebase it is a download per player
+  per poll, it is the cost H5 names, and it is refused outright by the rule that
+  stops a player reading another player's orders.
+
+  The fix is a single-submission accessor on the store interface, implemented by
+  all three stores, not a change to the rules.
+
+  **Done when:** no caller reads another player's submission to find its own, and
+  the rules can therefore refuse it.
+
+- [~] **H5. Cost and quota arithmetic, written down.** One galaxy at 4-hour turns
+  is 6 ticks a day, 182 a month. Quotas below read from Firebase's own
+  documentation on 20 September 2026, and worth re-reading before the beta opens
+  because one of them changed in February.
+
+  **Firestore**, the same on Spark and Blaze: 50K document reads, 20K writes and
+  20K deletes a day, 1 GiB stored, 10 GiB egress a month. Per project and **only
+  for the default database**; a named database gets no free quota at all.
+
+  **Cloud Storage**, on Blaze only since 3 February 2026, and a bucket created
+  now gets the Cloud Storage Always Free allowance rather than the legacy one:
+  5 GB-months stored, **5,000 Class A operations a month**, 50K Class B a month,
+  100 GB egress a month from North America.
+
+  | | per month | of free |
+  |---|---|---|
+  | Firestore writes, galaxy doc plus archive doc per tick | 364 | negligible |
+  | Firestore reads, launcher polls | poll-driven | 50K/day is ~8,300 polls per player per day at six players |
+  | Storage Class B, turn downloads and existence checks | ~5,500 | 11% |
+  | Storage stored | ~68 MB added | 5 GB in about six years |
+  | Storage egress | ~60 MB | negligible |
+  | **Storage Class A, uploads and lists** | **1,456 at six players saving once** | **29%** |
+
+  **The binding constraint is Storage Class A operations, and the driver is how
+  many times a player saves within a turn rather than how many players there
+  are.** Six players saving three times a turn is 73% of the allowance; ten
+  players saving three times is over it.
+
+  **That interacts with a deliberate design decision.** `player_turn.py` submits
+  every 20 seconds through the turn rather than once at the deadline, because the
+  first two-machine game lost a player's whole turn to a single write failing in
+  a narrow window. A submission identical to the last one is skipped, so the cost
+  is driven by how often a player's state actually changes rather than by the
+  clock, but an active player still produces many uploads per turn. Three ways
+  out, and they are not exclusive: lengthen the interval, keep interim
+  submissions in Firestore and write only the final one to Storage, or take the
+  Firestore-only variant in H0 and the constraint disappears.
+
+  The launcher polls against the deadline it already knows rather than on a fixed
+  short interval: often near the boundary, rarely in the middle of a turn.
+
+  **Done when:** a measured day of a live galaxy is inside the allowances with
+  margin, or the expected monthly bill is written down.
+
+---
+
+## J. The lobby
+
+- [ ] **J1. A galaxy directory above the store.** `open_store` addresses one
+  galaxy and nothing in the tree has a concept of more than one. The launcher
+  needs a list: name, status, turn, deadline, player count, whether you are in
+  it.
+
+  Kept as a separate small interface rather than folded into the store, so the
+  directory and HTTP store paths keep working for development and for the
+  two-machine test in F2.
+
+  **Done when:** the launcher lists the sandbox from the directory and opens its
+  store from what the directory gave it, with no galaxy path in any config file.
+
+- [ ] **J2. A Games tab in the launcher.** Replaces the old flow, where the
+  website listed active galaxies and a downloaded file was both the galaxy and
+  the key. The tab shows the sandbox, its turn, its deadline, how many players
+  are in it, and a Join button, and after joining it shows whether this player
+  has submitted.
+
+  `multiplayer.json` stops naming a galaxy. What the player has joined is written
+  by the launcher, beside `identity.json`, rather than hand-edited.
+
+  **Done when:** a player who has never opened a config file joins the sandbox
+  and plays a turn.
+
+- [ ] **J3. Joining is a request resolved at a turn boundary.** The launcher
+  writes a join request; the worker applies it during the next tick, on the
+  authoritative blob, never on a copy a player holds. A player who clicks Join
+  during turn N is playing at turn N+1.
+
+  **Done when:** a join clicked mid-turn produces a playable civ at the next
+  turn, and the player is told which system they landed in by a note rather than
+  having to find it.
+
+- [ ] **J4. A seat is bound to the anonymous UID that claimed it.** A second
+  install claiming a name already in the roster is refused. Because the UID is
+  per-install, a player who reinstalls Windows would otherwise be locked out of
+  their own empire, so the operator can rebind a seat to a new UID.
+
+  The refusal still does not name the other players, for the reason F4 already
+  gives: a launcher that could list the roster makes "is there a seat for me"
+  into a way to enumerate who is playing.
+
+  **Done when:** a name in the roster is refused from a second install, allowed
+  from the install that claimed it, and rebindable by the operator.
+
+---
+
+## K. The sandbox galaxy
+
+- [~] **K1. Merge a new civ into a live galaxy without taking a planet someone
+  was about to colonise.** `pick_homeworld` already refuses owned planets and
+  picks the uncolonised planet furthest from everything claimed. What it does not
+  know about is a planet nobody owns yet that a colony ship is flying toward,
+  which is the collision that matters in a sandbox. Reserved planets now feed
+  into its existing `taken` argument, and it takes a `margin`.
+
+  **An order carries no destination id. It carries a position.** The `ROUT`
+  target XYZ at `+16/+20/+24` is a bit-exact copy of the destination object's own
+  stored position, and resolving an order means matching that position back to an
+  object. Across 234 unique galaxies all **381** `ROUT` targets landed exactly on
+  either a `PLNT` or a `SUN ` position with nothing in between, so there is no
+  ambiguity band: a 0.01 tolerance and a 1.0 tolerance give the same answer.
+
+  | order type | planet-exact | sun-exact |
+  |---|---|---|
+  | Move (1) | 37 | 83 |
+  | Scout (2) | 0 | 242 |
+  | Colonize (3) | 19 | 0 |
+
+  **Most targets name a system, not a planet**, 325 of 381, so every `PLNT` in
+  that `SOLA` is reserved, with membership read from the section tree rather than
+  inferred from the contiguous id blocks.
+
+  **Two things that read like the destination and are not.** `ref_id` at `+92` is
+  non-zero on 29 of the 381 orders and on every one of them equals the enclosing
+  `DYNO`'s orbit id, which is where the ship *started*: reading it as a
+  destination points a colony ship at its own homeworld. And liveness is `ROUT`
+  presence, not the has-orders byte, because engine-issued scouts carry a `ROUT`
+  with advancing progress and has-orders clear.
+
+  Confirmed against the referee's own archive: over 152 consecutive same-galaxy
+  tick pairs, 7 colonise orders were seen completing, and in 7 of 7 the planet
+  that changed from unowned to owned is the one the target resolves to, owned by
+  the ordering ship's civ.
+
+  **The reservation changes no pick on any galaxy in this repo**, and that is
+  stated rather than hidden. Maximin lands newcomers 615 to 870 away while
+  contested planets sit near the incumbents, so the collision never arises
+  naturally on existing data. What demonstrates the fix works is a forced test of
+  209 cases, hiding every free planet but one a ship is flying to: unfixed, the
+  pick takes the contested planet every time; fixed, it refuses every time. The
+  reservation costs at most 11 of 162 free planets across a 28-blob sample.
+
+  **The margin is derived, not a constant**, defaulting to the galaxy's own
+  median nearest-neighbour system spacing, measured at 143 to 144 in the
+  108-system galaxies and 171 to 174 in the 32-system ones. One number cannot
+  mean "a system hop" in both densities. It does not bind on any galaxy on disk;
+  it is a crowding guard, not part of the placement policy.
+
+  **Donors have to be levelled first.** A civ added by `inject_civ` inherits its
+  donor's world, and a generated galaxy does not hand its civs equal worlds: seat
+  one carries the homeworld customisation and the rest get the engine default,
+  which is worth two `PLPR` bytes and decides games (D3).
+
+  **A related bug, found and not yet fixed.** `--donor` defaults to the smallest
+  `OWNR`, which after the first injection is the civ that was just added. So a
+  multi-name run chains each clone off the previous newcomer rather than off the
+  original donor, and whatever the first newcomer inherited propagates.
+
+  **Still open:** the live half. An injected galaxy has not been loaded in the
+  engine since this change, and no colony ship has been watched completing its
+  colonisation after a join. The injection path itself is unchanged from what D4
+  confirmed and only the planet chosen differs, which is a reason to expect it
+  holds and not evidence that it does.
+
+  **Done when:** a civ is injected into a galaxy with a colony ship in flight,
+  the newcomer's homeworld is not that ship's destination, and the colony ship
+  completes its colonisation on schedule in a client that actually ran.
+
+- [ ] **K2. Repeated joins across a long galaxy.** D4 confirmed one injection. A
+  permanent sandbox does this dozens of times, object ids grow monotonically, and
+  the `GLXY` civ count and high-water id are rewritten on every join.
+
+  **Done when:** a galaxy takes 12 joins spread across 100 turns and every one of
+  them loads, plays and ticks, with the civ count and high-water id correct at
+  the end.
+
+- [ ] **K3. Detect abandonment.** Countable out of the store already: the archive
+  records which civs submitted for each turn, so consecutive misses need no new
+  bookkeeping. Two stages, a warning and a reclaim, with the thresholds
+  configurable per galaxy. At 4-hour turns, 12 missed turns is two days.
+
+  The warning goes through the existing `put_note` path and is shown in the
+  launcher. A reclaimed player's launcher will then fail `roster_problem`, which
+  is the right behaviour, but the message has to say the seat was reclaimed after
+  so many missed turns rather than that no seat exists for that name.
+
+  **Done when:** a galaxy run with one player silent produces a warning note the
+  launcher displays, a reclaim at the configured threshold, and a refusal message
+  that explains itself.
+
+- [x] **K4. Wipe a reclaimed civ from the galaxy.** Answered, and the unknown this
+  item was built around does not exist. `server/dev_tools/wipe_civ.py` does the
+  wipe and `server/dev_tools/wipe_acceptance.py` is the live harness.
+
+  **The engine already does to itself exactly what the wipe needs to do.** When a
+  ship is destroyed it deletes the `SHIP` section outright, frees the id,
+  renumbers nothing, compacts nothing, and never lowers `SAVE+0`. Established by
+  diffing archived blobs before any surgery was attempted:
+
+  | pair | what went | what stayed |
+  |---|---|---|
+  | `war_fork.dat` t110 against `war.L1.dat` t180 | ships 669 and 670, every section and every dword referring to them | higher ids untouched, `SAVE+0` still 678 |
+  | `serve_Neighbor.dat` t3 against `turns/0007.b64` t7 | ships 200 and 209, consumed founding two colonies | `SAVE+0` still 209 |
+
+  The second pair matters most: **this is not a combat property.** Two colony
+  ships were consumed in ordinary play, holing the ship range at both the bottom
+  and the top. And the client demonstrably loads such blobs, because
+  `referee.tick` writes its input to `referee_work/tick_<epoch>.dat` and hands
+  that file to a fresh client, so every tick input on disk is a blob that loaded.
+
+  **So D1's precedent does not transfer.** D1's failure is positional in the
+  system and planet blocks; the ship range above them is holed by the engine
+  several times a galaxy.
+
+  **Planets needed more than the field write this item promised.** `PLNT+16` is
+  the owner, but un-owning alone leaves the wiped civ's population, stores,
+  facilities, production queue and name on the rock. The whole `PLPR` is replaced
+  with one taken from a never-colonised planet in the same galaxy.
+
+  **Civs are never cleaned up by the engine.** No archived blob shows an `OWNR`
+  removed, and a civ with no planets and no ships kept its `OWNR` through 20
+  ticks.
+
+  **The shell won, but not as the fallback this item called it.** Full deletion
+  also loads and ticks. It buys 866 bytes and a row off the diplomacy list, and
+  the shell wins instead because it creates no dangling reference. `--delete-owner`
+  exists and refuses any galaxy where another civ's `OWNR` holds a dword reading
+  the victim's object id, which is precisely the abandonment case;
+  `--force-delete-owner` overrides.
+
+  **Verified on `galaxy_demo/turns/0011.b64`**, three civs, wiping Neighbor
+  (object 206, planets 138 and 140, ship 208). Each check is listed with what
+  would have failed it, because a check that could not fail is how the fog
+  results went wrong:
+
+  | check | result | failure would have been |
+  |---|---|---|
+  | load the wiped blob | opened, turn 11, 32 suns | a process exit during load, the D1 shape |
+  | 20 turns ×3, across two invocations | all turn 11 to 31, canonical `6b283170b191fbf9` | a short tick, or two hashes differing |
+  | tick the post-tick blob again | turn 31 to 32 | the published blob failing to open |
+  | colonise planet 138 as DemoPlayer | owner 0 to 198 | the planet staying unowned |
+  | **control**, same order against the un-wiped blob | owner stayed 206 | the planet changing hands anyway, which would have made the positive result mean nothing |
+  | offline invariants | 42 of 42 | any renumbering, a moved `SAVE+0` or civ count |
+
+  **A trap this item did not mention, and the one most likely to have produced a
+  false failure.** A wiped civ owns nothing, and `game_cycle.launch` waits for a
+  local civ with at least one planet. A blob stamped for the wiped civ reports
+  "did not become readable", which is exactly the shape of the harness bug that
+  forced the fog retraction. `wipe_acceptance.prepare` stamps for a survivor and
+  refuses to stamp for the victim.
+
+  **Still open, none of it blocking:** the replaced `PLPR` carries the template
+  rock's rates rather than the original's, which is the right choice because
+  carrying the original across would preserve a homeworld's customisation boost,
+  but four of those bytes have no established meaning. `OWNR` deletion where
+  another civ has met the victim is guarded rather than answered. And **nobody
+  has looked at a wiped civ on screen**: how the dead shell reads in the
+  diplomacy and overview lists is unchecked.
+
+- [ ] **K5. Ending a galaxy is an operator action.** No season timer. The
+  operator calls a galaxy over and starts a fresh one, so there has to be a way
+  to close one that stops accepting submissions, keeps the archive readable, and
+  tells every launcher why.
+
+  **Done when:** a galaxy is closed and a fresh one started, and a launcher
+  pointed at the closed one says so rather than failing.
+
+---
+
+## L. Build versioning
+
+- [~] **L1. The launcher carries a version.** It did not: there was no version
+  constant in `release/launcher.py` and the only version anywhere was the `dist`
+  folder name, which is how a build made with `-Version 0.1.1` shipped a launcher
+  that called itself 0.1.0.
+
+  `release/stamp_build.py` writes `build.json` and `build.ps1` packs it into the
+  bundle beside `manifest.json`, where `build_info()` reads it back through the
+  existing `bundled()` helper rather than a parallel mechanism. Unstamped builds
+  are honest rather than silent: a checkout reports `0.1.0+dev` and a frozen
+  build with no stamp reports `0.1.0+unstamped`, so neither can be mistaken for a
+  release.
+
+  **The stamp has not been through a real build.** `release/build/` is gitignored
+  and PyInstaller regenerates the spec on every run, so an earlier attempt to
+  stamp from the spec was inert; the call now sits in `build.ps1` ahead of the
+  PyInstaller invocation. That path is wired and unexercised until someone runs
+  the packaging script.
+
+  **Done when:** a build produced by `build.ps1 -Version X` reports X, checked by
+  running it rather than by reading the script.
+
+- [x] **L2. A version gate on the galaxy.** The galaxy carries a minimum build; a
+  launcher below it refuses to play and says where to get the update.
+
+  `version_problem(build, state)` reads an optional `min_build` from the store's
+  state dict and is wired into `start_multiplayer` after `store.exists()` and
+  ahead of the `roster_problem` check, since a stale build is one reason the
+  roster could look wrong. Ordering compares only the leading dotted number, so
+  `0.1.1+dev` is not below `0.1.1`; if dev builds should be refused outright that
+  is a one-line change and a decision, not a bug. A galaxy with no `min_build`, a
+  null one, or a non-numeric one is not gated at all.
+
+  Exercised below, at and above the minimum, with the key absent, null and
+  non-numeric, and with no state, against both dict literals and a real
+  `state.json` through `open_store`.
+
+  **Nothing writes `min_build` yet.** That is the referee's side and arrives with
+  the relay in H1, so the gate is live but every galaxy today is ungated.
+
+  It earns its place because the failure it prevents is silent: a blob produced
+  by a client that does not match the referee, whose symptom is a mystery rather
+  than an error.
+
+  The update link is
+  `https://github.com/rsfutch77/Cosmic-Supremacy-Resurgence/releases/latest`,
+  taken from the README's download button. It needs changing if the beta gets its
+  own landing page.
+
+- [ ] **L3. One-click update now, silent auto-update later.** The gate's message
+  becomes a button that downloads and runs the installer. Replacing a running
+  executable in place is a separate problem and is deferred; the metadata is the
+  same either way, so the later version is a change to the launcher's UI and not
+  to anything on the server.
+
+  **Done when:** a player below the minimum build reaches a current one without
+  being told where to click by a human.
+
+---
+
+## M. Diagnostics
+
+- [~] **M1. The launcher uploads its own log.** Every finding in the blob push
+  plan came from watching a screen, and that stops being available the moment
+  players are elsewhere. Without this, every beta report is a slow conversation.
+
+  **The redaction is built; nothing uploads yet.** `redact_log_text`,
+  `redacted_log` and `write_redacted_log` produce the sendable copy, capped at
+  256 KiB by keeping the tail. The upload itself waits on the relay in H1.
+
+  **The log records the save protocol's HTTP bodies**, which is base64 of the
+  save blob in `body+` lines and diagnoses nothing. Each run of them now
+  collapses to one line saying how many bytes were elided, while the chunk-0
+  `body:` line is kept as far as `data=`, because ahead of that field it carries
+  userid, gamename, turn and version.
+
+  | `release/data/launcher.log` | bytes | lines |
+  |---|---|---|
+  | before | 23,310 | 181 |
+  | after | 10,963 | 154 |
+
+  Body dumps were 55% of the file, from 3 save requests. What survives: the
+  session headers, mode launches and exit codes, the AI reasoning stream, the
+  submission lines, the savegame summaries and the server's responses.
+
+  **An earlier draft of this item overstated the volume.** It said tens of
+  kilobytes per turn. `server/cs_server.py:558` already caps a `savegame` or
+  `savegov` body at its first 4000 characters, so it is about 4.2 KB per request
+  and two requests per multiplayer turn. Still worth removing, since it is over
+  half the log and grows monotonically, but not for the reason first given.
+
+  **Done when:** a turn's log uploads under the cap, and a failure the operator
+  did not witness is diagnosed from the uploaded copy alone.
+
+- [x] **M2. Say what the upload contains.** The Windows account name is scrubbed
+  out of paths by generalising `<drive>:\Users\<name>\`, with Public and Default
+  excepted, plus a literal match on the expanded home directory for a redirected
+  profile. No account name is hard-coded. The redacted copy's contents are
+  itemised in the launcher's own section header, which is what N4 gets written
+  from.
+
+  **Two things are deliberately not scrubbed** and are named rather than left to
+  be found: the referee's machine name in a UNC store path, and bare occurrences
+  of the account name outside a path.
+
+---
+
+## N. Operating it
+
+- [ ] **N1. The worker runs unattended.** A scheduled task that starts on boot,
+  the machine set not to sleep, and a startup rule that immediately closes any
+  turn whose deadline has already passed. A 4-hour clock over a permanent galaxy
+  means the machine's uptime is the galaxy's uptime.
+
+  **Done when:** the machine is rebooted mid-galaxy with nobody watching and the
+  next turn closes on time.
+
+- [ ] **N2. One bad submission cannot stall the galaxy.** The referee already
+  does the right thing structurally, extracting orders and applying them to its
+  own authoritative blob rather than trusting a submitted one as state. What is
+  missing is that a submission which fails to parse should be dropped with a note
+  rather than end the tick. A size cap on top.
+
+  This is robustness, not security: cheating is accepted for this beta, a tick
+  that dies is not.
+
+  **Done when:** a truncated blob, an oversized one and a blob from a different
+  galaxy are each dropped with a note, and the turn closes for everyone else.
+
+- [ ] **N3. An operator view.** One page showing the galaxy, its turn, who has
+  submitted, when the last tick ran and what it took, and any errors. Otherwise
+  the only way to know the beta is healthy is to read a log on one machine.
+
+  **Done when:** the state of the galaxy can be read without opening a log file
+  or a terminal.
+
+- [ ] **N4. What players are told, in the launcher and wherever they sign up.**
+  Not a footnote: several of these are properties the design has accepted rather
+  than faults waiting to be fixed, and a beta tester who learns them by discovery
+  reports them as bugs.
+
+  - A username is a claim and not a credential. Cheating is possible and easy.
+  - Every player's client holds the whole galaxy. An unmodified client hides what
+    it should; a modified one is a maphack.
+  - An inactive player's civ is wiped from the galaxy after a stated number of
+    missed turns.
+  - The galaxy may be ended by the operator at any time.
+  - What the diagnostic upload contains.
+
+  **Done when:** the text exists, is shown before a player joins rather than
+  buried, and matches what the code actually does.
+
+- [ ] **N5. Record a measured tick duration.** Capacity is not a constraint at one
+  galaxy and six ticks a day, and the number is worth having anyway, because it is
+  what the second galaxy and the cloud offload will be planned against.
+
+  **Done when:** the seconds a tick takes on a real sandbox galaxy are written
+  down, with the galaxy's size beside them.
+
+---
+
+## Out of scope, named so it stays out
+
+- **Resolving turns anywhere but this PC.** The cloud offload is the next phase.
+  H2 and H3 exist so that it is a deployment change.
+- **Inheriting an abandoned empire.** A future game mode, and an interesting one.
+  K4 wipes.
+- **Formed or ranked galaxies with a lobby.** The sandbox is the only galaxy in
+  this phase. J1's directory is the layer they would be added to.
+- **Passwords, Google login, real accounts.** Everything above `player_name()`
+  already takes a string, so the change is where the name comes from and nothing
+  else.
+- **Per-player projection and real fog.** Blocked in D1 and not blocked on this
+  phase.
+- **Governors and admirals.** The original's answer to an absent player. Their
+  absence is why K3 and K4 exist at all.

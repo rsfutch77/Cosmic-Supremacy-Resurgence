@@ -17,10 +17,13 @@ because the deployment this is heading for puts the referee on another host and
 the shared state in Firebase. A Firebase adapter replaces this class and the
 callers do not change.
 
-Two implementations exist. `TurnStore` is a directory, which is enough for one
-machine and for a shared folder between two. `HttpTurnStore` talks to
-`turn_server.py`, which is enough for a referee on another host. `open_store`
-takes either, so a caller is given a string and never learns which it got.
+Three implementations exist. `TurnStore` is a directory, which is enough for
+one machine and for a shared folder between two. `HttpTurnStore` talks to
+`turn_server.py`, which is enough for a referee on another host.
+`FirebaseTurnStore`, in `firebase_store.py`, is Firestore and Cloud Storage,
+which is what a beta played by strangers needs, because the referee reaches it
+outbound and nobody learns where the referee is. `open_store` takes any of the
+three, so a caller is given a string and never learns which it got.
 
 The layout is a directory, which is enough for one machine and for a shared
 folder between two:
@@ -427,9 +430,21 @@ class HttpTurnStore:
 
 
 def open_store(spec: str):
-    """A store from a directory path or a base URL, whichever this is."""
+    """A store from a directory path, a base URL or a Firebase project.
+
+        some/dir                            a directory, or a share
+        http://host:8899                    turn_server.py on another host
+        firebase://cs-resurgence/sandbox    Firestore and Cloud Storage
+
+    `firebase_store` is imported here rather than at the top of the module
+    because it pulls in the google client libraries, about a second of import
+    mostly spent in grpc, and the launcher and every dev tool open a directory.
+    """
     if spec.startswith('http://') or spec.startswith('https://'):
         return HttpTurnStore(spec)
+    if spec.startswith('firebase://'):
+        import firebase_store
+        return firebase_store.open_firebase_store(spec)
     return TurnStore(spec)
 
 
