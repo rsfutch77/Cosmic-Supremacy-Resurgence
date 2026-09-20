@@ -167,10 +167,144 @@ see D1.
   experiment without that control would have recorded "combat diverges", which
   was the available and wrong conclusion.
 
-  [ ] **The engagement was one-sided**, an armed attacker against an unarmed
-  defender and its planet. It exercises targeting, damage and destruction, not a
+  [x] **The engagement was one-sided**, an armed attacker against an unarmed
+  defender and its planet. It exercised targeting, damage and destruction, not a
   pitched two-sided battle, and BadGuy had no warship design to fight back with.
-  Worth repeating once both sides can shoot.
+  **Repeated with both sides armed, 19 September 2026**, by
+  `server/dev_tools/two_sided_war.py`.
+
+  BadGuy was given `bgf1`, a fighter carrying the same parts as GoodGuy's `f1`,
+  two hulls built on it, and a crew for each drafted from its own HQ. GoodGuy's
+  two warships were staged onto that planet so the branch measures the battle
+  rather than the approach. Contact came at turn 111: **GoodGuy lost both
+  warships and BadGuy lost none**, so the defenders fired and the engagement was
+  two-sided in the way the original was not.
+
+  | comparison, 70 turns from one fork | result |
+  |---|---|
+  | loaded against loaded, three invocations | identical, `bd1ec192cd335546` |
+  | played against loaded | 756 bytes of star names, **and 30 bytes that are not** |
+  | played against loaded, **no war** | identical once names are cleared |
+
+  **The referee's case is unaffected and reproduces exactly.** Loaded against
+  loaded is what the referee does, and three separate invocations across a
+  two-sided battle agreed byte for byte.
+
+  **The player's case does not.** A client that plays through a battle hands
+  back a state that a referee recomputing from the same blob does not produce.
+  The 30 bytes are two dwords and two ASCII digits in `NWDB`, one byte at
+  `OWPR+0`, and a run in the `PLPR` of the planet the battle happened over,
+  where the played branch's growth series sits one step ahead.
+
+  Four things pin it down, and each was measured rather than assumed:
+
+  - **It is the battle, not the setup.** A control on the same fixture with the
+    same conscription, the same staging and the same ship movement, differing
+    only in that peace was written instead of war, came out byte-identical once
+    names were cleared. A4's own lesson, run in the other direction.
+  - **It reproduces.** A second independent arming session produced the same
+    fork hash `7406be2618015075` and the same played hash `b32770a5260bef9c`.
+  - **The two branches agree about what happened.** Same news items, same turn,
+    same categories and ids, same coordinates, and the same two hulls lost. The
+    disagreement is in derived state, not in the outcome.
+  - **The tick reads it.** Ticking both turn-180 states 20 further turns leaves
+    them nine bytes apart in LENGTH, which is exactly one nine-byte population
+    record: the battle planet holds 19 citizens down the played line and 20 down
+    the loaded one. The difference cashes out rather than washing out.
+
+  So A4's "whatever the blob does not carry, the tick does not read" holds for
+  everything measured before, and **does not hold across a battle**.
+
+  **It does not reach the turn loop, and the reason is structural.** Neither
+  side of the loop is ever in the played position. The referee loads a blob and
+  advances exactly one turn, `resolve_turn` calling `tick(merged, turns=1)`. A
+  player never crosses a boundary at all: `player_turn.serve` holds the clock at
+  `0x0080AA08` for `HOLD_SECONDS = 86400` after load, and the player build is
+  the one without T1-T5 so the engine's own sync checks stay intact. No boundary
+  in a session means no combat resolves in one, so a submission cannot carry
+  this divergence. A submission that ticked anyway is already known to be junk
+  for every order type, not just this one, which `player_turn`'s header records.
+
+  **Where it does bite is the AI-played galaxy.** `duel.py` drives many
+  boundaries in a single client session with actuator writes between them, which
+  is precisely the played arm of this experiment. So an AI-vs-AI galaxy that has
+  fought a war cannot be captured, reloaded and continued as the same galaxy,
+  and per-turn measurements taken across such a run are not reproducible from
+  the blob. That constrains the on-demand AI galaxy idea, where a run has to be
+  able to stop and resume.
+
+  [ ] **What those 30 bytes are is not established.** The `NWDB` pair reads `1`
+  against `2` in ASCII, which would be a count rendered into news text, and a
+  count rendered at generation time is carried by the blob while one recomputed
+  at read time is not. That distinction is A4's own standard and is the thread
+  to pull first.
+
+  **`NEWS` is how contact is established, and a missing hull is not.** A `NEWS`
+  payload is a fixed 44-byte record. What is settled: the **turn** at `+8`, and
+  a **position** at `+32` which is zero for items that have no place. An
+  engagement raises a positioned item on the turn it resolves, at the
+  coordinates it resolved at. `two_sided_war.py contacts` diffs them between two
+  blobs, which is what turns "a ship is missing" into "an event happened here,
+  then".
+
+  What is **not** settled is `+20` and `+24`. Both are small ascending per-civ
+  numbers and `+20` is often `+24` minus one, so they read more like a chain
+  than like a category and an id. An early guess that `+20` was a category with
+  fixed meanings did not survive a second galaxy: the value that carried no
+  position in one carried one in the other. Do not read meaning into them.
+
+  How many items an engagement raises is also unsettled. The `cycle.dat` battle
+  raised two on one turn at one position, one in each civ's `OWNR`, which looked
+  like each side's own view of it. The two-player battle raised one, for the
+  defender only. One of those is a special case and it is not yet known which.
+
+  [ ] **A losing attacker can be told nothing at all, and why is unexplained.**
+  In the two-player battle the attacker lost two warships at the defender's
+  homeworld and received **no `NEWS` record of any kind**, while the defender
+  received one per engagement. Measured by counting raw `NEWS` sections against
+  the `OWNR` byte ranges rather than by trusting an attribution helper: two
+  sections in the whole blob, both inside the defender's range.
+
+  Three explanations have been tested and **all three fail**:
+
+  - **Not the merge.** The same fixture ticked with no players, no submissions
+    and no merge at all produced the identical result. The merge also applies
+    orders BEFORE the tick, and the news is generated during it.
+  - **Not presence.** An unarmed attacker-owned ship was placed at the battle
+    site. It was there, it was destroyed there, and its owner still received
+    nothing.
+  - **Not discovery.** The attacker's `EXSY` holds the defender's system, so it
+    had entered and knows the system its ships died in.
+
+  What remains is the difference between the two galaxies: `cycle.dat` is turn
+  110 with developed empires, the two-player galaxy is turn 2 out of
+  `make_multiplayer_galaxy`. Worth settling, because a player losing a fleet and
+  being told nothing about where is a bad enough experience to be worth knowing
+  whether it is the engine's rule or an artefact of how these galaxies are made.
+
+  This exists because a hull going missing was read as combat and is not
+  evidence of it: a warship can be lost in transit having met nothing. The
+  reading that produced this tool was wrong in exactly that way, and a
+  positioned news item on a known turn is what settled it.
+
+  **Fleet speed is per hull and cannot be generalised from one.** Measured on
+  `cycle.dat`: `b1` covers about 3.4 units a turn and `f1` about 6.4, so over a
+  450-unit separation one arrives inside a 70-turn window and the other does
+  not. Taking the slower hull's rate for the fleet is what produced the wrong
+  reading above.
+
+  **`cycle.dat` already holds GoodGuy and BadGuy at War at turn 110.** The
+  declaration in A4's setup was a no-op on this fixture, which costs A4 nothing
+  because combat did happen. It does mean a control has to **write peace**
+  rather than merely decline to declare war, or it runs the same war as the
+  experiment and forgives whatever it finds.
+
+  **The hashes above are only comparable against blobs built by the same
+  tooling.** The fixtures were produced by an actuator that debited one draft
+  where it owed two, so BadGuy opens on 6442 rather than 6187. Cash is inside
+  the canonical hash, so correcting that actuator moves every hash here.
+  Regenerating the fixtures and comparing against these numbers will look
+  exactly like a determinism failure and will not be one.
 
   Star names are deliberately **not** masked in `canonical.py`, because masking
   a name field to forgive a default would also forgive a change to it.
@@ -496,9 +630,33 @@ made unnecessary.
   | population invented | population changed, 10 to 9 |
   | an unknown job id | unknown job id(s) [99] |
   | a per-citizen value invented | values were invented rather than reordered |
-  | an unknown byte written | unknown bytes in a citizen record were written |
+  | an unknown byte written | opaque bytes in a people record were invented rather than carried |
 
   All five refused, with the honest submission still accepted.
+
+  **The last of those five was stated absolutely and had to be restated against
+  the served blob.** It asked whether a citizen's three opaque bytes were zero,
+  which is a claim about a state rather than about what a submission changed, so
+  a civ holding such a record was refused every turn whatever it did. Measured
+  on `client/twosided_staged.dat`, where GoodGuy's citizens on planets 262 and
+  266 carry `fe3b00`: handing the served blob back **unaltered** came out
+  `people DROPPED, unknown bytes in a citizen record were written`, with the
+  player told their orders were refused on a turn they had given none.
+
+  It was also asked of the citizen array alone, which made the pair of rules
+  point the wrong way. Conscription carries a record into the military array
+  with only its job byte rewritten, so drafting the two citizens above moved the
+  bytes out of the check's sight and the same submission came out `2 orders
+  taken, 0 dropped`. The rule refused the honest turn and accepted the turn that
+  hid the evidence, and it was stable: an existing soldier's record may never be
+  altered, so once those bytes are in the military array nothing looks at them
+  again.
+
+  Restated, it compares what the submission carries against what was served,
+  over citizens, soldiers and crew together. A civ may still hold whatever the
+  engine gave it; it may not invent bytes within a turn, in any of the three
+  arrays. `server/tests/test_people_and_hurry.py` pins both halves, and fails
+  three ways against the old predicate.
 
   **What the per-citizen owner id is for is not established, and it is not
   shared populations.** It equals the planet's owner on every naturally created
@@ -511,8 +669,15 @@ made unnecessary.
   bookkeeping, ownership of soldiers during a battle being the obvious
   candidate, but that is a guess and nothing depends on it.
 
-  The checks still compare per-owner job multisets, because whatever the field
-  means, a turn in which a citizen changes hands is not a job reassignment.
+  The checks still read that field, because whatever it means, a turn in which a
+  citizen changes hands is not a job reassignment. What they compare is the
+  count of people each owner holds, across the civ's whole empire rather than
+  per planet. The narrower per-planet comparison of `(owner, job)` pairs went
+  when jobs and military became one rule, so changing the job of another civ's
+  citizen sitting on your planet is no longer refused. Nothing rests on that
+  today, since the only foreign citizens ever measured were an `inject_ship`
+  artifact, and it is recorded here because the rule is weaker than the sentence
+  it replaced.
 
   **The rules were tested against a submission containing all three changes at
   once.** Two were applied and nothing else: the job change, the `EXSY`/`KNPL`
@@ -564,10 +729,155 @@ made unnecessary.
   actually mattered. Galaxy-level objects are now reported as unowned.
 
   Still unmeasured, and therefore not accepted: facility selection outside the
-  queue, ship designs, governors, admirals, diplomacy proposals. Orders issued
-  through an admiral are also out of scope, since the admiral id sits inside
-  `DYNO` and would be copied with the order.
-- [ ] **C3. Immediate-effect actions.** Hurry production, conscription, crew
+  queue, governors, admirals, diplomacy proposals. Orders issued through an
+  admiral are also out of scope, since the admiral id sits inside `DYNO` and
+  would be copied with the order.
+
+  **Ship designs, measured 19 September 2026 against the rehearsal store.** A
+  player who designs a ship lost it: the design existed only in their own copy
+  and was gone from the state they were served next turn, three times in a row
+  for one player making a scout. Carried now.
+
+      DSGN v4, 67 bytes, appended under the owning civ's OWNR > DATA
+        +0    u32     the design's own object id
+        SDPR  section, 54 bytes
+              u32     name length, then the name, unpadded
+              ...     six part lists
+              u32     the owning civ's object id, at the end
+        +1 trailing byte, zero, counted by the DSGN length word
+
+      the civ's design count, a u32 in DATA's own bytes before its first DSGN
+      SAVE+0, the highest object id in use, 205 -> 206
+
+  The existing `DSGN` is untouched and the subtree is copied whole, because it
+  is self-contained and all of it is the design.
+
+  **The trailing byte is uniform, and a synthesised design now carries it.**
+  Surveyed across every blob on disk on 19 September 2026: the galaxy1 and
+  galaxy2 rehearsal stores, turns and submissions both, plus the captures in
+  `server/saves`. 327 blobs decoded, 1015 `DSGN` records, and in all 1015 the
+  byte left over after the `SDPR` child is exactly one byte wide and zero.
+  Every record is `DSGN` v4 with an `SDPR` v0 child, no raw `DSGN` tag hit was
+  rejected as a coincidental byte run, and every per-civ design count dword
+  agreed with the records found, so that is every record on disk and not a
+  sample. `inject_design.build_dsgn` emitted the object id and the `SDPR` and
+  stopped, so a synthesised design was a byte short and its length word was a
+  byte low; `inject()` never had the fault, because it clones what the client
+  wrote. With the trailer emitted, 980 of the 1015 records rebuild from their
+  own parts byte for byte. The remaining 35 are the `e1x2` and `e1x4` probe
+  designs in `server/saves`, which carry no scanner, and `build_sdpr` defaults
+  a scanner in, which makes them four bytes longer. Every design in the
+  rehearsal galaxies carries exactly one scanner, id 0, the ones a person made
+  by clicking included. `server/tests/test_build_dsgn.py` holds the round trip.
+
+  **The object id is the hard part, not the bytes.** The client allocates a new
+  object id as one past the object count, so two players designing a ship on
+  the same turn both arrive claiming the same number. Whoever is merged second
+  is renumbered and every reference to the id they submitted is rewritten with
+  them: the id inside the `DSGN` payload, and the production queue that names
+  it at `PROD` payload +29. The id is judged against the **accumulating** blob
+  rather than the state served, which is the one place in the merge where that
+  is right, because an id is taken or free in the galaxy being built and not in
+  the one either player was handed. Everything else about a design, ownership
+  included, is still read from the state served.
+
+  **The queue and the design had to be fixed together.** A queue building a
+  design the galaxy does not hold is a dangling reference and the engine
+  refuses the *whole galaxy* rather than the order: the client starts, reads it
+  and exits in about four seconds, which stalled a live turn for both players.
+  The guard added mid-rehearsal stays as the backstop, now asking whether the
+  merged galaxy holds that design **for that civ**, so one player's new design
+  cannot become the thing another player's queue happens to name.
+
+  | forged | refused with |
+  |---|---|
+  | a design under another civ's `OWNR` | it arrived under another civ's OWNR |
+  | a payload naming another owner | its payload names civ 202 as the owner |
+  | control bytes in the name | the name holds bytes outside printable ASCII |
+  | a 200-byte name | the name is 200 bytes and the buffer the client offers holds 15 |
+  | a name the civ already uses | the client requires a name to be unique within a civ |
+  | an existing design edited | editing a design is not carried yet |
+  | a design deleted | deleting a design is not carried yet |
+  | a queue building someone else's design | Powerhouse does not own it in the merged galaxy |
+
+  **Ticked, twice.** `submissions/0006/Powerhouse.b64` against `turns/0006.b64`
+  is a real design a person made by clicking, object 206 named `test scout`.
+  Merged and ticked, the engine's own class scan reports 3 designs, the galaxy
+  advances to turn 7 and the design is still there with its queue resolving to
+  it. The same turn with a rival submission claiming the same id 206 merges to
+  two distinct designs, 206 and 207, ticks to turn 7 with the engine reporting
+  4 designs, and each player's queue resolves to their own.
+
+  **And a person built one, 19 September 2026.** The engine counting three
+  `ShipDesign` instances says the object loaded, not that the game offers it.
+  So turn 5's submission, which created a design and queued nothing, was merged
+  and ticked to a turn 6 holding the carried design `testscout` with the
+  player's HQ building a Colony Ship, and that turn was served to the player
+  who had made the design. They opened the HQ's production screen, found
+  `testscout` in the list beside `Colony Ship`, and queued it.
+
+  The capture came back the same size, 37,719 bytes both ways, so nothing was
+  created: the only change is planet 139's `PROD` naming design 206 instead of
+  199. The merge took it and dropped nothing. A design that reached a galaxy
+  only by being spliced in by the referee is a manufacturing option the client
+  offers, which is the claim the byte-level work could not make on its own.
+
+  **And the ship was built.** That merged turn was ticked forward with nothing
+  else done to it: the galaxy went 6 to 9, planet 139's queue emptied, and
+  `SHIP` 207 appeared owned by Powerhouse with its `SHPR` design pointer
+  reading 206, resolving to the carried `testscout`. The design record in the
+  turn-9 blob is byte-identical to the one the merge spliced in at turn 6. So a
+  design that existed only in a player's submission became a hull the engine
+  built, through the whitelist, with no step of it hand-made.
+
+  **The engine allocated that hull as object 207, which is what makes
+  `SAVE+0` worth writing.** The merge had raised the counter from 205 to 206
+  for the design, and the next object the engine created took 207. Had the
+  counter been left alone, the engine's next allocation would have been 206,
+  the id the carried design is using, and the galaxy would have held two
+  objects under one id. That is the same failure two players designing on one
+  turn produce, arriving by a different route.
+
+  **`SAVE+0` is the highest object id in use, not a count of objects**, which
+  had been left open because the two readings give the same answer whenever ids
+  are dense. This galaxy's are not: it has two gaps, so the count and the
+  highest id differ by two, and the counter tracks the id.
+
+  | state | `SAVE+0` | objects | highest id |
+  |---|---|---|---|
+  | turn 5 as served | 205 | 203 | 205 |
+  | merged and ticked to turn 6 | 206 | 204 | 206 |
+  | ticked to turn 9, hull built | 207 | 205 | 207 |
+
+  It follows the highest id at every step and is never the count. Allocating a
+  carried design at `max(id) + 1` is therefore right for the reason it looked
+  right, and `inject_design`'s reading of the field was the correct one.
+
+  Replayed over all 18 turns of the rehearsal, the merge is byte-identical to
+  the old one on 15 of them. The three that differ are turns 5, 6 and 7, the
+  three times that player made a scout; turns 6 and 7 go from "0 orders taken,
+  1 dropped" to "2 taken, 0 dropped".
+
+  **Four `OWPR` bytes move alongside a new design and none of them is carried.
+  This is a negative result and it is the useful part.** `+49`, `+77`, `+78`,
+  `+100` and `+110` were surveyed across every turn of the rehearsal:
+
+  | byte | what the survey says |
+  |---|---|
+  | `+49` | also moves on turns 8, 9 and 13, where no design was created; the engine rewrites it across a tick |
+  | `+77` | Laptop's moved on turn 1, no design created |
+  | `+78` | Powerhouse's moved on turn 1, no design created |
+  | `+100` | a `u32` the engine advances by 7 every tick on its own, 637 -> 644 across turn 6 -> 7 while that turn's design was being dropped |
+  | `+110` | the only one the engine never rewrote across a tick |
+
+  The decisive measurement is that the player made the **same design three
+  times**, on turns 5, 6 and 7, identical parts with only the name differing,
+  and the fields disagreed across the three submissions: `+100` went 630 -> 466
+  on turn 5 and 637 -> 735 on turn 6, `+110` went 260 -> 242 and then
+  260 -> 272. A value derived from the design would have been the same all
+  three times, so none of the four is a function of the design. What they are
+  is not established, and the two ticks say nothing needs them.
+- [x] **C3. Immediate-effect actions.** Hurry production, conscription, crew
   assignment and job reallocation take effect the moment they are clicked, so the
   diff shows the *effect* and not the intent. Each needs a reverse mapping, effect
   back to intent, which the referee then performs itself so it applies the cost.
@@ -579,9 +889,53 @@ made unnecessary.
   | job reallocation | **mapped**, and now judged with the soldiers, below |
   | hurry production | **mapped** |
   | crew assignment | **mapped**, and now judged with the citizens, below |
-  | conscription | **mapped**, a citizen becomes a soldier within one turn |
+  | conscription | **mapped**, a citizen becomes a soldier within one turn, and a player did it |
   | recruitment rate | **mapped**, `PLPR+27`, a percentage in one byte |
   | retiring from service | **refused and named**, because it destroys soldiers and also cuts upkeep, and only the destroying half has been measured |
+
+  **And a person drafted one, 20 September 2026, which is the turn the rule was
+  rewritten to stop refusing.** BadGuy was served turn 110 of the two-sided
+  galaxy with the clock held, on the player build, which cannot advance a turn
+  without a server. A player drafted a citizen on planet 384 and posted the new
+  unit to ship 677, and the capture came back at turn 110, the same turn it was
+  served, so no tick is inside the diff:
+
+      planet 384   15 farmer, 2 worker, 1 scientist -> 14 farmer, ...
+      ship 677     crew 0 -> 1
+      total        22 people served, 22 came back
+
+  `people_acceptable` returns `(True, '')` and the merge reports **2 orders
+  taken**, the draft and the crewing, each logged separately. The other civ,
+  which the player never touched, comes out `(True, '')` as well.
+
+  **The engine moves the record rather than rebuilding it**, which is the
+  property the whole rule rests on and which until now had only been measured
+  on records the AI tooling wrote itself:
+
+      citizen  000000940200001500
+      crew     030000940200001500
+
+  One byte differs, the job, `0` to `3`. That is what makes a soldier traceable
+  back to the citizen they were, and it is why the checks on what a record
+  carries have to read citizens, soldiers and crew as one population: a record
+  that keeps its bytes across the move would otherwise leave the rule's sight
+  the moment somebody drafted it.
+
+  Two near misses are recorded so they are not mistaken for this later. The AI
+  player's `conscript_to_crew` produces the right shape but writes the vectors
+  itself rather than calling the engine, and it has no player equivalent at
+  all, since it bypasses the garrison: a capture from it is evidence about the
+  tool, not about the client. And an earlier capture the same day spans a turn
+  boundary, `t110` to `t111`, which is the one comparison `people_acceptable`
+  is documented not to survive; its other civ duly came out `69 people served
+  and 70 came back`, the engine's own recruitment, and it is evidence neither
+  way.
+
+  One unrelated drop rode along and is **not** a people finding: the capture's
+  `scout` design came back a byte longer with a length field at `+4` reading 82
+  rather than 81, and the design rule refused it as an edit. Nobody edited a
+  design. It sits with the trailing byte a client writes after a design's
+  `SDPR`, and it belongs to C2 rather than here.
 
   **Jobs and military were two rules and had to become one.** Conscription
   turns a citizen into a soldier, so the jobs rule refused it for changing the
@@ -665,6 +1019,32 @@ made unnecessary.
   uploads on its own. `client/dev_tools/trigger_save.py` calls it in a remote
   thread and `player_turn.py collect` wraps that. Every submission in the
   two-player round arrived this way, the player having only given their order.
+- [x] **C6. Tell the player their order was refused.** Every refusal was
+  already written down, on the referee's console, which on a player's machine
+  is nowhere. Two of the rehearsal's six findings were silent for exactly that
+  reason: a system rename and a conscription, both accepted by the client, both
+  dropped by the merge, both simply gone the next turn with nothing to look at.
+
+  Logged, with no new UI, which is what was asked for: "in theory players would
+  be safe to assume if they try to submit something last second, the order would
+  be missed. we don't need like a new ui to show missed orders."
+
+  The store is the only thing both sides touch, so the note goes there.
+  `merge_orders.merge` takes a `notes` dict and records every refusal against
+  the civ that made it; `referee.resolve_turn` writes each civ's reasons to
+  `notes/0007/<civ>.txt` beside the turn, before the tick, so they are
+  certainly there by the time a player's launcher notices the next turn; and
+  `player_turn.report_refusals` prints them into the launcher's log pane when
+  the turn the player just played closes. The refusal text is the referee's
+  own, unchanged, because it already names the rule.
+
+  A missing note is the ordinary case and reads as nothing refused. Reading one
+  tolerates the same SMB races `state.json` does, and a store that cannot be
+  read says so rather than ending the turn loop.
+
+  **Done when:** a player whose order is dropped sees the reason. Covered by
+  `server/tests/test_refusal_notes.py`, end to end from the merge's `notes`
+  argument through the store to the line the launcher prints.
 
 ## D. The galaxy
 
@@ -879,14 +1259,37 @@ made unnecessary.
   9, 9, 9. A civ added by `inject_civ` inherits its donor's world, so it
   inherits whichever of the two it was cloned from.
 
-  [ ] **Whether this is the engine or our own patching is untested, and it
-  matters.** The referee ticks on the Resurgence build, which carries the six
-  T1-T5 sites in the turn pipeline, and whether one of them skips an AI phase is
-  unknown. The obvious control, ticking the same galaxy on the unpatched build,
-  is not available: without T1-T5 a client will not advance a turn without a
-  server, which is the whole reason those patches exist. If our patches are the
-  cause it is fixable; if the engine simply does not run AI down this path, the
-  empty seats need filling another way.
+  [x] **Neither: the patches remove no code, and the client carries no AI for
+  them to skip.** The control this item called unavailable does not require
+  running the unpatched build. `CosmicSupremacy.exe` is a file, and what each
+  site bypasses can be read out of it.
+
+  **Four sites, not six.** `0x0056E0EF` and `0x0056E133` both sit inside
+  `0x0056E0D0`, the homeworld prompt decision routine, as recorded above.
+
+  **None of the six removes a call.** T5 at `0x00579C2D` NOPs a `JZ` whose
+  target `0x00579C3D` is the next basic block, so both paths converge and its
+  only effect is that `0x0056DE20` may now run. That routine reads the turn
+  counter at `0x008578E8`, increments it and announces, which is the turn
+  advance itself and the reason T5 is what lets a client tick. T1 replaces the
+  body of `0x0056DBF0`, a leaf predicate whose only two calls, `0x00561D00` and
+  `0x00562CC0`, are getters; of its two callers one selects the string
+  `Connected` over `Disconnected` and the other runs a block it would otherwise
+  skip. T4a redirects a single store. T4b's skipped target `0x00577C84` is the
+  join rejection path, which pushes `LocalPort`.
+
+  **The engine carries no opponent AI.** 333 RTTI class names cover the whole
+  game model, `Owner`, `Planet`, `Ship`, `Fleet`, `Production`, `Treaty` and
+  `ShipDesign` among them, and not one is an AI. The only decision machinery is
+  the 57 `Governor*` and `Admiral*` classes, which run rules a player wrote.
+  Absence from RTTI is not proof, since a non-polymorphic AI would leave no type
+  descriptor, but every other system here is a polymorphic class and the
+  decision machinery that does exist is richly so.
+
+  **There are no empty seats to fill.** A civ whose player enters no orders and
+  set no governors drifts, and that is the design rather than a fault. Players
+  are expected to set governors up before a day away and already know it, so the
+  clause this item ended on assumed a gap that does not exist.
 - [x] **D4. More than two civs in a galaxy.** `server/dev_tools/inject_civ.py`
   adds a whole player to a blob, confirmed live with a third civ that owned a
   homeworld and played four turns.
@@ -914,6 +1317,34 @@ made unnecessary.
   It is advisory: nothing stops a tool calling `Popen` itself, and every path in
   this project goes through `launch`. On separate machines the problem does not
   exist, which is why it survived this long unnoticed.
+
+- [x] **A player's client offers no Next Turn control, measured on the player
+  build.** Multiplayer wants a client that never computes a turn, and the build
+  choice provides it: `resolve_exe` hands players a build without T1-T5, so no
+  countdown boundary fires an advance on its own. What that argument did not
+  cover was the TestBed dialog's three buttons, Next Turn, Load and Save, which
+  are resource 222 and which the player build inherits unpatched.
+
+  They do not reach the screen. A player build on a two-player galaxy at turn
+  110 has no window carrying control `0x0425`, `0x0426` or `0x0483`, and no
+  control whose text contains "Next Turn", so dialog 222 is never created down
+  this path and a player has nothing to click.
+
+  `patch_hide_next_turn.py` clears `WS_VISIBLE` in that template and has been
+  applied to nothing, which is why every binary in the tree still reads `0x50`
+  at file offset `0x007D6BD3`. A template's visibility bit only matters to a
+  dialog something creates, so the script is dead code unless a path turns up
+  that creates this one. What gates dialog 222 is not established.
+
+- [ ] **The lock records who last claimed the client, not who is using it.**
+  `take_client_lock` clears a stale lock by asking whether the holder's pid is
+  alive, which was written for a holder that died mid-hold. A holder that exits
+  normally and deliberately leaves the client running produces the same stale
+  lock, and the next tool through is waved past it. Seen live: a script that
+  opened a galaxy for inspection finished, left the client up, and left a lock
+  naming a dead pid while other work was still in flight on that machine. A free
+  lock and a free machine are independent facts, and the tooling cannot tell
+  them apart.
 
 ## F. Off one machine
 

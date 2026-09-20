@@ -28,7 +28,16 @@ folder between two:
     state.json              turn number, deadline, turn length, the civ roster
     turns/0007.b64          the authoritative state for turn 7
     submissions/0007/X.b64  what civ X handed back for turn 7
+    notes/0007/X.txt        what the referee refused from civ X's turn 7
     archive/0007.json       what the referee did, once it has done it
+
+The notes are the only thing here that travels from the referee to one named
+player. Every refusal was already logged, on the server, where the player whose
+order was dropped never sees it: in the first two-machine rehearsal a system
+rename and a conscription were both accepted by the client, both dropped by the
+merge, and both simply gone the next turn with nothing to look at. The store is
+the only thing both sides touch, so the note goes here and `player_turn.follow`
+prints it.
 
 Every write goes to a temporary file and is then renamed, so a reader never sees
 half a blob. That matters more than it looks: readers here are polling loops, and
@@ -134,6 +143,9 @@ class TurnStore:
 
     def archive_path(self, turn: int) -> str:
         return os.path.join(self.root, 'archive', f'{turn:04d}.json')
+
+    def note_path(self, civ: str, turn: int) -> str:
+        return os.path.join(self.root, 'notes', f'{turn:04d}', f'{civ}.txt')
 
     # ── state ────────────────────────────────────────────────────────────────
     def exists(self) -> bool:
@@ -279,6 +291,28 @@ class TurnStore:
         with open(path, encoding='utf-8') as f:
             return json.load(f)
 
+    # ── notes ────────────────────────────────────────────────────────────────
+    def put_note(self, civ: str, turn: int, lines) -> None:
+        """Leave one player the referee's reasons for refusing part of a turn.
+        """
+        _atomic_write(self.note_path(civ, turn),
+                      '\n'.join(lines).encode('utf-8'))
+
+    def note(self, civ: str, turn: int) -> list:
+        """Those reasons, or [] when the turn was taken whole.
+
+        No note is the ordinary case, so a missing file is an answer rather
+        than a fault. `PermissionError` is caught with it for the reason
+        `state` catches it: over SMB, a reader opening a file the writer is
+        replacing gets a sharing violation, and a player being told nothing was
+        refused when something was is the failure this exists to prevent.
+        """
+        try:
+            with open(self.note_path(civ, turn), encoding='utf-8') as f:
+                return [line for line in f.read().split('\n') if line]
+        except (FileNotFoundError, PermissionError, UnicodeDecodeError):
+            return []
+
 
 class HttpTurnStore:
     """The same interface, over `turn_server.py`.
@@ -378,6 +412,18 @@ class HttpTurnStore:
 
     def archive_record(self, turn: int):
         return self._get(f'/archive/{turn}')
+
+    # -- notes --
+    def put_note(self, civ: str, turn: int, lines) -> None:
+        self._post(f'/note/{turn}/{urllib.parse.quote(civ)}',
+                   '\n'.join(lines).encode('utf-8'), want_json=False)
+
+    def note(self, civ: str, turn: int) -> list:
+        body = self._get(f'/note/{turn}/{urllib.parse.quote(civ)}',
+                         want_json=False)
+        if not body:
+            return []
+        return [line for line in body.decode('utf-8').split('\n') if line]
 
 
 def open_store(spec: str):

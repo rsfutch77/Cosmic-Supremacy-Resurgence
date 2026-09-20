@@ -133,6 +133,52 @@ class Actuator:
     def _f32(self, addr, value, what):
         return self._write(addr, struct.pack("<f", value), what)
 
+    def _live_cash(self, civ):
+        """Owner:8 as it stands in the process right now.
+
+        `civ.cash` comes from the snapshot's field dump, which is taken once and
+        never moves when a debit is written. Two drafts in one pass would both
+        price against the same opening balance, and the second write would erase
+        the first: the treasury would lose one draft's cost for N drafts. Every
+        read that a cash WRITE is computed from has to come from here.
+        """
+        b = self.snap.read(civ.addr + 8, 4)
+        if b is None or len(b) != 4:
+            return civ.cash
+        return struct.unpack("<i", b)[0]
+
+    def _live_vec(self, obj, off, stride):
+        """A vector's records, with BOTH its extents and its data read live.
+
+        `Obj.vec` takes begin/end from the snapshot's field dump and reads only
+        the payload live, so a SECOND write to one vector in the same pass spans
+        the extent the pass opened with and runs off the end of the live data.
+
+        Measured 2026-09-19 against a running client: two `conscript_to_crew`
+        calls in one pass produced four crew records while removing two
+        citizens. The second call spanned the pre-draft 18 records, picked from
+        stale bytes past the live end, wrote the same 16 back and set `end` to
+        the value the first call had already left there, so the planet was
+        untouched and two people were created. `vector_is_sane` already reads
+        through `snap.rd32` for this reason; so does every read here.
+        """
+        base = obj.addr + off
+        begin, end = self.snap.rd32(base), self.snap.rd32(base + 4)
+        if not gs.is_ptr(begin) or end is None or end <= begin:
+            return []
+        span = end - begin
+        if span % stride or span > 1 << 20:
+            return []
+        data = self.snap.read(begin, span)
+        return [] if data is None else [data[i:i + stride]
+                                        for i in range(0, span, stride)]
+
+    def _live_ptr(self, obj, off):
+        """One of a vector's three pointers as it stands now, not as the
+        snapshot recorded it. A `begin` computed against a stale `end` is the
+        shape that corrupted a military vector once already."""
+        return self.snap.rd32(obj.addr + off)
+
     def _xyz(self, addr, xyz, what):
         return self._write(addr, struct.pack("<fff", *xyz), what)
 
@@ -512,11 +558,11 @@ class Actuator:
         self._require_sane(planet.addr + self.PLANET_MILITARY,
                            f"{planet}'s military vector")
         self._require_sane(ship.addr + self.SHIP_CREW, f"{ship}'s crew vector")
-        mil = planet.vec(self.PLANET_MILITARY, self.CITIZEN_STRIDE)
+        mil = self._live_vec(planet, self.PLANET_MILITARY, self.CITIZEN_STRIDE)
         if len(mil) < count:
             raise ValueError(f"{planet} has {len(mil)} trained unit(s), "
                              f"need {count}")
-        aboard = ship.vec(self.SHIP_CREW, self.CITIZEN_STRIDE)
+        aboard = self._live_vec(ship, self.SHIP_CREW, self.CITIZEN_STRIDE)
         if self.dry_run:
             self.log(f"  [WOULD LOAD] {count} unit(s) from {planet} onto {ship} "
                      f"({len(aboard)} aboard, {len(mil)} trained, "
@@ -531,7 +577,7 @@ class Actuator:
         buf = self._set_ship_crew(ship, b"".join(aboard) + taken,
                                   len(aboard) + count)
 
-        mb = planet.u32(self.PLANET_MILITARY)
+        mb = self._live_ptr(planet, self.PLANET_MILITARY)
         new_end = mb + (len(mil) - count) * self.CITIZEN_STRIDE
         self._u32(planet.addr + self.PLANET_MILITARY + 4, new_end,
                   f"planet military end -> {len(mil) - count} unit(s)")
@@ -615,7 +661,7 @@ class Actuator:
         survives. `allow_replace` exists for a caller that has proven it owns the
         buffer; nothing sets it today.
         """
-        old = ship.u32(self.SHIP_CREW)
+        old = self._live_ptr(ship, self.SHIP_CREW)
         if gs.is_ptr(old) and not allow_replace:
             raise ValueError(
                 f"{ship} already has a crew vector (0x{old:08X}); repointing "
@@ -648,10 +694,10 @@ class Actuator:
         """
         base = planet.addr + self.PLANET_MILITARY
         self._require_sane(base, f"{planet}'s military vector")
-        mil = planet.vec(self.PLANET_MILITARY, self.CITIZEN_STRIDE)
-        begin = planet.u32(self.PLANET_MILITARY)
-        end   = planet.u32(self.PLANET_MILITARY + 4)
-        cap   = planet.u32(self.PLANET_MILITARY + 8)
+        mil = self._live_vec(planet, self.PLANET_MILITARY, self.CITIZEN_STRIDE)
+        begin = self._live_ptr(planet, self.PLANET_MILITARY)
+        end   = self._live_ptr(planet, self.PLANET_MILITARY + 4)
+        cap   = self._live_ptr(planet, self.PLANET_MILITARY + 8)
         blob  = b"".join(records)
         need  = len(blob)
 
@@ -698,7 +744,7 @@ class Actuator:
         self._require_sane(ship.addr + self.SHIP_CREW, f"{ship}'s crew vector")
         self._require_sane(planet.addr + self.PLANET_MILITARY,
                            f"{planet}'s military vector")
-        aboard = ship.vec(self.SHIP_CREW, self.CITIZEN_STRIDE)
+        aboard = self._live_vec(ship, self.SHIP_CREW, self.CITIZEN_STRIDE)
         if keep is not None and len(aboard) - count < keep:
             raise ValueError(
                 f"{ship} carries {len(aboard)}; unloading {count} would leave "
@@ -707,7 +753,7 @@ class Actuator:
         if count <= 0 or len(aboard) < count:
             raise ValueError(f"{ship} carries {len(aboard)}, cannot unload "
                              f"{count}")
-        mil = planet.vec(self.PLANET_MILITARY, self.CITIZEN_STRIDE)
+        mil = self._live_vec(planet, self.PLANET_MILITARY, self.CITIZEN_STRIDE)
         if self.dry_run:
             self.log(f"  [WOULD GARRISON] {count} unit(s) from {ship} onto "
                      f"{planet} ({planet.military} stationed -> "
@@ -717,9 +763,9 @@ class Actuator:
             raise RuntimeError("unload_crew needs a remote.Remote to allocate")
 
         landed = b"".join(aboard[-count:])
-        begin = planet.u32(self.PLANET_MILITARY)
-        end   = planet.u32(self.PLANET_MILITARY + 4)
-        cap   = planet.u32(self.PLANET_MILITARY + 8)
+        begin = self._live_ptr(planet, self.PLANET_MILITARY)
+        end   = self._live_ptr(planet, self.PLANET_MILITARY + 4)
+        cap   = self._live_ptr(planet, self.PLANET_MILITARY + 8)
         need  = count * self.CITIZEN_STRIDE
         if gs.is_ptr(begin) and cap is not None and end is not None \
                 and cap - end >= need:
@@ -747,7 +793,7 @@ class Actuator:
 
         # The ship side only SHRINKS, which needs no allocation at all: walk
         # `end` back and the surviving records stay contiguous from `begin`.
-        cb = ship.u32(self.SHIP_CREW)
+        cb = self._live_ptr(ship, self.SHIP_CREW)
         self._u32(ship.addr + self.SHIP_CREW + 4,
                   cb + (len(aboard) - count) * self.CITIZEN_STRIDE,
                   f"crew end -> {len(aboard) - count} aboard")
@@ -852,7 +898,10 @@ class Actuator:
                 f"refuses below {self.HURRY_MIN_FRACTION:.0%} , "
                 f"'the production needs to be at least half finished'")
         civ = self.snap.civ_of(self.snap.rd32(planet.u32(40)))             if gs.is_ptr(planet.u32(40)) else None
-        cash = civ.cash if civ else None
+        # Live, not snapshot: the engine debits Owner:8 itself for every
+        # hurry, so a second hurry in the same pass is priced against a
+        # balance that has already been spent.
+        cash = self._live_cash(civ) if civ else None
         if cash is not None and cost > cash:
             raise ValueError(f"{planet} hurry costs {cost}, cash is {cash}")
         if self.dry_run:
@@ -916,8 +965,11 @@ class Actuator:
         # stale list names a citizen who has shifted or gone.
         self._require_sane(planet.addr + self.CITIZEN_LIST,
                            f"{planet}'s citizen vector")
+        # `planet.population` is the snapshot's extent over live bytes, so
+        # comparing the two is what actually detects the vector moving.
         live = [struct.unpack_from("<I", r, 0)[0]
-                for r in planet.vec(self.CITIZEN_LIST, self.CITIZEN_STRIDE)]
+                for r in self._live_vec(planet, self.CITIZEN_LIST,
+                                        self.CITIZEN_STRIDE)]
         if live != planet.population:
             self.log(f"  [!] {planet}'s citizen list moved since the snapshot "
                      f"({len(planet.population)} -> {len(live)}); using the "
@@ -930,8 +982,9 @@ class Actuator:
                              f"is a farmer, and drafting those starves it")
 
         cost = self.draft_cost(civ, 1)
-        if cost is not None and civ.cash is not None and cost > civ.cash:
-            raise ValueError(f"a conscript costs {cost}, cash is {civ.cash}; "
+        cash = self._live_cash(civ)
+        if cost is not None and cash is not None and cost > cash:
+            raise ValueError(f"a conscript costs {cost}, cash is {cash}; "
                              f"the engine would refuse")
 
         if self.dry_run:
@@ -953,13 +1006,13 @@ class Actuator:
         # plain field writes the bisect exonerated. A conscript is, in the
         # engine's own terms, one 16-byte record moving from the citizen vector
         # to the military vector with its job id set to 3.
-        recs = planet.vec(self.CITIZEN_LIST, self.CITIZEN_STRIDE)
+        recs = self._live_vec(planet, self.CITIZEN_LIST, self.CITIZEN_STRIDE)
         if pick >= len(recs):
             raise ValueError(f"citizen {pick} no longer exists on {planet}")
         moved = bytearray(recs[pick])
         struct.pack_into("<I", moved, 0, remote.DRAFT_JOB)
 
-        cbegin = planet.u32(self.CITIZEN_LIST)
+        cbegin = self._live_ptr(planet, self.CITIZEN_LIST)
         kept = b"".join(recs[:pick] + recs[pick + 1:])
         self._write(cbegin, kept, f"citizen list minus #{pick}")
         self._u32(planet.addr + self.CITIZEN_LIST + 4, cbegin + len(kept),
@@ -972,7 +1025,7 @@ class Actuator:
         # only by the number the engine itself quoted for this exact draft a few
         # microseconds earlier. The alternative is not "do it honestly", it is
         # "take the citizen for free", which is the actual cheat.
-        cash = civ.cash
+        cash = self._live_cash(civ)
         self._u32(civ.addr + 8, cash - cost,
                   f"{civ.civ_name} cash {cash} -> {cash - cost} "
                   f"(the engine's own price for this draft)")
@@ -1032,7 +1085,7 @@ class Actuator:
         # Empty-only, checked before anything is taken from the planet: a
         # half-done draft that then cannot deliver its crew would delete
         # citizens for nothing.
-        existing = ship.u32(self.SHIP_CREW)
+        existing = self._live_ptr(ship, self.SHIP_CREW)
         if gs.is_ptr(existing):
             raise ValueError(
                 f"{ship} already has a crew vector (0x{existing:08X}); this "
@@ -1044,7 +1097,7 @@ class Actuator:
         # Live read, never the snapshot: the engine shifts this vector itself
         # (CommitPopulation erases and memmoves, and auto-conscripts surplus
         # population), so an index chosen from a stale list names someone else.
-        recs = planet.vec(self.CITIZEN_LIST, self.CITIZEN_STRIDE)
+        recs = self._live_vec(planet, self.CITIZEN_LIST, self.CITIZEN_STRIDE)
         jobs = [struct.unpack_from("<I", r, 0)[0] for r in recs]
 
         picks = []
@@ -1087,9 +1140,10 @@ class Actuator:
                    ", and drafting those starves the colony"))
 
         cost = self.draft_cost(civ, count)
-        if cost is not None and civ.cash is not None and cost > civ.cash:
+        cash = self._live_cash(civ)
+        if cost is not None and cash is not None and cost > cash:
             raise ValueError(f"{count} conscript(s) cost {cost}, cash is "
-                             f"{civ.cash}; the engine would refuse")
+                             f"{cash}; the engine would refuse")
 
         if self.dry_run:
             who = ", ".join(f"{i} ({gs.JOBS.get(jobs[i], jobs[i])})"
@@ -1104,6 +1158,20 @@ class Actuator:
         # Both vectors are rewritten from one live read, so no index is used
         # after the list beneath it has shifted , the hazard that makes
         # `conscript` strictly one-per-call does not arise here.
+        #
+        # THIS MIGRATION NEVER RUNS `CommitPopulation`, which is the whole point
+        # of doing it by hand (§7), so whatever that call updates besides the two
+        # vectors is left as it stands. One known side effect is that it
+        # auto-conscripts surplus population above `space/10` while it is in
+        # there. The citizen vector's CAPACITY at Planet:144+8 is likewise left
+        # alone, so a drafted planet keeps spare capacity a reloaded one does not
+        # have.
+        #
+        # Measured 2026-09-19: none of that reaches the blob. A galaxy crewed
+        # this way, played 70 turns and compared against the same galaxy saved
+        # and reloaded, was byte-identical once star names were cleared, same
+        # canonical hash. That covers THIS path over that window, not `conscript`
+        # and not the claim that the skipped bookkeeping costs nothing.
         drafted = []
         for i in picks:
             rec = bytearray(recs[i])
@@ -1111,7 +1179,7 @@ class Actuator:
             drafted.append(bytes(rec))
 
         keep = [r for i, r in enumerate(recs) if i not in picks]
-        cbegin = planet.u32(self.CITIZEN_LIST)
+        cbegin = self._live_ptr(planet, self.CITIZEN_LIST)
         kept = b"".join(keep)
         self._write(cbegin, kept, f"citizen list minus {count}")
         self._u32(planet.addr + self.CITIZEN_LIST + 4, cbegin + len(kept),
@@ -1119,7 +1187,12 @@ class Actuator:
 
         self._set_ship_crew(ship, b"".join(drafted), count)
 
-        cash = civ.cash
+        # The balance has to be re-read here for the same reason the price is
+        # invalidated below: a caller that crews several ships in one pass holds
+        # ONE snapshot `civ`, and `civ.cash` still reads the balance this pass
+        # opened with. Debiting from that would rewrite Owner:8 to
+        # opening - cost every time, so N drafts would cost the treasury one.
+        cash = self._live_cash(civ)
         self._u32(civ.addr + 8, cash - cost,
                   f"{civ.civ_name} cash {cash} -> {cash - cost} "
                   f"(the engine's price for {count} draft(s))")
