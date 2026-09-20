@@ -579,13 +579,31 @@ made unnecessary.
               u32     name length, then the name, unpadded
               ...     six part lists
               u32     the owning civ's object id, at the end
-        +1 trailing byte, which inject_design.build_dsgn does not emit
+        +1 trailing byte, zero, counted by the DSGN length word
 
       the civ's design count, a u32 in DATA's own bytes before its first DSGN
       SAVE+0, the object counter, 205 -> 206
 
   The existing `DSGN` is untouched and the subtree is copied whole, because it
   is self-contained and all of it is the design.
+
+  **The trailing byte is uniform, and a synthesised design now carries it.**
+  Surveyed across every blob on disk on 19 September 2026: the galaxy1 and
+  galaxy2 rehearsal stores, turns and submissions both, plus the captures in
+  `server/saves`. 327 blobs decoded, 1015 `DSGN` records, and in all 1015 the
+  byte left over after the `SDPR` child is exactly one byte wide and zero.
+  Every record is `DSGN` v4 with an `SDPR` v0 child, no raw `DSGN` tag hit was
+  rejected as a coincidental byte run, and every per-civ design count dword
+  agreed with the records found, so that is every record on disk and not a
+  sample. `inject_design.build_dsgn` emitted the object id and the `SDPR` and
+  stopped, so a synthesised design was a byte short and its length word was a
+  byte low; `inject()` never had the fault, because it clones what the client
+  wrote. With the trailer emitted, 980 of the 1015 records rebuild from their
+  own parts byte for byte. The remaining 35 are the `e1x2` and `e1x4` probe
+  designs in `server/saves`, which carry no scanner, and `build_sdpr` defaults
+  a scanner in, which makes them four bytes longer. Every design in the
+  rehearsal galaxies carries exactly one scanner, id 0, the ones a person made
+  by clicking included. `server/tests/test_build_dsgn.py` holds the round trip.
 
   **The object id is the hard part, not the bytes.** The client allocates a new
   object id as one past the object count, so two players designing a ship on

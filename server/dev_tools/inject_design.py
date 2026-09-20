@@ -17,10 +17,10 @@ Every section is:
 
     tag(4)  (version << 26 | length26)(4)  payload[length]
 
-A design is a `DSGN` section whose payload begins with the object id and then
-carries one `SDPR` child:
+A design is a `DSGN` section whose payload begins with the object id, carries
+one `SDPR` child, and ends with a single zero byte:
 
-    DSGN  ver 4   objectId(4)  SDPR...
+    DSGN  ver 4   objectId(4)  SDPR...  00
     SDPR  ver 0   nameLen(4)  name[nameLen]  ...rest...
 
 Designs are per-civ and live inside `OWNR`, and immediately BEFORE the first
@@ -262,7 +262,16 @@ def inject(blob, src_name, new_name, new_id=None, log=print):
 #                                             that is empty on every design seen
 #     u32 ownerObjectId
 #
+# and the DSGN payload ends with one zero byte after that SDPR child.
+#
 PART_LISTS = ("chassis", "scanners", "engines", "weapons", "modules", "list6")
+
+# The byte that closes a DSGN payload, after the SDPR child. Surveyed across
+# 1015 DSGN records in 327 blobs: every turn and every submission of the
+# galaxy1 and galaxy2 rehearsal stores plus server/saves. It is exactly one
+# byte wide and zero in all 1015, designs a player made by clicking included,
+# so a synthesised record carries it and a cloned one keeps it.
+DSGN_TRAILER = b"\x00"
 
 
 # A scanner is defaulted in rather than left to the caller to remember. It can
@@ -287,15 +296,20 @@ def build_sdpr(name, parts, owner_id):
 
 
 def build_dsgn(new_id, name, parts, owner_id, dsgn_ver=4, sdpr_ver=0):
-    """A complete DSGN section: header, object id, and its SDPR child.
+    """A complete DSGN section: header, object id, its SDPR child, and the
+    trailing byte.
 
     Section versions are taken from real records rather than assumed , DSGN is
     version 4 and SDPR version 0 in every capture examined, and the version
     occupies bits 26..31 of the length word.
+
+    The DSGN payload length counts the trailer, so a record built here is
+    byte-identical to the one a client writes for the same id, name, parts and
+    owner. `test_build_dsgn.py` holds it to that against real records.
     """
     payload = build_sdpr(name, parts, owner_id)
     sdpr = struct.pack("<4sI", SDPR, (sdpr_ver << 26) | len(payload)) + payload
-    body = struct.pack("<I", new_id) + sdpr
+    body = struct.pack("<I", new_id) + sdpr + DSGN_TRAILER
     return struct.pack("<4sI", DSGN, (dsgn_ver << 26) | len(body)) + body
 
 

@@ -60,9 +60,9 @@ def remake(record, owner=None, name=None):
     """A DSGN record with a different owner id or name, sizes corrected.
 
     Built by editing a record a client really wrote rather than by
-    synthesising one, so a fixture keeps the client's byte shape: every DSGN
-    the client writes carries one trailing byte after its SDPR, which
-    `inject_design.build_dsgn` does not emit.
+    synthesising one, so a fixture keeps the client's byte shape whether or not
+    the builders are right about it. The shape of a synthesised record is
+    `test_build_dsgn.py`'s subject, not this file's.
     """
     dsgn_ln = struct.unpack_from('<I', record, 4)[0] & sp.SIZE_MASK
     sdpr_ln = struct.unpack_from('<I', record, 16)[0] & sp.SIZE_MASK
