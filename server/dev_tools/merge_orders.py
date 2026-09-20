@@ -85,9 +85,17 @@ two rules that were each correct about their own half.
 
 A submission never ticks, so within one turn the total number of people a civ
 holds cannot change. That is the check, along with: no soldier's existing
-record may be altered, nobody changes hands, no per-citizen value is invented,
-and the civ may not come back with fewer soldiers than it was served, which is
-what retiring from service looks like and is not carried yet.
+record may be altered, nobody changes hands, and the civ may not come back with
+fewer soldiers than it was served, which is what retiring from service looks
+like and is not carried yet.
+
+What a record CARRIES , its per-citizen value and its three opaque bytes , is
+judged against the state served and across all three arrays at once. Both parts
+matter. Asked absolutely, the opaque check refuses a civ for bytes the referee
+itself handed out, every turn, including a turn in which the civ did nothing.
+Asked of the citizen array alone, it loses sight of a record the moment it is
+drafted, so a turn that hides such bytes in the military array is accepted
+while the turn that leaves them alone is refused.
 
 The total is a claim about a **submission**, not about the galaxy. The engine's
 own recruitment makes soldiers out of food without costing a citizen, measured
@@ -383,6 +391,17 @@ def _owner_of(record):
     return struct.unpack_from('<I', record, 3)[0]
 
 
+def _record(raw):
+    """(job, owner, extra, rest) from a raw nine-byte soldier or crew record.
+
+    The same shape `citizens_of` returns, so the checks that look at what a
+    record carries can be stated once over everybody a civ holds rather than
+    over the citizen array alone.
+    """
+    return (raw[0], struct.unpack_from('<I', raw, 3)[0], raw[7],
+            bytes((raw[1], raw[2], raw[8])))
+
+
 def _everyone(planets, ships):
     citizens, soldiers = [], []
     for _oid, (cz, mil) in planets.items():
@@ -450,11 +469,38 @@ def people_acceptable(served, submitted, civ_oid):
     bad = {c[0] for c in cit_b} - set(JOB_IDS)
     if bad:
         return False, f'unknown job id(s) {sorted(bad)}'
-    if any(c[3] != b'\x00\x00\x00' for c in cit_b):
-        return False, 'unknown bytes in a citizen record were written'
-    vals_a = collections.Counter(c[2] for c in cit_a)
-    vals_b = collections.Counter(c[2] for c in cit_b)
-    if vals_b - vals_a:
+
+    # What a record carries, judged against what was served and across all
+    # three arrays at once.
+    #
+    # Both of these checks used to read the citizen array only, and the first
+    # of them asked whether the opaque bytes were zero rather than whether they
+    # matched. A galaxy in which some citizen already carries non-zero bytes
+    # there is therefore refused every turn whatever its owner does, including
+    # a turn in which they do nothing: GoodGuy in `client/twosided_staged.dat`
+    # holds two such records, `fe3b00` on planet 262 and planet 266, and
+    # submitting the served blob back unaltered came out
+    # "people DROPPED, unknown bytes in a citizen record were written".
+    #
+    # Refusing a civ for what it was handed is the whole of the error. Stated
+    # against the served state it is a rule about what a submission INVENTED,
+    # which is what was meant, and a civ may still carry whatever the engine
+    # gave it.
+    #
+    # Citizens, soldiers and crew together, because a record keeps its bytes
+    # when somebody moves between them: conscription rewrites the job and
+    # nothing else. Read over the citizen array alone, the checks lose sight of
+    # a record the moment it is drafted, so the same two records above stopped
+    # being refused once they were conscripted, which made the rule accept the
+    # turn that hid them and refuse the turn that did not.
+    all_a = [_record(r) for r in sol_a] + list(cit_a)
+    all_b = [_record(r) for r in sol_b] + list(cit_b)
+    if collections.Counter(c[3] for c in all_b) - collections.Counter(
+            c[3] for c in all_a):
+        return (False, 'opaque bytes in a people record were invented rather '
+                'than carried')
+    if collections.Counter(c[2] for c in all_b) - collections.Counter(
+            c[2] for c in all_a):
         return False, 'per-citizen values were invented rather than reordered'
     return True, ''
 
@@ -1078,76 +1124,6 @@ def _tally(jobs):
     import collections
     c = collections.Counter(jobs)
     return ', '.join(f'{n} {JOB_IDS.get(j, j)}' for j, n in sorted(c.items()))
-
-
-# ── the rules ────────────────────────────────────────────────────────────────
-def military_transfer(served, sub, civ_oid):
-    """([(kind, oid, before, after, records)], why_refused) for one civ.
-
-    Assigning crew moves soldiers between a planet's stationed array and a
-    ship's, and the records arrive byte for byte, so this is a transfer and not
-    an edit. That is what makes it safe to carry without decoding a soldier:
-    **the multiset of a civ's military records must be identical before and
-    after**. A player may rearrange their army however they like; they may not
-    come back with a soldier they did not have.
-
-    The check is over the civ's whole empire rather than over one planet and one
-    ship, because a submission carries every object and there is no reason to
-    assume a transfer involves only the pair a person happened to click on.
-
-    Ownership, as everywhere here, is read from the served state.
-    """
-    import collections
-
-    before_recs, after_recs, changed = [], [], []
-    for oid, (owner, _prod, plpr_served, _nm) in planet_index(served).items():
-        if owner != civ_oid:
-            continue
-        entry = planet_index(sub).get(oid)
-        if entry is None:
-            continue
-        _at, mine_served = military_of(plpr_served)
-        _at2, mine_sub = military_of(entry[2])
-        if mine_served is None or mine_sub is None:
-            return [], f'planet {oid} has no readable military array'
-        before_recs += mine_served
-        after_recs += mine_sub
-        if mine_served != mine_sub:
-            changed.append(('planet', oid, len(mine_served), len(mine_sub),
-                            mine_sub))
-
-    for oid, (owner, shpr_served) in _ship_crew_index(served).items():
-        if owner != civ_oid:
-            continue
-        entry = _ship_crew_index(sub).get(oid)
-        if entry is None:
-            continue
-        crew_served, crew_sub = crew_of(shpr_served), crew_of(entry[1])
-        if crew_served is None or crew_sub is None:
-            return [], f'ship {oid} has no readable crew array'
-        before_recs += crew_served
-        after_recs += crew_sub
-        if crew_served != crew_sub:
-            changed.append(('ship', oid, len(crew_served), len(crew_sub),
-                            crew_sub))
-
-    if not changed:
-        return [], ''
-    if collections.Counter(before_recs) != collections.Counter(after_recs):
-        if len(after_recs) < len(before_recs):
-            # Retiring from military service is a real thing a player can click,
-            # and it destroys soldiers rather than moving them, so it fails this
-            # check honestly. It is refused rather than carried because nobody
-            # has measured what else it writes: retiring cuts upkeep, and a rule
-            # that takes the disappearance without the rest of it would be
-            # guessing at the part that costs money.
-            return ([], f'{len(before_recs)} soldier(s) served and '
-                    f'{len(after_recs)} came back. Retiring from service is not '
-                    f'carried yet, and nothing else should lose soldiers')
-        return ([], f'{len(before_recs)} soldier(s) served and '
-                f'{len(after_recs)} came back, or their records were rewritten; '
-                f'a transfer moves them, it does not mint them')
-    return changed, ''
 
 
 def _ship_crew_index(blob):

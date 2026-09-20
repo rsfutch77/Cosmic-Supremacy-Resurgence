@@ -630,9 +630,33 @@ made unnecessary.
   | population invented | population changed, 10 to 9 |
   | an unknown job id | unknown job id(s) [99] |
   | a per-citizen value invented | values were invented rather than reordered |
-  | an unknown byte written | unknown bytes in a citizen record were written |
+  | an unknown byte written | opaque bytes in a people record were invented rather than carried |
 
   All five refused, with the honest submission still accepted.
+
+  **The last of those five was stated absolutely and had to be restated against
+  the served blob.** It asked whether a citizen's three opaque bytes were zero,
+  which is a claim about a state rather than about what a submission changed, so
+  a civ holding such a record was refused every turn whatever it did. Measured
+  on `client/twosided_staged.dat`, where GoodGuy's citizens on planets 262 and
+  266 carry `fe3b00`: handing the served blob back **unaltered** came out
+  `people DROPPED, unknown bytes in a citizen record were written`, with the
+  player told their orders were refused on a turn they had given none.
+
+  It was also asked of the citizen array alone, which made the pair of rules
+  point the wrong way. Conscription carries a record into the military array
+  with only its job byte rewritten, so drafting the two citizens above moved the
+  bytes out of the check's sight and the same submission came out `2 orders
+  taken, 0 dropped`. The rule refused the honest turn and accepted the turn that
+  hid the evidence, and it was stable: an existing soldier's record may never be
+  altered, so once those bytes are in the military array nothing looks at them
+  again.
+
+  Restated, it compares what the submission carries against what was served,
+  over citizens, soldiers and crew together. A civ may still hold whatever the
+  engine gave it; it may not invent bytes within a turn, in any of the three
+  arrays. `server/tests/test_people_and_hurry.py` pins both halves, and fails
+  three ways against the old predicate.
 
   **What the per-citizen owner id is for is not established, and it is not
   shared populations.** It equals the planet's owner on every naturally created
@@ -645,8 +669,15 @@ made unnecessary.
   bookkeeping, ownership of soldiers during a battle being the obvious
   candidate, but that is a guess and nothing depends on it.
 
-  The checks still compare per-owner job multisets, because whatever the field
-  means, a turn in which a citizen changes hands is not a job reassignment.
+  The checks still read that field, because whatever it means, a turn in which a
+  citizen changes hands is not a job reassignment. What they compare is the
+  count of people each owner holds, across the civ's whole empire rather than
+  per planet. The narrower per-planet comparison of `(owner, job)` pairs went
+  when jobs and military became one rule, so changing the job of another civ's
+  citizen sitting on your planet is no longer refused. Nothing rests on that
+  today, since the only foreign citizens ever measured were an `inject_ship`
+  artifact, and it is recorded here because the rule is weaker than the sentence
+  it replaced.
 
   **The rules were tested against a submission containing all three changes at
   once.** Two were applied and nothing else: the job change, the `EXSY`/`KNPL`
@@ -858,9 +889,33 @@ made unnecessary.
   | job reallocation | **mapped**, and now judged with the soldiers, below |
   | hurry production | **mapped** |
   | crew assignment | **mapped**, and now judged with the citizens, below |
-  | conscription | **mapped**, a citizen becomes a soldier within one turn |
+  | conscription | **mapped**, a citizen becomes a soldier within one turn, and see the gap below |
   | recruitment rate | **mapped**, `PLPR+27`, a percentage in one byte |
   | retiring from service | **refused and named**, because it destroys soldiers and also cuts upkeep, and only the destroying half has been measured |
+
+  **The one row without a capture behind it is conscription's accept path.**
+  Every other row was measured by serving a turn, having a person click exactly
+  one thing and diffing. Conscription's refusals are measured, and so is the
+  rule accepting a drafted record built by hand, but no capture yet shows the
+  fixed rule accepting a submission in which a **player** drafted a citizen and
+  posted the new soldier to a ship, which is the turn the rule was rewritten to
+  stop refusing.
+
+  Two near misses are worth recording so they are not mistaken for it later.
+  The AI player's `conscript_to_crew` produces the right shape but writes the
+  vectors itself rather than calling the engine, and it has no player
+  equivalent at all, since it bypasses the garrison: a capture from it is
+  evidence about the tool, not about the client. And a live capture taken on 20
+  September 2026 spans a turn boundary, `t110` to `t111`, which is the one
+  comparison `people_acceptable` is documented not to survive; its other civ
+  duly came out `69 people served and 70 came back`, the engine's own
+  recruitment, and it is not evidence either way.
+
+  What would settle it is an ordinary turn of the real pipeline: `player_turn
+  serve` already holds the clock at `0x0080AA08` for a day so no boundary
+  arrives mid-session, and the blob it hands out is the served baseline by
+  construction, so the run needs only a person, one draft, one loading, and a
+  capture before the turn ends.
 
   **Jobs and military were two rules and had to become one.** Conscription
   turns a citizen into a soldier, so the jobs rule refused it for changing the
