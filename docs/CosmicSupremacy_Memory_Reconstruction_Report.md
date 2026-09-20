@@ -621,6 +621,19 @@ multiple-inheritance class found and the pattern should now be *assumed* rather 
 `measure_extents` already probes `tag − 12`; it does not probe deeper, so a class whose primary
 base is further back than that will still be truncated at the front.
 
+### Which civ the client plays, a TLS tree of player slots (September 2026)
+
+The local player is selected at load from a **red-black tree of player slots held in thread-local
+storage**, the roster the testbed galaxy join populates. `0x0052DE10` walks it and takes the first
+slot whose `+0x38` is non-zero, reading the civ's object id from `+0x30`. `0x00537BF0` maps that id
+to a reference cell through the map at `0x00857C7C`, and the cell is stored at `0x00857904`, which
+is the cell the setup-prompt guards read through.
+
+`client/dev_tools/set_local_player.py` assigns that cell directly in a running client, which is
+useful for testing. It is not how a turn is served: the blob carries the answer in `GLOB`, one
+`u32` holding the civ's object id, so per-player distribution is a data operation. See the main
+report.
+
 ### Known players, a `.data` discovery vector (August 2026)
 
 The diplomacy page's "known players" box starts empty and fills when a rival is found. A static
@@ -1475,6 +1488,14 @@ wrong, the same trap as the `.data` `Treaty` static.
 The turn countdown at `0x0080AA08` is the authoritative timer. Writing a small integer (e.g. `1`) causes the game to count down and fire a full turn resolution, ships move, resources tick, production advances, all handled client-side. The server does NOT need to reimplement any game logic.
 
 The address is stable across launches but shows `0xFFFFFFFF` before a galaxy is loaded (value comes from GSET `turnlength` at runtime, default 3600 = 60 minutes).
+
+**Writing a large value holds a session open, and multiplayer needs it.** `server/player_turn.py`
+writes a day onto this address after the galaxy loads, so no turn boundary arrives while a player
+is in the client. Without it, a client served turn 3 and left alone for a few minutes returns turn
+4 with **174 sections changed instead of one**, and no order can be recovered from that: the change
+list carries every consequence of the tick, so copying a ship's `DYNO` out of it copies post-tick
+positions. The in-game countdown then reads about 24 hours, which is the artefact of the hold, and
+is why the turn clock a player sees is the launcher's rather than the client's.
 
 **Turn patches T1–T5** (22 bytes total, from `patched17`) bypass server sync checks so turns fire without a real game server:
 

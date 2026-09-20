@@ -72,6 +72,10 @@ Two consequences worth keeping in mind:
 
 ### What a planet's `PLPR` holds (September 2026, partial)
 
+    +4            the per-unit output rates, `Planet:96` on the object
+    +23           u32 production points accumulated toward the current item
+    +27           u8  recruitment rate, a percentage of food diverted into
+                      military growth each turn
     +36           u32 population count
     +40 .. +40+9n nine-byte citizen records, one per unit of population:
                       +0  u8   job id, 0 farmer, 1 worker, 2 scientist,
@@ -98,12 +102,17 @@ Two consequences worth keeping in mind:
                   **the planet's owner owns the working population.** Fixed
                   September 2026 by repointing every remaining reference, but
                   galaxies generated before the fix still carry it.
+    +40+9n        u32 stationed-military count, then that many records of the
+                  same nine-byte shape. A ship carries its crew in the same
+                  form, SHPR+4 the count and SHPR+8 the records, and a record
+                  moves between the two byte for byte.
     +167          PROD, the production queue, 29 bytes; its payload carries
-                  the queue's own fields and a nested section naming what is
-                  queued, FCLT for a facility
+                  the queue's own fields, at +29 the object id of what is
+                  being built, and a nested section naming it, FCLT for a
+                  facility
     +255          ENLI, 4 bytes
 
-`WLTH` appears inside `PROD`'s payload rather than beside it, and is replaced by `FCLT` when a facility is queued. The rest of `PLPR` is undecoded and mixes the planet's population, stores and derived economy with the job decision, which is why job allocation cannot yet be accepted as an order.
+`WLTH` appears inside `PROD`'s payload rather than beside it, and is replaced by `FCLT` when a facility is queued. The rest of `PLPR` is undecoded and mixes the planet's population, stores and derived economy with the job decision, which is why a submitted job change is carried as the citizen array alone and never as the whole section.
 
 #### Section framing, read out of the archive class, not inferred from blobs
 
@@ -175,6 +184,8 @@ This also **resolves two previously separate readings of the order object into o
 The conditional tail is the tell: an unordered ship's DYNO is `4 + 17 + 4 + 1 + 4 = 30` bytes, an ordered one's is `30 + (8 + ROUT payload) + 4`. A capture with two ordered and two unordered ships gave exactly 30 / 152 / 124 / 30.
 
 So pushing an order takes **three coordinated edits**, not one: the SHCO order-type byte, the has-orders byte, and the appended `ROUT` + `u32`. Writing only the `ROUT` leaves the order type at 0. `server/dev_tools/inject_order.py` does all three.
+
+**Colonising is a ship order, not an immediate-effect action.** It is the same three edits with the SHCO byte reading **3** where a move writes **1**, so both come off one extraction path. A human given a turn-2 galaxy and asked for one move changed exactly one section of a 37,851-byte blob, that ship's `DYNO`, 38 bytes to 132.
 
 If the owner check at `0x004DA310+0x52` fails, the writer emits a short `INFO` form instead of the full one, which is what the `'INFO'` branch in the reader at `0x004DBBB2` consumes.
 
@@ -404,6 +415,39 @@ covered separately below; `client/dev_tools/homeworld_clicks.py` reads and resto
 Scope of the claim: one fixture, two civs, 40 turns, no combat and no diplomacy. A war is the obvious
 next stress, since combat is where an accumulated AI state would most plausibly show up.
 
+**The war stress was run, and the claim does not survive it (September 2026).** Two arms from one
+fixture, 70 turns each: arm P played through a two-sided battle, arm L loaded the blob P forked from
+and was ticked the same distance. Once the `Unnamed` star names are stripped the two blobs still
+differ by **30 bytes**, and the difference is real rather than cosmetic. It is two dwords and two
+ASCII digits in `NWDB`, one byte at `OWPR+0`, and a run in the `PLPR` of the planet the battle
+happened over, where the played branch's growth series sits one step ahead. Ticking both branches 20
+further turns leaves them nine bytes apart in LENGTH, exactly one nine-byte population record: the
+battle planet holds 19 citizens down the played line and 20 down the loaded one. The difference
+cashes out rather than washing out.
+
+Four things pin it to the battle and each was measured rather than assumed. A control on the same
+fixture with the same conscription, the same staging and the same ship movement, differing only in
+that peace was written instead of war, came out byte-identical once names were cleared. A second
+independent arming session reproduced both hashes. The two branches agree about what happened, same
+news items, same turn, same categories and ids, same coordinates and the same two hulls lost, so the
+disagreement is in derived state rather than in the outcome. And **the referee's own case is
+unaffected**: loaded against loaded, which is what a referee does, agreed byte for byte across three
+invocations of the same two-sided battle.
+
+**It does not reach the turn loop, and the reason is structural.** Neither side of the loop is ever
+in the played position. The referee loads a blob and advances exactly one turn. A player never
+crosses a boundary at all, since `player_turn.serve` holds the clock at `0x0080AA08` after load and
+the player build is the one without T1-T5, so no boundary fires in a session and no combat resolves
+in one. Where it does bite is the AI-played galaxy: `duel.py` drives many boundaries in a single
+client session with actuator writes between them, which is precisely the played arm of this
+experiment. Such a galaxy cannot be captured, reloaded and continued as the same galaxy, and
+per-turn measurements taken across such a run are not reproducible from the blob.
+
+[ ] **What those 30 bytes are is not established.** The `NWDB` pair reads `1` against `2` in ASCII,
+which would be a count rendered into news text, and a count rendered at generation time is carried by
+the blob while one recomputed at read time is not. That distinction is this section's own standard
+and is the thread to pull first.
+
 #### The engine is deterministic (September 2026)
 
 **A turn is a pure function of state plus orders.** Three separate process launches drove one fixture
@@ -447,6 +491,171 @@ default would also forgive a change to it.
 `Unnamed` is the default a running client writes into this field when the blob
 leaves it empty.
 
+### `GLOB`, which civ the loading client plays
+
+`GLOB` carries one `u32` holding the object id of the civ the loading client will play. The same
+blob stamped 198 comes up as one civ and stamped 202 as the other, UI included, which is what makes
+per-player distribution a data operation rather than a per-player build.
+
+**The field is not at a fixed offset.** `GLOB` holds a variable-length list of the players the
+galaxy knows about, each entry a user id and a name, so the id moves as soon as any civ has met
+another: `+40` with no contact, `+65` once one entry exists, with `GLOB` itself growing from 87 to
+112 bytes. The stable landmark is the tag that follows it.
+
+    ... u32 99999 ; u32 localPlayerObjectId ; 'TMGX' ...
+
+`server/dev_tools/set_blob_player.py` finds `TMGX`, steps back four bytes, and checks the value
+against the civs the blob holds before writing. A blob written at an assumed offset is rejected by
+the client with an exception dialog.
+
+Two other fields carry no part of this and are dead ends: the order of the two `OWNR` sections, and
+`Owner:4`, the trailing `u32` of the `OWNR` payload.
+
+At runtime the selection comes from a **TLS red-black tree of player slots**, the roster the testbed
+galaxy join populates. `0x0052DE10` walks it and takes the first slot whose `+0x38` is non-zero,
+reading the civ's object id from `+0x30`; `0x00537BF0` maps that id to a reference cell through the
+map at `0x00857C7C`, and the cell is stored at `0x00857904`, which is the cell the setup-prompt
+guards in section 6 read through.
+
+### `DSGN`, a ship design on the wire, and what `SAVE+0` counts
+
+A design is a self-contained subtree under the owning civ's `OWNR > DATA`.
+
+    DSGN v4, 67 bytes for a typical design
+      +0    u32     the design's own object id
+      SDPR  section, v0
+            u32     name length, then the name, unpadded
+            ...     six part lists
+            u32     the owning civ's object id, at the end
+      +1    u8      zero, counted by the DSGN length word
+
+    the civ's design count, a u32 in DATA's own bytes before its first DSGN
+
+**The trailing byte is uniform.** Surveyed across every blob on disk in September 2026, 327 blobs
+and 1015 `DSGN` records: every record is v4 with an `SDPR` v0 child, in all 1015 the byte after the
+`SDPR` child is exactly one byte wide and zero, and every per-civ design count agreed with the
+records found. A synthesised design that omits it is a byte short with its length word a byte low,
+which the client reads as an edited design. Every design in the rehearsal galaxies carries exactly
+one scanner, id 0, the ones a person made by clicking included.
+
+**`SAVE+0` is the highest object id in use, not a count of objects.** The two readings agree
+whenever ids are dense, and this galaxy's are not: it holds two gaps, so count and highest id differ
+by two, and the field tracks the id.
+
+| state | `SAVE+0` | objects | highest id |
+|---|---|---|---|
+| turn 5 | 205 | 203 | 205 |
+| a design spliced in, ticked to turn 6 | 206 | 204 | 206 |
+| ticked to turn 9, the hull built | 207 | 205 | 207 |
+
+The client allocates a new object id as one past the object count. Splicing a design in without
+raising `SAVE+0` leaves the engine's next allocation landing on the id that design is using, and the
+galaxy then holds two objects under one id.
+
+**A queue naming a design the galaxy does not hold is fatal to the whole galaxy, not to the order.**
+The client starts, reads it and exits in about four seconds. A design and the `PROD` entry naming it
+have to be carried or dropped together.
+
+**Four `OWPR` bytes move alongside a new design and none of them is derived from it.** `+49`, `+77`,
+`+78`, `+100` and `+110` were surveyed across 18 turns: `+49`, `+77` and `+78` also move on turns
+where no design was created, `+100` is a `u32` the engine advances by 7 every tick on its own, and
+`+110` is the only one the engine never rewrites across a tick. One player made the same design
+three times with only the name differing and the fields disagreed across the three, so none is a
+function of the design. What they are is not established.
+
+### Hurry production, and the price the blob does not carry
+
+Clicking hurry moves exactly three fields:
+
+    PLPR+23, u32          production points accumulated, 110 -> 200
+    PROD payload byte 0   0 -> 1
+    OWNR, id_at+20, u32   credits, 10065 -> 9705
+
+`360 = 4 * (200 - 110)`, reproducing the manual verbatim: four credits per production point left,
+and the current production must be at least half finished. 110 of 200 is 55%.
+
+**The total cost of an item is nowhere in the blob.** What is recoverable is the distance the
+progress field moved between two states, and the price per point is fixed, so a hurry can be priced
+from the two ends without knowing what the item costs.
+
+### Filtering a galaxy, and what the engine hides on its own
+
+**Object ids tile the galaxy contiguously, and a system's id is the first id of its block.** System
+1 owns 1..7, system 8 owns 8..13, up to 193 owning 193..197, with civs and ships above at 198..209.
+Deleting a `SOLA` in the middle punches a hole in that space; deleting from the end truncates it.
+
+Whether a filtered blob loads is positional rather than a matter of how much was removed:
+
+    drop 1 system, anywhere (1, 8, 14, 130)      loads
+    drop [180, 186] / [186, 193]                 loads
+    truncate systems >= 142, nine of them        loads
+    drop [1, 14] / [8, 14] / [124, 130]          fails
+    any projection keeping only 1 or 3 systems   fails
+
+Hole size is not the axis either: the surviving `[180, 186]` hole is 13 objects and the fatal
+`[124, 130]` hole is 11. **The failure is a deliberate bail rather than a crash**, exit code 1 about
+four seconds in, with a minidump carrying no exception stream and every thread in a shutdown wait. A
+successful load writes no dump, so there is no control to diff against.
+
+Four causes were tested and none of them is it. Not `EXSY`: dropping 29 systems with the tables
+untouched fails the same way. Not `KNPL`: its records are keyed by civ id, and dropping systems
+removes no civs. Not `SAVE+12`, which reads 32 before and after filtering and changed nothing when
+set to the surviving system count. Not a ship in transit: `SHIP` sections are children of `GLXY`
+rather than of `SOLA`, so dropping a system can never drop a ship, and a blob whose removed planet
+was the orbit of two ships still loads. Renumbering the kept systems into a contiguous block rather
+than deleting them would turn every projection into the case that works; it has not been tried.
+
+**Orders survive filtering.** Three uncolonised systems removed at turn 15, served to a real client,
+ordered, captured and merged against the **unfiltered** authoritative blob, with an unfiltered
+control beside it: both took four orders across four order types, dropped none, and produced
+byte-identical merged results. The captures came back at the served system and object counts, 29 and
+190 against the control's 32 and 209, which is what shows the client ran the smaller galaxy rather
+than rebuilding what was removed.
+
+**The engine hides more than a full-state blob suggests.** A client holding the whole galaxy still
+draws only the planets in systems that civ has entered, ownership included, and another civ's ships
+only within scan range, about 30 units. So what full-state distribution leaks is what a modified
+client could draw, not what the stock one does.
+
+### `NEWS`, how an engagement is established, and who is told about it
+
+A `NEWS` payload is a fixed 44-byte record inside a civ's `OWNR` `DATA` block. What is settled is the
+**turn** at `+8` and a **position** at `+32`, which is zero for items that have no place. An
+engagement raises a positioned item on the turn it resolves, at the coordinates it resolved at.
+`two_sided_war.py contacts` diffs them between two blobs, which is what turns "a ship is missing"
+into "an event happened here, then".
+
+**A missing hull is not evidence of combat**, which is why this record matters: a warship can be lost
+in transit having met nothing, and a reading that took a missing hull for a battle was wrong in
+exactly that way. Fleet speed is per hull and cannot be generalised from one, measured on
+`cycle.dat`: `b1` covers about 3.4 units a turn and `f1` about 6.4, so over a 450-unit separation one
+arrives inside a 70-turn window and the other does not.
+
+What is **not** settled is `+20` and `+24`. Both are small ascending per-civ numbers and `+20` is
+often `+24` minus one, so they read more like a chain than like a category and an id. An early guess
+that `+20` was a category with fixed meanings did not survive a second galaxy: the value that carried
+no position in one carried one in the other. Do not read meaning into them.
+
+How many items an engagement raises is also unsettled. The `cycle.dat` battle raised two on one turn
+at one position, one in each civ's `OWNR`, which looked like each side's own view of it. The
+two-player battle raised one, for the defender only. One of those is a special case and it is not yet
+known which.
+
+[ ] **A losing attacker can be told nothing at all, and why is unexplained.** In the two-player
+battle the attacker lost two warships at the defender's homeworld and received **no `NEWS` record of
+any kind**, while the defender received one per engagement. Measured by counting raw `NEWS` sections
+against the `OWNR` byte ranges rather than by trusting an attribution helper: two sections in the
+whole blob, both inside the defender's range. Three explanations have been tested and all three fail.
+**Not the merge**, since the same fixture ticked with no players, no submissions and no merge at all
+produced the identical result, and the merge applies orders before the tick while the news is
+generated during it. **Not presence**, since an unarmed attacker-owned ship placed at the battle site
+was destroyed there and its owner still received nothing. **Not discovery**, since the attacker's
+`EXSY` holds the defender's system. What remains is the difference between the two galaxies:
+`cycle.dat` is turn 110 with developed empires, the two-player galaxy is turn 2 out of
+`make_multiplayer_galaxy`. Worth settling, because a player losing a fleet and being told nothing
+about where is a bad enough experience to be worth knowing whether it is the engine's rule or an
+artefact of how these galaxies are made.
+
 ### `EXSY`, a civ's explored systems and what it calls them
 
     +0   u32  record count
@@ -467,8 +676,11 @@ authored on the object: `PLNT` own payload `+24` is a `u32` length then the
 characters, and renaming is gated in game on owning the majority of the planet,
 which makes a name authoritative galaxy data rather than a private label.
 
-Renaming a **system** is unmeasured: the attempt was refused for want of
-majority ownership, so the write was never observed.
+**Renaming a system writes the `SUN ` section's name**, at the same `+24` in its
+own payload. Measured on a galaxy where one civ held five of a system's six
+planets, which is the game's own gate. The renamer's `EXSY` cache picked the new
+name up and the other civ's did not, so the other player keeps seeing the old
+name until they observe the change.
 
 #### The trailing dword of every `KNPL` payload is unreliable
 
@@ -492,9 +704,10 @@ with the final byte a flag in its own right. And it is worth sweeping the other 
 signature, which is cheap now that it is known: a field that changes between two otherwise identical
 runs, or whose top byte becomes `0xFF` after a load.
 
-[ ] `KNPL` is now doubly interesting: this field, and the fact that a `KNPL` still naming removed
-planets is the likely reason a fog-filtered blob fails to tick. Worth decoding properly rather than
-piecemeal.
+[ ] `KNPL` is worth decoding properly rather than piecemeal, for this field. The second reason
+recorded here, that a `KNPL` still naming removed planets is why a fog-filtered blob fails to load,
+is **falsified**: its records are keyed by **civ** id rather than planet id despite the name, and
+dropping systems removes no civs. See "Filtering a galaxy" below.
 
 [x] **NOT A DATA-LOSS BUG. It is an unbounded re-grant exploit (measured September 2026).** This
 item previously read "BUG, DATA LOSS, confirming the customisation popup overwrites server-restored
@@ -601,6 +814,8 @@ Two things make this easy to get wrong, and both cost this project a false concl
 * **At LOAD the live value at `0x0080AA08` reads 3600 regardless of the config.** Reading it there and stopping says the setting does nothing. The refresh runs at a turn BOUNDARY, and on a 3600-second galaxy the first boundary is an hour away, so nothing can be observed without driving turns first.
 * **Below 60 the value never appears at all.** Two sites in the binary clamp it, `cmp esi, 60 ; mov [0x0080AA08], esi ; jg skip ; mov [0x0080AA08], 60`, so a galaxy configured at 10 presents as 60 every turn, which reads like the engine ignoring the config rather than honouring it and rounding up.
 
+* **The in-game countdown is tied to neither the config nor the live value.** A blob carrying `turnlength = 43200` came up with `0x0080AA08` reading 3600 and the UI showing 45 minutes. Nothing was found that reads back what the display is derived from, so a turn clock that has to be trusted belongs outside the client.
+
 **60 seconds is therefore the engine's real minimum turn**, which is worth knowing independently: the original game had no reason to support anything faster, and a training loop does. Lowering it is one byte per site (`3c` → `01`), keeping the clamp and moving its floor.
 
 ---
@@ -617,6 +832,32 @@ Two things make this easy to get wrong, and both cost this project a false concl
 | **Ranked Galaxy** | Competitive galaxy requiring accumulated Galaxy-Fame to enter |
 
 Galaxy file format extension: `.csgalaxy` / `galaxy%d_%s.cs`
+
+### What the client's own generator produces (September 2026)
+
+**A generation does not hand its two civs equal worlds.** The second civ's homeworld reads the same
+two `PLPR` bytes in every generation captured here, `+4` = 32 and `+11` = 44, while the first civ's
+read 62/94 or 42/194: the first carries the homeworld customisation the setup screens apply and the
+second gets the engine's opponent default. `PLPR+4` is `Planet:96`, the per-unit output rates, and
+it decides games. Eight turns with no orders from anyone grew seat one from 7 citizens to 9 and left
+the other seats at 7; with the bytes levelled the same run gives 9, 9, 9. A civ added by
+`inject_civ.py` inherits whichever of the two it was cloned from.
+
+**The second civ's first ship starts under a Scout order**, type 2 with an 82-byte `ROUT`, at turn 0
+before anyone has played, in all five generations captured. A ship advancing along it looks exactly
+like a ship being given an order, unless the `DYNO` is compared against the state as served.
+
+**The engine issues no orders for a civ during a tick.** Measured on a galaxy where every ship
+starts with order type 0, no `ROUT` and has-orders clear: eight turns, three civs, nothing
+submitted, and no ship gained an order, no production queue changed, no research field was set. The
+only movement in the whole blob was population growth. Stamping the tick client as the second civ
+rather than the first gave the same answer, so it is not an artefact of which seat the client plays.
+
+**A civ nobody plays therefore coasts and then stalls.** Over 40 turns with no orders: population
+grew on every planet, every new citizen went to farming and nothing rebalanced, the queued facility
+completed and the queue went to the empty marker and was never refilled, one civ held its research
+topic and the other had none and never chose one, and nothing was built or settled. Governors and
+admirals are the original's answer to that and they run rules a player wrote.
 
 ## 4. Embedded Assets
 
@@ -735,6 +976,17 @@ PlanetSurfaceEffect
   └── EffectWrap
 ```
 
+### There is no opponent AI in the binary (September 2026)
+
+333 RTTI class names cover the whole game model, `Owner`, `Planet`, `Ship`, `Fleet`, `Production`,
+`Treaty` and `ShipDesign` among them, and not one of them is an AI. The only decision machinery is
+the 57 `Governor*` and `Admiral*` classes, which run rules a player wrote. Absence from RTTI is not
+proof, since a non-polymorphic AI would leave no type descriptor, but every other system here is a
+polymorphic class and the decision machinery that does exist is richly so. This agrees with the
+measurement in section 3 that a civ nobody plays receives no orders during a tick.
+
+---
+
 ## 6. Client Patching (EXE Modifications)
 
 The original `CosmicSupremacy.exe` connects to the production server infrastructure which has been offline for years. To run the game locally, 67 bytes were modified across 11 patch sites, no code was added or removed, only existing values were overwritten in place.
@@ -804,6 +1056,35 @@ Each is a Win32 dialog resource, not an in-engine overlay, so the main window's 
 
 **Side effect:** Applying T1–T5 removes the Next Turn button from the UI. This is intentional for the multiplayer build, turns are advanced externally via `fast_turns.py`, not by player clicks.
 
+### What T1–T5 skip, read out of the file (September 2026)
+
+**None of the six removes a call**, and the code on both sides of every one of them is still
+present, so a patched client runs the same routines the original does.
+
+| site | what it reaches |
+|---|---|
+| T1 `0x0056DBF0` | a leaf predicate rewritten to return true. Its own two calls are getters; of its two callers, one selects the string `Connected` over `Disconnected` and the other runs a block it would otherwise skip |
+| T2 `0x0056E0EF`, T3 `0x0056E133` | both guards of `0x0056E0D0`, the homeworld prompt decision routine, not the turn pipeline at all |
+| T4a `0x00577C1A` | a single store repointed |
+| T4b `0x00577C2A` | skips `0x00577C84`, the galaxy-join rejection path |
+| T5 `0x00579C2D` | NOPs a `JZ` whose target `0x00579C3D` is the next basic block, so both paths converge. Its only effect is that `0x0056DE20` may run, which reads the turn counter at `0x008578E8`, increments it and announces. That is the turn advance itself, and it is why T5 is the patch that lets a client tick |
+
+### The multiplayer player build, and why it has nothing to click
+
+A player's client must not compute a turn and must not be offered the setup prompts, and both follow
+from the build rather than from a patch. `CosmicSupremacy_TestBed.exe` is the Resurgence binary
+without T1–T5, so the engine's own sync checks are intact, it waits at 00:00 for a server tick the
+way the original did, and prompts 210 and 218 stay gated as shipped. `game_cycle.resolve_exe` makes
+the build a parameter: players get testbed, the referee keeps resurgence.
+
+**The TestBed dialog's Next Turn, Load and Save buttons never reach the screen on the served path.**
+They are dialog resource 222. A player build on a two-player galaxy at turn 110 has no window
+carrying control `0x0425`, `0x0426` or `0x0483`, and no control whose text contains "Next Turn", so
+the dialog is never created. `client/dev_tools/patch_hide_next_turn.py` clears `WS_VISIBLE` in that
+template at file offset `0x007D6BD3` and has been applied to nothing, which is why every binary in
+the tree still reads `0x50` there. A template's visibility bit matters only to a dialog something
+creates. What gates dialog 222 is not established.
+
 ### Patches 18–27, Turn-length floor, 60s → 1s (10 bytes, August 2026)
 
 **Optional, and the only patch here that changes game RULES rather than plumbing.** Applied by `client/dev_tools/patch_turn_floor.py --apply`, reverted by `--revert`, with a `.preturnfloor.bak` written beside the EXE.
@@ -850,6 +1131,7 @@ Patches 12–17 (22 bytes, T1–T5) bypass turn-pipeline sync checks, enabling e
 | `CosmicSupremacy_TestBed.exe` | 1–11 | Yes | `TestBedGalaxy_local.csgalaxy` | Manual testing with interactive turn button |
 | `CosmicSupremacy_Resurgence.exe` | 1–17 (incl. T1–T5) | No | `SandboxGalaxy_local.csgalaxy` | Production multiplayer, turns controlled by `fast_turns.py` |
 | `CosmicSupremacy_Resurgence.exe` | + 18–27 (optional) | No | any | AI development, sub-60s turns. **Do not ship**: it changes a game rule, not plumbing, and a galaxy built on it runs faster than the original ever allowed |
+| `CosmicSupremacy_Player.exe` | 1–11, plus the one byte for prompt 225 | Never created | a pushed `.dat` | Multiplayer player build. TestBed without T1–T5, so it cannot compute a turn and the setup prompts stay gated |
 
 ---
 
@@ -1072,6 +1354,27 @@ Corrected:
 - The **`savegamelist` turn-bump** idea (advertise a higher turn to trip the client's out-of-sync
   check) was never confirmed on the client and is now unnecessary.
 
+### One game process per machine, and what the lock does not know
+
+A machine has one game process, and the tools that drive it are not naturally exclusive. A host that
+both plays and referees has two things wanting the single client, and nothing arbitrates: a referee
+waking on its deadline will close a player's client mid-turn, or an experiment will close the
+referee's. `game_cycle.take_client_lock` settles it. `launch` claims the machine's one game process
+naming what it is for, `close_client` releases it, and a second tool is refused with the holder's pid
+and purpose rather than silently winning the race. The referee waits, because it can afford to and a
+player mid-turn cannot afford for it not to; a player's serve refuses at once. The lock is advisory,
+nothing stops a tool calling `Popen` itself, and every path in this project goes through `launch`. On
+separate machines the problem does not exist, which is why it survived this long unnoticed.
+
+[ ] **The lock records who last claimed the client, not who is using it.** `take_client_lock` clears
+a stale lock by asking whether the holder's pid is alive, which was written for a holder that died
+mid-hold, since a legitimate hold lasts a whole turn and a timeout would break it. A holder that
+exits normally and deliberately leaves the client running produces the same stale lock, and the next
+tool through is waved past it. Seen live: a script that opened a galaxy for inspection finished, left
+the client up, and left a lock naming a dead pid while other work was still in flight on that
+machine. A free lock and a free machine are independent facts, and the tooling cannot tell them
+apart.
+
 ### Conclusion (corrected)
 
 **Save-blob sync is the primary path for multiplayer.** The blob is a complete state snapshot, it
@@ -1115,6 +1418,17 @@ Conscription is therefore cheapest early and rises as the fleet grows.
 job change to id 3 plus a migration between two vectors, not an append to a military
 list. This is what makes `actions.conscript_to_crew` legitimate: a crew member is that
 same record again, so a draft can go straight onto a ship.
+
+**On the wire the engine moves the record rather than rebuilding it**, confirmed in September 2026
+by a player drafting a citizen on a planet and posting the new unit to a ship, captured on the same
+turn it was served so no tick is inside the diff. One byte of the nine-byte record changes, the job:
+
+    citizen  000000940200001500
+    crew     030000940200001500
+
+A soldier is therefore traceable back to the citizen they were, and citizens, garrison and ship
+crew have to be read as one population: a record that keeps its bytes across the move leaves the
+sight of any rule that looks only at citizens.
 
 **Container wrappers.** `Planet:132` and `Planet:156` hold their vector 12 bytes in,
 the same idiom as the order object's `+28`/`+52` list heads.
