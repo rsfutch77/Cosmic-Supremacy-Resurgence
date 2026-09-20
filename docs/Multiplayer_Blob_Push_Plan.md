@@ -643,6 +643,23 @@ made unnecessary.
   two distinct designs, 206 and 207, ticks to turn 7 with the engine reporting
   4 designs, and each player's queue resolves to their own.
 
+  **And a person built one, 19 September 2026.** The engine counting three
+  `ShipDesign` instances says the object loaded, not that the game offers it.
+  So turn 5's submission, which created a design and queued nothing, was merged
+  and ticked to a turn 6 holding the carried design `testscout` with the
+  player's HQ building a Colony Ship, and that turn was served to the player
+  who had made the design. They opened the HQ's production screen, found
+  `testscout` in the list beside `Colony Ship`, and queued it.
+
+  The capture came back the same size, 37,719 bytes both ways, so nothing was
+  created: the only change is planet 139's `PROD` naming design 206 instead of
+  199. The merge took it and dropped nothing. A design that reached a galaxy
+  only by being spliced in by the referee is a manufacturing option the client
+  offers, which is the claim the byte-level work could not make on its own.
+
+  Still not shown: a hull coming out the other end. Queuing it is not building
+  it, and nobody has run the turns to completion and seen the ship.
+
   Replayed over all 18 turns of the rehearsal, the merge is byte-identical to
   the old one on 15 of them. The three that differ are turns 5, 6 and 7, the
   three times that player made a scout; turns 6 and 7 go from "0 orders taken,
