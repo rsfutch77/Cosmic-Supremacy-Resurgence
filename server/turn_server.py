@@ -118,6 +118,12 @@ class Handler(BaseHTTPRequestHandler):
                 if rec is None:
                     return self._fail(404, f'no archive for turn {parts[1]}')
                 return self._json(rec)
+            if len(parts) == 3 and parts[0] == 'note':
+                lines = STORE.note(parts[2], int(parts[1]))
+                if not lines:
+                    return self._fail(404, f'no note for {parts[2]} on turn '
+                                           f'{parts[1]}')
+                return self._blob('\n'.join(lines).encode('utf-8'))
         except ValueError:
             return self._fail(400, 'a turn number has to be an integer')
         except Exception as exc:                            # noqa: BLE001
@@ -150,6 +156,12 @@ class Handler(BaseHTTPRequestHandler):
                 STORE.archive(int(parts[1]), json.loads(body or b'{}'))
                 log(f'  archived turn {parts[1]}')
                 return self._json({'turn': int(parts[1])})
+            if len(parts) == 3 and parts[0] == 'note':
+                n, civ = int(parts[1]), parts[2]
+                lines = [ln for ln in body.decode('utf-8').split('\n') if ln]
+                STORE.put_note(civ, n, lines)
+                log(f'  noted {len(lines)} refusal(s) for {civ} on turn {n}')
+                return self._json({'turn': n, 'civ': civ})
         except ValueError as exc:
             return self._fail(400, str(exc))
         except Exception as exc:                            # noqa: BLE001

@@ -56,16 +56,20 @@ def turn_of(blob: bytes) -> int:
     return turn_store.turn_of(blob)
 
 
-def apply_orders(blob: bytes, submissions, log=print) -> bytes:
+def apply_orders(blob: bytes, submissions, log=print, notes=None) -> bytes:
     """Take each player's orders out of the state they returned.
 
     submissions: [(civ_name, submitted_blob)]. Only changes on objects the
     authoritative blob says that civ owns are taken; everything else is dropped
     and named. See merge_orders.py for what "orders" currently covers.
+
+    `notes` is an optional `{civ: [reason]}` filled with every refusal, so the
+    player who made a dropped order can be told. `resolve_turn` writes what
+    lands there into the store.
     """
     if not submissions:
         return blob
-    return merge_orders.merge(blob, submissions, log=log)
+    return merge_orders.merge(blob, submissions, log=log, notes=notes)
 
 
 def tick(blob: bytes, turns: int = 1, secs: int = 10, work_dir=None,
@@ -136,7 +140,25 @@ def resolve_turn(store: TurnStore, save_dir=None, log=print) -> int:
         log(f"  referee: no submission from {missing}; the clock does not wait")
 
     log(f"  referee: closing turn {turn} with {len(taken)} submission(s)")
-    merged = apply_orders(blob, taken, log=log)
+    notes = {}
+    merged = apply_orders(blob, taken, log=log, notes=notes)
+
+    # Tell each player what was refused. Until now every refusal was logged
+    # here, on the referee's console, which on the player's machine is nowhere:
+    # a system rename and a conscription were both dropped in the first
+    # two-machine rehearsal and both players saw only their order missing the
+    # next turn. The note goes in before the tick, which takes minutes, so it
+    # is certainly there by the time a player's launcher sees the new turn and
+    # goes looking for it.
+    for civ, lines in sorted(notes.items()):
+        try:
+            store.put_note(civ, turn, lines)
+            log(f"  referee: {len(lines)} refusal(s) noted for {civ}")
+        except OSError as exc:
+            # A note that cannot be written is not worth losing a turn over.
+            log(f"  referee: could not leave {civ} a note about turn {turn}, "
+                f"{exc}")
+
     nxt = tick(merged, turns=1, save_dir=save_dir, log=log)
     new_turn = turn_of(nxt)
     if new_turn <= turn:
@@ -154,6 +176,7 @@ def resolve_turn(store: TurnStore, save_dir=None, log=print) -> int:
         "bytes_in": len(blob),
         "bytes_out": len(nxt),
         "closed_at": time.time(),
+        "refused": notes,
         # Enough to recompute this turn later and check the answer. The
         # submissions are hashed too, so a rerun that disagrees can be told
         # apart from a rerun given different orders.

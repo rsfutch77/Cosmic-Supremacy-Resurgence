@@ -239,6 +239,39 @@ def close():
     gc.close_client()
 
 
+def report_refusals(store: TurnStore, civ: str, turn: int, log=print,
+                    emit=None) -> int:
+    """Print what the referee refused from this civ's turn. Returns how many.
+
+    The player's half of the refusal note. Everything the merge drops is
+    already written down; until this it was written down on the referee's
+    machine, and the player's launcher never saw it. Two of the first
+    two-machine rehearsal's six findings were silent for exactly that reason: a
+    system rename and a conscription, both accepted by the client, both dropped
+    by the merge, both simply gone the next turn.
+
+    No new UI, which is what was asked for. `log` is the launcher's log pane.
+
+    Reading the note can fail , it lives on a share another machine writes ,
+    and a turn that has already been played is not worth unwinding the loop
+    for, so a failure here says so and the loop goes on.
+    """
+    try:
+        lines = store.note(civ, turn)
+    except Exception as exc:                                # noqa: BLE001
+        log(f"[{civ}] turn {turn}: could not read the referee's notes ({exc})")
+        return 0
+    if not lines:
+        return 0
+    log(f"[{civ}] turn {turn}: the referee refused {len(lines)} of your "
+        f"change(s):")
+    for line in lines:
+        log(f"[{civ}]     {line}")
+    if emit:
+        emit("refused_orders", turn=turn, civ=civ, count=len(lines))
+    return len(lines)
+
+
 def follow(store: TurnStore, civ: str, poll: float = 5.0, rounds: int = 0,
            on_state=None, exe=PLAYER_BUILD, save_dir=None, stop=None,
            submit_every: float = 20.0, log=print):
@@ -496,6 +529,12 @@ def follow(store: TurnStore, civ: str, poll: float = 5.0, rounds: int = 0,
             if got is None or got[0] != turn:
                 break
             nap(poll)
+
+        # The turn has closed, so the referee has said what it refused. This is
+        # the first moment the note can exist and the last moment the player
+        # can still act on it, since the state they are about to be served no
+        # longer carries the order they lost.
+        report_refusals(store, civ, turn, log=log, emit=emit)
 
     emit("stopped", turns=played)
     return played
