@@ -1704,6 +1704,25 @@ a stub, restore, which the reconstruction report already sketches as the
 remaining route for `LoadGame`, and which would remove the whole class rather
 than these two instances.
 
+[ ] **A FIXTURE AND ITS CANONICAL HASHES ONLY MEAN ANYTHING TOGETHER, and the
+conscription fixtures in `client/` predate 4691f57.** Before that commit the
+actuator read `Owner:8` and a vector's begin/end from the snapshot rather than
+live, so a pass that drafted twice debited one draft's price and removed one
+draft's citizens. Crewing two hulls left BadGuy on 6442 with 16 citizens on its
+HQ; the same pass now leaves 6187 and 14. Cash and population are both inside
+the canonical hash, so every hash taken downstream of those blobs moved with
+them.
+
+The trap is that regenerating a pre-4691f57 fixture and comparing it against a
+pre-4691f57 hash produces a mismatch that reads exactly like a determinism
+failure and is not one. Hashes are evidence only against blobs the same actuator
+produced, so publish the two together and say which actuator built them. The
+difference is structural as well as numeric: post-fix, `conscript_to_crew`
+cannot take four citizens from a planet holding three non-farmers at all, and it
+refuses instead. `allow_farmers` is NOT the way to get them back, it is a
+judgement only R-XPL-09 is positioned to make (§4.3); draft across more than one
+planet.
+
 [ ] **Every earlier "it crashed after we did X" in this document is now
 suspect**, including `Ship::SetCommand`. That one was blamed for a crash at the
 next turn boundary and marked DO-NOT-USE on that basis. It is a mutating engine
