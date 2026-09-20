@@ -167,10 +167,109 @@ see D1.
   experiment without that control would have recorded "combat diverges", which
   was the available and wrong conclusion.
 
-  [ ] **The engagement was one-sided**, an armed attacker against an unarmed
-  defender and its planet. It exercises targeting, damage and destruction, not a
+  [x] **The engagement was one-sided**, an armed attacker against an unarmed
+  defender and its planet. It exercised targeting, damage and destruction, not a
   pitched two-sided battle, and BadGuy had no warship design to fight back with.
-  Worth repeating once both sides can shoot.
+  **Repeated with both sides armed, 19 September 2026**, by
+  `server/dev_tools/two_sided_war.py`.
+
+  BadGuy was given `bgf1`, a fighter carrying the same parts as GoodGuy's `f1`,
+  two hulls built on it, and a crew for each drafted from its own HQ. GoodGuy's
+  two warships were staged onto that planet so the branch measures the battle
+  rather than the approach. Contact came at turn 111: **GoodGuy lost both
+  warships and BadGuy lost none**, so the defenders fired and the engagement was
+  two-sided in the way the original was not.
+
+  | comparison, 70 turns from one fork | result |
+  |---|---|
+  | loaded against loaded, three invocations | identical, `bd1ec192cd335546` |
+  | played against loaded | 756 bytes of star names, **and 30 bytes that are not** |
+  | played against loaded, **no war** | identical once names are cleared |
+
+  **The referee's case is unaffected and reproduces exactly.** Loaded against
+  loaded is what the referee does, and three separate invocations across a
+  two-sided battle agreed byte for byte.
+
+  **The player's case does not.** A client that plays through a battle hands
+  back a state that a referee recomputing from the same blob does not produce.
+  The 30 bytes are two dwords and two ASCII digits in `NWDB`, one byte at
+  `OWPR+0`, and a run in the `PLPR` of the planet the battle happened over,
+  where the played branch's growth series sits one step ahead.
+
+  Four things pin it down, and each was measured rather than assumed:
+
+  - **It is the battle, not the setup.** A control on the same fixture with the
+    same conscription, the same staging and the same ship movement, differing
+    only in that peace was written instead of war, came out byte-identical once
+    names were cleared. A4's own lesson, run in the other direction.
+  - **It reproduces.** A second independent arming session produced the same
+    fork hash `7406be2618015075` and the same played hash `b32770a5260bef9c`.
+  - **The two branches agree about what happened.** Same news items, same turn,
+    same categories and ids, same coordinates, and the same two hulls lost. The
+    disagreement is in derived state, not in the outcome.
+  - **The tick reads it.** Ticking both turn-180 states 20 further turns leaves
+    them nine bytes apart in LENGTH, which is exactly one nine-byte population
+    record: the battle planet holds 19 citizens down the played line and 20 down
+    the loaded one. The difference cashes out rather than washing out.
+
+  So A4's "whatever the blob does not carry, the tick does not read" holds for
+  everything measured before, and **does not hold across a battle**.
+
+  **It does not reach the turn loop, and the reason is structural.** Neither
+  side of the loop is ever in the played position. The referee loads a blob and
+  advances exactly one turn, `resolve_turn` calling `tick(merged, turns=1)`. A
+  player never crosses a boundary at all: `player_turn.serve` holds the clock at
+  `0x0080AA08` for `HOLD_SECONDS = 86400` after load, and the player build is
+  the one without T1-T5 so the engine's own sync checks stay intact. No boundary
+  in a session means no combat resolves in one, so a submission cannot carry
+  this divergence. A submission that ticked anyway is already known to be junk
+  for every order type, not just this one, which `player_turn`'s header records.
+
+  **Where it does bite is the AI-played galaxy.** `duel.py` drives many
+  boundaries in a single client session with actuator writes between them, which
+  is precisely the played arm of this experiment. So an AI-vs-AI galaxy that has
+  fought a war cannot be captured, reloaded and continued as the same galaxy,
+  and per-turn measurements taken across such a run are not reproducible from
+  the blob. That constrains the on-demand AI galaxy idea, where a run has to be
+  able to stop and resume.
+
+  [ ] **What those 30 bytes are is not established.** The `NWDB` pair reads `1`
+  against `2` in ASCII, which would be a count rendered into news text, and a
+  count rendered at generation time is carried by the blob while one recomputed
+  at read time is not. That distinction is A4's own standard and is the thread
+  to pull first.
+
+  **`NEWS` is how contact is established, and a missing hull is not.** A `NEWS`
+  payload is a fixed 44-byte record: the turn at `+8`, a category at `+20`, an
+  ascending per-civ item id at `+24`, and a position at `+32`. Categories 1 and
+  3 carry no position; 8 to 11 do. An engagement raises **two** items on one
+  turn at one position, one in each civ's `OWNR` under a different category,
+  which reads as each side's own view of it. `two_sided_war.py contacts` diffs
+  them between two blobs.
+
+  This exists because a hull going missing was read as combat and is not
+  evidence of it: a warship can be lost in transit having met nothing. The
+  reading that produced this tool was wrong in exactly that way, and a
+  positioned news item on a known turn is what settled it.
+
+  **Fleet speed is per hull and cannot be generalised from one.** Measured on
+  `cycle.dat`: `b1` covers about 3.4 units a turn and `f1` about 6.4, so over a
+  450-unit separation one arrives inside a 70-turn window and the other does
+  not. Taking the slower hull's rate for the fleet is what produced the wrong
+  reading above.
+
+  **`cycle.dat` already holds GoodGuy and BadGuy at War at turn 110.** The
+  declaration in A4's setup was a no-op on this fixture, which costs A4 nothing
+  because combat did happen. It does mean a control has to **write peace**
+  rather than merely decline to declare war, or it runs the same war as the
+  experiment and forgives whatever it finds.
+
+  **The hashes above are only comparable against blobs built by the same
+  tooling.** The fixtures were produced by an actuator that debited one draft
+  where it owed two, so BadGuy opens on 6442 rather than 6187. Cash is inside
+  the canonical hash, so correcting that actuator moves every hash here.
+  Regenerating the fixtures and comparing against these numbers will look
+  exactly like a determinism failure and will not be one.
 
   Star names are deliberately **not** masked in `canonical.py`, because masking
   a name field to forgive a default would also forgive a change to it.
