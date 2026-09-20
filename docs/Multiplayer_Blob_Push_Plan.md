@@ -233,11 +233,10 @@ see D1.
   the blob. That constrains the on-demand AI galaxy idea, where a run has to be
   able to stop and resume.
 
-  [ ] **What those 30 bytes are is not established.** The `NWDB` pair reads `1`
-  against `2` in ASCII, which would be a count rendered into news text, and a
-  count rendered at generation time is carried by the blob while one recomputed
-  at read time is not. That distinction is A4's own standard and is the thread
-  to pull first.
+  [~] **What those 30 bytes are is not established.** Moved to
+  `CosmicSupremacy_Reconstruction_Report.md` §2, under the blob-fidelity audit.
+  Not a beta blocker: it does not reach the turn loop, for the structural
+  reason given above.
 
   **`NEWS` is how contact is established, and a missing hull is not.** A `NEWS`
   payload is a fixed 44-byte record. What is settled: the **turn** at `+8`, and
@@ -258,29 +257,11 @@ see D1.
   like each side's own view of it. The two-player battle raised one, for the
   defender only. One of those is a special case and it is not yet known which.
 
-  [ ] **A losing attacker can be told nothing at all, and why is unexplained.**
-  In the two-player battle the attacker lost two warships at the defender's
-  homeworld and received **no `NEWS` record of any kind**, while the defender
-  received one per engagement. Measured by counting raw `NEWS` sections against
-  the `OWNR` byte ranges rather than by trusting an attribution helper: two
-  sections in the whole blob, both inside the defender's range.
-
-  Three explanations have been tested and **all three fail**:
-
-  - **Not the merge.** The same fixture ticked with no players, no submissions
-    and no merge at all produced the identical result. The merge also applies
-    orders BEFORE the tick, and the news is generated during it.
-  - **Not presence.** An unarmed attacker-owned ship was placed at the battle
-    site. It was there, it was destroyed there, and its owner still received
-    nothing.
-  - **Not discovery.** The attacker's `EXSY` holds the defender's system, so it
-    had entered and knows the system its ships died in.
-
-  What remains is the difference between the two galaxies: `cycle.dat` is turn
-  110 with developed empires, the two-player galaxy is turn 2 out of
-  `make_multiplayer_galaxy`. Worth settling, because a player losing a fleet and
-  being told nothing about where is a bad enough experience to be worth knowing
-  whether it is the engine's rule or an artefact of how these galaxies are made.
+  [~] **A losing attacker can be told nothing at all, and why is unexplained.**
+  Moved to `CosmicSupremacy_Reconstruction_Report.md` §2, "`NEWS`, how an
+  engagement is established, and who is told about it", along with the record
+  layout above. Not a beta blocker: it is a reporting gap, and the outcome of
+  the battle is the same on both sides.
 
   This exists because a hull going missing was read as combat and is not
   evidence of it: a warship can be lost in transit having met nothing. The
@@ -1336,15 +1317,10 @@ made unnecessary.
   dialog something creates, so the script is dead code unless a path turns up
   that creates this one. What gates dialog 222 is not established.
 
-- [ ] **The lock records who last claimed the client, not who is using it.**
-  `take_client_lock` clears a stale lock by asking whether the holder's pid is
-  alive, which was written for a holder that died mid-hold. A holder that exits
-  normally and deliberately leaves the client running produces the same stale
-  lock, and the next tool through is waved past it. Seen live: a script that
-  opened a galaxy for inspection finished, left the client up, and left a lock
-  naming a dead pid while other work was still in flight on that machine. A free
-  lock and a free machine are independent facts, and the tooling cannot tell
-  them apart.
+- [~] **The lock records who last claimed the client, not who is using it.**
+  Moved to `CosmicSupremacy_Reconstruction_Report.md` §12, "One game process
+  per machine, and what the lock does not know". Not a beta blocker: a stale
+  lock loses the arbitration it was written for, it does not corrupt a turn.
 
 ## F. Off one machine
 
