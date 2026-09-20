@@ -41,6 +41,41 @@ section, whose payload holds the queue's own fields and a nested section naming
 what is queued, `FCLT` for a facility. It is self-contained, so it is copied
 whole.
 
+**Ship designs**, `OWNR > DATA > DSGN`. A player who designs a ship returns an
+`OWNR` carrying a second `DSGN`/`SDPR` pair with the existing one untouched, the
+civ's design count raised by one and `SAVE+0` raised to the new object id. The
+subtree is copied whole, because it is self-contained and everything in it is
+the design.
+
+The hard part is the object id, not the bytes. **The client allocates a new
+object id as one past the object count**, so two players who design a ship on
+the same turn both arrive claiming the same number, and merging both would put
+two different objects into one galaxy under one id. Whoever is merged second is
+renumbered and every reference to the id they submitted is rewritten with them,
+which today means the id inside the `DSGN` payload and the production queue that
+names it.
+
+This interacts with the queue, which is why it had to be fixed rather than
+listed. A queue building a design the galaxy does not hold is a dangling
+reference and the engine refuses the **whole galaxy** rather than the order: the
+client starts, reads it and exits in about four seconds, which stalled a live
+turn for both players. The guard that refuses such a queue stays; it is the
+backstop, and carrying designs is what stops it firing.
+
+Editing a design and deleting one are refused and named. Neither has been
+measured, and a design with a ship already built from it is a reference nobody
+has followed.
+
+**Four `OWPR` bytes move in the same submission and none of them is carried.**
+`+49`, `+77`, `+78`, `+100` and `+110` were surveyed across all 18 turns of the
+rehearsal: the first three also move on turns where no design was created, and
+`+100` is a counter the engine advances by 7 every tick on its own. The
+decisive measurement is that the same player made the same design three times,
+on turns 5, 6 and 7, identical parts and only the name differing, and the
+fields disagreed across the three submissions. A value derived from the design
+would have been the same all three times. What they are is not established and
+nothing here needs it.
+
 **People**, the citizen array in `PLNT > PLPR`, the stationed military array
 that follows it, and a ship's crew in `SHPR`. Judged as one thing, because a
 player can move somebody between them: conscription turns a citizen into a
@@ -135,10 +170,17 @@ submitter owns.
 `Neighbor's HQ` purely from loading a turn, with no action by that player. It
 is knowledge the referee recomputes, so it stays excluded.
 
-**Everything else**: facility selection outside the queue, ship designs,
-governors, admirals, diplomacy proposals. Not measured, so not accepted. An
-order type nobody has measured is not a gap in a list, it is a change of unknown
-extent being copied between players.
+**Everything else**: facility selection outside the queue, governors, admirals,
+diplomacy proposals. Not measured, so not accepted. An order type nobody has
+measured is not a gap in a list, it is a change of unknown extent being copied
+between players.
+
+**Every refusal is recorded against the civ that made it**, in the optional
+`notes` argument to `merge`, as well as logged. The log reaches whoever is
+running the referee, which on a player's machine is nobody: a system rename and
+a conscription were both dropped in the first two-machine rehearsal and both
+players saw nothing but an order that had not happened. `referee.py` writes
+what lands in `notes` beside the turn and `player_turn.follow` prints it.
 
 [ ] **Nothing here checks that an order is legal**, only that it is the
 player's own. A submission naming a technology the civ cannot research, or a
@@ -153,6 +195,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import save_parser as sp
 import inject_civ as icv
+import inject_design as idg
 
 # Fields inside a civ's OWPR that carry the research topic, as (offset, length).
 RESEARCH_FIELDS = ((32, 4), (40, 4))
@@ -203,6 +246,52 @@ MILITARY_JOB = 3
 # planet keeps its soldiers in.
 CREW_COUNT_OFF = 4
 CREW_ARRAY_OFF = 8
+
+# ── ship designs ─────────────────────────────────────────────────────────────
+# A design is a `DSGN` section inside the owning civ's `OWNR > DATA`, a sibling
+# of `OWPR` and `SERV`, carrying its own object id and one `SDPR` child:
+#
+#     DSGN v4   u32 objectId ; SDPR ; one trailing byte
+#     SDPR v0   u32 nameLen ; name ; six part lists ; u32 owningCivObjectId
+#
+# Immediately before a civ's first `DSGN`, in `DATA`'s own bytes, sits a `u32`
+# count of that civ's designs. `inject_design.py` measured this format and its
+# readers are used here rather than a second set being written.
+#
+# Measured against the 19 September 2026 rehearsal, whose store kept every
+# submission: a player who created a design returned an `OWNR` grown by 75
+# bytes holding a second `DSGN`/`SDPR` pair, the existing one untouched, the
+# count dword 1 -> 2 and `SAVE+0` 205 -> 206.
+DESIGN_COUNT_BEFORE = 4     # the count dword, this far before the first DSGN
+MAX_DESIGN_NAME = 15        # the client's name buffer, per inject_design
+
+# Where a queued ship names its design, as an offset into a whole `PROD`
+# section: past PROD's own 8-byte header, then the nested `SHIP` section whose
+# header begins at +21 and whose payload is the design's object id.
+PROD_DESIGN_AT = 8 + 29
+
+# Four `OWPR` bytes move in the same submission as a new design, and none of
+# them is carried. Measured across all 18 turns of the rehearsal:
+#
+#     +49   also moves on turns 8, 9 and 13, where no design was created, and
+#           the engine rewrites it across a tick
+#     +77   Laptop's moved on turn 1, no design created
+#     +78   Powerhouse's moved on turn 1, no design created
+#     +100  a u32 the engine advances by 7 every tick on its own. It went
+#           637 -> 644 across turn 6 -> 7 while that turn's design was being
+#           dropped, so nothing about it waits on a submission
+#     +110  the only one of the four the engine never rewrote across a tick
+#
+# The decisive measurement is that the player created the SAME design three
+# times, on turns 5, 6 and 7: identical parts, only the name differing. The
+# fields did not agree across those three submissions. `+100` went 630 -> 466
+# on turn 5 and 637 -> 735 on turn 6; `+110` went 260 -> 242 and then
+# 260 -> 272. A value derived from the design would have been the same all
+# three times, so none of the four is a function of the design.
+#
+# What they are is not established, and carrying a design does not depend on
+# it. `OWPR` is the civ's whole property block and holds the research topic and
+# the coat-of-arms count, so an unexplained byte in it stays where it is.
 
 RECRUIT_OFF = 27
 PROGRESS_OFF = 23
@@ -530,13 +619,186 @@ def progress_of(plpr):
     return struct.unpack_from('<I', plpr, PROGRESS_OFF)[0]
 
 
-def design_ids(blob):
-    """Every ship design object id in a blob."""
-    out = set()
-    for sec in sp.flatten(sp.parse_blob(blob)):
-        if sec.tag == b'DSGN':
-            out.add(struct.unpack_from('<I', blob, sec.payload)[0])
+def design_sections(blob):
+    """([(civObjectId, DATA section, [DSGN sections])], tree) for every civ.
+
+    The tree comes back with them because `sp.replace_payload` has to be given
+    the one its target was parsed from.
+    """
+    tree = sp.parse_blob(blob)
+    glxy = next(tree[0].find('GLXY'))
+    out = []
+    for o in glxy.children:
+        if o.tag != b'OWNR':
+            continue
+        n = struct.unpack_from('<I', blob, o.payload)[0]
+        oid = struct.unpack_from('<I', blob, o.payload + 4 + n)[0]
+        data = next((c for c in o.children if c.tag == b'DATA'), None)
+        if data is None:
+            continue
+        out.append((oid, data, [c for c in data.children if c.tag == b'DSGN']))
+    return out, tree
+
+
+def design_index(blob):
+    """{designObjectId: {civ, name, parts, claims, record}} for every design.
+
+    `civ` is the civ whose `OWNR` the design sits in and `claims` is the civ its
+    own payload names. Both are reported because a submission that disagrees
+    with itself is refused rather than half believed, and because the two are
+    written in different places.
+
+    `name`, `parts` and `claims` are None when the record does not parse, which
+    is a refusal rather than a crash.
+    """
+    out = {}
+    for civ_oid, _data, designs in design_sections(blob)[0]:
+        for d in designs:
+            oid = struct.unpack_from('<I', blob, d.payload)[0]
+            try:
+                _oid, name, parts, claims = idg.read_design(blob, d.start)
+            except Exception:                                   # noqa: BLE001
+                name, parts, claims = None, None, None
+            out[oid] = {'civ': civ_oid, 'name': name, 'parts': parts,
+                        'claims': claims,
+                        'record': bytes(blob[d.start:d.end])}
     return out
+
+
+def designs_of(blob, civ_oid):
+    """The design object ids one civ owns."""
+    return {oid for oid, d in design_index(blob).items() if d['civ'] == civ_oid}
+
+
+def next_object_id(blob):
+    """An object id nothing in this blob is using.
+
+    `inject_design.max_object_id` takes the larger of `SAVE`'s counter and every
+    id a scan can find, so one past it is free under either reading of `SAVE+0`,
+    the highest id in use or the number of objects. The two readings coincide in
+    practice because ids are allocated densely from that counter, and a design
+    placed at max + 1 satisfies both.
+    """
+    return idg.max_object_id(blob) + 1
+
+
+def set_high_water(blob, oid):
+    """Raise `SAVE`'s object counter to cover an object just added."""
+    out = bytearray(blob)
+    if struct.unpack_from('<I', out, idg.HIGH_WATER_ID)[0] < oid:
+        struct.pack_into('<I', out, idg.HIGH_WATER_ID, int(oid))
+    return bytes(out)
+
+
+def with_design_id(record, oid):
+    """A `DSGN` record carrying a different object id."""
+    out = bytearray(record)
+    struct.pack_into('<I', out, 8, int(oid))
+    return bytes(out)
+
+
+def with_prod_design(prod, oid):
+    """A `PROD` section whose queued ship names a different design."""
+    out = bytearray(prod)
+    struct.pack_into('<I', out, PROD_DESIGN_AT, int(oid))
+    return bytes(out)
+
+
+def design_name_acceptable(name):
+    """(ok, reason) for a submitted design name."""
+    if name is None:
+        return False, 'the record does not parse'
+    raw = name.encode('latin1')
+    if not raw:
+        return False, 'the name is empty'
+    if len(raw) > MAX_DESIGN_NAME:
+        return (False, f'the name is {len(raw)} bytes and the buffer the '
+                f'client offers holds {MAX_DESIGN_NAME}')
+    if any(b < 0x20 or b > 0x7e for b in raw):
+        return False, 'the name holds bytes outside printable ASCII'
+    return True, ''
+
+
+def add_design(blob, civ_oid, record):
+    """Append a `DSGN` to a civ's `DATA` and bump its design count.
+
+    The section grows, so every enclosing size is corrected. The count dword is
+    only locatable relative to the civ's first `DSGN`, so a civ owning none is
+    refused rather than guessed at. Every civ a generated galaxy starts with
+    owns a Colony Ship.
+    """
+    secs, tree = design_sections(blob)
+    for oid, data, designs in secs:
+        if oid != civ_oid:
+            continue
+        if not designs:
+            raise SystemExit(f'civ {civ_oid} owns no design to append after, '
+                             f'and the count dword is only locatable from one')
+        first, last = designs[0], designs[-1]
+        count_at = first.start - DESIGN_COUNT_BEFORE
+        if count_at < data.payload:
+            raise SystemExit(f'civ {civ_oid} has no design count before its '
+                             f'first DSGN')
+        count = struct.unpack_from('<I', blob, count_at)[0]
+        if count != len(designs):
+            raise SystemExit(f'civ {civ_oid} holds {len(designs)} design(s) '
+                             f'and a count field reading {count}')
+        body = bytearray(blob[data.payload:data.end])
+        struct.pack_into('<I', body, count_at - data.payload, count + 1)
+        at = last.end - data.payload
+        body[at:at] = record
+        return sp.replace_payload(blob, tree, data, bytes(body))
+    raise SystemExit(f'civ {civ_oid} is not in this blob')
+
+
+def design_orders(served, submitted, civ_oid):
+    """([(objectId, design)], [refusals]) for one civ's ship designs.
+
+    `served` and `submitted` are `design_index` results. A design is new when
+    the submission holds one the served state does not. Everything else a
+    submission can do to the set of designs is refused and named, because
+    nothing else has been measured: editing one, deleting one, and touching
+    anybody else's.
+    """
+    new, refused = [], []
+
+    for oid in sorted(set(served) - set(submitted)):
+        whose = 'its own' if served[oid]['civ'] == civ_oid else "another civ's"
+        refused.append(f'design {oid} ({served[oid]["name"]!r}) DROPPED, it is '
+                       f'missing from the submission and is {whose}; deleting '
+                       f'a design is not carried yet')
+
+    for oid in sorted(set(served) & set(submitted)):
+        if submitted[oid]['record'] == served[oid]['record']:
+            continue
+        refused.append(f'design {oid} ({served[oid]["name"]!r}) DROPPED, it '
+                       f'came back changed; editing a design is not carried '
+                       f'yet')
+
+    for oid in sorted(set(submitted) - set(served)):
+        d = submitted[oid]
+        ok, why = design_name_acceptable(d['name'])
+        if not ok:
+            refused.append(f'design {oid} DROPPED, {why}')
+            continue
+        if d['civ'] != civ_oid:
+            refused.append(f'design {oid} ({d["name"]!r}) DROPPED, it arrived '
+                           f"under another civ's OWNR")
+            continue
+        if d['claims'] != civ_oid:
+            refused.append(f'design {oid} ({d["name"]!r}) DROPPED, its payload '
+                           f'names civ {d["claims"]} as the owner, not the '
+                           f'submitter')
+            continue
+        siblings = {v['name'] for k, v in submitted.items()
+                    if v['civ'] == civ_oid and k != oid}
+        if d['name'] in siblings:
+            refused.append(f'design {oid} DROPPED, this civ already owns one '
+                           f'named {d["name"]!r} and the client requires a '
+                           f'name to be unique within a civ')
+            continue
+        new.append((oid, d))
+    return new, refused
 
 
 def prod_builds(prod):
@@ -892,11 +1154,19 @@ def _ship_crew_index(blob):
     return out
 
 
-def merge(blob, submissions, log=print):
-    """submissions: [(civ_name, submitted_blob)]. Returns the merged blob."""
+def merge(blob, submissions, log=print, notes=None):
+    """submissions: [(civ_name, submitted_blob)]. Returns the merged blob.
+
+    `notes` is an optional `{civ: [reason]}` that every refusal is recorded in
+    as well as logged. The log goes to whoever is running the referee, which is
+    nobody on the player's machine: two of the rehearsal's six findings were a
+    rename and a conscription that the client accepted, the merge dropped and
+    the player never heard about. `referee.py` writes what lands here beside
+    the turn so `player_turn.follow` can print it into the launcher's log.
+    """
     served_ships = ship_index(blob)
     served_planets = planet_index(blob)
-    served_designs = design_ids(blob)
+    served_designs = design_index(blob)
     names = {o['oid']: o['name'] for o in icv.owner_records(blob)}
     accepted = dropped = 0
 
@@ -905,19 +1175,66 @@ def merge(blob, submissions, log=print):
         mine = civ['oid']
         log(f"{civ_name} (object {mine}):")
 
+        def drop(reason, _civ=civ_name):
+            """Refuse one change: say it here, and tell the player who made it.
+
+            A refusal that only reaches the referee's console is a turn the
+            player watches disappear, which is what happened to a system rename
+            and a conscription in the first two-machine rehearsal.
+            """
+            nonlocal dropped
+            dropped += 1
+            log(f"    {reason}")
+            if notes is not None:
+                notes.setdefault(_civ, []).append(reason)
+
+        # Ship designs, before the production queues, because a queue that
+        # builds a design the galaxy does not hold is a dangling reference and
+        # the engine refuses the whole file rather than the order.
+        #
+        # Judged against `served_designs`, the state as it was served, like
+        # every other rule here: applying one player's designs first would
+        # otherwise make the next player's untouched copy of the galaxy look
+        # like a submission that had deleted them.
+        remap = {}
+        new_designs, refusals = design_orders(served_designs,
+                                              design_index(sub), mine)
+        for why in refusals:
+            drop(why)
+        for was, d in new_designs:
+            oid = was
+            if oid in design_index(blob):
+                # The client allocates a new object id as one past the object
+                # count, so two players who design a ship on the same turn both
+                # arrive claiming the same id, and merging both would put two
+                # objects into one galaxy under one id. Whoever is merged second
+                # is renumbered.
+                #
+                # This is the one judgement made against the accumulating blob
+                # rather than against the state served, and it has to be: an id
+                # is taken or free in the galaxy being built, not in the one
+                # either player was handed.
+                oid = next_object_id(blob)
+                remap[was] = oid
+            blob = set_high_water(blob, oid)
+            blob = add_design(blob, mine, with_design_id(d['record'], oid))
+            log(f"    design {oid}: {d['name']!r} taken"
+                + (f", submitted as {was} and renumbered"
+                   if oid != was else ""))
+            accepted += 1
+        mine_designs = designs_of(blob, mine)
+
         # ship orders
         for ship_oid, (_claimed, dyno) in sorted(ship_index(sub).items()):
             if ship_oid not in served_ships:
-                log(f"    ship {ship_oid}: DROPPED, not in the state served")
-                dropped += 1
+                drop(f"ship {ship_oid}: DROPPED, not in the state served")
                 continue
             owner, as_served = served_ships[ship_oid]
             if dyno == as_served:
                 continue
             if owner != mine:
-                log(f"    ship {ship_oid}: DROPPED, owned by "
-                    f"{names.get(owner, owner)}")
-                dropped += 1
+                drop(f"ship {ship_oid}: DROPPED, owned by "
+                     f"{names.get(owner, owner)}")
                 continue
             blob = replace_dyno(blob, ship_oid, dyno)
             log(f"    ship {ship_oid}: order taken "
@@ -928,30 +1245,32 @@ def merge(blob, submissions, log=print):
         for planet_oid, (_claimed, prod, plpr, name) in sorted(
                 planet_index(sub).items()):
             if planet_oid not in served_planets:
-                log(f"    planet {planet_oid}: DROPPED, not in the state served")
-                dropped += 1
+                drop(f"planet {planet_oid}: DROPPED, not in the state served")
                 continue
             owner, prod_served, plpr_served, name_served = \
                 served_planets[planet_oid]
+
+            # A queue naming a design that was renumbered has to name the
+            # number it ended up with. The client wrote the id it allocated,
+            # and that id belongs to somebody else now.
+            if prod is not None and prod_builds(prod) in remap:
+                prod = with_prod_design(prod, remap[prod_builds(prod)])
 
             if name is None and name_served is not None:
                 # planet_name refuses a length it cannot trust, so a submission
                 # with a corrupt or overlong name arrives as None. Say that,
                 # rather than letting the next rule report whatever it happens
                 # to notice about the same wreckage.
-                log(f"    planet {planet_oid}: rename DROPPED, the name field "
-                    f"is unreadable or longer than {MAX_NAME} bytes")
-                dropped += 1
+                drop(f"planet {planet_oid}: rename DROPPED, the name field "
+                     f"is unreadable or longer than {MAX_NAME} bytes")
             elif name is not None and name_served is not None and name != name_served:
                 if owner != mine:
-                    log(f"    planet {planet_oid}: rename DROPPED, owned by "
-                        f"{names.get(owner, owner)}")
-                    dropped += 1
+                    drop(f"planet {planet_oid}: rename DROPPED, owned by "
+                         f"{names.get(owner, owner)}")
                 else:
                     ok, why = name_acceptable(name[1])
                     if not ok:
-                        log(f"    planet {planet_oid}: rename DROPPED, {why}")
-                        dropped += 1
+                        drop(f"planet {planet_oid}: rename DROPPED, {why}")
                     else:
                         blob = set_planet_name(blob, planet_oid, name[1])
                         log(f"    planet {planet_oid}: renamed "
@@ -961,27 +1280,30 @@ def merge(blob, submissions, log=print):
 
             if prod != prod_served:
                 if owner != mine:
-                    log(f"    planet {planet_oid}: production DROPPED, owned by "
-                        f"{names.get(owner, owner)}")
-                    dropped += 1
+                    drop(f"planet {planet_oid}: production DROPPED, owned by "
+                         f"{names.get(owner, owner)}")
                 elif prod is None or prod_served is None:
-                    log(f"    planet {planet_oid}: production DROPPED, no PROD "
-                        f"section on one side")
-                    dropped += 1
+                    drop(f"planet {planet_oid}: production DROPPED, no PROD "
+                         f"section on one side")
                 elif (prod_builds(prod) is not None
-                      and prod_builds(prod) not in served_designs):
-                    # A queue that names a design the served state does not
-                    # have is a dangling reference, and the engine refuses the
-                    # whole galaxy rather than the order: the client started,
-                    # read it, and exited in four seconds. Designs are not
-                    # carried by this whitelist, so a player who designs a ship
-                    # and queues it produces exactly this. Refusing the queue
-                    # keeps the galaxy loadable; carrying designs is the real
-                    # fix and is not measured yet.
-                    log(f"    planet {planet_oid}: production DROPPED, it "
-                        f"builds design {prod_builds(prod)}, which is not in "
-                        f"the state served. Ship designs are not carried yet")
-                    dropped += 1
+                      and prod_builds(prod) not in mine_designs):
+                    # A queue that names a design the galaxy does not hold is a
+                    # dangling reference, and the engine refuses the whole
+                    # galaxy rather than the order: the client started, read it,
+                    # and exited in four seconds. Designs are carried now, so
+                    # this fires for a queue naming something that was refused
+                    # or that the submitter does not own, and it stays because
+                    # it is what keeps an unloadable galaxy from being
+                    # published.
+                    #
+                    # Asked of the merged galaxy rather than of the state
+                    # served, because the question is whether the reference will
+                    # resolve in the file the referee is about to publish. It is
+                    # asked per civ so that one player's new design cannot
+                    # become the thing another player's queue happens to name.
+                    drop(f"planet {planet_oid}: production DROPPED, it builds "
+                         f"design {prod_builds(prod)}, which {civ_name} does "
+                         f"not own in the merged galaxy")
                 elif is_hurried(prod) and not is_hurried(prod_served):
                     # A hurry takes effect the moment it is clicked, so the
                     # submission carries the outcome rather than the request:
@@ -992,8 +1314,7 @@ def merge(blob, submissions, log=print):
                     ok, why, cost, points = hurry_acceptable(
                         plpr_served, plpr, credits_of(blob, mine))
                     if not ok:
-                        log(f"    planet {planet_oid}: hurry DROPPED, {why}")
-                        dropped += 1
+                        drop(f"planet {planet_oid}: hurry DROPPED, {why}")
                     else:
                         blob = replace_prod(blob, planet_oid, prod)
                         blob = set_progress(blob, planet_oid,
@@ -1013,13 +1334,11 @@ def merge(blob, submissions, log=print):
             rate, rate_served = recruit_of(plpr), recruit_of(plpr_served)
             if rate is not None and rate != rate_served:
                 if owner != mine:
-                    log(f"    planet {planet_oid}: recruitment rate DROPPED, "
-                        f"owned by {names.get(owner, owner)}")
-                    dropped += 1
+                    drop(f"planet {planet_oid}: recruitment rate DROPPED, "
+                         f"owned by {names.get(owner, owner)}")
                 elif not 0 <= rate <= 100:
-                    log(f"    planet {planet_oid}: recruitment rate DROPPED, "
-                        f"{rate} is not a percentage")
-                    dropped += 1
+                    drop(f"planet {planet_oid}: recruitment rate DROPPED, "
+                         f"{rate} is not a percentage")
                 else:
                     blob = set_recruit(blob, planet_oid, rate)
                     log(f"    planet {planet_oid}: recruitment rate "
@@ -1035,8 +1354,7 @@ def merge(blob, submissions, log=print):
         if planets_after is None:
             pass                              # unreadable; people_acceptable said so
         elif not ok:
-            log(f"    people DROPPED, {why}")
-            dropped += 1
+            drop(f"people DROPPED, {why}")
         else:
             for oid in sorted(planets_after):
                 cz_b, mil_b = planets_before[oid]
@@ -1065,16 +1383,14 @@ def merge(blob, submissions, log=print):
         served_systems = systems(blob)
         for sun_oid, (_o, _t, name) in sorted(systems(sub).items()):
             if sun_oid not in served_systems:
-                log(f"    system {sun_oid}: DROPPED, not in the state served")
-                dropped += 1
+                drop(f"system {sun_oid}: DROPPED, not in the state served")
                 continue
             owners, total, name_served = served_systems[sun_oid]
             if name_served is None:
                 continue
             if name is None:
-                log(f"    system {sun_oid}: rename DROPPED, the name field is "
-                    f"unreadable or longer than {MAX_NAME} bytes")
-                dropped += 1
+                drop(f"system {sun_oid}: rename DROPPED, the name field is "
+                     f"unreadable or longer than {MAX_NAME} bytes")
                 continue
             if name == name_served:
                 continue
@@ -1097,15 +1413,13 @@ def merge(blob, submissions, log=print):
             held = owners.get(mine, 0)
             settled = sum(owners.values())
             if held * 2 <= settled:
-                log(f"    system {sun_oid}: rename DROPPED, {civ_name} holds "
-                    f"{held} of the {settled} settled planet(s) in a system of "
-                    f"{total}, not a majority")
-                dropped += 1
+                drop(f"system {sun_oid}: rename DROPPED, {civ_name} holds "
+                     f"{held} of the {settled} settled planet(s) in a system "
+                     f"of {total}, not a majority")
                 continue
             ok, why = name_acceptable(name[1])
             if not ok:
-                log(f"    system {sun_oid}: rename DROPPED, {why}")
-                dropped += 1
+                drop(f"system {sun_oid}: rename DROPPED, {why}")
                 continue
             blob = set_system_name(blob, sun_oid, name[1])
             log(f"    system {sun_oid}: renamed "
@@ -1127,8 +1441,7 @@ def merge(blob, submissions, log=print):
             a = research_of(sub, other['oid'])
             b = research_of(blob, other['oid'])
             if a is not None and b is not None and a != b:
-                log(f"    research: DROPPED, belongs to {other['name']}")
-                dropped += 1
+                drop(f"research: DROPPED, belongs to {other['name']}")
 
     log(f"{accepted} order(s) taken, {dropped} change(s) dropped")
     return blob

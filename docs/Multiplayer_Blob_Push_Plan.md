@@ -564,9 +564,91 @@ made unnecessary.
   actually mattered. Galaxy-level objects are now reported as unowned.
 
   Still unmeasured, and therefore not accepted: facility selection outside the
-  queue, ship designs, governors, admirals, diplomacy proposals. Orders issued
-  through an admiral are also out of scope, since the admiral id sits inside
-  `DYNO` and would be copied with the order.
+  queue, governors, admirals, diplomacy proposals. Orders issued through an
+  admiral are also out of scope, since the admiral id sits inside `DYNO` and
+  would be copied with the order.
+
+  **Ship designs, measured 19 September 2026 against the rehearsal store.** A
+  player who designs a ship lost it: the design existed only in their own copy
+  and was gone from the state they were served next turn, three times in a row
+  for one player making a scout. Carried now.
+
+      DSGN v4, 67 bytes, appended under the owning civ's OWNR > DATA
+        +0    u32     the design's own object id
+        SDPR  section, 54 bytes
+              u32     name length, then the name, unpadded
+              ...     six part lists
+              u32     the owning civ's object id, at the end
+        +1 trailing byte, which inject_design.build_dsgn does not emit
+
+      the civ's design count, a u32 in DATA's own bytes before its first DSGN
+      SAVE+0, the object counter, 205 -> 206
+
+  The existing `DSGN` is untouched and the subtree is copied whole, because it
+  is self-contained and all of it is the design.
+
+  **The object id is the hard part, not the bytes.** The client allocates a new
+  object id as one past the object count, so two players designing a ship on
+  the same turn both arrive claiming the same number. Whoever is merged second
+  is renumbered and every reference to the id they submitted is rewritten with
+  them: the id inside the `DSGN` payload, and the production queue that names
+  it at `PROD` payload +29. The id is judged against the **accumulating** blob
+  rather than the state served, which is the one place in the merge where that
+  is right, because an id is taken or free in the galaxy being built and not in
+  the one either player was handed. Everything else about a design, ownership
+  included, is still read from the state served.
+
+  **The queue and the design had to be fixed together.** A queue building a
+  design the galaxy does not hold is a dangling reference and the engine
+  refuses the *whole galaxy* rather than the order: the client starts, reads it
+  and exits in about four seconds, which stalled a live turn for both players.
+  The guard added mid-rehearsal stays as the backstop, now asking whether the
+  merged galaxy holds that design **for that civ**, so one player's new design
+  cannot become the thing another player's queue happens to name.
+
+  | forged | refused with |
+  |---|---|
+  | a design under another civ's `OWNR` | it arrived under another civ's OWNR |
+  | a payload naming another owner | its payload names civ 202 as the owner |
+  | control bytes in the name | the name holds bytes outside printable ASCII |
+  | a 200-byte name | the name is 200 bytes and the buffer the client offers holds 15 |
+  | a name the civ already uses | the client requires a name to be unique within a civ |
+  | an existing design edited | editing a design is not carried yet |
+  | a design deleted | deleting a design is not carried yet |
+  | a queue building someone else's design | Powerhouse does not own it in the merged galaxy |
+
+  **Ticked, twice.** `submissions/0006/Powerhouse.b64` against `turns/0006.b64`
+  is a real design a person made by clicking, object 206 named `test scout`.
+  Merged and ticked, the engine's own class scan reports 3 designs, the galaxy
+  advances to turn 7 and the design is still there with its queue resolving to
+  it. The same turn with a rival submission claiming the same id 206 merges to
+  two distinct designs, 206 and 207, ticks to turn 7 with the engine reporting
+  4 designs, and each player's queue resolves to their own.
+
+  Replayed over all 18 turns of the rehearsal, the merge is byte-identical to
+  the old one on 15 of them. The three that differ are turns 5, 6 and 7, the
+  three times that player made a scout; turns 6 and 7 go from "0 orders taken,
+  1 dropped" to "2 taken, 0 dropped".
+
+  **Four `OWPR` bytes move alongside a new design and none of them is carried.
+  This is a negative result and it is the useful part.** `+49`, `+77`, `+78`,
+  `+100` and `+110` were surveyed across every turn of the rehearsal:
+
+  | byte | what the survey says |
+  |---|---|
+  | `+49` | also moves on turns 8, 9 and 13, where no design was created; the engine rewrites it across a tick |
+  | `+77` | Laptop's moved on turn 1, no design created |
+  | `+78` | Powerhouse's moved on turn 1, no design created |
+  | `+100` | a `u32` the engine advances by 7 every tick on its own, 637 -> 644 across turn 6 -> 7 while that turn's design was being dropped |
+  | `+110` | the only one the engine never rewrote across a tick |
+
+  The decisive measurement is that the player made the **same design three
+  times**, on turns 5, 6 and 7, identical parts with only the name differing,
+  and the fields disagreed across the three submissions: `+100` went 630 -> 466
+  on turn 5 and 637 -> 735 on turn 6, `+110` went 260 -> 242 and then
+  260 -> 272. A value derived from the design would have been the same all
+  three times, so none of the four is a function of the design. What they are
+  is not established, and the two ticks say nothing needs them.
 - [ ] **C3. Immediate-effect actions.** Hurry production, conscription, crew
   assignment and job reallocation take effect the moment they are clicked, so the
   diff shows the *effect* and not the intent. Each needs a reverse mapping, effect
@@ -665,6 +747,32 @@ made unnecessary.
   uploads on its own. `client/dev_tools/trigger_save.py` calls it in a remote
   thread and `player_turn.py collect` wraps that. Every submission in the
   two-player round arrived this way, the player having only given their order.
+- [x] **C6. Tell the player their order was refused.** Every refusal was
+  already written down, on the referee's console, which on a player's machine
+  is nowhere. Two of the rehearsal's six findings were silent for exactly that
+  reason: a system rename and a conscription, both accepted by the client, both
+  dropped by the merge, both simply gone the next turn with nothing to look at.
+
+  Logged, with no new UI, which is what was asked for: "in theory players would
+  be safe to assume if they try to submit something last second, the order would
+  be missed. we don't need like a new ui to show missed orders."
+
+  The store is the only thing both sides touch, so the note goes there.
+  `merge_orders.merge` takes a `notes` dict and records every refusal against
+  the civ that made it; `referee.resolve_turn` writes each civ's reasons to
+  `notes/0007/<civ>.txt` beside the turn, before the tick, so they are
+  certainly there by the time a player's launcher notices the next turn; and
+  `player_turn.report_refusals` prints them into the launcher's log pane when
+  the turn the player just played closes. The refusal text is the referee's
+  own, unchanged, because it already names the rule.
+
+  A missing note is the ordinary case and reads as nothing refused. Reading one
+  tolerates the same SMB races `state.json` does, and a store that cannot be
+  read says so rather than ending the turn loop.
+
+  **Done when:** a player whose order is dropped sees the reason. Covered by
+  `server/tests/test_refusal_notes.py`, end to end from the merge's `notes`
+  argument through the store to the line the launcher prints.
 
 ## D. The galaxy
 
