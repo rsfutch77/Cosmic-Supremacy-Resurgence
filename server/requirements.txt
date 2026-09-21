@@ -3,3 +3,11 @@ uvicorn[standard]>=0.29.0
 bcrypt>=4.1.0
 PyJWT>=2.8.0
 aiosqlite>=0.20.0
+
+# The Firebase turn store (firebase_store.py). The two client libraries rather
+# than firebase-admin, which is a wrapper over these same two plus auth and
+# messaging that this does not use, and which pins their versions itself. Both
+# read FIRESTORE_EMULATOR_HOST and STORAGE_EMULATOR_HOST, so the emulator suite
+# needs no code of its own.
+google-cloud-firestore>=2.16.0
+google-cloud-storage>=2.16.0

@@ -1,0 +1,87 @@
+// beta_storage.rules , proposed Cloud Storage rules for the beta relay
+// =====================================================================
+// NOT DEPLOYED. Written for review, and item H4's to deploy. The note in
+// beta_firestore.rules about there being no firebase.json beside these files
+// applies here for the same reason.
+//
+// The layout firebase_store.py writes:
+//
+//     beta/<galaxy>/turns/0007.b64            the state for turn 7
+//     beta/<galaxy>/submissions/0007/X.b64    what civ X handed back
+//     beta/<galaxy>/notes/0007/X.txt          what the referee refused from X
+//
+// The worker holds a service account and bypasses these rules, so nothing
+// below grants the worker anything. Everything here is what a launcher may do.
+//
+// THE ONE PROPERTY THESE RULES CANNOT EXPRESS AS THE STORE IS WRITTEN TODAY
+// -------------------------------------------------------------------------
+// H4 asks that a client may write only *its own* submission. A Storage rule
+// can test `request.auth.uid` and custom claims and nothing else about who is
+// asking. A submission object is named for the civ, which is a username the
+// player typed, and there is no relation a rule can evaluate between a uid and
+// a username. So `allow write: if request.auth != null` below lets any signed
+// in client write any civ's submission, which is not the rule that was asked
+// for.
+//
+// Two ways to close it, and the choice belongs to H4 and J4 together:
+//
+//   1. Name the object for the uid: beta/<galaxy>/submissions/0007/<uid>.b64,
+//      and let the worker resolve uid to civ through the roster it already
+//      keeps. The rule is then `uid == request.auth.uid`, which is exact. This
+//      costs a parameter on the store's `submit`, because the store is given a
+//      civ name today and would have to be given both.
+//   2. Have the worker set a custom claim on each uid naming its civ, and test
+//      `file == request.auth.token.civ + '.b64'`. No change to the layout, but
+//      a claim has to be minted at join and refreshed when a seat is rebound,
+//      which is J4's rebind case.
+//
+// Until one of them is done, the rule below is a size cap and a deletion
+// refusal and not an ownership rule, and it should not be described as one.
+//
+// A SECOND THING THE RULES BREAK, WHICH IS A CODE PROBLEM AND NOT A RULE ONE
+// --------------------------------------------------------------------------
+// `read: if false` on submissions is right: one player has no business reading
+// another's. But `player_turn.py` reaches its own submission through
+// `store.submissions(turn).get(civ)`, which lists and downloads every player's
+// submission and then throws all but one away. Under these rules that call is
+// refused, and under Firebase it is also a download per player per poll. The
+// fix is an accessor for one submission on the store interface rather than a
+// change to these rules.
+
+rules_version = '2';
+
+service firebase.storage {
+  match /b/{bucket}/o {
+
+    // A published turn. Every player downloads it; nobody but the worker
+    // writes it. This is the whole galaxy, which every player holds already,
+    // for the reason D1 and D2 in the blob push plan record.
+    match /beta/{galaxy}/turns/{file} {
+      allow read: if request.auth != null;
+      allow write: if false;
+    }
+
+    // A submission. See the note above: this is a size cap and a deletion
+    // refusal, and the ownership half is not expressible yet.
+    match /beta/{galaxy}/submissions/{turn}/{file} {
+      allow read: if false;
+      allow create, update: if request.auth != null
+                            && request.resource.size < 2 * 1024 * 1024
+                            && request.resource.contentType.matches('text/.*');
+      allow delete: if false;
+    }
+
+    // A note the referee left one player. Readable by anyone signed in for the
+    // same reason the roster is: the object is named for the civ, so a rule
+    // cannot tell whose it is. A note says which of a player's own orders were
+    // refused, which is not worth a redesign to hide, and N2's dropped
+    // submission notes are the same shape.
+    match /beta/{galaxy}/notes/{turn}/{file} {
+      allow read: if request.auth != null;
+      allow write: if false;
+    }
+
+    // Everything else, including anything the website ever puts in this
+    // bucket, is denied by default and is left that way.
+  }
+}
