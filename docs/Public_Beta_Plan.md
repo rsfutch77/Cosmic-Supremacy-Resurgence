@@ -129,6 +129,32 @@ is out of scope here.
   only as `firebase deploy --only firestore:rules,storage` from a directory whose
   `firebase.json` names nothing else.
 
+  **State on 21 September 2026.** Both services exist and one of them works.
+
+  | | |
+  |---|---|
+  | Firestore `(default)`, `nam5`, `freeTier: true` | write, read and delete all succeed |
+  | bucket `cs-resurgence.firebasestorage.app`, `US-WEST1` | listing succeeds, **upload returns 403** |
+
+  The region is one of the three that carry the Always Free allowance, and the
+  database is the default one that carries the Firestore quota, so both choices
+  are right. The upload fails with `the billing account for the owning project is
+  disabled in state absent`.
+
+  **That error is not what it looks like.** The project reports
+  `billingEnabled: true` against account `019BED-824A60-F1BDA5` ("Main"), which
+  itself reports `open: true`. So nothing is unlinked. Reads are served and only
+  billable writes are refused, which is the signature of a project Cloud Storage
+  does not consider billable regardless of what the link says.
+
+  **The likely cause is that attaching a Cloud Billing account is not the same
+  action as upgrading the Firebase project to Blaze**, and Firebase keeps its own
+  plan record. Two other billing accounts on this login are closed, one of them
+  named "Firebase Payment", and a plan record still pointing at a closed account
+  would produce exactly this. The place to look is the Firebase console, Usage
+  and billing, Details and settings: whether the plan reads Blaze, and which
+  billing account it names.
+
   **Done when:** the services exist, the budget alert is set, and the equivalence
   test passes against the live project.
 
