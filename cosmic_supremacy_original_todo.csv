@@ -161,3 +161,7 @@ Extended Hall of Fame stats. (http://cosmicsupremacy.com/forum/thread.php?thread
 Expanded ranking (http://cosmicsupremacy.com/forum/thread.php?threadid=3769&page=4),Profile
 Split production so more than 1 thing can be produce per turn.,Planetry
 Diplomacy Scans (http://cosmicsupremacy.com/forum/thread.php?threadid=5799),Scans / Tech
+"AI players: scope whether the probe harness in client/dev_tools/ai_player/ can hold a seat for a full game, the bar every AI Players item depends on",AI Players
+"AI players: on-demand AI galaxies, a player asks the server for a new galaxy filled with bots (single-player / practice mode)",AI Players
+"AI players: local play, a bot-filled galaxy running entirely on the player machine, no server dependency and no waiting",AI Players
+"AI players: lobby seat filling, offer a waiting multiplayer galaxy the option to start early with bots in the remaining seats",AI Players
