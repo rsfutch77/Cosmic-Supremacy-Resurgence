@@ -446,10 +446,52 @@ is out of scope here.
   one carries the homeworld customisation and the rest get the engine default,
   which is worth two `PLPR` bytes and decides games (D3).
 
-  **A related bug, found and not yet fixed.** `--donor` defaults to the smallest
-  `OWNR`, which after the first injection is the civ that was just added. So a
-  multi-name run chains each clone off the previous newcomer rather than off the
-  original donor, and whatever the first newcomer inherited propagates.
+  **Seat one is the lowest object id, and two tools were picking it wrongly.**
+  `--donor` defaulted to the smallest `OWNR`, which after the first injection is
+  the civ just added, so a multi-name run chained each clone off the previous
+  newcomer. `inject_civ.seat_one` now takes the lowest object id instead, which
+  is both the right answer and a fixed point under its own mutation: a newcomer
+  takes `max_object_id + 1` and so can never be selected, which is what makes a
+  multi-name run safe rather than an exclusion list bolted on.
+
+  The rule was chosen from the data, over 472 multi-civ galaxies on disk. Of the
+  183 holding exactly one homeworld whose rate pair is not the engine default:
+
+  | candidate rule | names the customised seat |
+  |---|---|
+  | **lowest object id** | **183 of 183** |
+  | first `OWNR` in blob order | 60 of 183 |
+  | smallest `OWNR` (the old default) | 39 of 183 |
+
+  Narrow where it should be: those 183 are five distinct rosters captured at many
+  turns each, so this measures consistency across a galaxy's life rather than 183
+  independent generations. What it also shows is stability: `OWNR` length names
+  two different civs within one galaxy in 3 of 7, and the lowest object id names
+  one in all 7.
+
+  Order independence is proved rather than asserted, and mutation-tested:
+  reverting the rule fails four checks. The test also asserts the reverse, that
+  naming seat two as donor really does hand newcomers seat two's rates, so the
+  passing assertion is not vacuous.
+
+  **The same bug was live in galaxy creation and mattered more.**
+  `make_multiplayer_galaxy.build` mapped player names to civs by
+  `owner_records(blob)[i]`, which is blob order, and `equalise_homeworlds` then
+  levels everyone to `players[0]`. The engine's serialiser does not keep civs in
+  allocation order: 171 of the 472 galaxies present something other than the
+  lowest object id first, and in the three-civ demo galaxy the injected civ comes
+  back first. So the reference world was whichever civ happened to serialise
+  first. Measured on `galaxy_demo/turns/0007.b64`, whose blob order begins with
+  the injected `Neighbor`:
+
+  | `build(['Alpha','Beta','Gamma'])` | every player's rates |
+  |---|---|
+  | by blob order | `(32, 44)`, levelled **down** to the engine default |
+  | by seat order | `(62, 94)`, levelled up to seat one's |
+
+  `seated(blob)` sorts by object id and both call sites use it. This is the
+  difference D3 measured as worth two `PLPR` bytes and a citizen every few turns,
+  applied to every player in the galaxy at creation.
 
   **Still open:** the live half. An injected galaxy has not been loaded in the
   engine since this change, and no colony ship has been watched completing its

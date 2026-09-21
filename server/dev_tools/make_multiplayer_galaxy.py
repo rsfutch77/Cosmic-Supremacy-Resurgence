@@ -84,6 +84,26 @@ def rename_civ(blob: bytes, old: str, new: str, log=print) -> bytes:
     return out
 
 
+def seated(blob):
+    """Civs in seat order, which is the object id and not the blob order.
+
+    `owner_records` walks the blob, and the engine's serialiser does not keep
+    civs in the order they were allocated: 171 of the 472 multi-civ galaxies on
+    disk present something other than the lowest object id first, and in the
+    three-civ demo galaxy the civ `inject_civ` appended last comes back first
+    after a tick. Seat one is the lowest object id, the same rule
+    `inject_civ.seat_one` uses to choose a donor, and it is the seat carrying
+    the homeworld customisation that `equalise_homeworlds` levels everyone to.
+
+    Mapping player names by blob order instead levels the galaxy to whichever
+    civ happens to serialise first. On a galaxy grown by injection that is the
+    newcomer, which takes the reference rates down from 62/94 to the engine
+    default 32/44 and hands the real seat one a worse world than it started
+    with.
+    """
+    return sorted(icv.owner_records(blob), key=lambda o: o['oid'])
+
+
 def homeworld(blob: bytes, civ_name: str):
     """A civ's most populous planet, which in a fresh galaxy is its only one."""
     civ = next((o for o in icv.owner_records(blob) if o['name'] == civ_name),
@@ -312,7 +332,7 @@ def build(blob: bytes, players, log=print) -> bytes:
     # civ we have not renamed yet, or the uniqueness check in add_civ and the
     # engine's own registry both see a collision that is about to disappear.
     for i, want in enumerate(players[:len(existing)]):
-        current = icv.owner_records(blob)[i]['name']
+        current = seated(blob)[i]['name']
         if want == current:
             continue
         if want in [o['name'] for o in icv.owner_records(blob)]:
@@ -321,7 +341,7 @@ def build(blob: bytes, players, log=print) -> bytes:
         blob = rename_civ(blob, current, want, log=log)
     # any placeholders left belong to a later player
     for i, want in enumerate(players[:len(existing)]):
-        for o in icv.owner_records(blob):
+        for o in seated(blob):
             if o['name'].startswith('__tmp'):
                 blob = rename_civ(blob, o['name'], want, log=log)
                 break

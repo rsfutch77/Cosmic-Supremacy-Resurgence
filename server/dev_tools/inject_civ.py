@@ -295,6 +295,50 @@ def system_spacing(blob, tree=None):
     return nearest[len(nearest) // 2]
 
 
+def seat_one(owners):
+    """The civ to clone when the caller names no donor.
+
+    The lowest object id, which is the civ the galaxy generator allocated
+    first. It is the right default for two independent reasons.
+
+    **It names the seat that carries the homeworld customisation.** A generated
+    galaxy does not hand its civs equal worlds: seat one gets the customisation
+    the setup screens apply and the rest get the engine default, a difference of
+    the two `PLPR` bytes `make_multiplayer_galaxy.RATE_OFFSETS` names, and a
+    cloned civ inherits its donor's world. Of the 472 multi-civ galaxy blobs in
+    this repository, 183 hold exactly one customised homeworld, and the civ
+    holding it is the lowest object id in 183 of the 183. The two rules that
+    read like alternatives are wrong most of the time: the first `OWNR` in the
+    blob names it 60 times of 183 and the smallest `OWNR` 39 times of 183.
+    Those 183 blobs are 5 distinct civ rosters captured at many turns each, so
+    the count measures consistency across a galaxy's life rather than 183
+    independent generations.
+
+    **It cannot select a civ this tool has just added.** A new civ takes
+    `max_object_id + 1`, so a newcomer is always the highest id and never the
+    lowest. The rule is a fixed point under its own injection, which is what
+    makes a multi-name run clone every newcomer off the same civ instead of
+    chaining each off the last.
+
+    Both rejected rules fail that second test as well. The smallest `OWNR` is
+    the newcomer immediately after the first injection, because a fresh clone
+    owns one planet and nothing else. `OWNR` length also tracks designs,
+    citizens and stores, so it moves during ordinary play: over the 161 tick
+    inputs in `server/referee_work` the smallest `OWNR` names two different civs
+    within one galaxy in three of the seven galaxies, while the lowest object id
+    gives a single answer in all seven. Blob order belongs to the engine's
+    serialiser and is not seat order: 171 of the 472 blobs present something
+    other than the lowest id first, and in the three-civ demo galaxy the civ
+    `inject_civ` appended last comes back first after a tick.
+
+    `Owner:4` orders the civs the same way on all 183 and is rejected for a
+    different reason: it is a field this tool assigns and `--userid` lets the
+    caller force, including to a value already in use, so a donor rule reading
+    it would depend on an argument of the same command.
+    """
+    return min(owners, key=lambda o: o["oid"])
+
+
 def pick_homeworld(planets, taken, margin=0.0):
     """The uncolonised planet furthest from everything already claimed.
 
@@ -341,9 +385,10 @@ def add_civ(blob, new_name, donor_name=None, home_id=None, taken=(),
         raise SystemExit(f"{new_name!r} is longer than the 15-char name buffer")
 
     donor = (next((o for o in owners if o["name"] == donor_name), None)
-             if donor_name else min(owners, key=lambda o: o["ln"]))
+             if donor_name else seat_one(owners))
     if donor is None:
         raise SystemExit(f"no civ named {donor_name!r}; saw {sorted(names)}")
+    how = "named" if donor_name else "lowest object id, seat one"
 
     planets = planet_records(blob)
     donor_home = max((p for p in planets if p["owner"] == donor["oid"]),
@@ -386,8 +431,8 @@ def add_civ(blob, new_name, donor_name=None, home_id=None, taken=(),
         target = pick_homeworld(planets, set(taken) | reserved, margin=margin)
 
     new_id = idg.max_object_id(blob) + 1
-    log(f"\n=== {new_name!r}: cloning {donor['name']!r} (id {donor['oid']}) "
-        f"as object id {new_id}")
+    log(f"\n=== {new_name!r}: cloning {donor['name']!r} (id {donor['oid']}, "
+        f"{how}) as object id {new_id}")
     log(f"  homeworld: planet #{target['id']} at "
         f"({target['pos'][0]:.0f}, {target['pos'][1]:.0f}, {target['pos'][2]:.0f})"
         f", {min(dist(target['pos'], p['pos']) for p in planets if p['owner']):.0f} "
@@ -496,6 +541,7 @@ def describe(blob, log=print):
     log(f"civ count field @{ca} reads "
         f"{struct.unpack_from('<I', blob, ca)[0]}; {len(owners)} OWNR record(s)")
     seen = {}
+    donor = seat_one(owners)["name"] if owners else None
     for o in owners:
         mine = [p for p in planets if p["owner"] == o["oid"]]
         uid = struct.unpack_from("<I", blob, o["end"] - 4)[0]
@@ -503,7 +549,8 @@ def describe(blob, log=print):
         seen.setdefault(uid, o["name"])
         log(f"  {o['name']!r:16} id={o['oid']:<6} Owner:4={uid:<4} "
             f"OWNR {o['ln']:>6} bytes  {len(mine)} planet(s): "
-            f"{', '.join(str(p['id']) for p in mine)}{clash}")
+            f"{', '.join(str(p['id']) for p in mine)}"
+            f"{'  <-- default donor' if o['name'] == donor else ''}{clash}")
     free = [p for p in planets if not p["owner"]]
     log(f"  {len(planets)} planet(s), {len(free)} uncolonised")
     dests = ship_destinations(blob)
@@ -539,8 +586,9 @@ def main():
                          "anything already claimed or under way. Default is the "
                          "galaxy's own median system spacing; 0 disables it")
     ap.add_argument("--donor", default=None,
-                    help="civ to clone (default: the smallest OWNR, which is "
-                         "normally the engine's own civ)")
+                    help="civ to clone (default: the lowest object id, which "
+                         "is the seat the generator filled first and the one "
+                         "carrying the homeworld customisation)")
     ap.add_argument("-o", "--out", default=None, help="output .b64")
     ap.add_argument("--dat", default=None,
                     help="also write the decompressed blob here, ready to be "
