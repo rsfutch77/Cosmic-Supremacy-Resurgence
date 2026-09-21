@@ -342,14 +342,24 @@ is out of scope here.
 
 ## J. The lobby
 
-- [ ] **J1. A galaxy directory above the store.** `open_store` addresses one
-  galaxy and nothing in the tree has a concept of more than one. The launcher
-  needs a list: name, status, turn, deadline, player count, whether you are in
-  it.
+- [~] **J1. A galaxy directory above the store.** `server/galaxy_directory.py`
+  holds `LocalGalaxyDirectory` and `FirebaseGalaxyDirectory` behind
+  `open_directory(spec)`, mirroring `open_store`. 59 checks pass against both.
 
-  Kept as a separate small interface rather than folded into the store, so the
+  Kept as a separate interface rather than folded into the store, so the
   directory and HTTP store paths keep working for development and for the
-  two-machine test in F2.
+  two-machine test in F2. The local one reads either a folder of galaxies or a
+  `galaxies.json` naming store specs, which is what lets a local directory list a
+  galaxy that is actually served over HTTP.
+
+  **A row carries a player count and a flag, never the roster**, which is the one
+  thing J4 asks of it. Statuses are `forming`, `open` and `closed`, and a closed
+  galaxy stays listed and readable rather than vanishing, which is what K5 needs.
+  A store that cannot be reached lists as forming rather than taking the whole
+  listing down.
+
+  **Still open:** the launcher half. Nothing in the UI reads this yet and
+  `multiplayer.json` still names a store, which is J2's work.
 
   **Done when:** the launcher lists the sandbox from the directory and opens its
   store from what the directory gave it, with no galaxy path in any config file.
