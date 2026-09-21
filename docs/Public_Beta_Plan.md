@@ -94,15 +94,43 @@ is out of scope here.
   legacy `appspot.com` allowance of 20,000 uploads per *day*, and only in
   `us-central1`, `us-west1` or `us-east1`.
 
-  **The alternative is Firestore only, which keeps the beta on Spark.** Measured
-  blobs are 13 to 53 KB base64 against a 1 MiB document ceiling, roughly 20 times
-  the headroom, and Firestore's 20,000 writes a day is about 120 times the
-  Storage allowance that H5 shows is the binding constraint. What it costs is the
-  ceiling itself: a galaxy that outgrows 1 MiB has nowhere to go, and nothing
-  here has measured how a blob grows over a long sandbox.
+  A Firestore-only variant was considered and rejected: it would have stayed on
+  Spark, but it trades the Storage allowance for a hard 1 MiB per-document
+  ceiling that nothing here has measured a long sandbox against. **Blaze is the
+  decision**, kept inside the no-cost allowances.
 
-  **Done when:** the plan is chosen and the services exist, or the Firestore-only
-  variant is chosen and H1's layout is revised to match.
+  **What the operator has to set up.** Every step is in the Firebase or Google
+  Cloud console and none of it is scriptable from here.
+
+  1. **Upgrade `cs-resurgence` to Blaze.** Usage and billing, Modify plan. Needs
+     a Cloud Billing account. Note what changes: Spark cannot overspend and Blaze
+     can, on a project that also serves the live website.
+  2. **Set a budget alert before anything else**, in the Google Cloud console
+     under Billing, Budgets and alerts. Low, with email at 50, 90 and 100%. This
+     is the only thing standing between a misconfigured loop and a real bill.
+  3. **Create the Firestore database as `(default)`.** The free quota applies
+     only to the default database and a named one gets none at all. **Its
+     location is permanent.** Start in production mode, which locks it until
+     rules are deployed.
+  4. **Create the Cloud Storage bucket in `us-central1`, `us-west1` or
+     `us-east1`.** The Always Free allowance exists only in those three.
+  5. **Enable Anonymous sign-in**, under Authentication, Sign-in method. That is
+     H4's identity and it adds no login screen.
+  6. **Decide the worker's credential.** Application default credentials already
+     work on this machine and are what the adapter was built against. An
+     unattended worker is better served by a service account key, which must live
+     outside the repo and never be committed.
+
+  **Deploying the rules is a separate, deliberate, manual step.**
+  `server/beta_firestore.rules` and `server/beta_storage.rules` are drafts for
+  review and deliberately have no `firebase.json` beside them. A bare
+  `firebase deploy` in a directory that has one deploys **hosting** as well, and
+  the hosting for this project is the live cosmicresurgence.com. Deploy rules
+  only as `firebase deploy --only firestore:rules,storage` from a directory whose
+  `firebase.json` names nothing else.
+
+  **Done when:** the services exist, the budget alert is set, and the equivalence
+  test passes against the live project.
 
 - [~] **H1. A Firebase store adapter.** `server/firebase_store.py` implements the
   `turn_store` interface as `FirebaseTurnStore`, and `open_store` dispatches on a
@@ -202,6 +230,14 @@ is out of scope here.
 
   The second fits J4's seat binding and is probably the one to take, since that
   binding has to exist anyway.
+
+  **Neither is being built in this phase, deliberately.** Google login follows
+  immediately after the prototype, and a real account identity settles both the
+  submission-ownership rule here and the roster leak at J4 in one move, after
+  which taking another player's civ stops being possible at all. Until then the
+  rule is a size cap and a deletion refusal, and the beta's warning at N4 already
+  says a username is a claim rather than a credential. Do not build a
+  custom-claim scheme that Google login would immediately replace.
 
   `server/beta_firestore.rules` and `server/beta_storage.rules` hold drafts for
   review. They are deliberately not accompanied by a `firebase.json`, so no
@@ -507,14 +543,22 @@ is out of scope here.
   build with no stamp reports `0.1.0+unstamped`, so neither can be mistaken for a
   release.
 
-  **The stamp has not been through a real build.** `release/build/` is gitignored
-  and PyInstaller regenerates the spec on every run, so an earlier attempt to
-  stamp from the spec was inert; the call now sits in `build.ps1` ahead of the
-  PyInstaller invocation. That path is wired and unexercised until someone runs
-  the packaging script.
+  **The stamp survives a real build.** `release/build/` is gitignored and
+  PyInstaller regenerates the spec on every run, so an earlier attempt to stamp
+  from the spec was inert; the call sits in `build.ps1` ahead of the PyInstaller
+  invocation instead. `build.ps1 -Version 0.1.2` wrote
+  `{"build": "0.1.2", "stamped_at": ..., "commit": "a84c528"}` and `build.json`
+  appears in the frozen launcher's `PKG-00.toc`, so it is inside the exe rather
+  than merely beside it.
 
-  **Done when:** a build produced by `build.ps1 -Version X` reports X, checked by
-  running it rather than by reading the script.
+  That run also found an unrelated packaging fault: the final archive step failed
+  with the staged `game\CosmicSupremacy.exe` held by another process. The freeze
+  and the staging completed; only the zip did not.
+
+  **Done when:** a packaged launcher is started and its own log line reads the
+  version it was built with. Everything up to the exe is confirmed; the last step
+  needs a moment when running a packaged launcher will not take port 8888 from a
+  checkout `cs_server`.
 
 - [x] **L2. A version gate on the galaxy.** The galaxy carries a minimum build; a
   launcher below it refuses to play and says where to get the update.
@@ -663,9 +707,11 @@ is out of scope here.
   K4 wipes.
 - **Formed or ranked galaxies with a lobby.** The sandbox is the only galaxy in
   this phase. J1's directory is the layer they would be added to.
-- **Passwords, Google login, real accounts.** Everything above `player_name()`
-  already takes a string, so the change is where the name comes from and nothing
-  else.
+- **Passwords, Google login, real accounts.** Out of this phase but next after
+  it, and not a maybe: Google login is what makes H4's submission-ownership rule
+  expressible and closes J4's roster leak, so both are deliberately left as they
+  are rather than worked around. Everything above `player_name()` already takes a
+  string, so the change is where the name comes from and nothing else.
 - **Per-player projection and real fog.** Blocked in D1 and not blocked on this
   phase.
 - **Governors and admirals.** The original's answer to an absent player. Their
