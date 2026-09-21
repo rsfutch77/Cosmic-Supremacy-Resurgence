@@ -195,26 +195,75 @@ is out of scope here.
 
 ## K. The sandbox galaxy
 
-- [ ] **K1. Merge a new civ into a live galaxy without taking a planet someone
+- [~] **K1. Merge a new civ into a live galaxy without taking a planet someone
   was about to colonise.** `pick_homeworld` already refuses owned planets and
   picks the uncolonised planet furthest from everything claimed. What it does not
   know about is a planet nobody owns yet that a colony ship is flying toward,
-  which is the collision that matters in a sandbox.
+  which is the collision that matters in a sandbox. Reserved planets now feed
+  into its existing `taken` argument, and it takes a `margin`.
 
-  The fix is to populate its existing `taken` argument with every planet named as
-  a destination by a live ship order. Ship orders and their `ROUT` are in the
-  blob and `order_diff` and `inject_order` already read that structure. A
-  distance margin on top, since maximin already pushes arrivals to the rim.
+  **An order carries no destination id. It carries a position.** The `ROUT`
+  target XYZ at `+16/+20/+24` is a bit-exact copy of the destination object's own
+  stored position, and resolving an order means matching that position back to an
+  object. Across 234 unique galaxies all **381** `ROUT` targets landed exactly on
+  either a `PLNT` or a `SUN ` position with nothing in between, so there is no
+  ambiguity band: a 0.01 tolerance and a 1.0 tolerance give the same answer.
+
+  | order type | planet-exact | sun-exact |
+  |---|---|---|
+  | Move (1) | 37 | 83 |
+  | Scout (2) | 0 | 242 |
+  | Colonize (3) | 19 | 0 |
+
+  **Most targets name a system, not a planet**, 325 of 381, so every `PLNT` in
+  that `SOLA` is reserved, with membership read from the section tree rather than
+  inferred from the contiguous id blocks.
+
+  **Two things that read like the destination and are not.** `ref_id` at `+92` is
+  non-zero on 29 of the 381 orders and on every one of them equals the enclosing
+  `DYNO`'s orbit id, which is where the ship *started*: reading it as a
+  destination points a colony ship at its own homeworld. And liveness is `ROUT`
+  presence, not the has-orders byte, because engine-issued scouts carry a `ROUT`
+  with advancing progress and has-orders clear.
+
+  Confirmed against the referee's own archive: over 152 consecutive same-galaxy
+  tick pairs, 7 colonise orders were seen completing, and in 7 of 7 the planet
+  that changed from unowned to owned is the one the target resolves to, owned by
+  the ordering ship's civ.
+
+  **The reservation changes no pick on any galaxy in this repo**, and that is
+  stated rather than hidden. Maximin lands newcomers 615 to 870 away while
+  contested planets sit near the incumbents, so the collision never arises
+  naturally on existing data. What demonstrates the fix works is a forced test of
+  209 cases, hiding every free planet but one a ship is flying to: unfixed, the
+  pick takes the contested planet every time; fixed, it refuses every time. The
+  reservation costs at most 11 of 162 free planets across a 28-blob sample.
+
+  **The margin is derived, not a constant**, defaulting to the galaxy's own
+  median nearest-neighbour system spacing, measured at 143 to 144 in the
+  108-system galaxies and 171 to 174 in the 32-system ones. One number cannot
+  mean "a system hop" in both densities. It does not bind on any galaxy on disk;
+  it is a crowding guard, not part of the placement policy.
 
   **Donors have to be levelled first.** A civ added by `inject_civ` inherits its
   donor's world, and a generated galaxy does not hand its civs equal worlds: seat
   one carries the homeworld customisation and the rest get the engine default,
   which is worth two `PLPR` bytes and decides games (D3).
 
+  **A related bug, found and not yet fixed.** `--donor` defaults to the smallest
+  `OWNR`, which after the first injection is the civ that was just added. So a
+  multi-name run chains each clone off the previous newcomer rather than off the
+  original donor, and whatever the first newcomer inherited propagates.
+
+  **Still open:** the live half. An injected galaxy has not been loaded in the
+  engine since this change, and no colony ship has been watched completing its
+  colonisation after a join. The injection path itself is unchanged from what D4
+  confirmed and only the planet chosen differs, which is a reason to expect it
+  holds and not evidence that it does.
+
   **Done when:** a civ is injected into a galaxy with a colony ship in flight,
-  the newcomer's homeworld is not that ship's destination, verified by reading
-  the ship's `ROUT` before and after rather than by the join having looked fine,
-  and the colony ship completes its colonisation on schedule.
+  the newcomer's homeworld is not that ship's destination, and the colony ship
+  completes its colonisation on schedule in a client that actually ran.
 
 - [ ] **K2. Repeated joins across a long galaxy.** D4 confirmed one injection. A
   permanent sandbox does this dozens of times, object ids grow monotonically, and
@@ -273,22 +322,53 @@ is out of scope here.
 
 ## L. Build versioning
 
-- [ ] **L1. The launcher carries a version.** It does not today: there is no
-  version constant in `release/launcher.py` and the only version anywhere is the
-  `dist` folder name. Everything below depends on this existing.
+- [~] **L1. The launcher carries a version.** It did not: there was no version
+  constant in `release/launcher.py` and the only version anywhere was the `dist`
+  folder name, which is how a build made with `-Version 0.1.1` shipped a launcher
+  that called itself 0.1.0.
 
-  **Done when:** the launcher reports its own build, and the build is stamped at
-  package time rather than hand-edited.
+  `release/stamp_build.py` writes `build.json` and `build.ps1` packs it into the
+  bundle beside `manifest.json`, where `build_info()` reads it back through the
+  existing `bundled()` helper rather than a parallel mechanism. Unstamped builds
+  are honest rather than silent: a checkout reports `0.1.0+dev` and a frozen
+  build with no stamp reports `0.1.0+unstamped`, so neither can be mistaken for a
+  release.
 
-- [ ] **L2. A version gate on the galaxy.** The galaxy carries a minimum build; a
+  **The stamp has not been through a real build.** `release/build/` is gitignored
+  and PyInstaller regenerates the spec on every run, so an earlier attempt to
+  stamp from the spec was inert; the call now sits in `build.ps1` ahead of the
+  PyInstaller invocation. That path is wired and unexercised until someone runs
+  the packaging script.
+
+  **Done when:** a build produced by `build.ps1 -Version X` reports X, checked by
+  running it rather than by reading the script.
+
+- [x] **L2. A version gate on the galaxy.** The galaxy carries a minimum build; a
   launcher below it refuses to play and says where to get the update.
 
-  This is the item that hurts most if skipped, because the failure it prevents is
-  silent: a blob produced by a client that does not match the referee, whose
-  symptom is a mystery rather than an error.
+  `version_problem(build, state)` reads an optional `min_build` from the store's
+  state dict and is wired into `start_multiplayer` after `store.exists()` and
+  ahead of the `roster_problem` check, since a stale build is one reason the
+  roster could look wrong. Ordering compares only the leading dotted number, so
+  `0.1.1+dev` is not below `0.1.1`; if dev builds should be refused outright that
+  is a one-line change and a decision, not a bug. A galaxy with no `min_build`, a
+  null one, or a non-numeric one is not gated at all.
 
-  **Done when:** a launcher below the minimum is refused with a message naming
-  its own build, the required build, and a link, and one at or above it plays.
+  Exercised below, at and above the minimum, with the key absent, null and
+  non-numeric, and with no state, against both dict literals and a real
+  `state.json` through `open_store`.
+
+  **Nothing writes `min_build` yet.** That is the referee's side and arrives with
+  the relay in H1, so the gate is live but every galaxy today is ungated.
+
+  It earns its place because the failure it prevents is silent: a blob produced
+  by a client that does not match the referee, whose symptom is a mystery rather
+  than an error.
+
+  The update link is
+  `https://github.com/rsfutch77/Cosmic-Supremacy-Resurgence/releases/latest`,
+  taken from the README's download button. It needs changing if the beta gets its
+  own landing page.
 
 - [ ] **L3. One-click update now, silent auto-update later.** The gate's message
   becomes a button that downloads and runs the installer. Replacing a running
@@ -303,26 +383,48 @@ is out of scope here.
 
 ## M. Diagnostics
 
-- [ ] **M1. The launcher uploads its own log.** Every finding in the blob push
+- [~] **M1. The launcher uploads its own log.** Every finding in the blob push
   plan came from watching a screen, and that stops being available the moment
   players are elsewhere. Without this, every beta report is a slow conversation.
 
-  **The log cannot be uploaded as it stands.** It currently records the HTTP
-  bodies of the save protocol, which means the whole save blob base64-encoded in
-  `body+` lines, tens of kilobytes per turn, and it is the one part of the log
-  that diagnoses nothing. Those lines come out first, and a size cap goes on what
-  is left.
+  **The redaction is built; nothing uploads yet.** `redact_log_text`,
+  `redacted_log` and `write_redacted_log` produce the sendable copy, capped at
+  256 KiB by keeping the tail. The upload itself waits on the relay in H1.
+
+  **The log records the save protocol's HTTP bodies**, which is base64 of the
+  save blob in `body+` lines and diagnoses nothing. Each run of them now
+  collapses to one line saying how many bytes were elided, while the chunk-0
+  `body:` line is kept as far as `data=`, because ahead of that field it carries
+  userid, gamename, turn and version.
+
+  | `release/data/launcher.log` | bytes | lines |
+  |---|---|---|
+  | before | 23,310 | 181 |
+  | after | 10,963 | 154 |
+
+  Body dumps were 55% of the file, from 3 save requests. What survives: the
+  session headers, mode launches and exit codes, the AI reasoning stream, the
+  submission lines, the savegame summaries and the server's responses.
+
+  **An earlier draft of this item overstated the volume.** It said tens of
+  kilobytes per turn. `server/cs_server.py:558` already caps a `savegame` or
+  `savegov` body at its first 4000 characters, so it is about 4.2 KB per request
+  and two requests per multiplayer turn. Still worth removing, since it is over
+  half the log and grows monotonically, but not for the reason first given.
 
   **Done when:** a turn's log uploads under the cap, and a failure the operator
   did not witness is diagnosed from the uploaded copy alone.
 
-- [ ] **M2. Say what the upload contains.** The log carries Windows paths, which
-  carry the player's account name, along with their username and galaxy. Either
-  scrub the paths or disclose it in the warning. Uploading a player's machine
-  details without telling them is not a thing to discover later.
+- [x] **M2. Say what the upload contains.** The Windows account name is scrubbed
+  out of paths by generalising `<drive>:\Users\<name>\`, with Public and Default
+  excepted, plus a literal match on the expanded home directory for a redirected
+  profile. No account name is hard-coded. The redacted copy's contents are
+  itemised in the launcher's own section header, which is what N4 gets written
+  from.
 
-  **Done when:** what is uploaded is either free of anything identifying beyond
-  the username, or named in the text at N4.
+  **Two things are deliberately not scrubbed** and are named rather than left to
+  be found: the referee's machine name in a UNC store path, and bare occurrences
+  of the account name outside a path.
 
 ---
 
