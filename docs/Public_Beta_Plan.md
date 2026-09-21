@@ -74,13 +74,13 @@ is out of scope here.
 
 ## H. The relay
 
-- [ ] **H0. Provision the project, which is a billing decision.** Nothing in this
+- [x] **H0. Provision the project, which is a billing decision.** Nothing in this
   section can be finished until it is made, and neither H1 nor H5 as first
   written knew it existed.
 
-  **`cs-resurgence` has no Firestore database and no Cloud Storage bucket.**
-  `firestore.googleapis.com` is not enabled on the project, and neither
-  `cs-resurgence.firebasestorage.app` nor `cs-resurgence.appspot.com` exists.
+  **As found, `cs-resurgence` had no Firestore database and no Cloud Storage
+  bucket**, and `firestore.googleapis.com` was not enabled. Neither H1 nor H5 as
+  first written knew a provisioning step existed at all.
 
   **Cloud Storage for Firebase has required the Blaze plan since 3 February
   2026.** On Spark every cell reads "not applicable" and the API answers 402 or
@@ -94,17 +94,75 @@ is out of scope here.
   legacy `appspot.com` allowance of 20,000 uploads per *day*, and only in
   `us-central1`, `us-west1` or `us-east1`.
 
-  **The alternative is Firestore only, which keeps the beta on Spark.** Measured
-  blobs are 13 to 53 KB base64 against a 1 MiB document ceiling, roughly 20 times
-  the headroom, and Firestore's 20,000 writes a day is about 120 times the
-  Storage allowance that H5 shows is the binding constraint. What it costs is the
-  ceiling itself: a galaxy that outgrows 1 MiB has nowhere to go, and nothing
-  here has measured how a blob grows over a long sandbox.
+  A Firestore-only variant was considered and rejected: it would have stayed on
+  Spark, but it trades the Storage allowance for a hard 1 MiB per-document
+  ceiling that nothing here has measured a long sandbox against. **Blaze is the
+  decision**, kept inside the no-cost allowances.
 
-  **Done when:** the plan is chosen and the services exist, or the Firestore-only
-  variant is chosen and H1's layout is revised to match.
+  **What the operator has to set up.** Every step is in the Firebase or Google
+  Cloud console and none of it is scriptable from here.
 
-- [~] **H1. A Firebase store adapter.** `server/firebase_store.py` implements the
+  1. **Upgrade `cs-resurgence` to Blaze.** Usage and billing, Modify plan. Needs
+     a Cloud Billing account. Note what changes: Spark cannot overspend and Blaze
+     can, on a project that also serves the live website.
+  2. **Set a budget alert before anything else**, in the Google Cloud console
+     under Billing, Budgets and alerts. Low, with email at 50, 90 and 100%. This
+     is the only thing standing between a misconfigured loop and a real bill.
+  3. **Create the Firestore database as `(default)`.** The free quota applies
+     only to the default database and a named one gets none at all. **Its
+     location is permanent.** Start in production mode, which locks it until
+     rules are deployed.
+  4. **Create the Cloud Storage bucket in `us-central1`, `us-west1` or
+     `us-east1`.** The Always Free allowance exists only in those three.
+  5. **Enable Anonymous sign-in**, under Authentication, Sign-in method. That is
+     H4's identity and it adds no login screen.
+  6. **Decide the worker's credential.** Application default credentials already
+     work on this machine and are what the adapter was built against. An
+     unattended worker is better served by a service account key, which must live
+     outside the repo and never be committed.
+
+  **Deploying the rules is a separate, deliberate, manual step.**
+  `server/beta_firestore.rules` and `server/beta_storage.rules` are drafts for
+  review and deliberately have no `firebase.json` beside them. A bare
+  `firebase deploy` in a directory that has one deploys **hosting** as well, and
+  the hosting for this project is the live cosmicresurgence.com. Deploy rules
+  only as `firebase deploy --only firestore:rules,storage` from a directory whose
+  `firebase.json` names nothing else.
+
+  **Done, 21 September 2026.** Blaze is on, Firestore is the `(default)`
+  database in `nam5` with `freeTier: true`, and the bucket
+  `cs-resurgence.firebasestorage.app` is in `US-WEST1`, one of the three regions
+  carrying the Always Free allowance. **The equivalence test passes against the
+  live project, 47 of 47**, and leaves nothing behind in either service.
+
+  **A day was nearly lost to an error that named the wrong thing.** Every
+  billable Storage write returned
+
+      403 the billing account for the owning project is disabled in state absent
+
+  while `gcloud storage cp` of the same object to the same bucket succeeded
+  throughout. The project was never at fault: `billingEnabled` was true against
+  an open account the whole time.
+
+  **The owning project in that message is the credential's quota project, not
+  the bucket's.** A user credential from `gcloud auth application-default login`
+  carries whichever project it was last run against, here `kalbot-cloudrun`, and
+  every request from the Python libraries was attributed there. gcloud does not
+  use ADC, which is why it was unaffected and why the two disagreed.
+
+  `FirebaseTurnStore.credentials()` now pins the quota project to the galaxy's
+  own project, so the store bills what it is reading and writing whoever is
+  logged in. A service account key carries no quota project and was never
+  exposed to this.
+
+  **A wrong diagnosis was recorded here first** and is worth keeping rather than
+  quietly replacing: this entry claimed the likely cause was a Firebase plan
+  record pointing at one of two closed billing accounts on the same login. That
+  was plausible, consistent with everything observed at the time, and wrong. What
+  distinguished it was not more reasoning but one command, `gcloud storage cp`,
+  which isolated the failure to the client rather than the project.
+
+- [x] **H1. A Firebase store adapter.** `server/firebase_store.py` implements the
   `turn_store` interface as `FirebaseTurnStore`, and `open_store` dispatches on a
   `firebase://<project>/<galaxy>` spec. Everything lives under a `beta/` prefix in
   both services so it cannot collide with the website on the same project.
@@ -203,6 +261,14 @@ is out of scope here.
   The second fits J4's seat binding and is probably the one to take, since that
   binding has to exist anyway.
 
+  **Neither is being built in this phase, deliberately.** Google login follows
+  immediately after the prototype, and a real account identity settles both the
+  submission-ownership rule here and the roster leak at J4 in one move, after
+  which taking another player's civ stops being possible at all. Until then the
+  rule is a size cap and a deletion refusal, and the beta's warning at N4 already
+  says a username is a claim rather than a credential. Do not build a
+  custom-claim scheme that Google login would immediately replace.
+
   `server/beta_firestore.rules` and `server/beta_storage.rules` hold drafts for
   review. They are deliberately not accompanied by a `firebase.json`, so no
   deploy can pick them up from beside them; this project serves the live website
@@ -212,18 +278,98 @@ is out of scope here.
   another player's submission, refused publishing a turn, and refused deleting
   anything, each by the rules rather than by the application declining to try.
 
-- [ ] **H6. A store fetches one submission, not all of them.** `player_turn.py`
-  reaches its own submission through `store.submissions(turn).get(civ)` at three
-  sites, which lists and downloads every player's submission and throws all but
-  one away. On a folder that was free. On Firebase it is a download per player
-  per poll, it is the cost H5 names, and it is refused outright by the rule that
-  stops a player reading another player's orders.
+- [ ] **H7. The player's launcher cannot reach Firebase, and nothing in the
+  tests could have noticed.** What H1 delivered is the *referee's* transport. It
+  is not the player's.
 
-  The fix is a single-submission accessor on the store interface, implemented by
-  all three stores, not a change to the rules.
+  `launcher.py` opens its store through `open_store(cfg["store"])`, so a
+  `firebase://` spec builds `FirebaseTurnStore`, which constructs
+  `firestore.Client()` and `storage.Client()`. Both are Google Cloud **admin**
+  clients and authenticate with IAM. A player has no Google Cloud credential, and
+  shipping a service account key inside a distributed executable is not an
+  option: it is project-wide, it would let any holder do anything to any galaxy,
+  and it cannot be revoked per player.
 
-  **Done when:** no caller reads another player's submission to find its own, and
-  the rules can therefore refuse it.
+  **This is also why the Storage rules look inert.** Firebase Security Rules
+  govern the client SDKs. The admin path is not subject to them, demonstrated on
+  the live project: listing the bucket succeeded while its rules read
+  `allow read, write: if false`. Deny-all is the correct default today and stays
+  correct until a client path exists for it to govern.
+
+  **The equivalence test cannot catch this**, because every run so far, emulator
+  and live, authenticated as an administrator. Proving three stores agree says
+  nothing about whether a player can open any of them.
+
+  Two designs, and they are not close:
+
+  **A. The launcher talks to Firebase directly**, over the Firestore and Storage
+  REST APIs with an anonymous Firebase Auth ID token, Security Rules enforcing
+  ownership. No new server component. Costs a second Firebase transport that has
+  to stay equivalent to the admin one forever, and it inherits H4's unsolved
+  problem, that a civ-named submission path cannot express "mine".
+
+  **B. The launcher keeps speaking HTTP, to a Cloud Function in front of the
+  store.** `HttpTurnStore` already exists, is already covered by the equivalence
+  test, and has worked from the launcher since F3. Pointing it at a function URL
+  instead of a LAN host is close to free. The function holds the admin
+  credential, verifies the caller's Firebase ID token, and enforces ownership
+  **in code**, where it can compare the token's uid against the seat that claimed
+  the civ. The home address stays hidden, so H2 still holds.
+
+  **B is the recommendation**, and the reason is H4 rather than the transport: it
+  turns the ownership rule from something Storage rules cannot express into an
+  `if` statement, and it keeps one Firebase transport rather than two. What it
+  costs is another deploy target in the project that serves the live website, so
+  every functions deploy must be `--only functions`.
+
+  **Done when:** a launcher holding no Google Cloud credentials plays a turn in a
+  galaxy hosted on Firebase.
+
+- [x] **H6. A store fetches one submission, not all of them.** `player_turn.py`
+  reached its own submission through `store.submissions(turn).get(civ)`, which
+  lists and downloads every player's submission and throws all but one away. Free
+  on a folder, a download per player per poll on Firebase, and refused outright
+  by the rule at H4 that stops a player reading another player's orders.
+
+  `submission(civ, turn)` now exists on all three stores, argument order matching
+  `has_submitted(civ, turn)`, returning the blob or **`None`** when there is not
+  one. None rather than raising, because absence is the ordinary answer on a path
+  a launcher polls.
+
+  **One deliberate asymmetry:** only a *missing* submission answers None. One
+  that is present but unreadable, the SMB sharing-violation case, still raises,
+  because the caller is the guard deciding whether there is a submission worth
+  protecting and answering None for a file that exists would let it be
+  overwritten.
+
+  **This item undercounted the readers.** It said three sites, all in
+  `player_turn.py`. There were five. `turn_server.py`'s own
+  `GET /submission/<n>/<civ>` route was building the entire `submissions(n)` dict
+  server-side to pick one entry out of it, so fixing only the stores and
+  `player_turn.py` would have left the HTTP store's per-civ path still listing
+  everything. And `test_loop_guards.py` carried a hand-copy of `follow`'s push
+  body that had drifted from the code it claims to replay; it mirrors it again.
+
+  | equivalence test | before | after |
+  |---|---|---|
+  | with the Firebase emulator | 131 | **157 passed, 0 failed** |
+  | without it, Firebase skipped | 88 | **105 passed, 0 failed** |
+
+  Above the seam and unchanged: the referee's status, `--verify 9
+  --no-recompute`, and a real merge of turn 9's 39,210-byte `DemoPlayer`
+  submission, 3 orders taken and 0 dropped. The same real submission read out of
+  all three stores through both `submission()` and `submissions()` gives
+  identical bytes.
+
+  **Left alone deliberately:** `referee.py` at three sites, which legitimately
+  wants every submission at the turn boundary. **A recorded follow-up:**
+  `dev_tools/check_store.py` does `sorted(store.submissions(turn))` when it only
+  wants the names, which on Firebase downloads every blob to discard it. It is an
+  operator diagnostic rather than a polled path, so it is cheap to leave and
+  cheaper still to fix when someone is next in that file.
+
+  **Not exercised:** `referee.resolve_turn`'s engine tick and `player_turn.follow`'s
+  serve, both of which need a client that was in use elsewhere.
 
 - [~] **H5. Cost and quota arithmetic, written down.** One galaxy at 4-hour turns
   is 6 ticks a day, 182 a month. Quotas below read from Firebase's own
@@ -273,14 +419,24 @@ is out of scope here.
 
 ## J. The lobby
 
-- [ ] **J1. A galaxy directory above the store.** `open_store` addresses one
-  galaxy and nothing in the tree has a concept of more than one. The launcher
-  needs a list: name, status, turn, deadline, player count, whether you are in
-  it.
+- [~] **J1. A galaxy directory above the store.** `server/galaxy_directory.py`
+  holds `LocalGalaxyDirectory` and `FirebaseGalaxyDirectory` behind
+  `open_directory(spec)`, mirroring `open_store`. 59 checks pass against both.
 
-  Kept as a separate small interface rather than folded into the store, so the
+  Kept as a separate interface rather than folded into the store, so the
   directory and HTTP store paths keep working for development and for the
-  two-machine test in F2.
+  two-machine test in F2. The local one reads either a folder of galaxies or a
+  `galaxies.json` naming store specs, which is what lets a local directory list a
+  galaxy that is actually served over HTTP.
+
+  **A row carries a player count and a flag, never the roster**, which is the one
+  thing J4 asks of it. Statuses are `forming`, `open` and `closed`, and a closed
+  galaxy stays listed and readable rather than vanishing, which is what K5 needs.
+  A store that cannot be reached lists as forming rather than taking the whole
+  listing down.
+
+  **Still open:** the launcher half. Nothing in the UI reads this yet and
+  `multiplayer.json` still names a store, which is J2's work.
 
   **Done when:** the launcher lists the sandbox from the directory and opens its
   store from what the directory gave it, with no galaxy path in any config file.
@@ -377,10 +533,52 @@ is out of scope here.
   one carries the homeworld customisation and the rest get the engine default,
   which is worth two `PLPR` bytes and decides games (D3).
 
-  **A related bug, found and not yet fixed.** `--donor` defaults to the smallest
-  `OWNR`, which after the first injection is the civ that was just added. So a
-  multi-name run chains each clone off the previous newcomer rather than off the
-  original donor, and whatever the first newcomer inherited propagates.
+  **Seat one is the lowest object id, and two tools were picking it wrongly.**
+  `--donor` defaulted to the smallest `OWNR`, which after the first injection is
+  the civ just added, so a multi-name run chained each clone off the previous
+  newcomer. `inject_civ.seat_one` now takes the lowest object id instead, which
+  is both the right answer and a fixed point under its own mutation: a newcomer
+  takes `max_object_id + 1` and so can never be selected, which is what makes a
+  multi-name run safe rather than an exclusion list bolted on.
+
+  The rule was chosen from the data, over 472 multi-civ galaxies on disk. Of the
+  183 holding exactly one homeworld whose rate pair is not the engine default:
+
+  | candidate rule | names the customised seat |
+  |---|---|
+  | **lowest object id** | **183 of 183** |
+  | first `OWNR` in blob order | 60 of 183 |
+  | smallest `OWNR` (the old default) | 39 of 183 |
+
+  Narrow where it should be: those 183 are five distinct rosters captured at many
+  turns each, so this measures consistency across a galaxy's life rather than 183
+  independent generations. What it also shows is stability: `OWNR` length names
+  two different civs within one galaxy in 3 of 7, and the lowest object id names
+  one in all 7.
+
+  Order independence is proved rather than asserted, and mutation-tested:
+  reverting the rule fails four checks. The test also asserts the reverse, that
+  naming seat two as donor really does hand newcomers seat two's rates, so the
+  passing assertion is not vacuous.
+
+  **The same bug was live in galaxy creation and mattered more.**
+  `make_multiplayer_galaxy.build` mapped player names to civs by
+  `owner_records(blob)[i]`, which is blob order, and `equalise_homeworlds` then
+  levels everyone to `players[0]`. The engine's serialiser does not keep civs in
+  allocation order: 171 of the 472 galaxies present something other than the
+  lowest object id first, and in the three-civ demo galaxy the injected civ comes
+  back first. So the reference world was whichever civ happened to serialise
+  first. Measured on `galaxy_demo/turns/0007.b64`, whose blob order begins with
+  the injected `Neighbor`:
+
+  | `build(['Alpha','Beta','Gamma'])` | every player's rates |
+  |---|---|
+  | by blob order | `(32, 44)`, levelled **down** to the engine default |
+  | by seat order | `(62, 94)`, levelled up to seat one's |
+
+  `seated(blob)` sorts by object id and both call sites use it. This is the
+  difference D3 measured as worth two `PLPR` bytes and a citizen every few turns,
+  applied to every player in the galaxy at creation.
 
   **Still open:** the live half. An injected galaxy has not been loaded in the
   engine since this change, and no colony ship has been watched completing its
@@ -507,14 +705,22 @@ is out of scope here.
   build with no stamp reports `0.1.0+unstamped`, so neither can be mistaken for a
   release.
 
-  **The stamp has not been through a real build.** `release/build/` is gitignored
-  and PyInstaller regenerates the spec on every run, so an earlier attempt to
-  stamp from the spec was inert; the call now sits in `build.ps1` ahead of the
-  PyInstaller invocation. That path is wired and unexercised until someone runs
-  the packaging script.
+  **The stamp survives a real build.** `release/build/` is gitignored and
+  PyInstaller regenerates the spec on every run, so an earlier attempt to stamp
+  from the spec was inert; the call sits in `build.ps1` ahead of the PyInstaller
+  invocation instead. `build.ps1 -Version 0.1.2` wrote
+  `{"build": "0.1.2", "stamped_at": ..., "commit": "a84c528"}` and `build.json`
+  appears in the frozen launcher's `PKG-00.toc`, so it is inside the exe rather
+  than merely beside it.
 
-  **Done when:** a build produced by `build.ps1 -Version X` reports X, checked by
-  running it rather than by reading the script.
+  That run also found an unrelated packaging fault: the final archive step failed
+  with the staged `game\CosmicSupremacy.exe` held by another process. The freeze
+  and the staging completed; only the zip did not.
+
+  **Done when:** a packaged launcher is started and its own log line reads the
+  version it was built with. Everything up to the exe is confirmed; the last step
+  needs a moment when running a packaged launcher will not take port 8888 from a
+  checkout `cs_server`.
 
 - [x] **L2. A version gate on the galaxy.** The galaxy carries a minimum build; a
   launcher below it refuses to play and says where to get the update.
@@ -663,9 +869,11 @@ is out of scope here.
   K4 wipes.
 - **Formed or ranked galaxies with a lobby.** The sandbox is the only galaxy in
   this phase. J1's directory is the layer they would be added to.
-- **Passwords, Google login, real accounts.** Everything above `player_name()`
-  already takes a string, so the change is where the name comes from and nothing
-  else.
+- **Passwords, Google login, real accounts.** Out of this phase but next after
+  it, and not a maybe: Google login is what makes H4's submission-ownership rule
+  expressible and closes J4's roster leak, so both are deliberately left as they
+  are rather than worked around. Everything above `player_name()` already takes a
+  string, so the change is where the name comes from and nothing else.
 - **Per-player projection and real fog.** Blocked in D1 and not blocked on this
   phase.
 - **Governors and admirals.** The original's answer to an absent player. Their

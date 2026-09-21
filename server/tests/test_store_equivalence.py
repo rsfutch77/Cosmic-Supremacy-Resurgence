@@ -14,8 +14,9 @@ stored as.
 
 So the same sequence runs against each of them and the answers are compared,
 rather than each implementation being tested against its own expectations. The
-sequence is the F1 sequence: start, publish, submit, the submission list, the
-archive, the notes, missing turns and the factory.
+sequence is the F1 sequence: start, publish, submit, one player's own
+submission, the submission list, the archive, the notes, missing turns and the
+factory.
 
 The HTTP run is made against a directory this test can also read, so the
 service's answers are checked against the directory underneath it as well as
@@ -152,6 +153,14 @@ def run_sequence(store, label, turn=TURN):
     print(f'{label}: submissions')
     check(f'{label}: nobody has submitted yet',
           store.has_submitted('DemoPlayer', turn), False)
+    # A submission that is not there is None rather than an exception, on all
+    # three. `player_turn` asks this every poll and the ordinary answer before
+    # a player has played is that there is nothing, so absence has to be an
+    # answer and not a fault, the way it is for `has_submitted`.
+    check(f'{label}: a submission nobody has made is None',
+          store.submission('DemoPlayer', turn), None)
+    check(f'{label}: and asking for it raises nothing',
+          raises(store.submission, 'DemoPlayer', turn), None)
     where = store.submit('DemoPlayer', turn, MINE)
     check(f'{label}: submit names where it landed',
           bool(where) and 'DemoPlayer' in where, True)
@@ -159,12 +168,25 @@ def run_sequence(store, label, turn=TURN):
           store.has_submitted('DemoPlayer', turn), True)
     check(f'{label}: the submission comes back as it went in',
           store.submissions(turn), {'DemoPlayer': MINE})
+    check(f'{label}: and one civ own submission is those same bytes',
+          store.submission('DemoPlayer', turn), MINE)
     store.submit('DemoPlayer', turn, MINE2)
     check(f'{label}: submitting twice replaces rather than joins',
           store.submissions(turn), {'DemoPlayer': MINE2})
+    check(f'{label}: and the replacement is what one civ read gives back',
+          store.submission('DemoPlayer', turn), MINE2)
     store.submit('Neighbor', turn, THEIRS)
     check(f'{label}: another civ joins the list',
           store.submissions(turn), {'DemoPlayer': MINE2, 'Neighbor': THEIRS})
+    # The point of the accessor: each civ gets their own bytes and nobody
+    # else's, without a listing that a storage rule would have to grant.
+    check(f'{label}: each civ reads their own submission',
+          (store.submission('DemoPlayer', turn),
+           store.submission('Neighbor', turn)), (MINE2, THEIRS))
+    check(f'{label}: a civ who never submitted is None',
+          store.submission('Stranger', turn), None)
+    check(f'{label}: a submission is per turn',
+          store.submission('DemoPlayer', turn + 1), None)
     check(f'{label}: a turn nobody submitted for lists nothing',
           store.submissions(turn + 1), {})
 
@@ -225,6 +247,8 @@ def run_sequence(store, label, turn=TURN):
         'hash': store.state()['hash'],
         'blob': store.turn_blob(store.current()[0]),
         'submissions': store.submissions(turn),
+        'submission': store.submission('DemoPlayer', turn),
+        'submission_missing': store.submission('Stranger', turn),
         'note': store.note('DemoPlayer', turn),
         'archive': store.archive_record(turn),
     }
@@ -262,6 +286,8 @@ def run_http(tmp):
           under.turn_blob(summary['turn']), summary['blob'])
     check('http: the directory sees the same submissions',
           under.submissions(7), summary['submissions'])
+    check('http: the directory holds the same one submission',
+          under.submission('DemoPlayer', 7), summary['submission'])
     check('http: the directory holds the same archive record',
           under.archive_record(7), summary['archive'])
     return summary

@@ -159,6 +159,7 @@ class FirebaseTurnStore:
         self._fs = None
         self._gcs = None
         self._bucket = None
+        self._creds = None
 
     def __repr__(self):
         return f'FirebaseTurnStore({self.project}:{self.prefix}/{self.galaxy})'
@@ -167,18 +168,49 @@ class FirebaseTurnStore:
     # Built on first use rather than in __init__. Importing the google client
     # libraries costs about a second, most of it grpc, and `open_store` is
     # called by tools that then go on to talk to a directory.
+    def credentials(self):
+        """Default credentials, billed to this galaxy's own project.
+
+        A user credential carries a quota project, and it is whatever project
+        `gcloud auth application-default login` was last run against. Requests
+        are attributed to that project rather than to the one holding the
+        bucket, so an operator whose ADC points somewhere else gets every
+        billable write refused with
+
+            403 the billing account for the owning project is disabled in
+                state absent
+
+        which names neither the project at fault nor the credential. That cost
+        an afternoon and a wrong diagnosis: this project's billing was never
+        the problem, and a `gcloud storage cp` of the same object succeeded
+        throughout, because gcloud does not use ADC.
+
+        Pinning it here means the store bills the project it is reading and
+        writing, whoever is logged in. A service account key carries no quota
+        project and is unaffected either way.
+        """
+        if self._creds is None:
+            import google.auth
+            creds, _ = google.auth.default()
+            if hasattr(creds, 'with_quota_project'):
+                creds = creds.with_quota_project(self.project)
+            self._creds = creds
+        return self._creds
+
     @property
     def fs(self):
         if self._fs is None:
             from google.cloud import firestore
-            self._fs = firestore.Client(project=self.project)
+            self._fs = firestore.Client(project=self.project,
+                                        credentials=self.credentials())
         return self._fs
 
     @property
     def gcs(self):
         if self._gcs is None:
             from google.cloud import storage
-            self._gcs = storage.Client(project=self.project)
+            self._gcs = storage.Client(project=self.project,
+                                       credentials=self.credentials())
         return self._gcs
 
     @property
@@ -329,13 +361,28 @@ class FirebaseTurnStore:
     def has_submitted(self, civ: str, turn: int) -> bool:
         return self._has(self.submission_object(civ, turn))
 
+    def submission(self, civ: str, turn: int):
+        """What one civ handed back for this turn, or None when they have not.
+
+        One object named outright, so this is one Class B operation and it
+        touches nothing but that civ's own object. That is what makes it
+        survivable on the path a launcher polls, and it is also what lets the
+        storage rule scope a read to the player it belongs to: a listing under
+        the turn's prefix could not be granted without granting every player's
+        orders with it.
+        """
+        data = self._get(self.submission_object(civ, turn))
+        if data is None:
+            return None
+        return sp.decode_save(data)
+
     def submissions(self, turn: int) -> dict:
         """{civ: blob} for everyone who handed something back for this turn.
 
         Listed from Storage rather than from an index in Firestore. An index
         would be a second thing to keep true, and this is not on the path that
         gets polled: the referee reads it once a turn, while a launcher asks
-        `has_submitted` about one civ.
+        `has_submitted` or `submission` about one civ.
         """
         out = {}
         start = self.submission_prefix(turn)
