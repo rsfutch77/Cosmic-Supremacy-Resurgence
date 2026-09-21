@@ -265,8 +265,33 @@ class TurnStore:
     def has_submitted(self, civ: str, turn: int) -> bool:
         return os.path.exists(self.submission_path(civ, turn))
 
+    def submission(self, civ: str, turn: int):
+        """What one civ handed back for this turn, or None when they have not.
+
+        A player's launcher needs its own submission and nobody else's, and it
+        needs it every poll. Reaching it through `submissions` cost a download
+        per player per poll on a store that charges per operation, and it is
+        refused outright by the rule that stops one player reading another
+        player's orders. Absence is an ordinary answer here for the reason it
+        is for `has_submitted`: most polls happen before the player has played.
+
+        Only a missing file answers None. A file that is present and
+        unreadable still raises, which is what `submissions` did and what the
+        caller needs: the guard above this decides whether there is a
+        submission worth protecting, and answering None for a file that exists
+        would let it overwrite one.
+        """
+        try:
+            return sp.load_any(self.submission_path(civ, turn))
+        except FileNotFoundError:
+            return None
+
     def submissions(self, turn: int) -> dict:
-        """{civ: blob} for everyone who handed something back for this turn."""
+        """{civ: blob} for everyone who handed something back for this turn.
+
+        The referee's view, at the turn boundary. A caller after one player's
+        own submission wants `submission`.
+        """
         out = {}
         d = self.submission_dir(turn)
         if not os.path.isdir(d):
@@ -399,11 +424,19 @@ class HttpTurnStore:
     def has_submitted(self, civ: str, turn: int) -> bool:
         return civ in (self._get(f'/submissions/{turn}') or [])
 
+    def submission(self, civ: str, turn: int):
+        """One civ's submission, or None when there is not one.
+
+        `_get` turns the service's 404 into None, which is the same answer the
+        directory store gives for a file that is not there.
+        """
+        return self._get(f'/submission/{turn}/{urllib.parse.quote(civ)}',
+                         want_json=False)
+
     def submissions(self, turn: int) -> dict:
         out = {}
         for civ in (self._get(f'/submissions/{turn}') or []):
-            blob = self._get(f'/submission/{turn}/{urllib.parse.quote(civ)}',
-                             want_json=False)
+            blob = self.submission(civ, turn)
             if blob is not None:
                 out[civ] = blob
         return out

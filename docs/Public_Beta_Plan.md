@@ -248,18 +248,51 @@ is out of scope here.
   another player's submission, refused publishing a turn, and refused deleting
   anything, each by the rules rather than by the application declining to try.
 
-- [ ] **H6. A store fetches one submission, not all of them.** `player_turn.py`
-  reaches its own submission through `store.submissions(turn).get(civ)` at three
-  sites, which lists and downloads every player's submission and throws all but
-  one away. On a folder that was free. On Firebase it is a download per player
-  per poll, it is the cost H5 names, and it is refused outright by the rule that
-  stops a player reading another player's orders.
+- [x] **H6. A store fetches one submission, not all of them.** `player_turn.py`
+  reached its own submission through `store.submissions(turn).get(civ)`, which
+  lists and downloads every player's submission and throws all but one away. Free
+  on a folder, a download per player per poll on Firebase, and refused outright
+  by the rule at H4 that stops a player reading another player's orders.
 
-  The fix is a single-submission accessor on the store interface, implemented by
-  all three stores, not a change to the rules.
+  `submission(civ, turn)` now exists on all three stores, argument order matching
+  `has_submitted(civ, turn)`, returning the blob or **`None`** when there is not
+  one. None rather than raising, because absence is the ordinary answer on a path
+  a launcher polls.
 
-  **Done when:** no caller reads another player's submission to find its own, and
-  the rules can therefore refuse it.
+  **One deliberate asymmetry:** only a *missing* submission answers None. One
+  that is present but unreadable, the SMB sharing-violation case, still raises,
+  because the caller is the guard deciding whether there is a submission worth
+  protecting and answering None for a file that exists would let it be
+  overwritten.
+
+  **This item undercounted the readers.** It said three sites, all in
+  `player_turn.py`. There were five. `turn_server.py`'s own
+  `GET /submission/<n>/<civ>` route was building the entire `submissions(n)` dict
+  server-side to pick one entry out of it, so fixing only the stores and
+  `player_turn.py` would have left the HTTP store's per-civ path still listing
+  everything. And `test_loop_guards.py` carried a hand-copy of `follow`'s push
+  body that had drifted from the code it claims to replay; it mirrors it again.
+
+  | equivalence test | before | after |
+  |---|---|---|
+  | with the Firebase emulator | 131 | **157 passed, 0 failed** |
+  | without it, Firebase skipped | 88 | **105 passed, 0 failed** |
+
+  Above the seam and unchanged: the referee's status, `--verify 9
+  --no-recompute`, and a real merge of turn 9's 39,210-byte `DemoPlayer`
+  submission, 3 orders taken and 0 dropped. The same real submission read out of
+  all three stores through both `submission()` and `submissions()` gives
+  identical bytes.
+
+  **Left alone deliberately:** `referee.py` at three sites, which legitimately
+  wants every submission at the turn boundary. **A recorded follow-up:**
+  `dev_tools/check_store.py` does `sorted(store.submissions(turn))` when it only
+  wants the names, which on Firebase downloads every blob to discard it. It is an
+  operator diagnostic rather than a polled path, so it is cheap to leave and
+  cheaper still to fix when someone is next in that file.
+
+  **Not exercised:** `referee.resolve_turn`'s engine tick and `player_turn.follow`'s
+  serve, both of which need a client that was in use elsewhere.
 
 - [~] **H5. Cost and quota arithmetic, written down.** One galaxy at 4-hour turns
   is 6 ticks a day, 182 a month. Quotas below read from Firebase's own

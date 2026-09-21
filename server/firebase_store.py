@@ -329,13 +329,28 @@ class FirebaseTurnStore:
     def has_submitted(self, civ: str, turn: int) -> bool:
         return self._has(self.submission_object(civ, turn))
 
+    def submission(self, civ: str, turn: int):
+        """What one civ handed back for this turn, or None when they have not.
+
+        One object named outright, so this is one Class B operation and it
+        touches nothing but that civ's own object. That is what makes it
+        survivable on the path a launcher polls, and it is also what lets the
+        storage rule scope a read to the player it belongs to: a listing under
+        the turn's prefix could not be granted without granting every player's
+        orders with it.
+        """
+        data = self._get(self.submission_object(civ, turn))
+        if data is None:
+            return None
+        return sp.decode_save(data)
+
     def submissions(self, turn: int) -> dict:
         """{civ: blob} for everyone who handed something back for this turn.
 
         Listed from Storage rather than from an index in Firestore. An index
         would be a second thing to keep true, and this is not on the path that
         gets polled: the referee reads it once a turn, while a launcher asks
-        `has_submitted` about one civ.
+        `has_submitted` or `submission` about one civ.
         """
         out = {}
         start = self.submission_prefix(turn)

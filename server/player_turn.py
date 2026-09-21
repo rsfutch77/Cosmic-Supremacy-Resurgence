@@ -361,7 +361,7 @@ def follow(store: TurnStore, civ: str, poll: float = 5.0, rounds: int = 0,
         # every diff and summary is measured against. `to_load` is only what
         # goes into the client, and on a restart those are not the same thing.
         to_load = blob
-        prior = store.submissions(turn).get(civ)
+        prior = store.submission(civ, turn)
         if prior is not None:
             if carries_orders(blob, prior, civ):
                 # Resume, do not restart. The submission is a complete blob of
@@ -431,7 +431,7 @@ def follow(store: TurnStore, civ: str, poll: float = 5.0, rounds: int = 0,
             # A player who genuinely cancels their order is still served: the
             # submission we wrote ourselves is `sent`, so replacing our own
             # with an empty one is allowed. Only a stranger's is protected.
-            existing = store.submissions(turn).get(civ)
+            existing = store.submission(civ, turn)
             if (existing is not None and existing != sent
                     and not carries_orders(blob, mine, civ)):
                 # Both are orderless: nothing is at stake, so say so quietly.
@@ -450,7 +450,7 @@ def follow(store: TurnStore, civ: str, poll: float = 5.0, rounds: int = 0,
                 return True
 
             store.submit(civ, turn, mine)
-            landed = store.submissions(turn).get(civ)
+            landed = store.submission(civ, turn)
             if landed != mine:
                 raise RuntimeError(
                     f"submission for turn {turn} did not land in the store: "

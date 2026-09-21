@@ -61,7 +61,7 @@ def run_push(store, turn, civ, capture, sent, orders, existing_orders=True):
     submitted = []
     if capture == sent:
         return 'unchanged', submitted
-    existing = store.submissions(turn).get(civ)
+    existing = store.submission(civ, turn)
     if existing is not None and existing != sent and not orders:
         return ('refused' if existing_orders else 'left alone'), submitted
     store.submit(civ, turn, capture)

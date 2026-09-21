@@ -109,10 +109,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(sorted(STORE.submissions(int(parts[1]))))
             if len(parts) == 3 and parts[0] == 'submission':
                 n, civ = int(parts[1]), parts[2]
-                subs = STORE.submissions(n)
-                if civ not in subs:
+                blob = STORE.submission(civ, n)
+                if blob is None:
                     return self._fail(404, f'{civ} has not submitted for {n}')
-                return self._blob(subs[civ])
+                return self._blob(blob)
             if len(parts) == 2 and parts[0] == 'archive':
                 rec = STORE.archive_record(int(parts[1]))
                 if rec is None:
