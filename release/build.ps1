@@ -220,6 +220,12 @@ $piArgs = @(
     # Without them a frozen build reports that it cannot list galaxies.
     '--hidden-import', 'galaxy_directory',
     '--hidden-import', 'firebase_store',
+    # The join gate reads both: beta_notice for the text a player must see
+    # before joining, abandonment for that galaxy's own miss thresholds so
+    # the notice states real numbers rather than invented ones. Without
+    # them a release refuses every join, loudly and by name.
+    '--hidden-import', 'beta_notice',
+    '--hidden-import', 'abandonment',
     '--hidden-import', 'save_parser',
     '--hidden-import', 'set_blob_player',
     '--hidden-import', 'inject_civ',

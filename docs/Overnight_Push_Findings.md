@@ -252,3 +252,36 @@ files, with `test_relay_function` skipping for want of an emulator and
 
 **NOT VERIFIED:** the wiring itself has never run inside a real turn with a real
 client. The seam is exercised only by tests that stub the tick.
+
+### The launcher gates: reclaim, closed, notice (launcher-wiring agent)
+
+All three server-side pieces now reach a player. `roster_problem` takes the
+player's own reclaim record and says the seat was taken back at turn N after M
+missed turns, echoing nothing but the name they typed; a leak of any other
+player's name fails a check. `closed_problem` sits directly after
+`version_problem` in both entry points, ahead of the roster and seat checks,
+because a seated player of a closed galaxy still passes `roster_problem` and
+would otherwise get a confusing refusal. The notice is a modal shown by the Join
+button and by nothing else, filled with that galaxy's own thresholds, refusing to
+open the beta at all when a marker is unfilled.
+
+Two consequences it reasoned out rather than being told: a reclaim does **not**
+offer the "change your name" prompt, since a new spelling is not the remedy; and
+a reclaim clears `joined.json`, because otherwise the Games row reads "you join
+at the next turn" forever with no Join button, a dead end. 89 checks, each
+refusal paired with the same call on a healthy galaxy, plus source-order
+assertions so a future reordering that put the notice after the request fails.
+
+**NOT VERIFIED: no window was opened.** `show_beta_notice` has never been
+rendered. Layout, scrollbar, wrapping at 78 columns, whether 22 lines is the
+right height and the modal grab are all unexercised. Nothing ran against a live
+galaxy, the relay, or a Firebase store; every test used folder stores. Nothing
+here produced a reclaim or a close, both were written by hand, so
+`abandonment.enforce` has never driven a launcher refusal end to end.
+
+**Fixed while committing:** `build.ps1` needed `beta_notice` and `abandonment` as
+hidden imports. Without them a release refuses **every** join, loudly and by
+name. That is the intended fail-safe rather than a silent wrong answer, but it
+would still have made the first packaged beta unjoinable. Both added, and the
+build script now carries five modules the launcher imports inside functions.
+Unexercised: no frozen build has been made since any of tonight's launcher work.
