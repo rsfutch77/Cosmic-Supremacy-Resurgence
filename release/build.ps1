@@ -211,6 +211,11 @@ $piArgs = @(
     '--paths', $AiPlayerDir,
     '--hidden-import', 'player_turn',
     '--hidden-import', 'turn_store',
+    # The Games tab lists galaxies through these two, and both are
+    # imported inside functions, so the graph walker does not see them.
+    # Without them a frozen build reports that it cannot list galaxies.
+    '--hidden-import', 'galaxy_directory',
+    '--hidden-import', 'firebase_store',
     '--hidden-import', 'save_parser',
     '--hidden-import', 'set_blob_player',
     '--hidden-import', 'inject_civ',
