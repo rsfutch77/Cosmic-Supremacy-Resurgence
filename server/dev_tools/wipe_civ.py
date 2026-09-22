@@ -49,6 +49,48 @@ destroyed, with `SAVE+0` still reading 206.
 That is why this tool deletes `SHIP` sections outright rather than emptying them:
 it is the operation the engine performs on itself several times a galaxy.
 
+A wiped civ keeps its row in the overview score list
+----------------------------------------------------
+This is kept deliberately. A wiped empire holds nothing and builds nothing, so
+its standing stops moving, but the row stays and records where the player got
+to before they stopped. In a permanent sandbox that is the only trace a departed
+player leaves, and it is worth more than a tidy list.
+
+It follows from the shell rather than being arranged. The score list holds one
+row per distinct `Owner:4`, the `u32` ending the `OWNR` payload, established in
+`CosmicSupremacy_Reconstruction_Report.md` by an A/B of two blobs differing in
+those four bytes alone. This tool never touches `OWNR` unless `--delete-owner`
+is passed, so that field, and everything else per-civ living in that record,
+survives untouched. Measured on the demo galaxy: wiping `Neighbor` leaves all
+three `OWNR` records byte-identical at 673, 719 and 866 bytes, with `Owner:4`
+still 21, 0 and 22.
+
+`--delete-owner` is the switch that removes the row, and in a galaxy anybody has
+played it is not usable: its guard refuses while another civ still names the
+victim's object id, which after any contact is always, and the forced result does
+not load. The client starts and exits without opening the galaxy. So the row is
+not a choice that was made, it is a consequence of the only wipe that works.
+
+What the shell still shows, and does not
+----------------------------------------
+Compared on screen, before and after, on the turn-180 war galaxy where the two
+civs had met and fought. Gone and correct: the planet's ownership icon, recon.
+Kept and correct: the news history, which is historical, and the score row above.
+
+**Still wrong: the victim's capital system marker is still drawn, and hovering
+their former planet still names them as its owner.** The blob is right and the
+client is reading something else: the planet carries `owner = 0`, an empty name
+and a blank `PLPR`. Those draws come from per-civ state inside the `OWNR` this
+tool deliberately keeps. The victim's own home system id is still in that record,
+at three offsets, and which one the client uses is not established. Clearing just
+those, rather than the record, is the fix and is not attempted here: scanning for
+small integers cannot tell a system id from a count, and `OWPR` is not a colony
+list, since one and two colonies both give 138 bytes.
+
+Not evidence for any of this: a score shown for a civ that was not wiped. Two
+of the three civs in a wiped demo galaxy are untouched and living, and their
+rows say nothing about the shell.
+
 What returning a planet costs
 -----------------------------
 A planet's owner is a `u32` at `PLNT` payload `+16`, so un-owning it is a write.
@@ -202,6 +244,55 @@ def uncolonise(blob, planet_id, template_plpr, log=print):
     return bytes(buf)
 
 
+def forget_civ(blob, oid, log=print):
+    """Clear the wiped civ out of every civ's remembered map.
+
+    `EXSY` is not just which systems a civ has entered. Per planet it holds a
+    last-known owner and the planet's name as that civ last saw it, which is
+    where a wiped empire keeps showing up after every live field is correct.
+    Measured on the turn-180 war galaxy: the planet reads `owner = 0` with an
+    empty name, and both civs' tables still carry `BadGuy's HQ` against
+    last-known-owner 660, so the client draws the name and the capital marker
+    from here while taking the ownership icon from the live record. Half the
+    display live and half remembered is the actual defect, not staleness.
+
+    Every table is rewritten, the victim's own included. `exsy.parse` refuses a
+    table it cannot walk exactly, and `build(parse(x)) == x` byte for byte, so a
+    table this does not understand stops the wipe rather than being flattened.
+
+    This is deliberately not fog-correct. A civ that has not looked again would,
+    strictly, go on remembering what it last saw. The alternative is a planet
+    anybody may now colonise carrying another empire's name and a capital marker
+    for an empire that no longer exists, which misleads a player about the board
+    rather than about history.
+    """
+    import exsy
+    changed = 0
+    for owner in icv.owner_records(blob):
+        off = next((i for i in idg.find_all(blob, b"EXSY")
+                    if owner["off"] <= i < owner["end"]), None)
+        if off is None:
+            continue
+        ver, ln = idg.sec_len(blob, off)
+        table = exsy.parse(bytes(blob[off + 8:off + 8 + ln]))
+        hits = 0
+        for system in table:
+            for planet in system["planets"]:
+                if planet["owner"] == oid:
+                    planet["owner"] = 0
+                    planet["name"] = b""
+                    hits += 1
+        if not hits:
+            continue
+        blob = icv.splice(blob, off + 8, off + 8 + ln, exsy.build(table),
+                          log=lambda *a: None, what="exsy")
+        log(f"  {owner['name']}'s EXSY: {hits} remembered planet(s) cleared")
+        changed += hits
+    if not changed:
+        log("  no remembered planets to clear")
+    return blob
+
+
 def cut_section(blob, start, end, log=print, what=""):
     """Remove a whole section, narrowing the sections that enclose it.
 
@@ -340,6 +431,7 @@ def wipe(blob, name, remove_owner=False, force_owner=False, log=print,
     log(f"  {len(mine)} planet(s) {mine}, {len(ships)} ship(s) {ships}")
     blank = blank_plpr(blob, template_blob, log=log)
 
+    blob = forget_civ(blob, civ["oid"], log=log)
     for pid in mine:
         blob = uncolonise(blob, pid, blank, log=log)
     for sid in ships:

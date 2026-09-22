@@ -682,6 +682,48 @@ planets, which is the game's own gate. The renamer's `EXSY` cache picked the new
 name up and the other civ's did not, so the other player keeps seeing the old
 name until they observe the change.
 
+#### `EXSY` drives what the client draws for a planet nobody owns (September 2026)
+
+**The layout above is superseded by `server/dev_tools/exsy.py`, which walks the
+whole table.** The undecoded tail is a per-planet array, and it is the part that
+matters:
+
+    u32   system count
+    per system:
+        u32 system id, u32 sun id, str sun name, u32 undecoded, u32 planet count
+        per planet:
+            u32   last known owner civ id, 0 for never seen
+            u32   an observed quantity, undecoded
+            str   planet name
+
+`parse` raises unless the walk lands exactly on the end, and `build(parse(x))`
+is byte-identical, verified 21 of 21 tables across 7 blobs.
+
+**The client draws a planet's hover label and its system's 3D name from here,
+not from the live record.** Found by wiping a civ and looking: with `BadGuy`
+removed from a turn-180 galaxy, planet 384 read `owner = 0` with an empty name
+and a blank `PLPR`, and its ownership icon disappeared, while hovering it still
+returned `BadGuy's HQ` and the system still carried its 3D label. Both civs'
+tables still held `BadGuy's HQ` against last-known-owner 660. Clearing those two
+entries removed both draws, confirmed on screen.
+
+So a planet's display is assembled from two sources at once, the live record and
+the viewer's own remembered map, and only the viewer's explored systems show the
+remembered half. That is visible only from a seat that has explored the system,
+which is itself the confirmation.
+
+[ ] **Clearing another civ's remembered map is not fog-correct, and it is what
+`wipe_civ.forget_civ` currently does.** Strictly, a civ that has not looked again
+should keep remembering what it last saw: this section already records that
+`EXSY` is a cache which goes stale on purpose, and that one civ held a planet as
+owned by 206 while another had the correct 202. Wiping an abandoned player
+currently clears every civ's memory of them, which is a deliberate trade made
+because a planet anybody may now colonise, carrying a dead empire's name and a
+capital marker, misleads a player about the board rather than about history. The
+fog-correct version clears only the wiped civ's own table and lets rivals keep
+theirs until they re-scout. Not attempted, and it needs a rule for what a rival
+sees when they do look again.
+
 #### The trailing dword of every `KNPL` payload is unreliable
 
 **One field per civ, immediately before that civ's `EXSY` header, is not dependable data.** Measured
