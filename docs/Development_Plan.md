@@ -53,7 +53,7 @@ The server also serves a minimal HTML portal at `GET /` (the game opens a browse
 1. Multi-player turn sync, one authoritative galaxy blob per galaxy, orders merged in
 2. Galaxy lifecycle, Sandbox, Unranked, Ranked galaxy types with join/leave/expire logic
 3. Galaxy-Fame leaderboard, persistent scoring across galaxies
-4. Production hosting, swap SQLite for Firebase Firestore or PostgreSQL, TLS termination
-5. HTTPS patch to EXE, WinInet `INTERNET_FLAG_SECURE` flag so passwords travel over TLS
+4. Production hosting
+5. Production Google Auth
 6. Web portal, galaxy listing, registration, `.csgalaxy` download, fame leaderboard
 7. Known bug fixes, binary patches for any player-reported bugs from the original game
