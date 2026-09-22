@@ -25,6 +25,13 @@ which is what a beta played by strangers needs, because the referee reaches it
 outbound and nobody learns where the referee is. `open_store` takes any of the
 three, so a caller is given a string and never learns which it got.
 
+`FirebaseTurnStore` is the referee's transport and cannot be a player's: it
+builds Google Cloud admin clients, and a player has no Google Cloud credential.
+So a player's launcher keeps speaking `HttpTurnStore`, and what answers is
+either `turn_server.py` on a LAN or the relay function in `functions/`, which
+holds the admin credential, verifies a Firebase ID token, and hands back signed
+URLs. `HttpTurnStore` carries the token and speaks to both.
+
 The layout is a directory, which is enough for one machine and for a shared
 folder between two:
 
@@ -342,25 +349,97 @@ class TurnStore:
             return []
 
 
-class HttpTurnStore:
-    """The same interface, over `turn_server.py`.
+def _same_host(a: str, b: str) -> bool:
+    pa, pb = urllib.parse.urlparse(a), urllib.parse.urlparse(b)
+    return (pa.scheme, pa.netloc) == (pb.scheme, pb.netloc)
 
-    Blobs move as raw decompressed bytes. The base64 the directory holds is the
-    directory's business, and a caller that had to know about it is a caller the
-    next adapter would break.
+
+def _drop_auth_on_redirect():
+    """A redirect handler that does not carry the caller's token off-site.
+
+    The relay answers a blob route with a redirect to a signed Cloud Storage
+    URL, so the bytes move between the launcher and Storage and never through
+    the relay. `urllib` copies every request header onto the redirected request,
+    the `Authorization` header included, and Cloud Storage reads an
+    `Authorization` header it was not given in the signature as a credential to
+    authenticate, refuses it, and answers 401 on a URL that is perfectly valid.
+
+    So the header is dropped whenever the redirect leaves the host it was minted
+    for. That is also the right thing on its own terms: a Firebase ID token is a
+    bearer credential for the relay, and no other host should see one.
+    """
+    import urllib.request
+
+    class Handler(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, req, fp, code, msg, headers, newurl):
+            new = super().redirect_request(req, fp, code, msg, headers, newurl)
+            if new is not None and not _same_host(req.full_url, newurl):
+                new.headers = {k: v for k, v in new.headers.items()
+                               if k.lower() != 'authorization'}
+            return new
+
+    return Handler
+
+
+class HttpTurnStore:
+    """The same interface, over `turn_server.py` or the relay function.
+
+    Blobs move as raw decompressed bytes across this interface. The base64 the
+    directory holds is the directory's business, and a caller that had to know
+    about it is a caller the next adapter would break. What changes below the
+    interface is where those bytes come from: `turn_server.py` hands them over
+    itself, and the relay function hands over a signed Cloud Storage URL, which
+    serves the base64 wire form the store keeps. `_blob` decodes either, by the
+    same rule `save_parser.load_any` uses for a file that may be in either form.
+
+    `token` is a callable rather than a string because an ID token expires in an
+    hour and a launcher outlives that. Asking for one per request lets the
+    holder refresh without this store, or its owner, knowing that it did. It
+    returns None when there is no identity yet, and then no header is sent and
+    this behaves exactly as it did before there was one.
     """
 
-    def __init__(self, base: str, timeout: float = 30.0):
+    def __init__(self, base: str, timeout: float = 30.0, token=None):
         self.base = base.rstrip('/')
         self.timeout = timeout
+        self.token = token
+        self._opener = None
 
     # -- plumbing --
+    def _url(self, path: str) -> str:
+        """A ticket may name an absolute URL or a path back on this service."""
+        if path.startswith('http://') or path.startswith('https://'):
+            return path
+        return self.base + path
+
+    def _headers(self, url: str) -> dict:
+        """The Authorization header, when there is a token and it is ours.
+
+        Scoped to this store's own base for the reason `_drop_auth_on_redirect`
+        gives: a signed URL carries its own authorisation and a bearer token
+        sent with it is refused.
+        """
+        if self.token is None or not _same_host(url, self.base):
+            return {}
+        tok = self.token()
+        return {'Authorization': f'Bearer {tok}'} if tok else {}
+
+    def _open(self, req):
+        import urllib.request
+        if self._opener is None:
+            self._opener = urllib.request.build_opener(
+                _drop_auth_on_redirect())
+        return self._opener.open(req, timeout=self.timeout)
+
     def _get(self, path, want_json=True):
         import urllib.error
         import urllib.request
+        url = self._url(path)
+        req = urllib.request.Request(url, method='GET')
+        for k, v in self._headers(url).items():
+            req.add_header(k, v)
         try:
-            with urllib.request.urlopen(self.base + path,
-                                        timeout=self.timeout) as r:
+            with self._open(req) as r:
                 body = r.read()
         except urllib.error.HTTPError as exc:
             if exc.code == 404:
@@ -368,13 +447,33 @@ class HttpTurnStore:
             raise
         return json.loads(body) if want_json else body
 
-    def _post(self, path, body=b'', want_json=True):
+    def _blob(self, path):
+        """A blob route's bytes, in whichever form the far end serves them.
+
+        None stays None: a turn nobody published and a submission nobody made
+        are ordinary answers on this interface.
+        """
+        data = self._get(path, want_json=False)
+        if data is None or data[:4] in sp.KNOWN_TAGS:
+            return data
+        return sp.decode_save(data.strip())
+
+    def _send(self, path, body=b'', method='POST', headers=None,
+              want_json=True):
         import urllib.request
-        req = urllib.request.Request(self.base + path, data=body, method='POST')
-        req.add_header('Content-Type', 'application/octet-stream')
-        with urllib.request.urlopen(req, timeout=self.timeout) as r:
+        url = self._url(path)
+        req = urllib.request.Request(url, data=body, method=method)
+        sent = dict(headers or {})
+        sent.setdefault('Content-Type', 'application/octet-stream')
+        sent.update(self._headers(url))
+        for k, v in sent.items():
+            req.add_header(k, v)
+        with self._open(req) as r:
             out = r.read()
         return json.loads(out) if want_json and out else out
+
+    def _post(self, path, body=b'', want_json=True):
+        return self._send(path, body, 'POST', want_json=want_json)
 
     # -- state --
     def exists(self) -> bool:
@@ -404,7 +503,7 @@ class HttpTurnStore:
         return self._post(f'/start?{q}', blob)['turn']
 
     def turn_blob(self, turn: int) -> bytes:
-        blob = self._get(f'/turn/{turn}', want_json=False)
+        blob = self._blob(f'/turn/{turn}')
         if blob is None:
             raise FileNotFoundError(f'no turn {turn} at {self.base}')
         return blob
@@ -418,7 +517,31 @@ class HttpTurnStore:
 
     # -- submissions --
     def submit(self, civ: str, turn: int, blob: bytes) -> str:
-        self._post(f'/submission/{turn}/{urllib.parse.quote(civ)}', blob)
+        """Hand a player's state back, by whichever route the far end offers.
+
+        Two shapes, one code path. `turn_server.py` takes the bytes itself and
+        its ticket says so. The relay function will not carry a blob at all: it
+        authorises the write and hands back a signed Cloud Storage URL, so the
+        bytes go to Storage directly and the function stays the control plane.
+        Asking for the ticket first is what lets one store speak to both, and
+        what will let the far end change again without a new launcher.
+
+        A service that predates the ticket route answers 404 and the bytes are
+        posted as they always were. A service that has the route and refuses
+        this write answers 403, which raises rather than quietly falling back:
+        a refusal is an answer and retrying it another way would bury it.
+        """
+        path = f'/submission/{turn}/{urllib.parse.quote(civ)}'
+        ticket = self._get(f'/upload{path}')
+        if ticket is None:
+            self._post(path, blob)
+            return f'{self.base}/submission/{turn}/{civ}'
+        body = sp.encode_save(blob) if ticket.get('encoding') == 'b64' else blob
+        self._send(ticket['url'], body,
+                   method=ticket.get('method', 'PUT'),
+                   headers=ticket.get('headers'), want_json=False)
+        if ticket.get('commit'):
+            self._post(ticket['commit'], b'')
         return f'{self.base}/submission/{turn}/{civ}'
 
     def has_submitted(self, civ: str, turn: int) -> bool:
@@ -430,8 +553,7 @@ class HttpTurnStore:
         `_get` turns the service's 404 into None, which is the same answer the
         directory store gives for a file that is not there.
         """
-        return self._get(f'/submission/{turn}/{urllib.parse.quote(civ)}',
-                         want_json=False)
+        return self._blob(f'/submission/{turn}/{urllib.parse.quote(civ)}')
 
     def submissions(self, turn: int) -> dict:
         out = {}
@@ -462,19 +584,27 @@ class HttpTurnStore:
         return [line for line in body.decode('utf-8').split('\n') if line]
 
 
-def open_store(spec: str):
+def open_store(spec: str, token=None):
     """A store from a directory path, a base URL or a Firebase project.
 
         some/dir                            a directory, or a share
         http://host:8899                    turn_server.py on another host
+        https://host/relay/sandbox          the relay function in front of it
         firebase://cs-resurgence/sandbox    Firestore and Cloud Storage
+
+    `token` is the caller's zero-argument source of a Firebase ID token and
+    reaches the HTTP store only. The Firebase store authenticates with Google
+    Cloud credentials a player does not have, and a directory authenticates with
+    the filesystem, so a token means nothing to either: passing one to a spec
+    that is not a URL is quietly ignored rather than refused, because a caller
+    holding an identity should not have to know which store its config named.
 
     `firebase_store` is imported here rather than at the top of the module
     because it pulls in the google client libraries, about a second of import
     mostly spent in grpc, and the launcher and every dev tool open a directory.
     """
     if spec.startswith('http://') or spec.startswith('https://'):
-        return HttpTurnStore(spec)
+        return HttpTurnStore(spec, token=token)
     if spec.startswith('firebase://'):
         import firebase_store
         return firebase_store.open_firebase_store(spec)
@@ -486,3 +616,33 @@ def turn_of(blob: bytes) -> int:
     tree = sp.parse_blob(blob)
     glob = next(tree[0].find('GLOB'))
     return struct.unpack_from('<I', blob, glob.payload)[0]
+
+
+def check_save(blob: bytes, turn: int = None) -> int:
+    """Refuse bytes that are not a save of this galaxy's current turn.
+
+    Raises `ValueError` naming what was wrong, and returns the turn the blob
+    carries when there was nothing wrong with it.
+
+    Two callers want this and they want it for different reasons. The relay
+    function cannot see a submission's bytes, because they go to Cloud Storage
+    directly, so it checks the object once after it lands; `turn_server.py`
+    checks the same thing at the same point so that the two services refuse the
+    same submissions. Without it the first thing to read a bad submission is the
+    referee, at the turn boundary, where one player's junk stops everyone's
+    turn.
+
+    The check is deliberately shallow: the wire form decodes, the section tree
+    parses, and the turn number in `GLOB` is the one being played. It does not
+    ask whether the orders inside are legal, which is `merge_orders`' job and
+    needs the rest of the galaxy to answer.
+    """
+    if not blob:
+        raise ValueError('an empty submission is not a save')
+    try:
+        carried = turn_of(blob)
+    except Exception as exc:                                # noqa: BLE001
+        raise ValueError(f'not a save blob: {type(exc).__name__}: {exc}')
+    if turn is not None and carried != turn:
+        raise ValueError(f'this save is turn {carried}, not turn {turn}')
+    return carried

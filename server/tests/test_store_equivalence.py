@@ -23,6 +23,12 @@ service's answers are checked against the directory underneath it as well as
 against the other implementations. Firebase has nothing underneath it to
 compare with, which is the point of comparing the three summaries.
 
+The HTTP run happens twice over, without a token and with one. A launcher that
+holds a Firebase identity has to be able to talk to a LAN service that does not
+verify one, and a launcher that holds none has to behave exactly as it did
+before identities existed. What the relay function does with a token it has
+verified is `test_relay_function.py`'s to check.
+
 The Firebase run needs somewhere to run against, and takes it either way:
 
     firebase emulators:start --only firestore,storage
@@ -46,6 +52,7 @@ import struct
 import sys
 import threading
 import time
+from http.server import ThreadingHTTPServer
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
@@ -272,6 +279,7 @@ def run_http(tmp):
     try:
         base = f'http://127.0.0.1:{httpd.server_address[1]}'
         summary = run_sequence(HttpTurnStore(base), 'http')
+        run_token_checks(base, root, summary['turn'])
     finally:
         httpd.shutdown()
         httpd.server_close()
@@ -291,6 +299,119 @@ def run_http(tmp):
     check('http: the directory holds the same archive record',
           under.archive_record(7), summary['archive'])
     return summary
+
+
+def run_token_checks(base, root, turn):
+    """The same service, spoken to by a launcher that holds an identity.
+
+    The relay function verifies a Firebase ID token and this service does not,
+    which is the difference between a LAN and a beta. What must be true of both
+    is that one launcher speaks to either: a store carrying a token has to work
+    against a service that ignores one, and a store carrying none has to work
+    exactly as it did before tokens existed.
+
+    The service's own log is the witness that the header arrived. Checking that
+    a tokened call succeeds proves nothing on its own, because a call with the
+    header silently dropped would succeed too, and that is the failure this is
+    for: `HttpTurnStore` scopes the header to its own base and a mistake there
+    would leave every request unauthenticated against the relay and identical
+    against this.
+    """
+    print('http: a token rides along and is not required')
+    import turn_server
+    lines = []
+    kept_log, kept_verbose = turn_server.log, turn_server.VERBOSE
+    turn_server.log = lines.append
+    turn_server.VERBOSE = True
+    try:
+        plain = HttpTurnStore(base)
+        tokened = HttpTurnStore(base, token=lambda: 'an.id.token')
+        empty = HttpTurnStore(base, token=lambda: None)
+        check('http: a tokened store reads the same state',
+              tokened.state(), plain.state())
+        check('http: and the same turn blob',
+              tokened.turn_blob(turn), plain.turn_blob(turn))
+        check('http: and a store whose token callable answers None does too',
+              empty.state(), plain.state())
+
+        mine = make_blob(turn, b'k')
+        tokened.submit('Tokened', turn, mine)
+        check('http: a tokened submit lands as itself',
+              TurnStore(root).submission('Tokened', turn), mine)
+        check('http: and the service saw an identity offered',
+              any('Tokened' in ln and 'identity offered' in ln
+                  for ln in lines), True)
+        plain.submit('Plain', turn, mine)
+        check('http: an untokened submit lands too',
+              TurnStore(root).submission('Plain', turn), mine)
+        check('http: and the service saw no identity with it',
+              any('Plain' in ln and 'identity offered' in ln
+                  for ln in lines), False)
+        empty.submit('Absent', turn, mine)
+        check('http: a token callable answering None sends no header either',
+              any('Absent' in ln and 'identity offered' in ln
+                  for ln in lines), False)
+
+        # The relay cannot see a submission's bytes, because they go to Cloud
+        # Storage directly, so it checks the object after it lands and removes
+        # one that is not a save. This service checks the same thing at the
+        # same point and leaves the store in the same state, which is the only
+        # way a launcher can treat the two as one.
+        check('http: the service refuses a submission that is not a save',
+              raises(post_junk, base, turn), 'HTTPError')
+        check('http: and does not leave it for the referee to read',
+              TurnStore(root).submission('Junk', turn), None)
+        check('http: and refuses one whose turn is not the turn being played',
+              raises(post_stale, base, turn), 'HTTPError')
+        check('http: and does not leave that either',
+              TurnStore(root).submission('Stale', turn), None)
+    finally:
+        turn_server.log, turn_server.VERBOSE = kept_log, kept_verbose
+
+    print('http: a service that predates the upload ticket')
+    old_style = serve_without_tickets(root)
+    try:
+        legacy = f'http://127.0.0.1:{old_style.server_address[1]}'
+        mine = make_blob(turn, b'j')
+        HttpTurnStore(legacy).submit('Legacy', turn, mine)
+        # The fallback the ticket route is allowed to be absent for. Fails if
+        # `submit` required a ticket, which would break every launcher pointed
+        # at a turn_server that has not been updated.
+        check('http: a submission still lands when there is no ticket route',
+              TurnStore(root).submission('Legacy', turn), mine)
+    finally:
+        old_style.shutdown()
+        old_style.server_close()
+
+
+def serve_without_tickets(root):
+    """The same service with the ticket route taken out, on its own port."""
+    import turn_server
+
+    class Older(turn_server.Handler):
+        def do_GET(self):
+            parts, _q = self._parts()
+            if parts[:2] == ['upload', 'submission']:
+                return self._fail(404, 'no route for ' + self.path)
+            return turn_server.Handler.do_GET(self)
+
+    httpd = ThreadingHTTPServer(('127.0.0.1', 0), Older)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    return httpd
+
+
+def post_junk(base, turn):
+    """Put bytes that are not a save where a submission goes, then commit."""
+    store = HttpTurnStore(base)
+    store._post(f'/submission/{turn}/Junk', b'not a save at all')
+    store._post(f'/commit/submission/{turn}/Junk', b'')
+
+
+def post_stale(base, turn):
+    """Submit a real save of the wrong turn, then commit."""
+    store = HttpTurnStore(base)
+    store._post(f'/submission/{turn}/Stale', make_blob(turn - 3, b'y'))
+    store._post(f'/commit/submission/{turn}/Stale', b'')
 
 
 def firebase_spec(given):

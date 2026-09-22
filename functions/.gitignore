@@ -1,0 +1,6 @@
+# The store's modules, copied in by bundle.py. A build product: bundle.ensure
+# rebuilds it at import in a checkout and firebase.json's predeploy rebuilds it
+# before a deploy, so a tracked copy could only ever be a stale second version.
+cs_store/
+# The virtualenv the functions emulator and the deploy build here.
+venv/

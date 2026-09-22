@@ -1,0 +1,27 @@
+{
+  "functions": [
+    {
+      "source": ".",
+      "codebase": "relay",
+      "runtime": "python312",
+      "predeploy": [
+        "python \"$RESOURCE_DIR/bundle.py\""
+      ],
+      "ignore": [
+        ".git",
+        ".runtimeconfig.json",
+        "venv",
+        "**/__pycache__/**",
+        "**/*.pyc"
+      ]
+    }
+  ],
+  "emulators": {
+    "auth": { "port": 9099 },
+    "firestore": { "port": 8080 },
+    "storage": { "port": 9199 },
+    "functions": { "port": 5001 },
+    "ui": { "enabled": false },
+    "singleProjectMode": true
+  }
+}
