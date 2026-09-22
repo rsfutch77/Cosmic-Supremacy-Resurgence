@@ -223,6 +223,11 @@ $piArgs = @(
     '--hidden-import', 'ejbo_viewer',
     '--hidden-import', 'advance_turns',
     '--hidden-import', 'trigger_save',
+    # This install's Firebase identity, imported by player_token() once a
+    # galaxy that wants one is opened. Missing from the bundle it would be an
+    # ImportError swallowed into "no token", so a release would talk to the
+    # beta's function anonymously and only the function would notice.
+    '--hidden-import', 'fb_auth',
     '--distpath', $Stage,
     '--workpath', (Join-Path $BuildDir 'work'),
     '--specpath', $BuildDir

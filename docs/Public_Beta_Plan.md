@@ -261,13 +261,21 @@ is out of scope here.
   The second fits J4's seat binding and is probably the one to take, since that
   binding has to exist anyway.
 
-  **Neither is being built in this phase, deliberately.** Google login follows
-  immediately after the prototype, and a real account identity settles both the
-  submission-ownership rule here and the roster leak at J4 in one move, after
-  which taking another player's civ stops being possible at all. Until then the
-  rule is a size cap and a deletion refusal, and the beta's warning at N4 already
-  says a username is a claim rather than a credential. Do not build a
-  custom-claim scheme that Google login would immediately replace.
+  **H7 settled this and neither option was taken.** Design B puts the function
+  between the player and the store, so ownership is compared in code, uid against
+  the seat that claimed the civ, and no claim scheme is needed at all. An earlier
+  draft of this item called the custom claim "probably the one to take" and then
+  said not to build one, which was a contradiction while it stood.
+
+  **So this item's done-when is unreachable as written.** It asks for a client
+  refused *by the rules*. Under design B a player never touches a client SDK, so
+  Security Rules govern nothing on the player path, which is also why the bucket
+  can carry `allow read, write: if false` while the referee works normally. The
+  enforceable version, and the one to hold H7 to: **the function refuses a
+  request whose token uid does not hold the seat it is writing.**
+
+  The rules files stay as deny-all. They are the backstop for the day something
+  does talk to Firebase directly, not the mechanism.
 
   `server/beta_firestore.rules` and `server/beta_storage.rules` hold drafts for
   review. They are deliberately not accompanied by a `firebase.json`, so no
@@ -462,10 +470,33 @@ is out of scope here.
   turn, and the player is told which system they landed in by a note rather than
   having to find it.
 
-- [ ] **J4. A seat is bound to the anonymous UID that claimed it.** A second
+- [~] **J4. A seat is bound to the anonymous UID that claimed it.** A second
   install claiming a name already in the roster is refused. Because the UID is
   per-install, a player who reinstalls Windows would otherwise be locked out of
   their own empire, so the operator can rebind a seat to a new UID.
+
+  **The identity half exists.** `server/fb_auth.py` signs up anonymously on first
+  use, keeps the uid and refresh token in `fb_identity.json` beside
+  `identity.json`, refreshes before expiry rather than after a failure, and
+  returns `None` rather than raising when the network is down so an offline
+  launcher degrades instead of crashing. `identity.json` keeps its existing
+  meaning: the username is still a claim, and the uid is never shown to the
+  player. Google login replaces `_sign_in` and nothing else.
+
+  **"Per-install" is too narrow.** The uid follows the **data directory**, and
+  `find_data_dir()` falls back from the install directory to
+  `%LOCALAPPDATA%\CosmicSupremacyResurgence` when the former is not writable. So
+  a player who moves an unpacked build into Program Files, or runs two copies,
+  gets two uids without reinstalling anything. The operator rebind this item
+  already needs is therefore routine rather than rare.
+
+  **Anonymous users can expire out from under a seat.** Firebase can delete
+  anonymous accounts inactive for 30 days, which would hand a returning player a
+  dead refresh token, a fresh uid, and a seat naming a uid nobody holds.
+  Measured on `cs-resurgence`: `autodeleteAnonymousUsers` is **disabled**, so
+  this does not bite today. It has to stay disabled for as long as identity is
+  anonymous, and that is a reason to reach Google login sooner rather than a
+  thing to engineer around.
 
   The refusal still does not name the other players, for the reason F4 already
   gives: a launcher that could list the roster makes "is there a seat for me"
