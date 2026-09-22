@@ -234,7 +234,7 @@ is out of scope here.
   **Done when:** the referee is killed mid-galaxy and the machine rebooted, and
   the loop resumes and closes the next turn with nothing restored by hand.
 
-- [ ] **H4. Anonymous auth and security rules.** Firebase Anonymous Auth gives
+- [~] **H4. Anonymous auth and security rules.** Firebase Anonymous Auth gives
   each install a stable UID with no login screen, no password and no account.
   The username stays exactly what it is today, a claim typed into the launcher.
 
@@ -291,7 +291,7 @@ is out of scope here.
   another player's submission, refused publishing a turn, and refused deleting
   anything, each by the rules rather than by the application declining to try.
 
-- [ ] **H7. The player's launcher cannot reach Firebase, and nothing in the
+- [~] **H7. The player's launcher cannot reach Firebase, and nothing in the
   tests could have noticed.** What H1 delivered is the *referee's* transport. It
   is not the player's.
 
