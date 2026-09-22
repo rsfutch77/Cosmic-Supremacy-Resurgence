@@ -78,9 +78,9 @@ is out of scope here.
   section can be finished until it is made, and neither H1 nor H5 as first
   written knew it existed.
 
-  **`cs-resurgence` has no Firestore database and no Cloud Storage bucket.**
-  `firestore.googleapis.com` is not enabled on the project, and neither
-  `cs-resurgence.firebasestorage.app` nor `cs-resurgence.appspot.com` exists.
+  **As found, `cs-resurgence` had no Firestore database and no Cloud Storage
+  bucket**, and `firestore.googleapis.com` was not enabled. Neither H1 nor H5 as
+  first written knew a provisioning step existed at all.
 
   **Cloud Storage for Firebase has required the Blaze plan since 3 February
   2026.** On Spark every cell reads "not applicable" and the API answers 402 or
