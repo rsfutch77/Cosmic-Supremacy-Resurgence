@@ -993,7 +993,7 @@ is out of scope here.
   **Done when:** the machine is rebooted mid-galaxy with nobody watching and the
   next turn closes on time.
 
-- [ ] **N2. One bad submission cannot stall the galaxy.** The referee already
+- [x] **N2. One bad submission cannot stall the galaxy.** The referee already
   does the right thing structurally, extracting orders and applying them to its
   own authoritative blob rather than trusting a submitted one as state. What is
   missing is that a submission which fails to parse should be dropped with a note

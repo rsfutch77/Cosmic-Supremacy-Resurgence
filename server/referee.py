@@ -54,6 +54,7 @@ import save_parser as sp
 import inject_civ as icv
 import merge_orders
 import canonical
+import abandonment
 import turn_store
 from turn_store import TurnStore, open_store
 
@@ -351,6 +352,16 @@ def resolve_turn(store: TurnStore, save_dir=None, log=print) -> int:
         # inventing one: a galaxy that did not advance is a fault to surface.
         log(f"  referee: WARNING the tick produced turn {new_turn}, "
             f"not past {turn}")
+
+    # Warn, then reclaim, the seats of players who have stopped. It runs on the
+    # blob the tick produced and before it is published, because a reclaim
+    # rewrites that blob: publishing first and correcting afterwards would
+    # restart the clock on a turn players already hold. `turn` is the turn just
+    # closed, not the new one, because that is the turn the miss is counted
+    # against. It never raises for an abandonment-shaped problem; a wipe it
+    # cannot do leaves the seat and is counted again next turn.
+    nxt = abandonment.enforce(store, turn, nxt, log=log)
+
     store.publish(new_turn, nxt)
     store.archive(turn, {
         "turn": turn,

@@ -203,3 +203,52 @@ not the Storage half. The reference is injected into the **generated** emulator
 config rather than `functions/firebase.json`, because adding a `storage` key to
 the committed file would make rules deployable from the one config whose whole
 purpose is that it can reach nothing but functions.
+
+### N2, and a bug it found rather than hardening (robustness agent)
+
+The baseline was measured against `merge` as it stood, on real fixtures. A
+truncated blob, an empty one, an oversized one and bytes that are not a save
+**each raised out of the merge and ended the turn for the whole galaxy**. Worse,
+a submission from **another turn** and one from **another galaxy** did not raise:
+they merged, writing an order out of a state nobody is playing into the live
+galaxy. So this item was not hardening, it closed a path by which one player's
+stale or foreign save silently altered everyone's game.
+
+Two layers now: `screen_submission` for the cheap cases, and a per-submission
+guard inside `merge` that rolls the blob back to what it was when that civ was
+reached. A dropped submission is invisible to the rest of the galaxy, landing in
+`missing` rather than `submitted`, with the reason in the player's note and in a
+new `dropped` field of the archive record. 78 checks, every bad case run **with
+two good submissions beside it**, so a referee that dropped everything fails.
+
+**NOT VERIFIED.** No client was launched: every `resolve_turn` test stubs the
+tick, so nothing here shows a real turn computing or a real capture arriving.
+`HttpTurnStore` and `FirebaseTurnStore` were not exercised. 300 random byte
+corruptions of a real submission produced 265 that passed the screen and **zero**
+that raised deeper, so the merge guard could not be triggered through the screen
+and is tested by calling `merge` directly.
+
+**Two findings in files it did not change.** A pre-existing, order-dependent
+false refusal: with two good submissions and no bad one, whoever merges second is
+told `research: DROPPED, belongs to <the other civ>`, because that one rule
+compares against the accumulating blob rather than the state as served, unlike
+every other rule in the module. Note-only, predates this work, left alone. And
+`duel3.b64` is a fixture trap: it looks like a different galaxy and is the same
+one at turn 3, so it tests the turn check rather than the galaxy check.
+
+**A zlib bomb is still possible.** Nothing caps the wire form before the store
+decompresses it, so a small compressed submission can expand past the 8 MB limit
+inside `turn_store` before the referee ever sees it. Outside that agent's files
+and not fixed.
+
+### `abandonment.enforce` wired into the referee
+
+Both agents that owned the two sides finished, so I joined them: `resolve_turn`
+calls `enforce` on the blob the tick produced, **before** `publish`, because a
+reclaim rewrites that blob and publishing first would restart the clock on a turn
+players already hold. Full server suite green afterwards, 682 checks across 16
+files, with `test_relay_function` skipping for want of an emulator and
+`test_rename_materialisation` skipping for a missing fixture, both pre-existing.
+
+**NOT VERIFIED:** the wiring itself has never run inside a real turn with a real
+client. The seam is exercised only by tests that stub the tick.
