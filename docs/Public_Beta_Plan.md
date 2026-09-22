@@ -753,13 +753,39 @@ is out of scope here.
   forced the fog retraction. `wipe_acceptance.prepare` stamps for a survivor and
   refuses to stamp for the victim.
 
+  **A late galaxy has no template to copy, and the first version simply
+  failed.** The blank `PLPR` is taken from a never-colonised planet, and in a
+  permanent sandbox played for months there may not be one. It raised rather
+  than writing something wrong, so nothing in the tree needs repairing, but it
+  failed in exactly the situation abandonment exists for. **No blob in the
+  archive has reached that state, 0 of 475**, which is why nothing caught it;
+  it was pointed out rather than measured.
+
+  **What a blank record actually contains decided the fix.** Across 475 blobs
+  and 110,399 free planets every blank `PLPR` is 137 bytes, and 24 of those
+  bytes vary:
+
+  | bytes | behaviour |
+  |---|---|
+  | `+4 +5 +6 +11 +12 +120 +121` | differ between planets in one galaxy, stable over time |
+  | `+90 .. +105` | identical for every planet in a galaxy, **different between galaxies** |
+  | `+106` | changes from turn to turn |
+
+  So the obvious fix, shipping one canonical blank record in the tree, is the
+  wrong one: its 90 to 105 run would belong to another galaxy. A template has to
+  come from **this** galaxy, and an earlier turn of it does fine, since that run
+  is stable over time. `wipe_civ --template-from` takes one, the refusal names
+  it, and `wipe()` takes `template_blob`. Verified against a galaxy with all 160
+  planets colonised: refused without a template, and with one the planets come
+  back unowned at 137 bytes with this galaxy's own 90 to 105 run.
+
   **Still open, none of it blocking:** the replaced `PLPR` carries the template
   rock's rates rather than the original's, which is the right choice because
   carrying the original across would preserve a homeworld's customisation boost,
-  but four of those bytes have no established meaning. `OWNR` deletion where
-  another civ has met the victim is guarded rather than answered. And **nobody
-  has looked at a wiped civ on screen**: how the dead shell reads in the
-  diplomacy and overview lists is unchecked.
+  but `+5`, `+6`, `+12`, `+120` and `+121` still have no established meaning.
+  `OWNR` deletion where another civ has met the victim is guarded rather than
+  answered. And **nobody has looked at a wiped civ on screen**: how the dead
+  shell reads in the diplomacy and overview lists is unchecked.
 
 - [ ] **K5. Ending a galaxy is an operator action.** No season timer. The
   operator calls a galaxy over and starts a fresh one, so there has to be a way

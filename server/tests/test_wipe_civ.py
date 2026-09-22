@@ -206,6 +206,52 @@ def main():
     except SystemExit:
         check('wiping the last civ standing is refused', True)
 
+
+    # ── a galaxy with nothing left free ──────────────────────────────────────
+    # The late state of a permanent sandbox, and the one an abandonment has to
+    # be processed in. No blob in the archive has reached it, 0 of 475, which
+    # is why this went unnoticed until it was pointed out.
+    print('\n10. every planet colonised')
+    BASE = sp.load_any(GALAXY)
+    full = bytearray(BASE)
+    keeper = next(o['oid'] for o in icv.owner_records(BASE) if o['name'] != VICTIM)
+    freed = 0
+    for q in icv.planet_records(BASE):
+        if not q['owner']:
+            freed += 1
+            struct.pack_into('<I', full, q['payload'] + 16, keeper)
+    full = bytes(full)
+    check('the fixture really has nothing free',
+          sum(1 for q in icv.planet_records(full) if not q['owner']), 0)
+    check('and it had some before', freed > 0, True)
+
+    try:
+        wipe_civ.wipe(full, VICTIM, log=lambda *a: None)
+        check('wiping without a template is refused', False)
+    except SystemExit as exc:
+        check('wiping without a template is refused', True)
+        check('and the refusal names --template-from',
+              '--template-from' in str(exc), True)
+
+    out, planets, ships = wipe_civ.wipe(full, VICTIM, log=lambda *a: None,
+                                        template_blob=BASE)
+    got = {q['id']: q for q in icv.planet_records(out)}
+    check('the wiped planets came back unowned',
+          all(got[i]['owner'] == 0 for i in planets), True)
+    check('and carry a 137-byte blank record',
+          {got[i]['plpr_ln'] for i in planets}, {137})
+    # 90..105 is galaxy-wide, so a template from this galaxy reproduces it
+    # exactly. One from a different galaxy would not, which is why a single
+    # canonical record cannot be shipped in the tree as a fallback.
+    blanks = [q for q in icv.planet_records(BASE)
+              if not q['owner'] and not q['nlen']]
+    want = bytes(BASE[blanks[0]['plpr_payload']:blanks[0]['plpr_end']])[90:106]
+    check("and the galaxy-wide run is this galaxy's",
+          {bytes(out[got[i]['plpr_payload']:got[i]['plpr_end']])[90:106]
+           for i in planets}, {want})
+    check('and the ships are gone',
+          [s for s in ish.ship_records(out) if s['id'] in ships], [])
+
     print(f'\n{len(PASS)} passed, {len(FAIL)} failed')
     return 1 if FAIL else 0
 
