@@ -110,3 +110,96 @@ K2 was not disturbed. **A test that kills processes by name is not safe to run
 for regression while another agent holds the client**, and `run_all.ps1` is not
 the only file that does it.
 
+### K1 and K2, both passed in a client that actually ran (injection agent)
+
+**K1.** The collision was forced rather than hoped for: a colony ship was ordered
+at the exact planet `pick_homeworld` returns with nothing reserved (#6). With the
+reservation the newcomer lands on #47 instead, all four `ROUT` sections survive
+the injection byte-identical, and **the contested planet #6 was settled on turn
+63 in both the control and the joined run**, 52 turns after the order. A second,
+shorter colonisation completed on turn 13 in both. 60 turns compared ship by
+ship: 0 divergences.
+
+**K2.** Turn 11 to 112, 12 joins, 13 client launches, each segment stamped for
+the civ that joined last so every load proves a newcomer is playable rather than
+merely present. Object ids 210 to 232 strictly increasing, final civ count 15
+matching 15 `OWNR` records, high-water 233 matching the largest id, then
+cold-loaded from a fresh client.
+
+**NOT VERIFIED.** No human saw any of it; every claim is read out of blobs the
+client wrote. To look: `server\join_work\joined_as_new.dat` (turn 11, stamped
+`Joiner`) or `server\join_work\k2_out.dat` (turn 112, 15 civs). The referee path
+was not exercised on a joined galaxy: `resolve_turn` publishing one, `merge_orders`
+accepting a submission from a joined civ, and the launcher admitting a joined
+name are all untested. Joined civs were given nothing to do, so K2 shows such a
+galaxy loads and ticks, not that a newcomer can act. The margin never bound, all
+12 picks landing 576+ away against a margin of 174. One galaxy shape only.
+**The `EXSY` cheat is still live**: every joined civ inherits the donor's
+explored map, which is recorded in `inject_civ.py` and out of K1 and K2's scope.
+
+It also closed the `war_after.dat` client that was left open for you, under a
+lock whose pid was already dead. The restore command is in its report if you want
+that view back; you had already confirmed the fix, so I did not reopen it.
+
+### K3 and K5, built, referee not wired (abandonment agent)
+
+`server/abandonment.py` with `enforce(store, turn, blob)`, plus `review()` as a
+read-only dry run and a CLI. Defaults warn at 6 missed turns and reclaim at 12.
+43 checks, three of them mutation-confirmed. Closing a galaxy is on all three
+stores; 40 local checks plus 14 against the Firestore emulator.
+
+Two things it got right that are easy to get wrong: a seat taken at turn 19 has
+missed 2 turns and not 18, so joining does not instantly reclaim; and the wipe
+takes its blank `PLPR` template from an **earlier archived turn** when the galaxy
+has no free planet left, which is K4's constraint and the state abandonment
+actually happens in.
+
+**NOT VERIFIED.** Nothing was loaded or ticked in a client. `enforce` has never
+run inside a real `resolve_turn` and the call ordering is a specification, not
+something observed. The launcher still says "no seat for you" rather than naming
+a reclaim. **Retroactive enforcement was never run against a real galaxy**: switching
+it on does not start counting from today, it reads the archive already there, so
+run the CLI's dry run first.
+
+**Fixed while committing:** the relay minted upload tickets without ever calling
+`submit`, so a closed galaxy was enforced only by the launcher's own client-side
+check and a modified one could still upload. `functions/relay.py` now refuses at
+both halves of the ticket. Unexercised: no test covers it yet.
+
+### N3 and N4, built, unseen (operator agent)
+
+`server/operator_view.py` is read-only by construction: a fail-closed allowlist
+proxy, with `submissions(turn)` deliberately off it so H6's mistake cannot be
+reintroduced. It refuses to invent a tick duration, since the archive records
+`closed_at` and no duration, and prints a clearly labelled derived figure
+instead. 92 checks, including a SHA-256 fingerprint of every file before and
+after a full render.
+
+`server/beta_notice.txt` is the player text, with `beta_notice.py` as the loader.
+It carries no invented numbers: the miss thresholds are markers the operator
+fills, and a missing notice returns a reason rather than an empty string so it
+cannot silently read as "there are no rules". 63 checks, including one that
+counts the launcher's own redaction bullets and fails if the notice does not
+match.
+
+**NOT VERIFIED.** Nobody has looked at either. Run
+`python server/operator_view.py --directory <folder> --serve` and open it; read
+`server/beta_notice.txt` end to end as a player. Firebase was never exercised by
+this agent. The notice's "three things leave your computer" claim is derived from
+reading `fb_auth.py`, submissions and the log, **not an audit of all 2,066 lines
+of `launcher.py`** — if the launcher makes another network call, that section is
+wrong and it is the section a player is most entitled to rely on.
+
+**Fixed while committing:** `build.ps1` now packs `beta_notice.txt`, which
+PyInstaller would not have carried, so a frozen build would have raised
+`FileNotFoundError` where the notice belongs. My first attempt at that line was
+itself broken, `` being eaten as a backspace escape and producing
+`$ServerDireta_notice.txt`; caught by reading the file back rather than trusting
+the edit.
+
+**Also fixed:** the storage emulator refused to start for want of a rules file,
+which is why the abandonment agent could test the Firestore half of a store and
+not the Storage half. The reference is injected into the **generated** emulator
+config rather than `functions/firebase.json`, because adding a `storage` key to
+the committed file would make rules deployable from the one config whose whole
+purpose is that it can reach nothing but functions.

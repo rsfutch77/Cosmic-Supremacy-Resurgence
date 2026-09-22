@@ -507,7 +507,7 @@ is out of scope here.
   **Done when:** the launcher lists the sandbox from the directory and opens its
   store from what the directory gave it, with no galaxy path in any config file.
 
-- [ ] **J2. A Games tab in the launcher.** Replaces the old flow, where the
+- [~] **J2. A Games tab in the launcher.** Replaces the old flow, where the
   website listed active galaxies and a downloaded file was both the galaxy and
   the key. The tab shows the sandbox, its turn, its deadline, how many players
   are in it, and a Join button, and after joining it shows whether this player
@@ -567,7 +567,7 @@ is out of scope here.
 
 ## K. The sandbox galaxy
 
-- [~] **K1. Merge a new civ into a live galaxy without taking a planet someone
+- [x] **K1. Merge a new civ into a live galaxy without taking a planet someone
   was about to colonise.** `pick_homeworld` already refuses owned planets and
   picks the uncolonised planet furthest from everything claimed. What it does not
   know about is a planet nobody owns yet that a colony ship is flying toward,
@@ -679,7 +679,7 @@ is out of scope here.
   the newcomer's homeworld is not that ship's destination, and the colony ship
   completes its colonisation on schedule in a client that actually ran.
 
-- [ ] **K2. Repeated joins across a long galaxy.** D4 confirmed one injection. A
+- [x] **K2. Repeated joins across a long galaxy.** D4 confirmed one injection. A
   permanent sandbox does this dozens of times, object ids grow monotonically, and
   the `GLXY` civ count and high-water id are rewritten on every join.
 
@@ -687,7 +687,7 @@ is out of scope here.
   them loads, plays and ticks, with the civ count and high-water id correct at
   the end.
 
-- [ ] **K3. Detect abandonment.** Countable out of the store already: the archive
+- [~] **K3. Detect abandonment.** Countable out of the store already: the archive
   records which civs submitted for each turn, so consecutive misses need no new
   bookkeeping. Two stages, a warning and a reclaim, with the thresholds
   configurable per galaxy. At 4-hour turns, 12 missed turns is two days.
@@ -836,7 +836,7 @@ is out of scope here.
   carrying the original across would preserve a homeworld's customisation boost,
   but `+5`, `+6`, `+12`, `+120` and `+121` still have no established meaning.
 
-- [ ] **K5. Ending a galaxy is an operator action.** No season timer. The
+- [~] **K5. Ending a galaxy is an operator action.** No season timer. The
   operator calls a galaxy over and starts a fresh one, so there has to be a way
   to close one that stops accepting submissions, keeps the archive readable, and
   tells every launcher why.
@@ -1005,14 +1005,14 @@ is out of scope here.
   **Done when:** a truncated blob, an oversized one and a blob from a different
   galaxy are each dropped with a note, and the turn closes for everyone else.
 
-- [ ] **N3. An operator view.** One page showing the galaxy, its turn, who has
+- [~] **N3. An operator view.** One page showing the galaxy, its turn, who has
   submitted, when the last tick ran and what it took, and any errors. Otherwise
   the only way to know the beta is healthy is to read a log on one machine.
 
   **Done when:** the state of the galaxy can be read without opening a log file
   or a terminal.
 
-- [ ] **N4. What players are told, in the launcher and wherever they sign up.**
+- [~] **N4. What players are told, in the launcher and wherever they sign up.**
   Not a footnote: several of these are properties the design has accepted rather
   than faults waiting to be fixed, and a beta tester who learns them by discovery
   reports them as bugs.

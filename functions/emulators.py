@@ -115,6 +115,31 @@ def resolve(config_path: str = CONFIG, host: str = '127.0.0.1'):
     return cfg, ports, env
 
 
+# The storage emulator refuses to start without a rules file, and firebase.json
+# deliberately does not name one: adding a `storage` key there would make rules
+# deployable from the config whose whole purpose is that it can reach nothing
+# but functions. So the reference is injected into the generated copy instead,
+# where only the emulator ever sees it.
+STORAGE_RULES = os.path.join(os.path.dirname(HERE), 'server',
+                             'beta_storage.rules')
+
+
+def add_storage_rules(cfg):
+    """Point the emulator at the deny-all storage rules, if they are there.
+
+    Without this, `emulators:start --only storage` exits with "Cannot start the
+    Storage emulator without rules file", which reads as a broken emulator
+    rather than a missing line, and a galaxy cannot be started against it at
+    all. Found when a test could exercise the Firestore half of a store and not
+    the Storage half.
+    """
+    if not os.path.exists(STORAGE_RULES):
+        return cfg
+    rel = os.path.relpath(STORAGE_RULES, HERE).replace(os.sep, '/')
+    cfg.setdefault('storage', {}).setdefault('rules', rel)
+    return cfg
+
+
 def write_resolved(cfg, env) -> str:
     """Write the resolved config and the env file, and return the config path."""
     with open(RESOLVED, 'w', encoding='utf-8', newline='\n') as fh:
@@ -136,6 +161,7 @@ def main(argv=None) -> int:
     args = ap.parse_args(argv)
 
     cfg, ports, env = resolve(host=args.host)
+    cfg = add_storage_rules(cfg)
     path = write_resolved(cfg, env)
 
     for name, port in sorted(ports.items()):

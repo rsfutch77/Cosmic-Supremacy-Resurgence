@@ -188,6 +188,10 @@ $piArgs = @(
     '--add-data', "$Manifest;.",
     # build.json rides beside it, written a few lines above by stamp_build.
     '--add-data', "$BuildStamp;.",
+    # beta_notice.txt is the text a player reads before joining. It is a
+    # data file, so the import graph never sees it and a frozen build
+    # would raise FileNotFoundError where the notice should be.
+    '--add-data', "$ServerDir\beta_notice.txt;.",
     # cs_server is imported inside a function after its environment is set, so
     # name it explicitly rather than relying on the import graph walker.
     '--paths', $ServerDir,
