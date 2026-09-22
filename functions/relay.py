@@ -425,6 +425,23 @@ def _submitted_civs(store, turn: int) -> list:
     return sorted(out)
 
 
+def refuse_if_closed(store, doc):
+    """A closed galaxy takes no more submissions, enforced here.
+
+    Every store's `submit` already refuses one, but the relay never calls
+    `submit`: it mints a signed Cloud Storage ticket and the launcher uploads
+    straight to Storage. So the store's own guard sits on the far side of the
+    door a player actually uses, and a launcher that skipped its client-side
+    check could upload into a galaxy the operator had ended. Both halves of the
+    ticket check, because an upload authorised before a close would otherwise
+    still commit after one.
+    """
+    if doc.get(turn_store.STATUS_KEY) == turn_store.CLOSED:
+        why = doc.get(turn_store.CLOSED_REASON_KEY)
+        raise Refused(409, f'{store.galaxy} is closed'
+                           + (f': {why}' if why else ''))
+
+
 def _upload_ticket(store, doc, uid, turn, civ):
     """Where to put a submission, and what the far end will accept.
 
@@ -442,6 +459,7 @@ def _upload_ticket(store, doc, uid, turn, civ):
     ticket that repeated it would send the next request to
     `/<galaxy>/<galaxy>/commit`.
     """
+    refuse_if_closed(store, doc)
     seat_or_refuse(store, doc, uid, civ, claim=True)
     current = _current_turn(doc)
     if turn != current:
@@ -483,6 +501,7 @@ def _commit_submission(store, doc, uid, turn, civ):
     of a turn that is hours long, the caller that opened it is the only one who
     can close it, and before this existed the window was the whole turn.
     """
+    refuse_if_closed(store, doc)
     seat_or_refuse(store, doc, uid, civ, claim=True)
     current = _current_turn(doc)
     if turn != current:
