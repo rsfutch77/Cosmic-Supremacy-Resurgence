@@ -420,8 +420,17 @@ is out of scope here.
   operator diagnostic rather than a polled path, so it is cheap to leave and
   cheaper still to fix when someone is next in that file.
 
-  **Not exercised:** `referee.resolve_turn`'s engine tick and `player_turn.follow`'s
-  serve, both of which need a client that was in use elsewhere.
+  **Now exercised with a real client.** Both halves that needed one have been
+  run: `player_turn.serve` stamped and launched a player build that came up as
+  `DemoPlayer` at turn 10, `collect` captured 39,125 bytes out of it, and the
+  new accessor read those exact bytes back and agreed with `submissions()`. So
+  the accessor is proved against a real capture rather than a synthetic blob.
+
+  `referee.resolve_turn` then closed turn 9 with that store's real 39,210-byte
+  submission and produced canonical **`c2f1e1e08bd7cd48`**, which is the value
+  the blob push plan's A3 recorded for this turn **before** this refactor
+  existed, and closing turn 10 reproduced the archived `9d63be7a3e9c3cc8`. The
+  store refactor did not change what the referee computes.
 
 - [~] **H5. Cost and quota arithmetic, written down.** One galaxy at 4-hour turns
   is 6 ticks a day, 182 a month. Quotas below read from Firebase's own
@@ -920,6 +929,21 @@ is out of scope here.
   turn whose deadline has already passed. A 4-hour clock over a permanent galaxy
   means the machine's uptime is the galaxy's uptime.
 
+  **A referee that cannot save no longer burns the turn.** `referee.py`'s header
+  has always named `cs_server.py` on port 8888 as a requirement and nothing
+  verified it, while `player_turn.serve` has checked the same thing since F2 lost
+  a player's turn to exactly this. Measured with the port closed: a real
+  resolution ran the whole merge, launched the client, advanced the galaxy, and
+  only then failed with `SaveGame returned 0` from inside the client, which reads
+  as a client fault rather than a missing server.
+
+  `tick` and `resolve_turn` both call `save_path_ready` now. `resolve_turn`
+  checks first because it writes each player's refusal notes before ticking, so
+  a referee that cannot save changes nothing at all rather than leaving notes for
+  a turn that did not close. Verified both ways: with the port closed it refuses
+  before launching anything and leaves no client process; with the server up the
+  same turn resolves normally.
+
   **Done when:** the machine is rebooted mid-galaxy with nobody watching and the
   next turn closes on time.
 
@@ -958,12 +982,20 @@ is out of scope here.
   **Done when:** the text exists, is shown before a player joins rather than
   buried, and matches what the code actually does.
 
-- [ ] **N5. Record a measured tick duration.** Capacity is not a constraint at one
-  galaxy and six ticks a day, and the number is worth having anyway, because it is
-  what the second galaxy and the cloud offload will be planned against.
+- [x] **N5. Record a measured tick duration.** Three real resolutions of the
+  32-system, 3-civ demo galaxy at about 39,100 bytes, each closing a turn and
+  publishing the next through a real client:
 
-  **Done when:** the seconds a tick takes on a real sandbox galaxy are written
-  down, with the galaxy's size beside them.
+  | turn | orders | seconds |
+  |---|---|---|
+  | 9 to 10 | 3 taken, 0 dropped | 11.7 |
+  | 10 to 11 | 0 | 11.0 |
+  | 11 to 12 | 0 | 8.6 |
+
+  So a tick is **about 10 seconds**, and six a day is under a minute of client
+  time. Capacity is not a constraint at one galaxy, and this is the number the
+  second galaxy and the cloud offload get planned against. A 108-system galaxy
+  has not been timed.
 
 ---
 
