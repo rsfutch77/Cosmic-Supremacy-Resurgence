@@ -190,6 +190,13 @@ a conscription were both dropped in the first two-machine rehearsal and both
 players saw nothing but an order that had not happened. `referee.py` writes
 what lands in `notes` beside the turn and `player_turn.follow` prints it.
 
+**A submission that cannot be read is dropped whole and named.** Every rule
+here reads the submitted blob, and a blob wrecked deeper than the referee's own
+screen can see used to raise out of `merge` and take the turn down with it, for
+every player in the galaxy rather than the one who sent it. What that civ had
+taken so far is rolled back, so a submission that fails halfway leaves nothing
+behind and is exactly a player who did not submit.
+
 [ ] **Nothing here checks that an order is legal**, only that it is the
 player's own. A submission naming a technology the civ cannot research, or a
 queue entry it cannot afford, is copied as given. That is C4, the legality gate,
@@ -1156,10 +1163,6 @@ def merge(blob, submissions, log=print, notes=None):
     accepted = dropped = 0
 
     for civ_name, sub in submissions:
-        civ = civ_by_name(blob, civ_name)
-        mine = civ['oid']
-        log(f"{civ_name} (object {mine}):")
-
         def drop(reason, _civ=civ_name):
             """Refuse one change: say it here, and tell the player who made it.
 
@@ -1173,260 +1176,294 @@ def merge(blob, submissions, log=print, notes=None):
             if notes is not None:
                 notes.setdefault(_civ, []).append(reason)
 
-        # Ship designs, before the production queues, because a queue that
-        # builds a design the galaxy does not hold is a dangling reference and
-        # the engine refuses the whole file rather than the order.
+        # One bad submission cannot be allowed to end the merge. Everything
+        # below reads the submitted blob, and a blob that parses far enough to
+        # reach here can still be wrecked deeper in: a section size that lies,
+        # a population count that runs past its array. Measured before this
+        # guard, against a submission truncated in half: `merge` raised
+        # StopIteration and took the turn down with it, for every player in the
+        # galaxy rather than the one who sent it.
         #
-        # Judged against `served_designs`, the state as it was served, like
-        # every other rule here: applying one player's designs first would
-        # otherwise make the next player's untouched copy of the galaxy look
-        # like a submission that had deleted them.
-        remap = {}
-        new_designs, refusals = design_orders(served_designs,
-                                              design_index(sub), mine)
-        for why in refusals:
-            drop(why)
-        for was, d in new_designs:
-            oid = was
-            if oid in design_index(blob):
-                # The client allocates a new object id as one past the object
-                # count, so two players who design a ship on the same turn both
-                # arrive claiming the same id, and merging both would put two
-                # objects into one galaxy under one id. Whoever is merged second
-                # is renumbered.
-                #
-                # This is the one judgement made against the accumulating blob
-                # rather than against the state served, and it has to be: an id
-                # is taken or free in the galaxy being built, not in the one
-                # either player was handed.
-                oid = next_object_id(blob)
-                remap[was] = oid
-            blob = set_high_water(blob, oid)
-            blob = add_design(blob, mine, with_design_id(d['record'], oid))
-            log(f"    design {oid}: {d['name']!r} taken"
-                + (f", submitted as {was} and renumbered"
-                   if oid != was else ""))
-            accepted += 1
-        mine_designs = designs_of(blob, mine)
+        # The blob is put back to what it was before this civ was read, so a
+        # submission that fails halfway leaves nothing of itself behind and is
+        # exactly a player who did not submit. `SystemExit` is deliberately not
+        # caught: `civ_by_name` raises it for a civ this galaxy does not hold,
+        # which is a caller naming the wrong civ rather than a client sending
+        # bad bytes. `referee.screen_submission` refuses that case with a note
+        # before the merge sees it.
+        before, kept = blob, accepted
+        try:
+            civ = civ_by_name(blob, civ_name)
+            mine = civ['oid']
+            log(f"{civ_name} (object {mine}):")
 
-        # ship orders
-        for ship_oid, (_claimed, dyno) in sorted(ship_index(sub).items()):
-            if ship_oid not in served_ships:
-                drop(f"ship {ship_oid}: DROPPED, not in the state served")
-                continue
-            owner, as_served = served_ships[ship_oid]
-            if dyno == as_served:
-                continue
-            if owner != mine:
-                drop(f"ship {ship_oid}: DROPPED, owned by "
-                     f"{names.get(owner, owner)}")
-                continue
-            blob = replace_dyno(blob, ship_oid, dyno)
-            log(f"    ship {ship_oid}: order taken "
-                f"({len(as_served)} -> {len(dyno)} bytes)")
-            accepted += 1
-
-        # production queues and job allocation
-        for planet_oid, (_claimed, prod, plpr, name) in sorted(
-                planet_index(sub).items()):
-            if planet_oid not in served_planets:
-                drop(f"planet {planet_oid}: DROPPED, not in the state served")
-                continue
-            owner, prod_served, plpr_served, name_served = \
-                served_planets[planet_oid]
-
-            # A queue naming a design that was renumbered has to name the
-            # number it ended up with. The client wrote the id it allocated,
-            # and that id belongs to somebody else now.
-            if prod is not None and prod_builds(prod) in remap:
-                prod = with_prod_design(prod, remap[prod_builds(prod)])
-
-            if name is None and name_served is not None:
-                # planet_name refuses a length it cannot trust, so a submission
-                # with a corrupt or overlong name arrives as None. Say that,
-                # rather than letting the next rule report whatever it happens
-                # to notice about the same wreckage.
-                drop(f"planet {planet_oid}: rename DROPPED, the name field "
-                     f"is unreadable or longer than {MAX_NAME} bytes")
-            elif name is not None and name_served is not None and name != name_served:
-                if owner != mine:
-                    drop(f"planet {planet_oid}: rename DROPPED, owned by "
-                         f"{names.get(owner, owner)}")
-                else:
-                    ok, why = name_acceptable(name[1])
-                    if not ok:
-                        drop(f"planet {planet_oid}: rename DROPPED, {why}")
-                    else:
-                        blob = set_planet_name(blob, planet_oid, name[1])
-                        log(f"    planet {planet_oid}: renamed "
-                            f"{name_served[1].decode('latin1')!r} -> "
-                            f"{name[1].decode('latin1')!r}")
-                        accepted += 1
-
-            if prod != prod_served:
-                if owner != mine:
-                    drop(f"planet {planet_oid}: production DROPPED, owned by "
-                         f"{names.get(owner, owner)}")
-                elif prod is None or prod_served is None:
-                    drop(f"planet {planet_oid}: production DROPPED, no PROD "
-                         f"section on one side")
-                elif (prod_builds(prod) is not None
-                      and prod_builds(prod) not in mine_designs):
-                    # A queue that names a design the galaxy does not hold is a
-                    # dangling reference, and the engine refuses the whole
-                    # galaxy rather than the order: the client started, read it,
-                    # and exited in four seconds. Designs are carried now, so
-                    # this fires for a queue naming something that was refused
-                    # or that the submitter does not own, and it stays because
-                    # it is what keeps an unloadable galaxy from being
-                    # published.
+            # Ship designs, before the production queues, because a queue that
+            # builds a design the galaxy does not hold is a dangling reference
+            # and the engine refuses the whole file rather than the order.
+            #
+            # Judged against `served_designs`, the state as it was served, like
+            # every other rule here: applying one player's designs first would
+            # otherwise make the next player's untouched copy of the galaxy
+            # look like a submission that had deleted them.
+            remap = {}
+            new_designs, refusals = design_orders(served_designs,
+                                                  design_index(sub), mine)
+            for why in refusals:
+                drop(why)
+            for was, d in new_designs:
+                oid = was
+                if oid in design_index(blob):
+                    # The client allocates a new object id as one past the
+                    # object count, so two players who design a ship on the
+                    # same turn both arrive claiming the same id, and merging
+                    # both would put two objects into one galaxy under one id.
+                    # Whoever is merged second is renumbered.
                     #
-                    # Asked of the merged galaxy rather than of the state
-                    # served, because the question is whether the reference will
-                    # resolve in the file the referee is about to publish. It is
-                    # asked per civ so that one player's new design cannot
-                    # become the thing another player's queue happens to name.
-                    drop(f"planet {planet_oid}: production DROPPED, it builds "
-                         f"design {prod_builds(prod)}, which {civ_name} does "
-                         f"not own in the merged galaxy")
-                elif is_hurried(prod) and not is_hurried(prod_served):
-                    # A hurry takes effect the moment it is clicked, so the
-                    # submission carries the outcome rather than the request:
-                    # the item complete and the credits already gone. The
-                    # referee prices it from the state it served and spends the
-                    # credits itself, so a client that edited its own balance
-                    # gains nothing.
-                    ok, why, cost, points = hurry_acceptable(
-                        plpr_served, plpr, credits_of(blob, mine))
-                    if not ok:
-                        drop(f"planet {planet_oid}: hurry DROPPED, {why}")
+                    # This is the one judgement made against the accumulating
+                    # blob rather than against the state served, and it has to
+                    # be: an id is taken or free in the galaxy being built, not
+                    # in the one either player was handed.
+                    oid = next_object_id(blob)
+                    remap[was] = oid
+                blob = set_high_water(blob, oid)
+                blob = add_design(blob, mine, with_design_id(d['record'], oid))
+                log(f"    design {oid}: {d['name']!r} taken"
+                    + (f", submitted as {was} and renumbered"
+                       if oid != was else ""))
+                accepted += 1
+            mine_designs = designs_of(blob, mine)
+
+            # ship orders
+            for ship_oid, (_claimed, dyno) in sorted(ship_index(sub).items()):
+                if ship_oid not in served_ships:
+                    drop(f"ship {ship_oid}: DROPPED, not in the state served")
+                    continue
+                owner, as_served = served_ships[ship_oid]
+                if dyno == as_served:
+                    continue
+                if owner != mine:
+                    drop(f"ship {ship_oid}: DROPPED, owned by "
+                         f"{names.get(owner, owner)}")
+                    continue
+                blob = replace_dyno(blob, ship_oid, dyno)
+                log(f"    ship {ship_oid}: order taken "
+                    f"({len(as_served)} -> {len(dyno)} bytes)")
+                accepted += 1
+
+            # production queues and job allocation
+            for planet_oid, (_claimed, prod, plpr, name) in sorted(
+                    planet_index(sub).items()):
+                if planet_oid not in served_planets:
+                    drop(f"planet {planet_oid}: DROPPED, not in the state "
+                         f"served")
+                    continue
+                owner, prod_served, plpr_served, name_served = \
+                    served_planets[planet_oid]
+
+                # A queue naming a design that was renumbered has to name the
+                # number it ended up with. The client wrote the id it
+                # allocated, and that id belongs to somebody else now.
+                if prod is not None and prod_builds(prod) in remap:
+                    prod = with_prod_design(prod, remap[prod_builds(prod)])
+
+                if name is None and name_served is not None:
+                    # planet_name refuses a length it cannot trust, so a
+                    # submission with a corrupt or overlong name arrives as
+                    # None. Say that, rather than letting the next rule report
+                    # whatever it happens to notice about the same wreckage.
+                    drop(f"planet {planet_oid}: rename DROPPED, the name "
+                         f"field is unreadable or longer than {MAX_NAME} "
+                         f"bytes")
+                elif (name is not None and name_served is not None
+                      and name != name_served):
+                    if owner != mine:
+                        drop(f"planet {planet_oid}: rename DROPPED, owned by "
+                             f"{names.get(owner, owner)}")
+                    else:
+                        ok, why = name_acceptable(name[1])
+                        if not ok:
+                            drop(f"planet {planet_oid}: rename DROPPED, {why}")
+                        else:
+                            blob = set_planet_name(blob, planet_oid, name[1])
+                            log(f"    planet {planet_oid}: renamed "
+                                f"{name_served[1].decode('latin1')!r} -> "
+                                f"{name[1].decode('latin1')!r}")
+                            accepted += 1
+
+                if prod != prod_served:
+                    if owner != mine:
+                        drop(f"planet {planet_oid}: production DROPPED, "
+                             f"owned by {names.get(owner, owner)}")
+                    elif prod is None or prod_served is None:
+                        drop(f"planet {planet_oid}: production DROPPED, no "
+                             f"PROD section on one side")
+                    elif (prod_builds(prod) is not None
+                          and prod_builds(prod) not in mine_designs):
+                        # A queue that names a design the galaxy does not hold
+                        # is a dangling reference, and the engine refuses the
+                        # whole galaxy rather than the order: the client
+                        # started, read it, and exited in four seconds. Designs
+                        # are carried now, so this fires for a queue naming
+                        # something that was refused or that the submitter does
+                        # not own, and it stays because it is what keeps an
+                        # unloadable galaxy from being published.
+                        #
+                        # Asked of the merged galaxy rather than of the state
+                        # served, because the question is whether the reference
+                        # will resolve in the file the referee is about to
+                        # publish. It is asked per civ so that one player's new
+                        # design cannot become the thing another player's queue
+                        # happens to name.
+                        drop(f"planet {planet_oid}: production DROPPED, it "
+                             f"builds design {prod_builds(prod)}, which "
+                             f"{civ_name} does not own in the merged galaxy")
+                    elif is_hurried(prod) and not is_hurried(prod_served):
+                        # A hurry takes effect the moment it is clicked, so the
+                        # submission carries the outcome rather than the
+                        # request: the item complete and the credits already
+                        # gone. The referee prices it from the state it served
+                        # and spends the credits itself, so a client that
+                        # edited its own balance gains nothing.
+                        ok, why, cost, points = hurry_acceptable(
+                            plpr_served, plpr, credits_of(blob, mine))
+                        if not ok:
+                            drop(f"planet {planet_oid}: hurry DROPPED, {why}")
+                        else:
+                            blob = replace_prod(blob, planet_oid, prod)
+                            blob = set_progress(blob, planet_oid,
+                                                progress_of(plpr))
+                            blob = set_credits(blob, mine,
+                                               credits_of(blob, mine) - cost)
+                            log(f"    planet {planet_oid}: production "
+                                f"hurried, {points} point(s) for {cost} "
+                                f"credits")
+                            accepted += 1
                     else:
                         blob = replace_prod(blob, planet_oid, prod)
-                        blob = set_progress(blob, planet_oid,
-                                            progress_of(plpr))
-                        blob = set_credits(blob, mine,
-                                           credits_of(blob, mine) - cost)
-                        log(f"    planet {planet_oid}: production hurried, "
-                            f"{points} point(s) for {cost} credits")
+                        log(f"    planet {planet_oid}: production queue taken")
                         accepted += 1
-                else:
-                    blob = replace_prod(blob, planet_oid, prod)
-                    log(f"    planet {planet_oid}: production queue taken")
+
+                if plpr is None or plpr_served is None:
+                    continue
+                rate, rate_served = recruit_of(plpr), recruit_of(plpr_served)
+                if rate is not None and rate != rate_served:
+                    if owner != mine:
+                        drop(f"planet {planet_oid}: recruitment rate DROPPED, "
+                             f"owned by {names.get(owner, owner)}")
+                    elif not 0 <= rate <= 100:
+                        drop(f"planet {planet_oid}: recruitment rate DROPPED, "
+                             f"{rate} is not a percentage")
+                    else:
+                        blob = set_recruit(blob, planet_oid, rate)
+                        log(f"    planet {planet_oid}: recruitment rate "
+                            f"{rate_served}% -> {rate}%")
+                        accepted += 1
+
+            # Everybody this civ holds, judged together. Jobs and military used
+            # to be two rules and a turn that did both, conscripting a citizen
+            # and posting the new soldier to a ship, was refused twice over.
+            ok, why = people_acceptable(blob, sub, mine)
+            planets_before, ships_before = population(blob, mine)
+            planets_after, ships_after = population(sub, mine)
+            if planets_after is None:
+                pass                   # unreadable; people_acceptable said so
+            elif not ok:
+                drop(f"people DROPPED, {why}")
+            else:
+                for oid in sorted(planets_after):
+                    cz_b, mil_b = planets_before[oid]
+                    cz_a, mil_a = planets_after[oid]
+                    if (cz_b, mil_b) == (cz_a, mil_a):
+                        continue
+                    blob = set_people(blob, oid, citizen_bytes(
+                        planet_index(sub)[oid][2]), mil_a)
+                    what = []
+                    if [c[0] for c in cz_b] != [c[0] for c in cz_a]:
+                        what.append(f'{_tally([c[0] for c in cz_b])} -> '
+                                    f'{_tally([c[0] for c in cz_a])}')
+                    if len(mil_b) != len(mil_a):
+                        what.append(f'{len(mil_b)} -> {len(mil_a)} stationed')
+                    log(f"    planet {oid}: "
+                        f"{'; '.join(what) or 'people moved'}")
+                    accepted += 1
+                for oid in sorted(ships_after):
+                    if ships_before[oid] == ships_after[oid]:
+                        continue
+                    blob = set_crew(blob, oid, ships_after[oid])
+                    log(f"    ship {oid}: crew {len(ships_before[oid])} -> "
+                        f"{len(ships_after[oid])}")
                     accepted += 1
 
-            if plpr is None or plpr_served is None:
-                continue
-            rate, rate_served = recruit_of(plpr), recruit_of(plpr_served)
-            if rate is not None and rate != rate_served:
-                if owner != mine:
-                    drop(f"planet {planet_oid}: recruitment rate DROPPED, "
-                         f"owned by {names.get(owner, owner)}")
-                elif not 0 <= rate <= 100:
-                    drop(f"planet {planet_oid}: recruitment rate DROPPED, "
-                         f"{rate} is not a percentage")
-                else:
-                    blob = set_recruit(blob, planet_oid, rate)
-                    log(f"    planet {planet_oid}: recruitment rate "
-                        f"{rate_served}% -> {rate}%")
-                    accepted += 1
-
-        # Everybody this civ holds, judged together. Jobs and military used to
-        # be two rules and a turn that did both, conscripting a citizen and
-        # posting the new soldier to a ship, was refused twice over.
-        ok, why = people_acceptable(blob, sub, mine)
-        planets_before, ships_before = population(blob, mine)
-        planets_after, ships_after = population(sub, mine)
-        if planets_after is None:
-            pass                              # unreadable; people_acceptable said so
-        elif not ok:
-            drop(f"people DROPPED, {why}")
-        else:
-            for oid in sorted(planets_after):
-                cz_b, mil_b = planets_before[oid]
-                cz_a, mil_a = planets_after[oid]
-                if (cz_b, mil_b) == (cz_a, mil_a):
+            # system names, which belong to whoever holds most of the system
+            served_systems = systems(blob)
+            for sun_oid, (_o, _t, name) in sorted(systems(sub).items()):
+                if sun_oid not in served_systems:
+                    drop(f"system {sun_oid}: DROPPED, not in the state served")
                     continue
-                blob = set_people(blob, oid, citizen_bytes(
-                    planet_index(sub)[oid][2]), mil_a)
-                what = []
-                if [c[0] for c in cz_b] != [c[0] for c in cz_a]:
-                    what.append(f'{_tally([c[0] for c in cz_b])} -> '
-                                f'{_tally([c[0] for c in cz_a])}')
-                if len(mil_b) != len(mil_a):
-                    what.append(f'{len(mil_b)} -> {len(mil_a)} stationed')
-                log(f"    planet {oid}: {'; '.join(what) or 'people moved'}")
-                accepted += 1
-            for oid in sorted(ships_after):
-                if ships_before[oid] == ships_after[oid]:
+                owners, total, name_served = served_systems[sun_oid]
+                if name_served is None:
                     continue
-                blob = set_crew(blob, oid, ships_after[oid])
-                log(f"    ship {oid}: crew {len(ships_before[oid])} -> "
-                    f"{len(ships_after[oid])}")
+                if name is None:
+                    drop(f"system {sun_oid}: rename DROPPED, the name field "
+                         f"is unreadable or longer than {MAX_NAME} bytes")
+                    continue
+                if name == name_served:
+                    continue
+                if name_served[0] == 0 and name[1] == DEFAULT_SUN_NAME:
+                    # Not a rename. A running client materialises `Unnamed`
+                    # into every SUN the blob left empty, so a fresh galaxy
+                    # comes back from each player with a "rename" on every
+                    # system they do not own. Dropping it is correct and saying
+                    # so 32 times a turn per player buries the drops that mean
+                    # something: the first live merge of the rehearsal reported
+                    # 65 drops, 64 of them this.
+                    continue
+                # The majority is of the planets that have an owner, not of
+                # every rock in the system. A player holding the only settled
+                # planet in a system of six may name it, which is what the
+                # client allows and what the first live rehearsal caught us
+                # refusing: both players named their own home system on turn 2
+                # and both were dropped, holding 1 of 6 and 1 of 4. The rule
+                # was inherited by analogy from planet renaming, where the
+                # client's own refusal names a majority, and the analogy was
+                # wrong.
+                held = owners.get(mine, 0)
+                settled = sum(owners.values())
+                if held * 2 <= settled:
+                    drop(f"system {sun_oid}: rename DROPPED, {civ_name} "
+                         f"holds {held} of the {settled} settled planet(s) in "
+                         f"a system of {total}, not a majority")
+                    continue
+                ok, why = name_acceptable(name[1])
+                if not ok:
+                    drop(f"system {sun_oid}: rename DROPPED, {why}")
+                    continue
+                blob = set_system_name(blob, sun_oid, name[1])
+                log(f"    system {sun_oid}: renamed "
+                    f"{name_served[1].decode('latin1')!r} -> "
+                    f"{name[1].decode('latin1')!r}")
                 accepted += 1
 
-        # system names, which belong to whoever holds most of the system
-        served_systems = systems(blob)
-        for sun_oid, (_o, _t, name) in sorted(systems(sub).items()):
-            if sun_oid not in served_systems:
-                drop(f"system {sun_oid}: DROPPED, not in the state served")
-                continue
-            owners, total, name_served = served_systems[sun_oid]
-            if name_served is None:
-                continue
-            if name is None:
-                drop(f"system {sun_oid}: rename DROPPED, the name field is "
-                     f"unreadable or longer than {MAX_NAME} bytes")
-                continue
-            if name == name_served:
-                continue
-            if name_served[0] == 0 and name[1] == DEFAULT_SUN_NAME:
-                # Not a rename. A running client materialises `Unnamed` into
-                # every SUN the blob left empty, so a fresh galaxy comes back
-                # from each player with a "rename" on every system they do not
-                # own. Dropping it is correct and saying so 32 times a turn per
-                # player buries the drops that mean something: the first live
-                # merge of the rehearsal reported 65 drops, 64 of them this.
-                continue
-            # The majority is of the planets that have an owner, not of every
-            # rock in the system. A player holding the only settled planet in a
-            # system of six may name it, which is what the client allows and
-            # what the first live rehearsal caught us refusing: both players
-            # named their own home system on turn 2 and both were dropped,
-            # holding 1 of 6 and 1 of 4. The rule was inherited by analogy from
-            # planet renaming, where the client's own refusal names a majority,
-            # and the analogy was wrong.
-            held = owners.get(mine, 0)
-            settled = sum(owners.values())
-            if held * 2 <= settled:
-                drop(f"system {sun_oid}: rename DROPPED, {civ_name} holds "
-                     f"{held} of the {settled} settled planet(s) in a system "
-                     f"of {total}, not a majority")
-                continue
-            ok, why = name_acceptable(name[1])
-            if not ok:
-                drop(f"system {sun_oid}: rename DROPPED, {why}")
-                continue
-            blob = set_system_name(blob, sun_oid, name[1])
-            log(f"    system {sun_oid}: renamed "
-                f"{name_served[1].decode('latin1')!r} -> "
-                f"{name[1].decode('latin1')!r}")
-            accepted += 1
+            # research topic
+            theirs = research_of(sub, mine)
+            served = research_of(blob, mine)
+            if theirs is not None and served is not None and theirs != served:
+                blob = set_research(blob, mine, theirs)
+                topic = struct.unpack_from('<I', theirs[0], 0)[0]
+                log(f"    research: topic taken (id {topic})")
+                accepted += 1
 
-        # research topic
-        theirs = research_of(sub, mine)
-        served = research_of(blob, mine)
-        if theirs is not None and served is not None and theirs != served:
-            blob = set_research(blob, mine, theirs)
-            topic = struct.unpack_from('<I', theirs[0], 0)[0]
-            log(f"    research: topic taken (id {topic})")
-            accepted += 1
-
-        # research belonging to anyone else
-        for other in (o for o in icv.owner_records(blob) if o['oid'] != mine):
-            a = research_of(sub, other['oid'])
-            b = research_of(blob, other['oid'])
-            if a is not None and b is not None and a != b:
-                drop(f"research: DROPPED, belongs to {other['name']}")
+            # research belonging to anyone else
+            for other in (o for o in icv.owner_records(blob)
+                          if o['oid'] != mine):
+                a = research_of(sub, other['oid'])
+                b = research_of(blob, other['oid'])
+                if a is not None and b is not None and a != b:
+                    drop(f"research: DROPPED, belongs to {other['name']}")
+        except Exception as exc:                                # noqa: BLE001
+            blob, accepted = before, kept
+            drop(f"submission DROPPED, it could not be read, "
+                 f"{type(exc).__name__}: {exc}; nothing from it was taken")
 
     log(f"{accepted} order(s) taken, {dropped} change(s) dropped")
     return blob

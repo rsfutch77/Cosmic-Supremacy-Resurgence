@@ -20,6 +20,13 @@ process launches, so a turn computed this way is reproducible.
 The two calls are kept apart on purpose. A Python reimplementation of the rules
 would replace `tick` alone, and every caller keeps working.
 
+A submission the referee cannot use is dropped with a note and the turn closes
+without it. At four hours a turn, a submission that ends the tick costs every
+player in the galaxy their turn, which is a far worse outcome than one player
+losing the orders they sent. `screen_submission` is the cheap half of that and
+`merge_orders.merge` catches the rest. None of it is a security measure:
+cheating is accepted for this beta and said so in the player-facing text.
+
 `loop` is the unattended form: it watches a `TurnStore`, and when a turn's
 deadline passes it takes whatever players submitted, applies it, ticks, and
 publishes the next turn. It never waits for a submission. The original advanced
@@ -44,9 +51,19 @@ sys.path.insert(0, os.path.join(DEV, "ai_player"))
 sys.path.insert(0, os.path.join(HERE, "dev_tools"))
 
 import save_parser as sp
+import inject_civ as icv
 import merge_orders
 import canonical
+import turn_store
 from turn_store import TurnStore, open_store
+
+# The largest submission the referee will read, as a decompressed blob. The
+# galaxy this was written against is 39 KB served and 39 KB back, so nobody
+# plays anywhere near this; it is a ceiling on what one client can make the
+# referee hold. The wire form is capped separately and lower, at 2 MB, by the
+# storage rule, because that is where a submission lands before anything here
+# sees it.
+MAX_SUBMISSION_BYTES = 8 * 1024 * 1024
 
 
 def turn_of(blob: bytes) -> int:
@@ -70,6 +87,133 @@ def apply_orders(blob: bytes, submissions, log=print, notes=None) -> bytes:
     if not submissions:
         return blob
     return merge_orders.merge(blob, submissions, log=log, notes=notes)
+
+
+def galaxy_id(blob: bytes):
+    """What says two blobs are the same galaxy: the civs in it by object id and
+    name, the systems by object id, and the planets by object id.
+
+    None of the three moves while a player is taking a turn. A turn is played
+    offline against a served state and nothing is created or destroyed until
+    the tick, so a submission carries the same civs, suns and planets it was
+    handed. Measured on the three real submissions in `galaxy_demo`, turns 7, 8
+    and 9: all three sets are identical between each served turn and the state
+    the player handed back, including the turn that queued a build and
+    reassigned a citizen.
+
+    Sun and planet object ids alone would not separate two galaxies, because
+    ids are allocated in order from 1 and two galaxies start the same way. The
+    civ names and the sizes of the three sets are what carry the answer.
+
+    Computing this walks every OWNR, SUN and PLNT in the blob, which is most of
+    what the merge will read, so a submission whose sections are internally
+    inconsistent fails here rather than several thousand lines later.
+    """
+    civs = sorted((o['oid'], o['name']) for o in icv.owner_records(blob))
+    return (tuple(civs),
+            tuple(sorted(merge_orders.systems(blob))),
+            tuple(sorted(merge_orders.planet_index(blob))))
+
+
+def screen_submission(blob: bytes, civ: str, sub: bytes, turn: int,
+                      served_id=None):
+    """(ok, reason) for one submission, before any of it is believed.
+
+    Cheap checks in the order that costs least, and nothing that needs the
+    rules. Whether an order is legal is a different question, it is C4, and it
+    is not asked here; this asks only whether these bytes can be used at all.
+    Every answer is phrased as something the player who sent it can read,
+    because it goes to them as a note.
+
+    Each case here was measured against `merge` as it stood. A truncated blob,
+    an empty one and bytes that are not a save each raised out of the merge and
+    ended the turn for the whole galaxy. A submission from another turn and one
+    from another galaxy did something worse than raise: they merged, and one
+    order out of a state nobody is playing was written into the galaxy.
+
+    `served_id` is `galaxy_id(blob)` when the caller already has it. It is the
+    expensive part of this, a second on a 121 KB galaxy, and it is the same
+    answer for every submission in a turn.
+    """
+    if not sub:
+        return False, 'submission DROPPED, it is empty'
+    if len(sub) > MAX_SUBMISSION_BYTES:
+        return False, (f'submission DROPPED, {len(sub):,} bytes is over the '
+                       f'{MAX_SUBMISSION_BYTES:,} byte limit')
+    try:
+        turn_store.check_save(sub, turn)
+    except ValueError as exc:
+        return False, f'submission DROPPED, {exc}'
+    try:
+        merge_orders.civ_by_name(blob, civ)
+    except SystemExit:
+        # merge_orders raises SystemExit for a civ the galaxy does not hold,
+        # which is right for a person running it with a typo and wrong for a
+        # turn being closed. The roster is checked before this and a civ can
+        # still be in the roster and not in the galaxy, a wiped civ being the
+        # case that will arrive.
+        return False, f'submission DROPPED, {civ} is not a civ in this galaxy'
+    # The served blob's own identity is read outside the guard below. A galaxy
+    # the referee cannot read is the referee's problem and has to be raised as
+    # one, rather than reported to a player as something wrong with what they
+    # sent.
+    if served_id is None:
+        served_id = galaxy_id(blob)
+    try:
+        same = galaxy_id(sub) == served_id
+    except Exception as exc:                                    # noqa: BLE001
+        return False, (f'submission DROPPED, it does not read as a galaxy, '
+                       f'{type(exc).__name__}: {exc}')
+    if not same:
+        return False, ('submission DROPPED, it is not this galaxy: its civs, '
+                       'systems or planets are not the ones that were served')
+    return True, ''
+
+
+def read_submissions(store: TurnStore, turn: int, roster, log=print,
+                     notes=None, dropped=None) -> dict:
+    """{civ: blob} for a turn, with what cannot be decoded dropped and noted.
+
+    A store decodes each submission as it reads it, so one player whose bytes
+    are not a save takes the whole listing down with them and the referee never
+    reaches a check that could name whose fault it was. Measured against the
+    directory store with a submission truncated on the wire: `submissions`
+    raises `zlib.error` and the turn ends there, for everyone.
+
+    The listing is tried first because it is one operation and it is what the
+    stores are built around. Only when it fails is the roster read one civ at a
+    time, which costs a read per player and attributes the fault to the player
+    who caused it. A civ outside the roster is not looked for on that path,
+    which matches `resolve_turn` ignoring their submission anyway, and a galaxy
+    started without a roster at all has nothing to read one civ at a time by,
+    so on that path it closes the turn with no submissions rather than not at
+    all. Every galaxy the beta starts has a roster.
+
+    `notes` and `dropped` are filled the same way `screen_submission`'s
+    refusals are, so a submission refused here and one refused there read the
+    same to the player and to the archive.
+    """
+    try:
+        return store.submissions(turn)
+    except Exception as exc:                                    # noqa: BLE001
+        log(f"  referee: the submissions for turn {turn} could not be read "
+            f"together ({type(exc).__name__}: {exc}); reading them one by one")
+    out = {}
+    for civ in roster:
+        try:
+            sub = store.submission(civ, turn)
+        except Exception as exc:                                # noqa: BLE001
+            reason = (f"submission DROPPED, its bytes are not a save the "
+                      f"referee can decode, {type(exc).__name__}: {exc}")
+            log(f"  referee: {civ}: {reason}")
+            if notes is not None:
+                notes.setdefault(civ, []).append(reason)
+            if dropped is not None:
+                dropped[civ] = reason
+            continue
+        if sub is not None:
+            out[civ] = sub
+    return out
 
 
 def tick(blob: bytes, turns: int = 1, secs: int = 10, work_dir=None,
@@ -149,13 +293,29 @@ def resolve_turn(store: TurnStore, save_dir=None, log=print) -> int:
 
     turn, _deadline = store.current()
     blob = store.turn_blob(turn)
-    submitted = store.submissions(turn)
     roster = store.civs()
 
+    # Filled from here rather than at the merge, because a submission dropped
+    # before the merge is refused as much as an order dropped inside it, and
+    # the player is owed the same note either way.
+    notes, refused = {}, {}
+    submitted = read_submissions(store, turn, roster, log=log, notes=notes,
+                                 dropped=refused)
+
     taken, ignored = [], []
+    served_id = galaxy_id(blob) if submitted else None
     for civ, sub in submitted.items():
         if roster and civ not in roster:
             ignored.append(civ)
+            continue
+        ok, why = screen_submission(blob, civ, sub, turn, served_id=served_id)
+        if not ok:
+            # Nothing of a dropped submission reaches the galaxy, so to every
+            # other player this civ did not submit. Only the player who sent it
+            # is told, and the reason is kept in the archive for the operator.
+            refused[civ] = why
+            notes.setdefault(civ, []).append(why)
+            log(f"  referee: {civ}: {why}")
             continue
         taken.append((civ, sub))
     if ignored:
@@ -164,8 +324,8 @@ def resolve_turn(store: TurnStore, save_dir=None, log=print) -> int:
     if missing:
         log(f"  referee: no submission from {missing}; the clock does not wait")
 
-    log(f"  referee: closing turn {turn} with {len(taken)} submission(s)")
-    notes = {}
+    log(f"  referee: closing turn {turn} with {len(taken)} submission(s)"
+        + (f", {len(refused)} dropped" if refused else ""))
     merged = apply_orders(blob, taken, log=log, notes=notes)
 
     # Tell each player what was refused. Until now every refusal was logged
@@ -198,6 +358,11 @@ def resolve_turn(store: TurnStore, save_dir=None, log=print) -> int:
         "submitted": sorted(dict(taken)),
         "missing": missing,
         "ignored": ignored,
+        # A dropped submission is a missing one to the rest of the galaxy, so
+        # the civ is in `missing` above as well. The reason is here because it
+        # is the only place the operator can read why a player who says they
+        # played is recorded as absent.
+        "dropped": refused,
         "bytes_in": len(blob),
         "bytes_out": len(nxt),
         "closed_at": time.time(),
