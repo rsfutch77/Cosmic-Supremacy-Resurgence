@@ -274,6 +274,53 @@ is out of scope here.
   another player's submission, refused publishing a turn, and refused deleting
   anything, each by the rules rather than by the application declining to try.
 
+- [ ] **H7. The player's launcher cannot reach Firebase, and nothing in the
+  tests could have noticed.** What H1 delivered is the *referee's* transport. It
+  is not the player's.
+
+  `launcher.py` opens its store through `open_store(cfg["store"])`, so a
+  `firebase://` spec builds `FirebaseTurnStore`, which constructs
+  `firestore.Client()` and `storage.Client()`. Both are Google Cloud **admin**
+  clients and authenticate with IAM. A player has no Google Cloud credential, and
+  shipping a service account key inside a distributed executable is not an
+  option: it is project-wide, it would let any holder do anything to any galaxy,
+  and it cannot be revoked per player.
+
+  **This is also why the Storage rules look inert.** Firebase Security Rules
+  govern the client SDKs. The admin path is not subject to them, demonstrated on
+  the live project: listing the bucket succeeded while its rules read
+  `allow read, write: if false`. Deny-all is the correct default today and stays
+  correct until a client path exists for it to govern.
+
+  **The equivalence test cannot catch this**, because every run so far, emulator
+  and live, authenticated as an administrator. Proving three stores agree says
+  nothing about whether a player can open any of them.
+
+  Two designs, and they are not close:
+
+  **A. The launcher talks to Firebase directly**, over the Firestore and Storage
+  REST APIs with an anonymous Firebase Auth ID token, Security Rules enforcing
+  ownership. No new server component. Costs a second Firebase transport that has
+  to stay equivalent to the admin one forever, and it inherits H4's unsolved
+  problem, that a civ-named submission path cannot express "mine".
+
+  **B. The launcher keeps speaking HTTP, to a Cloud Function in front of the
+  store.** `HttpTurnStore` already exists, is already covered by the equivalence
+  test, and has worked from the launcher since F3. Pointing it at a function URL
+  instead of a LAN host is close to free. The function holds the admin
+  credential, verifies the caller's Firebase ID token, and enforces ownership
+  **in code**, where it can compare the token's uid against the seat that claimed
+  the civ. The home address stays hidden, so H2 still holds.
+
+  **B is the recommendation**, and the reason is H4 rather than the transport: it
+  turns the ownership rule from something Storage rules cannot express into an
+  `if` statement, and it keeps one Firebase transport rather than two. What it
+  costs is another deploy target in the project that serves the live website, so
+  every functions deploy must be `--only functions`.
+
+  **Done when:** a launcher holding no Google Cloud credentials plays a turn in a
+  galaxy hosted on Firebase.
+
 - [x] **H6. A store fetches one submission, not all of them.** `player_turn.py`
   reached its own submission through `store.submissions(turn).get(civ)`, which
   lists and downloads every player's submission and throws all but one away. Free
