@@ -675,6 +675,16 @@ MP_CONFIG = "multiplayer.json"
 MP_CLIENTS = ("CosmicSupremacy_Player.exe", "CosmicSupremacy_TestBed.exe")
 
 
+def multiplayer_file(data_dir: str):
+    """multiplayer.json as it stands, or None if there is not one to read.
+
+    Separate from `multiplayer_config` because the file has two readers now.
+    A file naming only a `directory` is a whole configuration and carries no
+    store, and the store reader answering None for it must not lose the rest.
+    """
+    return _read_json(os.path.join(data_dir, MP_CONFIG))
+
+
 def multiplayer_config(data_dir: str):
     """{"store": <dir or URL>} for this galaxy, or None.
 
@@ -690,15 +700,8 @@ def multiplayer_config(data_dir: str):
     Firebase identity on the requests. Left out, an https store is taken to
     want one and everything else is taken not to: see `store_wants_token`.
     """
-    path = os.path.join(data_dir, MP_CONFIG)
-    if not os.path.exists(path):
-        return None
-    try:
-        with open(path, encoding="utf-8") as f:
-            cfg = json.load(f)
-    except (OSError, ValueError):
-        return None
-    if not cfg.get("store"):
+    cfg = multiplayer_file(data_dir)
+    if not cfg or not cfg.get("store"):
         return None
     return cfg
 
@@ -835,6 +838,270 @@ def fmt_left(seconds: float) -> str:
     if seconds >= 3600:
         return f"{seconds // 3600}h {seconds % 3600 // 60:02d}m"
     return f"{seconds // 60}:{seconds % 60:02d}"
+
+
+# ── The galaxy directory ──────────────────────────────────────────────────────
+# Which galaxies exist is a question a store cannot answer, so it is asked of a
+# directory: server\galaxy_directory.py, opened from a spec the way a store is.
+# The launcher lists what the directory holds and opens a galaxy with the store
+# spec the directory handed back, so no config file names a galaxy.
+#
+# The directory is reached only when multiplayer.json does not name a store. A
+# folder of turns and a LAN turn_server are named outright and keep working with
+# no directory, no identity and no network call, which is what development and
+# the two-machine test run on.
+JOINED_FILE = "joined.json"
+
+# The directory listed when nothing names another one. A player who has never
+# opened a config file gets this, which is the whole point of the Games tab.
+BETA_DIRECTORY = "firebase://cs-resurgence"
+
+# Where a join request goes in a galaxy that is a folder. A store that knows its
+# own route is asked instead: see send_join_request.
+JOIN_DIR = "joins"
+
+# How often the tab re-lists by itself. A listing is one query and the launcher
+# is one of many, so this is slow on purpose: the countdown a row shows is worth
+# less than the reads a faster poll would spend.
+GAMES_POLL_MS = 120000
+
+
+class JoinNotAccepted(Exception):
+    """This galaxy has nowhere to put a join request."""
+
+
+def directory_spec(cfg, mp_cfg=None) -> str:
+    """Which directory to list: multiplayer.json's, the manifest's, or the beta's.
+
+    multiplayer.json comes first because a player pointed at a folder of
+    galaxies is overriding the release they are running. The manifest comes
+    second, so a release can ship a different directory without a code change.
+    """
+    for src in (mp_cfg, (cfg or {}).get("multiplayer")):
+        spec = (src or {}).get("directory")
+        if isinstance(spec, str) and spec.strip():
+            return spec.strip()
+    return BETA_DIRECTORY
+
+
+def open_galaxy_directory(spec: str):
+    """The directory named by `spec`, or None when this build cannot open one.
+
+    `galaxy_directory` sits in server\\ beside the turn machinery and is reached
+    the same way, so multiplayer_modules() is what puts that directory on
+    sys.path in a checkout. A build frozen without it lists nothing rather than
+    failing to start, which is the rule the whole multiplayer half follows.
+    """
+    multiplayer_modules()
+    try:
+        import galaxy_directory
+    except ImportError:
+        return None
+    return galaxy_directory.open_directory(spec)
+
+
+def install_uid(data_dir: str, mint: bool = False):
+    """This install's Firebase uid, or None.
+
+    Read from fb_identity.json, and minted only when the galaxy being joined
+    wants an identity anyway. A folder galaxy asks for no uid and makes no
+    network call to discover it has none.
+    """
+    try:
+        import fb_auth
+    except ImportError:
+        return None
+    ident = fb_auth.identity(data_dir)
+    if ident.uid is None and mint:
+        ident.token()
+    return ident.uid
+
+
+# ── What this player joined ───────────────────────────────────────────────────
+# The launcher's own record of an action the player took, not a setting they are
+# asked to keep, which is why it lives beside identity.json and fb_identity.json
+# rather than in multiplayer.json. It holds the store spec the directory gave,
+# so a galaxy that moves between a folder, a LAN server and the beta is followed
+# without anyone editing anything.
+def joined_path(data_dir: str) -> str:
+    return os.path.join(data_dir, JOINED_FILE)
+
+
+def load_joined(data_dir: str):
+    """The galaxy this player joined, or None.
+
+    A record with no store is no record: it names a galaxy the launcher cannot
+    open, and treating it as one would leave the player in front of a Play
+    button that has nowhere to go.
+    """
+    rec = _read_json(joined_path(data_dir))
+    if not rec or not isinstance(rec.get("store"), str) or not rec["store"]:
+        return None
+    return rec
+
+
+def save_joined(data_dir: str, record: dict) -> None:
+    with open(joined_path(data_dir), "w", encoding="utf-8") as fh:
+        json.dump(record, fh, indent=2)
+
+
+def clear_joined(data_dir: str) -> None:
+    try:
+        os.remove(joined_path(data_dir))
+    except OSError:
+        pass
+
+
+def joined_record(galaxy, name: str, uid, directory: str, now=None) -> dict:
+    """What the launcher writes down when a player joins a galaxy."""
+    return {"directory": directory,
+            "galaxy": galaxy.id,
+            "name": name,
+            "store": galaxy.store,
+            "uid": uid,
+            "requested_at": now if now is not None else time.time(),
+            "requested_turn": galaxy.turn}
+
+
+def galaxy_to_play(data_dir: str):
+    """The galaxy this launcher plays, shaped like a multiplayer.json, or None.
+
+    multiplayer.json wins when it names a store: a folder or a LAN referee is a
+    galaxy somebody chose outright, and a Games tab must not take it from them.
+    Otherwise it is the one the player joined, and the `joined` key carries that
+    record so the caller can tell which name the seat was asked for under.
+    """
+    cfg = multiplayer_config(data_dir)
+    if cfg:
+        return cfg
+    rec = load_joined(data_dir)
+    if not rec:
+        return None
+    out = {"store": rec["store"], "joined": rec}
+    if isinstance(rec.get("auth"), bool):
+        out["auth"] = rec["auth"]
+    return out
+
+
+# ── Joining ───────────────────────────────────────────────────────────────────
+# A join is a request rather than a change. The worker applies it at a turn
+# boundary, on the authoritative blob, so a player who clicks Join during turn N
+# is playing at turn N+1. The launcher's half is to write the request down where
+# the worker will find it and to say plainly that it is waiting.
+def join_request(name: str, uid, build: str, turn=None, now=None) -> dict:
+    """The request a Join writes, read by the worker at the next turn boundary.
+
+    The uid is in it because a seat is bound to the identity that claimed it,
+    and the worker is the only thing that can record that binding. It is None
+    for every folder and LAN galaxy, where there is no identity to bind to and
+    nothing asking for one.
+    """
+    return {"name": name, "uid": uid, "build": build,
+            "requested_at": now if now is not None else time.time(),
+            "requested_turn": turn}
+
+
+def send_join_request(store, req: dict) -> str:
+    """Put a join request where this galaxy's worker will find it.
+
+    A store that has a `request_join` is asked, because a relay's own route is
+    the store's to know. A galaxy that is a folder has no such route and needs
+    none: the request is a file beside the submissions, named by the uid when
+    there is one and by the player's name when there is not, both of which are
+    already file-name safe.
+
+    Anything else raises rather than reporting success. A join that went
+    nowhere looks exactly like a join that is waiting for the next turn, and
+    the player has no way to tell those apart afterwards.
+    """
+    ask = getattr(store, "request_join", None)
+    if callable(ask):
+        return str(ask(req) or "the galaxy")
+    root = getattr(store, "root", None)
+    if not isinstance(root, str):
+        raise JoinNotAccepted(type(store).__name__)
+    path = os.path.join(root, JOIN_DIR, f"{req.get('uid') or req['name']}.json")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as fh:
+        json.dump(req, fh, indent=2)
+    os.replace(tmp, path)
+    return path
+
+
+def seat_claim_problem(name: str, seats, held: str = None):
+    """Why this launcher cannot claim a seat called `name`, or None.
+
+    A seat belongs to the identity that claimed it, so a name already in the
+    roster is refused here rather than at the turn boundary, where the refusal
+    would reach the player as a join that quietly did nothing.
+
+    What comes back names nobody. It echoes the name the player typed and the
+    number of seats, for the reason `roster_problem` gives: a launcher that
+    answered "is there a seat for me" with the roster is a way to enumerate who
+    is playing. A seat differing only in capitalisation is refused the same way
+    and is not echoed back, because that spelling belongs to somebody else.
+
+    `held` is the name this install already holds in this galaxy, which is not
+    a claim to refuse.
+    """
+    seats = [str(c) for c in (seats or [])]
+    if held and name == held:
+        return None
+    if not any(c == name or c.lower() == name.lower() for c in seats):
+        return None
+    count = "one seat" if len(seats) == 1 else f"{len(seats)} seats"
+    return (f"This galaxy already has a seat called {name!r}.\n\nIt has "
+            f"{count}, and a seat belongs to the install that claimed it, so "
+            "this one cannot take it over.\n\nChoose a different name, or if "
+            "that seat is yours on another machine, ask whoever runs the "
+            "galaxy to move it.")
+
+
+def pending_join(g, rec) -> bool:
+    """Whether this player has asked for a seat in `g` and is not in it yet.
+
+    The state between clicking Join and the worker merging the civ at the next
+    turn boundary. It is a fact about the launcher's own record rather than
+    about the galaxy, because the galaxy shows nothing until the merge lands.
+    """
+    return bool(rec and rec.get("galaxy") == g.id and not g.joined)
+
+
+def joinable(g, rec=None) -> bool:
+    """Whether the Games tab offers a Join for this galaxy.
+
+    Only an open galaxy takes new players. One that is forming has no first
+    turn for a worker to merge a join into, and a closed one has stopped taking
+    them and is still listed, which is why the answer is a button being absent
+    rather than the row being absent.
+    """
+    if g.joined or pending_join(g, rec):
+        return False
+    return g.status == "open"
+
+
+def galaxy_line(g, submitted=None, pending=False, now=None) -> str:
+    """One galaxy as the Games tab shows it: what it is and where it is up to.
+
+    A galaxy that is forming has no turn and no deadline, so those parts are
+    left out rather than printed empty: the status word is already the answer.
+    """
+    bits = [g.name or g.id, g.status]
+    if g.turn is not None:
+        bits.append(f"turn {g.turn}")
+    if g.deadline:
+        left = g.deadline - (time.time() if now is None else now)
+        bits.append(f"{fmt_left(left)} left" if left > 0 else "time is up")
+    bits.append("no players yet" if not g.players else
+                "1 player" if g.players == 1 else f"{g.players} players")
+    if g.joined:
+        bits.append("you have played this turn" if submitted else
+                    "your turn is waiting" if submitted is False else
+                    "you are in")
+    elif pending:
+        bits.append("you join at the next turn")
+    return " \u00b7 ".join(bits)
 
 
 # ── The log, made fit to send ─────────────────────────────────────────────────
@@ -1058,6 +1325,11 @@ class Launcher:
         self.mp_stop = False
         self.mp_note = ""
         self.mp_turn = None
+        # The Games tab: which directory it lists, and whether a listing is
+        # already in flight. None when multiplayer.json names a galaxy
+        # outright, which is the folder and LAN path and reaches no directory.
+        self.games_dir = None
+        self.games_busy = False
         # This player's name, read from the data directory at boot. None until
         # they have entered one, which is a state the launcher runs in happily:
         # only multiplayer needs to know who you are.
@@ -1148,6 +1420,27 @@ class Launcher:
                      wraplength=340, font=("Segoe UI", 9)).pack(
                          side="left", padx=(0, 14))
 
+        # The Games tab. Packed only when there is a directory to list, so a
+        # player who named a galaxy themselves never sees it.
+        self.games_frame = tk.Frame(self.root, bg=PANEL,
+                                    highlightbackground=EDGE,
+                                    highlightthickness=1)
+        head = tk.Frame(self.games_frame, bg=PANEL)
+        head.pack(fill="x", padx=12, pady=(10, 0))
+        tk.Label(head, text="Games", bg=PANEL, fg=ACCENT,
+                 font=("Segoe UI", 10, "bold")).pack(side="left")
+        self.games_refresh = tk.Label(head, text="refresh", bg=PANEL, fg=FAINT,
+                                      font=("Segoe UI", 8, "underline"),
+                                      cursor="hand2")
+        self.games_refresh.pack(side="right")
+        self.games_refresh.bind("<Button-1>", lambda e: self.refresh_games())
+        self.games_status = tk.Label(self.games_frame, text="", bg=PANEL,
+                                     fg=DIM, anchor="w", justify="left",
+                                     wraplength=430, font=("Segoe UI", 8))
+        self.games_status.pack(fill="x", padx=12, pady=(2, 0))
+        self.games_body = tk.Frame(self.games_frame, bg=PANEL)
+        self.games_body.pack(fill="x", padx=12, pady=(4, 10))
+
         self.ctl_frame = tk.Frame(self.root, bg=PANEL,
                                   highlightbackground=EDGE, highlightthickness=1)
         inner = tk.Frame(self.ctl_frame, bg=PANEL)
@@ -1227,6 +1520,18 @@ class Launcher:
         self.player = player_name(self.data_dir)
         self._show_identity()
         self.say(f"player  {self.player or 'not set yet'}")
+
+        # The Games tab, before the game files are looked for: which galaxies
+        # exist is worth showing even to an install that cannot start one.
+        if multiplayer_config(self.data_dir) is not None:
+            self.say(f"games   {MP_CONFIG} names a galaxy; not listing a "
+                     f"directory")
+        else:
+            self.games_dir = directory_spec(self.cfg,
+                                            multiplayer_file(self.data_dir))
+            self.say(f"games   {self.games_dir}")
+            self._show_games(True)
+            self._games_tick()
 
         icon = find_icon(self.data_dir)
         if icon:
@@ -1439,6 +1744,199 @@ class Launcher:
             return
         self.ask_player_name()
 
+    # ── The Games tab ────────────────────────────────────────────────────────
+    def _show_games(self, show: bool):
+        if show and not self.games_frame.winfo_ismapped():
+            self.games_frame.pack(fill="x", padx=26, pady=(10, 0))
+        elif not show and self.games_frame.winfo_ismapped():
+            self.games_frame.pack_forget()
+
+    def _games_tick(self):
+        """Re-list on a slow timer, and keep the timer whatever a listing did."""
+        self.refresh_games()
+        self.root.after(GAMES_POLL_MS, self._games_tick)
+
+    def refresh_games(self):
+        """List the directory off the Tk thread and repaint when it answers.
+
+        Off the thread because a directory is a network service in the beta and
+        this window is also the game's server: blocking it for a listing stops
+        the server answering the client.
+        """
+        if self.games_dir is None or self.games_busy:
+            return
+        self.games_busy = True
+        self.games_status.configure(text="listing galaxies\u2026", fg=DIM)
+        spec, player = self.games_dir, self.player
+        rec = load_joined(self.data_dir)
+
+        def work():
+            rows, extra, err = [], {}, None
+            try:
+                directory = open_galaxy_directory(spec)
+                if directory is None:
+                    err = ("This build cannot list galaxies: the directory it "
+                           "would read is not in it.")
+                else:
+                    rows = list(directory.galaxies(player=player))
+            except Exception as exc:        # any directory; unreachable is usual
+                err = f"Could not reach the galaxy directory: {exc}"
+            if rec and player:
+                extra["submitted"] = self._submitted_state(rows, rec, player)
+            self.msgs.put(("__games__", rows, extra, err))
+
+        threading.Thread(target=work, daemon=True, name="games").start()
+
+    def _submitted_state(self, rows, rec, player):
+        """Whether this player has handed in the current turn of their galaxy.
+
+        One extra read, for one galaxy, which is why it is not asked of every
+        row: a listing is one query and this is a request per refresh on a
+        store that may charge for it. None when the answer cannot be had, which
+        the row reads as "you are in" rather than as "you have not played".
+
+        Total, because the listing is posted back to the window after this and
+        an exception here would leave the tab saying it is still listing.
+        """
+        try:
+            g = next((r for r in rows if r.id == rec.get("galaxy")), None)
+            if g is None or not g.joined or g.turn is None:
+                return None
+            mods = multiplayer_modules()
+            if mods is None:
+                return None
+            _player_turn, turn_store = mods
+            token = (player_token(self.data_dir)
+                     if store_wants_token({"store": g.store}) else None)
+            store = open_player_store(turn_store, g.store, token)
+            return bool(store.has_submitted(rec.get("name") or player, g.turn))
+        except Exception:                   # a readout is not worth an error path
+            return None
+
+    def _on_games(self, rows, extra, err):
+        """Repaint the list. Runs on the Tk thread, off the message queue."""
+        self.games_busy = False
+        for child in self.games_body.winfo_children():
+            child.destroy()
+        if err:
+            self.games_status.configure(text=err, fg=WARN)
+            self.say(f"games   {err}")
+            return
+        if not rows:
+            self.games_status.configure(
+                text="No galaxies are listed here yet.", fg=DIM)
+            return
+        self.games_status.configure(text=self.games_dir, fg=FAINT)
+        tk = self.tk
+        rec = load_joined(self.data_dir)
+        for g in rows:
+            pending = pending_join(g, rec)
+            row = tk.Frame(self.games_body, bg=PANEL)
+            row.pack(fill="x", pady=2)
+            if joinable(g, rec):
+                b = tk.Button(row, text="Join", bg=BTN, fg="#ffffff",
+                              activebackground=BTN_HI,
+                              activeforeground="#ffffff", relief="flat", bd=0,
+                              cursor="hand2", width=6,
+                              font=("Segoe UI", 9, "bold"),
+                              command=lambda gg=g: self.on_join(gg))
+                b.pack(side="right", padx=(8, 0))
+            mine = rec is not None and rec.get("galaxy") == g.id
+            tk.Label(row, bg=PANEL, anchor="w", justify="left", wraplength=360,
+                     font=("Segoe UI", 9),
+                     fg=TEXT if (g.joined or pending) else DIM,
+                     text=galaxy_line(g, pending=pending,
+                                      submitted=(extra.get("submitted")
+                                                 if mine else None))).pack(
+                         side="left", fill="x")
+
+    def on_join(self, g):
+        """Ask a galaxy for a seat. The worker seats the player at the next turn.
+
+        Everything here is a check the player can act on before anything is
+        written: who they are, whether this build can play the galaxy at all,
+        and whether the name they typed is already somebody's seat. The request
+        itself is the last step, so a refusal leaves nothing behind.
+        """
+        from tkinter import messagebox
+        civ = self.player or self.ask_player_name(
+            "Before you can join a galaxy, this launcher needs to know who you "
+            "are.")
+        if not civ:
+            self.say("join: no player name entered, not joining")
+            return
+
+        rec = load_joined(self.data_dir)
+        if rec and rec.get("galaxy") != g.id and not messagebox.askyesno(
+                self.cfg["product"],
+                f"You have already joined {rec.get('galaxy')}.\n\nThis "
+                "launcher plays one galaxy at a time, so it would play "
+                f"{g.name or g.id} from now on.\n\nJoin anyway?"):
+            return
+
+        mods = multiplayer_modules()
+        if mods is None:
+            self.warn("This build cannot play multiplayer.\n\nThe turn "
+                      "machinery is missing from it. Everything else in this "
+                      "launcher works as normal.")
+            return
+        _player_turn, turn_store = mods
+
+        cfg = {"store": g.store}
+        token = player_token(self.data_dir) if store_wants_token(cfg) else None
+        try:
+            store = open_player_store(turn_store, g.store, token)
+            state = store.state() if store.exists() else None
+        except Exception as exc:            # any store; unreachable is usual
+            self.say(f"join: could not read {g.id} ({exc})")
+            self.warn(f"Could not reach {g.name or g.id}:\n\n{exc}")
+            return
+
+        # Ahead of the seat check, for the reason start_multiplayer gives: a
+        # build this galaxy will not accept is why anything further down might
+        # look wrong, so it is answered first.
+        if state is not None:
+            problem = version_problem(build_id(), state)
+            if problem:
+                self.say(f"join: build {build_id()} is below {g.id}'s minimum "
+                         f"{state.get(MIN_BUILD_KEY)!r}")
+                self.warn(problem)
+                return
+
+        seats = list((state or {}).get("civs", []))
+        held = rec.get("name") if rec and rec.get("galaxy") == g.id else None
+        problem = seat_claim_problem(civ, seats, held=held)
+        if problem:
+            # The count, not the names, in the window and in the log alike.
+            self.say(f"join: {civ!r} cannot claim a seat in {g.id}, which has "
+                     f"{len(seats)} seat(s)")
+            if messagebox.askyesno(self.cfg["product"],
+                                   problem + "\n\nChange your name now?"):
+                self.on_change_name()
+            return
+
+        uid = install_uid(self.data_dir, mint=token is not None)
+        try:
+            where = send_join_request(store, join_request(civ, uid, build_id(),
+                                                          turn=g.turn))
+        except (JoinNotAccepted, OSError, ValueError) as exc:
+            self.say(f"join: {g.id} took no join request ({exc})")
+            self.warn("This galaxy cannot take a join request yet.\n\nIts "
+                      "store has no route for one, so nothing was sent and "
+                      "nothing has changed.")
+            return
+
+        save_joined(self.data_dir, joined_record(g, civ, uid, self.games_dir))
+        self.say(f"join: asked {g.id} for a seat as {civ} ({where})")
+        when = f"turn {g.turn + 1}" if g.turn is not None else "the first turn"
+        messagebox.showinfo(
+            self.cfg["product"],
+            f"You have asked to join {g.name or g.id} as {civ}.\n\nA galaxy "
+            "takes new players at a turn boundary, so your empire appears at "
+            f"{when}.\n\nPress Multiplayer once it does, and the launcher "
+            "plays every turn from there.")
+        self.refresh_games()
+
     # ── Multiplayer session ──────────────────────────────────────────────────
     def start_multiplayer(self, mode):
         """Follow this galaxy's turns until the player stops or the launcher
@@ -1453,15 +1951,18 @@ class Launcher:
                       "turn starts the game itself.")
             return
 
-        cfg = multiplayer_config(self.data_dir)
+        # The galaxy the player joined, or the one multiplayer.json names
+        # outright. Either way this is a store spec and nothing below here
+        # knows which of the two it came from.
+        cfg = galaxy_to_play(self.data_dir)
         if cfg is None:
             self.warn(
-                "This galaxy is not set up yet.\n\nMultiplayer needs a "
-                f"{MP_CONFIG} in\n{self.data_dir}\n\nnaming the galaxy "
-                "folder or the referee's address, for example:\n\n"
-                '{"store": "C:\\\\galaxies\\\\demo"}\n\n'
-                "Your own name does not go in that file. The launcher asks you "
-                "for it.")
+                "You have not joined a galaxy yet.\n\nPick one in the Games "
+                "list and press Join. The launcher writes down which galaxy "
+                "you joined, so there is no file to edit.\n\nA galaxy of "
+                "your own, in a folder or on another PC here, is named in a "
+                f"{MP_CONFIG} in\n{self.data_dir}\n\nfor example:\n\n"
+                '{"store": "C:\\\\galaxies\\\\demo"}')
             return
 
         # Asked for here and not at first run: a player who only ever opens the
@@ -1562,6 +2063,10 @@ class Launcher:
         self.mp_civ = civ
         self.mp_stop = False
         self.running_mode = mode
+        joined = cfg.get("joined")
+        if joined and joined.get("name") and joined["name"] != civ:
+            self.say(f"multiplayer: this galaxy was joined as "
+                     f"{joined['name']!r}")
         self.say(f"multiplayer: following {cfg['store']} as {civ}")
         self.set_status(f"Multiplayer , {civ}", OK)
         self._show_controls(True)
@@ -2010,6 +2515,9 @@ class Launcher:
                 if isinstance(msg, tuple) and msg and msg[0] == "__ctl__":
                     _tag, label, result, err, done = msg
                     self._on_control_done(label, result, err, done)
+                elif isinstance(msg, tuple) and msg and msg[0] == "__games__":
+                    _tag, rows, extra, err = msg
+                    self._on_games(rows, extra, err)
                 else:
                     self.say(msg)
         except queue.Empty:
