@@ -226,7 +226,19 @@ tick, so nothing here shows a real turn computing or a real capture arriving.
 `HttpTurnStore` and `FirebaseTurnStore` were not exercised. 300 random byte
 corruptions of a real submission produced 265 that passed the screen and **zero**
 that raised deeper, so the merge guard could not be triggered through the screen
-and is tested by calling `merge` directly.
+and is tested by calling `merge` directly. Repeated against the final code, same
+seed, same answer.
+
+**What that result means is worth stating, because it is easy to read as
+reassurance.** Random single-byte and four-byte corruption leaves the galaxy
+identity intact, so the screen passes it, and the merge then judges the corrupted
+bytes as ordinary orders. A corrupted submission therefore produces **wrong
+orders rather than a rejection**. That is inside the domain this beta has already
+accepted, since a player who wanted to send wrong orders could simply send them,
+and it is not a stall, which is what N2 exists to prevent. It is not evidence
+that submissions are validated, because they are not and were never meant to be.
+`screen_submission` asks whether bytes can be used at all, never whether an order
+is legal, which is C4 and is not built.
 
 **Two findings in files it did not change.** A pre-existing, order-dependent
 false refusal: with two good submissions and no bad one, whoever merges second is
