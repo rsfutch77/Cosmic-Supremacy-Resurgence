@@ -73,7 +73,7 @@ def apply_orders(blob: bytes, submissions, log=print, notes=None) -> bytes:
 
 
 def tick(blob: bytes, turns: int = 1, secs: int = 10, work_dir=None,
-         save_dir=None, log=print) -> bytes:
+         save_dir=None, log=print, check_save_path=True) -> bytes:
     """Advance the galaxy by `turns` turns and return the resulting blob.
 
     `save_dir` is where the capture will land, which is wherever the stub server
@@ -81,9 +81,23 @@ def tick(blob: bytes, turns: int = 1, secs: int = 10, work_dir=None,
     hosting the server runs it against its own data directory, and a referee
     looking in the checkout's would wait for a file that is being written
     somewhere else.
+
+    The save path is checked before the client is launched, for the same reason
+    `player_turn.serve` checks it before serving: the tick takes minutes, ends
+    in a `SaveGame`, and a `SaveGame` with nothing listening fails after the
+    work is done. This module's header has always named `cs_server.py` on 8888
+    as a requirement and nothing verified it, so the failure arrived as
+    `SaveGame returned 0` from inside the client rather than as a missing
+    server. Measured: with the port closed, a real turn resolution ran the whole
+    merge, launched the client, advanced the galaxy and only then lost it.
     """
     import game_cycle as gc
     import player_turn
+
+    if check_save_path:
+        ok, why = player_turn.save_path_ready()
+        if not ok:
+            raise SystemExit(f'refusing to tick: {why}')
 
     work_dir = work_dir or os.path.join(HERE, "referee_work")
     os.makedirs(work_dir, exist_ok=True)
@@ -121,7 +135,18 @@ def tick(blob: bytes, turns: int = 1, secs: int = 10, work_dir=None,
 
 
 def resolve_turn(store: TurnStore, save_dir=None, log=print) -> int:
-    """Close the current turn and publish the next one. Returns the new turn."""
+    """Close the current turn and publish the next one. Returns the new turn.
+
+    The save path is checked here as well as in `tick`, because between the two
+    this writes each player's refusal notes. `tick` refusing would leave notes
+    for a turn that did not close, and the next attempt would write them again.
+    Checking first means a referee that cannot save changes nothing at all.
+    """
+    import player_turn
+    ok, why = player_turn.save_path_ready()
+    if not ok:
+        raise SystemExit(f'refusing to close the turn: {why}')
+
     turn, _deadline = store.current()
     blob = store.turn_blob(turn)
     submitted = store.submissions(turn)

@@ -111,24 +111,68 @@ PLNT_OWNER_OFF = 16          # PLNT payload +16, the owning civ's object id
 def pristine_planet(blob, planets=None):
     """A planet nobody has colonised, to take a blank `PLPR` from.
 
-    Uncolonised planets are uniform in a way colonised ones are not: across the
-    541 free planets of `client/cycle.dat` every `PLPR` is 137 bytes and every
-    byte agrees except the output rates at `+4..+6` and four further bytes at
-    `+11`, `+12`, `+120` and `+121`. The modal length is taken rather than the
-    first record found, so a galaxy holding one odd free planet cannot decide
-    what a blank planet looks like, and the lowest object id among those breaks
-    the tie, so two runs of this tool choose the same template.
+    Uncolonised planets are uniform in a way colonised ones are not. Measured
+    across 475 blobs and 110,399 free planets, **every** blank `PLPR` is 137
+    bytes, and 24 of those bytes vary. Which 24 is what decides where a
+    template may legitimately come from:
+
+        +4, +5, +6, +11, +12, +120, +121   differ between planets in one galaxy
+        +90 .. +105                        same for every planet in a galaxy,
+                                           different between galaxies
+        +106                               changes from turn to turn
+
+    So a template taken from **the same galaxy** is safe in the 90..105 run and
+    carries that galaxy's current +106, and the only thing it imposes on the
+    wiped planet is the seven per-planet bytes, of which `+4` and `+11` are the
+    homeworld customisation pair. That is the trade this tool already documents.
+
+    A template from a **different galaxy** is not safe, because 90..105 would be
+    the wrong galaxy's. That rules out shipping one canonical blank record in
+    the tree as a fallback, which is the obvious fix and the wrong one.
+
+    The modal length is taken rather than the first record found, so a galaxy
+    holding one odd free planet cannot decide what a blank planet looks like,
+    and the lowest object id among those breaks the tie, so two runs of this
+    tool choose the same template.
     """
     planets = icv.planet_records(blob) if planets is None else planets
     free = [p for p in planets if not p["owner"] and p["nlen"] == 0]
     if not free:
-        raise SystemExit("this galaxy has no uncolonised planet to copy a "
-                         "blank PLPR from")
+        raise SystemExit(
+            "this galaxy has no uncolonised planet to copy a blank PLPR from. "
+            "Pass --template-from with an earlier state of THIS galaxy, where "
+            "one was still free; a blob from a different galaxy will not do, "
+            "see pristine_planet")
     sizes = {}
     for p in free:
         sizes.setdefault(p["plpr_ln"], []).append(p)
     modal = max(sizes.values(), key=len)
     return min(modal, key=lambda p: p["id"])
+
+
+def blank_plpr(blob, template_blob=None, log=print) -> bytes:
+    """The blank `PLPR` to write over a wiped planet.
+
+    From this galaxy when anything is still free, otherwise from an earlier
+    state of it supplied by the caller. A permanent sandbox is the case that
+    needs the second: every planet colonised is the ordinary late state of a
+    galaxy that has been played for months, and it is exactly when an
+    abandonment has to be processed.
+
+    No galaxy in the archive has reached it yet, 0 of 475 blobs, which is why
+    nothing caught this earlier. The tool failed loudly rather than writing
+    something wrong, so nothing is in the tree to repair.
+    """
+    source, where = blob, "this galaxy"
+    if not [p for p in icv.planet_records(blob)
+            if not p["owner"] and p["nlen"] == 0]:
+        if template_blob is None:
+            pristine_planet(blob)                 # raises, naming the fix
+        source, where = template_blob, "the template blob"
+    template = pristine_planet(source)
+    log(f"  blank PLPR taken from planet #{template['id']} in {where} "
+        f"({template['plpr_ln']} bytes)")
+    return bytes(source[template["plpr_payload"]:template["plpr_end"]])
 
 
 def uncolonise(blob, planet_id, template_plpr, log=print):
@@ -274,8 +318,13 @@ def delete_owner(blob, name, force=False, log=print):
     return bytes(buf)
 
 
-def wipe(blob, name, remove_owner=False, force_owner=False, log=print):
-    """Take `name` off the board. Returns (blob, planet ids, ship ids)."""
+def wipe(blob, name, remove_owner=False, force_owner=False, log=print,
+         template_blob=None):
+    """Take `name` off the board. Returns (blob, planet ids, ship ids).
+
+    `template_blob` is an earlier state of **this** galaxy, needed only when
+    every planet in it has been colonised. See `blank_plpr`.
+    """
     owners = icv.owner_records(blob)
     civ = next((o for o in owners if o["name"] == name), None)
     if civ is None:
@@ -287,12 +336,9 @@ def wipe(blob, name, remove_owner=False, force_owner=False, log=print):
 
     mine = [p["id"] for p in icv.planet_records(blob) if p["owner"] == civ["oid"]]
     ships = [s["id"] for s in ish.ship_records(blob) if s["owner"] == civ["oid"]]
-    template = pristine_planet(blob)
     log(f"\n=== wiping {name!r} (object id {civ['oid']})")
     log(f"  {len(mine)} planet(s) {mine}, {len(ships)} ship(s) {ships}")
-    log(f"  blank PLPR taken from planet #{template['id']} "
-        f"({template['plpr_ln']} bytes)")
-    blank = bytes(blob[template["plpr_payload"]:template["plpr_end"]])
+    blank = blank_plpr(blob, template_blob, log=log)
 
     for pid in mine:
         blob = uncolonise(blob, pid, blank, log=log)
@@ -358,6 +404,12 @@ def main():
     ap.add_argument("--dat", default=None,
                     help="also write the decompressed blob here, ready to be "
                          "passed to the client on its command line")
+    ap.add_argument("--template-from", default=None, metavar="BLOB",
+                    help="an earlier state of THIS galaxy, to take a blank "
+                         "PLPR from when every planet has been colonised. It "
+                         "has to be the same galaxy: bytes 90 to 105 of a "
+                         "blank record are galaxy-wide, so another galaxy's "
+                         "would be wrong. See pristine_planet")
     ap.add_argument("--list", action="store_true",
                     help="describe the capture and exit")
     a = ap.parse_args()
@@ -368,12 +420,19 @@ def main():
     if a.list or not a.civ:
         return 0
 
+    template_blob = None
+    if a.template_from:
+        template_blob = sp.load_any(a.template_from)
+        print(f"template: {os.path.basename(a.template_from)}, "
+              f"{len(template_blob):,} bytes")
+
     wiped = []
     for name in a.civ:
         blob, planets, ships = wipe(
             blob, name,
             remove_owner=a.delete_owner or a.force_delete_owner,
-            force_owner=a.force_delete_owner)
+            force_owner=a.force_delete_owner,
+            template_blob=template_blob)
         wiped.append((name, planets, ships))
 
     print()

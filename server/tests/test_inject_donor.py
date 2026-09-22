@@ -228,6 +228,46 @@ def main():
             parsed = f'{type(exc).__name__}: {exc}'
         check(f'the {label} run reparses section by section', parsed)
 
+
+    # ── make_multiplayer_galaxy.build levels to seat one ─────────────────────
+    # Same root cause as the donor rule: blob order is not seat order. `build`
+    # maps player names onto existing civs positionally and `equalise_homeworlds`
+    # then levels everyone to players[0], so taking them in blob order makes the
+    # reference whichever civ happens to serialise first. On a galaxy grown by
+    # injection that is the newcomer, and the whole galaxy levels DOWN to the
+    # engine default instead of up to the customised seat.
+    print('\nmake_multiplayer_galaxy.build levels to seat one')
+    demo = os.path.join(ROOT, 'server', 'galaxy_demo', 'turns', '0007.b64')
+    if not os.path.exists(demo):
+        print('  [SKIP] no galaxy_demo fixture in this checkout')
+    else:
+        grown = sp.load_any(demo)
+        blob_order = [o['name'] for o in icv.owner_records(grown)]
+        seat_order = [o['name'] for o in mmg.seated(grown)]
+        # The test is only meaningful on a galaxy where the two disagree.
+        check('blob order and seat order disagree on this fixture',
+              blob_order != seat_order, True)
+        check('seat one is the lowest object id',
+              seat_order[0],
+              min(icv.owner_records(grown), key=lambda o: o['oid'])['name'])
+
+        names = ['Alpha', 'Beta', 'Gamma'][:len(seat_order)]
+        out = mmg.build(grown, names, log=quiet)
+        got = {n: rates(out, n) for n in names}
+        check('every player is levelled to the boosted world',
+              set(got.values()), {BOOSTED})
+
+        # And the check can fail: with blob order restored, the same call
+        # levels everyone to the engine default instead.
+        real = mmg.seated
+        try:
+            mmg.seated = lambda b: icv.owner_records(b)
+            bad = mmg.build(grown, names, log=quiet)
+            check('blob order would have levelled everyone down',
+                  {rates(bad, n) for n in names}, {DEFAULT})
+        finally:
+            mmg.seated = real
+
     print(f'\n{len(PASS)} passed, {len(FAIL)} failed')
     for f in FAIL:
         print(f'  FAILED: {f}')

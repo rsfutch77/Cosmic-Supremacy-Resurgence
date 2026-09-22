@@ -234,7 +234,7 @@ is out of scope here.
   **Done when:** the referee is killed mid-galaxy and the machine rebooted, and
   the loop resumes and closes the next turn with nothing restored by hand.
 
-- [ ] **H4. Anonymous auth and security rules.** Firebase Anonymous Auth gives
+- [~] **H4. Anonymous auth and security rules.** Firebase Anonymous Auth gives
   each install a stable UID with no login screen, no password and no account.
   The username stays exactly what it is today, a claim typed into the launcher.
 
@@ -291,7 +291,7 @@ is out of scope here.
   another player's submission, refused publishing a turn, and refused deleting
   anything, each by the rules rather than by the application declining to try.
 
-- [ ] **H7. The player's launcher cannot reach Firebase, and nothing in the
+- [~] **H7. The player's launcher cannot reach Firebase, and nothing in the
   tests could have noticed.** What H1 delivered is the *referee's* transport. It
   is not the player's.
 
@@ -420,8 +420,17 @@ is out of scope here.
   operator diagnostic rather than a polled path, so it is cheap to leave and
   cheaper still to fix when someone is next in that file.
 
-  **Not exercised:** `referee.resolve_turn`'s engine tick and `player_turn.follow`'s
-  serve, both of which need a client that was in use elsewhere.
+  **Now exercised with a real client.** Both halves that needed one have been
+  run: `player_turn.serve` stamped and launched a player build that came up as
+  `DemoPlayer` at turn 10, `collect` captured 39,125 bytes out of it, and the
+  new accessor read those exact bytes back and agreed with `submissions()`. So
+  the accessor is proved against a real capture rather than a synthetic blob.
+
+  `referee.resolve_turn` then closed turn 9 with that store's real 39,210-byte
+  submission and produced canonical **`c2f1e1e08bd7cd48`**, which is the value
+  the blob push plan's A3 recorded for this turn **before** this refactor
+  existed, and closing turn 10 reproduced the archived `9d63be7a3e9c3cc8`. The
+  store refactor did not change what the referee computes.
 
 - [~] **H5. Cost and quota arithmetic, written down.** One galaxy at 4-hour turns
   is 6 ticks a day, 182 a month. Quotas below read from Firebase's own
@@ -753,13 +762,39 @@ is out of scope here.
   forced the fog retraction. `wipe_acceptance.prepare` stamps for a survivor and
   refuses to stamp for the victim.
 
+  **A late galaxy has no template to copy, and the first version simply
+  failed.** The blank `PLPR` is taken from a never-colonised planet, and in a
+  permanent sandbox played for months there may not be one. It raised rather
+  than writing something wrong, so nothing in the tree needs repairing, but it
+  failed in exactly the situation abandonment exists for. **No blob in the
+  archive has reached that state, 0 of 475**, which is why nothing caught it;
+  it was pointed out rather than measured.
+
+  **What a blank record actually contains decided the fix.** Across 475 blobs
+  and 110,399 free planets every blank `PLPR` is 137 bytes, and 24 of those
+  bytes vary:
+
+  | bytes | behaviour |
+  |---|---|
+  | `+4 +5 +6 +11 +12 +120 +121` | differ between planets in one galaxy, stable over time |
+  | `+90 .. +105` | identical for every planet in a galaxy, **different between galaxies** |
+  | `+106` | changes from turn to turn |
+
+  So the obvious fix, shipping one canonical blank record in the tree, is the
+  wrong one: its 90 to 105 run would belong to another galaxy. A template has to
+  come from **this** galaxy, and an earlier turn of it does fine, since that run
+  is stable over time. `wipe_civ --template-from` takes one, the refusal names
+  it, and `wipe()` takes `template_blob`. Verified against a galaxy with all 160
+  planets colonised: refused without a template, and with one the planets come
+  back unowned at 137 bytes with this galaxy's own 90 to 105 run.
+
   **Still open, none of it blocking:** the replaced `PLPR` carries the template
   rock's rates rather than the original's, which is the right choice because
   carrying the original across would preserve a homeworld's customisation boost,
-  but four of those bytes have no established meaning. `OWNR` deletion where
-  another civ has met the victim is guarded rather than answered. And **nobody
-  has looked at a wiped civ on screen**: how the dead shell reads in the
-  diplomacy and overview lists is unchecked.
+  but `+5`, `+6`, `+12`, `+120` and `+121` still have no established meaning.
+  `OWNR` deletion where another civ has met the victim is guarded rather than
+  answered. And **nobody has looked at a wiped civ on screen**: how the dead
+  shell reads in the diplomacy and overview lists is unchecked.
 
 - [ ] **K5. Ending a galaxy is an operator action.** No season timer. The
   operator calls a galaxy over and starts a fresh one, so there has to be a way
@@ -773,7 +808,7 @@ is out of scope here.
 
 ## L. Build versioning
 
-- [~] **L1. The launcher carries a version.** It did not: there was no version
+- [x] **L1. The launcher carries a version.** It did not: there was no version
   constant in `release/launcher.py` and the only version anywhere was the `dist`
   folder name, which is how a build made with `-Version 0.1.1` shipped a launcher
   that called itself 0.1.0.
@@ -797,10 +832,16 @@ is out of scope here.
   with the staged `game\CosmicSupremacy.exe` held by another process. The freeze
   and the staging completed; only the zip did not.
 
-  **Done when:** a packaged launcher is started and its own log line reads the
-  version it was built with. Everything up to the exe is confirmed; the last step
-  needs a moment when running a packaged launcher will not take port 8888 from a
-  checkout `cs_server`.
+  **Confirmed by running the packaged build.** `dist\CosmicSupremacy-Resurgence-v0.1.2\CosmicSupremacyLauncher.exe`
+  wrote, on its first line:
+
+      Cosmic Supremacy: Resurgence v0.1.2
+      build   stamped_at 2026-09-21T06:48:19Z commit a84c528
+
+  `release/manifest.json` still reads `0.1.0`, so the launcher is reporting the
+  version `build.ps1 -Version 0.1.2` decided rather than the manifest's. That is
+  precisely the bug the stamp exists for, and the mismatch is what makes the
+  result mean something rather than being a number that happened to agree.
 
 - [x] **L2. A version gate on the galaxy.** The galaxy carries a minimum build; a
   launcher below it refuses to play and says where to get the update.
@@ -894,6 +935,21 @@ is out of scope here.
   turn whose deadline has already passed. A 4-hour clock over a permanent galaxy
   means the machine's uptime is the galaxy's uptime.
 
+  **A referee that cannot save no longer burns the turn.** `referee.py`'s header
+  has always named `cs_server.py` on port 8888 as a requirement and nothing
+  verified it, while `player_turn.serve` has checked the same thing since F2 lost
+  a player's turn to exactly this. Measured with the port closed: a real
+  resolution ran the whole merge, launched the client, advanced the galaxy, and
+  only then failed with `SaveGame returned 0` from inside the client, which reads
+  as a client fault rather than a missing server.
+
+  `tick` and `resolve_turn` both call `save_path_ready` now. `resolve_turn`
+  checks first because it writes each player's refusal notes before ticking, so
+  a referee that cannot save changes nothing at all rather than leaving notes for
+  a turn that did not close. Verified both ways: with the port closed it refuses
+  before launching anything and leaves no client process; with the server up the
+  same turn resolves normally.
+
   **Done when:** the machine is rebooted mid-galaxy with nobody watching and the
   next turn closes on time.
 
@@ -932,12 +988,20 @@ is out of scope here.
   **Done when:** the text exists, is shown before a player joins rather than
   buried, and matches what the code actually does.
 
-- [ ] **N5. Record a measured tick duration.** Capacity is not a constraint at one
-  galaxy and six ticks a day, and the number is worth having anyway, because it is
-  what the second galaxy and the cloud offload will be planned against.
+- [x] **N5. Record a measured tick duration.** Three real resolutions of the
+  32-system, 3-civ demo galaxy at about 39,100 bytes, each closing a turn and
+  publishing the next through a real client:
 
-  **Done when:** the seconds a tick takes on a real sandbox galaxy are written
-  down, with the galaxy's size beside them.
+  | turn | orders | seconds |
+  |---|---|---|
+  | 9 to 10 | 3 taken, 0 dropped | 11.7 |
+  | 10 to 11 | 0 | 11.0 |
+  | 11 to 12 | 0 | 8.6 |
+
+  So a tick is **about 10 seconds**, and six a day is under a minute of client
+  time. Capacity is not a constraint at one galaxy, and this is the number the
+  second galaxy and the cloud offload get planned against. A 108-system galaxy
+  has not been timed.
 
 ---
 
