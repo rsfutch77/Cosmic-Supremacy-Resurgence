@@ -1,7 +1,11 @@
 """
 test_relay_function.py , what the relay lets a player do, and what it does not
 ==============================================================================
-    firebase emulators:start --only firestore,storage,auth
+    python functions/emulators.py --only firestore,storage,auth
+
+which resolves each port before binding and prints the three variables
+below. Starting the suite by hand works too, on the ports in
+functions/firebase.json, as long as nothing else holds them.
     set FIRESTORE_EMULATOR_HOST=127.0.0.1:8080
     set STORAGE_EMULATOR_HOST=http://127.0.0.1:9199
     set FIREBASE_AUTH_EMULATOR_HOST=127.0.0.1:9099

@@ -4,3 +4,7 @@
 cs_store/
 # The virtualenv the functions emulator and the deploy build here.
 venv/
+# Resolved emulator ports, written by emulators.py when it walks past a port
+# something else holds. Per-machine and per-run, so never tracked.
+.firebase.emulators.json
+.firebase.emulators.env
