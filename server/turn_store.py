@@ -68,6 +68,23 @@ The deadline is an absolute epoch time rather than a countdown, so a launcher
 that was closed and reopened, or a second machine whose clock differs a little,
 still agrees about when the turn is due. It is the referee's to move, and nobody
 else writes it.
+
+A galaxy ends because the operator says so
+------------------------------------------
+There is no season timer, so `status` is an operator's word carried in the state
+every launcher already reads. A closed galaxy refuses submissions and stays
+readable: its turns, its archive and its notes answer exactly as they did, which
+is the whole point of closing rather than deleting. `galaxy_directory` carries
+the same word in its listing, and writes through to here, because a launcher is
+given a store spec and may never have been given a directory. A galaxy that has
+ended has to be able to say so by itself.
+
+`reclaimed` is the other half of the same idea, for one seat rather than the
+whole galaxy. A player whose civ was taken back for missing too many turns is no
+longer in `civs`, so every roster check refuses them, and a refusal that can only
+say there is no such seat reads as the galaxy having lost them rather than as a
+consequence of not playing. The record says which turn took the seat and how
+many turns were missed, so the refusal can explain itself.
 """
 import json
 import os
@@ -90,6 +107,48 @@ STATE_RETRY_SECONDS = 2.0
 # _atomic_write: this is the other half of STATE_RETRY_SECONDS, and it is the
 # side that was missing.
 WRITE_RETRY_SECONDS = 10.0
+
+# The two words a galaxy's status can be, and the key it lives under. A state
+# with no status at all is open, which is every galaxy written before there was
+# one, so nothing has to be migrated for a launcher to start asking.
+STATUS_KEY = 'status'
+OPEN, CLOSED = 'open', 'closed'
+
+# Why it was closed, and what became of seats taken back. Both are optional and
+# both are read by a launcher explaining a refusal to the player who hit it.
+CLOSED_REASON_KEY = 'closed_reason'
+RECLAIMED_KEY = 'reclaimed'
+
+
+class GalaxyClosed(RuntimeError):
+    """A submission refused because the operator has ended this galaxy.
+
+    Its own class rather than a `ValueError`, because the caller that has to
+    tell them apart is a player's launcher: a submission refused for being
+    malformed is worth retrying and one refused for arriving after the galaxy
+    ended never will be.
+    """
+
+
+def status_of(state) -> str:
+    """`open` or `closed` for a galaxy's state, whichever kind of store it came
+    from. Absent means open, so a galaxy nobody has closed is one."""
+    value = (state or {}).get(STATUS_KEY)
+    return CLOSED if value == CLOSED else OPEN
+
+
+def reclaimed_of(state, civ: str = None):
+    """Seats taken back, or one of them, or None when that seat was not.
+
+    Keyed by civ name, holding `{turn, missed, at}`. A caller asking about one
+    name gets that record and nothing about anyone else, which is the same rule
+    the roster follows: a launcher answering "what happened to my seat" must not
+    become a way to enumerate who else stopped playing.
+    """
+    taken = (state or {}).get(RECLAIMED_KEY) or {}
+    if not isinstance(taken, dict):
+        return None if civ else {}
+    return taken.get(civ) if civ else dict(taken)
 
 
 def _atomic_write(path: str, data: bytes) -> None:
@@ -220,6 +279,49 @@ class TurnStore:
     def civs(self) -> list:
         return list(self.state().get('civs', []))
 
+    def update_state(self, fields: dict) -> dict:
+        """Merge fields into the state and return what it now holds.
+
+        Read, merge, write, because a file is all or nothing where a Firestore
+        write names the fields it changes. A write here that lands while the
+        referee is publishing can lose one of the two, which is the race the
+        store has always had and is not worth a lock for what uses this: an
+        operator at a console, and a referee holding the turn it just closed.
+        """
+        state = self.state() if self.exists() else {}
+        state.update(fields)
+        self._put_state(state)
+        return state
+
+    # ── status ───────────────────────────────────────────────────────────────
+    def status(self) -> str:
+        return status_of(self.state())
+
+    def is_closed(self) -> bool:
+        return self.status() == CLOSED
+
+    def closed_reason(self):
+        return self.state().get(CLOSED_REASON_KEY)
+
+    def close(self, reason: str = None) -> dict:
+        """End this galaxy. Submissions stop; everything else still answers."""
+        fields = {STATUS_KEY: CLOSED}
+        if reason:
+            fields[CLOSED_REASON_KEY] = reason
+        return self.update_state(fields)
+
+    def reopen(self) -> dict:
+        """Undo a close. The reason goes with it, so a galaxy closed twice for
+        different reasons cannot report the first one."""
+        state = self.state()
+        state[STATUS_KEY] = OPEN
+        state.pop(CLOSED_REASON_KEY, None)
+        self._put_state(state)
+        return state
+
+    def reclaimed(self, civ: str = None):
+        return reclaimed_of(self.state(), civ)
+
     # ── turns ────────────────────────────────────────────────────────────────
     def start(self, blob: bytes, civs, turn_seconds: int = 3600,
               turn: int = None) -> int:
@@ -264,7 +366,17 @@ class TurnStore:
     def submit(self, civ: str, turn: int, blob: bytes) -> str:
         """Hand a player's state back. Writing twice replaces, which is right:
         a player may save several times in a turn and the last one is their
-        intent."""
+        intent.
+
+        A closed galaxy refuses, and this is the only write that does. Reading
+        the state first costs one file read per submission, which is once per
+        player per turn, and it is what makes the refusal say why: a player
+        whose orders vanished into a galaxy the operator ended would otherwise
+        find out by watching nothing happen.
+        """
+        if self.is_closed():
+            raise GalaxyClosed(f'this galaxy is closed and is not taking '
+                               f'submissions ({self.root})')
         path = self.submission_path(civ, turn)
         _atomic_write(path, sp.encode_save(blob))
         return path
@@ -495,6 +607,37 @@ class HttpTurnStore:
     def civs(self) -> list:
         return list(self.state().get('civs', []))
 
+    def update_state(self, fields: dict) -> dict:
+        """Refused, because this is a player's transport and not an operator's.
+
+        Closing a galaxy and taking a seat back are the operator's writes, and
+        the operator holds the store itself: a directory, or the Firebase
+        project. Neither `turn_server.py` nor the relay offers a route for
+        them, and inventing one here would put the two writes that end a
+        player's game behind the credential every player carries.
+        """
+        raise NotImplementedError(
+            'a galaxy is closed where it lives, not over the player interface')
+
+    # -- status --
+    def status(self) -> str:
+        return status_of(self.state())
+
+    def is_closed(self) -> bool:
+        return self.status() == CLOSED
+
+    def closed_reason(self):
+        return self.state().get(CLOSED_REASON_KEY)
+
+    def close(self, reason: str = None) -> dict:
+        return self.update_state({STATUS_KEY: CLOSED})
+
+    def reopen(self) -> dict:
+        return self.update_state({STATUS_KEY: OPEN})
+
+    def reclaimed(self, civ: str = None):
+        return reclaimed_of(self.state(), civ)
+
     # -- turns --
     def start(self, blob: bytes, civs, turn_seconds: int = 3600,
               turn: int = None) -> int:
@@ -530,7 +673,16 @@ class HttpTurnStore:
         posted as they always were. A service that has the route and refuses
         this write answers 403, which raises rather than quietly falling back:
         a refusal is an answer and retrying it another way would bury it.
+
+        The closed check is here as well as behind the service so that all
+        three stores refuse the same submission the same way. Behind
+        `turn_server.py` the far end raises this itself and the player sees an
+        HTTP 500 with no reason in it, which is the failure closing a galaxy
+        exists to avoid.
         """
+        if self.is_closed():
+            raise GalaxyClosed(f'this galaxy is closed and is not taking '
+                               f'submissions ({self.base})')
         path = f'/submission/{turn}/{urllib.parse.quote(civ)}'
         ticket = self._get(f'/upload{path}')
         if ticket is None:

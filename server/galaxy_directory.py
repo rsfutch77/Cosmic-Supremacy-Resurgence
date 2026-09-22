@@ -34,6 +34,13 @@ yet, which is a fact about the store rather than a setting. `open` and `closed`
 are the operator's, and a closed galaxy stays listed and readable, because a
 launcher pointed at one has to be able to say so rather than fail (K5).
 
+`set_status` writes the operator's word into the galaxy's own state as well as
+into the listing, and a row takes the store's word over the listing's when the
+store has one. A launcher is given a store spec, joins with it, and from then on
+never needs the directory again, so a galaxy that was closed only in the listing
+would go on taking that player's turns. The two cannot be allowed to disagree,
+and the one the player reads is the one that decides.
+
 Two implementations
 -------------------
 `LocalGalaxyDirectory` is a folder of galaxies, or a `galaxies.json` naming
@@ -55,7 +62,11 @@ if HERE not in sys.path:
 
 import turn_store
 
-FORMING, OPEN, CLOSED = 'forming', 'open', 'closed'
+FORMING = 'forming'
+# The operator's two words are the store's, not this module's copy of them: a
+# listing that said `closed` where a state said something else would be two
+# spellings of one fact.
+OPEN, CLOSED = turn_store.OPEN, turn_store.CLOSED
 
 # The file that lets a folder list galaxies it does not itself contain. Without
 # it a folder's galaxies are its subdirectories, which is the layout every
@@ -84,10 +95,16 @@ def _row(gid, name, status, state, player, spec):
     A galaxy whose store has no state yet is forming rather than missing: the
     operator registers a galaxy before the first turn is published, and a row
     that vanished in between would be read as the galaxy having failed.
+
+    The store's own status wins over the listing's when it has one, because the
+    store is what a launcher reads once it has joined. A row that still said
+    `open` about a galaxy whose state says `closed` would send a player into a
+    galaxy that will refuse their turn.
     """
     if not state:
         return Galaxy(gid, name, FORMING, None, None, 0, False, spec)
     civs = list(state.get('civs', []))
+    status = state.get(turn_store.STATUS_KEY) or status
     return Galaxy(gid, name, status, state.get('turn'), state.get('deadline'),
                   len(civs), bool(player) and player in civs, spec)
 
@@ -178,12 +195,25 @@ class LocalGalaxyDirectory:
         self._write_index(entries)
         return turn_store.open_store(entries[gid]['store'])
 
-    def set_status(self, gid: str, status: str) -> None:
+    def set_status(self, gid: str, status: str, reason: str = None) -> None:
+        """The operator's word, into the listing and into the galaxy itself.
+
+        A galaxy with no state yet takes the listing's word alone, which is the
+        `forming` case: there is nothing to write it into, and `register` will
+        carry it forward when the first turn is published.
+        """
         entries = self._entries()
         if gid not in entries:
             raise FileNotFoundError(f'no galaxy {gid} in {self.root}')
         entries[gid]['status'] = status
         self._write_index(entries)
+        store = turn_store.open_store(entries[gid]['store'])
+        if not store.exists():
+            return
+        if status == CLOSED:
+            store.close(reason=reason)
+        else:
+            store.reopen()
 
 
 class FirebaseGalaxyDirectory:
@@ -261,9 +291,23 @@ class FirebaseGalaxyDirectory:
             {'name': name or gid, 'status': status or OPEN}, merge=True)
         return self.store(gid)
 
-    def set_status(self, gid: str, status: str) -> None:
-        self.fs.collection(self.prefix).document(gid).set({'status': status},
-                                                          merge=True)
+    def set_status(self, gid: str, status: str, reason: str = None) -> None:
+        """One write, because the row and the state are the same document.
+
+        The local directory has to write twice and keep the two agreeing; here
+        there is only one place for the word to be, which is the arrangement
+        that made this document the state document in the first place.
+        """
+        from google.cloud import firestore
+        fields = {'status': status}
+        if status == CLOSED:
+            if reason:
+                fields[turn_store.CLOSED_REASON_KEY] = reason
+        else:
+            # A reason outlives its close otherwise, and a galaxy reopened and
+            # closed again would report the first one.
+            fields[turn_store.CLOSED_REASON_KEY] = firestore.DELETE_FIELD
+        self.fs.collection(self.prefix).document(gid).set(fields, merge=True)
 
 
 def open_directory(spec: str):
