@@ -65,8 +65,27 @@ survives untouched. Measured on the demo galaxy: wiping `Neighbor` leaves all
 three `OWNR` records byte-identical at 673, 719 and 866 bytes, with `Owner:4`
 still 21, 0 and 22.
 
-`--delete-owner` is the switch that removes the row, and it carries the costs
-the section above describes.
+`--delete-owner` is the switch that removes the row, and in a galaxy anybody has
+played it is not usable: its guard refuses while another civ still names the
+victim's object id, which after any contact is always, and the forced result does
+not load. The client starts and exits without opening the galaxy. So the row is
+not a choice that was made, it is a consequence of the only wipe that works.
+
+What the shell still shows, and does not
+----------------------------------------
+Compared on screen, before and after, on the turn-180 war galaxy where the two
+civs had met and fought. Gone and correct: the planet's ownership icon, recon.
+Kept and correct: the news history, which is historical, and the score row above.
+
+**Still wrong: the victim's capital system marker is still drawn, and hovering
+their former planet still names them as its owner.** The blob is right and the
+client is reading something else: the planet carries `owner = 0`, an empty name
+and a blank `PLPR`. Those draws come from per-civ state inside the `OWNR` this
+tool deliberately keeps. The victim's own home system id is still in that record,
+at three offsets, and which one the client uses is not established. Clearing just
+those, rather than the record, is the fix and is not attempted here: scanning for
+small integers cannot tell a system id from a count, and `OWPR` is not a colony
+list, since one and two colonies both give 138 bytes.
 
 Not evidence for any of this: a score shown for a civ that was not wiped. Two
 of the three civs in a wiped demo galaxy are untouched and living, and their

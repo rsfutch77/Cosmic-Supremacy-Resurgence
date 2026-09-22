@@ -788,13 +788,47 @@ is out of scope here.
   planets colonised: refused without a template, and with one the planets come
   back unowned at 137 bytes with this galaxy's own 90 to 105 run.
 
+  **Looked at on screen, and the shell is not a preference but the only option.**
+  A wiped civ was compared before and after on the turn-180 war galaxy, where
+  GoodGuy and BadGuy have met and fought, played from GoodGuy's seat:
+
+  | screen | after the wipe |
+  |---|---|
+  | planet ownership icon | gone, correct |
+  | recon | gone, correct |
+  | news | still lists the history, correct, it is historical |
+  | overview score | row still present, as intended and documented |
+  | diplomacy | BadGuy still listed |
+  | **capital system marker** | **still drawn** |
+  | **hovering the planet** | **still names BadGuy as owner** |
+
+  The last two are wrong and the blob is not. Planet 384 reads `owner = 0`, an
+  empty name and a blank `PLPR`, and all four ships are gone. So the client is
+  drawing those from per-civ state inside the preserved `OWNR`, which the shell
+  keeps on purpose.
+
+  **`--delete-owner` cannot be the answer.** Its guard refuses when another civ
+  still names the victim's object id, which after any contact is always, and the
+  forced result **does not load**: the client starts and exits without opening
+  the galaxy, the D1 refusal shape, where the same harness had opened the shell
+  version of the same galaxy at the same turn minutes earlier. That closes the
+  question this item previously recorded as guarded rather than answered.
+
+  So in a real sandbox, where players have met, the shell is mandatory and the
+  stale capital marker comes with it. The score row and the stale marker are the
+  same fact, not two choices.
+
+  **The narrow fix is to clear the victim's own references inside the kept
+  `OWNR`.** Not attempted: `BadGuy`'s record still holds its home system id 3 at
+  three offsets, but which of them the client draws the marker from was not
+  established, and dword scanning for small integers cannot establish it.
+  `OWPR` is not a colony list either, since one and two colonies both give 138
+  bytes. This wants the RTTI and annotation route rather than more scanning.
+
   **Still open, none of it blocking:** the replaced `PLPR` carries the template
   rock's rates rather than the original's, which is the right choice because
   carrying the original across would preserve a homeworld's customisation boost,
   but `+5`, `+6`, `+12`, `+120` and `+121` still have no established meaning.
-  `OWNR` deletion where another civ has met the victim is guarded rather than
-  answered. And **nobody has looked at a wiped civ on screen**: how the dead
-  shell reads in the diplomacy and overview lists is unchecked.
 
 - [ ] **K5. Ending a galaxy is an operator action.** No season timer. The
   operator calls a galaxy over and starts a fresh one, so there has to be a way
