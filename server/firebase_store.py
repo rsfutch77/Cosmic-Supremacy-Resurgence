@@ -81,6 +81,11 @@ if HERE not in sys.path:
 sys.path.insert(0, os.path.join(HERE, 'dev_tools'))
 
 import save_parser as sp
+# The status keys and the closed-galaxy refusal are the store interface's and
+# not this implementation's, so they come from where the interface is written
+# down. `turn_store` reaches back here only inside `open_store`, so importing
+# it at the top of this module is not a cycle.
+import turn_store
 
 # The prefix everything this module writes lives under, in both services. The
 # project also hosts a public website, and a name that could be mistaken for
@@ -88,10 +93,17 @@ import save_parser as sp
 PREFIX = 'beta'
 
 # The fields of the galaxy document that belong to the store. The same document
-# carries the directory's row (name, status, created), which `state` does not
-# return, so that no caller above the store seam starts depending on a field
-# only one of the three implementations has.
-STATE_FIELDS = ('turn', 'deadline', 'turn_seconds', 'civs', 'hash')
+# carries the directory's row as well, and `name` and `created` stay out of the
+# state so that no caller above the store seam starts depending on a field only
+# one of the three implementations has.
+#
+# `status`, `closed_reason` and `reclaimed` are in for the opposite reason: all
+# three stores carry them now. A launcher is handed a store spec and may never
+# be handed a directory, so a galaxy that has ended and a seat that was taken
+# back have to be answerable by the store the player is already holding.
+STATE_FIELDS = ('turn', 'deadline', 'turn_seconds', 'civs', 'hash',
+                turn_store.STATUS_KEY, turn_store.CLOSED_REASON_KEY,
+                turn_store.RECLAIMED_KEY)
 
 _BUCKETS = {}
 
@@ -299,6 +311,45 @@ class FirebaseTurnStore:
     def civs(self) -> list:
         return list(self.state().get('civs', []))
 
+    def update_state(self, fields: dict) -> dict:
+        """Merge fields into the galaxy document and return the state after.
+
+        A merge names the fields it changes, so an operator closing a galaxy
+        cannot roll back a turn the referee published between the read and the
+        write. The directory store has to read and write the whole file and
+        carries that race; this one does not.
+        """
+        self.doc.set(dict(fields), merge=True)
+        return self.state()
+
+    # ── status ───────────────────────────────────────────────────────────────
+    def status(self) -> str:
+        return turn_store.status_of(self.state())
+
+    def is_closed(self) -> bool:
+        return self.status() == turn_store.CLOSED
+
+    def closed_reason(self):
+        return self.state().get(turn_store.CLOSED_REASON_KEY)
+
+    def close(self, reason: str = None) -> dict:
+        fields = {turn_store.STATUS_KEY: turn_store.CLOSED}
+        if reason:
+            fields[turn_store.CLOSED_REASON_KEY] = reason
+        return self.update_state(fields)
+
+    def reopen(self) -> dict:
+        """Undo a close, and take the reason with it so a galaxy closed twice
+        cannot report the first reason."""
+        from google.cloud import firestore
+        self.doc.set({turn_store.STATUS_KEY: turn_store.OPEN,
+                      turn_store.CLOSED_REASON_KEY: firestore.DELETE_FIELD},
+                     merge=True)
+        return self.state()
+
+    def reclaimed(self, civ: str = None):
+        return turn_store.reclaimed_of(self.state(), civ)
+
     # ── turns ────────────────────────────────────────────────────────────────
     def start(self, blob: bytes, civs, turn_seconds: int = 3600,
               turn: int = None) -> int:
@@ -353,7 +404,18 @@ class FirebaseTurnStore:
     def submit(self, civ: str, turn: int, blob: bytes) -> str:
         """Hand a player's state back. Writing twice replaces, which is right:
         a player may save several times in a turn and the last one is their
-        intent."""
+        intent.
+
+        A closed galaxy refuses, at the cost of one document read per
+        submission, which is once per player per turn. The relay writes through
+        Cloud Storage rather than through this method, so closing a galaxy in
+        the beta deployment needs the relay to make the same check; see the
+        store's `GalaxyClosed`.
+        """
+        if self.is_closed():
+            raise turn_store.GalaxyClosed(
+                f'this galaxy is closed and is not taking submissions '
+                f'({self.project}/{self.galaxy})')
         name = self.submission_object(civ, turn)
         self._put(name, sp.encode_save(blob), 'text/plain')
         return f'gs://{self.bucket.name}/{name}'

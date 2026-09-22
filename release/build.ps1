@@ -188,6 +188,10 @@ $piArgs = @(
     '--add-data', "$Manifest;.",
     # build.json rides beside it, written a few lines above by stamp_build.
     '--add-data', "$BuildStamp;.",
+    # beta_notice.txt is the text a player reads before joining. It is a
+    # data file, so the import graph never sees it and a frozen build
+    # would raise FileNotFoundError where the notice should be.
+    '--add-data', "$ServerDir\beta_notice.txt;.",
     # cs_server is imported inside a function after its environment is set, so
     # name it explicitly rather than relying on the import graph walker.
     '--paths', $ServerDir,
@@ -216,6 +220,12 @@ $piArgs = @(
     # Without them a frozen build reports that it cannot list galaxies.
     '--hidden-import', 'galaxy_directory',
     '--hidden-import', 'firebase_store',
+    # The join gate reads both: beta_notice for the text a player must see
+    # before joining, abandonment for that galaxy's own miss thresholds so
+    # the notice states real numbers rather than invented ones. Without
+    # them a release refuses every join, loudly and by name.
+    '--hidden-import', 'beta_notice',
+    '--hidden-import', 'abandonment',
     '--hidden-import', 'save_parser',
     '--hidden-import', 'set_blob_player',
     '--hidden-import', 'inject_civ',

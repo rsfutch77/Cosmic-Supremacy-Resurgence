@@ -504,7 +504,48 @@ def player_name(data_dir: str):
     return civ
 
 
-def roster_problem(name: str, civs):
+# What a galaxy's state says about itself, by the keys turn_store writes. Read
+# by key rather than through the store's own helpers for the reason
+# `min_build` already is: the launcher holds the state it read anyway, these
+# are answered from it without a second read, and a galaxy written before any
+# of them existed simply has none. Absent therefore means open and not
+# reclaimed, which is every galaxy that predates this.
+STATUS_KEY = "status"
+CLOSED = "closed"
+CLOSED_REASON_KEY = "closed_reason"
+RECLAIMED_KEY = "reclaimed"
+
+
+def reclaimed_seat(state, name: str):
+    """What became of this player's own seat, or None if nothing did.
+
+    Read out of the state the launcher already holds rather than asked of the
+    store a second time, and read by the raw key so that a galaxy written
+    before seats could be taken back answers None instead of raising.
+
+    Only the record for `name` is taken out. The key holds every seat this
+    galaxy has reclaimed, and carrying the rest of it any further would answer
+    "what happened to my seat" with a list of who else stopped playing.
+    """
+    taken = (state or {}).get(RECLAIMED_KEY)
+    if not isinstance(taken, dict):
+        return None
+    record = taken.get(name)
+    return record if isinstance(record, dict) else None
+
+
+def _count(value):
+    """A whole number from a record written elsewhere, or None.
+
+    Booleans are numbers in Python and are not counts anywhere else, so one in
+    a record is a malformed field rather than a turn number.
+    """
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    return value
+
+
+def roster_problem(name: str, civs, reclaimed=None):
     """Why this name cannot play this galaxy, or None. Written for the player.
 
     The other players' names are not in the answer. A launcher pointed at a
@@ -517,10 +558,35 @@ def roster_problem(name: str, civs):
     A seat that differs only in case is the exception, because the name it
     echoes back is the one the player just typed. It reveals nobody new, and it
     is the mistake a player makes when they were told their name out loud.
+
+    `reclaimed` is this player's own record from `reclaimed_seat`, and it is
+    the commonest reason a seat is missing once a galaxy has been running for a
+    while: the seat existed and the galaxy took it back. Told only that no seat
+    exists, a player who played for a fortnight reads their own empire being
+    deleted as the launcher being pointed at the wrong galaxy. The record names
+    nobody but the player holding it, and the message echoes only the name they
+    typed.
     """
     seats = list(civs)
     if name in seats:
         return None
+    # A record with nothing in it says a seat was reclaimed and nothing about
+    # when or why, which is less than the roster count already says, so it is
+    # not a record. Anything that is not a mapping at all is a malformed state
+    # rather than a reclaim, and answering it as one would tell a player their
+    # empire was deleted on the strength of a typo.
+    taken = reclaimed if isinstance(reclaimed, dict) and reclaimed else None
+    if taken is not None:
+        turn, missed = _count(taken.get("turn")), _count(taken.get("missed"))
+        when = f" at turn {turn}" if turn is not None else ""
+        after = ("" if not missed else
+                 " after 1 missed turn" if missed == 1 else
+                 f" after {missed} missed turns in a row")
+        return (f"This galaxy took the seat {name!r} back{when}{after}.\n\n"
+                "An empire that stops playing is removed rather than left for "
+                "the galaxy to fill up with, so its planets are unowned again "
+                "and its ships are gone.\n\nNothing of it is left to return "
+                "to. Joining from the Games list starts a new empire.")
     near = next((c for c in seats if str(c).lower() == name.lower()), None)
     if near is not None:
         return (f"This galaxy spells your seat {near!r} and you are calling "
@@ -651,6 +717,33 @@ def version_problem(build: str, state) -> "str | None":
             f"build {build}.\n\nAn older build can hand the galaxy a turn the "
             "referee cannot use, and that goes wrong quietly, so the galaxy "
             "stops here instead.\n\nThe current release is at\n" + UPDATE_URL)
+
+
+def closed_problem(state) -> "str | None":
+    """Why this galaxy is no longer being played, or None. For the player.
+
+    Beside `version_problem` and asked with it, ahead of the roster, for the
+    same reason: a galaxy the operator has ended is why everything below might
+    look wrong. Its roster is whatever it was when it stopped, a submission
+    into it is refused outright, and a launcher that checked the roster first
+    would report one of those instead of the one fact that explains them.
+
+    The operator's own words are shown when the state carries them. A galaxy is
+    ended for a reason a player has no other way of learning, and "closed" on
+    its own reads as a fault rather than a decision.
+
+    A state with no status is open. That is every galaxy written before a
+    galaxy could be closed, and treating a missing key as anything else would
+    end all of them.
+    """
+    if (state or {}).get(STATUS_KEY) != CLOSED:
+        return None
+    reason = (state or {}).get(CLOSED_REASON_KEY)
+    said = f"\n\n{reason}" if isinstance(reason, str) and reason.strip() else ""
+    return (f"This galaxy has been closed.{said}\n\nIt still reads, so its "
+            "turns are all still there, but it takes no more of them and a "
+            "turn played into it would be refused.\n\nThe Games list shows "
+            "whatever else is running.")
 
 
 # ── Multiplayer ───────────────────────────────────────────────────────────────
@@ -1086,11 +1179,17 @@ def galaxy_line(g, submitted=None, pending=False, now=None) -> str:
 
     A galaxy that is forming has no turn and no deadline, so those parts are
     left out rather than printed empty: the status word is already the answer.
+
+    A closed galaxy keeps its row, which is what K5 asks of it, and says in the
+    row that it has stopped. Its clock is left out as well: a closed galaxy's
+    deadline is whenever it was when the operator ended it, and a countdown
+    beside it says a turn is coming that never is.
     """
-    bits = [g.name or g.id, g.status]
+    closed = g.status == CLOSED
+    bits = [g.name or g.id, "closed, not taking turns" if closed else g.status]
     if g.turn is not None:
         bits.append(f"turn {g.turn}")
-    if g.deadline:
+    if g.deadline and not closed:
         left = g.deadline - (time.time() if now is None else now)
         bits.append(f"{fmt_left(left)} left" if left > 0 else "time is up")
     bits.append("no players yet" if not g.players else
@@ -1102,6 +1201,94 @@ def galaxy_line(g, submitted=None, pending=False, now=None) -> str:
     elif pending:
         bits.append("you join at the next turn")
     return " \u00b7 ".join(bits)
+
+
+# ── The notice a player reads before joining ──────────────────────────────────
+# server\beta_notice.py holds the words, in a .txt beside it, because they are
+# for players rather than for programmers. The launcher's half is to show them
+# where they cannot be walked past: on the join step, with the Join control on
+# the far side of them, rather than behind a help menu.
+#
+# Three values in that text are left to whoever shows it. Two are the galaxy's
+# own miss thresholds, which are per galaxy, so the numbers a player reads are
+# the ones the galaxy they are joining actually enforces rather than the
+# defaults. The third says what happens to the log copy, and the launcher fills
+# it from what the launcher does today.
+#
+# Every way of not having the whole notice is refused rather than shown short.
+# A rule with a blank where the number should be reads as no rule at all, and a
+# missing notice reads as there being nothing to agree to.
+
+# What can honestly be said about the log copy today. M1 built the redaction
+# and nothing uploads: write_redacted_log writes the copy beside launcher.log
+# and the upload itself waits on the relay. This is the clause to change when
+# that lands, and it is deliberately the narrower of the two claims the notice
+# offers, because the notice is read once and believed afterwards.
+LOG_UPLOAD_CLAUSE = ("Nothing is sent by itself. The launcher writes that "
+                     "copy to a file on your own machine, and it reaches us "
+                     "only if you send it to us yourself.")
+
+
+def beta_notice_module():
+    """server\\beta_notice, or None when this build cannot reach it.
+
+    Found the way `galaxy_directory` is, and answering None the same way, so
+    that a build frozen without it is a join refused with a reason rather than
+    a launcher that will not start.
+    """
+    multiplayer_modules()
+    try:
+        import beta_notice
+    except ImportError:
+        return None
+    return beta_notice
+
+
+def miss_thresholds(state):
+    """(warn, reclaim) for this galaxy, or None when this build cannot say.
+
+    `abandonment.thresholds` holds both the per-galaxy keys and the defaults
+    behind them, so the launcher reads neither itself. A launcher that read the
+    keys directly would print the default beside a galaxy that overrode it, or
+    print nothing for a galaxy that did not, and either way would be telling a
+    player a threshold the referee does not enforce.
+    """
+    multiplayer_modules()
+    try:
+        import abandonment
+    except ImportError:
+        return None
+    return abandonment.thresholds(state)
+
+
+def beta_notice_text(state):
+    """(notice, None) as this galaxy's player must read it, or (None, reason).
+
+    `state` is the galaxy being joined, because two of the three values are its
+    own thresholds.
+
+    The reason is for showing rather than for swallowing. A build without the
+    module, a build without the file, and a marker nobody filled are three
+    different faults and one outcome for the player, so each of them refuses
+    here and says which it was.
+    """
+    notice = beta_notice_module()
+    if notice is None:
+        return None, ("this build does not carry beta_notice, so what a "
+                      "player agrees to is not in it")
+    body, why = notice.text_or_reason()
+    if body is None:
+        return None, why
+    values = {"log_upload": LOG_UPLOAD_CLAUSE}
+    pair = miss_thresholds(state)
+    if pair is not None:
+        values["warn_after_misses"], values["reclaim_after_misses"] = pair
+    body = notice.fill(values, body)
+    missing = notice.unfilled(body)
+    if missing:
+        return None, ("the notice still has nothing to say for "
+                      + ", ".join(missing))
+    return body, None
 
 
 # ── The log, made fit to send ─────────────────────────────────────────────────
@@ -1850,13 +2037,88 @@ class Launcher:
                                                  if mine else None))).pack(
                          side="left", fill="x")
 
+    def show_beta_notice(self, body: str, g) -> bool:
+        """Show the notice and answer whether the player joined from it.
+
+        Modal, and the only way past it is the Join button under the text. The
+        done condition for this text is that it is read before joining rather
+        than buried, so the button that joins is on the far side of it and
+        there is no other route to one: the row's Join opens this, and this
+        opens nothing else.
+
+        The text is scrolled rather than shortened. It is the whole of what a
+        player is agreeing to, and a summary with a Join button under it is the
+        thing this exists instead of.
+        """
+        tk = self.tk
+        win = tk.Toplevel(self.root)
+        win.title(self.cfg["product"])
+        win.configure(bg=BG)
+        win.transient(self.root)
+
+        notice = beta_notice_module()
+        heading = notice.title(body) if notice else "Before you join the beta"
+        tk.Label(win, text=heading, bg=BG, fg=ACCENT,
+                 font=("Segoe UI", 14, "bold")).pack(anchor="w", padx=20,
+                                                     pady=(18, 0))
+        tk.Label(win, text=f"You are about to join {g.name or g.id}.",
+                 bg=BG, fg=DIM, font=("Segoe UI", 9)).pack(anchor="w", padx=20,
+                                                           pady=(2, 10))
+
+        frame = tk.Frame(win, bg=BG)
+        frame.pack(fill="both", expand=True, padx=20)
+        bar = tk.Scrollbar(frame, orient="vertical")
+        text = tk.Text(frame, width=78, height=22, bg=PANEL, fg=TEXT,
+                       relief="flat", wrap="word", padx=10, pady=8,
+                       highlightbackground=EDGE, highlightthickness=1,
+                       font=("Consolas", 9), yscrollcommand=bar.set)
+        bar.configure(command=text.yview)
+        bar.pack(side="right", fill="y")
+        text.pack(side="left", fill="both", expand=True)
+        text.insert("1.0", body)
+        # After the insert, or the player can edit the rules they are agreeing
+        # to before agreeing to them.
+        text.configure(state="disabled")
+
+        joined = {}
+
+        def accept():
+            joined["yes"] = True
+            win.destroy()
+
+        row = tk.Frame(win, bg=BG)
+        row.pack(fill="x", padx=20, pady=(14, 18))
+        tk.Button(row, text="Join", bg=BTN, fg="#ffffff",
+                  activebackground=BTN_HI, activeforeground="#ffffff",
+                  relief="flat", bd=0, cursor="hand2", width=12,
+                  font=("Segoe UI", 9, "bold"), command=accept).pack(
+                      side="right", padx=(6, 0))
+        tk.Button(row, text="Not yet", bg=PANEL, fg=TEXT,
+                  activebackground=EDGE, activeforeground="#ffffff",
+                  relief="flat", bd=0, cursor="hand2", width=12,
+                  font=("Segoe UI", 9, "bold"), command=win.destroy).pack(
+                      side="right", padx=(6, 0))
+        tk.Label(row, text="Read this first. It is short, and it is all true.",
+                 bg=BG, fg=FAINT, font=("Segoe UI", 8)).pack(side="left")
+
+        win.bind("<Escape>", lambda e: win.destroy())
+        win.update_idletasks()
+        try:
+            win.grab_set()
+        except tk.TclError:
+            pass
+        self.root.wait_window(win)
+        return bool(joined.get("yes"))
+
     def on_join(self, g):
         """Ask a galaxy for a seat. The worker seats the player at the next turn.
 
         Everything here is a check the player can act on before anything is
         written: who they are, whether this build can play the galaxy at all,
-        and whether the name they typed is already somebody's seat. The request
-        itself is the last step, so a refusal leaves nothing behind.
+        whether the galaxy is still running, and whether the name they typed is
+        already somebody's seat. Then the notice, which is the last thing
+        between a player and a seat. The request itself is the step after that,
+        so a refusal and a change of mind alike leave nothing behind.
         """
         from tkinter import messagebox
         civ = self.player or self.ask_player_name(
@@ -1902,6 +2164,14 @@ class Launcher:
                          f"{state.get(MIN_BUILD_KEY)!r}")
                 self.warn(problem)
                 return
+            # Beside it, and ahead of the seat: the listing that offered this
+            # Join is as old as the last refresh, and a galaxy closed since
+            # then would otherwise take a request nothing will ever read.
+            problem = closed_problem(state)
+            if problem:
+                self.say(f"join: {g.id} is closed")
+                self.warn(problem)
+                return
 
         seats = list((state or {}).get("civs", []))
         held = rec.get("name") if rec and rec.get("galaxy") == g.id else None
@@ -1913,6 +2183,22 @@ class Launcher:
             if messagebox.askyesno(self.cfg["product"],
                                    problem + "\n\nChange your name now?"):
                 self.on_change_name()
+            return
+
+        # The last thing before the request, and the only one that is not a
+        # check: what a player is agreeing to is read here, with the Join on
+        # the far side of it, because a notice shown after the seat is asked
+        # for is a notice shown after the decision.
+        notice, why = beta_notice_text(state)
+        if notice is None:
+            self.say(f"join: the beta notice is not showable ({why})")
+            self.warn("This build cannot show you what you are joining.\n\n"
+                      f"{why}.\n\nJoining is stopped here rather than done "
+                      "without it, because what would be missing is the rules "
+                      "of the beta rather than a detail of them.")
+            return
+        if not self.show_beta_notice(notice, g):
+            self.say(f"join: the notice was closed without joining {g.id}")
             return
 
         uid = install_uid(self.data_dir, mint=token is not None)
@@ -2034,6 +2320,15 @@ class Launcher:
                          f"galaxy's minimum {state.get(MIN_BUILD_KEY)!r}")
                 self.warn(problem)
                 return
+            # Beside the build check and ahead of the roster, because a closed
+            # galaxy is one of the reasons the roster would read wrong: it
+            # holds whoever was in it when the operator ended it, and the turn
+            # a player went on to serve would be refused at the submission.
+            problem = closed_problem(state)
+            if problem:
+                self.say("multiplayer: this galaxy is closed")
+                self.warn(problem)
+                return
 
         # The roster is the galaxy's list of seats, and the referee matches
         # submissions to it by exact name and discards anything else. Checking
@@ -2046,12 +2341,32 @@ class Launcher:
             seats = None
             self.say(f"multiplayer: could not read the roster ({exc})")
         if seats is not None:
-            problem = roster_problem(civ, seats)
+            taken = reclaimed_seat(state, civ)
+            problem = roster_problem(civ, seats, taken)
             if problem:
                 # The count, not the names. launcher.log is a file the player
                 # can open, so it is one more place the roster would leak from.
+                if taken:
+                    self.say(f"multiplayer: {civ!r} was reclaimed at turn "
+                             f"{taken.get('turn')} after {taken.get('missed')} "
+                             f"missed turn(s)")
                 self.say(f"multiplayer: {civ!r} is not one of this galaxy's "
                          f"{len(seats)} seat(s)")
+                if taken:
+                    # A reclaimed seat is not a name to spell differently, so
+                    # the offer that fits a misspelling is not made. The
+                    # launcher's own record of the join is dropped instead,
+                    # because the galaxy has undone the thing it records: left
+                    # in place it makes the Games tab show a join still waiting
+                    # to land, which is a dead end rather than a row to join
+                    # again from. Only a galaxy that was joined from the list
+                    # has such a record; one named in multiplayer.json is the
+                    # player's own choice and is left alone.
+                    if cfg.get("joined"):
+                        clear_joined(self.data_dir)
+                        self.refresh_games()
+                    self.warn(problem)
+                    return
                 from tkinter import messagebox
                 if messagebox.askyesno(
                         self.cfg["product"],
