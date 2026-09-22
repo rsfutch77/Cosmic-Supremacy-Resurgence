@@ -274,8 +274,13 @@ is out of scope here.
   enforceable version, and the one to hold H7 to: **the function refuses a
   request whose token uid does not hold the seat it is writing.**
 
-  The rules files stay as deny-all. They are the backstop for the day something
-  does talk to Firebase directly, not the mechanism.
+  **The rules files stay deny-all, and that is now permanent rather than
+  provisional.** An earlier line here said deny-all held "until a client path
+  exists for it to govern". Under design B no such path will ever exist: the
+  relay hands out **signed URLs**, which are a Cloud Storage credential and
+  bypass Security Rules exactly as the admin path does. So the note in
+  `server/beta_storage.rules` about the ownership half being inexpressible is
+  moot rather than outstanding.
 
   `server/beta_firestore.rules` and `server/beta_storage.rules` hold drafts for
   review. They are deliberately not accompanied by a `firebase.json`, so no
@@ -324,11 +329,50 @@ is out of scope here.
   **in code**, where it can compare the token's uid against the seat that claimed
   the civ. The home address stays hidden, so H2 still holds.
 
-  **B is the recommendation**, and the reason is H4 rather than the transport: it
-  turns the ownership rule from something Storage rules cannot express into an
-  `if` statement, and it keeps one Firebase transport rather than two. What it
-  costs is another deploy target in the project that serves the live website, so
-  every functions deploy must be `--only functions`.
+  **B was chosen and is built**, in `functions/`, passing on the emulator. The
+  deciding reason was H4 rather than the transport: ownership becomes an `if`
+  statement, and there is one Firebase transport rather than two.
+
+  | run | result |
+  |---|---|
+  | equivalence, no Firebase | **118 passed** (was 105) |
+  | equivalence, Firestore and Storage emulator | **170 passed** |
+  | `test_relay_function.py`, with the auth emulator | **77 passed** |
+  | end to end through the real Cloud Functions emulator | **6 passed** |
+
+  **"Close to free" was wrong in two ways.** Downloads redirect to a signed URL
+  cleanly. Uploads cannot: `urllib` refuses to re-issue a POST on a 307 and never
+  re-sends a body, so a submission takes a ticket round trip, `GET /upload/...`
+  then a signed PUT then `POST /commit/...`. And blobs fetched from Storage
+  arrive in the base64 wire form rather than the raw form the HTTP service
+  returns, so the store accepts both. A redirect handler also has to **drop
+  `Authorization` when the host changes**, because Cloud Storage reads an
+  unsigned bearer header as a credential and rejects an otherwise valid signed
+  URL.
+
+  **This item assumed a seat binding that nothing in the tree writes.** "Compare
+  the token's uid against the seat that claimed the civ" had no data behind it:
+  there was no uid-to-civ mapping anywhere. The relay defines one, a `seats` map
+  of `{uid: civ}` on the galaxy document, that way round because a uid is a safe
+  Firestore map key and a civ name is a username a player typed. A galaxy without
+  it cannot be played through the relay at all, so this item's done-when depends
+  on J4, on the operator writing `seats` by hand, or on the opt-in
+  `seat_claim: "first-use"`, which binds an unheld roster civ on a uid's first
+  **submission** only and is off by default because among strangers first use is
+  a land grab. An unseated uid gets the galaxy's public face and 403 on anything
+  per-civ.
+
+  **Signing needs one operator action.** A Cloud Functions runtime account has no
+  private key, so `generate_signed_url` signs through the IAM Credentials API.
+  That needs `iamcredentials.googleapis.com` enabled and
+  `roles/iam.serviceAccountTokenCreator` granted to the runtime service account
+  **on itself**. Both commands are in `functions/deploy.py`'s docstring.
+
+  **Not deployed.** That is the operator's call. The deploy cannot reach Hosting
+  for three independent reasons: `functions/firebase.json` carries no `hosting`
+  key and `deploy.py --check` refuses if one appears, `--only functions:relay`
+  names one function of one codebase, and the CLI reads only the config in the
+  directory it runs from, which is never `site/`.
 
   **Done when:** a launcher holding no Google Cloud credentials plays a turn in a
   galaxy hosted on Firebase.
@@ -401,6 +445,11 @@ is out of scope here.
   | Storage stored | ~68 MB added | 5 GB in about six years |
   | Storage egress | ~60 MB | negligible |
   | **Storage Class A, uploads and lists** | **1,456 at six players saving once** | **29%** |
+
+  **The relay changes this less than expected.** A submission commit costs one
+  Class B read, not a Class A write, so the binding quota below is untouched.
+  What is new is one Firestore document read per relay request, which this item
+  counted only for launcher polls.
 
   **The binding constraint is Storage Class A operations, and the driver is how
   many times a player saves within a turn rather than how many players there
