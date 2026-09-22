@@ -818,12 +818,18 @@ is out of scope here.
   stale capital marker comes with it. The score row and the stale marker are the
   same fact, not two choices.
 
-  **The narrow fix is to clear the victim's own references inside the kept
-  `OWNR`.** Not attempted: `BadGuy`'s record still holds its home system id 3 at
-  three offsets, but which of them the client draws the marker from was not
-  established, and dword scanning for small integers cannot establish it.
-  `OWPR` is not a colony list either, since one and two colonies both give 138
-  bytes. This wants the RTTI and annotation route rather than more scanning.
+  **Fixed, and it was not `OWNR` at all.** The hover label and the system's 3D
+  name come from `EXSY`, each civ's remembered map, which carries a last-known
+  owner and the planet's name as that civ last saw it. Both civs' tables still
+  held `BadGuy's HQ` against owner 660. `wipe_civ.forget_civ` clears the wiped
+  civ from every table using the existing `exsy` decoder, which refuses a table
+  it cannot walk exactly rather than flattening it. Confirmed on screen: the
+  hover no longer names the civ and the 3D label is gone.
+
+  An earlier note here claimed the record still referenced "SOLA 3" at three
+  offsets. The system is **383**; that was a misread field, and scanning for a
+  small integer is how it happened. See the report for the decoded layout and
+  for the fog question this leaves open.
 
   **Still open, none of it blocking:** the replaced `PLPR` carries the template
   rock's rates rather than the original's, which is the right choice because

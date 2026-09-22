@@ -274,6 +274,66 @@ def main():
               for n in rb if n != VICTIM}
     check('and still distinct from every survivor', uid_after not in others, True)
 
+
+    # ── the remembered map is cleared too ────────────────────────────────────
+    # EXSY carries a last-known owner and the planet's name as each civ last
+    # saw it, and the client draws the hover label and the system's 3D name
+    # from there rather than from the live record. Without this a wiped civ
+    # keeps its name on a planet that reads as unowned.
+    print('\n12. every civ forgets the wiped civ')
+    import exsy, inject_design as _idg
+    src = sp.load_any(GALAXY)
+    victim = next(o for o in icv.owner_records(src) if o['name'] == VICTIM)
+
+    def remembered(blob, oid):
+        total = 0
+        for o in icv.owner_records(blob):
+            off = next((i for i in _idg.find_all(blob, b'EXSY')
+                        if o['off'] <= i < o['end']), None)
+            if off is None:
+                continue
+            ln = _idg.sec_len(blob, off)[1]
+            for sysrec in exsy.parse(bytes(blob[off + 8:off + 8 + ln])):
+                total += sum(1 for q in sysrec['planets'] if q['owner'] == oid)
+        return total
+
+    # SinglePlayerGalaxy is fresh, so nobody remembers anything yet and the
+    # check below would pass for the wrong reason. The precondition is built
+    # rather than borrowed: the galaxy that has it naturally lives in
+    # referee_work, which is not tracked.
+    def remember(blob, oid):
+        o = next(x for x in icv.owner_records(blob) if x['name'] != VICTIM)
+        off = next(i for i in _idg.find_all(blob, b'EXSY')
+                   if o['off'] <= i < o['end'])
+        ln = _idg.sec_len(blob, off)[1]
+        table = exsy.parse(bytes(blob[off + 8:off + 8 + ln]))
+        if not table or not table[0]['planets']:
+            return blob, False
+        table[0]['planets'][0]['owner'] = oid
+        table[0]['planets'][0]['name'] = b"%s's HQ" % VICTIM.encode()
+        return icv.splice(blob, off + 8, off + 8 + ln, exsy.build(table),
+                          log=lambda *a: None, what='exsy'), True
+
+    src, planted = remember(src, victim['oid'])
+    if not planted:
+        print('  [SKIP] no EXSY row to plant a memory in')
+    check('some civ remembers the victim owning something',
+          remembered(src, victim['oid']) > 0, True)
+    gone, _p, _s = wipe_civ.wipe(src, VICTIM, log=lambda *a: None)
+    check('and nobody does afterwards', remembered(gone, victim['oid']), 0)
+    # the tables must still be walkable, which is what proves the rewrite is
+    # a rewrite and not a truncation
+    walked = 0
+    for o in icv.owner_records(gone):
+        off = next((i for i in _idg.find_all(gone, b'EXSY')
+                    if o['off'] <= i < o['end']), None)
+        if off is None:
+            continue
+        ln = _idg.sec_len(gone, off)[1]
+        exsy.parse(bytes(gone[off + 8:off + 8 + ln]))
+        walked += 1
+    check('and every table still walks cleanly end to end', walked > 0, True)
+
     print(f'\n{len(PASS)} passed, {len(FAIL)} failed')
     return 1 if FAIL else 0
 

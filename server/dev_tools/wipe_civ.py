@@ -244,6 +244,55 @@ def uncolonise(blob, planet_id, template_plpr, log=print):
     return bytes(buf)
 
 
+def forget_civ(blob, oid, log=print):
+    """Clear the wiped civ out of every civ's remembered map.
+
+    `EXSY` is not just which systems a civ has entered. Per planet it holds a
+    last-known owner and the planet's name as that civ last saw it, which is
+    where a wiped empire keeps showing up after every live field is correct.
+    Measured on the turn-180 war galaxy: the planet reads `owner = 0` with an
+    empty name, and both civs' tables still carry `BadGuy's HQ` against
+    last-known-owner 660, so the client draws the name and the capital marker
+    from here while taking the ownership icon from the live record. Half the
+    display live and half remembered is the actual defect, not staleness.
+
+    Every table is rewritten, the victim's own included. `exsy.parse` refuses a
+    table it cannot walk exactly, and `build(parse(x)) == x` byte for byte, so a
+    table this does not understand stops the wipe rather than being flattened.
+
+    This is deliberately not fog-correct. A civ that has not looked again would,
+    strictly, go on remembering what it last saw. The alternative is a planet
+    anybody may now colonise carrying another empire's name and a capital marker
+    for an empire that no longer exists, which misleads a player about the board
+    rather than about history.
+    """
+    import exsy
+    changed = 0
+    for owner in icv.owner_records(blob):
+        off = next((i for i in idg.find_all(blob, b"EXSY")
+                    if owner["off"] <= i < owner["end"]), None)
+        if off is None:
+            continue
+        ver, ln = idg.sec_len(blob, off)
+        table = exsy.parse(bytes(blob[off + 8:off + 8 + ln]))
+        hits = 0
+        for system in table:
+            for planet in system["planets"]:
+                if planet["owner"] == oid:
+                    planet["owner"] = 0
+                    planet["name"] = b""
+                    hits += 1
+        if not hits:
+            continue
+        blob = icv.splice(blob, off + 8, off + 8 + ln, exsy.build(table),
+                          log=lambda *a: None, what="exsy")
+        log(f"  {owner['name']}'s EXSY: {hits} remembered planet(s) cleared")
+        changed += hits
+    if not changed:
+        log("  no remembered planets to clear")
+    return blob
+
+
 def cut_section(blob, start, end, log=print, what=""):
     """Remove a whole section, narrowing the sections that enclose it.
 
@@ -382,6 +431,7 @@ def wipe(blob, name, remove_owner=False, force_owner=False, log=print,
     log(f"  {len(mine)} planet(s) {mine}, {len(ships)} ship(s) {ships}")
     blank = blank_plpr(blob, template_blob, log=log)
 
+    blob = forget_civ(blob, civ["oid"], log=log)
     for pid in mine:
         blob = uncolonise(blob, pid, blank, log=log)
     for sid in ships:
