@@ -74,7 +74,7 @@ is out of scope here.
 
 ## H. The relay
 
-- [ ] **H0. Provision the project, which is a billing decision.** Nothing in this
+- [x] **H0. Provision the project, which is a billing decision.** Nothing in this
   section can be finished until it is made, and neither H1 nor H5 as first
   written knew it existed.
 
@@ -129,36 +129,40 @@ is out of scope here.
   only as `firebase deploy --only firestore:rules,storage` from a directory whose
   `firebase.json` names nothing else.
 
-  **State on 21 September 2026.** Both services exist and one of them works.
+  **Done, 21 September 2026.** Blaze is on, Firestore is the `(default)`
+  database in `nam5` with `freeTier: true`, and the bucket
+  `cs-resurgence.firebasestorage.app` is in `US-WEST1`, one of the three regions
+  carrying the Always Free allowance. **The equivalence test passes against the
+  live project, 47 of 47**, and leaves nothing behind in either service.
 
-  | | |
-  |---|---|
-  | Firestore `(default)`, `nam5`, `freeTier: true` | write, read and delete all succeed |
-  | bucket `cs-resurgence.firebasestorage.app`, `US-WEST1` | listing succeeds, **upload returns 403** |
+  **A day was nearly lost to an error that named the wrong thing.** Every
+  billable Storage write returned
 
-  The region is one of the three that carry the Always Free allowance, and the
-  database is the default one that carries the Firestore quota, so both choices
-  are right. The upload fails with `the billing account for the owning project is
-  disabled in state absent`.
+      403 the billing account for the owning project is disabled in state absent
 
-  **That error is not what it looks like.** The project reports
-  `billingEnabled: true` against account `019BED-824A60-F1BDA5` ("Main"), which
-  itself reports `open: true`. So nothing is unlinked. Reads are served and only
-  billable writes are refused, which is the signature of a project Cloud Storage
-  does not consider billable regardless of what the link says.
+  while `gcloud storage cp` of the same object to the same bucket succeeded
+  throughout. The project was never at fault: `billingEnabled` was true against
+  an open account the whole time.
 
-  **The likely cause is that attaching a Cloud Billing account is not the same
-  action as upgrading the Firebase project to Blaze**, and Firebase keeps its own
-  plan record. Two other billing accounts on this login are closed, one of them
-  named "Firebase Payment", and a plan record still pointing at a closed account
-  would produce exactly this. The place to look is the Firebase console, Usage
-  and billing, Details and settings: whether the plan reads Blaze, and which
-  billing account it names.
+  **The owning project in that message is the credential's quota project, not
+  the bucket's.** A user credential from `gcloud auth application-default login`
+  carries whichever project it was last run against, here `kalbot-cloudrun`, and
+  every request from the Python libraries was attributed there. gcloud does not
+  use ADC, which is why it was unaffected and why the two disagreed.
 
-  **Done when:** the services exist, the budget alert is set, and the equivalence
-  test passes against the live project.
+  `FirebaseTurnStore.credentials()` now pins the quota project to the galaxy's
+  own project, so the store bills what it is reading and writing whoever is
+  logged in. A service account key carries no quota project and was never
+  exposed to this.
 
-- [~] **H1. A Firebase store adapter.** `server/firebase_store.py` implements the
+  **A wrong diagnosis was recorded here first** and is worth keeping rather than
+  quietly replacing: this entry claimed the likely cause was a Firebase plan
+  record pointing at one of two closed billing accounts on the same login. That
+  was plausible, consistent with everything observed at the time, and wrong. What
+  distinguished it was not more reasoning but one command, `gcloud storage cp`,
+  which isolated the failure to the client rather than the project.
+
+- [x] **H1. A Firebase store adapter.** `server/firebase_store.py` implements the
   `turn_store` interface as `FirebaseTurnStore`, and `open_store` dispatches on a
   `firebase://<project>/<galaxy>` spec. Everything lives under a `beta/` prefix in
   both services so it cannot collide with the website on the same project.
