@@ -252,6 +252,28 @@ def main():
     check('and the ships are gone',
           [s for s in ish.ship_records(out) if s['id'] in ships], [])
 
+
+    # ── the shell keeps its score row ────────────────────────────────────────
+    # Deliberate, and documented in wipe_civ's header: the score list keys on
+    # Owner:4, the u32 ending the OWNR payload, and a shell wipe never touches
+    # OWNR. If that ever stops being true the row disappears silently, which is
+    # a behaviour change nobody would see in a passing blob check.
+    print('\n11. a wiped civ keeps its OWNR, and so its score row')
+    before = sp.load_any(GALAXY)
+    after, _p, _s = wipe_civ.wipe(before, VICTIM, log=lambda *a: None)
+    ra = {o['name']: o for o in icv.owner_records(before)}
+    rb = {o['name']: o for o in icv.owner_records(after)}
+    check('every OWNR record survives the wipe', sorted(rb), sorted(ra))
+    same = all(bytes(before[ra[n]['off']:ra[n]['end']])
+               == bytes(after[rb[n]['off']:rb[n]['end']]) for n in ra)
+    check('and every one is byte-identical, the victim included', same, True)
+    uid_before = struct.unpack_from('<I', before, ra[VICTIM]['end'] - 4)[0]
+    uid_after = struct.unpack_from('<I', after, rb[VICTIM]['end'] - 4)[0]
+    check("the victim's Owner:4 is unchanged", uid_after, uid_before)
+    others = {struct.unpack_from('<I', after, rb[n]['end'] - 4)[0]
+              for n in rb if n != VICTIM}
+    check('and still distinct from every survivor', uid_after not in others, True)
+
     print(f'\n{len(PASS)} passed, {len(FAIL)} failed')
     return 1 if FAIL else 0
 

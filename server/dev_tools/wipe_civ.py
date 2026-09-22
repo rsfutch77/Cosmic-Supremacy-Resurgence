@@ -49,6 +49,29 @@ destroyed, with `SAVE+0` still reading 206.
 That is why this tool deletes `SHIP` sections outright rather than emptying them:
 it is the operation the engine performs on itself several times a galaxy.
 
+A wiped civ keeps its row in the overview score list
+----------------------------------------------------
+This is kept deliberately. A wiped empire holds nothing and builds nothing, so
+its standing stops moving, but the row stays and records where the player got
+to before they stopped. In a permanent sandbox that is the only trace a departed
+player leaves, and it is worth more than a tidy list.
+
+It follows from the shell rather than being arranged. The score list holds one
+row per distinct `Owner:4`, the `u32` ending the `OWNR` payload, established in
+`CosmicSupremacy_Reconstruction_Report.md` by an A/B of two blobs differing in
+those four bytes alone. This tool never touches `OWNR` unless `--delete-owner`
+is passed, so that field, and everything else per-civ living in that record,
+survives untouched. Measured on the demo galaxy: wiping `Neighbor` leaves all
+three `OWNR` records byte-identical at 673, 719 and 866 bytes, with `Owner:4`
+still 21, 0 and 22.
+
+`--delete-owner` is the switch that removes the row, and it carries the costs
+the section above describes.
+
+Not evidence for any of this: a score shown for a civ that was not wiped. Two
+of the three civs in a wiped demo galaxy are untouched and living, and their
+rows say nothing about the shell.
+
 What returning a planet costs
 -----------------------------
 A planet's owner is a `u32` at `PLNT` payload `+16`, so un-owning it is a write.
