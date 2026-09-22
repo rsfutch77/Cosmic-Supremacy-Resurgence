@@ -808,7 +808,7 @@ is out of scope here.
 
 ## L. Build versioning
 
-- [~] **L1. The launcher carries a version.** It did not: there was no version
+- [x] **L1. The launcher carries a version.** It did not: there was no version
   constant in `release/launcher.py` and the only version anywhere was the `dist`
   folder name, which is how a build made with `-Version 0.1.1` shipped a launcher
   that called itself 0.1.0.
@@ -832,10 +832,16 @@ is out of scope here.
   with the staged `game\CosmicSupremacy.exe` held by another process. The freeze
   and the staging completed; only the zip did not.
 
-  **Done when:** a packaged launcher is started and its own log line reads the
-  version it was built with. Everything up to the exe is confirmed; the last step
-  needs a moment when running a packaged launcher will not take port 8888 from a
-  checkout `cs_server`.
+  **Confirmed by running the packaged build.** `dist\CosmicSupremacy-Resurgence-v0.1.2\CosmicSupremacyLauncher.exe`
+  wrote, on its first line:
+
+      Cosmic Supremacy: Resurgence v0.1.2
+      build   stamped_at 2026-09-21T06:48:19Z commit a84c528
+
+  `release/manifest.json` still reads `0.1.0`, so the launcher is reporting the
+  version `build.ps1 -Version 0.1.2` decided rather than the manifest's. That is
+  precisely the bug the stamp exists for, and the mismatch is what makes the
+  result mean something rather than being a number that happened to agree.
 
 - [x] **L2. A version gate on the galaxy.** The galaxy carries a minimum build; a
   launcher below it refuses to play and says where to get the update.
