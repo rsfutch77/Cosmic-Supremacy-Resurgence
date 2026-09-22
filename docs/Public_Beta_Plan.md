@@ -261,13 +261,26 @@ is out of scope here.
   The second fits J4's seat binding and is probably the one to take, since that
   binding has to exist anyway.
 
-  **Neither is being built in this phase, deliberately.** Google login follows
-  immediately after the prototype, and a real account identity settles both the
-  submission-ownership rule here and the roster leak at J4 in one move, after
-  which taking another player's civ stops being possible at all. Until then the
-  rule is a size cap and a deletion refusal, and the beta's warning at N4 already
-  says a username is a claim rather than a credential. Do not build a
-  custom-claim scheme that Google login would immediately replace.
+  **H7 settled this and neither option was taken.** Design B puts the function
+  between the player and the store, so ownership is compared in code, uid against
+  the seat that claimed the civ, and no claim scheme is needed at all. An earlier
+  draft of this item called the custom claim "probably the one to take" and then
+  said not to build one, which was a contradiction while it stood.
+
+  **So this item's done-when is unreachable as written.** It asks for a client
+  refused *by the rules*. Under design B a player never touches a client SDK, so
+  Security Rules govern nothing on the player path, which is also why the bucket
+  can carry `allow read, write: if false` while the referee works normally. The
+  enforceable version, and the one to hold H7 to: **the function refuses a
+  request whose token uid does not hold the seat it is writing.**
+
+  **The rules files stay deny-all, and that is now permanent rather than
+  provisional.** An earlier line here said deny-all held "until a client path
+  exists for it to govern". Under design B no such path will ever exist: the
+  relay hands out **signed URLs**, which are a Cloud Storage credential and
+  bypass Security Rules exactly as the admin path does. So the note in
+  `server/beta_storage.rules` about the ownership half being inexpressible is
+  moot rather than outstanding.
 
   `server/beta_firestore.rules` and `server/beta_storage.rules` hold drafts for
   review. They are deliberately not accompanied by a `firebase.json`, so no
@@ -316,11 +329,50 @@ is out of scope here.
   **in code**, where it can compare the token's uid against the seat that claimed
   the civ. The home address stays hidden, so H2 still holds.
 
-  **B is the recommendation**, and the reason is H4 rather than the transport: it
-  turns the ownership rule from something Storage rules cannot express into an
-  `if` statement, and it keeps one Firebase transport rather than two. What it
-  costs is another deploy target in the project that serves the live website, so
-  every functions deploy must be `--only functions`.
+  **B was chosen and is built**, in `functions/`, passing on the emulator. The
+  deciding reason was H4 rather than the transport: ownership becomes an `if`
+  statement, and there is one Firebase transport rather than two.
+
+  | run | result |
+  |---|---|
+  | equivalence, no Firebase | **118 passed** (was 105) |
+  | equivalence, Firestore and Storage emulator | **170 passed** |
+  | `test_relay_function.py`, with the auth emulator | **77 passed** |
+  | end to end through the real Cloud Functions emulator | **6 passed** |
+
+  **"Close to free" was wrong in two ways.** Downloads redirect to a signed URL
+  cleanly. Uploads cannot: `urllib` refuses to re-issue a POST on a 307 and never
+  re-sends a body, so a submission takes a ticket round trip, `GET /upload/...`
+  then a signed PUT then `POST /commit/...`. And blobs fetched from Storage
+  arrive in the base64 wire form rather than the raw form the HTTP service
+  returns, so the store accepts both. A redirect handler also has to **drop
+  `Authorization` when the host changes**, because Cloud Storage reads an
+  unsigned bearer header as a credential and rejects an otherwise valid signed
+  URL.
+
+  **This item assumed a seat binding that nothing in the tree writes.** "Compare
+  the token's uid against the seat that claimed the civ" had no data behind it:
+  there was no uid-to-civ mapping anywhere. The relay defines one, a `seats` map
+  of `{uid: civ}` on the galaxy document, that way round because a uid is a safe
+  Firestore map key and a civ name is a username a player typed. A galaxy without
+  it cannot be played through the relay at all, so this item's done-when depends
+  on J4, on the operator writing `seats` by hand, or on the opt-in
+  `seat_claim: "first-use"`, which binds an unheld roster civ on a uid's first
+  **submission** only and is off by default because among strangers first use is
+  a land grab. An unseated uid gets the galaxy's public face and 403 on anything
+  per-civ.
+
+  **Signing needs one operator action.** A Cloud Functions runtime account has no
+  private key, so `generate_signed_url` signs through the IAM Credentials API.
+  That needs `iamcredentials.googleapis.com` enabled and
+  `roles/iam.serviceAccountTokenCreator` granted to the runtime service account
+  **on itself**. Both commands are in `functions/deploy.py`'s docstring.
+
+  **Not deployed.** That is the operator's call. The deploy cannot reach Hosting
+  for three independent reasons: `functions/firebase.json` carries no `hosting`
+  key and `deploy.py --check` refuses if one appears, `--only functions:relay`
+  names one function of one codebase, and the CLI reads only the config in the
+  directory it runs from, which is never `site/`.
 
   **Done when:** a launcher holding no Google Cloud credentials plays a turn in a
   galaxy hosted on Firebase.
@@ -394,6 +446,11 @@ is out of scope here.
   | Storage egress | ~60 MB | negligible |
   | **Storage Class A, uploads and lists** | **1,456 at six players saving once** | **29%** |
 
+  **The relay changes this less than expected.** A submission commit costs one
+  Class B read, not a Class A write, so the binding quota below is untouched.
+  What is new is one Firestore document read per relay request, which this item
+  counted only for launcher polls.
+
   **The binding constraint is Storage Class A operations, and the driver is how
   many times a player saves within a turn rather than how many players there
   are.** Six players saving three times a turn is 73% of the allowance; ten
@@ -462,10 +519,33 @@ is out of scope here.
   turn, and the player is told which system they landed in by a note rather than
   having to find it.
 
-- [ ] **J4. A seat is bound to the anonymous UID that claimed it.** A second
+- [~] **J4. A seat is bound to the anonymous UID that claimed it.** A second
   install claiming a name already in the roster is refused. Because the UID is
   per-install, a player who reinstalls Windows would otherwise be locked out of
   their own empire, so the operator can rebind a seat to a new UID.
+
+  **The identity half exists.** `server/fb_auth.py` signs up anonymously on first
+  use, keeps the uid and refresh token in `fb_identity.json` beside
+  `identity.json`, refreshes before expiry rather than after a failure, and
+  returns `None` rather than raising when the network is down so an offline
+  launcher degrades instead of crashing. `identity.json` keeps its existing
+  meaning: the username is still a claim, and the uid is never shown to the
+  player. Google login replaces `_sign_in` and nothing else.
+
+  **"Per-install" is too narrow.** The uid follows the **data directory**, and
+  `find_data_dir()` falls back from the install directory to
+  `%LOCALAPPDATA%\CosmicSupremacyResurgence` when the former is not writable. So
+  a player who moves an unpacked build into Program Files, or runs two copies,
+  gets two uids without reinstalling anything. The operator rebind this item
+  already needs is therefore routine rather than rare.
+
+  **Anonymous users can expire out from under a seat.** Firebase can delete
+  anonymous accounts inactive for 30 days, which would hand a returning player a
+  dead refresh token, a fresh uid, and a seat naming a uid nobody holds.
+  Measured on `cs-resurgence`: `autodeleteAnonymousUsers` is **disabled**, so
+  this does not bite today. It has to stay disabled for as long as identity is
+  anonymous, and that is a reason to reach Google login sooner rather than a
+  thing to engineer around.
 
   The refusal still does not name the other players, for the reason F4 already
   gives: a launcher that could list the roster makes "is there a seat for me"

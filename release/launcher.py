@@ -685,6 +685,10 @@ def multiplayer_config(data_dir: str):
     Only `store` is required. `civ` used to be, and a file that still carries
     one is read once by `legacy_civ` to seed the player's name, after which the
     name comes from identity.json and this file names only the galaxy.
+
+    An optional `auth`, true or false, says whether to put this install's
+    Firebase identity on the requests. Left out, an https store is taken to
+    want one and everything else is taken not to: see `store_wants_token`.
     """
     path = os.path.join(data_dir, MP_CONFIG)
     if not os.path.exists(path):
@@ -724,6 +728,73 @@ def multiplayer_modules():
     except ImportError:
         return None
     return player_turn, turn_store
+
+
+def store_wants_token(cfg) -> bool:
+    """Whether this galaxy's store is one to put an identity on.
+
+    A galaxy served by the beta's Cloud Function is reached over https and
+    wants a token. A folder on this disk and a `turn_server.py` on the LAN do
+    not: neither reads one, and signing this install up to Firebase to talk to
+    either would be an account nobody asked for and a network call a player who
+    is offline should not be waiting on. An `auth` key in multiplayer.json
+    overrides both ways, which is what points the launcher at the function
+    running in a local emulator.
+    """
+    want = cfg.get("auth")
+    if isinstance(want, bool):
+        return want
+    return str(cfg.get("store", "")).startswith("https://")
+
+
+def player_token(data_dir: str):
+    """A zero-argument callable answering this install's Firebase ID token.
+
+    None when this build cannot reach `fb_auth`, which is the same answer as a
+    token that cannot be minted: the store sends no Authorization header and
+    behaves as it did before any of this existed.
+
+    The identity is separate from the player's name and is never shown. See
+    server\\fb_auth.py. Called after multiplayer_modules(), because that is
+    what puts server\\ on sys.path in a checkout.
+    """
+    try:
+        import fb_auth
+    except ImportError:
+        return None
+    return fb_auth.identity(data_dir).token
+
+
+def _takes_token(fn) -> bool:
+    """Whether `fn` accepts a `token` keyword.
+
+    Asked rather than assumed because the store side of this lands separately:
+    a launcher built against a turn_store that predates it has to keep opening
+    galaxies, without a TypeError and without quietly swallowing a real one.
+    """
+    import inspect
+    try:
+        return "token" in inspect.signature(fn).parameters
+    except (TypeError, ValueError):
+        return False
+
+
+def open_player_store(turn_store, spec: str, token=None):
+    """`open_store`, carrying this install's identity when there is one.
+
+    `open_store`, not `HttpTurnStore`, for the reason the call site already
+    gives: which kind of store a spec names is the spec's business. The token
+    is passed as the callable itself and not as a string, because a galaxy is
+    followed for longer than a token lasts.
+    """
+    if token is None:
+        return turn_store.open_store(spec)
+    if _takes_token(turn_store.open_store):
+        return turn_store.open_store(spec, token=token)
+    http = turn_store.HttpTurnStore
+    if _takes_token(http) and spec.startswith(("http://", "https://")):
+        return http(spec, token=token)
+    return turn_store.open_store(spec)
 
 
 def bind_multiplayer_paths(game_root: str, data_dir: str):
@@ -1429,7 +1500,18 @@ class Launcher:
         # and a base URL once the referee is on another, and which one it is is
         # the player's to write in multiplayer.json. Naming the class here made
         # a URL silently mean "a folder called http:".
-        store = turn_store.open_store(cfg["store"])
+        #
+        # A galaxy behind the beta's function is opened with this install's
+        # Firebase identity on the requests. A folder and a LAN turn_server are
+        # opened exactly as before, with no token and no sign-in. An identity
+        # that cannot be minted, because this player is offline or the project
+        # is not answering, is a missing header rather than a refusal to start:
+        # what the galaxy does about that is the galaxy's to say.
+        token = player_token(self.data_dir) if store_wants_token(cfg) else None
+        if token is not None and token() is None:
+            self.say("multiplayer: no Firebase identity available, opening the "
+                     "galaxy without one")
+        store = open_player_store(turn_store, cfg["store"], token)
         if not store.exists():
             self.warn(f"No galaxy in\n{cfg['store']}\n\nThe referee has to "
                       "publish a first turn before anyone can play it.")
