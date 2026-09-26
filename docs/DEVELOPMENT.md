@@ -87,8 +87,8 @@ galaxy.
 
 Multiplayer state is separate. `server/turn_store.py` holds a galaxy's turn blobs
 and player submissions behind one interface with three implementations, a
-directory, HTTP to `turn_server.py`, and Firestore plus Cloud Storage. That
-design and its open items are the [public beta plan](Public_Beta_Plan.md).
+directory, HTTP to `turn_server.py`, and Firestore plus Cloud Storage. Its
+module docstring says which one a player gets and which one the referee gets.
 
 ## The three client EXEs
 
@@ -135,6 +135,10 @@ differ from each other on the local server, measured rather than assumed:
 |------|----------------------------|
 | Tutorial | Yes, `testconnection` at startup, one of the checks this EXE was modified to take |
 | Demo | No, zero requests and zero connection attempts across a 45-second run with both loopback listeners up |
+
+## Backlog
+
+Single-player work. Multiplayer is tracked separately.
 
 ### [ ] Let the player name a save
 
@@ -240,7 +244,6 @@ the `inject_*.py` family for planting civs, designs, ships and orders.
 
 ## Reference
 
-- [Development_Plan.md](Development_Plan.md), phases, priorities, backlog
 - [CosmicSupremacy_Reconstruction_Report.md](CosmicSupremacy_Reconstruction_Report.md), the full reverse-engineering reference
 - [CosmicSupremacy_Memory_Reconstruction_Report.md](CosmicSupremacy_Memory_Reconstruction_Report.md), memory layout and structures
 - [CosmicSupremacy_Stat_Tables.md](CosmicSupremacy_Stat_Tables.md), component, facility and

@@ -74,10 +74,10 @@ This is a preservation and fan project, and contributions are welcome, protocol
 analysis, server implementation, documentation, or just playing it and telling us
 what broke.
 
-Start with **[docs/DEVELOPMENT.md](docs/DEVELOPMENT.md)** for setup, the server
-protocol, and how to build a release. The
-[reverse-engineering report](docs/CosmicSupremacy_Reconstruction_Report.md) and
-the [development plan](docs/Development_Plan.md) have the deep detail.
+Start with **[docs/DEVELOPMENT.md](docs/DEVELOPMENT.md)** for setup, the server,
+the backlog, and how to build a release. The
+[reverse-engineering report](docs/CosmicSupremacy_Reconstruction_Report.md) has
+the deep detail.
 
 ## Use of Generative AI
 
