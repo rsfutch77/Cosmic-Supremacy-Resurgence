@@ -1,8 +1,6 @@
-fastapi>=0.111.0
-uvicorn[standard]>=0.29.0
-bcrypt>=4.1.0
-PyJWT>=2.8.0
-aiosqlite>=0.20.0
+# cs_server.py is stdlib only, http.server and urllib, so nothing here is
+# needed to run the stub server or play locally. These are the multiplayer
+# turn store's dependencies.
 
 # The Firebase turn store (firebase_store.py). The two client libraries rather
 # than firebase-admin, which is a wrapper over these same two plus auth and
