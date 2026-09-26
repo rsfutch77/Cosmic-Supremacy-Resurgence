@@ -21,7 +21,7 @@ client/                  Client EXEs and .csgalaxy pass files
 server/                  Python stub server
   dev_tools/             Save-blob parsing and injection tools
 release/                 Player-facing launcher and release build script
-docs/                    This file, the development plan, and the RE reports
+docs/                    This file, the plans, and the RE reports
 dist/                    Build output (gitignored)
 ```
 
@@ -56,6 +56,39 @@ a release's `game\` folder and saves you a build:
 ```powershell
 server\.venv\Scripts\python.exe release\launcher.py
 ```
+
+## The server
+
+`server/cs_server.py` is the stub backend, plain `http.server` from the standard
+library with no framework. It answers the game API the client knows how to send,
+`HTTP/1.0 POST /clientinterface.php` with `Content-Type:
+application/x-cosmicsupremacy` and a body of
+`action=<name>&userid=<int>&passhash='<hash>'&...`. Every action and its response
+format is in the [reconstruction report](CosmicSupremacy_Reconstruction_Report.md).
+
+It also serves a small page at `GET /`, which is where the game opens a browser
+on first run, and `GET /enter-demo`, which hands back
+`DemoGalaxy_local.csgalaxy` as a download.
+
+What it keeps, all under `CS_DATA_DIR`, the checkout's `server\` by default and
+the release's `data\` when the launcher sets it:
+
+| What | Where |
+|------|-------|
+| Save blobs | `saves\`, a `.b64` and a `.json` sidecar per save, listed in `saves\index.json` |
+| Governor blobs | `save_gov_<id>.dat` |
+| Request log | `cs_server.log` |
+
+Both blob kinds are stored and returned verbatim, the server never parses one.
+Civ names live in memory for the life of the process, and coat-of-arms uploads
+are accepted and discarded, `getcoa` answers with a 1x1 placeholder PNG. Neither
+survives a restart, which is enough for local play and is a gap for a hosted
+galaxy.
+
+Multiplayer state is separate. `server/turn_store.py` holds a galaxy's turn blobs
+and player submissions behind one interface with three implementations, a
+directory, HTTP to `turn_server.py`, and Firestore plus Cloud Storage. That
+design and its open items are the [public beta plan](Public_Beta_Plan.md).
 
 ## The three client EXEs
 
@@ -210,3 +243,7 @@ the `inject_*.py` family for planting civs, designs, ships and orders.
 - [Development_Plan.md](Development_Plan.md), phases, priorities, backlog
 - [CosmicSupremacy_Reconstruction_Report.md](CosmicSupremacy_Reconstruction_Report.md), the full reverse-engineering reference
 - [CosmicSupremacy_Memory_Reconstruction_Report.md](CosmicSupremacy_Memory_Reconstruction_Report.md), memory layout and structures
+- [CosmicSupremacy_Stat_Tables.md](CosmicSupremacy_Stat_Tables.md), component, facility and
+  formula stats from the manual, joined to the object ids the client uses
+- [Singleplayer_UI_Checklist.md](Singleplayer_UI_Checklist.md), the human-eyes test pass for a
+  release build
