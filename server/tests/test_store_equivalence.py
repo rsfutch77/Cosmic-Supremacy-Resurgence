@@ -182,9 +182,17 @@ def run_sequence(store, label, turn=TURN):
           store.submissions(turn), {'DemoPlayer': MINE2})
     check(f'{label}: and the replacement is what one civ read gives back',
           store.submission('DemoPlayer', turn), MINE2)
+    check(f'{label}: the names-only accessor names the one who has submitted',
+          store.submitted_civs(turn), ['DemoPlayer'])
     store.submit('Neighbor', turn, THEIRS)
     check(f'{label}: another civ joins the list',
           store.submissions(turn), {'DemoPlayer': MINE2, 'Neighbor': THEIRS})
+    check(f'{label}: and joins the names, sorted',
+          store.submitted_civs(turn), ['DemoPlayer', 'Neighbor'])
+    check(f'{label}: the names are exactly the keys of the blobs',
+          store.submitted_civs(turn), sorted(store.submissions(turn)))
+    check(f'{label}: a turn nobody submitted for names nobody',
+          store.submitted_civs(turn + 1), [])
     # The point of the accessor: each civ gets their own bytes and nobody
     # else's, without a listing that a storage rule would have to grant.
     check(f'{label}: each civ reads their own submission',
@@ -254,11 +262,120 @@ def run_sequence(store, label, turn=TURN):
         'hash': store.state()['hash'],
         'blob': store.turn_blob(store.current()[0]),
         'submissions': store.submissions(turn),
+        'submitted_civs': store.submitted_civs(turn),
         'submission': store.submission('DemoPlayer', turn),
         'submission_missing': store.submission('Stranger', turn),
         'note': store.note('DemoPlayer', turn),
         'archive': store.archive_record(turn),
     }
+
+
+# ── what a names-only read is allowed to fetch ───────────────────────────────
+class CountingStore(TurnStore):
+    """A directory store that records every submission blob it reads.
+
+    Counting the fetches rather than checking the answer is the whole point.
+    `sorted(store.submissions(turn))` returns the right names, and returned the
+    right names before this was fixed; what was wrong was that it downloaded
+    every player's orders to produce them. A test that compared the answer
+    would have passed against the bug, which is how the bug lived in
+    `check_store.py` and `turn_server.py` long enough to be written down as H6.
+    """
+
+    def __init__(self, root):
+        TurnStore.__init__(self, root)
+        self.fetched = []
+
+    def submission(self, civ, turn):
+        self.fetched.append(civ)
+        return TurnStore.submission(self, civ, turn)
+
+    def submissions(self, turn):
+        d = self.submission_dir(turn)
+        if os.path.isdir(d):
+            self.fetched.extend(sorted(n[:-4] for n in os.listdir(d)
+                                       if n.endswith('.b64')))
+        return TurnStore.submissions(self, turn)
+
+
+def run_fetch_counts(tmp):
+    """H6, on both sides of the seam: names cost no blobs.
+
+    The service half is measured through the store `turn_server` is holding,
+    so what is counted is what the machine serving the route actually read off
+    disk. `HttpTurnStore` and `turn_server.py` are a matched pair and F3 is
+    what happens when one of them is fixed and the other is not.
+    """
+    import turn_server
+    print('names-only reads fetch no blobs')
+    root = os.path.join(tmp, 'galaxy_counts')
+    store = CountingStore(root)
+    store.start(BLOB1, ['DemoPlayer', 'Neighbor'], turn_seconds=1800)
+    store.submit('DemoPlayer', TURN, MINE)
+    store.submit('Neighbor', TURN, THEIRS)
+
+    store.fetched = []
+    names = store.submitted_civs(TURN)
+    check('directory: submitted_civs answers the names',
+          names, ['DemoPlayer', 'Neighbor'])
+    check('directory: and fetched no submission to do it', store.fetched, [])
+
+    store.fetched = []
+    store.submissions(TURN)
+    check('directory: the control, submissions does fetch both',
+          store.fetched, ['DemoPlayer', 'Neighbor'])
+
+    kept_store, kept_verbose = turn_server.STORE, turn_server.VERBOSE
+    turn_server.VERBOSE = False
+    httpd = turn_server.serve(root, '127.0.0.1', 0)
+    turn_server.STORE = store
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    try:
+        client = HttpTurnStore(f'http://127.0.0.1:{httpd.server_address[1]}')
+        store.fetched = []
+        check('http: the service answers /submissions with the names',
+              client.submitted_civs(TURN), ['DemoPlayer', 'Neighbor'])
+        check('http: and read no submission off disk to do it',
+              store.fetched, [])
+        store.fetched = []
+        check('http: has_submitted rides the same route',
+              client.has_submitted('Neighbor', TURN), True)
+        check('http: and cost no blob either', store.fetched, [])
+        store.fetched = []
+        check('http: the control, asking for the blobs does fetch them',
+              client.submissions(TURN),
+              {'DemoPlayer': MINE, 'Neighbor': THEIRS})
+        check('http: two of them', sorted(store.fetched),
+              ['DemoPlayer', 'Neighbor'])
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+        turn_server.STORE, turn_server.VERBOSE = kept_store, kept_verbose
+
+    # check_store.py prints the names and nothing else, so it is held to the
+    # same count. Its own store rather than the launcher's config, because the
+    # tool reads a spec when it is given one.
+    import check_store
+    counted = CountingStore(root)
+    counted.fetched = []
+    check('check_store: the tool it was recorded against reads names only',
+          counted.submitted_civs(TURN), ['DemoPlayer', 'Neighbor'])
+    check('check_store: fetching nothing', counted.fetched, [])
+    check('check_store: and the source no longer asks for the blobs',
+          'store.submissions(' in inspect_source(check_store), False)
+
+
+def inspect_source(module) -> str:
+    """A module's own text, for asserting on what it calls.
+
+    A source-order assertion rather than a stub, because what is being held
+    still is a call this test cannot reach: `check_store.main` wants a config,
+    a path and a console, and the thing worth pinning is that the expensive
+    call is not written there any more.
+    """
+    import inspect
+    return inspect.getsource(module)
 
 
 # ── the three runs ───────────────────────────────────────────────────────────
@@ -504,6 +621,8 @@ def main():
                   'This run does not say whether H1 is done.')
     if len(summaries) > 1:
         compare(summaries)
+    if 'dir' in want:
+        run_fetch_counts(tmp)
     check_factory()
 
     print(f'\n{len(PASS)} passed, {len(FAIL)} failed')

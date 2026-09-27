@@ -61,6 +61,18 @@ DESIGNS = [
 ]
 
 
+# A console child started from a windowed parent gets a console window of its
+# own, and this tool starts several per run. Its own constant rather than an
+# import, because the process helpers below are deliberately standalone copies
+# and `game_cycle` is only reached lazily, inside `seed`.
+CREATE_NO_WINDOW = 0x08000000
+
+
+def no_window() -> int:
+    """`creationflags` that hide a console child, and zero off Windows."""
+    return CREATE_NO_WINDOW if os.name == "nt" else 0
+
+
 def log(msg):
     print(msg, flush=True)
 
@@ -72,7 +84,7 @@ def client_pids():
          "Get-Process -Name 'CosmicSupremacy*' -ErrorAction SilentlyContinue "
          "| Where-Object { $_.ProcessName -ne 'CosmicSupremacyLauncher' } "
          "| Select-Object -ExpandProperty Id"],
-        capture_output=True, text=True).stdout
+        capture_output=True, text=True, creationflags=no_window()).stdout
     return [int(x) for x in out.split() if x.strip().isdigit()]
 
 
@@ -82,7 +94,8 @@ def close_client(timeout=20):
         return
     for pid in pids:
         subprocess.run(["powershell", "-NoProfile", "-Command",
-                        f"Stop-Process -Id {pid} -Force"], capture_output=True)
+                        f"Stop-Process -Id {pid} -Force"],
+                       capture_output=True, creationflags=no_window())
     deadline = time.time() + timeout
     while time.time() < deadline:
         if not client_pids():
@@ -142,7 +155,8 @@ def capture_save(name="spseed"):
     started = time.time() - 1
     r = subprocess.run([sys.executable, os.path.join(HERE, "trigger_save.py"),
                         "--name", name[:15]],
-                       capture_output=True, text=True, cwd=HERE)
+                       capture_output=True, text=True, cwd=HERE,
+                       creationflags=no_window())
     if "saved" not in r.stdout:
         log(r.stdout + r.stderr)
         raise SystemExit("SaveGame did not report success")
