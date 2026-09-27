@@ -440,7 +440,8 @@ consistent with everything visible, and wrong. The log said what had actually
 happened:
 
     multiplayer stopped: SaveGame succeeded but no capture appeared in
-    ...elease\data\saves; is the launcher's server running?
+    ...
+elease\data\saves; is the launcher's server running?
 
 **The launcher was reusing a foreign server.** A checkout `cs_server` was left
 running on 8888 from the referee testing. `_boot` found the port busy, confirmed
@@ -487,3 +488,85 @@ path works.
 - **The turn readout lingers after the game window closes.** It is a fact about
   a client that is gone; it should clear at once while the final submission
   finishes in the background.
+
+---
+
+## Second overnight push, 27 September 2026
+
+Four agents. Plan moved from 11 done / 11 partial / 5 open to **12 / 12 / 3**.
+
+### Needs the operator, in the order that unblocks most
+
+1. **Automatic logon**, `control userpasswords2`, clearing "Users must enter a
+   user name and password". Without it a reboot never reaches a desktop and the
+   unattended referee cannot draw the game. This is now the single thing between
+   a reboot and the galaxy resuming.
+2. **Register the scheduled task.** `.un_worker.ps1 -Store <galaxy> -Once` to
+   watch it decide nothing is due, then `-WriteTaskXml` and `schtasks /Create`.
+   Nothing was registered for you.
+3. **Reboot mid-galaxy and watch the next turn close.** That is N1's whole claim
+   and H3's, and nobody has done it.
+4. **Deploy the relay**, still, plus the one-time signing grant. Without it the
+   beta galaxy cannot take a join at all, see below.
+
+### The polling number was worse than H5 said
+
+Fixed, and the before column was **measured against the old file out of git**
+rather than calculated: 44,484 reads a day at four-hour turns, 104,064 at fifteen
+minutes, which is twice the whole free tier for one player. Now 888 and 7,872.
+
+**A second and larger reader was found that H5 never mentioned.** The launcher's
+countdown called `current()` and `seconds_left()` once a second while a game was
+open, 172,800 reads a day at fifteen-minute turns, more than the loop it reported
+on. Now one read per turn.
+
+### A boot-triggered task would have no desktop
+
+The finding that shaped N1. A task set to run whether or not a user is logged on
+runs in session 0, which has no desktop, so the worker would start perfectly at
+boot and fail four hours later when it tried to launch the game client. Hence a
+logon trigger, hence automatic logon being the operator's job.
+
+The worker also refuses to share port 8888 rather than adopting a stranger's
+`cs_server`, which is the same conclusion the launcher reached from the other
+side and for the same reason: nothing in the protocol can ask a running server
+where it writes.
+
+### J3 works, and its dead end is only half closed
+
+A join request becomes a seated empire at the next turn, verified live against a
+control run of the same turn with no join: every incumbent's planets, ships and
+`OWNR` bytes byte-identical.
+
+**But a refused player is still never told.** The reason is written to `notes/`
+and to `joins/done/<key>.json` and nothing reads either, because a refused player
+is on no roster and `player_turn.follow` never runs for them. Their row says
+"you have asked to join" forever, which is exactly where J3 started. It is a
+launcher change.
+
+**And only a folder store can take a join.** The beta galaxy is Firebase, which
+has no join route, so `send_join_request` raises there. That needs a relay route
+and a store method.
+
+**A balance decision nobody has made:** a joiner arrives with a homeworld, a
+shipyard and no hulls, so they start strictly behind anyone with a fleet.
+
+### Fixed a regression of my own
+
+The emulator storage-rules reference I added pointed outside the project and the
+Storage emulator refuses such a path, so the emulator went from failing for want
+of a rules file to failing for the path to one, which is worse because the second
+message does not name the fix. Rules are copied in now. **All emulators ready**,
+and `test_store_equivalence` then ran **196 passed with Firebase live**, closing
+the largest unverified item three agents in a row had carried.
+
+### Still recorded, still not done
+
+- `server/referee.py:268` spawns `advance_turns.py` on **every tick** without
+  `CREATE_NO_WINDOW`, so a console still flashes per turn. The client-side tools
+  are fixed; this one was in another agent's file.
+- `functions/relay.py` keeps its own copy of the names-only submission listing.
+  It agrees with the store's new `submitted_civs` by inspection, not by a shared
+  call or a test.
+- `operator_view`'s allowlist does not carry `submitted_civs`, which is exactly
+  the cheap accessor it wants.

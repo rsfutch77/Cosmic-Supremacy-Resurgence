@@ -55,6 +55,7 @@ import inject_civ as icv
 import merge_orders
 import canonical
 import abandonment
+import joins
 import turn_store
 from turn_store import TurnStore, open_store
 
@@ -336,9 +337,15 @@ def resolve_turn(store: TurnStore, save_dir=None, log=print) -> int:
     # next turn. The note goes in before the tick, which takes minutes, so it
     # is certainly there by the time a player's launcher sees the new turn and
     # goes looking for it.
+    #
+    # It adds to whatever that turn's note already holds rather than replacing
+    # it. A player seated at the previous boundary was left a note on this
+    # turn, which is the first turn they play and so the first one
+    # `player_turn.report_refusals` reads for them, and a replace here would
+    # take it away before they ever saw it.
     for civ, lines in sorted(notes.items()):
         try:
-            store.put_note(civ, turn, lines)
+            joins.append_note(store, civ, turn, lines, log=log)
             log(f"  referee: {len(lines)} refusal(s) noted for {civ}")
         except OSError as exc:
             # A note that cannot be written is not worth losing a turn over.
@@ -362,7 +369,23 @@ def resolve_turn(store: TurnStore, save_dir=None, log=print) -> int:
     # cannot do leaves the seat and is counted again next turn.
     nxt = abandonment.enforce(store, turn, nxt, log=log)
 
+    # Then seat whoever asked to join during the turn that just closed, on the
+    # same blob and for the same reason: a join applied anywhere but here is
+    # applied to a copy, and the next publish writes over it. Abandonment runs
+    # first because a reclaim frees planets and a name that a join in the same
+    # tick can then use, and because a wipe needs an uncolonised planet for its
+    # blank PLPR, which is the one thing a join consumes. See joins.py.
+    #
+    # `apply` changes bytes and nothing else. Every durable write is in
+    # `commit`, below the publish, so a referee killed between them leaves a
+    # galaxy holding an empire nobody is seated on, which an operator can
+    # answer by adding the name, rather than a roster naming a civ the galaxy
+    # does not hold, which every submission from that player then fails the
+    # screen for, turn after turn, with nothing to fix.
+    nxt, joined = joins.apply(store, turn, new_turn, nxt, log=log)
+
     store.publish(new_turn, nxt)
+    joins.commit(store, turn, new_turn, joined, log=log)
     store.archive(turn, {
         "turn": turn,
         "published": new_turn,
@@ -374,6 +397,12 @@ def resolve_turn(store: TurnStore, save_dir=None, log=print) -> int:
         # is the only place the operator can read why a player who says they
         # played is recorded as absent.
         "dropped": refused,
+        # Who joined at this boundary and who was refused one, which is the
+        # only place an operator can read why a player who pressed Join is not
+        # in the galaxy. The blob's own civ count says a join happened and
+        # never says whose request it was.
+        "joined": [{k: v for k, v in o.items() if k != "path"}
+                   for o in joined],
         "bytes_in": len(blob),
         "bytes_out": len(nxt),
         "closed_at": time.time(),
