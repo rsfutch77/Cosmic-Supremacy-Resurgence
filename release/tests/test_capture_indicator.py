@@ -359,5 +359,18 @@ check("the real launcher carries the waiting branch",
       "waiting for the next turn" in inspect.getsource(L.Launcher._watch_game),
       True)
 
+
+print()
+print("Play on the galaxy already being followed")
+src = inspect.getsource(L.Launcher._take_turn_loop)
+# The loop outlives the game window, so 'already playing' was told to a
+# player looking at a closed game. Fails if the refusal has one wording for
+# both states.
+check("the refusal asks whether the client is gone",
+      "mp_client_gone" in src, True)
+check("and says the turn was sent rather than that a game is open",
+      "already been " in src and "sent." in src, True)
+check("while a live client still reads as playing",
+      "You are already playing" in src, True)
 print("\n" + ("ALL PASSED" if not fails else f"FAILURES: {fails}"))
 sys.exit(1 if fails else 0)

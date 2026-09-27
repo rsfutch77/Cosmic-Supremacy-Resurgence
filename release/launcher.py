@@ -3051,9 +3051,23 @@ class Launcher:
             return True
         here = playing.get("name") or playing.get("store") or "a galaxy"
         if g is not None and same_store(playing.get("store"), g.store):
-            self.warn(f"You are already playing {here}.\n\nIts turns are "
-                      "being followed now, and the readout on the home page "
-                      "is this galaxy's.")
+            # "Already playing" is true of the loop and not of the game.
+            # The loop outlives the window: once a turn is sent it waits
+            # for the referee, and at four hours a turn that is most of the
+            # day. A player who closed the game themselves, and can see it
+            # is closed, was being told it was open.
+            if self.mp_client_gone:
+                turn = self.mp_turn
+                which = f' for turn {turn}' if turn else ''
+                self.warn(
+                    f"Your turn{which} in {here} has already been "
+                    f"sent.\n\nThe game opens again by itself when the "
+                    f"next turn is published, and this window is what is "
+                    f"waiting for it. There is nothing to do until then.")
+            else:
+                self.warn(f"You are already playing {here}.\n\nIts turns "
+                          "are being followed now, and the readout on "
+                          "the home page is this galaxy's.")
             return False
 
         from tkinter import messagebox
