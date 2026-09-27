@@ -111,143 +111,98 @@ def check_found():
 
 
 def check_the_five(body: str):
-    """Each of the five things N4 names has to be in there, in plain words."""
-    print('content: all five of the things a player has to be told')
-    low = flat(body)
-    check('content: a name is a claim, not a credential',
-          'not a password' in low and 'no account' in low)
-    check('content: cheating is possible and easy',
-          'cheating is possible' in low and 'easy' in low)
-    check('content: the whole galaxy is sent to every player',
-          'entire state of the galaxy' in low)
-    check('content: and a modified game sees all of it',
-          'modified copy' in low and 'whole map' in low)
-    check('content: an inactive empire is deleted',
-          'removed from the galaxy' in low and 'missed turns before deletion'
-          in low)
-    check('content: nobody inherits it, which is the part players assume',
-          'nobody inherits' in low)
-    check('content: the galaxy can be ended at any time',
-          'can end it' in low and 'no end date' in low)
-    check('content: and that nothing survives it',
-          'nothing you build here is permanent' in low)
-    check('content: the diagnostic copy is described',
-          'launcher' in low and 'log' in low)
+    """What the notice actually undertakes to say.
 
+    It used to assert all five of N4's topics plus the diagnostic copy. The
+    notice was rewritten to four short bullets by an editorial decision, and
+    asserting the old list against it would only record that the file no longer
+    matches a plan item. What is asserted instead is what this notice claims, so
+    that a later edit which drops one of these is still caught.
+
+    **What it no longer says**, recorded here rather than silently dropped: that
+    a name is a claim and not a credential, that every player holds the whole
+    galaxy and a modified client is a maphack, that nobody inherits a deleted
+    empire, and what leaves the player's computer. If any of those is meant to
+    reach a player it now has to reach them somewhere else. The maphack and the
+    data-collection points are the two worth being deliberate about.
+    """
+    print('content: what this notice undertakes to say')
+    low = flat(body).lower()
+    check('content: it asks players not to cheat', 'cheat' in low)
+    check('content: it says an absent player may be removed',
+          'miss' in low and ('kick' in low or 'remov' in low))
+    check('content: it warns the galaxy may be restarted',
+          'restart' in low and ('any time' in low or 'anytime' in low))
+    check('content: it says there may be serious bugs', 'bug' in low)
+    check('content: and where to report them', 'github.com' in low)
 
 def check_placeholders(body: str):
-    print('placeholders: undecided values read as blanks, not as numbers')
-    pending = beta_notice.unfilled(body)
-    check('placeholders: the warning threshold is a marker',
-          'warn_after_misses' in pending)
-    check('placeholders: the deletion threshold is a marker',
-          'reclaim_after_misses' in pending)
-    check('placeholders: whether the log is sent automatically is a marker',
-          'log_upload' in pending)
-    check('placeholders: no invented number stands next to a threshold',
-          re.search(r'miss \d+', flat(body)), None)
-    check('placeholders: every key is described for whoever fills it',
-          sorted(set(pending)), sorted(beta_notice.KEYS))
+    """No invented value, and no marker left showing.
 
-    print('placeholders: filling them, which is what the launcher does')
-    filled = beta_notice.fill({'warn_after_misses': 6,
-                               'reclaim_after_misses': 12,
-                               'log_upload': 'It is sent only when you ask'},
-                              body)
-    check('placeholders: a filled notice has none left',
-          beta_notice.unfilled(filled), [])
-    check('placeholders: and reads as a sentence',
-          'miss 6 turns in a row and the launcher will warn you'
-          in flat(filled))
-    # The control. A half-filled notice is as unfinished as an empty one, and
-    # a fill() that quietly dropped the markers it had no value for would hide
-    # exactly that.
-    half = beta_notice.fill({'warn_after_misses': 6}, body)
-    check('placeholders CONTROL: a half-filled notice still reports the rest',
-          beta_notice.unfilled(half),
-          ['reclaim_after_misses', 'log_upload'])
-    check('placeholders CONTROL: and the unfilled one still shows its marker',
-          'SET BEFORE THE BETA OPENS' in half)
-
-    print('placeholders: the thresholds belong to the code, not to this file')
-    try:
-        import abandonment
-    except ImportError:
-        check('placeholders: server/abandonment.py holds them', False)
-        return
-    warn, reclaim = abandonment.thresholds({})
-    check('placeholders: the store side really has a pair to fill them with',
-          isinstance(warn, int) and isinstance(reclaim, int))
-    check('placeholders: neither number is written into the notice',
-          str(warn) in body or str(reclaim) in body, False)
-
+    The two miss thresholds were markers here and are gone with the sentences
+    that carried them: the notice states no turn limits at all now, so there is
+    nothing per galaxy for it to be given. `log_upload` is the only key left and
+    M1 has still not settled it.
+    """
+    print('placeholders: nothing invented, nothing left showing')
+    check('placeholders: no marker survives in the shipped notice',
+          beta_notice.markers(body), [])
+    check('placeholders: log_upload is the only key still defined',
+          list(beta_notice.KEYS), ['log_upload'])
+    check('placeholders: and it is described for whoever fills it',
+          len(beta_notice.KEYS['log_upload']) > 20)
+    check('placeholders: nothing reports as unfilled',
+          beta_notice.unfilled(body), [])
+    check('placeholders CONTROL: a marker added back is seen',
+          beta_notice.unfilled(body + chr(10) +
+                               '[SET BEFORE THE BETA OPENS: x, a thing]'),
+          ['x'])
 
 def check_against_launcher(body: str):
-    print('log: the list matches the launcher\'s own, item for item')
-    if not os.path.exists(LAUNCHER):
-        check('log: release/launcher.py is readable', False)
-        return
-    src = read(LAUNCHER)
-    bullets = launcher_bullets(src)
-    check('log: the launcher still itemises what the copy contains',
-          len(bullets) > 0)
-    check('log: the notice lists the same number of things',
-          len(notice_bullets(body)), len(bullets))
+    """The notice no longer describes the diagnostic copy, so there is nothing
+    to hold item for item against the launcher's own list.
 
-    low = flat(body)
-    # One phrase per launcher bullet. A phrase rather than the whole sentence,
-    # because the notice is written for a player and the launcher's line is
-    # written for a programmer, and they are allowed to read differently.
-    for what, phrase in (
-            ('the player name', 'your player name'),
-            ('the galaxy and where it is', 'which galaxy you are playing'),
-            ('the referee machine in a UNC path', 'name of the machine'),
-            ('the save request head', 'the turn number'),
-            ('which modes ran', 'which parts of the game were started'),
-            ('the install layout', 'folder layout'),
-            ('the AI reasoning', "computer opponent's reasoning"),
-            ('timestamps', 'the time, to the second')):
-        check(f'log: the notice covers {what}', phrase in low)
+    This used to count the bullets in `launcher.py`'s redaction section and
+    require the notice to carry one phrase for each, so that a line added there
+    and not here failed. The rewritten notice does not mention the log at all.
+    That coupling is therefore gone, and with it the guarantee that what the
+    launcher collects is what a player was told it collects.
 
-    print('log: the two things M2 leaves unscrubbed are named')
-    check('log: a referee machine name in a path is named',
-          'stays in the path' in low)
-    check('log: an account name outside a path is named',
-          'is not a file path' in low)
-
-    print('log: the claims about the copy match the code')
-    check('log: the account name really is taken out of paths',
-          'USER_MARK' in src and 'scrub_paths' in src)
-    check('log: the notice says so', 'account name is taken out' in low)
-    check('log: there really is a cap', 'LOG_UPLOAD_CAP' in src)
-    check('log: and the tail really is what is kept',
-          '_keep_tail' in src and 'keeping the' in src)
-    check('log: the notice says the oldest part goes',
-          'oldest part is dropped' in low)
-    check('log: the notice does not quote a cap that could change',
-          '256' in body, False)
-
+    Recorded rather than deleted outright: if the diagnostic copy is ever sent
+    anywhere, M1, then somewhere has to say so and this check is the shape of
+    what should guard it.
+    """
+    print('log: the notice no longer describes the diagnostic copy')
+    low = flat(body).lower()
+    check('log: it makes no claim about what leaves the machine',
+          all(w not in low for w in ('log', 'upload', 'diagnostic')))
 
 def check_against_code(body: str):
+    """Every claim the notice makes has to be true of the code.
+
+    The list shrank with the notice. What it used to check, and cannot now,
+    is recorded in `check_the_five`: the anonymous id, the four-hour turn, that
+    nobody inherits a deleted empire, and that there is one galaxy with no
+    season timer are all things the notice no longer says. A notice that says
+    less needs fewer of these, and the rule that survives is the one that
+    matters: it must not say anything the code does not do.
+    """
     print('claims: the rest of the notice against the code it describes')
-    low = flat(body)
-    fb_auth = os.path.join(ROOT, 'server', 'fb_auth.py')
-    check('claims: an anonymous id really is registered',
-          os.path.exists(fb_auth) and 'accounts:signUp' in read(fb_auth))
-    check('claims: the notice says so', 'anonymous id' in low)
-    check('claims: and that the player never sees it', 'never see it' in low)
-
-    plan = read(PLAN) if os.path.exists(PLAN) else ''
-    check('claims: four hours is the decided turn length',
-          'turn length | 4 hours' in plan)
-    check('claims: the notice says four hours',
-          'a turn lasts four hours' in low)
-    check('claims: the seat is not passed on, which the plan decided',
-          'the seat is not passed to anyone' in plan)
-    check('claims: the notice says nobody inherits it', 'nobody inherits' in low)
-    check('claims: one galaxy, no season timer',
-          'no season timer' in plan and 'no season' in low)
-
+    low = flat(body).lower()
+    # An absent player really is removed, and by this code.
+    ab = os.path.join(ROOT, 'server', 'abandonment.py')
+    check('claims: an absent player really is removed',
+          os.path.exists(ab) and 'def enforce' in read(ab))
+    check('claims: and the notice says they may be', 'kick' in low or
+          'remov' in low)
+    # The galaxy really can be ended by the operator, and really is restartable.
+    ts = os.path.join(ROOT, 'server', 'turn_store.py')
+    check('claims: a galaxy really can be closed',
+          os.path.exists(ts) and 'def close' in read(ts))
+    check('claims: and the notice says it may be restarted',
+          'restart' in low)
+    check('claims: the notice invents no number', not any(
+        w in low for w in ('six turns', '6 turns', '12 turns', 'four hours')))
 
 def check_tone(body: str):
     print('tone: written for a player, not for this repo')
