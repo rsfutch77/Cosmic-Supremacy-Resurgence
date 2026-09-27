@@ -323,3 +323,51 @@ second civ to merge in both orderings.
 The control matters as much: a player who really does edit someone else's topic
 is still refused, and the refusal still names whose it is. Without that check the
 fix would be indistinguishable from deleting the rule.
+
+---
+
+## UI review, 26 September 2026
+
+The first review of anything built in the overnight push, on screen, by the
+operator. The Games panel was **rejected on shape** rather than on behaviour, so
+this is a redesign and not a patch.
+
+**What the screen showed that no test could.** Every check in
+`test_games_tab.py` and `test_join_gates.py` passed against a panel that was the
+wrong thing to have built. 96 and 89 checks say the rows render correct text; not
+one of them could say the player has no idea what to click. Worth remembering
+the next time a headless suite reads as coverage.
+
+**Findings:**
+
+- **A galaxy you are already in has no Play control.** The row says "you are in"
+  and offers nothing. This is a hole, not a preference: the sandbox could be
+  listed and not opened.
+- **The Multiplayer button's job is now unclear**, because there are two
+  overlapping entry points. With a `directory` configured and nothing joined it
+  has no galaxy to play and falls through to a roster refusal with a rename
+  prompt, which is what the operator actually hit. Nothing says "go and pick
+  one".
+- **Bottom padding of the Games box is 0** and matches nothing else in the
+  window.
+- **`Join` is the wrong word in the main window.** The modal is where a player
+  reads about the galaxy and confirms, so the row's button should say **View**.
+- The join modal itself was approved as it stands. Beta text edits are coming
+  from the operator separately.
+
+**Decided: option A.** The Multiplayer button becomes navigation to a Galaxies
+page holding a sortable table, with per-row View and Play, and a Back button to
+the home page. The Games panel comes out of the main window. Chosen over
+patching the panel because the sandbox is meant to become many galaxies, and a
+table with one row beats a panel that has to be rebuilt later.
+
+**A walkthrough error of mine, recorded because it wasted a step:** I asked the
+operator to test the reclaim refusal while `multiplayer.json` still pointed at
+the directory rather than at the lapsed galaxy, so they got the ordinary "no
+seat" path and a rename prompt instead. The test said nothing about the reclaim
+message. Repointed and retried.
+
+**Still not verified after this session:** the closed-galaxy refusal, the reclaim
+refusal now that it is pointed correctly, the operator view, and every frozen
+build path. The launcher under review is the checkout at `0.1.0+dev`, so the
+notice and the two new hidden imports remain unexercised in a real package.
