@@ -650,6 +650,27 @@ def follow(store: TurnStore, civ: str, poll: float = 5.0, rounds: int = 0,
                     # away and the one at the deadline still has to succeed or
                     # say why. SystemExit by name because that is what a failed
                     # `collect` raises, and it is not an Exception.
+                    #
+                    # Unless the game has gone, which is not transient and never
+                    # recovers. The first version of this cadence kept asking
+                    # every five seconds for the rest of the turn, filling the
+                    # log with `SaveGame did not report success` until somebody
+                    # stopped it by hand. The client is only looked for once a
+                    # capture has already failed, because a capture that worked
+                    # is the cheapest possible proof that it is still there and
+                    # `client_pids` costs a PowerShell process.
+                    import game_cycle as gc
+                    if not gc.client_pids():
+                        log(f"[{civ}] turn {turn}: the game has closed, "
+                            f"sending what was captured before it did")
+                        try:
+                            send(final=True)
+                        except Exception as bad:            # noqa: BLE001
+                            log(f"[{civ}] turn {turn}: LOST, {bad}")
+                            emit("lost", turn=turn, civ=civ, error=str(bad))
+                        else:
+                            emit("submitted", turn=turn, civ=civ, final=True)
+                        break
                     log(f"[{civ}] turn {turn}: could not capture, {exc}")
                     emit("capture_failed", turn=turn, civ=civ, error=str(exc))
 

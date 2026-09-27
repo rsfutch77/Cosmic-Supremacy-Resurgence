@@ -143,8 +143,11 @@ def run_turn(capture_every=5.0, uploads_per_turn=2, submit_every=None,
         done = sum(1 for e in edits_at if now - start >= e)
         return base + b'ORDER' * done
 
+    attempts = []
+
     def fake_collect(name, save_dir=None, log=print, announce=True):
         now = clock.now()
+        attempts.append(now - start)
         if close_at is not None and now - start >= close_at:
             raise SystemExit('SaveGame did not report success')
         blob = player_state(now)
@@ -162,6 +165,14 @@ def run_turn(capture_every=5.0, uploads_per_turn=2, submit_every=None,
     # `collect` hands back a path that `sp.load_any` reads. The fake hands back
     # the bytes themselves, so loading one is the identity.
     player_turn.sp = types.SimpleNamespace(load_any=lambda b: b)
+    # `follow` asks game_cycle whether the client is still there, but only once
+    # a capture has already failed. Stubbed so this answers for the fake client
+    # rather than reading whatever happens to be running on this machine.
+    import game_cycle
+    saved_pids = game_cycle.client_pids
+    game_cycle.client_pids = lambda: (
+        [] if close_at is not None and clock.now() - start >= close_at
+        else [4242])
     try:
         player_turn.follow(
             store, 'DemoPlayer', poll=poll, rounds=1,
@@ -173,7 +184,9 @@ def run_turn(capture_every=5.0, uploads_per_turn=2, submit_every=None,
         (player_turn.serve, player_turn.collect, player_turn.close,
          player_turn.carries_orders, player_turn.describe_orders,
          player_turn.sp) = saved
+        game_cycle.client_pids = saved_pids
     return types.SimpleNamespace(store=store, captures=captures,
+                                 attempts=attempts,
                                  uploads=store.writes, served=served,
                                  states=states, clock=clock, start=start,
                                  final=player_state(clock.now()))
@@ -306,6 +319,15 @@ def test_client_closing_does_not_lose_the_turn():
           r.uploads[-1][1], b'BASE' * 64 + b'ORDER')
     check('the loop does not call the turn lost',
           [k for _t, k, _f in r.states if k == 'lost'], [])
+    # The check that was missing, and the bug it would have caught: the first
+    # version kept asking a gone client for a capture every five seconds for
+    # the rest of the turn, about 40 times over the 200 seconds after it
+    # closed, logging `SaveGame did not report success` each time. Counting
+    # captures that succeeded cannot see that; only counting attempts can.
+    after = [t for t in r.attempts if t >= 400.0]
+    check('it stops asking a client that has gone', len(after), lambda n: n <= 1)
+    check('and the turn ends there rather than running to the deadline',
+          r.clock.now() - r.start, lambda t: t < 600.0)
 
 
 def test_indicator_states():
