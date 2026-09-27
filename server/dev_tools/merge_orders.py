@@ -1159,6 +1159,14 @@ def merge(blob, submissions, log=print, notes=None):
     served_ships = ship_index(blob)
     served_planets = planet_index(blob)
     served_designs = design_index(blob)
+    # Research as it was served, for the same reason the three indexes above are
+    # taken once: every player played offline against this state, so this is the
+    # only thing their submission can honestly be compared against. Reading it
+    # live instead falsely accuses the second player to merge in any turn where
+    # two of them changed topic, because by then the blob already carries the
+    # first one's new choice and the second one's copy is the old one.
+    served_research = {o['oid']: research_of(blob, o['oid'])
+                       for o in icv.owner_records(blob)}
     names = {o['oid']: o['name'] for o in icv.owner_records(blob)}
     accepted = dropped = 0
 
@@ -1446,18 +1454,24 @@ def merge(blob, submissions, log=print, notes=None):
 
             # research topic
             theirs = research_of(sub, mine)
-            served = research_of(blob, mine)
+            served = served_research.get(mine)
             if theirs is not None and served is not None and theirs != served:
                 blob = set_research(blob, mine, theirs)
                 topic = struct.unpack_from('<I', theirs[0], 0)[0]
                 log(f"    research: topic taken (id {topic})")
                 accepted += 1
 
-            # research belonging to anyone else
+            # research belonging to anyone else, against the state as served
+            # rather than against the blob as it stands. Nothing here ever
+            # writes another civ's research, so the accumulating blob differs
+            # from the served one only where an earlier submission in this same
+            # turn was honestly applied, and comparing against that told the
+            # second player to merge that they had touched the first player's
+            # topic when they had not.
             for other in (o for o in icv.owner_records(blob)
                           if o['oid'] != mine):
                 a = research_of(sub, other['oid'])
-                b = research_of(blob, other['oid'])
+                b = served_research.get(other['oid'])
                 if a is not None and b is not None and a != b:
                     drop(f"research: DROPPED, belongs to {other['name']}")
         except Exception as exc:                                # noqa: BLE001
