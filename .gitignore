@@ -66,8 +66,13 @@ site/public/
 site/.firebase/
 site/*.log
 referee_work/
+# What the unattended worker keeps about itself on one machine: its log, the
+# status file naming the process that holds a galaxy, and the stub server's
+# output. One machine's account of a run, not source.
+server/worker_work/
 server/fog_work/
 server/wipe_work/
 server/join_work/
+server/join_turn_work/
 # Galaxies built for looking at the launcher, per machine and throwaway.
 server/uidemo/
