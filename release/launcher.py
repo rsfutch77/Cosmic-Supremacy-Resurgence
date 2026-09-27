@@ -1331,7 +1331,7 @@ GALAXY_COLUMNS = (
     Column("name", "Galaxy", 132, _name_value, _name_text),
     Column("status", "Status", 64, _status_value, _status_text),
     Column("turn", "Turn", 46, _turn_value, _turn_text),
-    Column("left", "Time left", 84, _left_value, _left_text),
+    Column("left", "Next turn", 84, _left_value, _left_text),
     Column("players", "Players", 54, _players_value, _players_text),
     # Wide enough for the longest thing it says, "joining next turn". A
     # minsize narrower than the cell would let that column push the table
@@ -2633,8 +2633,6 @@ class Launcher:
                   relief="flat", bd=0, cursor="hand2", width=12,
                   font=("Segoe UI", 9, "bold"), command=win.destroy).pack(
                       side="right", padx=(6, 0))
-        tk.Label(row, text="Read this first. It is short, and it is all true.",
-                 bg=BG, fg=FAINT, font=("Segoe UI", 8)).pack(side="left")
 
         win.bind("<Escape>", lambda e: win.destroy())
         win.update_idletasks()

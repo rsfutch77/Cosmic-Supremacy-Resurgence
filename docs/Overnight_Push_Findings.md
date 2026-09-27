@@ -371,3 +371,63 @@ message. Repointed and retried.
 refusal now that it is pointed correctly, the operator view, and every frozen
 build path. The launcher under review is the checkout at `0.1.0+dev`, so the
 notice and the two new hidden imports remain unexercised in a real package.
+
+## Second UI review, 26 September 2026
+
+The Galaxies page was accepted. "The rest looks good on that window now."
+
+**Done from this round:** `Time left` is now `Next turn`. Joining several
+galaxies is being fixed, see below.
+
+### Windows Defender quarantines a build artifact, not the product
+
+`Exploit:Python/Leivion.C` on
+`client/dev_tools/__pycache__/trigger_save.cpython-312.pyc`, twice, on 20 and 26
+September. The diagnosis is not a false positive in the interesting sense:
+`trigger_save.py` really does use `OpenProcess`, `VirtualAllocEx`,
+`WriteProcessMemory` and `CreateRemoteThread` to make the client save on demand,
+which is textbook remote code injection and the only mechanism this path has for
+a save. Defender is describing what the file does.
+
+**What matters is which file.** Both detections name the **compiled bytecode** in
+a checkout `__pycache__`. The `.py` source beside it is not flagged. A frozen
+build has no `__pycache__` at all, and a full custom scan of
+`dist/CosmicSupremacy-Resurgence-v0.1.2` came back **clean, exe intact**. So this
+is a developer-machine problem and not, on this evidence, something a beta player
+meets.
+
+**NOT VERIFIED and worth knowing before the beta opens:** an on-disk scan is not
+behavioural detection. A packaged launcher that actually calls
+`CreateRemoteThread` into the game process at runtime could still be stopped, and
+nothing here has run a packaged save. That is the test, and it needs a real
+frozen build taking a real turn.
+
+A dev-side fix that needs no antivirus exclusion: stop writing bytecode for these
+tools, with `PYTHONDONTWRITEBYTECODE` or `sys.dont_write_bytecode`, so the file
+Defender objects to never exists. An exclusion would also work and is worse,
+since it trains the habit and hides the next thing.
+
+### Joining is membership; playing is a client constraint
+
+`joined.json` held one record, so joining a second galaxy offered to replace the
+first: "this launcher plays one galaxy at a time". Playing one at a time is real,
+one machine has one game process. Being a **member** of one at a time is not, and
+the restriction was sitting on the wrong verb.
+
+### Recorded, not yet investigated
+
+- **A lot of cmd windows appear when the sandbox launches.** Operator asked for
+  this as a later TODO. Likely subprocess calls without `CREATE_NO_WINDOW`, which
+  `stamp_build.py` already uses and the client tools mostly do not.
+- **A scientist reassignment did not survive closing and reopening the client.**
+  Resume is implemented: `player_turn.follow` reloads this civ's own submission
+  when `carries_orders` says it holds any, rather than re-serving the pristine
+  turn. So either no interim submission had been made in that window, or a job
+  reassignment is not what `carries_orders` counts. Needs reproduction with a
+  client before anything is changed, and the operator noted it may be waiting on
+  features anyway.
+- **Join on `lapsed` and `crowded` both answered "you have asked to join".**
+  Expected while J3 is unbuilt, since nothing on the server consumes a join
+  request. It also means the reclaim refusal on `lapsed` is still unverified: the
+  row offers View rather than Play, because a reclaimed player is no longer in
+  the roster.
