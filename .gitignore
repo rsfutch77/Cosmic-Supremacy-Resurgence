@@ -76,3 +76,5 @@ server/join_work/
 server/join_turn_work/
 # Galaxies built for looking at the launcher, per machine and throwaway.
 server/uidemo/
+# A scheduled task written for one machine and one galaxy path.
+referee_task.xml
