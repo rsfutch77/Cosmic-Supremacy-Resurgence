@@ -349,13 +349,16 @@ class _St:
         self.said.append((text, colour))
 
 
+READY = ("server running on 127.0.0.1:8888", "ok")
+
+
 def _status_for(sending, gone):
     """The branch as `_watch_game` runs it, with mp_live true and no client."""
     st = _St(sending, gone)
     if st.mp_sending:
         st._status_if_changed("sending your turn , keep this window open", "warn")
     elif st.mp_client_gone:
-        st._status_if_changed(f"Multiplayer , waiting for the next turn", "ok")
+        st._status_if_changed(*READY)
     else:
         st._status_if_changed(f"Multiplayer , {st.mp_civ}", "ok")
     return st.said[0][0]
@@ -368,12 +371,14 @@ check("playing names the civ", "DemoPlayer" in playing, True)
 # The bug: the loop stays alive between turns, so a closed game read as an open
 # one for hours. Fails if waiting and playing say the same thing.
 check("waiting does not read as playing", waiting == playing, False)
-check("and says what it is waiting for", "waiting" in waiting, True)
+check("and is the launcher's own ready line", waiting, READY[0])
+check("which says nothing about multiplayer",
+      "Multiplayer" in waiting, False)
 check("sending is distinct from both",
       sending not in (playing, waiting), True)
-check("the real launcher carries the waiting branch",
-      "waiting for the next turn" in inspect.getsource(L.Launcher._watch_game),
-      True)
+check("the real launcher falls back to its ready line",
+      "_status_if_changed(*self._ready)"
+      in inspect.getsource(L.Launcher._watch_game), True)
 
 
 print()

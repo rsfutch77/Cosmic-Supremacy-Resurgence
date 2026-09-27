@@ -3851,14 +3851,17 @@ class Launcher:
                 self._status_if_changed(
                     "Multiplayer , opening the game again", OK)
             elif mp_live and self.mp_client_gone:
-                # The loop outlives the game window: after a turn is sent it
-                # waits for the referee to publish the next one, which at four
-                # hours a turn is most of the day. Saying "Multiplayer , <civ>"
-                # through all of it reads as a game that is open, and the
-                # player closed it themselves and can see that it is not.
-                self._status_if_changed(
-                    f"Multiplayer , waiting for the next turn"
-                    if self.mp_civ else "Multiplayer , waiting", OK)
+                # The status line is the server's. It says what is running,
+                # and between turns nothing is: the loop is waiting for the
+                # referee, which at four hours a turn is most of the day. A
+                # green "Multiplayer" through all of it reads as a game
+                # session to a player who closed the game themselves.
+                #
+                # That the galaxy is still being followed is not lost, it is
+                # on the Games page, where the row for a galaxy you are in
+                # says so. This line goes back to what it says when the
+                # launcher has just opened and is only holding the port.
+                self._status_if_changed(*self._ready)
             elif mp_live:
                 self._status_if_changed(
                     f"Multiplayer , {self.mp_civ}" if self.mp_civ
