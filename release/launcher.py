@@ -2018,6 +2018,11 @@ class Launcher:
         self.mp_stop = False
         self.mp_note = ""
         self.mp_turn = None
+        # When this turn closes, as an absolute time. The turn loop reads the
+        # store on a schedule of its own and says how long is left with every
+        # `playing`, so the readout subtracts from this rather than asking the
+        # store once a second: see player_turn.POLL_SHARE for what one costs.
+        self.mp_deadline = None
         # What the loop last did with the player's state, and when: one of the
         # capture states above with a timestamp, or None before anything has
         # been captured. Recorded by _mp_state on the worker thread and painted
@@ -3296,6 +3301,7 @@ class Launcher:
                            else store_label(cfg["store"]),
                            "store": cfg["store"]}
         self.mp_stop = False
+        self.mp_deadline = None
         self.mp_capture = None
         self.mp_client_seen = False
         self.mp_client_gone = False
@@ -3320,6 +3326,10 @@ class Launcher:
             try:
                 player_turn.follow(
                     store, civ,
+                    # The floor of the read schedule rather than the whole of
+                    # it. The last stretch before a deadline is read this
+                    # often and the rest of the turn backs off towards
+                    # player_turn.POLL_CEILING.
                     poll=2.0,
                     on_state=self._mp_state,
                     save_dir=save_dir,
@@ -3343,6 +3353,11 @@ class Launcher:
         turn = facts.get("turn")
         if turn is not None:
             self.mp_turn = turn
+        left = facts.get("seconds_left")
+        if left is not None:
+            # `playing` carries this several times a turn, on the loop's own
+            # capture cadence, which is far more often than a countdown needs.
+            self.mp_deadline = time.time() + left
         if kind in ("playing", "waiting", "overtaken", "lost", "done",
                     "stopped", "failed", "serve_failed"):
             # The reopen has either happened or is not going to. Left standing
@@ -3418,6 +3433,7 @@ class Launcher:
         self.mp_playing = None
         self.mp_note = ""
         self.mp_turn = None
+        self.mp_deadline = None
         self.mp_capture = None
         self.mp_client_seen = False
         self.mp_client_gone = False
@@ -3676,9 +3692,22 @@ class Launcher:
                 # In multiplayer the clock belongs to the store, not to the
                 # client: the client's own countdown is held far into the
                 # future so it can never compute a turn the referee has not.
+                #
+                # It does not belong to this method either. Asking the store
+                # here is two Firestore document reads, and this runs once a
+                # second while a game window is open: 7,200 an hour against an
+                # allowance of 50,000 a day for the whole project, for a
+                # countdown whose only work is to subtract. The turn loop reads
+                # the store against the deadline and reports what it found, so
+                # this counts down from that and asks nothing.
                 try:
-                    turn, _deadline = self.mp_store.current()
-                    left = self.mp_store.seconds_left()
+                    if self.mp_turn is None or self.mp_deadline is None:
+                        # Nothing heard from the loop yet, which is the gap
+                        # between a galaxy being followed and its first turn
+                        # being served. One read answers it and is kept.
+                        self.mp_turn, self.mp_deadline = self.mp_store.current()
+                    turn = self.mp_turn
+                    left = self.mp_deadline - time.time()
                     label = f"turn {turn} \u00b7 {fmt_left(left)} left"
                     if self.mp_note:
                         label = f"turn {turn} \u00b7 {self.mp_note}"
