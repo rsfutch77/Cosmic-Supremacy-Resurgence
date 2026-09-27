@@ -51,6 +51,42 @@ from turn_store import TurnStore, open_store
 HOLD_SECONDS = 86400          # a day; long enough that no boundary arrives
 PLAYER_BUILD = "player"       # see game_cycle.resolve_exe for why
 
+# ── The two cadences a turn runs on ──────────────────────────────────────────
+# Taking a capture and sending one are not the same kind of act and must not
+# share an interval.
+#
+# A capture is a `SaveGame` in the client and a write to this disk. Nothing
+# meters it, so the only thing setting its interval is how much thought a
+# failure may cost and how often the client can be asked without the saves
+# overlapping. `collect` triggers the save and then looks for the file the stub
+# server wrote; the launcher's own Save allows 1.5 seconds for one to land, so
+# five seconds leaves the client alone between captures and still bounds the
+# loss at five seconds of play rather than twenty.
+#
+# Sending a capture to the store is a Cloud Storage Class A operation, and
+# docs\\Public_Beta_Plan.md H5 measures those as the binding quota for the whole
+# beta: 5,000 a month. Its own arithmetic is 182 four-hour turns a month and
+# 1,456 operations at six players saving once, so 1,092 of those are the
+# players (6 x 182) and the remaining 364 are the referee's two per tick. That
+# leaves 5,000 - 364 = 4,636 for players, and
+#
+#     4,636 / (182 turns x 10 players) = 2.5 uploads per player per turn
+#
+# at the ten players H5 names as the size that goes over at three saves each.
+# Two is therefore the budget, not a round number: ten players at two uploads a
+# turn is 364 + 3,640 = 4,004 operations, 80% of the allowance, and six players
+# is 2,548, half of it.
+#
+# The budget is per turn rather than per second, because that is how the quota
+# is actually spent, so the upload interval is derived from the turn a galaxy
+# publishes: a budget of two on a four-hour turn is one upload at the halfway
+# point and one at the deadline, and the same budget on a ten-minute test
+# galaxy is one at five minutes and one at the deadline. A capture identical to
+# what the store already holds is skipped either way, which is what keeps an
+# idle turn costing nothing at all.
+CAPTURE_EVERY = 5.0
+UPLOADS_PER_TURN = 2
+
 
 def hold_clock(seconds=HOLD_SECONDS, log=print):
     """Push the next turn boundary out of reach of a play session."""
@@ -204,12 +240,17 @@ def serve(blob: bytes, civ: str, work_dir=None, hold=HOLD_SECONDS,
     return dat
 
 
-def collect(name="player", save_dir=None, log=print) -> str:
+def collect(name="player", save_dir=None, log=print, announce=True) -> str:
     """Take the player's state back. Returns the capture path.
 
     `save_dir` is where the capture will land, which is wherever the stub server
     was told to keep its data. The launcher runs the server against its own data
     directory rather than the checkout's, so the caller has to say.
+
+    `announce` is off for the captures a turn takes on its own cadence. One
+    line per capture every few seconds buries the lines that matter in a log a
+    player is asked to read when something goes wrong. What failed is still
+    said: the failure path logs and raises whatever `announce` is.
     """
     import game_cycle as gc
     if save_dir is None:
@@ -230,7 +271,8 @@ def collect(name="player", save_dir=None, log=print) -> str:
         raise SystemExit(f"SaveGame succeeded but no capture appeared in "
                          f"{save_dir}; is the launcher's server running?")
     path = max(fresh, key=os.path.getmtime)
-    log(f"  captured {os.path.basename(path)}")
+    if announce:
+        log(f"  captured {os.path.basename(path)}")
     return path
 
 
@@ -274,7 +316,10 @@ def report_refusals(store: TurnStore, civ: str, turn: int, log=print,
 
 def follow(store: TurnStore, civ: str, poll: float = 5.0, rounds: int = 0,
            on_state=None, exe=PLAYER_BUILD, save_dir=None, stop=None,
-           submit_every: float = 20.0, log=print):
+           capture_every: float = CAPTURE_EVERY,
+           uploads_per_turn: int = UPLOADS_PER_TURN,
+           submit_every: float = None, send_now=None, log=print,
+           clock=time.time, sleep=time.sleep):
     """Play one civ's turns as the store publishes them.
 
     One pass is: serve the current turn, wait until its deadline, take the
@@ -289,19 +334,33 @@ def follow(store: TurnStore, civ: str, poll: float = 5.0, rounds: int = 0,
     loop between turns without killing the thread mid-capture and losing the
     player's orders.
 
-    **A player's state is submitted throughout the turn, every `submit_every`
-    seconds, not once at the deadline.** Submitting once put the whole turn on a
-    single write landing in a narrow window, and the first time two machines
-    played, one player's orders were lost to exactly that: their submission
-    never reached the store, and the referee closed the turn reporting a missing
-    player, which reads as somebody who did not turn up rather than a write that
-    failed. Writing continuously means the worst case is losing the last few
-    seconds of thought rather than the whole turn, and the store already treats
-    a second submission as replacing the first, since the latest is the
-    player's intent.
+    `send_now` is anything with `is_set()` and `clear()`, a `threading.Event` in
+    the launcher. Setting it captures and sends at once instead of waiting for
+    the next cadence, which is what the launcher's Save button means during a
+    multiplayer turn. It goes through here rather than through a second call
+    into the client, because this loop is already driving that client and two
+    things running `SaveGame` on one client at once is a race nobody can see.
 
-    A submission identical to the one already sent is skipped, so an idle turn
-    costs one write rather than one every interval.
+    **A player's state is captured and submitted throughout the turn, not once
+    at the deadline.** Submitting once put the whole turn on a single write
+    landing in a narrow window, and the first time two machines played, one
+    player's orders were lost to exactly that: their submission never reached
+    the store, and the referee closed the turn reporting a missing player, which
+    reads as somebody who did not turn up rather than a write that failed.
+
+    **The capture and the upload run on separate cadences**, because they cost
+    different things: see CAPTURE_EVERY and UPLOADS_PER_TURN above for the
+    quota arithmetic that sets them. `capture_every` seconds between captures,
+    `uploads_per_turn` uploads across the turn including the one at the
+    deadline, and the last capture of the turn is always sent before it closes.
+    `submit_every` overrides the derived upload interval with a fixed number of
+    seconds, which is what the command line's switch sets.
+
+    A capture identical to what the store already holds is not sent, so an idle
+    turn costs one upload rather than one per interval.
+
+    `clock` and `sleep` are the loop's own time. They are parameters so a test
+    can drive several intervals without waiting for them.
     """
     def emit(kind, **facts):
         if on_state:
@@ -310,13 +369,23 @@ def follow(store: TurnStore, civ: str, poll: float = 5.0, rounds: int = 0,
     def halted():
         return bool(stop and stop())
 
+    # Whether a turn is being played right now, which is the only time a
+    # request to send one can be acted on. Without it, a request made while the
+    # loop is waiting for the referee wakes every nap it ever takes and the
+    # wait becomes a spin on the store.
+    playing = [False]
+
+    def asked():
+        """Has a player asked for their turn to go now, and can it go?"""
+        return bool(playing[0] and send_now is not None and send_now.is_set())
+
     def nap(seconds):
-        """Sleep, but wake early if asked to stop."""
-        end = time.time() + seconds
-        while time.time() < end:
-            if halted():
+        """Sleep, but wake early if asked to stop or to send now."""
+        end = clock() + seconds
+        while clock() < end:
+            if halted() or asked():
                 return
-            time.sleep(min(0.5, max(0.0, end - time.time())))
+            sleep(min(0.5, max(0.0, end - clock())))
 
     played = 0
     while not halted():
@@ -410,14 +479,32 @@ def follow(store: TurnStore, civ: str, poll: float = 5.0, rounds: int = 0,
             continue
 
         sent = None                     # the last blob this turn actually stored
-        last_try = 0.0
+        held = None                     # the last blob taken out of the client
 
-        def push(final):
-            """Capture and store, returning what landed. Quiet unless it moves."""
+        def take(final=False):
+            """Capture the player's state to this disk. Metered nowhere.
+
+            Kept separate from `send` because that is the whole point of the
+            two cadences: this half can run often, and does.
+            """
+            nonlocal held
+            emit("capturing", turn=turn, civ=civ)
+            capture = collect(f"{civ[:8]}t{turn}", save_dir=save_dir, log=log,
+                              announce=final)
+            held = sp.load_any(capture)
+            emit("captured", turn=turn, civ=civ, pending=held != sent)
+            return held
+
+        def send(final):
+            """Store the last capture, if the store has not got it already.
+
+            This is the half that is metered, so it does nothing at all
+            for a capture the store already holds, which is what an idle
+            turn is made of.
+            """
             nonlocal sent
-            capture = collect(f"{civ[:8]}t{turn}", save_dir=save_dir, log=log)
-            mine = sp.load_any(capture)
-            if mine == sent:
+            mine = held
+            if mine is None or mine == sent:
                 return True
 
             # Refuse to replace a submission we did not write with one that
@@ -464,6 +551,50 @@ def follow(store: TurnStore, civ: str, poll: float = 5.0, rounds: int = 0,
             emit("submitted", turn=turn, civ=civ, final=final)
             return True
 
+        def push(final):
+            """Capture and store, which is what a deadline and a Save both mean."""
+            try:
+                take(final=final)
+            except BaseException as exc:                    # noqa: BLE001
+                # The client being gone is the ordinary way this fails at the
+                # deadline: the player closed the game window, so there is
+                # nothing left to ask for a save. The capture taken seconds
+                # before it closed is still theirs and still the turn, so send
+                # that rather than lose the turn to the window closing.
+                if final and held is not None:
+                    log(f"[{civ}] turn {turn}: could not take a last capture "
+                        f"({exc}); sending the {len(held):,} bytes already "
+                        f"captured")
+                else:
+                    raise
+            return send(final)
+
+        # How often this turn's uploads may go, from the turn's own length. The
+        # budget is per turn because that is how the quota is spent, so a
+        # galaxy with short turns does not spend more per turn than a galaxy
+        # with long ones.
+        try:
+            left0 = store.seconds_left()
+        except OSError:
+            left0 = None
+        if submit_every is not None:
+            gap = float(submit_every)
+        elif left0 and left0 > 0:
+            gap = max(capture_every, left0 / max(1, uploads_per_turn))
+        else:
+            # No readable clock to divide up. The upload at the deadline is the
+            # one this can still promise, and guessing an interval here is
+            # guessing with the month's quota.
+            gap = float("inf")
+        log(f"[{civ}] turn {turn}: capturing every {capture_every:g}s, "
+            + ("sending at the deadline only" if gap == float("inf")
+               else f"sending every {gap:g}s and again at the deadline"))
+
+        started = clock()
+        last_capture = started
+        last_upload = started
+        playing[0] = True
+
         while not halted():
             # A store read can fail transiently , the store lives on an SMB
             # share and the referee rewrites it from another machine. `state()`
@@ -501,19 +632,52 @@ def follow(store: TurnStore, civ: str, poll: float = 5.0, rounds: int = 0,
                     emit("lost", turn=turn, civ=civ, error=str(exc))
                 break
 
-            if time.time() - last_try >= submit_every:
-                last_try = time.time()
+            now = clock()
+            # A player who pressed Save is not waiting for either cadence. Both
+            # halves run at once for them, which is the whole of what the
+            # button means.
+            wanted = asked()
+            if wanted:
+                send_now.clear()
+                log(f"[{civ}] turn {turn}: sending now, you asked")
+
+            if wanted or now - last_capture >= capture_every:
+                last_capture = now
                 try:
-                    push(final=False)
+                    take()
+                except (Exception, SystemExit) as exc:      # noqa: BLE001
+                    # One failed capture is not a turn. The next one is seconds
+                    # away and the one at the deadline still has to succeed or
+                    # say why. SystemExit by name because that is what a failed
+                    # `collect` raises, and it is not an Exception.
+                    log(f"[{civ}] turn {turn}: could not capture, {exc}")
+                    emit("capture_failed", turn=turn, civ=civ, error=str(exc))
+
+            if wanted or now - last_upload >= gap:
+                last_upload = now
+                try:
+                    send(final=False)
                 except Exception as exc:                    # noqa: BLE001
                     # A failed interim write is worth saying and not worth
-                    # stopping for: the next one is seconds away, and the one at
-                    # the deadline still has to succeed or raise.
+                    # stopping for: the next one is a cadence away, and the one
+                    # at the deadline still has to succeed or raise.
                     log(f"[{civ}] turn {turn}: interim submit failed, {exc}")
 
             emit("playing", turn=turn, civ=civ, seconds_left=left)
-            nap(min(poll, left))
+            # Wake for whichever comes first: the next poll, the next capture,
+            # or the deadline. Sleeping a whole poll regardless would stretch
+            # the capture cadence to the poll above it, so a five-second
+            # capture on a two-second poll would really be every six.
+            due = last_capture + capture_every - clock()
+            nap(max(0.1, min(poll, due if due > 0 else capture_every, left)))
 
+        playing[0] = False
+        if send_now is not None:
+            # A request made in the last seconds of a turn has been served by
+            # the upload at the deadline, and one made after it names a turn
+            # that is closed. Either way it must not carry into the next turn
+            # and spend an upload on a turn nobody has played yet.
+            send_now.clear()
         close()
         played += 1
         if rounds and played >= rounds:
@@ -564,9 +728,17 @@ def main():
                    help="stop after this many turns; 0 keeps going")
     f.add_argument("--poll", type=float, default=5.0)
     f.add_argument("--exe", default=PLAYER_BUILD)
-    f.add_argument("--submit-every", type=float, default=20.0,
-                   help="seconds between interim submissions during a turn, so "
-                        "a turn never rests on one write at the deadline")
+    f.add_argument("--capture-every", type=float, default=CAPTURE_EVERY,
+                   help="seconds between captures, which cost nothing but a "
+                        "SaveGame and a local write")
+    f.add_argument("--uploads-per-turn", type=int, default=UPLOADS_PER_TURN,
+                   help="how many times a turn may be sent to the store, the "
+                        "one at the deadline included; the interval comes from "
+                        "the turn's own length")
+    f.add_argument("--submit-every", type=float,
+                   help="a fixed interval between uploads instead, in seconds, "
+                        "which spends the month's quota by the clock rather "
+                        "than by the turn")
 
     a = ap.parse_args()
     if a.cmd == "serve":
@@ -578,6 +750,8 @@ def main():
         if not store.exists():
             raise SystemExit(f"no galaxy at {a.store}")
         follow(store, a.civ, poll=a.poll, rounds=a.rounds, exe=a.exe,
+               capture_every=a.capture_every,
+               uploads_per_turn=a.uploads_per_turn,
                submit_every=a.submit_every)
 
 

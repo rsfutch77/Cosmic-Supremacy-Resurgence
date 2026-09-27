@@ -172,7 +172,11 @@ def port_is_free(host: str, port: int) -> bool:
 
 
 def stub_server_answers(host: str, port: int, timeout: float = 1.5) -> bool:
-    """True if whatever holds the port speaks our protocol (a dev server, say)."""
+    """True if whatever holds the port speaks our protocol (a dev server, say).
+
+    Asked only once the port is known to be taken, and only to name what has
+    taken it. It is not a licence to use that server: see `_boot`.
+    """
     import http.client
     conn = None
     try:
@@ -936,6 +940,25 @@ def fmt_left(seconds: float) -> str:
     if seconds >= 3600:
         return f"{seconds // 3600}h {seconds % 3600 // 60:02d}m"
     return f"{seconds // 60}:{seconds % 60:02d}"
+
+
+def fmt_ago(seconds: float) -> str:
+    """How long ago something happened, for a line that is repainted every
+    second.
+
+    Rounded rather than exact, because the question it answers is whether the
+    launcher is keeping up, not what the clock says. Anything under three
+    seconds is "just now": a number ticking 1, 2, 3 beside a status that is not
+    changing reads as a problem.
+    """
+    seconds = max(0.0, seconds)
+    if seconds < 3:
+        return "just now"
+    if seconds < 60:
+        return f"{int(seconds)}s ago"
+    if seconds < 3600:
+        return f"{int(seconds) // 60}m ago"
+    return f"{int(seconds) // 3600}h ago"
 
 
 # ── The galaxy directory ──────────────────────────────────────────────────────
@@ -1922,6 +1945,40 @@ PAGE_PACK = {"fill": "both", "expand": True, "padx": PAD_X,
 PAGE_WIDTH = (sum(c.width for c in GALAXY_COLUMNS) + ACTION_WIDTH
               + 2 * PANEL_PAD + 2)
 
+# ── The capture indicator ─────────────────────────────────────────────────────
+# What the turn loop last did with the player's work, beside the dot that says
+# the server is up. The question it answers is the one a player cannot answer
+# from the log: is what I have just done safe yet.
+#
+# Three states have to be distinguishable at a glance, because the player's next
+# move depends on which one it is. A capture running now means wait a moment. A
+# capture taken and not sent means the work is on this disk but not in the
+# galaxy, so closing the machine loses it. Sent means the galaxy has it and the
+# turn would survive this launcher being closed.
+CAPTURING = "capturing"     # the client is being asked for the player's state
+HELD = "held"               # captured here, not in the store yet
+SENT = "sent"               # the store holds everything captured
+CAPTURE_FAILED = "failed"   # the last capture did not come back
+
+
+def capture_readout(state, age: float):
+    """(text, colour) for the capture indicator, or ("", colour) to hide it.
+
+    `age` is how long ago the state was recorded. It is in the text for the two
+    states where staleness is the thing worth knowing: "sent 4m ago" on a turn
+    the player is still playing says the cadence is working, and the same line
+    frozen at "sent 40m ago" says it is not.
+    """
+    if state == CAPTURING:
+        return "saving your turn…", WARN
+    if state == HELD:
+        return f"saved here {fmt_ago(age)}, not sent yet", WARN
+    if state == SENT:
+        return f"turn sent {fmt_ago(age)}", OK
+    if state == CAPTURE_FAILED:
+        return "could not save your turn", BAD
+    return "", FAINT
+
 
 class Launcher:
     def __init__(self, root, cfg):
@@ -1961,6 +2018,23 @@ class Launcher:
         self.mp_stop = False
         self.mp_note = ""
         self.mp_turn = None
+        # What the loop last did with the player's state, and when: one of the
+        # capture states above with a timestamp, or None before anything has
+        # been captured. Recorded by _mp_state on the worker thread and painted
+        # by _refresh_turn on the Tk thread, which is the route mp_note already
+        # takes.
+        self.mp_capture = None
+        # Set by Save during a multiplayer turn, cleared by the loop when it
+        # acts on it. An Event rather than a second call into the client,
+        # because the loop is already driving that client.
+        self.mp_send_now = threading.Event()
+        # Whether the game client was up when the watcher last looked, so that
+        # it closing clears the turn readout at once rather than at the next
+        # poll, and whether the turn it was playing is still on its way to the
+        # galaxy afterwards.
+        self.mp_client_seen = False
+        self.mp_client_gone = False
+        self.mp_sending = False
         # The Galaxies page: which directory it lists, the store
         # multiplayer.json names outright, and whether a listing is in flight.
         # The directory is None when multiplayer.json names a store and no
@@ -1992,6 +2066,10 @@ class Launcher:
         # then , "server running", "port taken", "reusing the existing server" ,
         # rather than a guess.
         self._ready: "tuple[str, str]" = ("starting…", WARN)
+        # Whether THIS launcher's server is the one on the port. False while a
+        # foreign server holds it, which is a state multiplayer cannot run in:
+        # the turn would be captured into that server's data directory.
+        self.server_ok = False
         self.log_visible = False
         self.buttons: "list" = []
         self.game_root = self.galaxy_root = self.data_dir = None
@@ -2131,6 +2209,14 @@ class Launcher:
         self.status = tk.Label(status, text="starting…", bg=BG, fg=DIM,
                                font=("Segoe UI", 9))
         self.status.pack(side="left", padx=(6, 0))
+        # The capture indicator, beside the server's dot and built the same
+        # way. Packed only while a turn loop is running: outside multiplayer
+        # there is nothing being captured and an idle second dot reads as a
+        # second thing that could be wrong.
+        self.cap_dot = tk.Label(status, text="●", bg=BG, fg=FAINT,
+                                font=("Segoe UI", 11))
+        self.cap_status = tk.Label(status, text="", bg=BG, fg=DIM,
+                                   font=("Segoe UI", 9))
         self.log_btn = tk.Label(status, text="show log", bg=BG, fg=FAINT,
                                 font=("Segoe UI", 8, "underline"), cursor="hand2")
         self.log_btn.pack(side="right")
@@ -2222,18 +2308,35 @@ class Launcher:
         port = int(self.cfg["server"]["port"])
 
         if not port_is_free(host, port):
-            if stub_server_answers(host, port):
-                self.set_ready_status(f"using the server already on {host}:{port}", OK)
-                self.say(f"port {port} already serving our protocol , reusing it")
-                return
-            self.set_ready_status(f"port {port} is taken by something else", BAD)
-            self.say(f"port {port} is in use and did not answer testconnection")
+            # A server on this port that answers the protocol used to be reused.
+            # It cannot be: every capture a turn takes lands in whatever data
+            # directory THAT server was started with, and there is no message in
+            # the protocol to ask it which one. On the night of 25 September a
+            # checkout cs_server writing to server\saves held the port while
+            # this launcher looked in release\data\saves, and every turn died
+            # two seconds after serving with "SaveGame succeeded but no capture
+            # appeared , is the launcher's server running?", which was true of
+            # a server that was not this one. Half-working that way is worse
+            # than refusing, so this refuses.
+            ours = stub_server_answers(host, port)
+            self.set_ready_status(f"port {port} is held by another server", BAD)
+            self.say(f"port {port} is in use by "
+                     + ("a server speaking our protocol" if ours
+                        else "something that did not answer testconnection")
+                     + " , not reusing it")
             self.warn(
-                f"Port {port} is already in use by another program.\n\n"
-                "The game can only talk to that exact port, so TestBed will not "
-                "work until it is free. Tutorial and Demo are unaffected.\n\n"
-                "Close any other copy of this launcher, or any cs_server.py you "
-                "started yourself, and restart.")
+                f"Another server already holds port {port}.\n\n"
+                + ("It speaks this game's protocol, so it is probably a second "
+                   "copy of this launcher or a cs_server you started yourself. "
+                   "It cannot be shared: it keeps its saved turns in its own "
+                   "folder, this launcher would look for them in\n"
+                   f"{os.path.join(self.data_dir, 'saves')}\n\nand every turn "
+                   "would be captured somewhere this launcher never reads.\n\n"
+                   if ours else
+                   "The game can only talk to that exact port, so multiplayer "
+                   "and TestBed will not work until it is free. Tutorial and "
+                   "Demo are unaffected.\n\n")
+                + "Close it and start this launcher again.")
             return
 
         try:
@@ -2244,6 +2347,7 @@ class Launcher:
             self.say("server failed: " + "".join(
                 traceback.format_exception_only(type(exc), exc)).strip())
             return
+        self.server_ok = True
         self.set_ready_status(f"server running on {host}:{port}", OK)
         listening = ", ".join(
             f"{s.server_address[0]}:{s.server_address[1]}" for s in self.servers)
@@ -2984,8 +3088,19 @@ class Launcher:
         busy = running_clients(self.client_exes)
         if busy:
             self.warn("A Cosmic Supremacy game is already running "
-                      f"({', '.join(busy)}).\n\nClose it first: a multiplayer "
-                      "turn starts the game itself.")
+                      f"({', '.join(busy)}).\n\nClose it first.")
+            return
+
+        # Every capture this turn takes arrives through this launcher's own
+        # server, so a turn played without one is a turn that cannot be
+        # collected. The boot said why; saying it again here is the difference
+        # between a refusal and a turn that dies two seconds after it starts.
+        if not self.server_ok:
+            port = self.cfg["server"]["port"]
+            self.warn(
+                "This launcher's server is not running, so a turn played now "
+                "could not be saved.\n\nAnother server holds port "
+                f"{port}. Close it and start this launcher again.")
             return
 
         # The row the player pressed Play on, or, with no row, the galaxy this
@@ -3136,6 +3251,11 @@ class Launcher:
                            else store_label(cfg["store"]),
                            "store": cfg["store"]}
         self.mp_stop = False
+        self.mp_capture = None
+        self.mp_client_seen = False
+        self.mp_client_gone = False
+        self.mp_sending = False
+        self.mp_send_now.clear()
         self.running_mode = mode
         joined = cfg.get("joined")
         if joined and joined.get("name") and joined["name"] != civ:
@@ -3156,6 +3276,7 @@ class Launcher:
                     on_state=self._mp_state,
                     save_dir=save_dir,
                     stop=lambda: self.mp_stop,
+                    send_now=self.mp_send_now,
                     log=self.say_threadsafe)
             except BaseException as exc:            # noqa: BLE001
                 # A dead worker must say so. Silence here reads as "my turn is
@@ -3173,6 +3294,38 @@ class Launcher:
         turn = facts.get("turn")
         if turn is not None:
             self.mp_turn = turn
+
+        # The capture half of the readout. These arrive several times a turn
+        # and say nothing about which step of the turn is running, so they are
+        # recorded on their own and do not disturb the note beside the turn
+        # number. A capture that matches what the store already holds counts as
+        # sent, because that is what it means to the player: everything they
+        # have done is in the galaxy.
+        if kind == "capturing":
+            self.mp_capture = (CAPTURING, time.time())
+            return
+        if kind == "captured":
+            self.mp_capture = (HELD if facts.get("pending") else SENT,
+                               time.time())
+            return
+        if kind == "capture_failed":
+            self.mp_capture = (CAPTURE_FAILED, time.time())
+            return
+        if kind == "submitted":
+            self.mp_capture = (SENT, time.time())
+            if facts.get("final"):
+                self.mp_sending = False
+        elif kind in ("waiting", "overtaken", "lost", "serving", "done",
+                      "stopped", "failed"):
+            # The turn is over, however it ended, so nothing is still on its
+            # way. Left standing, "sending your turn" would sit there for the
+            # whole gap between turns.
+            self.mp_sending = False
+        if kind == "serving":
+            # A new turn: nothing of it has been captured yet, and leaving the
+            # last turn's "turn sent" standing would say the new one is safe.
+            self.mp_capture = None
+
         self.mp_note = {
             "serving": "starting your turn",
             "playing": "",
@@ -3201,6 +3354,12 @@ class Launcher:
         self.mp_playing = None
         self.mp_note = ""
         self.mp_turn = None
+        self.mp_capture = None
+        self.mp_client_seen = False
+        self.mp_client_gone = False
+        self.mp_sending = False
+        self.mp_send_now.clear()
+        self._show_capture(None, 0.0)
 
     def start_ai(self, mode):
         """Start the opponent, and say clearly if there is not one to start."""
@@ -3297,6 +3456,24 @@ class Launcher:
         self._in_background("ending the turn", work)
 
     def on_save(self):
+        """Save, which means two different things and says which one it means.
+
+        In single player it writes a .dat the player can load again. During a
+        multiplayer turn it means send my turn now: the turn loop is already
+        driving this client on its own cadence, and a second SaveGame into
+        data\\games would be a file nothing reads, taken from a client another
+        thread is saving at the same moment. The loop is asked instead, which
+        is why the two can never run at once against one client , the loop is
+        the only thing that ever calls SaveGame while it is running.
+
+        That is also the answer to waiting for the upload cadence. A player who
+        has just done something they care about presses this and it goes.
+        """
+        if self.playing_now() is not None:
+            self.mp_send_now.set()
+            self.say("multiplayer: sending your turn now")
+            return
+
         import gamectl
         save_dir = os.path.join(self.data_dir, "saves")
         dat_dir = os.path.join(self.data_dir, "games")
@@ -3405,29 +3582,48 @@ class Launcher:
         """
         import gamectl
         if self.mp_store is not None:
-            # In multiplayer the clock belongs to the store, not to the client:
-            # the client's own countdown is held far into the future so it can
-            # never compute a turn the referee has not.
-            try:
-                turn, _deadline = self.mp_store.current()
-                left = self.mp_store.seconds_left()
-                label = f"turn {turn} \u00b7 {fmt_left(left)} left"
-                if self.mp_note:
-                    label = f"turn {turn} \u00b7 {self.mp_note}"
+            state, when = self.mp_capture or (None, time.time())
+            self._show_capture(state, time.time() - when)
+            if self.mp_client_gone:
+                # The turn number and the countdown are facts about a client
+                # that has gone. Holding them on screen until the next poll
+                # tells the player their turn is still open when it is not,
+                # and the one thing they do need to know instead is whether
+                # the launcher is still sending it.
+                label = ("sending your turn" if self.mp_sending
+                         else self.mp_note or "waiting for the next turn")
                 if self.turn_label.cget("text") != label:
                     self.turn_label.configure(text=label)
-            except Exception:
-                pass
+            else:
+                # In multiplayer the clock belongs to the store, not to the
+                # client: the client's own countdown is held far into the
+                # future so it can never compute a turn the referee has not.
+                try:
+                    turn, _deadline = self.mp_store.current()
+                    left = self.mp_store.seconds_left()
+                    label = f"turn {turn} \u00b7 {fmt_left(left)} left"
+                    if self.mp_note:
+                        label = f"turn {turn} \u00b7 {self.mp_note}"
+                    if self.turn_label.cget("text") != label:
+                        self.turn_label.configure(text=label)
+                except Exception:
+                    pass
             for key, btn in self.ctl_buttons.items():
-                # Save and Next Turn are meaningless here. The launcher submits
-                # at the deadline, and a player who ends their own turn early
-                # would be asking for a state the referee has not computed.
-                want = "disabled" if key in ("turn", "load") else "normal"
+                # Next Turn and Load are meaningless here. The referee owns the
+                # clock, and a player who ends their own turn early would be
+                # asking for a state it has not computed. Save stays, and means
+                # send this turn now: see on_save.
+                # Save is the one that comes and goes: there is a turn to
+                # send only while a client is up to take it from.
+                live = key == "save" and not self.mp_client_gone
+                want = "normal" if live else "disabled"
                 if btn.cget("state") != want:
                     btn.configure(state=want,
                                   bg=BTN if want == "normal" else FAINT,
                                   cursor="hand2" if want == "normal" else "")
+            self._set_save_text("Send Turn")
             return
+        self._set_save_text("Save")
         try:
             if self._ctl_client is None:
                 pid, _n = gamectl.find_client()
@@ -3455,6 +3651,33 @@ class Launcher:
                                   cursor="hand2" if ready else "")
         except Exception:
             self._close_ctl_client()    # a readout is not worth an error path
+
+    def _set_save_text(self, text: str):
+        """Name what the Save button will actually do, once."""
+        btn = self.ctl_buttons.get("save")
+        if btn is not None and btn.cget("text") != text:
+            btn.configure(text=text)
+
+    def _show_capture(self, state, age: float):
+        """Paint the capture indicator, or take it away when there is none.
+
+        Packed and unpacked rather than blanked, so that a launcher with no
+        turn loop running shows one dot and one status, which is what it had
+        before any of this.
+        """
+        text, colour = capture_readout(state, age)
+        if not text:
+            if self.cap_dot.winfo_ismapped():
+                self.cap_status.pack_forget()
+                self.cap_dot.pack_forget()
+            return
+        if not self.cap_dot.winfo_ismapped():
+            self.cap_dot.pack(side="left", padx=(16, 0))
+            self.cap_status.pack(side="left", padx=(6, 0))
+        if self.cap_status.cget("text") != text:
+            self.cap_status.configure(text=text)
+        if self.cap_dot.cget("fg") != colour:
+            self.cap_dot.configure(fg=colour)
 
     def _close_ctl_client(self):
         if self._ctl_client is not None:
@@ -3547,11 +3770,21 @@ class Launcher:
             self.say(f"opponent exited (code {code}) , the other empire will "
                      f"not take any more turns")
 
+        mp_live = self.mp_thread is not None and self.mp_thread.is_alive()
         if self.child is not None and self.running_mode is not None:
             self._status_if_changed(f"{_short(self.running_mode)} is running", OK)
         else:
             busy = running_clients(self.client_exes)
-            if busy:
+            if mp_live:
+                self._watch_mp_client(bool(busy))
+            if mp_live and self.mp_sending:
+                self._status_if_changed(
+                    "sending your turn , keep this window open", WARN)
+            elif mp_live:
+                self._status_if_changed(
+                    f"Multiplayer , {self.mp_civ}" if self.mp_civ
+                    else "Multiplayer", OK)
+            elif busy:
                 self._status_if_changed(f"{self._name_for(busy)} is running", OK)
             else:
                 self._status_if_changed(*self._ready)
@@ -3559,17 +3792,40 @@ class Launcher:
         # The controls belong to a running game, and only to a mode that asked
         # for them: Tutorial and Demo have their own UI and must not grow a
         # Next Turn button that means nothing there.
-        if self.mp_thread is not None and self.mp_thread.is_alive():
+        if mp_live:
             self._show_controls(True)
             self._refresh_turn()
             self.root.after(1000, self._watch_game)
             return
+        self._show_capture(None, 0.0)
         wants = bool(self.running_mode and self.running_mode.get("controls")
                      and self.child is not None)
         self._show_controls(wants)
         if wants:
             self._refresh_turn()
         self.root.after(1000, self._watch_game)
+
+    def _watch_mp_client(self, up: bool):
+        """Notice the multiplayer client coming and going.
+
+        The turn loop starts its own client, so there is no child handle to
+        watch and the only evidence is the process list this already reads once
+        a second. What it is for is the moment the player closes the game
+        window: the readout is a fact about that client and has to go at once,
+        while the final capture and its submission carry on behind it.
+        """
+        if up:
+            self.mp_client_seen = True
+            self.mp_client_gone = False
+            return
+        if self.mp_client_seen:
+            self.mp_client_seen = False
+            self.mp_client_gone = True
+            # The last capture and its submission run on the worker thread and
+            # are not waited for here: the readout goes now, the sending says
+            # so until the loop reports the turn finished.
+            self.mp_sending = True
+            self.say("multiplayer: the game has closed, sending your turn")
 
     def _name_for(self, exe_names) -> str:
         """
