@@ -154,38 +154,49 @@ check("no uid without minting", L.install_uid(quiet), None)
 check("and nothing was written for one",
       os.path.exists(os.path.join(quiet, "fb_identity.json")), False)
 
-print("\n6. the row a galaxy shows as")
+print("\n6. the cells a galaxy's row prints")
+# Rewritten from the one-line summary the old Games panel drew. The panel is
+# gone and the page draws a table, so each rule the sentence carried is
+# asserted against the cell that carries it now.
 now = 1_000_000.0
-line = L.galaxy_line(row(deadline=now + 3660, players=5), now=now)
-for want in ("Sandbox", "open", "turn 4", "1h 01m left", "5 players"):
-    check(f"the row says {want!r}", want in line, True)
-check("a forming galaxy shows no turn and no clock",
-      L.galaxy_line(row(status="forming", turn=None, deadline=None,
-                        players=0), now=now),
-      "Sandbox \u00b7 forming \u00b7 no players yet")
-check("one player is not '1 players'",
-      "1 player \u00b7" in L.galaxy_line(row(players=1, deadline=now + 60,
-                                             joined=True), now=now), True)
-check("an overdue turn says so",
-      "time is up" in L.galaxy_line(row(deadline=now - 5), now=now), True)
-check("a galaxy this player is in says so",
-      "you are in" in L.galaxy_line(row(joined=True), now=now), True)
-check("having played this turn is shown",
-      "you have played this turn" in L.galaxy_line(row(joined=True),
-                                                   submitted=True, now=now),
-      True)
-check("and not having played is shown",
-      "your turn is waiting" in L.galaxy_line(row(joined=True),
-                                              submitted=False, now=now), True)
-check("a galaxy nobody here has joined claims nothing",
-      "you" in L.galaxy_line(row(), now=now), False)
-check("a join that has not landed yet says when it will",
-      "you join at the next turn" in L.galaxy_line(row(), pending=True,
-                                                   now=now), True)
 
-print("\n7. which rows offer a Join")
+
+def cells(g, **kw):
+    """What one row prints, column by column."""
+    view = L.View(now=now, **kw)
+    return {c.key: c.text(g, view) for c in L.GALAXY_COLUMNS}
+
+
+live = cells(row(deadline=now + 3660, players=5))
+check("the name cell", live["name"], "Sandbox")
+check("the status cell", live["status"], "open")
+check("the turn cell", live["turn"], "4")
+check("the countdown cell", live["left"], "1h 01m left")
+check("the player count cell", live["players"], "5")
+forming = cells(row(status="forming", turn=None, deadline=None, players=0))
+check("a forming galaxy prints no turn", forming["turn"], "")
+check("and no clock", forming["left"], "")
+check("and says what it is", forming["status"], "forming")
+check("and counts nobody", forming["players"], "0")
+check("an overdue turn says so", cells(row(deadline=now - 5))["left"],
+      "time is up")
+check("a galaxy this player is in says so",
+      cells(row(joined=True))["you"], "you are in")
 mine = {"galaxy": "sandbox", "store": "x", "name": "Alice"}
-check("an open galaxy does", L.joinable(row()), True)
+check("having played this turn is shown",
+      cells(row(joined=True), rec=mine, submitted=True)["you"], "turn played")
+check("and not having played is shown",
+      cells(row(joined=True), rec=mine, submitted=False)["you"], "your turn")
+check("a readout for another galaxy is not read into this row",
+      cells(row(gid="other", joined=True), rec=mine, submitted=True)["you"],
+      "you are in")
+check("a galaxy nobody here has joined claims nothing",
+      cells(row())["you"], "")
+check("a join that has not landed yet says when it will",
+      cells(row(), rec=mine)["you"], "joining next turn")
+
+print("\n7. which control a row offers")
+check("an open galaxy takes a join", L.joinable(row()), True)
 check("a forming one does not", L.joinable(row(status="forming")), False)
 check("a closed one does not", L.joinable(row(status="closed")), False)
 check("one this player is in does not", L.joinable(row(joined=True)), False)
@@ -196,6 +207,16 @@ check("and stops being pending once the seat exists",
       L.pending_join(row(joined=True), mine), False)
 check("a record for another galaxy is not this row's",
       L.pending_join(row(gid="other"), mine), False)
+check("a galaxy you could join is offered View", L.row_action(row()), L.VIEW)
+check("a galaxy you are in is offered Play",
+      L.row_action(row(joined=True)), L.PLAY)
+check("a forming galaxy is offered neither",
+      L.row_action(row(status="forming")), None)
+check("a closed one is offered neither",
+      L.row_action(row(status="closed")), None)
+check("nor a closed one you are in",
+      L.row_action(row(status="closed", joined=True)), None)
+check("nor one you have already asked for", L.row_action(row(), mine), None)
 
 print("\n8. a seat belongs to the install that claimed it")
 seats = ["Alice", "Bob", "Carol"]

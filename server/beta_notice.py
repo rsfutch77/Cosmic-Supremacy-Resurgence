@@ -63,14 +63,12 @@ UNFILLED = re.compile(r'\[SET BEFORE THE BETA OPENS:\s*([A-Za-z_]+),[^\]]*\]')
 
 # What each key is, and where its value comes from. Named here so a caller can
 # see what it has to supply without reading the notice for the list.
+# The two miss thresholds used to live here as well. They were removed with the
+# markers that referenced them: the notice states no turn limits by a deliberate
+# editorial decision, and they are explained somewhere else. A key with no
+# marker in the text is dead weight, and worse, it reads as though the notice
+# says something it does not.
 KEYS = {
-    'warn_after_misses':
-        'consecutive missed turns before the player is warned, which is the '
-        'first of abandonment.thresholds(store.state()) for the galaxy being '
-        'joined',
-    'reclaim_after_misses':
-        'consecutive missed turns before the empire is deleted, the second of '
-        'that pair for the same galaxy',
     'log_upload':
         'one clause saying whether the redacted log copy is sent '
         'automatically or only when the player chooses to send it, which is '

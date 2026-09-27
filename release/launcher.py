@@ -13,6 +13,7 @@ import sys
 import threading
 import time
 import traceback
+import typing
 
 CREATE_NO_WINDOW = 0x08000000
 APP_DIRNAME = "CosmicSupremacyResurgence"
@@ -515,6 +516,12 @@ CLOSED = "closed"
 CLOSED_REASON_KEY = "closed_reason"
 RECLAIMED_KEY = "reclaimed"
 
+# The other two words a listing uses. `forming` is not a status anything
+# writes: it is what a directory calls a galaxy whose store has no first turn
+# yet. They are here because the table orders and colours rows by them.
+OPEN = "open"
+FORMING = "forming"
+
 
 def reclaimed_seat(state, name: str):
     """What became of this player's own seat, or None if nothing did.
@@ -583,10 +590,8 @@ def roster_problem(name: str, civs, reclaimed=None):
                  " after 1 missed turn" if missed == 1 else
                  f" after {missed} missed turns in a row")
         return (f"This galaxy took the seat {name!r} back{when}{after}.\n\n"
-                "An empire that stops playing is removed rather than left for "
-                "the galaxy to fill up with, so its planets are unowned again "
-                "and its ships are gone.\n\nNothing of it is left to return "
-                "to. Joining from the Games list starts a new empire.")
+                "An empire that stops playing is removed so its "
+                "planets are freed up for others. ")
     near = next((c for c in seats if str(c).lower() == name.lower()), None)
     if near is not None:
         return (f"This galaxy spells your seat {near!r} and you are calling "
@@ -742,7 +747,7 @@ def closed_problem(state) -> "str | None":
     said = f"\n\n{reason}" if isinstance(reason, str) and reason.strip() else ""
     return (f"This galaxy has been closed.{said}\n\nIt still reads, so its "
             "turns are all still there, but it takes no more of them and a "
-            "turn played into it would be refused.\n\nThe Games list shows "
+            "turn played into it would be refused.\n\nThe Galaxies list shows "
             "whatever else is running.")
 
 
@@ -946,16 +951,16 @@ def fmt_left(seconds: float) -> str:
 JOINED_FILE = "joined.json"
 
 # The directory listed when nothing names another one. A player who has never
-# opened a config file gets this, which is the whole point of the Games tab.
+# opened a config file gets this, which is the point of the Galaxies page.
 BETA_DIRECTORY = "firebase://cs-resurgence"
 
 # Where a join request goes in a galaxy that is a folder. A store that knows its
 # own route is asked instead: see send_join_request.
 JOIN_DIR = "joins"
 
-# How often the tab re-lists by itself. A listing is one query and the launcher
-# is one of many, so this is slow on purpose: the countdown a row shows is worth
-# less than the reads a faster poll would spend.
+# How often the page re-lists by itself. A listing is one query and the
+# launcher is one of many, so this is slow on purpose: the countdown a row
+# shows is worth less than the reads a faster poll would spend.
 GAMES_POLL_MS = 120000
 
 
@@ -975,6 +980,26 @@ def directory_spec(cfg, mp_cfg=None) -> str:
         if isinstance(spec, str) and spec.strip():
             return spec.strip()
     return BETA_DIRECTORY
+
+
+def directory_to_list(cfg, mp_cfg=None):
+    """Which directory the Galaxies page lists, or None when there is not one.
+
+    A multiplayer.json that names a `directory` is listed whatever else it
+    names, so a player who pointed the launcher at one galaxy by hand still
+    sees the rest of them beside it.
+
+    A multiplayer.json that names only a `store` reaches no directory at all.
+    That is the folder and LAN path, which runs with no identity and no
+    network call, and falling back to the beta's directory for it would be a
+    query nobody asked for on a machine that may well be offline.
+    """
+    named = (mp_cfg or {}).get("directory")
+    if isinstance(named, str) and named.strip():
+        return named.strip()
+    if (mp_cfg or {}).get("store"):
+        return None
+    return directory_spec(cfg, mp_cfg)
 
 
 def open_galaxy_directory(spec: str):
@@ -1060,7 +1085,7 @@ def galaxy_to_play(data_dir: str):
     """The galaxy this launcher plays, shaped like a multiplayer.json, or None.
 
     multiplayer.json wins when it names a store: a folder or a LAN referee is a
-    galaxy somebody chose outright, and a Games tab must not take it from them.
+    galaxy somebody chose outright, and a listing must not take it from them.
     Otherwise it is the one the player joined, and the `joined` key carries that
     record so the caller can tell which name the seat was asked for under.
     """
@@ -1162,45 +1187,341 @@ def pending_join(g, rec) -> bool:
 
 
 def joinable(g, rec=None) -> bool:
-    """Whether the Games tab offers a Join for this galaxy.
+    """Whether this galaxy would take a join request from this player.
 
     Only an open galaxy takes new players. One that is forming has no first
     turn for a worker to merge a join into, and a closed one has stopped taking
-    them and is still listed, which is why the answer is a button being absent
+    them and is still listed, which is why the answer is a control being absent
     rather than the row being absent.
     """
     if g.joined or pending_join(g, rec):
         return False
-    return g.status == "open"
+    return g.status == OPEN
 
 
-def galaxy_line(g, submitted=None, pending=False, now=None) -> str:
-    """One galaxy as the Games tab shows it: what it is and where it is up to.
+# ── The table the Galaxies page draws ────────────────────────────────────────
+# One row per galaxy, sorted by whatever column the player clicked. A column is
+# two halves that are deliberately not the same thing: the value it orders by,
+# and the text it prints. Those disagree wherever the text is written for a
+# player, which is nearly everywhere , turn 9 sorts below turn 11 but prints
+# above it, "1h 04m left" prints above "9:30" and is further away, and "you are
+# in" prints after "joining next turn" while being the row that matters more.
+# So the table sorts on the value and never on the cell.
+PLAY = "play"
+VIEW = "view"
+ACTION_TEXT = {PLAY: "Play", VIEW: "View"}
 
-    A galaxy that is forming has no turn and no deadline, so those parts are
-    left out rather than printed empty: the status word is already the answer.
+# How far along a galaxy is, which is what the status column orders by. Not the
+# spelling of the word: alphabetically the closed galaxies come first, which is
+# the wrong end of a list of what there is to play.
+STATUS_ORDER = (OPEN, FORMING, CLOSED)
 
-    A closed galaxy keeps its row, which is what K5 asks of it, and says in the
-    row that it has stopped. Its clock is left out as well: a closed galaxy's
-    deadline is whenever it was when the operator ended it, and a countdown
-    beside it says a turn is coming that never is.
+
+class View(typing.NamedTuple):
+    """What a cell needs to know that its own row does not carry.
+
+    `submitted` belongs to one row, the galaxy named in `rec`. Finding out
+    costs a read per galaxy, so the launcher asks it of the galaxy this player
+    joined and of no other, and every other row reads None as "not asked".
+
+    `own` is the store multiplayer.json names outright, which is the one row
+    that is played whatever the listing says about it.
     """
-    closed = g.status == CLOSED
-    bits = [g.name or g.id, "closed, not taking turns" if closed else g.status]
-    if g.turn is not None:
-        bits.append(f"turn {g.turn}")
-    if g.deadline and not closed:
-        left = g.deadline - (time.time() if now is None else now)
-        bits.append(f"{fmt_left(left)} left" if left > 0 else "time is up")
-    bits.append("no players yet" if not g.players else
-                "1 player" if g.players == 1 else f"{g.players} players")
+    now: "float | None" = None
+    rec: "dict | None" = None
+    submitted: "bool | None" = None
+    own: "str | None" = None
+
+    @property
+    def clock(self) -> float:
+        """The moment the countdowns are measured from."""
+        return time.time() if self.now is None else self.now
+
+
+class Column(typing.NamedTuple):
+    """One column: what it sorts on, and what it prints.
+
+    `value` answers None for a galaxy the column cannot speak for, which is a
+    third thing and not a zero: a forming galaxy has no turn, and a closed one
+    has no countdown.
+    """
+    key: str
+    heading: str
+    width: int
+    value: typing.Callable      # (galaxy, view) -> the sort value, or None
+    text: typing.Callable       # (galaxy, view) -> the cell
+
+
+def _name_value(g, view):
+    # Folded, or a galaxy called "sandbox" lands after every capitalised one.
+    return (g.name or g.id or "").lower()
+
+
+def _name_text(g, view):
+    return g.name or g.id or ""
+
+
+def _status_value(g, view):
+    return (STATUS_ORDER.index(g.status) if g.status in STATUS_ORDER
+            else len(STATUS_ORDER))
+
+
+def _status_text(g, view):
+    return g.status or ""
+
+
+def _turn_value(g, view):
+    return g.turn
+
+
+def _turn_text(g, view):
+    return "" if g.turn is None else str(g.turn)
+
+
+def _left_value(g, view):
+    """Seconds until this galaxy's deadline, or None when it has not got one.
+
+    A closed galaxy has none by decision rather than by omission. Its deadline
+    is frozen at whatever it was when the operator ended it, and a clock
+    counting down to it promises a turn that never comes.
+    """
+    if g.status == CLOSED or not g.deadline:
+        return None
+    return g.deadline - view.clock
+
+
+def _left_text(g, view):
+    left = _left_value(g, view)
+    if left is None:
+        return ""
+    return f"{fmt_left(left)} left" if left > 0 else "time is up"
+
+
+def _players_value(g, view):
+    return g.players or 0
+
+
+def _players_text(g, view):
+    return str(g.players or 0)
+
+
+def _you_value(g, view):
+    """How far into this galaxy the player is, nearest first."""
     if g.joined:
-        bits.append("you have played this turn" if submitted else
-                    "your turn is waiting" if submitted is False else
-                    "you are in")
-    elif pending:
-        bits.append("you join at the next turn")
-    return " \u00b7 ".join(bits)
+        return 0
+    if pending_join(g, view.rec):
+        return 1
+    return 2
+
+
+def _you_text(g, view):
+    if g.joined:
+        mine = bool(view.rec) and view.rec.get("galaxy") == g.id
+        if mine and view.submitted is True:
+            return "turn played"
+        if mine and view.submitted is False:
+            return "your turn"
+        return "you are in"
+    if pending_join(g, view.rec):
+        return "joining next turn"
+    return ""
+
+
+GALAXY_COLUMNS = (
+    Column("name", "Galaxy", 132, _name_value, _name_text),
+    Column("status", "Status", 64, _status_value, _status_text),
+    Column("turn", "Turn", 46, _turn_value, _turn_text),
+    Column("left", "Time left", 84, _left_value, _left_text),
+    Column("players", "Players", 54, _players_value, _players_text),
+    # Wide enough for the longest thing it says, "joining next turn". A
+    # minsize narrower than the cell would let that column push the table
+    # wider than the home page and resize the window on the way in.
+    Column("you", "You", 120, _you_value, _you_text),
+)
+
+# The action column, which sorts nothing and so is not one of the above.
+ACTION_WIDTH = 66
+
+DEFAULT_SORT = "name"
+
+
+def galaxy_column(key: str):
+    """The column called `key`, or None."""
+    return next((c for c in GALAXY_COLUMNS if c.key == key), None)
+
+
+GALAXY_LEFT = galaxy_column("left")
+
+
+def sort_galaxies(rows, key: str = DEFAULT_SORT, reverse: bool = False,
+                  view: "View | None" = None):
+    """`rows` in the order one column asks for.
+
+    Ordered on the value the column computes and never on the text it draws,
+    because the two are written for different readers.
+
+    A row the column cannot speak for keeps to the bottom in both directions
+    rather than swapping ends with the reversal. A galaxy with no turn yet is
+    not the earliest turn and not the latest one, and either end would be a
+    claim the row does not make.
+
+    The sort is stable, so rows the column cannot tell apart stay in the order
+    the listing handed them over in.
+    """
+    col = galaxy_column(key)
+    if col is None:
+        return list(rows)
+    view = view or View()
+    known, unknown = [], []
+    for g in rows:
+        (unknown if col.value(g, view) is None else known).append(g)
+    known.sort(key=lambda g: col.value(g, view), reverse=bool(reverse))
+    return known + unknown
+
+
+def same_store(a, b) -> bool:
+    """Whether two store specs name the same galaxy.
+
+    Compared as written first, because a URL is a URL and there is nothing
+    else to do with one. Two local paths are compared as paths as well:
+    multiplayer.json is typed by a player and a directory's index is written
+    by a tool, so the same folder arrives here spelled two ways.
+    """
+    if not a or not b:
+        return False
+    if a == b:
+        return True
+    try:
+        return (os.path.normcase(os.path.abspath(a))
+                == os.path.normcase(os.path.abspath(b)))
+    except (TypeError, ValueError):
+        return False
+
+
+def row_action(g, rec=None, own=None):
+    """Which control this row offers: PLAY, VIEW, or nothing at all.
+
+    Play is the galaxy you are in, and it is what the Multiplayer button used
+    to do. View is a galaxy you could join: it opens the notice, which is
+    where the joining is confirmed, so the row itself joins nothing.
+
+    A closed galaxy offers neither, whoever is in it, because a turn played
+    into one is refused at the submission. Nor does a galaxy this launcher has
+    already asked for a seat in: the request is with the worker and there is
+    nothing for a second click to do.
+
+    `own` is the store multiplayer.json names, and it is offered Play whatever
+    the roster says. It is the galaxy the launcher was pointed at by hand, its
+    state may not even be readable from here, and the checks in
+    start_multiplayer are what answer whether a turn can be taken in it.
+    """
+    if g.status == CLOSED:
+        return None
+    if same_store(g.store, own):
+        return PLAY
+    if g.joined:
+        return PLAY
+    if pending_join(g, rec):
+        return None
+    return VIEW if joinable(g, rec) else None
+
+
+class OwnGalaxy(typing.NamedTuple):
+    """A row for the galaxy no directory lists.
+
+    The same seven facts a directory's row carries, declared here rather than
+    borrowed from `galaxy_directory`, because a build frozen without that
+    module still has a multiplayer.json to show and a row type that is allowed
+    to be missing is no row type at all.
+    """
+    id: str
+    name: str
+    status: str
+    turn: "int | None"
+    deadline: "float | None"
+    players: int
+    joined: bool
+    store: str
+
+
+def named_galaxy(spec: str, state, player: "str | None" = None) -> OwnGalaxy:
+    """The row for a store multiplayer.json names, built from its own state.
+
+    Identified by the spec, because that is all there is: a folder of turns
+    and a LAN referee are registered nowhere and have no id but where they
+    are. Shown by the last part of it, which is the folder or the host a
+    player would recognise.
+
+    A store whose state cannot be read is forming rather than absent, for the
+    reason a directory's row gives: the referee publishes the first turn some
+    time after the folder exists, and a row that vanished in between reads as
+    the galaxy having failed.
+    """
+    spec = str(spec)
+    name = os.path.basename(spec.rstrip("/\\").replace("\\", "/")) or spec
+    if not state:
+        return OwnGalaxy(spec, name, FORMING, None, None, 0, False, spec)
+    civs = list(state.get("civs", []))
+    return OwnGalaxy(spec, name, state.get(STATUS_KEY) or OPEN,
+                     state.get("turn"), state.get("deadline"), len(civs),
+                     bool(player) and player in civs, spec)
+
+
+def own_row(data_dir: str, cfg, player: "str | None" = None) -> OwnGalaxy:
+    """Read the galaxy multiplayer.json names and turn it into a row.
+
+    Opened exactly as playing it opens it, `store_wants_token` and all, so a
+    folder and a LAN referee are read with no identity and no sign-in. A store
+    that cannot be reached is a row saying so rather than a listing that
+    fails: this is the one galaxy the player definitely wants to see.
+    """
+    spec = cfg["store"]
+    mods = multiplayer_modules()
+    if mods is None:
+        return named_galaxy(spec, None, player)
+    _player_turn, turn_store = mods
+    try:
+        token = player_token(data_dir) if store_wants_token(cfg) else None
+        store = open_player_store(turn_store, spec, token)
+        state = store.state() if store.exists() else None
+    except Exception:           # any store; unreachable is the usual one
+        state = None
+    return named_galaxy(spec, state, player)
+
+
+def galaxy_rows(data_dir: str, spec, player: "str | None" = None):
+    """(rows, problem) for the Galaxies page: the directory's, and your own.
+
+    The galaxy multiplayer.json names goes first and goes in whether or not
+    the directory answered, because a player who has a store and no directory
+    still has a galaxy to play and a page that showed them nothing would be
+    the launcher looking broken.
+
+    A directory that cannot be reached is a problem reported beside whatever
+    rows there are rather than instead of them, for the same reason.
+
+    Called on a worker thread. Everything here reads a store or a service.
+    """
+    rows, problem = [], None
+    if spec:
+        try:
+            directory = open_galaxy_directory(spec)
+            if directory is None:
+                problem = ("This build cannot list galaxies: the directory it "
+                           "would read is not in it.")
+            else:
+                rows = list(directory.galaxies(player=player))
+        except Exception as exc:    # any directory; unreachable is usual
+            problem = f"Could not reach the galaxy directory: {exc}"
+    cfg = multiplayer_config(data_dir)
+    # Unless the directory already listed it. A registered galaxy has a name
+    # the operator gave it and a row read in the same query as the rest, and
+    # two rows for one galaxy reads as a fault. It is still played from the
+    # store multiplayer.json names, because `row_action` matches that row by
+    # its store rather than by where the row came from.
+    if cfg and not any(same_store(g.store, cfg["store"]) for g in rows):
+        rows.insert(0, own_row(data_dir, cfg, player))
+    return rows, problem
 
 
 # ── The notice a player reads before joining ──────────────────────────────────
@@ -1244,33 +1565,23 @@ def beta_notice_module():
     return beta_notice
 
 
-def miss_thresholds(state):
-    """(warn, reclaim) for this galaxy, or None when this build cannot say.
-
-    `abandonment.thresholds` holds both the per-galaxy keys and the defaults
-    behind them, so the launcher reads neither itself. A launcher that read the
-    keys directly would print the default beside a galaxy that overrode it, or
-    print nothing for a galaxy that did not, and either way would be telling a
-    player a threshold the referee does not enforce.
-    """
-    multiplayer_modules()
-    try:
-        import abandonment
-    except ImportError:
-        return None
-    return abandonment.thresholds(state)
-
-
 def beta_notice_text(state):
     """(notice, None) as this galaxy's player must read it, or (None, reason).
 
-    `state` is the galaxy being joined, because two of the three values are its
-    own thresholds.
+    `state` is the galaxy being joined, for any value the notice wants to state
+    per galaxy. It states none today.
 
     The reason is for showing rather than for swallowing. A build without the
     module, a build without the file, and a marker nobody filled are three
     different faults and one outcome for the player, so each of them refuses
     here and says which it was.
+
+    **The notice no longer states the miss thresholds**, by a deliberate
+    editorial decision: turn limits are explained elsewhere and not on this
+    page. So the two markers are gone and with them the refusal that fired when
+    a build could not fill them. `miss_thresholds` and the `abandonment` import
+    behind it went at the same time and for the same reason. Any future value
+    the notice wants per galaxy goes in `values` and gets its own marker back.
     """
     notice = beta_notice_module()
     if notice is None:
@@ -1279,11 +1590,7 @@ def beta_notice_text(state):
     body, why = notice.text_or_reason()
     if body is None:
         return None, why
-    values = {"log_upload": LOG_UPLOAD_CLAUSE}
-    pair = miss_thresholds(state)
-    if pair is not None:
-        values["warn_after_misses"], values["reclaim_after_misses"] = pair
-    body = notice.fill(values, body)
+    body = notice.fill({"log_upload": LOG_UPLOAD_CLAUSE}, body)
     missing = notice.unfilled(body)
     if missing:
         return None, ("the notice still has nothing to say for "
@@ -1478,6 +1785,29 @@ OK      = "#3ddc84"
 WARN    = "#ffb020"
 BAD     = "#ff5555"
 
+# The window's own padding, in one place. Every child of the root is inset by
+# PAD_X, and anything with a bottom edge of its own is inset from it by PAD_Y,
+# which is the number the panels already use between their border and their
+# last row. A panel that padded one edge and not the other is the defect this
+# replaces: the eye reads the missing gap before it reads anything in the box.
+PAD_X = 26
+PAD_Y = 12
+
+# Inside a bordered panel, between its edge and its contents. Equal on all four
+# sides for the same reason.
+PANEL_PAD = 12
+
+# How a page sits in the window. Both pages take it, so they line up with the
+# header above them and with each other, and both edges are padded.
+PAGE_PACK = {"fill": "both", "expand": True, "padx": PAD_X,
+             "pady": (PAD_Y, PAD_Y)}
+
+# What the galaxy table needs across, its panel and that panel's border
+# included. The home page is held to the same width, so moving between the two
+# pages does not resize a window that cannot be resized by hand.
+PAGE_WIDTH = (sum(c.width for c in GALAXY_COLUMNS) + ACTION_WIDTH
+              + 2 * PANEL_PAD + 2)
+
 
 class Launcher:
     def __init__(self, root, cfg):
@@ -1512,11 +1842,28 @@ class Launcher:
         self.mp_stop = False
         self.mp_note = ""
         self.mp_turn = None
-        # The Games tab: which directory it lists, and whether a listing is
-        # already in flight. None when multiplayer.json names a galaxy
-        # outright, which is the folder and LAN path and reaches no directory.
+        # The Galaxies page: which directory it lists, the store
+        # multiplayer.json names outright, and whether a listing is in flight.
+        # The directory is None when multiplayer.json names a store and no
+        # directory, which is the folder and LAN path and reaches no service.
         self.games_dir = None
+        self.own_store = None
         self.games_busy = False
+        # The last listing, kept so that sorting a column repaints the table
+        # without going back to the directory for the same rows. None until
+        # one has been asked for, which is what the page says while it waits.
+        self.games_rows = None
+        self.games_extra = {}
+        self.games_err = None
+        self.games_rec = None
+        self.sort_key = DEFAULT_SORT
+        self.sort_desc = False
+        # Which page the window is showing, and the widgets the table owns:
+        # the cells, thrown away on every repaint, and the countdown cells,
+        # which are rewritten once a second without disturbing the order.
+        self.page = "home"
+        self._cells: "list" = []
+        self._clocks: "list" = []
         # This player's name, read from the data directory at boot. None until
         # they have entered one, which is a state the launcher runs in happily:
         # only multiplayer needs to know who you are.
@@ -1557,7 +1904,7 @@ class Launcher:
     # ── construction ──
     def _build(self):
         tk = self.tk
-        pad = {"padx": 26}
+        pad = {"padx": PAD_X}
 
         # One line, from the manifest, so the header, the title bar and every
         # dialog title are the same string rather than three things to keep in
@@ -1571,11 +1918,21 @@ class Launcher:
         tk.Label(self.root, text=f"v{build_id()}",
                  bg=BG, fg=DIM, font=("Segoe UI", 10)).pack(anchor="w", **pad)
 
-        body = tk.Frame(self.root, bg=BG)
-        body.pack(fill="x", pady=(18, 4), **pad)
+        # The window's body, which is one page at a time. The home page holds
+        # the mode cards; Multiplayer swaps in the Galaxies page and Back swaps
+        # it out again.
+        self.pages = tk.Frame(self.root, bg=BG)
+        self.pages.pack(**PAGE_PACK)
+        # One width for both pages, so that navigating does not resize a window
+        # that cannot be resized by hand. Without it the window would widen
+        # when the table appears and narrow again on the way back.
+        tk.Frame(self.pages, bg=BG, width=PAGE_WIDTH, height=1).pack()
+        self.home_page = tk.Frame(self.pages, bg=BG)
+        self.galaxies_page = tk.Frame(self.pages, bg=BG)
+        self.home_page.pack(fill="both", expand=True)
 
         for mode in self.modes:
-            card = tk.Frame(body, bg=PANEL, highlightbackground=EDGE,
+            card = tk.Frame(self.home_page, bg=PANEL, highlightbackground=EDGE,
                             highlightthickness=1)
             card.pack(fill="x", pady=5)
             ready = is_playable(mode)
@@ -1607,26 +1964,7 @@ class Launcher:
                      wraplength=340, font=("Segoe UI", 9)).pack(
                          side="left", padx=(0, 14))
 
-        # The Games tab. Packed only when there is a directory to list, so a
-        # player who named a galaxy themselves never sees it.
-        self.games_frame = tk.Frame(self.root, bg=PANEL,
-                                    highlightbackground=EDGE,
-                                    highlightthickness=1)
-        head = tk.Frame(self.games_frame, bg=PANEL)
-        head.pack(fill="x", padx=12, pady=(10, 0))
-        tk.Label(head, text="Games", bg=PANEL, fg=ACCENT,
-                 font=("Segoe UI", 10, "bold")).pack(side="left")
-        self.games_refresh = tk.Label(head, text="refresh", bg=PANEL, fg=FAINT,
-                                      font=("Segoe UI", 8, "underline"),
-                                      cursor="hand2")
-        self.games_refresh.pack(side="right")
-        self.games_refresh.bind("<Button-1>", lambda e: self.refresh_games())
-        self.games_status = tk.Label(self.games_frame, text="", bg=PANEL,
-                                     fg=DIM, anchor="w", justify="left",
-                                     wraplength=430, font=("Segoe UI", 8))
-        self.games_status.pack(fill="x", padx=12, pady=(2, 0))
-        self.games_body = tk.Frame(self.games_frame, bg=PANEL)
-        self.games_body.pack(fill="x", padx=12, pady=(4, 10))
+        self._build_galaxies(self.galaxies_page)
 
         self.ctl_frame = tk.Frame(self.root, bg=PANEL,
                                   highlightbackground=EDGE, highlightthickness=1)
@@ -1687,7 +2025,7 @@ class Launcher:
         self.log.pack(fill="both", expand=True)
         self.log.configure(state="disabled")
 
-        tk.Frame(self.root, bg=BG, height=18).pack()
+        tk.Frame(self.root, bg=BG, height=PAD_Y).pack()
 
     # ── startup ──
     def _boot(self):
@@ -1708,17 +2046,16 @@ class Launcher:
         self._show_identity()
         self.say(f"player  {self.player or 'not set yet'}")
 
-        # The Games tab, before the game files are looked for: which galaxies
-        # exist is worth showing even to an install that cannot start one.
-        if multiplayer_config(self.data_dir) is not None:
-            self.say(f"games   {MP_CONFIG} names a galaxy; not listing a "
-                     f"directory")
-        else:
-            self.games_dir = directory_spec(self.cfg,
-                                            multiplayer_file(self.data_dir))
-            self.say(f"games   {self.games_dir}")
-            self._show_games(True)
-            self._games_tick()
+        # What the Galaxies page will list, before the game files are looked
+        # for: which galaxies exist is worth showing even to an install that
+        # cannot start one. Nothing is listed until the page is opened.
+        mp_cfg = multiplayer_file(self.data_dir)
+        self.own_store = (multiplayer_config(self.data_dir) or {}).get("store")
+        self.games_dir = directory_to_list(self.cfg, mp_cfg)
+        if self.own_store:
+            self.say(f"games   {MP_CONFIG} names {self.own_store}")
+        self.say(f"games   {self.games_dir or 'no directory to list'}")
+        self._games_tick()
 
         icon = find_icon(self.data_dir)
         if icon:
@@ -1799,7 +2136,10 @@ class Launcher:
         if not is_playable(mode):
             return
         if mode.get("id") == "multiplayer":
-            self.start_multiplayer(mode)
+            # Navigation, not a launch. Which galaxy to play is a choice the
+            # player makes in front of the list, and a button that guessed it
+            # for them is what the Galaxies page replaces.
+            self.show_galaxies()
             return
         busy = running_clients(self.client_exes)
         if busy:
@@ -1931,43 +2271,135 @@ class Launcher:
             return
         self.ask_player_name()
 
-    # ── The Games tab ────────────────────────────────────────────────────────
-    def _show_games(self, show: bool):
-        if show and not self.games_frame.winfo_ismapped():
-            self.games_frame.pack(fill="x", padx=26, pady=(10, 0))
-        elif not show and self.games_frame.winfo_ismapped():
-            self.games_frame.pack_forget()
+    # ── The Galaxies page ────────────────────────────────────────────────────
+    def _build_galaxies(self, parent):
+        """The page the Multiplayer button opens: a sortable table of galaxies.
+
+        The header, the status line and the column headings are built once and
+        never thrown away, so Back is on screen while a listing is in flight
+        and after one has failed. A repaint replaces the cells under the
+        headings and touches nothing else.
+        """
+        tk = self.tk
+        head = tk.Frame(parent, bg=BG)
+        head.pack(fill="x")
+        back = tk.Button(head, text="‹ Back", bg=BTN, fg="#ffffff",
+                         activebackground=BTN_HI, activeforeground="#ffffff",
+                         relief="flat", bd=0, cursor="hand2", width=8,
+                         font=("Segoe UI", 9, "bold"), command=self.show_home)
+        back.pack(side="left")
+        back.bind("<Enter>", lambda e: back.configure(bg=BTN_HI))
+        back.bind("<Leave>", lambda e: back.configure(bg=BTN))
+        tk.Label(head, text="Galaxies", bg=BG, fg=ACCENT,
+                 font=("Segoe UI", 13, "bold")).pack(side="left", padx=(12, 0))
+        self.games_refresh = tk.Label(head, text="refresh", bg=BG, fg=FAINT,
+                                      font=("Segoe UI", 8, "underline"),
+                                      cursor="hand2")
+        self.games_refresh.pack(side="right")
+        self.games_refresh.bind("<Button-1>", lambda e: self.refresh_games())
+
+        self.games_status = tk.Label(parent, text="", bg=BG, fg=DIM,
+                                     anchor="w", justify="left",
+                                     wraplength=PAGE_WIDTH,
+                                     font=("Segoe UI", 8))
+        self.games_status.pack(fill="x", pady=(8, 0))
+
+        panel = tk.Frame(parent, bg=PANEL, highlightbackground=EDGE,
+                         highlightthickness=1)
+        panel.pack(fill="both", expand=True, pady=(6, 0))
+        self.games_table = tk.Frame(panel, bg=PANEL)
+        self.games_table.pack(fill="both", expand=True, padx=PANEL_PAD,
+                              pady=PANEL_PAD)
+        for i, col in enumerate(GALAXY_COLUMNS):
+            # Only the name stretches. The rest are as wide as their heading
+            # needs, so the numbers stay in a column the eye can run down.
+            self.games_table.grid_columnconfigure(
+                i, minsize=col.width, weight=1 if col.key == "name" else 0)
+        self.games_table.grid_columnconfigure(len(GALAXY_COLUMNS),
+                                              minsize=ACTION_WIDTH)
+        self.games_heads = {}
+        for i, col in enumerate(GALAXY_COLUMNS):
+            lab = tk.Label(self.games_table, bg=PANEL, fg=DIM, anchor="w",
+                           cursor="hand2", font=("Segoe UI", 8, "bold"))
+            lab.grid(row=0, column=i, sticky="w", padx=(0, 8), pady=(0, 6))
+            lab.bind("<Button-1>", lambda e, k=col.key: self.sort_by(k))
+            self.games_heads[col.key] = lab
+        self._show_sort()
+
+        self.games_hint = tk.Label(parent, bg=BG, fg=WARN, anchor="w",
+                                   justify="left", wraplength=PAGE_WIDTH,
+                                   font=("Segoe UI", 8))
+
+    def show_page(self, name: str):
+        """Swap the window's body between the launcher's two pages."""
+        if self.page == name:
+            return
+        self.page = name
+        showing = self.home_page if name == "home" else self.galaxies_page
+        hidden = self.galaxies_page if name == "home" else self.home_page
+        hidden.pack_forget()
+        showing.pack(fill="both", expand=True)
+
+    def show_home(self):
+        self.show_page("home")
+
+    def show_galaxies(self):
+        """What the Multiplayer button does now: open the list, play nothing.
+
+        The listing is asked for on the way in rather than kept warm behind
+        the home page. A listing is a metered read in the beta, and a launcher
+        nobody is looking at has no use for a fresher one.
+        """
+        self.show_page("galaxies")
+        self._draw_galaxies()
+        self.refresh_games()
+
+    def sort_by(self, key: str):
+        """Sort on this column, or turn it round if it is already the one."""
+        if key == self.sort_key:
+            self.sort_desc = not self.sort_desc
+        else:
+            self.sort_key, self.sort_desc = key, False
+        self._draw_galaxies()
+
+    def _show_sort(self):
+        """Mark the column being sorted on, and which way round it is."""
+        for col in GALAXY_COLUMNS:
+            lab = self.games_heads.get(col.key)
+            if lab is None:
+                continue
+            here = col.key == self.sort_key
+            mark = (" ▾" if self.sort_desc else " ▴") if here else ""
+            lab.configure(text=col.heading + mark, fg=ACCENT if here else DIM)
 
     def _games_tick(self):
-        """Re-list on a slow timer, and keep the timer whatever a listing did."""
-        self.refresh_games()
+        """Re-list on a slow timer, and keep the timer whatever a listing did.
+
+        Only while the page is on screen. A countdown nobody is looking at is
+        worth less than the reads a poll behind a hidden page would spend.
+        """
+        if self.page == "galaxies":
+            self.refresh_games()
         self.root.after(GAMES_POLL_MS, self._games_tick)
 
     def refresh_games(self):
-        """List the directory off the Tk thread and repaint when it answers.
+        """List off the Tk thread and repaint when it answers.
 
-        Off the thread because a directory is a network service in the beta and
-        this window is also the game's server: blocking it for a listing stops
-        the server answering the client.
+        Off the thread because a directory is a network service in the beta,
+        and because the galaxy multiplayer.json names is opened and read here
+        as well. This window is also the game's server: blocking it stops the
+        server answering the client.
         """
-        if self.games_dir is None or self.games_busy:
+        if self.games_busy or not (self.games_dir or self.own_store):
             return
         self.games_busy = True
-        self.games_status.configure(text="listing galaxies\u2026", fg=DIM)
-        spec, player = self.games_dir, self.player
-        rec = load_joined(self.data_dir)
+        self.games_status.configure(text="listing galaxies…", fg=DIM)
+        spec, player, data_dir = self.games_dir, self.player, self.data_dir
+        rec = load_joined(data_dir)
 
         def work():
-            rows, extra, err = [], {}, None
-            try:
-                directory = open_galaxy_directory(spec)
-                if directory is None:
-                    err = ("This build cannot list galaxies: the directory it "
-                           "would read is not in it.")
-                else:
-                    rows = list(directory.galaxies(player=player))
-            except Exception as exc:        # any directory; unreachable is usual
-                err = f"Could not reach the galaxy directory: {exc}"
+            extra = {}
+            rows, err = galaxy_rows(data_dir, spec, player)
             if rec and player:
                 extra["submitted"] = self._submitted_state(rows, rec, player)
             self.msgs.put(("__games__", rows, extra, err))
@@ -1979,11 +2411,12 @@ class Launcher:
 
         One extra read, for one galaxy, which is why it is not asked of every
         row: a listing is one query and this is a request per refresh on a
-        store that may charge for it. None when the answer cannot be had, which
-        the row reads as "you are in" rather than as "you have not played".
+        store that may charge for it. None when the answer cannot be had,
+        which the row reads as "you are in" rather than as "you have not
+        played".
 
         Total, because the listing is posted back to the window after this and
-        an exception here would leave the tab saying it is still listing.
+        an exception here would leave the page saying it is still listing.
         """
         try:
             g = next((r for r in rows if r.id == rec.get("galaxy")), None)
@@ -2001,41 +2434,143 @@ class Launcher:
             return None
 
     def _on_games(self, rows, extra, err):
-        """Repaint the list. Runs on the Tk thread, off the message queue."""
+        """Take a listing in. Runs on the Tk thread, off the message queue."""
         self.games_busy = False
-        for child in self.games_body.winfo_children():
-            child.destroy()
+        self.games_rows = list(rows)
+        self.games_extra = extra or {}
+        self.games_err = err
         if err:
-            self.games_status.configure(text=err, fg=WARN)
             self.say(f"games   {err}")
-            return
-        if not rows:
+        self._draw_galaxies()
+
+    def _galaxy_view(self):
+        """What a cell needs to know that its own row does not carry."""
+        return View(now=time.time(), rec=self.games_rec,
+                    submitted=self.games_extra.get("submitted"),
+                    own=self.own_store)
+
+    def _draw_galaxies(self):
+        """Paint the table from the last listing, in the order asked for."""
+        tk = self.tk
+        for widget in self._cells:
+            widget.destroy()
+        self._cells, self._clocks = [], []
+        self.games_rec = load_joined(self.data_dir)
+        view = self._galaxy_view()
+        rows = sort_galaxies(self.games_rows or [], self.sort_key,
+                             self.sort_desc, view)
+        self._show_sort()
+        self._show_source(rows)
+        for r, g in enumerate(rows, start=1):
+            action = row_action(g, view.rec, view.own)
+            # The rows lit are the ones that are this player's business: the
+            # galaxy they are in, the one they have asked to join, and the one
+            # they named themselves.
+            near = bool(g.joined or action == PLAY
+                        or pending_join(g, view.rec))
+            for i, col in enumerate(GALAXY_COLUMNS):
+                cell = tk.Label(self.games_table, text=col.text(g, view),
+                                bg=PANEL, fg=TEXT if near else DIM,
+                                anchor="w", font=("Segoe UI", 9))
+                cell.grid(row=r, column=i, sticky="w", padx=(0, 8), pady=3)
+                self._cells.append(cell)
+                if col is GALAXY_LEFT:
+                    self._clocks.append((cell, g))
+            if action is None:
+                continue
+            btn = tk.Button(self.games_table, text=ACTION_TEXT[action], bg=BTN,
+                            fg="#ffffff", activebackground=BTN_HI,
+                            activeforeground="#ffffff", relief="flat", bd=0,
+                            cursor="hand2", width=6,
+                            font=("Segoe UI", 9, "bold"),
+                            command=lambda gg=g, a=action: self.on_row(gg, a))
+            btn.grid(row=r, column=len(GALAXY_COLUMNS), sticky="e", pady=3)
+            self._cells.append(btn)
+        self._show_hint(rows, view)
+
+    def _show_source(self, rows):
+        """The line above the table: where these rows came from, or why not.
+
+        A directory that could not be reached is reported here rather than in
+        place of the table, because the galaxy multiplayer.json names is in
+        the table whatever the directory did and is still playable.
+        """
+        if self.games_err:
+            self.games_status.configure(text=self.games_err, fg=WARN)
+        elif self.games_rows is None:
+            self.games_status.configure(text="listing galaxies…", fg=DIM)
+        elif not rows:
             self.games_status.configure(
                 text="No galaxies are listed here yet.", fg=DIM)
+        elif self.games_dir:
+            self.games_status.configure(text=str(self.games_dir), fg=FAINT)
+        else:
+            self.games_status.configure(
+                text=f"{MP_CONFIG} names this galaxy, so no directory is "
+                     "listed.", fg=FAINT)
+
+    def _show_hint(self, rows, view):
+        """One line saying what to press when there is nothing to play yet.
+
+        This is the hole the page was built to close. A player with a
+        directory and no seat pressed Multiplayer, the launcher had no galaxy
+        to play, and what they got was a roster refusal offering to change
+        their name. The answer belongs in front of the list, beside the thing
+        to press.
+        """
+        actions = [row_action(g, view.rec, view.own) for g in rows]
+        text = ""
+        if rows and PLAY not in actions:
+            if VIEW in actions:
+                text = ("You are not in a galaxy yet. Press View on one to "
+                        "read what you would be joining, and join from "
+                        "there.")
+            elif any(pending_join(g, view.rec) for g in rows):
+                text = ("Your join is with the galaxy. A seat appears at the "
+                        "next turn boundary, and Play appears with it.")
+        if text:
+            self.games_hint.configure(text=text)
+            if not self.games_hint.winfo_ismapped():
+                self.games_hint.pack(fill="x", pady=(8, 0))
+        elif self.games_hint.winfo_ismapped():
+            self.games_hint.pack_forget()
+
+    def _tick_clocks(self):
+        """Keep the countdowns honest between listings.
+
+        That one column is rewritten and the order is left alone. A table that
+        re-sorted itself once a second would move the row being clicked on out
+        from under the pointer.
+        """
+        view = self._galaxy_view()
+        for cell, g in self._clocks:
+            if not cell.winfo_exists():
+                continue
+            text = GALAXY_LEFT.text(g, view)
+            if cell.cget("text") != text:
+                cell.configure(text=text)
+
+    def on_row(self, g, action: str):
+        """What a row's one button does. View reads, Play plays."""
+        if action == PLAY:
+            self.play_galaxy(g)
+        else:
+            self.on_join(g)
+
+    def play_galaxy(self, g):
+        """Take turns in one row's galaxy, which is what Multiplayer did.
+
+        Home first. The turn readout, the turn controls and the status line
+        are on the home page, and a session started from a page the player
+        then has to leave is a session they cannot watch.
+        """
+        mode = next((m for m in self.modes if m.get("id") == "multiplayer"),
+                    None)
+        if mode is None or not is_playable(mode):
+            self.warn("This build does not offer multiplayer.")
             return
-        self.games_status.configure(text=self.games_dir, fg=FAINT)
-        tk = self.tk
-        rec = load_joined(self.data_dir)
-        for g in rows:
-            pending = pending_join(g, rec)
-            row = tk.Frame(self.games_body, bg=PANEL)
-            row.pack(fill="x", pady=2)
-            if joinable(g, rec):
-                b = tk.Button(row, text="Join", bg=BTN, fg="#ffffff",
-                              activebackground=BTN_HI,
-                              activeforeground="#ffffff", relief="flat", bd=0,
-                              cursor="hand2", width=6,
-                              font=("Segoe UI", 9, "bold"),
-                              command=lambda gg=g: self.on_join(gg))
-                b.pack(side="right", padx=(8, 0))
-            mine = rec is not None and rec.get("galaxy") == g.id
-            tk.Label(row, bg=PANEL, anchor="w", justify="left", wraplength=360,
-                     font=("Segoe UI", 9),
-                     fg=TEXT if (g.joined or pending) else DIM,
-                     text=galaxy_line(g, pending=pending,
-                                      submitted=(extra.get("submitted")
-                                                 if mine else None))).pack(
-                         side="left", fill="x")
+        self.show_home()
+        self.start_multiplayer(mode, g)
 
     def show_beta_notice(self, body: str, g) -> bool:
         """Show the notice and answer whether the player joined from it.
@@ -2219,12 +2754,35 @@ class Launcher:
             self.cfg["product"],
             f"You have asked to join {g.name or g.id} as {civ}.\n\nA galaxy "
             "takes new players at a turn boundary, so your empire appears at "
-            f"{when}.\n\nPress Multiplayer once it does, and the launcher "
-            "plays every turn from there.")
+            f"{when}.\n\nIts row here grows a Play button once it does, and "
+            "the launcher plays every turn from there.")
         self.refresh_games()
 
     # ── Multiplayer session ──────────────────────────────────────────────────
-    def start_multiplayer(self, mode):
+    def galaxy_config(self, g):
+        """A multiplayer.json-shaped config for the galaxy about to be played.
+
+        A row from the page names its own store, and that is what is played,
+        whether it came from the directory or from multiplayer.json. The
+        joined record is carried along when it is that row's, because the seat
+        may have been asked for under a name the player has since changed.
+
+        No row at all is the old question: whatever this launcher plays.
+        """
+        if g is None:
+            return galaxy_to_play(self.data_dir)
+        cfg = multiplayer_config(self.data_dir)
+        if cfg and same_store(cfg.get("store"), g.store):
+            return cfg
+        out = {"store": g.store}
+        rec = load_joined(self.data_dir)
+        if rec and rec.get("galaxy") == g.id:
+            out["joined"] = rec
+            if isinstance(rec.get("auth"), bool):
+                out["auth"] = rec["auth"]
+        return out
+
+    def start_multiplayer(self, mode, g=None):
         """Follow this galaxy's turns until the player stops or the launcher
         closes."""
         if self.mp_thread is not None and self.mp_thread.is_alive():
@@ -2237,18 +2795,19 @@ class Launcher:
                       "turn starts the game itself.")
             return
 
-        # The galaxy the player joined, or the one multiplayer.json names
-        # outright. Either way this is a store spec and nothing below here
-        # knows which of the two it came from.
-        cfg = galaxy_to_play(self.data_dir)
+        # The row the player pressed Play on, or, with no row, the galaxy this
+        # launcher plays. Either way this is a store spec and nothing below
+        # here knows which of the two it came from.
+        cfg = self.galaxy_config(g)
         if cfg is None:
             self.warn(
-                "You have not joined a galaxy yet.\n\nPick one in the Games "
-                "list and press Join. The launcher writes down which galaxy "
-                "you joined, so there is no file to edit.\n\nA galaxy of "
-                "your own, in a folder or on another PC here, is named in a "
-                f"{MP_CONFIG} in\n{self.data_dir}\n\nfor example:\n\n"
-                '{"store": "C:\\\\galaxies\\\\demo"}')
+                "You have not joined a galaxy yet.\n\nPress Multiplayer to "
+                "open the galaxy list, press View on one to read what you "
+                "would be joining, and join from there. The launcher writes "
+                "down which galaxy you joined, so there is no file to edit."
+                "\n\nA galaxy of your own, in a folder or on another PC here, "
+                f"is named in a {MP_CONFIG} in\n{self.data_dir}\n\nfor "
+                'example:\n\n{"store": "C:\\\\galaxies\\\\demo"}')
             return
 
         # Asked for here and not at first run: a player who only ever opens the
@@ -2357,8 +2916,8 @@ class Launcher:
                     # the offer that fits a misspelling is not made. The
                     # launcher's own record of the join is dropped instead,
                     # because the galaxy has undone the thing it records: left
-                    # in place it makes the Games tab show a join still waiting
-                    # to land, which is a dead end rather than a row to join
+                    # in place it makes the page show a join still waiting to
+                    # land, which is a dead end rather than a row to join
                     # again from. Only a galaxy that was joined from the list
                     # has such a record; one named in multiplayer.json is the
                     # player's own choice and is left alone.
@@ -2491,7 +3050,7 @@ class Launcher:
     # ── Game controls ────────────────────────────────────────────────────────
     def _show_controls(self, show: bool):
         if show and not self.ctl_frame.winfo_ismapped():
-            self.ctl_frame.pack(fill="x", padx=26, pady=(10, 12))
+            self.ctl_frame.pack(fill="x", padx=PAD_X, pady=(0, PAD_Y))
         elif not show and self.ctl_frame.winfo_ismapped():
             self.ctl_frame.pack_forget()
 
@@ -2707,7 +3266,8 @@ class Launcher:
     def toggle_log(self):
         self.log_visible = not self.log_visible
         if self.log_visible:
-            self.log_frame.pack(fill="both", expand=True, padx=26, pady=(8, 0))
+            self.log_frame.pack(fill="both", expand=True, padx=PAD_X,
+                                pady=(8, 0))
             self.log_btn.configure(text="hide log")
         else:
             self.log_frame.pack_forget()
@@ -2766,6 +3326,11 @@ class Launcher:
         self.msgs.put(msg)
 
     def _watch_game(self):
+        # The table's countdowns, which are re-listed only every two minutes
+        # and would otherwise sit there being wrong for most of that.
+        if self.page == "galaxies":
+            self._tick_clocks()
+
         if self.child is not None and self.child.poll() is not None:
             name = _short(self.running_mode) if self.running_mode else "the game"
             code = self.child.returncode

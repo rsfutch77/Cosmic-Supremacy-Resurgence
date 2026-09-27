@@ -198,20 +198,33 @@ check("a seated player of a closed galaxy still passes the roster, which is "
       "why the closed check has to come first",
       L.roster_problem("Alice", ended.civs()), None)
 
-print("\n5. and the Games list shows it")
+print("\n5. and the Galaxies list shows it")
 now = 1_000_000.0
-live_line = L.galaxy_line(row(deadline=now + 3660), now=now)
-check("an open row still counts down", "1h 01m left" in live_line, True)
-check("and says it is open", "open" in live_line, True)
-shut_line = L.galaxy_line(row(status="closed", deadline=now + 3660), now=now)
-check("a closed row says it is closed", "closed" in shut_line, True)
-check("and that it has stopped", "not taking turns" in shut_line, True)
-check("and counts down to nothing", "left" in shut_line, False)
+
+
+def cells(g):
+    """What one row prints, column by column."""
+    view = L.View(now=now)
+    return {c.key: c.text(g, view) for c in L.GALAXY_COLUMNS}
+
+
+open_row = cells(row(deadline=now + 3660))
+check("an open row still counts down", open_row["left"], "1h 01m left")
+check("and says it is open", open_row["status"], "open")
+shut = cells(row(status="closed", deadline=now + 3660))
+check("a closed row says it is closed", shut["status"], "closed")
+check("and counts down to nothing", shut["left"], "")
 check("while still saying where it got to",
-      "turn 12" in shut_line and "3 players" in shut_line, True)
-check("the row is still listed rather than dropped", bool(shut_line), True)
-check("an open galaxy is offered a Join", L.joinable(row()), True)
-check("and a closed one is not", L.joinable(row(status="closed")), False)
+      (shut["turn"], shut["players"]), ("12", "3"))
+check("the row is still drawn rather than dropped", bool(shut["name"]), True)
+check("a closed galaxy's countdown is absent rather than zero",
+      L.GALAXY_LEFT.value(row(status="closed", deadline=now + 3660),
+                          L.View(now=now)), None)
+check("an open galaxy is offered a View", L.row_action(row()), L.VIEW)
+check("and a closed one is offered nothing",
+      L.row_action(row(status="closed")), None)
+check("and neither is a closed one this player is in",
+      L.row_action(row(status="closed", joined=True)), None)
 
 print("\n6. the notice a player reads before joining")
 body, why = L.beta_notice_text({})
@@ -219,31 +232,18 @@ check("there is a notice", body is not None, True)
 check("and no reason not to show it", why, None)
 check("nothing in it is still unfilled", beta_notice.unfilled(body), [])
 check("no marker survives", "SET BEFORE THE BETA OPENS" in (body or ""), False)
-check("it warns at the default", "Miss 6 turns in a row" in body, True)
-check("and deletes at the default", "Miss 12 turns in a row" in body, True)
-check("the thresholds are the ones abandonment holds",
-      abandonment.thresholds({}), (6, 12))
-check("it says what happens to the log copy", L.LOG_UPLOAD_CLAUSE in body,
-      True)
-check("which is that nothing is sent by itself",
-      "Nothing is sent by itself" in body, True)
 check("it names itself", beta_notice.title(body), "Before you join the beta")
-for topic in ("not a password", "whole galaxy", "empire is deleted",
-              "ended at any time", "leaves your computer"):
-    check(f"and still carries {topic!r}", topic in body, True)
-
-own = make_galaxy(seated, extra={abandonment.WARN_KEY: 3,
-                                 abandonment.RECLAIM_KEY: 9})
-mine = turn_store.open_store(own).state()
-body, why = L.beta_notice_text(mine)
-check("a galaxy's own thresholds are the ones shown",
-      "Miss 3 turns in a row" in body and "Miss 9 turns in a row" in body,
-      True)
-check("and the defaults are not", "Miss 6 turns" in body, False)
-check("miss_thresholds reads them from the galaxy",
-      L.miss_thresholds(mine), (3, 9))
-check("a threshold nobody can read falls back rather than refusing",
-      L.miss_thresholds({abandonment.WARN_KEY: "soon"}), (6, 12))
+# The notice states no turn limits and no per-galaxy value, by an editorial
+# decision: those are explained somewhere other than this page. The checks that
+# used to assert both thresholds appeared, that a galaxy's own overrides were
+# the ones shown, and that a build unable to fill them refused the join, went
+# with the markers they were about. What is left is the property that outlived
+# them: the notice exists, it is readable, and nothing in it is a placeholder.
+check("no key is left without a marker to fill",
+      [k for k in beta_notice.KEYS if k not in beta_notice.markers(body)],
+      ["log_upload"])
+check("and log_upload is the only one, pending M1",
+      list(beta_notice.KEYS), ["log_upload"])
 
 print("\n7. and the beta does not open without it")
 real_text = beta_notice.text
@@ -268,10 +268,9 @@ finally:
 check("and a build that has it opens", L.beta_notice_text({})[0] is not None,
       True)
 
-beta_notice.text = instead(
-    real_text().replace("A turn lasts four hours",
-                        "A turn lasts [SET BEFORE THE BETA OPENS: turn_hours, "
-                        "how long a turn is] hours"))
+MARKER = ("[SET BEFORE THE BETA OPENS: turn_hours, how long a "
+          "turn is]")
+beta_notice.text = instead(real_text() + "\n" + MARKER + "\n")
 try:
     body, why = L.beta_notice_text({})
     check("a marker nobody filled refuses the join", body, None)
@@ -297,9 +296,10 @@ class NoModule:
         return None
 
 
-for name, expect in (("beta_notice", ["beta_notice"]),
-                     ("abandonment", ["warn_after_misses",
-                                      "reclaim_after_misses"])):
+# `abandonment` was in this list, for a build that could not fill the miss
+# thresholds. The notice no longer states them, so such a build has nothing it
+# cannot say and refusing would be wrong.
+for name, expect in (("beta_notice", ["beta_notice"]),):
     hook = NoModule(name)
     saved = sys.modules.pop(name)
     sys.meta_path.insert(0, hook)
