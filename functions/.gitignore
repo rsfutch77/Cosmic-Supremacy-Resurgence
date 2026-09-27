@@ -8,3 +8,4 @@ venv/
 # something else holds. Per-machine and per-run, so never tracked.
 .firebase.emulators.json
 .firebase.emulators.env
+.storage.emulator.rules
