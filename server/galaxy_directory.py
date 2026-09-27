@@ -75,7 +75,16 @@ INDEX = 'galaxies.json'
 
 
 class Galaxy(typing.NamedTuple):
-    """One row of the list, and everything the Games tab shows."""
+    """One row of the list, and everything the Games tab shows.
+
+    `turn_seconds` is the galaxy's turn length, carried because a deadline on
+    its own cannot say whether a turn is merely due or has stopped being
+    closed. A referee a minute past a four-hour deadline is ordinary and one a
+    minute past a fifteen-minute deadline is most of a turn late, so the reader
+    needs the length to judge the lateness by. It comes out of the same state
+    document the rest of the row does and costs no read of its own, which is
+    the reason it is here rather than asked for separately.
+    """
     id: str
     name: str
     status: str
@@ -84,6 +93,7 @@ class Galaxy(typing.NamedTuple):
     players: int
     joined: bool
     store: str
+    turn_seconds: int = None
 
     def as_dict(self) -> dict:
         return dict(self._asdict())
@@ -106,7 +116,8 @@ def _row(gid, name, status, state, player, spec):
     civs = list(state.get('civs', []))
     status = state.get(turn_store.STATUS_KEY) or status
     return Galaxy(gid, name, status, state.get('turn'), state.get('deadline'),
-                  len(civs), bool(player) and player in civs, spec)
+                  len(civs), bool(player) and player in civs, spec,
+                  state.get('turn_seconds'))
 
 
 class LocalGalaxyDirectory:

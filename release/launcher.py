@@ -1318,6 +1318,113 @@ def joinable(g, recs=None) -> bool:
     return g.status == OPEN
 
 
+# ── When a galaxy has stopped ────────────────────────────────────────────────
+# Turns are closed by a referee running as a scheduled task on one person's PC,
+# which starts when they log in. A machine that is off, or one that rebooted
+# and is sitting at a logon screen, leaves every galaxy it refs with a deadline
+# that passes and a turn nothing closes. Until this, a player could not tell
+# that apart from a turn about to close: the countdown reached zero and then
+# nothing happened, which is the same screen either way, so nobody had a reason
+# to tell the operator that the machine needed switching back on.
+#
+# Being past the deadline is not the fault, and a rule that said so would flag
+# every healthy galaxy six times a day. What the referee is allowed to be late
+# by is written down in its own files:
+#
+#   referee_worker.GRACE        20s   submissions are still taken after the
+#                                     deadline, so it does not even begin yet
+#   referee_worker.POLL          5s   how long a passed deadline can go unread
+#   N5                         ~10s   a measured tick, client launch included
+#   referee_worker.BACKOFF_MAX  300s  the longest a live worker waits between
+#                                     attempts at a turn that keeps failing
+#
+# So a worker that is up and working can be five minutes behind, and that is
+# STALL_FLOOR: below it, a galaxy is late and no more, whatever its turn
+# length. Above it the judgement has to scale, because a minute means nothing
+# to a 4-hour galaxy and a third of a turn to a 15-minute one, so the threshold
+# is a share of the turn. A quarter is late enough to be unambiguous and early
+# enough to be worth acting on, and STALL_CEILING holds it at an hour however
+# long the turn is, which is the operator's own line for lateness that is not
+# acceptable. At the beta's 4-hour turn the share and the ceiling agree.
+STALL_FLOOR = 300.0
+STALL_SHARE = 4.0
+STALL_CEILING = 3600.0
+
+
+def stall_after(turn_seconds) -> float:
+    """How overdue a turn has to be before its galaxy counts as stopped.
+
+    A galaxy whose state carries no usable turn length is judged by the
+    ceiling. That is the latest this can fire, and late is the right direction
+    to be wrong in: calling a healthy galaxy stopped sends a player to the
+    operator over nothing, and telling them late costs them the difference.
+    """
+    try:
+        seconds = float(turn_seconds)
+    except (TypeError, ValueError):
+        return STALL_CEILING
+    if seconds <= 0:
+        return STALL_CEILING
+    return max(STALL_FLOOR, min(STALL_CEILING, seconds / STALL_SHARE))
+
+
+def stalled_for(deadline, turn_seconds, status=None, now=None) -> float:
+    """How long this galaxy's turns have been stopped, or 0 if they have not.
+
+    Answered from the deadline and the turn length the caller already holds,
+    so it reads nothing. That is the point as much as the arithmetic is: the
+    store is metered, and a check that cost a read per galaxy per second would
+    spend more than the whole polling schedule H5 just cut.
+
+    A closed galaxy is never stopped. The worker deliberately ticks nothing in
+    one, so its deadline passes and stays passed for as long as the galaxy is
+    listed, and that is the operator having ended it rather than a machine
+    being off. A galaxy with no deadline has published no turn and has no clock
+    to be behind on.
+    """
+    if status == CLOSED or not deadline:
+        return 0.0
+    over = (time.time() if now is None else now) - deadline
+    return over if over > stall_after(turn_seconds) else 0.0
+
+
+def row_stalled_for(g, view=None) -> float:
+    """`stalled_for` for one row of the table, whichever kind of row it is.
+
+    The turn length is fetched rather than named, because a row handed over by
+    a directory this launcher did not ship with would not carry one, and a
+    missing length is a threshold rather than a crash.
+    """
+    return stalled_for(g.deadline, getattr(g, "turn_seconds", None), g.status,
+                       None if view is None else view.clock)
+
+
+def stall_hint(stalled) -> str:
+    """The line under the table when a galaxy's turns have stopped.
+
+    Written for a player who has never read a plan, which is what N4 asks of
+    every line like this one. It says what has happened, that nothing they
+    played is gone, and the one thing only a player can do about it, which is
+    to tell the person whose computer the turns are worked out on. Without
+    that last sentence the message is a complaint rather than a report, and
+    the operator has asked to be told.
+
+    `stalled` is the (row, seconds) pairs that are stopped, and the time given
+    is the longest of them: several stopped galaxies on one referee is one
+    machine being off, and the oldest deadline is the one that says since when.
+    """
+    names = [g.name or g.id for g, _ in stalled]
+    worst = max(seconds for _, seconds in stalled)
+    if len(names) == 1:
+        head = f"{names[0]} has stopped."
+    else:
+        head = f"{len(names)} galaxies have stopped: {', '.join(names)}."
+    return (f"{head} The turn was due {fmt_ago(worst)} and nothing has closed "
+            f"it. Turns are worked out on one person's computer, so it is "
+            f"probably switched off. Nothing you have played is lost. Tell "
+            f"whoever runs the beta, and it carries on where it stopped.")
+
+
 # ── The table the Galaxies page draws ────────────────────────────────────────
 # One row per galaxy, sorted by whatever column the player clicked. A column is
 # two halves that are deliberately not the same thing: the value it orders by,
@@ -1390,6 +1497,18 @@ def _status_value(g, view):
 
 
 def _status_text(g, view):
+    """The galaxy's own word, or "stopped" over the top of it.
+
+    The word the store holds is `open`, and an open galaxy nothing is ticking
+    is the state this column has to be able to show: a player scanning the
+    table for somewhere to play reads the status before anything else, and a
+    row that said `open` about a galaxy whose referee has been off since
+    Tuesday is the table telling them the wrong thing at the place they look
+    first. The stored word is still what the column sorts on, which is the
+    table's standing rule and not an exception made here.
+    """
+    if row_stalled_for(g, view):
+        return "stopped"
     return g.status or ""
 
 
@@ -1474,6 +1593,12 @@ def galaxy_column(key: str):
 
 
 GALAXY_LEFT = galaxy_column("left")
+# The two cells whose text is a function of the clock rather than of the
+# listing. Both are rewritten between listings, which is two minutes apart, and
+# a galaxy crossing into "stopped" in the middle of one must not wait for the
+# next query to say so.
+GALAXY_STATUS = galaxy_column("status")
+LIVE_COLUMNS = (GALAXY_STATUS, GALAXY_LEFT)
 
 
 def sort_galaxies(rows, key: str = DEFAULT_SORT, reverse: bool = False,
@@ -1556,7 +1681,7 @@ def row_action(g, recs=None, own=None):
 class OwnGalaxy(typing.NamedTuple):
     """A row for the galaxy no directory lists.
 
-    The same seven facts a directory's row carries, declared here rather than
+    The same facts a directory's row carries, declared here rather than
     borrowed from `galaxy_directory`, because a build frozen without that
     module still has a multiplayer.json to show and a row type that is allowed
     to be missing is no row type at all.
@@ -1569,6 +1694,7 @@ class OwnGalaxy(typing.NamedTuple):
     players: int
     joined: bool
     store: str
+    turn_seconds: "int | None" = None
 
 
 def store_label(spec: str) -> str:
@@ -1601,7 +1727,8 @@ def named_galaxy(spec: str, state, player: "str | None" = None) -> OwnGalaxy:
     civs = list(state.get("civs", []))
     return OwnGalaxy(spec, name, state.get(STATUS_KEY) or OPEN,
                      state.get("turn"), state.get("deadline"), len(civs),
-                     bool(player) and player in civs, spec)
+                     bool(player) and player in civs, spec,
+                     state.get("turn_seconds"))
 
 
 def own_row(data_dir: str, cfg, player: "str | None" = None) -> OwnGalaxy:
@@ -2023,6 +2150,16 @@ class Launcher:
         # `playing`, so the readout subtracts from this rather than asking the
         # store once a second: see player_turn.POLL_SHARE for what one costs.
         self.mp_deadline = None
+        # This galaxy's turn length, read once with the state that start_
+        # multiplayer already reads, and the scale `stalled_for` judges a
+        # passed deadline against.
+        self.mp_turn_seconds = None
+        # Whether the loop is between turns rather than in one. Every other
+        # note the readout can show is about something this launcher is doing
+        # now and outranks a galaxy that has stopped; this is the state in
+        # which it has nothing else to say and the player is watching a clock
+        # that has run out.
+        self.mp_waiting = False
         # What the loop last did with the player's state, and when: one of the
         # capture states above with a timestamp, or None before anything has
         # been captured. Recorded by _mp_state on the worker thread and painted
@@ -2689,6 +2826,19 @@ class Launcher:
             self.say(f"games   {err}")
         self._draw_galaxies()
 
+    def _cell_colour(self, col, g, view, near: bool) -> str:
+        """What colour one cell is drawn in.
+
+        Ordinarily how close the galaxy is to this player: lit for the ones
+        that are their business and dim for the rest. A stopped galaxy takes
+        the warning colour in its status cell whether or not they are in it,
+        because the row has to be different at a glance and a dim row that
+        merely reads differently is not.
+        """
+        if col is GALAXY_STATUS and row_stalled_for(g, view):
+            return WARN
+        return TEXT if near else DIM
+
     def _galaxy_view(self):
         """What a cell needs to know that its own row does not carry."""
         return View(now=time.time(), recs=self.games_recs,
@@ -2716,12 +2866,13 @@ class Launcher:
                         or pending_join(g, view.recs))
             for i, col in enumerate(GALAXY_COLUMNS):
                 cell = tk.Label(self.games_table, text=col.text(g, view),
-                                bg=PANEL, fg=TEXT if near else DIM,
+                                bg=PANEL, fg=self._cell_colour(col, g, view,
+                                                               near),
                                 anchor="w", font=("Segoe UI", 9))
                 cell.grid(row=r, column=i, sticky="w", padx=(0, 8), pady=3)
                 self._cells.append(cell)
-                if col is GALAXY_LEFT:
-                    self._clocks.append((cell, g))
+                if col in LIVE_COLUMNS:
+                    self._clocks.append((cell, col, g, near))
             if action is None:
                 continue
             btn = tk.Button(self.games_table, text=ACTION_TEXT[action], bg=BTN,
@@ -2763,10 +2914,20 @@ class Launcher:
         to play, and what they got was a roster refusal offering to change
         their name. The answer belongs in front of the list, beside the thing
         to press.
+
+        A stopped galaxy takes the line ahead of either. Both of the others
+        are about what there is to play; this one is the only state in the
+        page a player is asked to act on, and telling them to press View
+        instead would be the launcher watching a dead referee and talking
+        about something else.
         """
         actions = [row_action(g, view.recs, view.own) for g in rows]
+        stalled = [(g, s) for g, s in
+                   ((g, row_stalled_for(g, view)) for g in rows) if s]
         text = ""
-        if rows and PLAY not in actions:
+        if stalled:
+            text = stall_hint(stalled)
+        elif rows and PLAY not in actions:
             if VIEW in actions:
                 text = ("You are not in a galaxy yet. Press View on one to "
                         "read what you would be joining, and join from "
@@ -2775,26 +2936,41 @@ class Launcher:
                 text = ("Your join is with the galaxy. A seat appears at the "
                         "next turn boundary, and Play appears with it.")
         if text:
-            self.games_hint.configure(text=text)
+            # Only on a change. This is called once a second now, and the
+            # stopped line's own clock rounds to minutes, so repainting a
+            # label that has not moved is a redraw a second for nothing.
+            if self.games_hint.cget("text") != text:
+                self.games_hint.configure(text=text)
             if not self.games_hint.winfo_ismapped():
                 self.games_hint.pack(fill="x", pady=(8, 0))
         elif self.games_hint.winfo_ismapped():
             self.games_hint.pack_forget()
 
     def _tick_clocks(self):
-        """Keep the countdowns honest between listings.
+        """Keep the countdowns and the stopped galaxies honest between
+        listings.
 
-        That one column is rewritten and the order is left alone. A table that
-        re-sorted itself once a second would move the row being clicked on out
-        from under the pointer.
+        Those two columns are rewritten and the order is left alone. A table
+        that re-sorted itself once a second would move the row being clicked
+        on out from under the pointer.
+
+        The hint goes with them. A galaxy crosses into stopped by the clock
+        rather than by anything a listing says, and the line that tells a
+        player what to do about it would otherwise appear up to two minutes
+        after the row it explains.
         """
         view = self._galaxy_view()
-        for cell, g in self._clocks:
+        for cell, col, g, near in self._clocks:
             if not cell.winfo_exists():
                 continue
-            text = GALAXY_LEFT.text(g, view)
+            text = col.text(g, view)
             if cell.cget("text") != text:
                 cell.configure(text=text)
+            colour = self._cell_colour(col, g, view, near)
+            if cell.cget("fg") != colour:
+                cell.configure(fg=colour)
+        self._show_hint(sort_galaxies(self.games_rows or [], self.sort_key,
+                                      self.sort_desc, view), view)
 
     def on_row(self, g, action: str):
         """What a row's one button does. View reads, Play plays."""
@@ -3302,6 +3478,11 @@ class Launcher:
                            "store": cfg["store"]}
         self.mp_stop = False
         self.mp_deadline = None
+        # Out of the state read above rather than asked for again. A galaxy
+        # whose state would not read leaves this None, which `stall_after`
+        # answers with its ceiling.
+        self.mp_turn_seconds = (state or {}).get("turn_seconds")
+        self.mp_waiting = False
         self.mp_capture = None
         self.mp_client_seen = False
         self.mp_client_gone = False
@@ -3416,6 +3597,11 @@ class Launcher:
             "stopped": "stopped",
             "done": "finished",
         }.get(kind, kind)
+        # Set beside the note and from the same kind, so the two cannot come
+        # apart: the readout asks this before it falls back to "waiting for
+        # the next turn", and a galaxy that has stopped is what that wait has
+        # turned into.
+        self.mp_waiting = kind == "waiting"
         if kind in ("submitted", "waiting", "failed", "stopped", "done"):
             self.say_threadsafe(f"multiplayer: {self.mp_note} ({civ})")
 
@@ -3434,6 +3620,8 @@ class Launcher:
         self.mp_note = ""
         self.mp_turn = None
         self.mp_deadline = None
+        self.mp_turn_seconds = None
+        self.mp_waiting = False
         self.mp_capture = None
         self.mp_client_seen = False
         self.mp_client_gone = False
@@ -3660,6 +3848,22 @@ class Launcher:
             return True, f"{civ} not responding"
         return False, f"{civ} is thinking"
 
+    def _mp_stalled(self) -> float:
+        """How long the galaxy being followed has been stopped, or 0.
+
+        Only while the loop is between turns. During a turn the deadline is
+        ahead and there is nothing to judge; afterwards it is the moment the
+        referee should have closed the turn, and how far past it we are is how
+        long the referee has been gone.
+
+        Nothing here reads the store. The deadline arrives with the loop's own
+        `playing` reports and the turn length was read once when the galaxy
+        was opened, which is what keeps a once-a-second check free.
+        """
+        if not self.mp_waiting:
+            return 0.0
+        return stalled_for(self.mp_deadline, self.mp_turn_seconds)
+
     def _refresh_turn(self):
         """Update the turn readout
         """
@@ -3683,8 +3887,18 @@ class Launcher:
                 # tells the player their turn is still open when it is not,
                 # and the one thing they do need to know instead is whether
                 # the launcher is still sending it.
+                #
+                # The wait is also where a dead referee is seen from. A turn
+                # the galaxy is never going to close looks exactly like one
+                # about to be closed, and this line is what a player waiting
+                # for a turn is looking at, so it is where the difference has
+                # to be said. Only over the wait: everything above it is this
+                # launcher's own work and is both truer and more urgent.
+                stopped = self._mp_stalled()
                 label = ("sending your turn" if self.mp_sending
                          else "opening the game again" if self.mp_reopening
+                         else f"turns have stopped, due {fmt_ago(stopped)}"
+                         if stopped
                          else self.mp_note or "waiting for the next turn")
                 if self.turn_label.cget("text") != label:
                     self.turn_label.configure(text=label)
@@ -3709,6 +3923,15 @@ class Launcher:
                     turn = self.mp_turn
                     left = self.mp_deadline - time.time()
                     label = f"turn {turn} \u00b7 {fmt_left(left)} left"
+                    # A player who reopened the game into an overdue turn
+                    # would otherwise read "0:00 left" for as long as the
+                    # referee stays down, which is the countdown claiming a
+                    # turn is about to close.
+                    stopped = stalled_for(self.mp_deadline,
+                                          self.mp_turn_seconds)
+                    if stopped:
+                        label = (f"turn {turn} \u00b7 turns have stopped, due "
+                                 f"{fmt_ago(stopped)}")
                     if self.mp_note:
                         label = f"turn {turn} \u00b7 {self.mp_note}"
                     if self.turn_label.cget("text") != label:
@@ -3901,7 +4124,20 @@ class Launcher:
                 # on the Games page, where the row for a galaxy you are in
                 # says so. This line goes back to what it says when the
                 # launcher has just opened and is only holding the port.
-                self._status_if_changed(*self._ready)
+                #
+                # Unless the galaxy has stopped, which is the one thing about
+                # the wait worth putting here. It is not the claim this branch
+                # exists to avoid: it says nothing about a game being open or
+                # a loop being alive, it says the referee has not closed a
+                # turn that fell due long enough ago to be a fault, and that
+                # is a thing the player has to act on rather than watch.
+                stopped = self._mp_stalled()
+                if stopped:
+                    self._status_if_changed(
+                        f"the galaxy has stopped , its turn was due "
+                        f"{fmt_ago(stopped)}", WARN)
+                else:
+                    self._status_if_changed(*self._ready)
             elif mp_live:
                 self._status_if_changed(
                     f"Multiplayer , {self.mp_civ}" if self.mp_civ

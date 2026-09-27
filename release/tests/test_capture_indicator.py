@@ -113,6 +113,12 @@ def bare(**over):
     app.mp_note = ""
     app.mp_turn = None
     app.mp_deadline = None
+    # The turn length and whether the loop is between turns, which together
+    # decide whether a passed deadline is a referee about to close a turn or
+    # one that has stopped. Four hours, so that a deadline a few seconds old
+    # is ordinary here, which is what every readout above is written against.
+    app.mp_turn_seconds = 14400
+    app.mp_waiting = False
     app.mp_civ = "DemoPlayer"
     app.mp_capture = None
     app.mp_playing = None
