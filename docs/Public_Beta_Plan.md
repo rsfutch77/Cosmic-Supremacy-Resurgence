@@ -475,8 +475,27 @@ is out of scope here.
   submissions in Firestore and write only the final one to Storage, or take the
   Firestore-only variant in H0 and the constraint disappears.
 
-  The launcher polls against the deadline it already knows rather than on a fixed
-  short interval: often near the boundary, rarely in the middle of a turn.
+  **This sentence described a design, not the code, and the code is the opposite.**
+  It read: the launcher polls against the deadline it already knows rather than
+  on a fixed short interval. `player_turn.follow` in fact polls `store.current()`
+  every `poll` seconds without pause, and the launcher passes `poll=2.0`, through
+  the whole turn **and through the wait between turns**. A launcher left open is
+  a launcher reading the store every two seconds all day.
+
+  | poll | store reads per day per player | of the 50K Firestore free tier |
+  |---|---|---|
+  | **2s, today** | **43,200** | **86%** |
+  | 15s | 5,760 | 12% |
+  | 60s | 1,440 | 3% |
+
+  So the beta cannot have two players with their launchers open, and the
+  constraint is Firestore reads rather than the Storage writes this item spends
+  its length on. It predates the capture and upload split and is not caused by
+  it, though that made it about 20% worse by waking the nap more often.
+
+  The fix is the sentence that was already here: fast while a turn is being
+  played, and between turns sleep against the deadline, which the store has
+  already given. Not done.
 
   **Done when:** a measured day of a live galaxy is inside the allowances with
   margin, or the expected monthly bill is written down.
