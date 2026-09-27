@@ -395,4 +395,19 @@ check("neither branch starts anything itself",
 check("and the loop is handed the event it watches",
       "reopen=self.mp_reopen" in mp, True)
 print("\n" + ("ALL PASSED" if not fails else f"FAILURES: {fails}"))
+
+print()
+print("the indicator once the game window has closed")
+src = inspect.getsource(L.Launcher._refresh_turn)
+# It used to stick on 'saving your turn...' for the whole wait between
+# turns: the last attempt emits `capturing` before asking a client that is
+# gone, the attempt fails, and the send after it has nothing new to store
+# so it returns without emitting. Nothing superseded the state.
+check("a closed game stops the indicator saying anything",
+      "mp_client_gone and not self.mp_sending" in src, True)
+check("and a state of None is what hides it",
+      L.capture_readout(None, 0.0)[0] in (None, ""), True)
+check("while a submission in flight still says so",
+      L.capture_readout("capturing", 0.0)[0] not in (None, ""),
+      True)
 sys.exit(1 if fails else 0)

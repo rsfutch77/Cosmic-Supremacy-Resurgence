@@ -3092,17 +3092,25 @@ class Launcher:
                           "the home page is this galaxy's.")
             return False
 
-        from tkinter import messagebox
         there = (g.name or g.id) if g is not None else "another galaxy"
-        if not messagebox.askyesno(
-                self.cfg["product"],
-                f"This launcher is playing {here} right now.\n\nYou can be in "
-                "as many galaxies as you like, but a turn starts the game "
-                "itself and this machine runs one game, so one galaxy is "
-                f"played at a time.\n\nStop following {here} and play {there} "
-                "instead?"):
-            self.say(f"multiplayer: still following {here}, not switching")
-            return False
+        # Only ask when there is a game to lose. The dialog is there so a
+        # player mid-turn is not dropped out of it, and once they have
+        # closed the window themselves there is nothing on screen to
+        # interrupt: the loop is only waiting for the referee. Asking then
+        # made switching feel like it needed permission it did not need.
+        if not self.mp_client_gone:
+            from tkinter import messagebox
+            if not messagebox.askyesno(
+                    self.cfg["product"],
+                    f"This launcher is playing {here} right now.\n\nYou can be in "
+                    "as many galaxies as you like, but a turn starts the game "
+                    "itself and this machine runs one game, so one galaxy is "
+                    f"played at a time.\n\nStop following {here} and play {there} "
+                    "instead?"):
+                self.say(f"multiplayer: still following {here}, not switching")
+                return False
+        else:
+            self.say(f"multiplayer: {here} had no game open, switching to {there}")
 
         # The thread stop_multiplayer let go of. It clears the handle whether
         # or not the loop finished, and a second loop started over one that is
@@ -3631,6 +3639,16 @@ class Launcher:
         import gamectl
         if self.mp_store is not None:
             state, when = self.mp_capture or (None, time.time())
+            # The indicator is about capturing, and a closed game is not being
+            # captured from. It used to stick on "saving your turn..." for the
+            # whole wait between turns: the last capture attempt emits
+            # `capturing` before it asks the client, the client is gone so the
+            # attempt fails, and the send that follows has nothing new to
+            # store and returns without emitting anything. Nothing superseded
+            # it. While the final submission is still in flight there is
+            # something worth saying, so that case keeps the indicator.
+            if self.mp_client_gone and not self.mp_sending:
+                state = None
             self._show_capture(state, time.time() - when)
             if self.mp_client_gone:
                 # The turn number and the countdown are facts about a client

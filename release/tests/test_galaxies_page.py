@@ -788,4 +788,26 @@ check("and it is cleared when a loop starts and when one stops",
        "self.mp_reopen.clear()" in
        inspect.getsource(L.Launcher.stop_multiplayer)), (True, True))
 print("\n" + ("ALL PASSED" if not fails else f"FAILURES: {fails}"))
+
+print()
+print("switching away from a galaxy whose game window is closed")
+here_rec = {"name": sandbox.name, "store": sandbox.store}
+asked.clear()
+open_sw = Player(playing=here_rec)
+answers.append(True)
+check("with a game open it asks first", open_sw.take(crowded), True)
+check("and the question names both galaxies",
+      len(asked) == 1 and sandbox.name in asked[0], True)
+
+asked.clear()
+gone_sw = Player(playing=here_rec, client_gone=True, turn=11)
+# The dialog exists so a player mid-turn is not dropped out of it. With the
+# window already closed there is nothing to interrupt, so asking made a
+# switch feel like it needed permission it did not need. Fails if the
+# prompt still appears, which is what the operator saw.
+check("with no game open it does not ask", gone_sw.take(crowded), True)
+check("and nothing was put to the player", asked, [])
+check("and the first galaxy was let go of", len(gone_sw.stopped), 1)
+check("and it said so in the log",
+      any("no game open" in m for m in gone_sw.said), True)
 sys.exit(1 if fails else 0)
