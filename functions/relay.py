@@ -45,6 +45,33 @@ What it enforces, which is what rules could not
     so Cloud Storage refuses an oversized body itself, and it is checked again
     at commit because the emulator cannot enforce a signed header
   * a submission that is not a save of this galaxy's current turn is deleted
+  * a join request is filed under the uid in the token and not the one in the
+    body, and a caller reads back only the request it lodged itself
+
+The one caller with no seat
+----------------------------
+Everything above is about a player who holds a seat proving they are the player
+whose seat it is. A join is the request that arrives from somebody who holds
+nothing, and it has to be let in or nobody new ever plays. So `seat_or_refuse`
+is not on that path, and what stands in its place is narrower:
+
+  * **the uid is the token's.** The launcher puts a uid in the body because a
+    folder galaxy has nowhere else to get one; here the body's is discarded. A
+    request filed under another player's uid is that player's next seat taken
+    from them at the boundary, by a caller who only had to read a uid once.
+  * **the clock is the galaxy's.** `requested_at` decides who gets the last
+    free planet when two joins compete for it, so it is stamped here rather
+    than taken from a caller who could send a zero and always win.
+  * **one waiting request per sign-in per galaxy**, because the document is the
+    uid. Pressing Join again replaces, exactly as it does on a folder, and the
+    door cannot be used to fill a collection.
+  * **a caller already seated on the roster is refused**, and one whose seat
+    was reclaimed is not: K4 takes a seat back and leaves the player able to
+    come back, and a check that only asked whether a uid appears in `seats`
+    would lock them out of the galaxy they were reclaimed from.
+  * **nothing is seated here.** The request is a request. The worker grants it
+    at the next boundary, on the authoritative blob, which is J3's whole shape
+    and the reason a player cannot join a galaxy by writing to it.
 
 Who a uid is
 ------------
@@ -102,9 +129,28 @@ URL_SECONDS = int(os.environ.get('CS_RELAY_URL_SECONDS', '600'))
 # filled, not to be tight.
 MAX_BYTES = int(os.environ.get('CS_RELAY_MAX_BYTES', str(2 * 1024 * 1024)))
 
+# The ceiling on a join request, which is a name, a build string and two
+# numbers. Three orders of magnitude above what one is and small enough that
+# the door cannot be used to write a document of any size into Firestore.
+MAX_JOIN_BYTES = int(os.environ.get('CS_RELAY_MAX_JOIN_BYTES', '4096'))
+
+# The longest build string a request may carry. It is a claim the launcher
+# makes about itself, read by L2's minimum-build gate, so it is kept rather
+# than dropped and capped rather than trusted.
+MAX_BUILD_CHARS = 64
+
 # Where the galaxies are. The prefix matches `firebase_store.PREFIX` for the
 # reason that module gives: the same project hosts the public website.
 PREFIX = os.environ.get('CS_RELAY_PREFIX', firebase_store.PREFIX)
+
+# Fields of the galaxy document that the store carries and this door does not
+# serve. `joined` is the worker's record of who was seated at which boundary
+# and it holds their uids, so serving it would hand every player the uid to
+# civ mapping that `seats` is kept out of `/state` to protect. The store has to
+# carry it, because `joins.commit` writes it and the acceptance tool reads it
+# back; a player has no use for anybody's record but their own, and
+# `GET /<galaxy>/join` is where they get that.
+PRIVATE_FIELDS = (turn_store.JOINED_KEY,)
 
 _STORES = {}
 _APP = None
@@ -529,6 +575,113 @@ def _commit_submission(store, doc, uid, turn, civ):
     return _json({'turn': turn, 'civ': civ, 'bytes': len(decoded)})
 
 
+def _lodge_join(store, doc, uid, body):
+    """Ask this galaxy for a seat. The one write an unseated caller may make.
+
+    What comes back is where it landed and the turn it was lodged during, so a
+    launcher can tell the player which turn their empire appears at without
+    reading the clock again.
+
+    A galaxy with no first turn is refused rather than queued. `joins.apply`
+    runs on the blob a tick produced and a galaxy that has never published one
+    has nothing for a newcomer to be merged into, so a request lodged against
+    it would wait for a boundary that cannot come.
+    """
+    refuse_if_closed(store, doc)
+    if len(body or b'') > MAX_JOIN_BYTES:
+        raise Refused(413, f'a join request may be {MAX_JOIN_BYTES:,} bytes')
+    try:
+        req = json.loads(body or b'{}')
+    except ValueError:
+        raise Refused(400, 'a join request is a JSON object')
+    if not isinstance(req, dict):
+        raise Refused(400, 'a join request is a JSON object')
+    name = req.get('name')
+    name = name.strip() if isinstance(name, str) else ''
+    if not name:
+        raise Refused(400, 'a join request names the player asking')
+
+    turn = _current_turn(doc)
+    roster = [str(c) for c in (doc.get('civs') or [])]
+    held = seat_of(doc, uid)
+    if held and held in roster:
+        # Already playing. Refused here rather than at the boundary, where the
+        # answer would be a second empire refused for a name clash and would
+        # read to the player as the galaxy having lost their seat. A seat that
+        # was reclaimed is not in the roster and falls through, because a
+        # reclaimed player coming back is a join `joins.py` knows how to grant.
+        raise Refused(409, f'this sign-in already plays {held} in '
+                           f'{store.galaxy}')
+    if any(c == name or c.lower() == name.lower() for c in roster):
+        # The launcher refuses this at the button and says more about it than
+        # a status code can. It is refused here as well because the launcher is
+        # not a boundary: what stops a second player taking a seat has to be on
+        # this side of the door.
+        raise Refused(409, f'{store.galaxy} already has a seat called {name}')
+
+    build = req.get('build')
+    clean = {'name': name,
+             'uid': uid,
+             'build': str(build)[:MAX_BUILD_CHARS] if build else None,
+             'requested_at': time.time(),
+             'requested_turn': turn}
+    try:
+        where = store.request_join(clean)
+    except ValueError as exc:
+        # The store refuses a request it could not file, and every reason it
+        # has is about the caller. Unreachable as the record is built above,
+        # where the name is checked and the key is a uid; turned into a
+        # refusal rather than left to become a 500, because a caller told
+        # "internal error" has nothing to do about it.
+        raise Refused(400, str(exc))
+    return _json({'where': where, 'key': uid, 'requested_turn': turn})
+
+
+def _own_key(uid: str, asked: str) -> str:
+    """The request key in a path, once it has been shown to be this caller's.
+
+    Through this door a request is filed under the uid in the token, so the
+    only key a caller may name is its own. The comparison is the same one
+    `seat_or_refuse` makes about a civ, one step earlier in a player's life:
+    there they have a seat and here they are asking for one.
+
+    Unquoted first, because `HttpTurnStore` quotes a key whole and a uid that
+    came back with an escape in it would never match.
+    """
+    key = urllib.parse.unquote(asked or '')
+    if key != uid:
+        raise Refused(403, 'a join request is read back by the sign-in that '
+                           'lodged it')
+    return key
+
+
+def _own_join(store, doc, uid):
+    """What became of the request this caller lodged, or that it is waiting.
+
+    Keyed by the token's uid and by nothing else, so there is no route here
+    that lists what is waiting on a galaxy. `turn_server.py` has one, because
+    on a LAN the worker is whoever holds the port; through this door the same
+    list would tell a stranger who else is trying to join, which is the
+    enumeration F4 refuses to let a launcher make.
+
+    This is what closes J3's other half: a refused player is on no roster, so
+    `player_turn.follow` never runs for them and the note the worker left is on
+    a path they cannot read. The answer is on a path they can.
+
+    Two named document reads and no listing, for the reason H6 gives about a
+    submission: this is a path a launcher polls while it waits for a boundary,
+    and reading the whole waiting collection to find one row in it would cost a
+    read per player waiting, per poll.
+    """
+    answer = store.join_answer(uid)
+    if answer is not None:
+        return _json({'state': 'answered', 'answer': answer})
+    waiting = store.join_request(uid)
+    if waiting is not None:
+        return _json({'state': 'waiting', 'request': waiting})
+    return _json({'state': 'none'})
+
+
 def sp_decode(data: bytes) -> bytes:
     """The wire form a submission is stored in, decoded, or a ValueError.
 
@@ -567,7 +720,7 @@ def _route(method: str, path: str, headers: dict, body: bytes):
     if method in ('GET', 'HEAD'):
         if parts == ['state']:
             return _json({k: doc[k] for k in firebase_store.STATE_FIELDS
-                          if k in doc})
+                          if k in doc and k not in PRIVATE_FIELDS})
         if len(parts) == 2 and parts[0] == 'turn':
             turn = _turn_number(parts[1])
             if not store.has_turn(turn):
@@ -597,8 +750,36 @@ def _route(method: str, path: str, headers: dict, body: bytes):
             if not lines:
                 raise Refused(404, f'no note for {civ} on turn {turn}')
             return _text('\n'.join(lines).encode('utf-8'))
+        if parts == ['join']:
+            return _own_join(store, doc, uid)
+        if len(parts) == 2 and parts[0] == 'join':
+            req = store.join_request(_own_key(uid, parts[1]))
+            if req is None:
+                raise Refused(404, 'no join request of yours is waiting here')
+            return _json(req)
+        if len(parts) == 3 and parts[0] == 'join' and parts[2] == 'answer':
+            answer = store.join_answer(_own_key(uid, parts[1]))
+            if answer is None:
+                raise Refused(404, 'nothing has been decided about a join '
+                                   'request of yours here')
+            return _json(answer)
+        if parts and parts[0] == 'joins':
+            # What is waiting on a galaxy is the worker's question.
+            # `turn_server.py` answers it, because on a LAN the worker is
+            # whoever holds the port. Answering it here would tell any stranger
+            # who else is trying to join, which is the enumeration F4 refuses
+            # to let a launcher make.
+            raise Refused(403, 'what is waiting on this galaxy is the '
+                               'worker\'s to read, and this door answers a '
+                               'caller only about its own request')
 
     if method == 'POST':
+        if parts == ['join']:
+            return _lodge_join(store, doc, uid, body)
+        if parts and parts[0] in ('join', 'joins'):
+            raise Refused(403, 'a join request is answered by the worker at a '
+                               'turn boundary, and it does not come through '
+                               'here')
         if len(parts) == 4 and parts[:2] == ['commit', 'submission']:
             return _commit_submission(store, doc, uid,
                                       _turn_number(parts[2]), parts[3])

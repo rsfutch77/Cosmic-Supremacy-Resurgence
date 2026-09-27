@@ -107,6 +107,13 @@ LOG_BYTES, LOG_KEEP = 4 * 1024 * 1024, 5
 # default and the same reason: a launcher needs a few seconds to trigger a
 # save, wait for it over HTTP and write it to the store, and a turn closed
 # inside that window drops orders the player did give.
+# What the worker records into the galaxy itself, as opposed to into its own
+# status file, which lives on one machine and no player can read. These two are
+# what lets a launcher tell a referee that is gone from one that is up and
+# failing, which look identical from a deadline alone.
+WORKER_SEEN_KEY = 'worker_seen'
+WORKER_FAILURES_KEY = 'worker_failures'
+
 GRACE = 20.0
 
 # How often the clock is read while waiting. The turn is hours and this costs a
@@ -697,6 +704,36 @@ def close_overdue(store, save_dir=None, grace: float = GRACE, log=print) -> bool
 
 
 # ── the loop ─────────────────────────────────────────────────────────────────
+def heartbeat(store, fails: int, log=print) -> None:
+    """Tell the galaxy its referee is alive, where a player can see it.
+
+    `GalaxyGuard` already records all of this, and it records it into a file on
+    this machine that no player can reach. So a launcher can tell a turn is
+    overdue and cannot tell **why**: a machine that is switched off and a worker
+    that is up and failing on a turn it cannot close look identical from the
+    outside, and the second one is about to fix itself.
+
+    **Written when a turn is closed and when one fails, never on an idle pass.**
+    An idle worker has nothing to report: no turn is due, so nothing is wrong,
+    and the launcher's stall check does not even look until a turn is overdue.
+    Writing every poll instead would be 17,280 writes a day for one galaxy
+    against a 20,000 a day free tier, which would spend more than the polling
+    work just saved. A tick is 182 a month; a failure is bounded by
+    `BACKOFF_MAX`, so a worker stuck in a retry loop writes under 300 a day.
+
+    Never raises. A heartbeat that could end a turn would be worse than no
+    heartbeat, and a store too old to carry `update_state` simply has none.
+    """
+    write = getattr(store, 'update_state', None)
+    if write is None:
+        return
+    try:
+        write({WORKER_SEEN_KEY: time.time(), WORKER_FAILURES_KEY: int(fails)})
+    except Exception as exc:                                # noqa: BLE001
+        log(f'  worker: could not record a heartbeat ({type(exc).__name__}: '
+            f'{exc}); the turn is unaffected')
+
+
 def run(store, save_dir=None, grace: float = GRACE, poll: float = POLL,
         once: bool = False, stop=None, guard=None, log=print,
         server=None, sleeper=time.sleep) -> int:
@@ -762,6 +799,7 @@ def run(store, save_dir=None, grace: float = GRACE, poll: float = POLL,
             referee.wait_for_client_free(log=log)
             referee.resolve_turn(store, save_dir=save_dir, log=log)
             fails = 0
+            heartbeat(store, fails, log=log)
             if once:
                 return EXIT_OK
         except (Exception, SystemExit) as exc:              # noqa: BLE001
@@ -773,6 +811,7 @@ def run(store, save_dir=None, grace: float = GRACE, poll: float = POLL,
             if guard is not None:
                 guard.write(failures=fails, last_error=f'{type(exc).__name__}: {exc}',
                             last_error_at=time.time())
+            heartbeat(store, fails, log=log)
             if once:
                 return 1
             sleeper(wait)

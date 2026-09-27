@@ -24,6 +24,7 @@ What is not here is a real tick, which needs the game client. Everything that
 would reach one is stubbed at `referee.resolve_turn`, and what is under test is
 the worker's decision to call it rather than anything it does.
 """
+import inspect
 import json
 import os
 import socket
@@ -546,6 +547,53 @@ def test_task_definition():
 
 
 # ── the log that outlives the window ─────────────────────────────────────────
+def test_heartbeat():
+    """What the worker tells the galaxy about itself, and what it costs."""
+    print('the heartbeat a player can see')
+
+    class Beat:
+        def __init__(self, raises=False):
+            self.wrote, self.raises = [], raises
+
+        def update_state(self, d):
+            if self.raises:
+                raise OSError('store is gone')
+            self.wrote.append(d)
+
+    b = Beat()
+    rw.heartbeat(b, 0, log=lambda *a: None)
+    check('a tick records that the referee was here',
+          rw.WORKER_SEEN_KEY in b.wrote[0], True)
+    check('and how many times it has failed',
+          b.wrote[0][rw.WORKER_FAILURES_KEY], 0)
+
+    b2 = Beat()
+    rw.heartbeat(b2, 3, log=lambda *a: None)
+    check('a failing worker still reports, with its count',
+          b2.wrote[0][rw.WORKER_FAILURES_KEY], 3)
+
+    # A heartbeat that could end a turn would be worse than none at all.
+    said = []
+    rw.heartbeat(Beat(raises=True), 1, log=said.append)
+    check('a store that refuses it does not stop the worker',
+          any('heartbeat' in m for m in said), True)
+
+    class Old:
+        pass
+
+    rw.heartbeat(Old(), 0, log=lambda *a: None)
+    check('and a store too old to carry one simply has none', True, True)
+
+    # The cost rule. An idle pass must write nothing, or one galaxy spends
+    # 17,280 writes a day against a 20,000 a day tier, which would undo
+    # more than the polling work saved.
+    src = inspect.getsource(rw.run)
+    idle = src.split('referee.wait_for_client_free')[0]
+    check('no heartbeat on an idle pass', 'heartbeat(' in idle, False)
+    check('one after a turn closes',
+          'heartbeat(' in src.split('referee.resolve_turn')[1], True)
+
+
 def test_log():
     print('the log')
     work = tmpdir('log')
@@ -568,6 +616,7 @@ if __name__ == '__main__':
     test_stub_server()
     test_sleep()
     test_task_definition()
+    test_heartbeat()
     test_log()
     print(f'\n{len(PASS)} passed, {len(FAIL)} failed')
     if FAIL:

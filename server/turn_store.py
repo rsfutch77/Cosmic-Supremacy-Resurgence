@@ -40,6 +40,8 @@ folder between two:
     submissions/0007/X.b64  what civ X handed back for turn 7
     notes/0007/X.txt        what the referee refused from civ X's turn 7
     archive/0007.json       what the referee did, once it has done it
+    joins/X.json            a seat a stranger has asked for
+    joins/done/X.json       what the worker decided about it
 
 The notes are the only thing here that travels from the referee to one named
 player. Every refusal was already logged, on the server, where the player whose
@@ -137,6 +139,17 @@ OPEN, CLOSED = 'open', 'closed'
 # both are read by a launcher explaining a refusal to the player who hit it.
 CLOSED_REASON_KEY = 'closed_reason'
 RECLAIMED_KEY = 'reclaimed'
+
+# Who was seated at a boundary and what they were given, written by
+# `joins.commit`, and the build a galaxy refuses to be played by anything
+# older than, which is L2's gate. Both are optional and both are spelled here
+# rather than where they are written, because `firebase_store` keeps an
+# allowlist of the fields its `state` returns and a field named only by its
+# writer is a field that store drops in silence. `release/launcher.py` holds
+# `MIN_BUILD_KEY` as its own constant of the same name, the way it holds
+# `JOIN_DIR`: the two have to agree and neither file imports the other.
+JOINED_KEY = 'joined'
+MIN_BUILD_KEY = 'min_build'
 
 
 class GalaxyClosed(RuntimeError):
@@ -245,6 +258,118 @@ def reclaimed_of(state, civ: str = None):
     if not isinstance(taken, dict):
         return None if civ else {}
     return taken.get(civ) if civ else dict(taken)
+
+
+# ── join requests ────────────────────────────────────────────────────────────
+# A join is a request rather than a change. The launcher lodges one and stops;
+# the worker applies it at the next turn boundary, on the blob the tick
+# produced, so a player who asks during turn N is playing at turn N+1. That is
+# J3, `server/joins.py` is the worker's half, and the four methods below are
+# the store's, carried by every implementation because a galaxy that cannot
+# take a join is a galaxy nobody new can play. J3 shipped the folder half
+# alone, and the beta galaxy is Firebase.
+#
+# The names and the shape live here rather than in any one implementation, so
+# that a request lodged through one store is the same request read back through
+# another. A galaxy moves between a folder, a LAN service and Firebase by
+# copying, and a join that only one of the three understood would be lost in
+# the move.
+
+# Where a request waits and where its answer goes, in a store that is a
+# directory. `release/launcher.py` holds `JOIN_DIR` as its own constant of the
+# same name: the two have to agree and neither file imports the other.
+JOIN_DIR = 'joins'
+JOIN_DONE_DIR = 'done'
+
+# The longest a request key may be. A key is a uid or a name a player typed,
+# and both are far shorter than this. It is here so that a key cannot be made
+# into a file name or a document id the store behind it refuses, which would
+# arrive as a failure at the worker rather than as a refusal at the caller.
+MAX_JOIN_KEY = 200
+
+
+def join_key(req) -> str:
+    """What one request is filed under: the uid, or the name when there is none.
+
+    One definition, because three stores and the relay all have to agree about
+    which request a second press of Join replaces. The uid is the better of the
+    two, because it survives a name change and it is what J4 binds a seat to. A
+    folder galaxy has no identity and no uid at all, and there the name is the
+    only thing that is the same player twice.
+    """
+    uid = req.get('uid') if isinstance(req, dict) else None
+    key = uid if isinstance(uid, str) and uid.strip() else (
+        req.get('name') if isinstance(req, dict) else None)
+    return str(key or '').strip()
+
+
+def join_problem(rec) -> str:
+    """Why this is not a join request, or ''.
+
+    A request that cannot be read is not a fault the player who wrote it can
+    fix, and it must never be able to stop a turn, so every store sets one
+    aside rather than raising. The rule is written once so the three agree
+    about what counts as a request: a store that took one the others refused
+    would seat a player in one galaxy and leave them waiting in another.
+    """
+    if not isinstance(rec, dict):
+        return 'the record does not hold a join request'
+    name = rec.get('name')
+    if not isinstance(name, str) or not name.strip():
+        return 'the request names no player'
+    key = join_key(rec)
+    if not key:
+        return 'the request has nothing to file it under'
+    if len(key) > MAX_JOIN_KEY:
+        return (f'the request is filed under more than {MAX_JOIN_KEY} '
+                f'characters')
+    if any(c in key for c in '/\\\0') or key in ('.', '..'):
+        # Refused rather than escaped, so the three agree. A directory store
+        # makes the key a file name, and a key with a separator in it is a
+        # subdirectory rather than a request; Firebase escapes what it must to
+        # make a document id, but escaping here would mean a request lodged in
+        # Firebase that could not be copied into a folder, and a galaxy moves
+        # between the two by copying. The launcher refuses these at the button
+        # and a uid never holds one.
+        return 'the request is filed under a name that cannot be a file'
+    return ''
+
+
+def join_record(req) -> dict:
+    """A request as it is stored: what the launcher wrote and nothing else.
+
+    `key` is what a store adds to a request on the way out, so a request
+    carrying one in would have it written down and then overwritten when it is
+    read back. `path` goes with it because a request read out of a folder once
+    carried one, and a record that travelled between two stores would otherwise
+    take a file name on another machine with it. Dropping both here is what
+    makes the round trip the same on all three.
+    """
+    return {k: v for k, v in dict(req).items() if k not in ('key', 'path')}
+
+
+def join_order(rec):
+    """The sort a waiting list is in: when the player asked, then their key.
+
+    Oldest first, so two requests that cannot both be granted are settled by
+    who asked first rather than by how a listing happened to come back. The
+    tie-break is the key, so a directory listing, a JSON array and a Firestore
+    stream all produce the same order.
+    """
+    at = rec.get('requested_at')
+    ok = isinstance(at, (int, float)) and not isinstance(at, bool)
+    return (at if ok else 0.0, str(rec.get('key') or ''))
+
+
+def skipped(log, what, why: str) -> None:
+    """Say that something in `joins/` was not a request and was left alone.
+
+    The worker's console is the only place this can be seen, and a player whose
+    request was unreadable is waiting on an answer that is never coming, so
+    silence here is the one outcome worth avoiding.
+    """
+    if log:
+        log(f'  joins: ignoring {what}, {why}')
 
 
 def _atomic_write(path: str, data: bytes) -> None:
@@ -571,6 +696,120 @@ class TurnStore:
         except (FileNotFoundError, PermissionError, UnicodeDecodeError):
             return []
 
+    # ── joins ────────────────────────────────────────────────────────────────
+    def join_dir(self) -> str:
+        return os.path.join(self.root, JOIN_DIR)
+
+    def join_path(self, key: str) -> str:
+        return os.path.join(self.join_dir(), f'{key}.json')
+
+    def join_answer_path(self, key: str) -> str:
+        return os.path.join(self.join_dir(), JOIN_DONE_DIR, f'{key}.json')
+
+    def request_join(self, req: dict) -> str:
+        """Lodge a join request, and say where it landed.
+
+        Lodging twice replaces, the way a second submission does, so a player
+        who presses Join again is one request waiting rather than two. The file
+        name is the key, which is what a consumed request is filed under and
+        what a player reads their own answer back by.
+        """
+        problem = join_problem(req)
+        if problem:
+            raise ValueError(problem)
+        path = self.join_path(join_key(req))
+        _atomic_write(path,
+                      json.dumps(join_record(req), indent=2).encode('utf-8'))
+        return path
+
+    def join_requests(self, log=None) -> list:
+        """Every request waiting on this galaxy, oldest first.
+
+        `log` is on this read and on no other in the interface, because this is
+        the only one that can meet something that is not what it asked for: a
+        file in `joins/` that is not a request. It is reported and set aside,
+        never raised, because one unreadable file must not end the turn for
+        everybody in the galaxy.
+        """
+        where = self.join_dir()
+        if not os.path.isdir(where):
+            return []
+        out = []
+        for entry in sorted(os.listdir(where)):
+            if not entry.endswith('.json'):
+                continue
+            path = os.path.join(where, entry)
+            if not os.path.isfile(path):
+                continue
+            try:
+                with open(path, encoding='utf-8') as f:
+                    rec = json.load(f)
+            except (OSError, ValueError) as exc:
+                skipped(log, entry, f'{type(exc).__name__}: {exc}')
+                continue
+            problem = join_problem(rec)
+            if problem:
+                skipped(log, entry, problem)
+                continue
+            rec = join_record(rec)
+            rec['key'] = entry[:-len('.json')]
+            out.append(rec)
+        return sorted(out, key=join_order)
+
+    def join_request(self, key: str):
+        """The one request filed under this key, or None while there is none.
+
+        Named rather than listed, for the reason `submission` is: a player
+        asking after their own request is on the path a launcher polls, and a
+        listing would cost a read per player waiting and hand back everybody
+        else's request to find one.
+        """
+        path = self.join_path(key)
+        try:
+            with open(path, encoding='utf-8') as f:
+                rec = json.load(f)
+        except (FileNotFoundError, PermissionError, ValueError):
+            return None
+        if join_problem(rec):
+            return None
+        rec = join_record(rec)
+        rec['key'] = key
+        return rec
+
+    def answer_join(self, key: str, answer: dict) -> None:
+        """Consume one request and record what was decided about it.
+
+        The request leaves `joins/` and the answer takes its place in
+        `joins/done/`, which is one of the three independent things that stop a
+        request being granted twice; the other two are the roster check and
+        `inject_civ.add_civ` refusing a name the blob already holds.
+
+        The answer is written before the request is removed. A worker killed
+        between the two leaves a request the next boundary refuses, for a name
+        it has already seated, which an operator can read and settle. The other
+        order loses the answer and leaves nothing to read.
+        """
+        _atomic_write(self.join_answer_path(key),
+                      json.dumps(dict(answer), indent=2).encode('utf-8'))
+        try:
+            os.remove(self.join_path(key))
+        except FileNotFoundError:
+            pass
+
+    def join_answer(self, key: str):
+        """What was decided about one request, or None while it is waiting.
+
+        Keyed rather than listed, because a player asking what happened to
+        their own request must not be handed everybody else's: a list of who is
+        trying to join is the roster-enumeration problem J4 and F4 already
+        refuse to hand out.
+        """
+        try:
+            with open(self.join_answer_path(key), encoding='utf-8') as f:
+                return json.load(f)
+        except (FileNotFoundError, PermissionError, ValueError):
+            return None
+
 
 def _same_host(a: str, b: str) -> bool:
     pa, pb = urllib.parse.urlparse(a), urllib.parse.urlparse(b)
@@ -864,6 +1103,52 @@ class HttpTurnStore:
         if not body:
             return []
         return [line for line in body.decode('utf-8').split('\n') if line]
+
+    # -- joins --
+    def request_join(self, req: dict) -> str:
+        """Lodge a join request through whichever service is answering.
+
+        The one write on this interface that a caller with no seat may make,
+        which is the whole of what a join is: a stranger asking. What decides
+        whether it may be made is the far end's, and the two ends decide
+        differently on purpose. `turn_server.py` takes it from anyone who can
+        reach the port, which is a LAN among people who know each other. The
+        relay verifies a Firebase ID token first and stamps the uid out of it
+        over whatever the body claimed, because a request filed under somebody
+        else's uid is a seat taken from them at the next boundary.
+        """
+        problem = join_problem(req)
+        if problem:
+            raise ValueError(problem)
+        out = self._post('/join',
+                         json.dumps(join_record(req)).encode('utf-8'))
+        return (out or {}).get('where') or f'{self.base}/join'
+
+    def join_requests(self, log=None) -> list:
+        """Every request waiting on this galaxy, oldest first.
+
+        `log` is accepted and unused, because the files that can fail to be
+        requests are on the far side of the wire and the service that reads
+        them reports them there. Sorting happens here rather than being taken
+        from the service, so that all three stores order a waiting list by the
+        same rule even when the far end is an older build.
+        """
+        rows = [r for r in (self._get('/joins') or []) if isinstance(r, dict)]
+        return sorted((r for r in rows if not join_problem(r)),
+                      key=join_order)
+
+    def join_request(self, key: str):
+        """The one request filed under this key, or None while there is none."""
+        return self._get(f'/join/{urllib.parse.quote(key, safe="")}')
+
+    def answer_join(self, key: str, answer: dict) -> None:
+        self._post(f'/join/{urllib.parse.quote(key, safe="")}',
+                   json.dumps(dict(answer)).encode('utf-8'), want_json=False)
+
+    def join_answer(self, key: str):
+        """What was decided about one request, or None while it is waiting."""
+        return self._get(
+            f'/join/{urllib.parse.quote(key, safe="")}/answer')
 
 
 def open_store(spec: str, token=None):

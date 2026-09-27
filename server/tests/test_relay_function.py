@@ -1,15 +1,27 @@
 """
 test_relay_function.py , what the relay lets a player do, and what it does not
 ==============================================================================
-    python functions/emulators.py --only firestore,storage,auth
+    python functions/emulators.py --only firestore,storage,auth --print-env
+    cd functions && firebase emulators:start --only firestore,storage,auth \
+        --config .firebase.emulators.json --project demo-cs-resurgence
 
-which resolves each port before binding and prints the three variables
-below. Starting the suite by hand works too, on the ports in
-functions/firebase.json, as long as nothing else holds them.
     set FIRESTORE_EMULATOR_HOST=127.0.0.1:8080
     set STORAGE_EMULATOR_HOST=http://127.0.0.1:9199
     set FIREBASE_AUTH_EMULATOR_HOST=127.0.0.1:9099
     server\\.venv\\Scripts\\python.exe server\\tests\\test_relay_function.py
+
+`--print-env` resolves each port before anything binds and writes the config
+the second line runs; the ports it prints are the three variables.
+
+**The project has to be named and `emulators.py` does not name one.** Without
+`--project`, the CLI takes the default out of `functions/.firebaserc`, which is
+the live project `cs-resurgence`, and the Auth emulator then mints tokens whose
+`aud` is that. This test is a `demo-` project, which the emulator suite refuses
+to let reach a real one, so every token is refused as minted for another
+project and the run fails at "a real emulator token is accepted" with nothing
+in the message about the project. The store equivalence test does not care,
+because it mints no tokens, which is why the two runs disagree about whether
+the same emulator is usable.
 
 The equivalence test proves three stores agree. It cannot prove anything about
 this, and H7 recorded why: every run of it, on the emulator and against the live
@@ -536,6 +548,181 @@ def run(referee, galaxy, base, player_a, player_b, player_c, anonymous, ids):
     check('and points at Cloud Storage rather than at the relay',
           headers['Location'].startswith(
               os.environ['STORAGE_EMULATOR_HOST'].rstrip('/')), True)
+
+    run_joins(referee, galaxy, call, ids)
+
+
+def run_joins(referee, galaxy, call, ids):
+    """J3 through the relay: the one request from a caller with no seat.
+
+    Every other route here is a seated player proving they are the player whose
+    seat it is. This one has to let somebody in who holds nothing, so what
+    stands in place of the seat check is narrower and each piece of it is
+    checked below against the referee's own store rather than against the
+    relay's answer.
+
+    The referee is the oracle throughout, for the reason this file gives: a 200
+    is not evidence that a request landed and a 403 is not evidence that one
+    did not.
+    """
+    uid_a, token_a = ids['a']
+    uid_c, token_c = ids['c']
+    uid_d, token_d = ids['d']
+
+    def lodge(token, **fields):
+        return call('POST', '/join', token, json.dumps(fields).encode('utf-8'))
+
+    print('a join is the one request from somebody with no seat')
+    # Fails if the relay had required a seat to lodge a join, which would mean
+    # only players already in a galaxy could ask to be in it.
+    code, _h, body = lodge(token_d, name='Newcomer', build='0.1.0+dev',
+                           uid='somebody-elses-uid', requested_at=0.0)
+    check('an unseated caller may lodge a join', code, 200)
+    waiting = referee.join_requests()
+    check('and the referee sees it waiting',
+          [r['key'] for r in waiting], [uid_d])
+    # The one that matters. Fails if the body's uid were taken: a request filed
+    # under another player's uid is that player's next seat, taken from them at
+    # the boundary by a caller who only had to read a uid once.
+    check('filed under the uid in the token and not the one in the body',
+          waiting[0]['uid'], uid_d)
+    check('carrying the name that was asked for', waiting[0]['name'],
+          'Newcomer')
+    check('and the turn the galaxy is actually playing',
+          waiting[0]['requested_turn'], referee.current()[0])
+    # Fails if the caller's clock were kept. `requested_at` decides which of
+    # two joins gets the last free planet, so a caller that sent a zero would
+    # win every race forever.
+    check('and a clock the caller did not set',
+          waiting[0]['requested_at'] > 1.0, True)
+    # Fails if lodging a join bound a seat. A join is a request, granted by the
+    # worker on the authoritative blob, which is the whole of J3's shape.
+    check('lodging a join takes no seat',
+          (referee.doc.get().to_dict().get('seats') or {}).get(uid_d), None)
+    check('and adds nobody to the roster', referee.civs(),
+          ['DemoPlayer', 'Neighbor', 'Third'])
+
+    print('a request is read back by the caller that lodged it')
+    check('the caller reads their own request',
+          json.loads(call('GET', '/join', token_d)[2])['state'], 'waiting')
+    # Fails if the route answered about the galaxy rather than about the
+    # caller, which is how a launcher would learn who else is asking to join.
+    check('another caller sees nothing of it',
+          json.loads(call('GET', '/join', token_a)[2])['state'], 'none')
+    check('and may not ask for it by key',
+          call('GET', f'/join/{uid_d}', token_a)[0], 403)
+    check('the caller may ask for it by its own key',
+          json.loads(call('GET', f'/join/{uid_d}', token_d)[2])['name'],
+          'Newcomer')
+    # Fails if the relay grew the listing route `turn_server.py` has. On a LAN
+    # the worker is whoever holds the port; here the same list is a roster of
+    # everyone trying to join, which F4 refuses to hand a launcher.
+    check('there is no route here that lists what is waiting',
+          call('GET', '/joins', token_d)[0], 403)
+
+    print('the worker answers a join, and nobody else does')
+    code, _h, body = call('POST', f'/join/{uid_d}', token_d,
+                          b'{"outcome": "granted"}')
+    check('a caller may not answer its own request', code, 403)
+    check('and says the worker does it at a boundary',
+          'worker' in json.loads(body)['error'], True)
+    # Fails if the refusal were the relay declining to answer while the write
+    # happened anyway.
+    check('and nothing was answered', referee.join_answer(uid_d), None)
+    check('the request is still waiting',
+          [r['key'] for r in referee.join_requests()], [uid_d])
+
+    print('who may ask, and for what name')
+    code, _h, body = lodge(token_a, name='Another')
+    # Fails if a seated player could lodge a join, which at the boundary is a
+    # second empire for one player refused as a name clash, and reads to them
+    # as the galaxy having lost their seat.
+    check('a caller already on the roster is refused', code, 409)
+    check('and is told which seat it holds',
+          'DemoPlayer' in json.loads(body)['error'], True)
+    check('a name already seated is refused', lodge(token_d,
+                                                    name='DemoPlayer')[0], 409)
+    check('and so is the same name spelled differently',
+          lodge(token_d, name='demoplayer')[0], 409)
+    # Fails if a refused lodge had overwritten the request already waiting.
+    check('and the request that was waiting is untouched',
+          referee.join_request(uid_d)['name'], 'Newcomer')
+    lodge(token_d, name='Newcomer2')
+    check('pressing Join again replaces rather than joining',
+          [r['name'] for r in referee.join_requests()], ['Newcomer2'])
+
+    print('a seat that was reclaimed is not a seat')
+    # K4 takes a seat back and leaves the player able to come back, so the
+    # check above has to be about the roster and not about the seat map. Fails
+    # if it asked only whether a uid appears in `seats`, which would lock a
+    # reclaimed player out of the galaxy they were reclaimed from.
+    referee.update_state({'civs': ['DemoPlayer', 'Neighbor']})
+    check('the reclaimed player may ask for a seat again',
+          lodge(token_c, name='Third')[0], 200)
+    check('and the referee sees both requests',
+          sorted(r['key'] for r in referee.join_requests()),
+          sorted([uid_c, uid_d]))
+    referee.update_state({'civs': ['DemoPlayer', 'Neighbor', 'Third']})
+
+    print('what a join request may not be')
+    big = 'y' * (relay.MAX_JOIN_BYTES + 100)
+    check('an oversized join request is refused',
+          lodge(token_d, name='Newcomer2', build=big)[0], 413)
+    check('one that is not JSON is refused',
+          call('POST', '/join', token_d, b'not json at all')[0], 400)
+    check('one that names nobody is refused', lodge(token_d, build='x')[0],
+          400)
+    check('one with no token at all is refused',
+          call('POST', '/join', None, b'{"name": "Nobody"}')[0], 401)
+    # Fails if any of the four above had been written anyway.
+    check('and none of them changed what is waiting',
+          [r['name'] for r in referee.join_requests()
+           if r['key'] == uid_d], ['Newcomer2'])
+
+    print('a refused player is told, which is where J3 stopped')
+    referee.answer_join(uid_d, {'key': uid_d, 'name': 'Newcomer2',
+                                'outcome': 'refused',
+                                'reason': 'this galaxy had no room'})
+    out = json.loads(call('GET', '/join', token_d)[2])
+    check('the answer reaches the player through the same door',
+          out['state'], 'answered')
+    # The whole point of the route. A refused player is on no roster, so
+    # `player_turn.follow` never runs for them and the note the worker left is
+    # on a path they cannot read. Fails if the reason were dropped.
+    check('and carries the reason rather than only the outcome',
+          out['answer']['reason'], 'this galaxy had no room')
+    check('the request is no longer waiting',
+          [r['key'] for r in referee.join_requests()], [uid_c])
+    check('and another caller cannot read that answer',
+          call('GET', f'/join/{uid_d}/answer', token_a)[0], 403)
+
+    print('the record of who was seated stays behind the door')
+    referee.update_state({turn_store.JOINED_KEY: {
+        'Third': {'turn': 8, 'uid': uid_c, 'planet': 6, 'system': 'Tau Ceti'}}})
+    # The store has to carry `joined`, because `joins.commit` writes it and the
+    # acceptance tool reads it back, and it holds the uid of everyone who has
+    # ever been seated. Fails if the relay served the whole allowlist: that is
+    # the uid-to-civ mapping `seats` is kept out of `/state` to protect, handed
+    # to every player in the galaxy.
+    state = json.loads(call('GET', '/state', token_d)[2])
+    check('the seated record is not in the state a player reads',
+          turn_store.JOINED_KEY in state, False)
+    check('and neither is the seat map', 'seats' in state, False)
+    check('while the referee holding the galaxy still reads it',
+          list(referee.state().get(turn_store.JOINED_KEY) or {}), ['Third'])
+
+    print('a closed galaxy takes no more joins')
+    referee.close('the beta ended')
+    code, _h, body = lodge(token_d, name='Latecomer')
+    # Fails if the closed check sat only on the store's own `request_join`,
+    # which the relay reaches with admin credentials: the guard has to be on
+    # the door a player uses.
+    check('a join into a closed galaxy is refused', code, 409)
+    check('and says the galaxy is closed',
+          'closed' in json.loads(body)['error'], True)
+    check('and nothing was lodged',
+          [r['key'] for r in referee.join_requests()], [uid_c])
+    referee.reopen()
 
 
 def put(ticket, data: bytes):

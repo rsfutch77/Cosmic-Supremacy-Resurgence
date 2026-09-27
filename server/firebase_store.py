@@ -26,6 +26,8 @@ Firestore is good at: one small document, read often, replaced atomically.
       beta/<galaxy>                     the clock, the roster, the hash, and
                                         the directory's row for this galaxy
       beta/<galaxy>/archive/<turn>      what the referee recorded for a turn
+      beta/<galaxy>/joins/<key>         a seat a stranger has asked for
+      beta/<galaxy>/joins_done/<key>    what the worker decided about it
 
     Cloud Storage
       beta/<galaxy>/turns/0007.b64            the state for turn 7
@@ -50,6 +52,23 @@ by copying. Base64 costs a third more egress than the compressed bytes would;
 at tens of kilobytes and six turns a day that is not worth a second encoding in
 the tree.
 
+A join request is a document and not an object
+-----------------------------------------------
+It is the one thing here that is neither a blob nor part of the clock, and the
+choice is the same one the split above is: what does this thing fail at. A
+request is a few hundred bytes of structure, and the question asked of it is
+"what is waiting, oldest first", which is a query over a small collection
+rather than a fetch of something named.
+
+Cost decides it as well, and decides it the same way. H5 measured Cloud Storage
+Class A operations as the binding free allowance, 5,000 a month against
+Firestore's 20,000 writes a day, and a request kept as an object would spend a
+Class A to lodge it, another to list for it at every turn boundary, and a copy
+and a delete to move it aside once it is answered. Two documents and a batched
+delete spend none of that. And the batch buys a property a bucket cannot offer
+at all: the request leaves and the answer arrives together, so a worker killed
+mid-write leaves one of the two states a reader can understand.
+
 What is deliberately absent
 ---------------------------
 `TurnStore.state` retries for two seconds because `os.replace` is not atomic
@@ -71,6 +90,7 @@ themselves, so this module needs no emulator branch.
 """
 import json
 import os
+import string
 import sys
 import time
 import urllib.parse
@@ -101,11 +121,57 @@ PREFIX = 'beta'
 # three stores carry them now. A launcher is handed a store spec and may never
 # be handed a directory, so a galaxy that has ended and a seat that was taken
 # back have to be answerable by the store the player is already holding.
+#
+# **An allowlist drops a field added later in silence**, which is what happened
+# to the two at the end. `joins.commit` writes `joined` and
+# `dev_tools/join_turn_acceptance.py` reads it back to check a live join, and
+# on a Firebase galaxy it read nothing; L2's minimum-build gate reads
+# `min_build` out of the state a launcher already has, and on a Firebase galaxy
+# every build passes it. Neither was a missing write. A field this store is
+# asked to carry belongs in this tuple, and the equivalence test now writes one
+# and reads it back through all three so the next one cannot be dropped
+# quietly.
 STATE_FIELDS = ('turn', 'deadline', 'turn_seconds', 'civs', 'hash',
                 turn_store.STATUS_KEY, turn_store.CLOSED_REASON_KEY,
-                turn_store.RECLAIMED_KEY)
+                turn_store.RECLAIMED_KEY, turn_store.JOINED_KEY,
+                turn_store.MIN_BUILD_KEY)
+
+# The two subcollections a join lives in: waiting, and answered. Two rather
+# than one document with a flag on it, because "what is waiting" is then a
+# plain stream of a small collection. One collection filtered by a flag and
+# ordered by when the player asked is a composite index to create and keep,
+# which is a deploy step for a question a handful of documents can answer.
+JOIN_COLLECTION = 'joins'
+JOIN_DONE_COLLECTION = 'joins_done'
+
+# What a Firestore document id may carry as itself. A request key is a uid when
+# the player has one and a name they typed when they do not, and a document id
+# may not hold a slash, may not be `.` or `..`, and may not be spelled
+# `__like_this__`. Escaping `.` and `_` along with the obvious characters rules
+# out all three without a special case for each.
+ID_SAFE = frozenset(string.ascii_letters + string.digits + '-~')
 
 _BUCKETS = {}
+
+
+def join_doc_id(key: str) -> str:
+    """A document id for a request key, still readable when the key is a uid.
+
+    An anonymous uid is letters and digits and comes through untouched, which
+    is what an operator sees in the Firestore console when they ask what is
+    waiting on a galaxy. Anything else is escaped byte by byte, so the mapping
+    is one to one and no two keys can land on one document.
+
+    This is the one place a caller-supplied string becomes a Firestore id, and
+    it is the exception to this module's own rule that anything keyed by a name
+    a player typed is a Storage object. The rule is kept where it was written
+    for: a submission and a note are named for a civ, and a civ name is
+    unbounded, arbitrary and read by the referee. A request key is bounded by
+    `turn_store.MAX_JOIN_KEY`, is a uid on every path a stranger reaches, and
+    is escaped here rather than hoped about.
+    """
+    return ''.join(chr(b) if chr(b) in ID_SAFE else f'%{b:02X}'
+                   for b in key.encode('utf-8'))
 
 
 def parse_spec(spec: str):
@@ -239,6 +305,13 @@ class FirebaseTurnStore:
 
     def archive_doc(self, turn: int):
         return self.doc.collection('archive').document(f'{turn:04d}')
+
+    def join_doc(self, key: str):
+        return self.doc.collection(JOIN_COLLECTION).document(join_doc_id(key))
+
+    def join_done_doc(self, key: str):
+        return self.doc.collection(JOIN_DONE_COLLECTION).document(
+            join_doc_id(key))
 
     def _object(self, *parts) -> str:
         return '/'.join((self.prefix, self.galaxy) + parts)
@@ -509,6 +582,100 @@ class FirebaseTurnStore:
             return []
         return [line for line in data.decode('utf-8').split('\n') if line]
 
+    # ── joins ────────────────────────────────────────────────────────────────
+    def request_join(self, req: dict) -> str:
+        """Lodge a join request, and say where it landed.
+
+        Lodging twice replaces, because the document id is the key: a player
+        who presses Join again is one request waiting rather than two, which is
+        what the directory store gets from writing the same file name.
+
+        The key is written into the document as well as being its id. The id is
+        escaped, so a request read back cannot recover a key that needed
+        escaping from the id alone, and the key is what an answer is filed
+        under and what a player reads their own answer back by.
+        """
+        problem = turn_store.join_problem(req)
+        if problem:
+            raise ValueError(problem)
+        key = turn_store.join_key(req)
+        rec = turn_store.join_record(req)
+        rec['key'] = key
+        self.join_doc(key).set(rec)
+        return (f'{self.project}/{self.prefix}/{self.galaxy}/'
+                f'{JOIN_COLLECTION}/{join_doc_id(key)}')
+
+    def join_requests(self, log=None) -> list:
+        """Every request waiting on this galaxy, oldest first.
+
+        Streamed and sorted here rather than ordered by Firestore, for a reason
+        that is quiet enough to be worth writing down: a query with an
+        `order_by` returns only the documents that carry the field it orders
+        on, so a request written without a `requested_at` would be invisible
+        rather than last, and a request that cannot be seen is a player waiting
+        forever. The collection holds one document per player waiting, which is
+        a handful, so the sort costs nothing and is the sort the other two
+        stores use.
+        """
+        out = []
+        for snap in self.doc.collection(JOIN_COLLECTION).stream():
+            data = snap.to_dict() or {}
+            problem = turn_store.join_problem(data)
+            if problem:
+                turn_store.skipped(log, snap.id, problem)
+                continue
+            rec = turn_store.join_record(data)
+            rec['key'] = data.get('key') or turn_store.join_key(data)
+            out.append(rec)
+        return sorted(out, key=turn_store.join_order)
+
+    def join_request(self, key: str):
+        """The one request filed under this key, or None while there is none.
+
+        One named document read. A launcher waiting on a boundary polls this,
+        so it is the read that must not be a listing, which is the same
+        reasoning `submission` carries about not listing a turn's submissions
+        to find one player's.
+        """
+        snap = self.join_doc(key).get()
+        if not snap.exists:
+            return None
+        data = snap.to_dict() or {}
+        if turn_store.join_problem(data):
+            return None
+        rec = turn_store.join_record(data)
+        rec['key'] = data.get('key') or key
+        return rec
+
+    def answer_join(self, key: str, answer: dict) -> None:
+        """Consume one request and record what was decided, in one write.
+
+        A batch, so the request leaves and the answer arrives together. The
+        directory store cannot do that: it writes the answer and then removes
+        the file, and a worker killed between the two leaves both. Here there
+        is no such window, so a request cannot be read a second time after it
+        has been answered.
+
+        Answering one that is already answered writes the answer again rather
+        than refusing. A worker that is retrying cannot tell whether the batch
+        it lost landed, and the second write of the same answer is the same
+        answer.
+
+        The answer is a map and not a JSON string, unlike the archive record
+        beside it, because every key in it is a field name this tree chose:
+        `outcome`, `reason`, `planet`, `system`. The archive record is keyed by
+        civ name in two places, which is what a Firestore map key may not be.
+        """
+        batch = self.fs.batch()
+        batch.set(self.join_done_doc(key), dict(answer))
+        batch.delete(self.join_doc(key))
+        batch.commit()
+
+    def join_answer(self, key: str):
+        """What was decided about one request, or None while it is waiting."""
+        snap = self.join_done_doc(key).get()
+        return snap.to_dict() if snap.exists else None
+
     # ── housekeeping ─────────────────────────────────────────────────────────
     def delete_everything(self) -> int:
         """Remove this galaxy from both services, and say how many things went.
@@ -522,9 +689,10 @@ class FirebaseTurnStore:
                                         prefix=self._object() + '/'):
             blob.delete()
             n += 1
-        for snap in self.doc.collection('archive').stream():
-            snap.reference.delete()
-            n += 1
+        for name in ('archive', JOIN_COLLECTION, JOIN_DONE_COLLECTION):
+            for snap in self.doc.collection(name).stream():
+                snap.reference.delete()
+                n += 1
         if self.doc.get().exists:
             self.doc.delete()
             n += 1
