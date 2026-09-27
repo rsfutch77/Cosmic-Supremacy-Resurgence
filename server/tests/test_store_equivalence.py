@@ -16,7 +16,15 @@ So the same sequence runs against each of them and the answers are compared,
 rather than each implementation being tested against its own expectations. The
 sequence is the F1 sequence: start, publish, submit, one player's own
 submission, the submission list, the archive, the notes, missing turns and the
-factory.
+factory, and now the seat a stranger asked for.
+
+Joins are here because of how J3 went wrong, which is the failure this file
+exists to catch. The launcher wrote a request into the store's directory and
+the worker read the directory back, so the feature worked, completely, against
+one of the three implementations and against nothing else. The beta galaxy is
+Firebase. A test that lodges a request and reads it back through one store
+proves nothing about the other two, so `run_joins` runs against each of them
+and the result goes into the summary the three are compared on.
 
 The HTTP run is made against a directory this test can also read, so the
 service's answers are checked against the directory underneath it as well as
@@ -101,6 +109,21 @@ THEIRS = make_blob(TURN, b'n')
 # typed, and this is a name a player could type.
 DOTTED = 'Player.One'
 
+# Two join requests, in the shape `release/launcher.py` writes one. Bo asked
+# first and Ada second, and they are lodged the other way round, so an order
+# that came from the listing rather than from `requested_at` shows.
+#
+# Ada has a uid and Bo has none, which is the difference between a beta galaxy
+# and a folder: a request is filed under the uid when there is one and under
+# the name when there is not. Bo's name carries a dot, which is what decides
+# whether a store can key a request by a name a player typed at all: a
+# Firestore document id may not be a dot and may not be spelled `__like_this__`,
+# so the key is escaped into an id rather than used as one.
+ADA = {'name': 'Ada', 'uid': 'uid-ada', 'build': '0.1.0+dev',
+       'requested_at': 200.0, 'requested_turn': TURN}
+BO = {'name': 'Bo.1', 'uid': None, 'build': '0.1.0+dev',
+      'requested_at': 100.0, 'requested_turn': TURN}
+
 
 def check(name, got, want=True):
     ok = got == want
@@ -120,7 +143,7 @@ def raises(fn, *a):
 
 
 # ── the sequence ─────────────────────────────────────────────────────────────
-def run_sequence(store, label, turn=TURN):
+def run_sequence(store, label, turn=TURN, writer=None):
     """The same checks against whichever store this is.
 
     Returns what the store ended up holding, so the three runs can be compared
@@ -255,6 +278,9 @@ def run_sequence(store, label, turn=TURN):
     check(f'{label}: and so is its archive record',
           store.archive_record(turn), record)
 
+    run_joins(store, label)
+    run_state_fields(store, label, writer or store)
+
     return {
         'turn': store.current()[0],
         'turn_seconds': store.state()['turn_seconds'],
@@ -267,7 +293,159 @@ def run_sequence(store, label, turn=TURN):
         'submission_missing': store.submission('Stranger', turn),
         'note': store.note('DemoPlayer', turn),
         'archive': store.archive_record(turn),
+        'joins': store.join_requests(),
+        'join_request': store.join_request('Bo.1'),
+        'join_answer': store.join_answer('uid-ada'),
+        'join_answer_missing': store.join_answer('Bo.1'),
+        'joined': store.state().get(turn_store.JOINED_KEY),
+        'min_build': store.state().get(turn_store.MIN_BUILD_KEY),
     }
+
+
+# ── the fields a galaxy document carries ─────────────────────────────────────
+def run_state_fields(store, label, writer):
+    """A field the interface names survives being written and read back.
+
+    `FirebaseTurnStore.state` returns an allowlist, so a field added to the
+    galaxy by one writer and read by another is carried by two stores and
+    dropped in silence by the third. Both fields below were in exactly that
+    state and neither failure was a missing write: `joins.commit` wrote
+    `joined` and `join_turn_acceptance.py` read nothing back from a Firebase
+    galaxy, and L2's gate read `min_build` out of a state that could not carry
+    it, so every build passed on the one deployment that has strangers in it.
+
+    Checked here rather than in either of those files because the allowlist is
+    the store's, and a test that passes against a directory says nothing about
+    it, which is how both of them got in.
+    """
+    print(f'{label}: the fields a galaxy carries')
+    seated = {'Ada': {'turn': TURN + 1, 'uid': 'uid-ada', 'planet': 6,
+                      'system': 'Tau Ceti', 'build': '0.1.0+dev', 'at': 1.0}}
+    writer.update_state({turn_store.JOINED_KEY: seated,
+                         turn_store.MIN_BUILD_KEY: '0.2.0'})
+    state = store.state()
+    check(f'{label}: the record of who was seated reads back',
+          state.get(turn_store.JOINED_KEY), seated)
+    check(f'{label}: and the minimum build L2 gates on',
+          state.get(turn_store.MIN_BUILD_KEY), '0.2.0')
+    check(f'{label}: and the clock is where it was',
+          state['turn'], store.current()[0])
+
+
+# ── the seat a stranger asked for ────────────────────────────────────────────
+def run_joins(store, label):
+    """J3's half of the interface, against whichever store this is.
+
+    A join is the only thing a caller with no seat writes, and until now it was
+    the only thing only one of the three implementations could take: the
+    launcher wrote a file into the store's directory and `HttpTurnStore` and
+    `FirebaseTurnStore` had nowhere to put one. The beta galaxy is Firebase, so
+    the feature was unreachable by the beta it was built for.
+
+    Every check here is about the round trip rather than about the write
+    succeeding, because a write that succeeded and cannot be read back is
+    exactly the shape that bug had.
+    """
+    print(f'{label}: joins')
+    check(f'{label}: a galaxy nobody has asked to join has nothing waiting',
+          store.join_requests(), [])
+    check(f'{label}: and nothing waiting under a key nobody used',
+          store.join_request('uid-ada'), None)
+    check(f'{label}: and nothing decided under one either',
+          store.join_answer('uid-ada'), None)
+
+    where = store.request_join(ADA)
+    check(f'{label}: request_join names where it landed',
+          bool(where) and 'uid-ada' in where, True)
+    waiting = store.join_requests()
+    check(f'{label}: one request is waiting', len(waiting), 1)
+    check(f'{label}: carrying the name the player typed',
+          waiting[0]['name'], 'Ada')
+    check(f'{label}: the uid J4 binds a seat to', waiting[0]['uid'], 'uid-ada')
+    check(f'{label}: the turn they asked during',
+          waiting[0]['requested_turn'], TURN)
+    # Filed under the uid and not the name. Fails if the key came from the
+    # name, which would give one player two requests after a rename and would
+    # let a second install lodge one under a name it does not hold.
+    check(f'{label}: and filed under the uid rather than the name',
+          waiting[0]['key'], 'uid-ada')
+
+    store.request_join(BO)
+    # Fails if the order came from the listing. A directory sorts by file name
+    # and Firestore streams in document-id order, and on both of those Ada
+    # comes first; only `requested_at` puts Bo there, and who asked first is
+    # what decides which of two joins gets the last free planet.
+    check(f'{label}: two requests come back oldest first',
+          [r['name'] for r in store.join_requests()], ['Bo.1', 'Ada'])
+    # A name a player could type, as a key. Fails on Firestore if the key were
+    # used as a document id unescaped, because an id may not hold a dot on its
+    # own and may not be spelled `__like_this__`.
+    check(f'{label}: a request with no uid is filed under the name',
+          [r['key'] for r in store.join_requests()], ['Bo.1', 'uid-ada'])
+
+    store.request_join(dict(ADA, build='0.1.1+dev'))
+    check(f'{label}: pressing Join again replaces rather than joining',
+          len(store.join_requests()), 2)
+    check(f'{label}: and the replacement is what is read back',
+          store.join_request('uid-ada')['build'], '0.1.1+dev')
+    # Fails if the named read and the listing disagreed, which is the H6 shape
+    # one step along: the launcher polls the named read and the worker reads
+    # the list, and a player must not be told something the worker will not do.
+    check(f'{label}: a named read is the record the listing gives',
+          store.join_request('uid-ada'),
+          [r for r in store.join_requests() if r['key'] == 'uid-ada'][0])
+    check(f'{label}: and a key nobody lodged under is None',
+          store.join_request('uid-nobody'), None)
+
+    answer = {'key': 'uid-ada', 'name': 'Ada', 'uid': 'uid-ada',
+              'build': '0.1.1+dev', 'requested_at': 200.0,
+              'requested_turn': TURN, 'turn': TURN + 1, 'outcome': 'granted',
+              'reason': '', 'planet': 6, 'sun': 3, 'system': 'Tau Ceti',
+              'answered_at': 300.0}
+    store.answer_join('uid-ada', answer)
+    # The three defences against one join being granted twice are independent
+    # and this is the first of them. Fails if consuming did not consume: the
+    # worker reads this list at every boundary, and a request still in it after
+    # it was granted is a second empire for one player.
+    check(f'{label}: an answered request stops waiting',
+          [r['key'] for r in store.join_requests()], ['Bo.1'])
+    check(f'{label}: and is not there under its own key either',
+          store.join_request('uid-ada'), None)
+    check(f'{label}: the answer reads back whole',
+          store.join_answer('uid-ada'), answer)
+    check(f'{label}: and only under the key it was filed under',
+          store.join_answer('Bo.1'), None)
+
+    store.answer_join('uid-ada', answer)
+    # A worker killed after the write and before it knew the write landed
+    # retries. Fails if answering twice raised, which inside a tick ends the
+    # turn for everybody, or if it put the request back.
+    check(f'{label}: answering twice is not an error',
+          store.join_answer('uid-ada'), answer)
+    check(f'{label}: and does not put the request back',
+          [r['key'] for r in store.join_requests()], ['Bo.1'])
+
+    check(f'{label}: a request filed under nothing is refused',
+          raises(store.request_join, {'name': '  '}), 'ValueError')
+    # Refused by all three rather than escaped by the two that could, because a
+    # galaxy moves between a folder and Firebase by copying and a request only
+    # one of them can hold would not survive the move.
+    check(f'{label}: and one filed under a name that cannot be a file is too',
+          raises(store.request_join, {'name': 'a/b'}), 'ValueError')
+    check(f'{label}: neither of which is now waiting',
+          [r['key'] for r in store.join_requests()], ['Bo.1'])
+
+    # `joins.pending` is the worker's read, and it is the seam J3 left
+    # unexercised: it asks a store for `join_requests` and only one of the
+    # three had one. Imported here rather than at the top of this file because
+    # `joins` pulls in the injection tools, and nothing else in this test needs
+    # a save format that can hold a civ.
+    import joins
+    check(f'{label}: joins.pending reads what this store is holding',
+          [r['key'] for r in joins.pending(store, log=lambda *a: None)],
+          ['Bo.1'])
+    check(f'{label}: and gives back exactly what the store gave it',
+          joins.pending(store, log=lambda *a: None), store.join_requests())
 
 
 # ── what a names-only read is allowed to fetch ───────────────────────────────
@@ -395,7 +573,13 @@ def run_http(tmp):
     thread.start()
     try:
         base = f'http://127.0.0.1:{httpd.server_address[1]}'
-        summary = run_sequence(HttpTurnStore(base), 'http')
+        # The operator's writes are refused over this interface on purpose,
+        # so the state fields are written through the directory the service is
+        # holding and read back through the service, which is the pair that
+        # matters: a launcher reads L2's gate over HTTP and an operator sets it
+        # where the galaxy lives.
+        summary = run_sequence(HttpTurnStore(base), 'http',
+                               writer=TurnStore(root))
         run_token_checks(base, root, summary['turn'])
     finally:
         httpd.shutdown()
@@ -415,6 +599,15 @@ def run_http(tmp):
           under.submission('DemoPlayer', 7), summary['submission'])
     check('http: the directory holds the same archive record',
           under.archive_record(7), summary['archive'])
+    # The join half, through the service and into the folder behind it. Fails
+    # if the service had answered out of something of its own rather than
+    # writing through, which is the only way a request could be readable over
+    # HTTP and invisible to the worker holding the same galaxy as a directory.
+    check('http: the directory sees the request that is still waiting',
+          [r['key'] for r in under.join_requests()],
+          [r['key'] for r in summary['joins']])
+    check('http: and the answer the service filed',
+          under.join_answer('uid-ada'), summary['join_answer'])
     return summary
 
 

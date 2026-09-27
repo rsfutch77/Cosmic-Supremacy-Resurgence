@@ -27,6 +27,11 @@ this service is no longer needed. Nothing above the store changes either way.
     POST /archive/<n>               record it
     GET  /note/<n>/<civ>            what the referee refused from that civ
     POST /note/<n>/<civ>            leave that note
+    GET  /joins                     the seats strangers have asked for
+    POST /join                      ask for one
+    GET  /join/<key>                the one request filed under that key
+    GET  /join/<key>/answer         what was decided about it
+    POST /join/<key>                file that decision and consume the request
 
 Blobs move as raw decompressed bytes rather than the base64 the directory holds,
 because the encoding is the directory's business and a caller that has to know
@@ -50,6 +55,13 @@ service runs on a LAN and the relay is what a stranger reaches. An
 the same as ignored: a launcher configured with an identity has to be able to
 talk to a LAN service without its token being either a fault or a credential.
 What verifies one is `functions/relay.py`.
+
+That is also why `GET /joins` exists here and has no counterpart in the relay.
+Listing what is waiting is the worker's question, and on a LAN the worker is
+whoever holds the port. Through the relay the same list would tell any stranger
+who else is trying to join this galaxy, which is the enumeration J4 and F4 both
+refuse to hand out, so the relay answers a caller only about the request that
+caller lodged.
 """
 import argparse
 import json
@@ -62,6 +74,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(HERE, 'dev_tools'))
 
+import turn_store
 from turn_store import TurnStore, check_save
 
 STORE = None
@@ -165,6 +178,24 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(rec)
             if len(parts) == 4 and parts[:2] == ['upload', 'submission']:
                 return self._json(upload_ticket(int(parts[2]), parts[3]))
+            if parts == ['joins']:
+                # The worker's question, answered whole. What a stranger may
+                # ask is one request: see the note in this module's docstring
+                # about why the relay has no route of this shape.
+                return self._json(STORE.join_requests(log=log))
+            if len(parts) == 2 and parts[0] == 'join':
+                req = STORE.join_request(urllib.parse.unquote(parts[1]))
+                if req is None:
+                    return self._fail(404, f'no join request is waiting under '
+                                           f'{parts[1]}')
+                return self._json(req)
+            if len(parts) == 3 and parts[0] == 'join' \
+                    and parts[2] == 'answer':
+                answer = STORE.join_answer(urllib.parse.unquote(parts[1]))
+                if answer is None:
+                    return self._fail(404, f'nothing has been decided about '
+                                           f'{parts[1]}')
+                return self._json(answer)
             if len(parts) == 3 and parts[0] == 'note':
                 lines = STORE.note(parts[2], int(parts[1]))
                 if not lines:
@@ -228,6 +259,27 @@ class Handler(BaseHTTPRequestHandler):
                 STORE.put_note(civ, n, lines)
                 log(f'  noted {len(lines)} refusal(s) for {civ} on turn {n}')
                 return self._json({'turn': n, 'civ': civ})
+            if parts == ['join']:
+                # The one write here a caller with no seat may make, which is
+                # what a join is. This service takes it from anyone who can
+                # reach the port, as it takes everything else; the relay
+                # verifies a token first and stamps the uid out of it.
+                req = json.loads(body or b'{}')
+                where = STORE.request_join(req)
+                log(f'  {req.get("name")} asked to join{self._who()}')
+                return self._json({'where': where,
+                                   'key': turn_store.join_key(req)})
+            if len(parts) == 2 and parts[0] == 'join':
+                # The key is unquoted, because it may be a name a player typed
+                # and `HttpTurnStore` quotes it whole. The submission routes
+                # above do not, which is a difference and not an oversight to
+                # copy: they were written before a path segment here could
+                # carry anything but a civ name, and changing what they store
+                # would rename every submission object in every live galaxy.
+                key = urllib.parse.unquote(parts[1])
+                STORE.answer_join(key, json.loads(body or b'{}'))
+                log(f'  answered the join request filed under {key}')
+                return self._json({'key': key})
         except ValueError as exc:
             return self._fail(400, str(exc))
         except Exception as exc:                            # noqa: BLE001

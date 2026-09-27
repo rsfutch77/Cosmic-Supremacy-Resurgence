@@ -20,8 +20,7 @@ over it.
 The request, and who owns its shape
 ------------------------------------
 `release/launcher.py` writes it and this reads it, so the shape is a contract
-between two files that are owned by different people. It is a JSON object under
-`<store>/joins/<uid or name>.json`:
+between two files that are owned by different people. It is a JSON object:
 
     {"name": "Ada", "uid": null, "build": "0.1.0+dev",
      "requested_at": 1790486818.25, "requested_turn": 11}
@@ -31,9 +30,19 @@ is unchanged: two live galaxies in `server/uidemo` hold requests in that form,
 written by the launcher's own button, and a shape agreed by changing the file
 that produces it is a shape nobody can test today.
 
-What this adds is the answer, which the launcher does not read yet:
-`<store>/joins/done/<uid or name>.json`, holding the request it answers, the
-outcome, and for a granted one the planet and system the player landed in.
+**Where it is kept is the store's and not this module's.** A folder holds it at
+`<store>/joins/<uid or name>.json` and the answer at `joins/done/`, which is
+what J3 shipped; a Firebase galaxy holds both as documents under the galaxy,
+and a LAN service passes them through to the folder behind it. This module asks
+`store.join_requests()` and `store.answer_join()` and never learns which it is
+talking to, which is the same seam every other galaxy state crosses. J3 read
+the folder itself, so the beta galaxy, which is Firebase, could not take a join
+at all.
+
+The answer, which the launcher does not read yet, holds the request it answers,
+the outcome, and for a granted one the planet and system the player landed in.
+It is read back by key, never listed: a list of who is trying to join a galaxy
+is the enumeration F4 and J4 both refuse to hand a launcher.
 
 Why the order in `resolve_turn` is abandonment first
 -----------------------------------------------------
@@ -68,10 +77,18 @@ Applying one join twice is the failure that matters
 ----------------------------------------------------
 It is a second empire for one player, and unlike a lost join it cannot be
 noticed by the player it happened to. Three things stop it and they are
-deliberately independent. A granted request is moved out of `joins/` into
-`joins/done/`. A name already on the roster is refused. And `inject_civ.add_civ`
-refuses a name already in the blob, which is the check that still holds when
-the other two have been defeated by a store restored from a backup.
+deliberately independent. An answered request is consumed, which on a folder is
+a move into `joins/done/` and in Firebase is a delete batched with the answer.
+A name already on the roster is refused. And `inject_civ.add_civ` refuses a
+name already in the blob, which is the check that still holds when the other
+two have been defeated by a store restored from a backup.
+
+The third is what carries a worker killed between `publish` and `commit`. The
+request is still waiting, the roster does not name the seat, and the galaxy
+does hold the empire, so the next boundary refuses the request for a civ of
+that name standing on the board that no roster claims, and says in the log that
+a roster and a galaxy which disagree are the operator's to settle. One empire,
+not two.
 
 A join that cannot be granted changes nothing
 ----------------------------------------------
@@ -95,18 +112,22 @@ for _d in (HERE, os.path.join(HERE, 'dev_tools'),
         sys.path.insert(0, _d)
 
 import inject_civ as icv
+import turn_store
 
-# Where the launcher puts a request and where the answer goes back. `JOIN_DIR`
-# is `release/launcher.py`'s constant of the same name; the two have to agree
-# and neither file imports the other, so changing one means changing both.
-JOIN_DIR = 'joins'
-DONE_DIR = 'done'
+# Where a request and its answer sit in a galaxy that is a folder, for the
+# operator tools that read the files themselves. Taken from the store rather
+# than spelled again here, because the store is what writes them and two
+# spellings of one path is a way for the two to disagree.
+JOIN_DIR = turn_store.JOIN_DIR
+DONE_DIR = turn_store.JOIN_DONE_DIR
 
 # What a seat granted here is recorded as, in the galaxy's own state, beside
 # `reclaimed`. It is a record and not an enforcement: J4 binds a seat to the
 # uid that claimed it, and the binding cannot be checked by anything until
-# something writes it down. This is the thing that writes it down.
-JOINED_KEY = 'joined'
+# something writes it down. This is the thing that writes it down. The name is
+# the store's, for the reason the two above are: a field a store does not know
+# about is a field one of them silently drops.
+JOINED_KEY = turn_store.JOINED_KEY
 
 # The engine's name buffer, which `add_civ` also refuses past. Checked here as
 # well so a request that is too long is answered with a sentence rather than
@@ -129,74 +150,29 @@ GRANTED, REFUSED = 'granted', 'refused'
 
 # ── reading what is waiting ──────────────────────────────────────────────────
 def request_dir(store) -> str:
-    """Where this galaxy's join requests are, or '' when it has nowhere.
+    """Where this galaxy's join requests are, or '' when it is not a folder.
 
-    A directory store keeps them beside its submissions. Nothing else can hold
-    one yet: `HttpTurnStore` and `FirebaseTurnStore` have no route for a join,
-    the launcher raises rather than reporting a request it could not send, and
-    a store that grows a `join_requests` is asked for its own answer instead.
+    For an operator and for the acceptance tools, which read the files
+    themselves. Nothing in this module reaches a request this way any more:
+    every store answers `join_requests` and `answer_join`, so a galaxy in
+    Firebase takes a join the same way a folder does and this module cannot
+    tell which it is holding.
     """
     root = getattr(store, 'root', None)
     return os.path.join(root, JOIN_DIR) if isinstance(root, str) else ''
 
 
-def _read_request(path: str):
-    """One request file as (record, reason). `reason` names what is wrong.
-
-    A file that is not a request is not a player's fault in any way they can
-    fix, and it must not be able to stop a turn, so it is reported and set
-    aside rather than raised.
-    """
-    try:
-        with open(path, encoding='utf-8') as fh:
-            rec = json.load(fh)
-    except (OSError, ValueError) as exc:
-        return None, f'{type(exc).__name__}: {exc}'
-    if not isinstance(rec, dict):
-        return None, 'the file does not hold a join request'
-    name = rec.get('name')
-    if not isinstance(name, str) or not name.strip():
-        return None, 'the request names no player'
-    return rec, ''
-
-
 def pending(store, log=print) -> list:
     """Every join request waiting on this galaxy, oldest first.
 
-    Ordered by when the player asked, so two requests that can only both be
-    granted if there is room for both are settled by who asked first rather
-    than by how a directory listing happened to come back. The key is the file
-    name, which is the uid when the player has one and their name when they do
-    not, and it is what a consumed request is filed under.
+    The store's own answer, whichever store it is. Ordered by when the player
+    asked, so two requests that can only both be granted if there is room for
+    both are settled by who asked first rather than by how a listing happened
+    to come back. The key is what the request is filed under, the uid when the
+    player has one and their name when they do not, and it is what the answer
+    is filed under in turn.
     """
-    where = request_dir(store)
-    ask = getattr(store, 'join_requests', None)
-    if callable(ask):
-        return list(ask() or [])
-    if not where or not os.path.isdir(where):
-        return []
-    out = []
-    for entry in sorted(os.listdir(where)):
-        if not entry.endswith('.json'):
-            continue
-        path = os.path.join(where, entry)
-        if not os.path.isfile(path):
-            continue
-        rec, why = _read_request(path)
-        if rec is None:
-            log(f'  joins: ignoring {entry}, {why}')
-            continue
-        rec = dict(rec)
-        rec['key'] = entry[:-len('.json')]
-        rec['path'] = path
-        out.append(rec)
-
-    def asked(rec):
-        at = rec.get('requested_at')
-        ok = isinstance(at, (int, float)) and not isinstance(at, bool)
-        return (at if ok else 0.0, rec['key'])
-
-    return sorted(out, key=asked)
+    return list(store.join_requests(log=log) or [])
 
 
 # ── deciding ─────────────────────────────────────────────────────────────────
@@ -382,8 +358,7 @@ def _grant(store, blob, req: dict, roster, turn: int, log=print):
     name = req['name'].strip()
     out = {'key': req.get('key'), 'name': name, 'uid': req.get('uid'),
            'build': req.get('build'), 'requested_at': req.get('requested_at'),
-           'requested_turn': req.get('requested_turn'), 'path': req.get('path'),
-           'turn': int(turn)}
+           'requested_turn': req.get('requested_turn'), 'turn': int(turn)}
 
     why = refusal(name, roster, blob)
     if why:
@@ -512,26 +487,28 @@ def _note_or_log(store, civ: str, turn: int, lines, log=print) -> None:
 
 
 def _file_answer(store, out: dict, log=print) -> None:
-    """Move a request out of `joins/` and leave the answer in its place.
+    """Consume the request this outcome answers, and record the answer.
 
-    The move is what stops one request being granted twice. It is not the only
-    thing that stops it , the roster check and `add_civ`'s own name check both
-    do , and that is the point: this one can fail, on a file another process
-    has open, and the other two still hold.
+    Consuming it is what stops one request being granted twice. It is not the
+    only thing that stops it , the roster check and `add_civ`'s own name check
+    both do , and that is the point: this one can fail, on a file another
+    process has open or on a network that is down, and the other two still
+    hold.
+
+    The store decides how. A folder writes the answer into `joins/done/` and
+    removes the request; Firebase deletes the request and writes the answer in
+    one batch, so there is no window at all. A failure here is reported rather
+    than raised, because the seat has already been published and losing the
+    turn over the paperwork would be the worse outcome.
     """
-    path = out.get('path')
-    if not path:
+    key = out.get('key')
+    if not key:
         return
-    answer = {k: v for k, v in out.items() if k != 'path'}
+    answer = dict(out)
     answer['answered_at'] = time.time()
-    done = os.path.join(os.path.dirname(path), DONE_DIR,
-                        os.path.basename(path))
     try:
-        os.makedirs(os.path.dirname(done), exist_ok=True)
-        with open(done, 'w', encoding='utf-8') as fh:
-            json.dump(answer, fh, indent=2)
-        os.remove(path)
-    except OSError as exc:
+        store.answer_join(key, answer)
+    except Exception as exc:                                # noqa: BLE001
         log(f'  joins: could not file the answer for {out["name"]}, {exc}; '
             f'the request stays and will be refused as a name already in the '
             f'galaxy next turn')
@@ -569,7 +546,6 @@ def commit(store, turn: int, new_turn: int, outcomes, log=print) -> list:
             # current state of a name that is on the roster again.
             taken.pop(out['name'], None)
         fields = {'civs': roster, JOINED_KEY: record}
-        import turn_store
         if taken != (store.reclaimed() or {}):
             fields[turn_store.RECLAIMED_KEY] = taken
         store.update_state(fields)
@@ -631,7 +607,6 @@ def main():
                                   'firebase:// spec')
     a = ap.parse_args()
 
-    import turn_store
     store = turn_store.open_store(a.store)
     if not store.exists():
         raise SystemExit(f'no galaxy in {a.store}')

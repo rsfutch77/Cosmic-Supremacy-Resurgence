@@ -460,6 +460,94 @@ def test_two_in_one_turn(blob):
           (answer(clash, 'second') or {}).get('outcome'), joins.REFUSED)
 
 
+def test_the_launcher_asks_the_store(blob):
+    print('\nthe launcher lodges a request through the store, not into a folder')
+    import launcher
+
+    class Recording(TurnStore):
+        """A store that says whether it was asked rather than written past."""
+
+        def __init__(self, root):
+            TurnStore.__init__(self, root)
+            self.asked = []
+
+        def request_join(self, req):
+            self.asked.append(req)
+            return TurnStore.request_join(self, req)
+
+    root = tempfile.mkdtemp(prefix='joins_')
+    store = Recording(root)
+    store.start(blob, list(ROSTER), turn_seconds=1800, turn=TURN)
+    where = launcher.send_join_request(
+        store, launcher.join_request('Ada', 'uid-ada', '0.1.0+dev', turn=TURN))
+
+    # The whole of what `release/launcher.py` has to call, pinned from this
+    # side because that file is not this one's to change. It already prefers a
+    # store's own `request_join` and falls back to writing the file itself, and
+    # the fallback is what a Firebase galaxy fell off: the store had no such
+    # method and no `root` either, so the launcher raised `JoinNotAccepted`.
+    # Fails if the launcher wrote past the store, which is invisible against a
+    # folder and total against the other two.
+    check('the launcher asked the store rather than writing the file',
+          [r['name'] for r in store.asked], ['Ada'])
+    check('and the store put it where the worker reads it',
+          os.path.dirname(where), joins.request_dir(store))
+    check('which is the same request joins.pending gives back',
+          [r['key'] for r in joins.pending(store, log=lambda *a: None)],
+          ['uid-ada'])
+    shutil.rmtree(root, ignore_errors=True)
+
+
+def test_a_worker_killed_before_commit(blob):
+    print('\na worker killed after publish seats one empire, not two')
+    store = fresh_store(blob)
+    write_request(store, 'Ada', uid='uid-ada')
+
+    # `resolve_turn` without its last line. `apply` changes bytes, `publish`
+    # makes them the galaxy, and `commit` is every durable write after it; a
+    # worker killed in that gap is what the split across `publish` exists for
+    # and nothing has ever run it.
+    new_turn = TURN + 1
+    grown, outcomes = joins.apply(store, TURN, new_turn,
+                                  set_turn(store.turn_blob(TURN), new_turn),
+                                  log=lambda *a: None)
+    check('the join was granted before the crash',
+          [o['outcome'] for o in outcomes], [joins.GRANTED])
+    store.publish(new_turn, grown)
+
+    names = [o['name'] for o in icv.owner_records(store.turn_blob(new_turn))]
+    check('the galaxy holds the newcomer', names.count('Ada'), 1)
+    # The recoverable half of the pair, and the reason the order is this way
+    # round: a roster naming a civ the galaxy does not hold fails that player's
+    # every submission forever, and this one an operator answers with a name.
+    check('and the roster does not, which is what a crash here leaves',
+          'Ada' in store.civs(), False)
+    check('the request is still waiting, because commit never ran',
+          [r['key'] for r in joins.pending(store, log=lambda *a: None)],
+          ['uid-ada'])
+    check('and nothing was answered', store.join_answer('uid-ada'), None)
+
+    second = close_turn(store, blob_turn=new_turn)
+    after = store.turn_blob(second)
+    names = [o['name'] for o in icv.owner_records(after)]
+    # The check this test exists for. Fails if the next boundary granted the
+    # still-waiting request: that is a second empire for one player, and unlike
+    # a lost join it cannot be noticed by the player it happened to.
+    check('the next boundary does not seat a second empire',
+          names.count('Ada'), 1)
+    check('the counters still agree', counters_agree(after))
+    filed = answer(store, 'uid-ada') or {}
+    check('the request is answered as a refusal',
+          filed.get('outcome'), joins.REFUSED)
+    # Refused for the right reason. `add_civ`'s own name check would refuse it
+    # too, later and with a message about bytes; this one is the roster and the
+    # galaxy disagreeing, which is what an operator has to settle.
+    check('naming the galaxy and the roster disagreeing',
+          'roster' in filed.get('reason', ''))
+    check('and it is no longer waiting',
+          joins.pending(store, log=lambda *a: None), [])
+
+
 def test_asked_twice_across_turns(blob):
     print('\nthe same request seen again next turn is not a second empire')
     store = fresh_store(blob)
@@ -662,9 +750,11 @@ def main():
     print(f'{os.path.basename(GALAXY)}: {len(blob):,} bytes, civs {names}, '
           f'{len(free_planets(blob))} free planet(s)')
 
-    tests = [test_shape, test_a_join_lands, test_nothing_waiting_changes_nothing,
+    tests = [test_shape, test_the_launcher_asks_the_store,
+             test_a_join_lands, test_nothing_waiting_changes_nothing,
              test_no_room, test_margin, test_name_already_seated,
-             test_two_in_one_turn, test_asked_twice_across_turns,
+             test_two_in_one_turn, test_a_worker_killed_before_commit,
+             test_asked_twice_across_turns,
              test_reclaimed_player_rejoining, test_closed_galaxy,
              test_a_broken_request_is_not_a_broken_turn,
              test_order_against_abandonment,
