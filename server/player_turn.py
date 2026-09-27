@@ -318,8 +318,8 @@ def follow(store: TurnStore, civ: str, poll: float = 5.0, rounds: int = 0,
            on_state=None, exe=PLAYER_BUILD, save_dir=None, stop=None,
            capture_every: float = CAPTURE_EVERY,
            uploads_per_turn: int = UPLOADS_PER_TURN,
-           submit_every: float = None, send_now=None, log=print,
-           clock=time.time, sleep=time.sleep):
+           submit_every: float = None, send_now=None, reopen=None,
+           log=print, clock=time.time, sleep=time.sleep):
     """Play one civ's turns as the store publishes them.
 
     One pass is: serve the current turn, wait until its deadline, take the
@@ -340,6 +340,17 @@ def follow(store: TurnStore, civ: str, poll: float = 5.0, rounds: int = 0,
     multiplayer turn. It goes through here rather than through a second call
     into the client, because this loop is already driving that client and two
     things running `SaveGame` on one client at once is a race nobody can see.
+
+    `reopen` is an event of the same shape, and it is the other half of the
+    game window closing. This loop outlives that window: once the turn is sent
+    it waits here for the referee, which at four hours a turn is most of the
+    day, and a player who wants to look at the galaxy again, or read a message
+    in it, has nothing to press. Setting this ends that wait and takes the turn
+    round again, so the turn is opened through the same path as any other and
+    the player is served their own submission rather than the store's pristine
+    blob. It is an event rather than a second call into `serve` for the reason
+    `send_now` is: this loop owns the client, and a second thing starting one
+    is what the lock in `game_cycle` exists to prevent.
 
     **A player's state is captured and submitted throughout the turn, not once
     at the deadline.** Submitting once put the whole turn on a single write
@@ -477,6 +488,13 @@ def follow(store: TurnStore, civ: str, poll: float = 5.0, rounds: int = 0,
                     break
                 nap(poll)
             continue
+
+        if reopen is not None:
+            # The game is open, so any request to open it has been answered,
+            # including one made in the seconds between the referee publishing
+            # and this serve. Left standing it would spend itself at the far
+            # end of a turn the player is in the middle of.
+            reopen.clear()
 
         sent = None                     # the last blob this turn actually stored
         held = None                     # the last blob taken out of the client
@@ -710,11 +728,28 @@ def follow(store: TurnStore, civ: str, poll: float = 5.0, rounds: int = 0,
 
         emit("waiting", turn=turn, civ=civ)
         log(f"[{civ}] waiting for the referee to publish past turn {turn}")
+        reopening = False
         while not halted():
             got = current_or_wait()
             if got is None or got[0] != turn:
                 break
+            if reopen is not None and reopen.is_set():
+                reopen.clear()
+                reopening = True
+                break
             nap(poll)
+        if reopening:
+            # Round the outer loop rather than serving from here. Everything
+            # that decides what a turn is opened on lives at the top of it:
+            # `store.submission` is read there, and a submission carrying
+            # orders is what gets loaded. Serving from this point would be the
+            # 18 September failure with a button on it, the pristine turn over
+            # a played one. Going round also re-enters the capture and upload
+            # cadences, so anything played after the window opens again is
+            # captured and sent like the rest of the turn.
+            log(f"[{civ}] turn {turn}: opening the game again, you asked")
+            emit("reopening", turn=turn, civ=civ)
+            continue
 
         # The turn has closed, so the referee has said what it refused. This is
         # the first moment the note can exist and the last moment the player

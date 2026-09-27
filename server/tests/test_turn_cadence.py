@@ -22,6 +22,14 @@ submitted for is resumed rather than re-served, and a capture carrying no
 orders never overwrites a submission this loop did not write. See
 test_loop_guards.py for the incidents behind both.
 
+Opening a turn again, which is what Play means on a galaxy this loop is
+following once its game window has closed, is checked against those same two.
+It is the one thing that asks the loop to serve a turn it has already played.
+What is asserted is the bytes handed to the client and the submission left
+standing in the store, never that a client was started: a reopen that starts a
+client on the pristine turn passes every check that counts serves and loses
+the player's orders anyway.
+
 No client, no store on disk and no real time: the clock, the client and the
 store are all fakes, so the loop under test is the only real thing here.
 """
@@ -70,20 +78,37 @@ class Store:
     def __init__(self, clock, turn=7, seconds=600.0, blob=b'BASE' * 64):
         self.clock = clock
         self.turn = turn
+        self.opened = turn              # the turn this store started on
         self.seconds = seconds
         self.deadline = clock.now() + seconds
         self.blob = blob
         self.subs = {}
         self.writes = []                # (when, blob) per submit that landed
+        # When the referee closes this turn and publishes the next, which is
+        # the state a player who comes back to a galaxy can land in.
+        self.next_at = None
+
+    def _tick(self):
+        if self.next_at is not None and self.clock.now() >= self.next_at:
+            self.turn += 1
+            self.deadline = self.clock.now() + self.seconds
+            self.next_at = None
 
     def current(self):
+        self._tick()
         return self.turn, self.deadline
 
     def seconds_left(self):
+        self._tick()
         return self.deadline - self.clock.now()
 
     def turn_blob(self, turn):
-        return self.blob
+        """Each turn's own pristine blob, so a serve names the turn it served.
+
+        One blob for every turn would let a test that checks what went into
+        the client pass on the wrong turn's bytes.
+        """
+        return self.blob if turn == self.opened else self.blob + b'NEXT'
 
     def submission(self, civ, turn):
         return self.subs.get((civ, turn))
@@ -98,7 +123,11 @@ class Store:
 
 
 class Ask:
-    """A player pressing Save, which is a threading.Event in the launcher.
+    """A player pressing a button the loop watches for, Save or Play.
+
+    A threading.Event in the launcher, and the loop treats both the same way:
+    it looks for one where it would otherwise sleep, and clears it when it
+    acts on it.
 
     `at` is when they press it, or several times if they press it more than
     once. A press that has not happened yet is not cleared by the loop tidying
@@ -121,34 +150,70 @@ class Ask:
 
 def run_turn(capture_every=5.0, uploads_per_turn=2, submit_every=None,
              seconds=600.0, edits_at=(), close_at=None, ask_at=None,
-             prior=None, orders=True, poll=2.0):
+             prior=None, orders=True, poll=2.0, rounds=1, reopen_at=None,
+             next_turn_at=None, loses_orders=False):
     """One whole turn against a fake clock. Returns what it did.
 
     `edits_at` is when the player changes something, in seconds from the start
     of the turn, so that captures taken after one differ from captures before
     it. `close_at` is the player closing the game window, after which no
-    capture can be taken at all.
+    capture can be taken until the turn is opened again.
+
+    `reopen_at` is Play pressed on this galaxy with the window closed, and
+    `next_turn_at` is the referee publishing the next turn, so that a reopen
+    can be made to land on either side of a turn closing. `rounds` has to be
+    2 for a reopen to be visible at all: the first pass ends when the window
+    closes, and the pass that opens it again is the second.
+
+    `loses_orders` is a client that comes up without what was loaded into it.
+    It is the shape of the 18 September loss, and what it is here for is to
+    put an orderless capture against a submission carrying orders.
     """
     clock = Clock()
     store = Store(clock, seconds=seconds)
     start = clock.now()
     base = store.blob
+    if next_turn_at is not None:
+        store.next_at = start + next_turn_at
     if prior is not None:
         store.subs[('DemoPlayer', store.turn)] = prior
         store.writes.clear()            # a submission that was already there
 
-    captures, served, states = [], [], []
+    captures, served, serve_times, states = [], [], [], []
+    # What the client holds: the blob last loaded into it, and when. A turn
+    # opened again is opened on the player's own submission, so a capture
+    # taken afterwards carries what they played before the window closed as
+    # well as whatever they do next.
+    loaded = {'blob': base, 'at': 0.0}
 
     def player_state(now):
-        done = sum(1 for e in edits_at if now - start >= e)
-        return base + b'ORDER' * done
+        done = sum(1 for e in edits_at if loaded['at'] <= e <= now - start)
+        return loaded['blob'] + b'ORDER' * done
 
     attempts = []
+    # The game window: it closes at `close_at` and the next serve opens it
+    # again. Counting serves rather than holding a flag is what lets one
+    # harness cover a window that stays shut and one that is opened again.
+    shut = {'after': None}
+
+    def window_gone():
+        if close_at is None or clock.now() - start < close_at:
+            return False
+        if shut['after'] is None:
+            shut['after'] = len(served)
+        return len(served) == shut['after']
+
+    def fake_serve(blob, civ, **kw):
+        served.append(blob)
+        serve_times.append(clock.now() - start)
+        loaded['blob'] = base if loses_orders else blob
+        loaded['at'] = clock.now() - start
+        return 'x.dat'
 
     def fake_collect(name, save_dir=None, log=print, announce=True):
         now = clock.now()
         attempts.append(now - start)
-        if close_at is not None and now - start >= close_at:
+        if window_gone():
             raise SystemExit('SaveGame did not report success')
         blob = player_state(now)
         captures.append((now - start, blob))
@@ -157,10 +222,14 @@ def run_turn(capture_every=5.0, uploads_per_turn=2, submit_every=None,
     saved = (player_turn.serve, player_turn.collect, player_turn.close,
              player_turn.carries_orders, player_turn.describe_orders,
              player_turn.sp)
-    player_turn.serve = lambda b, civ, **kw: served.append(b) or 'x.dat'
+    player_turn.serve = fake_serve
     player_turn.collect = fake_collect
     player_turn.close = lambda: None
-    player_turn.carries_orders = lambda served_b, sub, civ: orders
+    # A predicate rather than a constant when a test needs the two guards to
+    # tell a played turn from an empty one, which a constant cannot.
+    player_turn.carries_orders = (
+        orders if callable(orders) else
+        lambda served_b, sub, civ: orders)
     player_turn.describe_orders = lambda *a: 'summary'
     # `collect` hands back a path that `sp.load_any` reads. The fake hands back
     # the bytes themselves, so loading one is the identity.
@@ -170,15 +239,14 @@ def run_turn(capture_every=5.0, uploads_per_turn=2, submit_every=None,
     # rather than reading whatever happens to be running on this machine.
     import game_cycle
     saved_pids = game_cycle.client_pids
-    game_cycle.client_pids = lambda: (
-        [] if close_at is not None and clock.now() - start >= close_at
-        else [4242])
+    game_cycle.client_pids = lambda: [] if window_gone() else [4242]
     try:
         player_turn.follow(
-            store, 'DemoPlayer', poll=poll, rounds=1,
+            store, 'DemoPlayer', poll=poll, rounds=rounds,
             on_state=lambda kind, **f: states.append((clock.now() - start, kind, f)),
             capture_every=capture_every, uploads_per_turn=uploads_per_turn,
             submit_every=submit_every, send_now=Ask(clock, ask_at),
+            reopen=Ask(clock, reopen_at),
             log=lambda *a: None, clock=clock.now, sleep=clock.sleep)
     finally:
         (player_turn.serve, player_turn.collect, player_turn.close,
@@ -188,6 +256,7 @@ def run_turn(capture_every=5.0, uploads_per_turn=2, submit_every=None,
     return types.SimpleNamespace(store=store, captures=captures,
                                  attempts=attempts,
                                  uploads=store.writes, served=served,
+                                 serve_times=serve_times,
                                  states=states, clock=clock, start=start,
                                  final=player_state(clock.now()))
 
@@ -407,6 +476,90 @@ def test_send_now_between_turns_does_not_spin():
           round(reads['n'] / elapsed, 2), lambda r: r <= 1.0)
 
 
+# ── Play again on a turn whose game window has closed ────────────────────────
+BASE = b'BASE' * 64
+
+
+def carries(served_b, sub, civ):
+    """A capture carries orders when it differs from what was served.
+
+    A predicate rather than a constant, so the two guards can tell a played
+    turn from an empty one the way the real `carries_orders` does.
+    """
+    return sub != served_b
+
+
+def tail(blob):
+    """What a blob carries beyond the pristine turn, so a check reads.
+
+    Comparing whole blobs prints two hundred bytes of BASE at the reader and
+    hides the five that differ, which is the half the check is about.
+    """
+    return blob[len(BASE):] if blob.startswith(BASE) else blob
+
+
+def test_play_again_opens_the_turn_on_the_submission():
+    """Play on a galaxy this loop is following, its window closed, opens it.
+
+    The failure that matters is not that no client starts. It is that the
+    client starts on the store's pristine turn: that is the 18 September loss
+    with a button on it, an orderless state served over a played one and then
+    captured back over the submission carrying the order. So every check here
+    is on the bytes that went into the client and on what the store holds
+    afterwards, and none of them is satisfied by a serve having happened.
+    """
+    print('opening the turn again')
+    r = run_turn(seconds=600.0, edits_at=(30.0, 400.0), close_at=100.0,
+                 reopen_at=Clock().now() + 200.0, rounds=2, orders=carries)
+    check('the turn is opened a second time', len(r.served), 2)
+    check('when the player asked and not before',
+          round(r.serve_times[-1]), lambda t: 200 <= t <= 203)
+    check('on the submission carrying their order, not the pristine turn',
+          tail(r.served[1]), b'ORDER')
+    check('which is not the blob the store would have served',
+          r.served[1] == r.store.turn_blob(r.store.turn), False)
+    check('and it is the same turn, not the next one',
+          [f.get('turn') for _t, k, f in r.states if k == 'serving'], [7, 7])
+    check('the loop says what it is doing',
+          [k for _t, k, _f in r.states if k == 'reopening'], ['reopening'])
+    # The trap this feature could have been: a window that opens, shows the
+    # turn, and quietly drops everything done in it.
+    check('captures resume after it opens',
+          len([t for t, _b in r.captures if t > 205.0]), lambda n: n >= 70)
+    check('an edit made after it opened reaches the store',
+          tail(r.store.subs[('DemoPlayer', 7)]), b'ORDERORDER')
+    check('and what was played before it closed is still under that',
+          r.store.subs[('DemoPlayer', 7)].startswith(BASE + b'ORDER'), True)
+    check('nothing orderless was ever written over it',
+          [t for t, b in r.uploads if b == BASE], [])
+
+
+def test_reopen_after_the_turn_closed_serves_the_new_turn():
+    """The referee publishes while the window is shut, then Play is pressed.
+
+    The old turn is closed: anything played in it now is refused at the
+    submission, and capturing a dead turn back over the submission standing
+    for it is the destructive half of the same failure. Fails if the loop
+    opens the turn it remembers rather than the turn the store is on.
+    """
+    print('opening again after the turn closed')
+    r = run_turn(seconds=600.0, edits_at=(30.0,), close_at=100.0,
+                 next_turn_at=150.0, reopen_at=Clock().now() + 150.0,
+                 rounds=2, orders=carries)
+    check('the second serve is the turn the store is on',
+          [f.get('turn') for _t, k, f in r.states if k == 'serving'], [7, 8])
+    check('served on that turn rather than on the old submission',
+          tail(r.served[1]), b'NEXT')
+    check('the closed turn keeps the submission it had',
+          tail(r.store.subs[('DemoPlayer', 7)]), b'ORDER')
+    check('and the new turn is the one being played into',
+          ('DemoPlayer', 8) in r.store.subs, True)
+    check('the request was spent on the new turn, not carried past it',
+          [k for _t, k, _f in r.states if k == 'reopening'], [])
+    check('so the game was opened twice in all, not three times',
+          len(r.served), 2)
+
+
 # ── the guards that predate the two cadences ─────────────────────────────────
 def test_guards_survive():
     """The two turn-12 guards, in the rewritten loop.
@@ -431,6 +584,20 @@ def test_guards_survive():
     check('an orderless submission is served fresh rather than resumed',
           r.served[0], b'BASE' * 64)
 
+    # The same guard, on the far side of a reopen. Opening a turn again starts
+    # a fresh pass, so `sent` is empty and the submission standing for the
+    # turn is once more one this pass did not write. A client that comes up
+    # without what was loaded into it is then exactly the turn-12 shape, and
+    # the capture it hands back must not land.
+    r = run_turn(seconds=600.0, edits_at=(30.0,), close_at=100.0,
+                 reopen_at=Clock().now() + 200.0, rounds=2, orders=carries,
+                 loses_orders=True)
+    check('a reopened turn whose client comes up empty keeps the submission',
+          tail(r.store.subs[('DemoPlayer', 7)]), b'ORDER')
+    check('and the loop says it refused rather than doing it quietly',
+          [k for _t, k, _f in r.states if k == 'refused'],
+          lambda ks: len(ks) >= 1)
+
 
 if __name__ == '__main__':
     test_two_cadences()
@@ -441,6 +608,8 @@ if __name__ == '__main__':
     test_client_closing_does_not_lose_the_turn()
     test_send_now_between_turns_does_not_spin()
     test_indicator_states()
+    test_play_again_opens_the_turn_on_the_submission()
+    test_reopen_after_the_turn_closed_serves_the_new_turn()
     test_guards_survive()
     print(f'\n{len(PASS)} passed, {len(FAIL)} failed')
     for n in FAIL:

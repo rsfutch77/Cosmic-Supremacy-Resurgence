@@ -21,6 +21,7 @@ import os
 import shutil
 import sys
 import tempfile
+import threading
 import time
 
 import pathlib
@@ -645,10 +646,13 @@ class Player:
         self.cfg = {"product": "Cosmic Supremacy"}
         self.mp_playing = playing
         self.mp_thread = Loop(finishes) if playing is not None else None
-        # The loop outlives the game window, so the refusal has two wordings:
-        # a live client reads as playing, a closed one as a turn already sent.
+        # The loop outlives the game window, so Play means two things here:
+        # a live client is a second game and is refused, a closed one is a
+        # request to open the galaxy again. These are what that request sets.
         self.mp_client_gone = client_gone
         self.mp_turn = turn
+        self.mp_reopen = threading.Event()
+        self.mp_reopening = False
         self.warned, self.said, self.stopped = [], [], []
 
     def warn(self, msg):
@@ -743,17 +747,45 @@ print()
 print("Play on a galaxy whose game window has been closed")
 here = {"name": sandbox.name, "store": sandbox.store}
 open_p = Player(playing=here)
-open_p.take(sandbox)
+refused_again = open_p.take(sandbox)
 gone_p = Player(playing=here, client_gone=True, turn=11)
-gone_p.take(sandbox)
-# Both refuse, and that is right: the turn is sent and the loop still holds the
-# galaxy. What was wrong was telling someone looking at a closed game that it
-# was open. Fails if the two states share a wording.
+reopened = gone_p.take(sandbox)
+# A live client is refused, because two games on one machine is the whole of
+# what this rule is for. A closed one is not a refusal: the player has sent
+# their turn and wants another look at the galaxy, and the loop still
+# following it is the only thing allowed to start a client, so it is asked.
+# Neither answers True: what must not happen either way is a second loop.
 check("a live client reads as playing",
       "already playing" in open_p.warned[0], True)
-check("a closed one says the turn was already sent",
-      "already been sent" in gone_p.warned[0], True)
-check("and names the turn it sent", "turn 11" in gone_p.warned[0], True)
-check("and does not claim the game is open",
-      "already playing" in gone_p.warned[0], False)
+check("and starts no second loop", refused_again, False)
+check("and asks the loop for nothing", open_p.mp_reopen.is_set(), False)
+check("a closed one starts no second loop either", reopened, False)
+check("and is not turned away in a window at all", gone_p.warned, [])
+check("it asks the loop following that galaxy to open the game again",
+      gone_p.mp_reopen.is_set(), True)
+check("and says so where the turn readout can read it",
+      gone_p.mp_reopening, True)
+check("the log names the galaxy and the turn being opened",
+      ("sandbox" in gone_p.said[-1], "turn 11" in gone_p.said[-1]),
+      (True, True))
+check("the loop it asked is left running", gone_p.stopped, [])
+check("a galaxy with no turn recorded is still opened",
+      Player(playing=here, client_gone=True).take(sandbox), False)
+
+# The rule this must never break: one game process per machine, held by the
+# advisory lock in client/dev_tools/game_cycle.py. Fails if Play reaches for a
+# client instead of signalling the loop that owns one.
+take_src = inspect.getsource(L.Launcher._take_turn_loop)
+check("Play on a closed game starts nothing here",
+      ("start_multiplayer" in take_src, "serve(" in take_src,
+       "restart(" in take_src), (False, False, False))
+check("the event it sets is the one the turn loop is given",
+      "reopen=self.mp_reopen" in
+      inspect.getsource(L.Launcher.start_multiplayer), True)
+check("and it is cleared when a loop starts and when one stops",
+      ("self.mp_reopen.clear()" in
+       inspect.getsource(L.Launcher.start_multiplayer),
+       "self.mp_reopen.clear()" in
+       inspect.getsource(L.Launcher.stop_multiplayer)), (True, True))
+print("\n" + ("ALL PASSED" if not fails else f"FAILURES: {fails}"))
 sys.exit(1 if fails else 0)

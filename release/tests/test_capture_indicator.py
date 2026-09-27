@@ -13,7 +13,8 @@ they read before it starts:
                          multiplayer turn, and write a .dat outside one.
   the turn readout       which is a fact about the game client, so it goes the
                          moment the client does, while the submission carries
-                         on behind it.
+                         on behind it, and says instead when the game is being
+                         opened again.
   the port refusal       a server on 8888 that is not this launcher's is
                          refused rather than reused: it keeps its captures in
                          its own folder and there is no way to ask it which.
@@ -111,6 +112,8 @@ def bare(**over):
     app.mp_client_gone = False
     app.mp_sending = False
     app.mp_send_now = threading.Event()
+    app.mp_reopen = threading.Event()
+    app.mp_reopening = False
     app.mp_stop = False
     app.data_dir = os.path.join(REPO, "release", "data")
     app.turn_label = Widget(text="turn ,")
@@ -266,9 +269,22 @@ check("and the readout stops saying it",
 check("without putting the closed turn's countdown back",
       app.turn_label.cget("text"), lambda t: "turn 14" not in t)
 
+# Play, on the galaxy this loop is following with its window closed, asks the
+# loop to open the game again. Between the press and the client coming up the
+# readout has to say that, or the player presses a button and nothing on the
+# window changes for as long as a client takes to start.
+app.mp_reopening = True
+app._refresh_turn()
+check("a game being opened again says so rather than saying it is waiting",
+      app.turn_label.cget("text"), lambda t: "opening" in t.lower())
+app._mp_state("playing", turn=14, civ="DemoPlayer", seconds_left=900)
+check("and stops saying it once the turn is running", app.mp_reopening, False)
+app.mp_reopening = True
+
 app._watch_mp_client(True)
 check("a client coming back puts the readout back",
       app.mp_client_gone, False)
+check("and answers whatever asked for it", app.mp_reopening, False)
 app._refresh_turn()
 check("with the galaxy's clock on it",
       app.turn_label.cget("text"), lambda t: t.startswith("turn 14"))
@@ -363,14 +379,20 @@ check("the real launcher carries the waiting branch",
 print()
 print("Play on the galaxy already being followed")
 src = inspect.getsource(L.Launcher._take_turn_loop)
-# The loop outlives the game window, so 'already playing' was told to a
-# player looking at a closed game. Fails if the refusal has one wording for
-# both states.
-check("the refusal asks whether the client is gone",
-      "mp_client_gone" in src, True)
-check("and says the turn was sent rather than that a game is open",
-      "already been " in src and "sent." in src, True)
+# The loop outlives the game window, so Play means two different things here.
+# A live client is a second game on one machine and is refused. A closed one
+# is a request to open the galaxy again, and the loop already following it is
+# the only thing allowed to start a client, so it is asked rather than told.
+check("the two states are told apart", "mp_client_gone" in src, True)
+check("a closed game asks the loop to open it again",
+      "self.mp_reopen.set()" in src, True)
+check("and is not turned away with a window saying the turn was sent",
+      "already been sent" in src, False)
 check("while a live client still reads as playing",
       "You are already playing" in src, True)
+check("neither branch starts anything itself",
+      ("start_multiplayer" in src, "serve(" in src), (False, False))
+check("and the loop is handed the event it watches",
+      "reopen=self.mp_reopen" in mp, True)
 print("\n" + ("ALL PASSED" if not fails else f"FAILURES: {fails}"))
 sys.exit(1 if fails else 0)

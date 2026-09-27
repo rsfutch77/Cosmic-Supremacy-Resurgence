@@ -2028,6 +2028,15 @@ class Launcher:
         # acts on it. An Event rather than a second call into the client,
         # because the loop is already driving that client.
         self.mp_send_now = threading.Event()
+        # Set by Play on the galaxy this loop is already following once its
+        # game window has closed, cleared by the loop when it opens the game
+        # again. The loop owns the client, so Play asks it rather than
+        # starting a second one, which is what the lock in game_cycle exists
+        # to prevent. `mp_reopening` is the Tk side of the same thing: what
+        # the status line and the turn readout say between the press and the
+        # client coming back up.
+        self.mp_reopen = threading.Event()
+        self.mp_reopening = False
         # Whether the game client was up when the watcher last looked, so that
         # it closing clears the turn readout at once rather than at the next
         # poll, and whether the turn it was playing is still on its way to the
@@ -3045,6 +3054,12 @@ class Launcher:
         a galaxy is the usual reason one is. A galaxy that then refuses the
         player leaves neither being followed, and Play on the first row starts
         it again.
+
+        Play on the galaxy being followed, with its game window closed, is not
+        a second loop and is not refused: it asks the loop that is running to
+        open the game again. Answering False is still right, because what must
+        not happen here is a second loop, and the reopen is the running one's
+        to do.
         """
         playing = self.playing_now()
         if playing is None:
@@ -3052,18 +3067,25 @@ class Launcher:
         here = playing.get("name") or playing.get("store") or "a galaxy"
         if g is not None and same_store(playing.get("store"), g.store):
             # "Already playing" is true of the loop and not of the game.
-            # The loop outlives the window: once a turn is sent it waits
-            # for the referee, and at four hours a turn that is most of the
-            # day. A player who closed the game themselves, and can see it
-            # is closed, was being told it was open.
+            # The loop outlives the window: once a turn is sent it waits for
+            # the referee, and at four hours a turn that is most of the day,
+            # so the two answer differently.
             if self.mp_client_gone:
+                # Play here means open the galaxy again, which is what the
+                # player is asking for: the turn is sent, and they want
+                # another look at the galaxy, or at a message in it. The loop
+                # is asked rather than a client started from here, for the
+                # reason Save is asked, because the loop owns that client.
+                #
+                # What it opens is the player's own submission for the turn it
+                # is on, so nothing they played is taken away, and the new
+                # turn instead if the referee has published one meanwhile.
+                self.mp_reopen.set()
+                self.mp_reopening = True
                 turn = self.mp_turn
-                which = f' for turn {turn}' if turn else ''
-                self.warn(
-                    f"Your turn{which} in {here} has already been "
-                    f"sent.\n\nThe game opens again by itself when the "
-                    f"next turn is published, and this window is what is "
-                    f"waiting for it. There is nothing to do until then.")
+                where = f"{here} at turn {turn}" if turn else here
+                self.say(f"multiplayer: opening {where} again, with the "
+                         f"orders you already sent")
             else:
                 self.warn(f"You are already playing {here}.\n\nIts turns "
                           "are being followed now, and the readout on "
@@ -3270,6 +3292,8 @@ class Launcher:
         self.mp_client_gone = False
         self.mp_sending = False
         self.mp_send_now.clear()
+        self.mp_reopen.clear()
+        self.mp_reopening = False
         self.running_mode = mode
         joined = cfg.get("joined")
         if joined and joined.get("name") and joined["name"] != civ:
@@ -3291,6 +3315,7 @@ class Launcher:
                     save_dir=save_dir,
                     stop=lambda: self.mp_stop,
                     send_now=self.mp_send_now,
+                    reopen=self.mp_reopen,
                     log=self.say_threadsafe)
             except BaseException as exc:            # noqa: BLE001
                 # A dead worker must say so. Silence here reads as "my turn is
@@ -3308,6 +3333,12 @@ class Launcher:
         turn = facts.get("turn")
         if turn is not None:
             self.mp_turn = turn
+        if kind in ("playing", "waiting", "overtaken", "lost", "done",
+                    "stopped", "failed", "serve_failed"):
+            # The reopen has either happened or is not going to. Left standing
+            # it would say the game was opening for the rest of the gap
+            # between turns.
+            self.mp_reopening = False
 
         # The capture half of the readout. These arrive several times a turn
         # and say nothing about which step of the turn is running, so they are
@@ -3345,6 +3376,7 @@ class Launcher:
             "playing": "",
             "collecting": "time is up, orders are in",
             "submitted": "orders sent",
+            "reopening": "opening the game again",
             "waiting": "waiting for the next turn",
             "overtaken": "that turn closed without you",
             "failed": f"stopped: {facts.get('error', 'unknown')}",
@@ -3373,6 +3405,8 @@ class Launcher:
         self.mp_client_gone = False
         self.mp_sending = False
         self.mp_send_now.clear()
+        self.mp_reopen.clear()
+        self.mp_reopening = False
         self._show_capture(None, 0.0)
 
     def start_ai(self, mode):
@@ -3605,6 +3639,7 @@ class Launcher:
                 # and the one thing they do need to know instead is whether
                 # the launcher is still sending it.
                 label = ("sending your turn" if self.mp_sending
+                         else "opening the game again" if self.mp_reopening
                          else self.mp_note or "waiting for the next turn")
                 if self.turn_label.cget("text") != label:
                     self.turn_label.configure(text=label)
@@ -3794,6 +3829,9 @@ class Launcher:
             if mp_live and self.mp_sending:
                 self._status_if_changed(
                     "sending your turn , keep this window open", WARN)
+            elif mp_live and self.mp_reopening:
+                self._status_if_changed(
+                    "Multiplayer , opening the game again", OK)
             elif mp_live and self.mp_client_gone:
                 # The loop outlives the game window: after a turn is sent it
                 # waits for the referee to publish the next one, which at four
@@ -3840,6 +3878,8 @@ class Launcher:
         if up:
             self.mp_client_seen = True
             self.mp_client_gone = False
+            # The game is up, so whatever asked for it has been answered.
+            self.mp_reopening = False
             return
         if self.mp_client_seen:
             self.mp_client_seen = False
