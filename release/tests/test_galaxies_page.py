@@ -640,10 +640,15 @@ class Loop:
 class Player:
     """A launcher following one galaxy, without the window or the thread."""
 
-    def __init__(self, playing=None, finishes=True):
+    def __init__(self, playing=None, finishes=True, client_gone=False,
+                 turn=None):
         self.cfg = {"product": "Cosmic Supremacy"}
         self.mp_playing = playing
         self.mp_thread = Loop(finishes) if playing is not None else None
+        # The loop outlives the game window, so the refusal has two wordings:
+        # a live client reads as playing, a closed one as a turn already sent.
+        self.mp_client_gone = client_gone
+        self.mp_turn = turn
         self.warned, self.said, self.stopped = [], [], []
 
     def warn(self, msg):
@@ -733,4 +738,22 @@ check("every question asked was answered", answers, [])
 for d in dirs:
     shutil.rmtree(d, ignore_errors=True)
 print("\n" + ("ALL PASSED" if not fails else f"FAILURES: {fails}"))
+
+print()
+print("Play on a galaxy whose game window has been closed")
+here = {"name": sandbox.name, "store": sandbox.store}
+open_p = Player(playing=here)
+open_p.take(sandbox)
+gone_p = Player(playing=here, client_gone=True, turn=11)
+gone_p.take(sandbox)
+# Both refuse, and that is right: the turn is sent and the loop still holds the
+# galaxy. What was wrong was telling someone looking at a closed game that it
+# was open. Fails if the two states share a wording.
+check("a live client reads as playing",
+      "already playing" in open_p.warned[0], True)
+check("a closed one says the turn was already sent",
+      "already been sent" in gone_p.warned[0], True)
+check("and names the turn it sent", "turn 11" in gone_p.warned[0], True)
+check("and does not claim the game is open",
+      "already playing" in gone_p.warned[0], False)
 sys.exit(1 if fails else 0)
