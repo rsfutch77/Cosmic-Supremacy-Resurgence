@@ -110,6 +110,9 @@ def bare(**over):
     app.mp_thread = None
     app.mp_client_seen = False
     app.mp_client_gone = False
+    # Whether a turn is still on its way, which is what decides if
+    # closing the window announces a send or just notices the close.
+    app.mp_turn_open = True
     app.mp_sending = False
     app.mp_send_now = threading.Event()
     app.mp_reopen = threading.Event()
@@ -426,4 +429,42 @@ check("they are hidden once the client has gone",
       "_show_controls(not self.mp_client_gone)" in wsrc, True)
 check("and nothing shows them unconditionally while a loop runs",
       "_show_controls(True)" in wsrc, False)
+
+print()
+print("a window closed after the turn already finished")
+
+
+class _Close:
+    """Just enough Launcher to drive _watch_mp_client."""
+
+    def __init__(self, turn_open):
+        self.mp_client_seen, self.mp_client_gone = True, False
+        self.mp_sending, self.mp_turn_open = False, turn_open
+        self.said = []
+
+    def say(self, m):
+        self.said.append(m)
+
+
+mid = _Close(turn_open=True)
+L.Launcher._watch_mp_client(mid, False)
+check("a turn still open says it is being sent", mid.mp_sending, True)
+
+# The deadline passed while the game was still open, so the loop finished
+# the turn and emitted `waiting` minutes before the window was closed.
+# Announcing a send then contradicted the capture dot beside it, which
+# correctly read 'turn sent 2m ago'.
+done = _Close(turn_open=False)
+L.Launcher._watch_mp_client(done, False)
+check("a turn already finished does not", done.mp_sending, False)
+check("and it is still noticed that the game closed",
+      any("has closed" in m for m in done.said), True)
+check("without claiming anything is on its way",
+      any("sending" in m for m in done.said), False)
+
+st = inspect.getsource(L.Launcher._mp_state)
+check("a finished turn closes the window of sending",
+      "mp_turn_open = False" in st, True)
+check("and serving a turn opens it again",
+      "mp_turn_open = True" in st, True)
 sys.exit(1 if fails else 0)

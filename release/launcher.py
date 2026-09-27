@@ -2044,6 +2044,7 @@ class Launcher:
         self.mp_client_seen = False
         self.mp_client_gone = False
         self.mp_sending = False
+        self.mp_turn_open = False
         # The Galaxies page: which directory it lists, the store
         # multiplayer.json names outright, and whether a listing is in flight.
         # The directory is None when multiplayer.json names a store and no
@@ -3299,6 +3300,7 @@ class Launcher:
         self.mp_client_seen = False
         self.mp_client_gone = False
         self.mp_sending = False
+        self.mp_turn_open = False
         self.mp_send_now.clear()
         self.mp_reopen.clear()
         self.mp_reopening = False
@@ -3368,12 +3370,20 @@ class Launcher:
             self.mp_capture = (SENT, time.time())
             if facts.get("final"):
                 self.mp_sending = False
-        elif kind in ("waiting", "overtaken", "lost", "serving", "done",
+        elif kind in ("waiting", "overtaken", "lost", "done",
                       "stopped", "failed"):
             # The turn is over, however it ended, so nothing is still on its
             # way. Left standing, "sending your turn" would sit there for the
             # whole gap between turns.
             self.mp_sending = False
+            # And nothing closing the window afterwards can put it back. A turn
+            # whose deadline passed while the game was still open finishes here,
+            # and the player closes the window minutes later: `_watch_mp_client`
+            # would otherwise announce that a turn sent long ago was on its way,
+            # beside a capture dot correctly reading "turn sent 2m ago".
+            self.mp_turn_open = False
+        if kind in ("serving", "playing", "reopening"):
+            self.mp_turn_open = True
         if kind == "serving":
             # A new turn: nothing of it has been captured yet, and leaving the
             # last turn's "turn sent" standing would say the new one is safe.
@@ -3412,6 +3422,7 @@ class Launcher:
         self.mp_client_seen = False
         self.mp_client_gone = False
         self.mp_sending = False
+        self.mp_turn_open = False
         self.mp_send_now.clear()
         self.mp_reopen.clear()
         self.mp_reopening = False
@@ -3914,8 +3925,14 @@ class Launcher:
             # The last capture and its submission run on the worker thread and
             # are not waited for here: the readout goes now, the sending says
             # so until the loop reports the turn finished.
-            self.mp_sending = True
-            self.say("multiplayer: the game has closed, sending your turn")
+            if self.mp_turn_open:
+                self.mp_sending = True
+                self.say("multiplayer: the game has closed, sending your turn")
+            else:
+                # The turn had already finished before the window closed, so
+                # there is nothing on its way and saying so would contradict
+                # the capture dot beside it.
+                self.say("multiplayer: the game has closed")
 
     def _name_for(self, exe_names) -> str:
         """
