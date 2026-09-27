@@ -98,29 +98,115 @@ check("a blank entry does not count",
 
 print("\n3. what the launcher writes down when a player joins")
 d = fresh_dir()
-check("nothing joined yet", L.load_joined(d), None)
+check("nothing joined yet", L.load_joined(d), {})
 g = row(store=os.path.join(fresh_dir(), "sandbox"))
 rec = L.joined_record(g, "Alice", "uid-1", "D:\\galaxies", now=1000.0)
 L.save_joined(d, rec)
 check("the record lands beside identity.json",
       os.path.basename(L.joined_path(d)), L.JOINED_FILE)
-check("it names the galaxy", L.load_joined(d).get("galaxy"), "sandbox")
+check("and is keyed by the galaxy it is for", list(L.load_joined(d)),
+      ["sandbox"])
+held = L.load_joined(d)["sandbox"]
+check("it names the galaxy", held.get("galaxy"), "sandbox")
 check("and the store the directory gave, not one a player typed",
-      L.load_joined(d).get("store"), g.store)
-check("and the name the seat was asked for under",
-      L.load_joined(d).get("name"), "Alice")
-check("and the identity that asked", L.load_joined(d).get("uid"), "uid-1")
-check("and which turn it was asked at",
-      L.load_joined(d).get("requested_turn"), 4)
+      held.get("store"), g.store)
+check("and the name the seat was asked for under", held.get("name"), "Alice")
+check("and the identity that asked", held.get("uid"), "uid-1")
+check("and which turn it was asked at", held.get("requested_turn"), 4)
 broken = fresh_dir()
 write_json(L.joined_path(broken), {"galaxy": "sandbox"})
-check("a record with no store is no record", L.load_joined(broken), None)
+check("a record with no store is no record", L.load_joined(broken), {})
 L.clear_joined(d)
-check("and it can be cleared", L.load_joined(d), None)
+check("and it can be cleared", L.load_joined(d), {})
 L.clear_joined(d)
 check("clearing twice is not an error", os.path.exists(L.joined_path(d)), False)
 
-print("\n4. which galaxy this launcher plays")
+print("\n4. a second galaxy is joined, not swapped for the first")
+# The check that matters here is that the first galaxy is still named after
+# the second is joined. Counting the records would pass an implementation that
+# overwrote one and left a stale one behind, so every record is asked for by
+# name and the order they are in is asserted as well.
+two = fresh_dir()
+first = L.joined_record(row(gid="sandbox", store="C:\\g\\sandbox"), "Alice",
+                        None, "D:\\galaxies", now=1000.0)
+second = L.joined_record(row(gid="crowded", store="C:\\g\\crowded"), "Alice",
+                         None, "D:\\galaxies", now=2000.0)
+L.save_joined(two, first)
+L.save_joined(two, second)
+both_held = L.load_joined(two)
+check("the galaxy joined first is still held by name",
+      (both_held.get("sandbox") or {}).get("galaxy"), "sandbox")
+check("with the store it was joined at",
+      (both_held.get("sandbox") or {}).get("store"), "C:\\g\\sandbox")
+check("and the second is held beside it",
+      (both_held.get("crowded") or {}).get("store"), "C:\\g\\crowded")
+check("neither record was written over the other",
+      len({r["store"] for r in both_held.values()}), 2)
+check("and they are in the order they were joined",
+      list(both_held), ["sandbox", "crowded"])
+check("which is the order a re-read gives too",
+      list(L.load_joined(two)), ["sandbox", "crowded"])
+L.save_joined(two, dict(first, name="Alicia"))
+check("joining one of them again keeps its place",
+      list(L.load_joined(two)), ["sandbox", "crowded"])
+check("and replaces that record rather than adding one",
+      L.load_joined(two)["sandbox"]["name"], "Alicia")
+L.clear_joined(two, "sandbox")
+check("forgetting one galaxy leaves the rest alone",
+      list(L.load_joined(two)), ["crowded"])
+check("and the record left is the whole one",
+      L.load_joined(two)["crowded"]["store"], "C:\\g\\crowded")
+L.clear_joined(two, "nowhere")
+check("forgetting a galaxy that was never joined changes nothing",
+      list(L.load_joined(two)), ["crowded"])
+L.clear_joined(two, "crowded")
+check("and the file goes with the last record",
+      os.path.exists(L.joined_path(two)), False)
+
+print("\n5. a joined.json written before a player could be in two")
+# Read off disk in the shape the launcher used to write, rather than from a
+# dict built here to look like one: the thing being checked is that a file an
+# install already has still holds the seat it recorded.
+old = fresh_dir()
+with open(L.joined_path(old), "w", encoding="utf-8") as fh:
+    fh.write('{\n  "directory": "firebase://cs-resurgence",\n'
+             '  "galaxy": "sandbox",\n  "name": "Alice",\n'
+             '  "store": "C:\\\\g\\\\sandbox",\n  "uid": "uid-1",\n'
+             '  "requested_at": 1000.0,\n  "requested_turn": 4\n}\n')
+carried = L.load_joined(old)
+check("the seat it recorded is still held", list(carried), ["sandbox"])
+check("under the name it was claimed with", carried["sandbox"]["name"],
+      "Alice")
+check("with its store", carried["sandbox"]["store"], "C:\\g\\sandbox")
+check("its identity", carried["sandbox"]["uid"], "uid-1")
+check("the turn it was asked at", carried["sandbox"]["requested_turn"], 4)
+check("and the directory it was joined from",
+      carried["sandbox"]["directory"], "firebase://cs-resurgence")
+check("that galaxy is still what this launcher plays",
+      L.galaxy_to_play(old).get("store"), "C:\\g\\sandbox")
+check("and its row still reads as a join waiting to land",
+      L.pending_join(row(), carried), True)
+L.save_joined(old, second)
+check("joining a second does not take the migrated seat away",
+      sorted(L.load_joined(old)), ["crowded", "sandbox"])
+check("and the one that was there keeps its name",
+      L.load_joined(old)["sandbox"]["name"], "Alice")
+with open(L.joined_path(old), encoding="utf-8") as fh:
+    raw = json.load(fh)
+check("the old shape is never written again", "store" in raw, False)
+check("what is written is a collection keyed by galaxy id",
+      sorted(raw.get(L.JOINED_KEY) or {}), ["crowded", "sandbox"])
+check("and it says which shape it is", raw.get("version"), L.JOINED_VERSION)
+
+nameless = fresh_dir()
+write_json(L.joined_path(nameless), {"store": "C:\\g\\somewhere",
+                                     "name": "Alice"})
+check("an old record with no galaxy id is kept under its store",
+      list(L.load_joined(nameless)), ["C:\\g\\somewhere"])
+check("so the galaxy it named is still played",
+      L.galaxy_to_play(nameless).get("store"), "C:\\g\\somewhere")
+
+print("\n6. which galaxy this launcher plays")
 check("neither a config nor a join is nothing to play",
       L.galaxy_to_play(fresh_dir()), None)
 
@@ -131,10 +217,43 @@ check("a joined galaxy is played", played.get("store"), g.store)
 check("and carries the record it came from",
       (played.get("joined") or {}).get("name"), "Alice")
 
+several = fresh_dir()
+for gid, when in (("one", 1000.0), ("three", 3000.0), ("two", 2000.0)):
+    L.save_joined(several, L.joined_record(
+        row(gid=gid, store=f"C:\\g\\{gid}"), "Alice", None, "D:\\galaxies",
+        now=when))
+check("with several joined and no row named, the newest join is played",
+      L.galaxy_to_play(several).get("store"), "C:\\g\\three")
+check("which is neither the first nor the last the file lists, so it is a "
+      "choice rather than whichever came to hand",
+      [list(L.load_joined(several))[0], list(L.load_joined(several))[-1]],
+      ["one", "two"])
+check("and the same call gives the same galaxy every time",
+      len({L.galaxy_to_play(several)["store"] for _ in range(5)}), 1)
+
+tied = fresh_dir()
+for gid in ("bravo", "alpha"):
+    L.save_joined(tied, L.joined_record(row(gid=gid, store=f"C:\\g\\{gid}"),
+                                        "Alice", None, "D:\\g", now=5000.0))
+check("two joins written in the same moment are settled by galaxy id",
+      L.galaxy_to_play(tied).get("store"), "C:\\g\\bravo")
+
+undated = fresh_dir()
+write_json(L.joined_path(undated),
+           {"version": L.JOINED_VERSION,
+            L.JOINED_KEY: {
+                "recent": {"galaxy": "recent", "store": "C:\\g\\recent",
+                           "requested_at": 10.0},
+                "undated": {"galaxy": "undated",
+                            "store": "C:\\g\\undated"}}})
+check("a record carrying no time is the older one",
+      L.galaxy_to_play(undated).get("store"), "C:\\g\\recent")
+
 both = fresh_dir()
 write_json(os.path.join(both, L.MP_CONFIG), {"store": "C:\\galaxies\\mine"})
 L.save_joined(both, rec)
-check("multiplayer.json still wins over a join",
+L.save_joined(both, second)
+check("multiplayer.json still wins over every join",
       L.galaxy_to_play(both).get("store"), "C:\\galaxies\\mine")
 
 check("a folder galaxy wants no identity",
@@ -148,13 +267,13 @@ L.save_joined(authed, dict(rec, store="https://relay.example/s", auth=False))
 check("and an auth in the record still overrides both ways",
       L.store_wants_token(L.galaxy_to_play(authed)), False)
 
-print("\n5. an install with no identity does not go and get one")
+print("\n7. an install with no identity does not go and get one")
 quiet = fresh_dir()
 check("no uid without minting", L.install_uid(quiet), None)
 check("and nothing was written for one",
       os.path.exists(os.path.join(quiet, "fb_identity.json")), False)
 
-print("\n6. the cells a galaxy's row prints")
+print("\n8. the cells a galaxy's row prints")
 # Rewritten from the one-line summary the old Games panel drew. The panel is
 # gone and the page draws a table, so each rule the sentence carried is
 # asserted against the cell that carries it now.
@@ -182,20 +301,28 @@ check("an overdue turn says so", cells(row(deadline=now - 5))["left"],
       "time is up")
 check("a galaxy this player is in says so",
       cells(row(joined=True))["you"], "you are in")
-mine = {"galaxy": "sandbox", "store": "x", "name": "Alice"}
+mine = {"sandbox": {"galaxy": "sandbox", "store": "x", "name": "Alice"}}
 check("having played this turn is shown",
-      cells(row(joined=True), rec=mine, submitted=True)["you"], "turn played")
+      cells(row(joined=True), recs=mine,
+            submitted={"sandbox": True})["you"], "turn played")
 check("and not having played is shown",
-      cells(row(joined=True), rec=mine, submitted=False)["you"], "your turn")
+      cells(row(joined=True), recs=mine,
+            submitted={"sandbox": False})["you"], "your turn")
 check("a readout for another galaxy is not read into this row",
-      cells(row(gid="other", joined=True), rec=mine, submitted=True)["you"],
-      "you are in")
+      cells(row(gid="other", joined=True), recs=mine,
+            submitted={"sandbox": True})["you"], "you are in")
+check("a galaxy whose readout could not be had says only that you are in it",
+      cells(row(joined=True), recs=mine, submitted={})["you"], "you are in")
+check("and two galaxies read their own answers",
+      [cells(row(gid=gid, joined=True), recs=mine,
+             submitted={"sandbox": True, "crowded": False})["you"]
+       for gid in ("sandbox", "crowded")], ["turn played", "your turn"])
 check("a galaxy nobody here has joined claims nothing",
       cells(row())["you"], "")
 check("a join that has not landed yet says when it will",
-      cells(row(), rec=mine)["you"], "joining next turn")
+      cells(row(), recs=mine)["you"], "joining next turn")
 
-print("\n7. which control a row offers")
+print("\n9. which control a row offers")
 check("an open galaxy takes a join", L.joinable(row()), True)
 check("a forming one does not", L.joinable(row(status="forming")), False)
 check("a closed one does not", L.joinable(row(status="closed")), False)
@@ -218,7 +345,21 @@ check("nor a closed one you are in",
       L.row_action(row(status="closed", joined=True)), None)
 check("nor one you have already asked for", L.row_action(row(), mine), None)
 
-print("\n8. a seat belongs to the install that claimed it")
+waiting = {"sandbox": {"galaxy": "sandbox", "store": "x", "name": "Alice"},
+           "crowded": {"galaxy": "crowded", "store": "y", "name": "Alice"}}
+check("two galaxies asked for at once are both waiting",
+      [L.pending_join(row(gid=gid), waiting)
+       for gid in ("sandbox", "crowded")], [True, True])
+check("and neither offers a second Join",
+      [L.row_action(row(gid=gid), waiting)
+       for gid in ("sandbox", "crowded")], [None, None])
+check("two galaxies this player is seated in are both offered Play",
+      [L.row_action(row(gid=gid, joined=True), waiting)
+       for gid in ("sandbox", "crowded")], [L.PLAY, L.PLAY])
+check("and a third they are in neither of is still offered View",
+      L.row_action(row(gid="beacon"), waiting), L.VIEW)
+
+print("\n10. a seat belongs to the install that claimed it")
 seats = ["Alice", "Bob", "Carol"]
 check("a free name is no problem", L.seat_claim_problem("Dave", seats), None)
 check("an empty galaxy is no problem", L.seat_claim_problem("Dave", []), None)
@@ -239,7 +380,7 @@ check("this install's own seat is not a refusal",
 check("but somebody else's still is",
       bool(L.seat_claim_problem("Alice", seats, held="Bob")), True)
 
-print("\n9. the request a Join writes")
+print("\n11. the request a Join writes")
 req = L.join_request("Alice", "uid-1", "0.1.2", turn=4, now=1000.0)
 check("it carries the name", req["name"], "Alice")
 check("and the identity claiming the seat", req["uid"], "uid-1")
@@ -249,7 +390,7 @@ check("and when", req["requested_at"], 1000.0)
 check("a galaxy with no identity asks anyway",
       L.join_request("Alice", None, "0.1.2")["uid"], None)
 
-print("\n10. and where it is put")
+print("\n12. and where it is put")
 gx = make_galaxy(os.path.join(fresh_dir(), "sandbox"), ["Bob"])
 store = turn_store.open_store(gx)
 where = L.send_join_request(store, req)
@@ -294,7 +435,7 @@ except L.JoinNotAccepted as exc:
     check("a store that cannot take a join says so", "MuteStore" in str(exc),
           True)
 
-print("\n11. the whole path, from a directory to a request, on one disk")
+print("\n13. the whole path, from a directory to a request, on one disk")
 root = fresh_dir()
 sandbox = make_galaxy(os.path.join(root, "sandbox"), ["Bob", "Carol"], turn=7)
 make_galaxy(os.path.join(root, "quiet"), [], turn=1)
@@ -329,7 +470,7 @@ check("and the row shows the join as waiting, not as a seat",
 check("so it offers no second Join",
       L.joinable(again, L.load_joined(data)), False)
 
-print("\n12. a galaxy that is a folder reaches no directory and no network")
+print("\n14. a galaxy that is a folder reaches no directory and no network")
 lan = fresh_dir()
 write_json(os.path.join(lan, L.MP_CONFIG), {"store": "http://10.0.0.5:7000"})
 check("a LAN galaxy is played as it was", L.galaxy_to_play(lan).get("store"),

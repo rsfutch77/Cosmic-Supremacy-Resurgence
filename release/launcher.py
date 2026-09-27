@@ -950,6 +950,14 @@ def fmt_left(seconds: float) -> str:
 # the two-machine test run on.
 JOINED_FILE = "joined.json"
 
+# What the collection in that file is written under. A file carrying this key
+# holds one record per galaxy; anything else is the single record the file held
+# before a player could be in more than one, and is read as one of these. The
+# version is written for whoever reads the file next rather than for the reader
+# below, which tells the two shapes apart by the key.
+JOINED_KEY = "galaxies"
+JOINED_VERSION = 2
+
 # The directory listed when nothing names another one. A player who has never
 # opened a config file gets this, which is the point of the Galaxies page.
 BETA_DIRECTORY = "firebase://cs-resurgence"
@@ -1036,34 +1044,94 @@ def install_uid(data_dir: str, mint: bool = False):
 
 
 # ── What this player joined ───────────────────────────────────────────────────
-# The launcher's own record of an action the player took, not a setting they are
-# asked to keep, which is why it lives beside identity.json and fb_identity.json
-# rather than in multiplayer.json. It holds the store spec the directory gave,
-# so a galaxy that moves between a folder, a LAN server and the beta is followed
-# without anyone editing anything.
+# The launcher's own record of the actions the player took, not settings they
+# are asked to keep, which is why this lives beside identity.json and
+# fb_identity.json rather than in multiplayer.json. Each record holds the store
+# spec the directory gave, so a galaxy that moves between a folder, a LAN server
+# and the beta is followed without anyone editing anything.
+#
+# One record per galaxy, keyed by galaxy id. Being in a galaxy is membership and
+# a player may hold seats in several at once; playing one is a client
+# constraint, because a machine runs one game, and that limit is enforced where
+# a turn loop starts rather than here.
 def joined_path(data_dir: str) -> str:
     return os.path.join(data_dir, JOINED_FILE)
 
 
-def load_joined(data_dir: str):
-    """The galaxy this player joined, or None.
+def joined_records(raw):
+    """The records in a joined.json of either shape, keyed by galaxy id.
+
+    Before a player could hold more than one seat the file was a single record
+    with its `store` at the top level. One of those is read here as the
+    collection it would be written as today, so an install that joined a galaxy
+    before this existed is still in that galaxy afterwards. Nothing writes the
+    old shape again: the next save writes the collection.
 
     A record with no store is no record: it names a galaxy the launcher cannot
     open, and treating it as one would leave the player in front of a Play
-    button that has nowhere to go.
+    button that has nowhere to go. A record that arrived without a galaxy id is
+    kept under its store spec, which is what the single-record file was played
+    from, so dropping it would be losing a seat over a missing key.
+
+    Order is the order the file lists, which is the order the galaxies were
+    joined in, so the page does not reshuffle itself between refreshes.
     """
-    rec = _read_json(joined_path(data_dir))
-    if not rec or not isinstance(rec.get("store"), str) or not rec["store"]:
-        return None
-    return rec
+    if not isinstance(raw, dict):
+        return {}
+    found = raw.get(JOINED_KEY)
+    if not isinstance(found, dict):
+        found = {str(raw.get("galaxy") or raw.get("store") or ""): raw}
+    out = {}
+    for gid, rec in found.items():
+        if not isinstance(rec, dict):
+            continue
+        if not isinstance(rec.get("store"), str) or not rec["store"]:
+            continue
+        # The key is what every caller matches a row against, so the record
+        # carries it whatever the file said.
+        out[str(gid)] = dict(rec, galaxy=str(gid))
+    return out
+
+
+def load_joined(data_dir: str):
+    """Every galaxy this player has joined or asked to join, keyed by id."""
+    return joined_records(_read_json(joined_path(data_dir)))
+
+
+def write_joined(data_dir: str, records) -> None:
+    """Write the whole collection, in the order it is in."""
+    with open(joined_path(data_dir), "w", encoding="utf-8") as fh:
+        json.dump({"version": JOINED_VERSION, JOINED_KEY: dict(records)},
+                  fh, indent=2)
 
 
 def save_joined(data_dir: str, record: dict) -> None:
-    with open(joined_path(data_dir), "w", encoding="utf-8") as fh:
-        json.dump(record, fh, indent=2)
+    """Write down one galaxy, leaving every other one where it was.
+
+    Joining a second galaxy is joining rather than moving: the record for the
+    first is the seat the player still holds in it. A galaxy joined again keeps
+    the place it already had in the file rather than moving to the end.
+    """
+    records = load_joined(data_dir)
+    gid = str(record.get("galaxy") or record.get("store") or "")
+    records[gid] = dict(record, galaxy=gid)
+    write_joined(data_dir, records)
 
 
-def clear_joined(data_dir: str) -> None:
+def clear_joined(data_dir: str, galaxy=None) -> None:
+    """Forget one galaxy, or all of them.
+
+    One galaxy by default, because a seat taken back in one is not a reason to
+    forget the others. The file goes when the last record does, so an install
+    that has left every galaxy looks like one that never joined any.
+    """
+    if galaxy is not None:
+        records = load_joined(data_dir)
+        if records.pop(str(galaxy), None) is None:
+            return
+        if records:
+            write_joined(data_dir, records)
+            return
     try:
         os.remove(joined_path(data_dir))
     except OSError:
@@ -1081,18 +1149,46 @@ def joined_record(galaxy, name: str, uid, directory: str, now=None) -> dict:
             "requested_turn": galaxy.turn}
 
 
+def newest_joined(records):
+    """The record for the galaxy joined most recently, or None.
+
+    Asked only when nothing named a galaxy to play. The newest join is the one
+    the player last said they wanted, which is the best a caller with no row
+    can do, and it is a decision rather than whichever record the file happened
+    to list first. Two joins written in the same second are settled by galaxy
+    id, so the answer is the same on every call.
+    """
+    def when(item):
+        gid, rec = item
+        at = rec.get("requested_at")
+        ok = isinstance(at, (int, float)) and not isinstance(at, bool)
+        return (at if ok else 0.0, gid)
+
+    if not records:
+        return None
+    return max(records.items(), key=when)[1]
+
+
 def galaxy_to_play(data_dir: str):
     """The galaxy this launcher plays, shaped like a multiplayer.json, or None.
 
     multiplayer.json wins when it names a store: a folder or a LAN referee is a
     galaxy somebody chose outright, and a listing must not take it from them.
-    Otherwise it is the one the player joined, and the `joined` key carries that
-    record so the caller can tell which name the seat was asked for under.
+    Otherwise it is a galaxy the player joined, and the `joined` key carries
+    that record so the caller can tell which name the seat was asked for under.
+
+    This is the answer for a caller that named no row. A player in several
+    galaxies chooses one by pressing Play on its row, which reaches
+    `galaxy_config` instead and never asks this.
+
+    Answered from the records alone, with no store read, so it can name a join
+    that has not landed yet. What that galaxy does about a player with no seat
+    in it is the roster check's to say, as it was when there was one record.
     """
     cfg = multiplayer_config(data_dir)
     if cfg:
         return cfg
-    rec = load_joined(data_dir)
+    rec = newest_joined(load_joined(data_dir))
     if not rec:
         return None
     out = {"store": rec["store"], "joined": rec}
@@ -1176,17 +1272,17 @@ def seat_claim_problem(name: str, seats, held: str = None):
             "galaxy to move it.")
 
 
-def pending_join(g, rec) -> bool:
+def pending_join(g, recs) -> bool:
     """Whether this player has asked for a seat in `g` and is not in it yet.
 
     The state between clicking Join and the worker merging the civ at the next
-    turn boundary. It is a fact about the launcher's own record rather than
+    turn boundary. It is a fact about the launcher's own records rather than
     about the galaxy, because the galaxy shows nothing until the merge lands.
     """
-    return bool(rec and rec.get("galaxy") == g.id and not g.joined)
+    return bool(recs) and g.id in recs and not g.joined
 
 
-def joinable(g, rec=None) -> bool:
+def joinable(g, recs=None) -> bool:
     """Whether this galaxy would take a join request from this player.
 
     Only an open galaxy takes new players. One that is forming has no first
@@ -1194,7 +1290,7 @@ def joinable(g, rec=None) -> bool:
     them and is still listed, which is why the answer is a control being absent
     rather than the row being absent.
     """
-    if g.joined or pending_join(g, rec):
+    if g.joined or pending_join(g, recs):
         return False
     return g.status == OPEN
 
@@ -1220,16 +1316,20 @@ STATUS_ORDER = (OPEN, FORMING, CLOSED)
 class View(typing.NamedTuple):
     """What a cell needs to know that its own row does not carry.
 
-    `submitted` belongs to one row, the galaxy named in `rec`. Finding out
-    costs a read per galaxy, so the launcher asks it of the galaxy this player
-    joined and of no other, and every other row reads None as "not asked".
+    `recs` is what this launcher has joined, keyed by galaxy id, so a row finds
+    its own record and no other row's.
+
+    `submitted` is keyed the same way. Finding out costs a read per galaxy, so
+    the launcher asks it of the galaxies this player is actually seated in and
+    of no others, and a row with no entry reads it as "not asked" rather than
+    as "not played".
 
     `own` is the store multiplayer.json names outright, which is the one row
     that is played whatever the listing says about it.
     """
     now: "float | None" = None
-    rec: "dict | None" = None
-    submitted: "bool | None" = None
+    recs: "dict | None" = None
+    submitted: "dict | None" = None
     own: "str | None" = None
 
     @property
@@ -1309,20 +1409,20 @@ def _you_value(g, view):
     """How far into this galaxy the player is, nearest first."""
     if g.joined:
         return 0
-    if pending_join(g, view.rec):
+    if pending_join(g, view.recs):
         return 1
     return 2
 
 
 def _you_text(g, view):
     if g.joined:
-        mine = bool(view.rec) and view.rec.get("galaxy") == g.id
-        if mine and view.submitted is True:
+        played = (view.submitted or {}).get(g.id)
+        if played is True:
             return "turn played"
-        if mine and view.submitted is False:
+        if played is False:
             return "your turn"
         return "you are in"
-    if pending_join(g, view.rec):
+    if pending_join(g, view.recs):
         return "joining next turn"
     return ""
 
@@ -1398,12 +1498,16 @@ def same_store(a, b) -> bool:
         return False
 
 
-def row_action(g, rec=None, own=None):
+def row_action(g, recs=None, own=None):
     """Which control this row offers: PLAY, VIEW, or nothing at all.
 
-    Play is the galaxy you are in, and it is what the Multiplayer button used
-    to do. View is a galaxy you could join: it opens the notice, which is
-    where the joining is confirmed, so the row itself joins nothing.
+    Play is any galaxy you are in, and it is what the Multiplayer button used
+    to do. Every galaxy you hold a seat in offers it, because being in a galaxy
+    is membership and a player may be in several; which one is being played is
+    a question for the turn loop, which follows one at a time and says so when
+    Play is pressed on a second. View is a galaxy you could join: it opens the
+    notice, which is where the joining is confirmed, so the row itself joins
+    nothing.
 
     A closed galaxy offers neither, whoever is in it, because a turn played
     into one is refused at the submission. Nor does a galaxy this launcher has
@@ -1421,9 +1525,9 @@ def row_action(g, rec=None, own=None):
         return PLAY
     if g.joined:
         return PLAY
-    if pending_join(g, rec):
+    if pending_join(g, recs):
         return None
-    return VIEW if joinable(g, rec) else None
+    return VIEW if joinable(g, recs) else None
 
 
 class OwnGalaxy(typing.NamedTuple):
@@ -1444,13 +1548,23 @@ class OwnGalaxy(typing.NamedTuple):
     store: str
 
 
+def store_label(spec: str) -> str:
+    """What to call a galaxy that is only a store spec.
+
+    The last part of it, which is the folder or the host a player would
+    recognise, because a folder of turns and a LAN referee are registered
+    nowhere and have no name but where they are.
+    """
+    spec = str(spec)
+    return os.path.basename(spec.rstrip("/\\").replace("\\", "/")) or spec
+
+
 def named_galaxy(spec: str, state, player: "str | None" = None) -> OwnGalaxy:
     """The row for a store multiplayer.json names, built from its own state.
 
     Identified by the spec, because that is all there is: a folder of turns
     and a LAN referee are registered nowhere and have no id but where they
-    are. Shown by the last part of it, which is the folder or the host a
-    player would recognise.
+    are. Shown under the name `store_label` reads out of it.
 
     A store whose state cannot be read is forming rather than absent, for the
     reason a directory's row gives: the referee publishes the first turn some
@@ -1458,7 +1572,7 @@ def named_galaxy(spec: str, state, player: "str | None" = None) -> OwnGalaxy:
     the galaxy having failed.
     """
     spec = str(spec)
-    name = os.path.basename(spec.rstrip("/\\").replace("\\", "/")) or spec
+    name = store_label(spec)
     if not state:
         return OwnGalaxy(spec, name, FORMING, None, None, 0, False, spec)
     civs = list(state.get("civs", []))
@@ -1839,6 +1953,11 @@ class Launcher:
         self.mp_thread = None
         self.mp_store = None
         self.mp_civ = None
+        # Which galaxy that loop is following, for the refusal a second Play
+        # gets. A name and a store spec rather than the row, because the row
+        # goes stale with the next listing and this has to name the galaxy for
+        # as long as it is being played.
+        self.mp_playing = None
         self.mp_stop = False
         self.mp_note = ""
         self.mp_turn = None
@@ -1855,7 +1974,7 @@ class Launcher:
         self.games_rows = None
         self.games_extra = {}
         self.games_err = None
-        self.games_rec = None
+        self.games_recs = {}
         self.sort_key = DEFAULT_SORT
         self.sort_desc = False
         # Which page the window is showing, and the widgets the table owns:
@@ -2395,43 +2514,51 @@ class Launcher:
         self.games_busy = True
         self.games_status.configure(text="listing galaxies…", fg=DIM)
         spec, player, data_dir = self.games_dir, self.player, self.data_dir
-        rec = load_joined(data_dir)
+        recs = load_joined(data_dir)
 
         def work():
             extra = {}
             rows, err = galaxy_rows(data_dir, spec, player)
-            if rec and player:
-                extra["submitted"] = self._submitted_state(rows, rec, player)
+            if recs and player:
+                extra["submitted"] = self._submitted_state(rows, recs, player)
             self.msgs.put(("__games__", rows, extra, err))
 
         threading.Thread(target=work, daemon=True, name="games").start()
 
-    def _submitted_state(self, rows, rec, player):
-        """Whether this player has handed in the current turn of their galaxy.
+    def _submitted_state(self, rows, recs, player):
+        """Which of this player's galaxies have had the current turn handed in.
 
-        One extra read, for one galaxy, which is why it is not asked of every
-        row: a listing is one query and this is a request per refresh on a
-        store that may charge for it. None when the answer cannot be had,
-        which the row reads as "you are in" rather than as "you have not
-        played".
+        One extra read per galaxy this launcher holds a seat in, which is why
+        it is not asked of every row: a listing is one query and each of these
+        is a request per refresh on a store that may charge for it. A galaxy
+        left out of the answer is one that could not be read, which its row
+        prints as "you are in" rather than as "you have not played".
+
+        Each galaxy is asked for under the name its own seat was claimed
+        under, because a player who has since changed their name still holds
+        the seat they joined with.
 
         Total, because the listing is posted back to the window after this and
         an exception here would leave the page saying it is still listing.
         """
-        try:
-            g = next((r for r in rows if r.id == rec.get("galaxy")), None)
-            if g is None or not g.joined or g.turn is None:
-                return None
-            mods = multiplayer_modules()
-            if mods is None:
-                return None
-            _player_turn, turn_store = mods
-            token = (player_token(self.data_dir)
-                     if store_wants_token({"store": g.store}) else None)
-            store = open_player_store(turn_store, g.store, token)
-            return bool(store.has_submitted(rec.get("name") or player, g.turn))
-        except Exception:                   # a readout is not worth an error path
-            return None
+        out = {}
+        for g in rows:
+            rec = recs.get(g.id)
+            if rec is None or not g.joined or g.turn is None:
+                continue
+            try:
+                mods = multiplayer_modules()
+                if mods is None:
+                    return out
+                _player_turn, turn_store = mods
+                token = (player_token(self.data_dir)
+                         if store_wants_token({"store": g.store}) else None)
+                store = open_player_store(turn_store, g.store, token)
+                out[g.id] = bool(store.has_submitted(rec.get("name") or player,
+                                                     g.turn))
+            except Exception:               # a readout is not worth an error path
+                continue
+        return out
 
     def _on_games(self, rows, extra, err):
         """Take a listing in. Runs on the Tk thread, off the message queue."""
@@ -2445,7 +2572,7 @@ class Launcher:
 
     def _galaxy_view(self):
         """What a cell needs to know that its own row does not carry."""
-        return View(now=time.time(), rec=self.games_rec,
+        return View(now=time.time(), recs=self.games_recs,
                     submitted=self.games_extra.get("submitted"),
                     own=self.own_store)
 
@@ -2455,19 +2582,19 @@ class Launcher:
         for widget in self._cells:
             widget.destroy()
         self._cells, self._clocks = [], []
-        self.games_rec = load_joined(self.data_dir)
+        self.games_recs = load_joined(self.data_dir)
         view = self._galaxy_view()
         rows = sort_galaxies(self.games_rows or [], self.sort_key,
                              self.sort_desc, view)
         self._show_sort()
         self._show_source(rows)
         for r, g in enumerate(rows, start=1):
-            action = row_action(g, view.rec, view.own)
+            action = row_action(g, view.recs, view.own)
             # The rows lit are the ones that are this player's business: the
             # galaxy they are in, the one they have asked to join, and the one
             # they named themselves.
             near = bool(g.joined or action == PLAY
-                        or pending_join(g, view.rec))
+                        or pending_join(g, view.recs))
             for i, col in enumerate(GALAXY_COLUMNS):
                 cell = tk.Label(self.games_table, text=col.text(g, view),
                                 bg=PANEL, fg=TEXT if near else DIM,
@@ -2518,14 +2645,14 @@ class Launcher:
         their name. The answer belongs in front of the list, beside the thing
         to press.
         """
-        actions = [row_action(g, view.rec, view.own) for g in rows]
+        actions = [row_action(g, view.recs, view.own) for g in rows]
         text = ""
         if rows and PLAY not in actions:
             if VIEW in actions:
                 text = ("You are not in a galaxy yet. Press View on one to "
                         "read what you would be joining, and join from "
                         "there.")
-            elif any(pending_join(g, view.rec) for g in rows):
+            elif any(pending_join(g, view.recs) for g in rows):
                 text = ("Your join is with the galaxy. A seat appears at the "
                         "next turn boundary, and Play appears with it.")
         if text:
@@ -2661,13 +2788,11 @@ class Launcher:
             self.say("join: no player name entered, not joining")
             return
 
-        rec = load_joined(self.data_dir)
-        if rec and rec.get("galaxy") != g.id and not messagebox.askyesno(
-                self.cfg["product"],
-                f"You have already joined {rec.get('galaxy')}.\n\nThis "
-                "launcher plays one galaxy at a time, so it would play "
-                f"{g.name or g.id} from now on.\n\nJoin anyway?"):
-            return
+        # Nothing is asked about the galaxies this launcher has already
+        # joined. A seat in one is not a reason to refuse a seat in another:
+        # joining is membership, and which of them is being played is settled
+        # when Play is pressed.
+        rec = load_joined(self.data_dir).get(g.id)
 
         mods = multiplayer_modules()
         if mods is None:
@@ -2707,7 +2832,7 @@ class Launcher:
                 return
 
         seats = list((state or {}).get("civs", []))
-        held = rec.get("name") if rec and rec.get("galaxy") == g.id else None
+        held = rec.get("name") if rec else None
         problem = seat_claim_problem(civ, seats, held=held)
         if problem:
             # The count, not the names, in the window and in the log alike.
@@ -2773,18 +2898,88 @@ class Launcher:
         if cfg and same_store(cfg.get("store"), g.store):
             return cfg
         out = {"store": g.store}
-        rec = load_joined(self.data_dir)
-        if rec and rec.get("galaxy") == g.id:
+        rec = load_joined(self.data_dir).get(g.id)
+        if rec:
             out["joined"] = rec
             if isinstance(rec.get("auth"), bool):
                 out["auth"] = rec["auth"]
         return out
 
+    def playing_now(self):
+        """The galaxy this launcher's turn loop is following, or None.
+
+        The one place that answers whether a galaxy is being played. A player
+        may hold seats in several, and every one of those rows offers Play;
+        what there is only one of is this loop, because it drives the game
+        client and the machine runs one of those.
+
+        A running loop with nothing recorded against it answers with an empty
+        record rather than with None. What the caller acts on is that a loop
+        is running, and answering None there would let a second one start.
+        """
+        if self.mp_thread is None or not self.mp_thread.is_alive():
+            return None
+        return self.mp_playing or {}
+
+    def _take_turn_loop(self, g) -> bool:
+        """Whether the turn loop is free for this galaxy, asking to switch.
+
+        This is where one-at-a-time lives, and it is about playing rather than
+        about joining. A player can be in as many galaxies as they like; the
+        turn loop starts the game client, the machine runs one of those, so
+        two loops would be two games fighting over it.
+
+        A second Play names the galaxy already being followed rather than
+        saying a galaxy is running, because "which one" is the question a
+        player with several seats is actually asking. Answering yes stops that
+        loop between turns and starts this one, which is the switch the
+        refusal offers and is the whole of what has to be done by hand
+        otherwise.
+
+        The stop happens here, ahead of the checks below, because the first of
+        them asks whether a game client is running and a loop still following
+        a galaxy is the usual reason one is. A galaxy that then refuses the
+        player leaves neither being followed, and Play on the first row starts
+        it again.
+        """
+        playing = self.playing_now()
+        if playing is None:
+            return True
+        here = playing.get("name") or playing.get("store") or "a galaxy"
+        if g is not None and same_store(playing.get("store"), g.store):
+            self.warn(f"You are already playing {here}.\n\nIts turns are "
+                      "being followed now, and the readout on the home page "
+                      "is this galaxy's.")
+            return False
+
+        from tkinter import messagebox
+        there = (g.name or g.id) if g is not None else "another galaxy"
+        if not messagebox.askyesno(
+                self.cfg["product"],
+                f"This launcher is playing {here} right now.\n\nYou can be in "
+                "as many galaxies as you like, but a turn starts the game "
+                "itself and this machine runs one game, so one galaxy is "
+                f"played at a time.\n\nStop following {here} and play {there} "
+                "instead?"):
+            self.say(f"multiplayer: still following {here}, not switching")
+            return False
+
+        # The thread stop_multiplayer let go of. It clears the handle whether
+        # or not the loop finished, and a second loop started over one that is
+        # still capturing a turn is two of them driving the same client.
+        thread = self.mp_thread
+        self.stop_multiplayer(f"switching to {there}")
+        if thread is not None and thread.is_alive():
+            self.warn(f"{here} is still finishing a turn.\n\nIt stops between "
+                      f"turns rather than mid-capture. Press Play on {there} "
+                      "again in a moment.")
+            return False
+        return True
+
     def start_multiplayer(self, mode, g=None):
         """Follow this galaxy's turns until the player stops or the launcher
         closes."""
-        if self.mp_thread is not None and self.mp_thread.is_alive():
-            self.warn("A multiplayer galaxy is already running.")
+        if not self._take_turn_loop(g):
             return
         busy = running_clients(self.client_exes)
         if busy:
@@ -2918,9 +3113,12 @@ class Launcher:
                     # land, which is a dead end rather than a row to join
                     # again from. Only a galaxy that was joined from the list
                     # has such a record; one named in multiplayer.json is the
-                    # player's own choice and is left alone.
+                    # player's own choice and is left alone. This galaxy's
+                    # record and no other: the seats this player holds
+                    # elsewhere are still theirs.
                     if cfg.get("joined"):
-                        clear_joined(self.data_dir)
+                        clear_joined(self.data_dir,
+                                     cfg["joined"].get("galaxy"))
                         self.refresh_games()
                     self.warn(problem)
                     return
@@ -2933,6 +3131,10 @@ class Launcher:
 
         self.mp_store = store
         self.mp_civ = civ
+        self.mp_playing = {"id": g.id if g is not None else cfg["store"],
+                           "name": (g.name or g.id) if g is not None
+                           else store_label(cfg["store"]),
+                           "store": cfg["store"]}
         self.mp_stop = False
         self.running_mode = mode
         joined = cfg.get("joined")
@@ -2996,6 +3198,7 @@ class Launcher:
         if self.mp_thread.is_alive():
             self.say("multiplayer: the turn loop is still finishing a capture")
         self.mp_thread = None
+        self.mp_playing = None
         self.mp_note = ""
         self.mp_turn = None
 

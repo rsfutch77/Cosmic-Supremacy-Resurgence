@@ -69,3 +69,5 @@ referee_work/
 server/fog_work/
 server/wipe_work/
 server/join_work/
+# Galaxies built for looking at the launcher, per machine and throwaway.
+server/uidemo/

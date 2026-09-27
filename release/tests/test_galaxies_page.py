@@ -89,8 +89,11 @@ ROWS = [
     gx("beacon", "Beacon", status="forming", turn=None, left=None, players=0),
     gx("sandbox", "sandbox", turn=100, left=59, players=1, joined=True),
 ]
-JOINING = {"galaxy": "crowded", "store": "C:\\g\\crowded", "name": "Alice"}
-VIEW = L.View(now=NOW, rec=JOINING)
+# What this launcher has joined, keyed by galaxy id. One entry here, because
+# the rows above are the one-galaxy case; section 5a joins a second.
+JOINING = {"crowded": {"galaxy": "crowded", "store": "C:\\g\\crowded",
+                       "name": "Alice"}}
+VIEW = L.View(now=NOW, recs=JOINING)
 
 
 def order(key, reverse=False, view=VIEW, rows=None):
@@ -225,6 +228,37 @@ check("which it is not without that, being a galaxy with no first turn",
 check("and not even it is played once it is closed",
       L.row_action(ROWS[1], JOINING, own=ROWS[1].store), None)
 
+print("\n5a. a player who is in several galaxies is in several galaxies")
+# Being in a galaxy is membership; playing one is the client's limit. So every
+# galaxy this player is in offers Play at the same time, and the rows are
+# asked for one at a time by name: a count would pass a page that offered Play
+# on the wrong two.
+IN_BOTH = {"sandbox": {"galaxy": "sandbox", "store": "C:\\g\\sandbox",
+                       "name": "Alice"},
+           "lapsed": {"galaxy": "lapsed", "store": "C:\\g\\lapsed",
+                      "name": "Alice"}}
+seated = [gx("sandbox", "sandbox", joined=True),
+          gx("lapsed", "Lapsed", joined=True),
+          gx("crowded", "crowded")]
+check("both galaxies this player is in offer Play",
+      {g.id: L.row_action(g, IN_BOTH) for g in seated},
+      {"sandbox": L.PLAY, "lapsed": L.PLAY, "crowded": L.VIEW})
+check("and both say so in the column that answers for the player",
+      [L.galaxy_column("you").text(g, L.View(now=NOW, recs=IN_BOTH))
+       for g in seated], ["you are in", "you are in", ""])
+check("a seat held in one galaxy and a join waiting in another are both kept",
+      {g.id: L.row_action(g, {**IN_BOTH, "crowded": JOINING["crowded"]})
+       for g in seated},
+      {"sandbox": L.PLAY, "lapsed": L.PLAY, "crowded": None})
+check("and the waiting one still says when it lands",
+      L.galaxy_column("you").text(
+          seated[2], L.View(now=NOW,
+                            recs={**IN_BOTH, "crowded": JOINING["crowded"]})),
+      "joining next turn")
+check("the page draws every one of them rather than the newest",
+      len(L.sort_galaxies(seated, "you", False,
+                          L.View(now=NOW, recs=IN_BOTH))), 3)
+
 print("\n6. the row for a galaxy no directory lists")
 spec = "C:\\galaxies\\demo"
 empty = L.named_galaxy(spec, None)
@@ -261,6 +295,27 @@ check("a directory alone lists what is in it",
       sorted(g.id for g in rows), ["alpha", "quiet"])
 check("with nothing to report", problem, None)
 check("and the seated player is seated", rows[0].joined, True)
+
+# Two seats, on this disk, through the file the launcher actually keeps.
+two = fresh_dir()
+pair = fresh_dir()
+make_galaxy(os.path.join(pair, "alpha"), ["Alice", "Bob"], turn=7)
+make_galaxy(os.path.join(pair, "bravo"), ["Alice", "Carol"], turn=3)
+for gid in ("alpha", "bravo"):
+    L.save_joined(two, {"galaxy": gid, "store": os.path.join(pair, gid),
+                        "name": "Alice", "uid": None,
+                        "directory": pair, "requested_at": 1.0,
+                        "requested_turn": 1})
+rows, problem = L.galaxy_rows(two, pair, "Alice")
+recs = L.load_joined(two)
+check("a player seated in two galaxies is seated in both",
+      {g.id: g.joined for g in rows}, {"alpha": True, "bravo": True})
+check("and is offered Play on each of them",
+      {g.id: L.row_action(g, recs) for g in rows},
+      {"alpha": L.PLAY, "bravo": L.PLAY})
+check("with both records still on disk, named",
+      [recs["alpha"]["galaxy"], recs["bravo"]["galaxy"]], ["alpha", "bravo"])
+check("and nothing to report", problem, None)
 
 mine = fresh_dir()
 folder = make_galaxy(os.path.join(fresh_dir(), "mine"), ["Alice"], turn=3)
@@ -433,6 +488,21 @@ check("the turn loop takes a galaxy, or none, as it always did",
 check("and asks what to play through one place",
       "self.galaxy_config(g)" in
       inspect.getsource(L.Launcher.start_multiplayer), True)
+start = inspect.getsource(L.Launcher.start_multiplayer)
+check("the turn loop asks one place whether it is free to start",
+      "self._take_turn_loop(g)" in start, True)
+check("and carries no second rule about a galaxy already running",
+      "already running" in start.split("running_clients")[0], False)
+joining = inspect.getsource(L.Launcher.on_join)
+check("a join no longer offers to replace the galaxy already joined",
+      "Join anyway?" in joining, False)
+check("nor says the launcher plays one galaxy at a time",
+      "one galaxy at a time" in joining, False)
+check("it writes the record beside the others",
+      "save_joined(self.data_dir, joined_record(" in joining, True)
+check("a reclaimed seat forgets that galaxy rather than all of them",
+      ("clear_joined(self.data_dir," in start,
+       "clear_joined(self.data_dir)" in start), (True, False))
 
 draw = inspect.getsource(L.Launcher._draw_galaxies)
 check("the table's buttons are the ones row_action names",
@@ -530,6 +600,135 @@ before = n.home_page.packs
 L.Launcher.show_home(n)
 check("asking for the page you are already on changes nothing",
       (n.where(), n.home_page.packs), (("home", True, False), before))
+
+print("\n14. one galaxy is played at a time, and that is about playing")
+# The limit the page does not carry. Every joined row offers Play; the turn
+# loop is what there is one of, because it starts the game client and the
+# machine runs one of those.
+#
+# The dialog is stood in for rather than shown: tkinter is replaced in this
+# process by a module that answers the question and records what it was asked,
+# so the offer to switch is exercised with no window and no display.
+import types                                                    # noqa: E402
+
+asked, answers = [], []
+
+
+def askyesno(title, message):
+    asked.append(message)
+    return answers.pop(0)
+
+
+fake_tk = types.ModuleType("tkinter")
+fake_mb = types.ModuleType("tkinter.messagebox")
+fake_mb.askyesno = askyesno
+fake_tk.messagebox = fake_mb
+sys.modules["tkinter"], sys.modules["tkinter.messagebox"] = fake_tk, fake_mb
+
+
+class Loop:
+    """A turn loop, as far as this rule can see it: alive, or stopped."""
+
+    def __init__(self, finishes=True):
+        self.finishes = finishes
+        self.asked_to_stop = False
+
+    def is_alive(self):
+        return not (self.asked_to_stop and self.finishes)
+
+
+class Player:
+    """A launcher following one galaxy, without the window or the thread."""
+
+    def __init__(self, playing=None, finishes=True):
+        self.cfg = {"product": "Cosmic Supremacy"}
+        self.mp_playing = playing
+        self.mp_thread = Loop(finishes) if playing is not None else None
+        self.warned, self.said, self.stopped = [], [], []
+
+    def warn(self, msg):
+        self.warned.append(msg)
+
+    def say(self, msg):
+        self.said.append(msg)
+
+    def stop_multiplayer(self, why=""):
+        self.stopped.append(why)
+        self.mp_thread.asked_to_stop = True
+        self.mp_thread = None
+        self.mp_playing = None
+
+    def playing_now(self):
+        return L.Launcher.playing_now(self)
+
+    def take(self, g):
+        return L.Launcher._take_turn_loop(self, g)
+
+
+CROWDED = {"id": "crowded", "name": "crowded", "store": "C:\\g\\crowded"}
+sandbox, crowded = ROWS[4], ROWS[2]
+
+free = Player()
+check("a launcher following nothing starts the galaxy asked for",
+      free.take(sandbox), True)
+check("without a word about it", (free.warned, asked), ([], []))
+check("and one following nothing has no galaxy to name",
+      L.Launcher.playing_now(free), None)
+
+again = Player(CROWDED)
+check("pressing Play on the galaxy already being played does not start it",
+      again.take(crowded), False)
+check("it says you are already playing that one",
+      "already playing crowded" in again.warned[0], True)
+check("and asks nothing, because there is nothing to switch to",
+      asked, [])
+check("the loop is left alone", again.stopped, [])
+
+refused = Player(CROWDED)
+answers.append(False)
+check("pressing Play on another galaxy while one is playing asks first",
+      refused.take(sandbox), False)
+check("and the question names the galaxy being played",
+      "crowded" in asked[-1], True)
+check("and the one it would switch to", "sandbox" in asked[-1], True)
+check("and says why there is only one", "one game" in asked[-1], True)
+check("answering no stops nothing", refused.stopped, [])
+check("and leaves that galaxy being followed",
+      (L.Launcher.playing_now(refused) or {}).get("name"), "crowded")
+check("and says so in the log rather than in a window",
+      (refused.warned, "not switching" in refused.said[-1]), ([], True))
+
+switched = Player(CROWDED)
+answers.append(True)
+check("answering yes starts the galaxy asked for", switched.take(sandbox),
+      True)
+check("having stopped the one that was playing", len(switched.stopped), 1)
+check("with a reason naming what it switched to",
+      "sandbox" in switched.stopped[0], True)
+check("and nothing was warned about", switched.warned, [])
+
+busy = Player(CROWDED, finishes=False)
+answers.append(True)
+check("a loop that has not finished its turn does not start a second one",
+      busy.take(sandbox), False)
+check("it says which galaxy is still finishing",
+      "crowded is still finishing" in busy.warned[0], True)
+check("and what to press once it has", "Play on sandbox" in busy.warned[0],
+      True)
+
+unnamed = Player(CROWDED)
+answers.append(False)
+check("a Play that named no row is asked about too", unnamed.take(None),
+      False)
+check("and the question still names the galaxy being played",
+      "crowded" in asked[-1], True)
+
+nameless = Player({})
+answers.append(False)
+check("a loop with no galaxy recorded against it still holds the turn loop",
+      nameless.take(sandbox), False)
+check("and is asked about rather than talked over", len(asked), 5)
+check("every question asked was answered", answers, [])
 
 for d in dirs:
     shutil.rmtree(d, ignore_errors=True)
