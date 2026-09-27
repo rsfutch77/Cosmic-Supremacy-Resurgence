@@ -240,11 +240,8 @@ that submissions are validated, because they are not and were never meant to be.
 `screen_submission` asks whether bytes can be used at all, never whether an order
 is legal, which is C4 and is not built.
 
-**Two findings in files it did not change.** A pre-existing, order-dependent
-false refusal: with two good submissions and no bad one, whoever merges second is
-told `research: DROPPED, belongs to <the other civ>`, because that one rule
-compares against the accumulating blob rather than the state as served, unlike
-every other rule in the module. Note-only, predates this work, left alone. And
+**Two findings in files it did not change.** The first is now fixed, see below.
+And
 `duel3.b64` is a fixture trap: it looks like a different galaxy and is the same
 one at turn 3, so it tests the turn check rather than the galaxy check.
 
@@ -297,3 +294,32 @@ name. That is the intended fail-safe rather than a silent wrong answer, but it
 would still have made the first packaged beta unjoinable. Both added, and the
 build script now carries five modules the launcher imports inside functions.
 Unexercised: no frozen build has been made since any of tonight's launcher work.
+
+### The research refusal was firing at honest players
+
+`merge` snapshots `served_ships`, `served_planets` and `served_designs` once at
+entry, because every player played offline against that state and it is the only
+thing a submission can honestly be compared against. The research rules did not:
+they read the accumulating blob. Nothing in the merge ever writes another civ's
+research, so the two differ only where an earlier submission in the same turn was
+honestly applied, and the result was that **the second player to merge in any
+turn where two of them changed topic was told they had edited the first
+player's research.**
+
+Their own orders still applied, so nothing was lost. What was wrong is the note,
+in a galaxy where notes are the only thing telling a player what the referee
+refused, and it named another player as the owner of an edit that never
+happened. In a two-player test it needs both to change topic in one turn; in a
+sandbox with several players it is most turns, hitting everyone except whoever
+merges first.
+
+`served_research` is now taken alongside the other three indexes and both rules
+read it. `server/tests/test_research_merge.py`, 10 checks, each run with **both**
+submissions present because one submission cannot show the bug: with only one,
+the accumulating blob and the served blob are the same thing and the old code
+passed. Mutation-tested by reverting the one line, which fails exactly the
+second civ to merge in both orderings.
+
+The control matters as much: a player who really does edit someone else's topic
+is still refused, and the refusal still names whose it is. Without that check the
+fix would be indistinguishable from deleting the rule.
