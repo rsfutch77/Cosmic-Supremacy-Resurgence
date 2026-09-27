@@ -432,7 +432,7 @@ is out of scope here.
   existed, and closing turn 10 reproduced the archived `9d63be7a3e9c3cc8`. The
   store refactor did not change what the referee computes.
 
-- [~] **H5. Cost and quota arithmetic, written down.** One galaxy at 4-hour turns
+- [x] **H5. Cost and quota arithmetic, written down.** One galaxy at 4-hour turns
   is 6 ticks a day, 182 a month. Quotas below read from Firebase's own
   documentation on 20 September 2026, and worth re-reading before the beta opens
   because one of them changed in February.
@@ -493,9 +493,36 @@ is out of scope here.
   its length on. It predates the capture and upload split and is not caused by
   it, though that made it about 20% worse by waking the nap more often.
 
-  The fix is the sentence that was already here: fast while a turn is being
-  played, and between turns sleep against the deadline, which the store has
-  already given. Not done.
+  **Done.** `poll_gap` makes the gap a twentieth of the distance to the deadline,
+  floored at 2 seconds and capped at 300. The distance is signed, so the same
+  rule runs on both sides: it is a V, tightest exactly at the deadline, which is
+  the one moment that matters. A turn published on its deadline is still served
+  within 2 seconds, and one published 20 minutes late is served 3.5 seconds after
+  it appears, having spent 239 reads waiting rather than 36,000.
+
+  | turn length | before | after | players inside 50K |
+  |---|---|---|---|
+  | 4 hours | 44,484 a day, 89% | **888, 1.8%** | 1 to **55** |
+  | 15 minutes | 104,064 a day, 208% | **7,872, 16%** | 0 to **6** |
+
+  The before column was measured by running the same harness against the old
+  `player_turn.py` out of git rather than by arithmetic, and it reproduces the
+  43,200 above independently, which is what says the harness counts the right
+  thing.
+
+  **A second and larger source was found that this item never mentioned.**
+  `_refresh_turn` called `current()` **and** `seconds_left()` from `_watch_game`,
+  which runs once a second whenever a game window is open: 7,200 reads an hour,
+  172,800 a day at 15-minute turns, more than the loop it was reporting on. The
+  countdown now subtracts from a deadline the loop already emits and reads the
+  store once, when it has heard nothing yet. Measured 1 read across 601 ticks
+  against 1,202.
+
+  **Not measured:** that one `store.current()` is exactly one Firestore document
+  read. That is taken from this item and from `FirebaseTurnStore.state()` being a
+  single fetch, not from a billing console. The Games page also polls the
+  directory every 120 seconds, which is a separate path and is not in the figures
+  above.
 
   **Done when:** a measured day of a live galaxy is inside the allowances with
   margin, or the expected monthly bill is written down.
