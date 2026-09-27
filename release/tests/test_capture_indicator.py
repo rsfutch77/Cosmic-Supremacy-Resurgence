@@ -410,4 +410,15 @@ check("and a state of None is what hides it",
 check("while a submission in flight still says so",
       L.capture_readout("capturing", 0.0)[0] not in (None, ""),
       True)
+
+print()
+print("the turn controls follow the game window, not the loop")
+wsrc = inspect.getsource(L.Launcher._watch_game)
+# Next Turn, Send Turn and Load all act on a running client. The loop
+# outlives the window by most of a four-hour turn, so showing them while
+# it waits left three dead buttons on screen for hours.
+check("they are hidden once the client has gone",
+      "_show_controls(not self.mp_client_gone)" in wsrc, True)
+check("and nothing shows them unconditionally while a loop runs",
+      "_show_controls(True)" in wsrc, False)
 sys.exit(1 if fails else 0)

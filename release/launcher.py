@@ -3872,7 +3872,13 @@ class Launcher:
         # for them: Tutorial and Demo have their own UI and must not grow a
         # Next Turn button that means nothing there.
         if mp_live:
-            self._show_controls(True)
+            # The controls belong to a game window, not to the loop. Next Turn,
+            # Send Turn and Load all act on a running client, and the loop
+            # outlives the window by most of a four-hour turn, so leaving them
+            # up left three dead buttons and a turn readout on screen for
+            # hours. What is worth saying while waiting is already in the
+            # status line above them. They come back when the client does.
+            self._show_controls(not self.mp_client_gone)
             self._refresh_turn()
             self.root.after(1000, self._watch_game)
             return
