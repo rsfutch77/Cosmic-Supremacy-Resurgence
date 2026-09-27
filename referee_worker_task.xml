@@ -1,0 +1,105 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  The referee worker as a Windows scheduled task.
+
+  This is a template, and it is UTF-8 so that it reads as text here. Fill the
+  {{ }} values and save it as UTF-16, which is the encoding Task Scheduler
+  accepts, or let
+  `run_worker.ps1 -WriteTaskXml <path> -Store <spec>` fill them from this
+  checkout, and then register it yourself:
+
+      schtasks /Create /TN "CosmicSupremacy Referee" /XML <path>
+
+  Nothing registers it for you. A task that appeared on an operator's machine
+  without them asking is a worse thing than a galaxy that is not yet running.
+
+  Why this triggers at logon and not at boot
+  ==========================================
+  A turn is computed by launching the game client, which is a DirectX
+  application and needs a desktop. A task set to run whether or not a user is
+  logged on runs in session 0, which since Windows Vista has no desktop and no
+  GPU, so the client would be started there and would have nowhere to draw. The
+  worker itself would start perfectly well at boot; the first turn it tried to
+  close would be the thing that failed, four hours later, unattended.
+
+  So the task starts when the operator's account logs on, and a reboot reaches
+  a logon without a human only if the machine is set to log that account on
+  automatically. That is a Windows setting on the operator's own machine and
+  it stores a credential, so it is theirs to make and not this file's:
+
+      control userpasswords2     (clear "Users must enter a user name and
+                                  password to use this computer")
+
+  or Sysinternals Autologon, which keeps the password as an LSA secret rather
+  than in the registry in clear text.
+
+  What the settings below are for
+  ==========================================
+  MultipleInstancesPolicy IgnoreNew, with a ten-minute repetition on the
+  trigger, is the keep-alive: while the worker is running each repeat is
+  ignored, and after a crash the next one starts it again. RestartOnFailure
+  covers the same ground faster for a worker that exits nonzero. Between them a
+  crash at 2am costs at most ten minutes of a four-hour turn.
+
+  The battery settings are inverted from the Windows defaults deliberately. By
+  default a task does not start on battery and is stopped when the machine goes
+  onto one, which on a laptop means the galaxy stops when a plug is pulled.
+
+  ExecutionTimeLimit PT0S is no limit. The default is three days, and this task
+  is meant to run for the length of the beta.
+-->
+<Task version="1.4" xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <RegistrationInfo>
+    <Author>Cosmic Supremacy Resurgence</Author>
+    <Description>Closes each turn of one Cosmic Supremacy galaxy as its deadline passes, and closes an overdue turn at startup. Runs in the operator's own session because computing a turn launches the game client.</Description>
+    <URI>\CosmicSupremacy Referee</URI>
+  </RegistrationInfo>
+  <Triggers>
+    <LogonTrigger>
+      <Enabled>true</Enabled>
+      <UserId>{{USERID}}</UserId>
+      <Delay>PT30S</Delay>
+      <Repetition>
+        <Interval>PT10M</Interval>
+        <StopAtDurationEnd>false</StopAtDurationEnd>
+      </Repetition>
+    </LogonTrigger>
+  </Triggers>
+  <Principals>
+    <Principal id="Author">
+      <UserId>{{USERID}}</UserId>
+      <LogonType>InteractiveToken</LogonType>
+      <RunLevel>LeastPrivilege</RunLevel>
+    </Principal>
+  </Principals>
+  <Settings>
+    <MultipleInstancesPolicy>IgnoreNew</MultipleInstancesPolicy>
+    <DisallowStartIfOnBatteries>false</DisallowStartIfOnBatteries>
+    <StopIfGoingOnBatteries>false</StopIfGoingOnBatteries>
+    <AllowHardTerminate>true</AllowHardTerminate>
+    <StartWhenAvailable>true</StartWhenAvailable>
+    <RunOnlyIfNetworkAvailable>false</RunOnlyIfNetworkAvailable>
+    <IdleSettings>
+      <StopOnIdleEnd>false</StopOnIdleEnd>
+      <RestartOnIdle>false</RestartOnIdle>
+    </IdleSettings>
+    <AllowStartOnDemand>true</AllowStartOnDemand>
+    <Enabled>true</Enabled>
+    <Hidden>false</Hidden>
+    <RunOnlyIfIdle>false</RunOnlyIfIdle>
+    <WakeToRun>false</WakeToRun>
+    <ExecutionTimeLimit>PT0S</ExecutionTimeLimit>
+    <Priority>5</Priority>
+    <RestartOnFailure>
+      <Interval>PT5M</Interval>
+      <Count>3</Count>
+    </RestartOnFailure>
+  </Settings>
+  <Actions Context="Author">
+    <Exec>
+      <Command>powershell.exe</Command>
+      <Arguments>{{ARGUMENTS}}</Arguments>
+      <WorkingDirectory>{{WORKINGDIRECTORY}}</WorkingDirectory>
+    </Exec>
+  </Actions>
+</Task>
