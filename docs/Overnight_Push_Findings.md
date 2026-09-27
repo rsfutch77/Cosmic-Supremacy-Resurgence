@@ -501,7 +501,8 @@ Four agents. Plan moved from 11 done / 11 partial / 5 open to **12 / 12 / 3**.
    user name and password". Without it a reboot never reaches a desktop and the
    unattended referee cannot draw the game. This is now the single thing between
    a reboot and the galaxy resuming.
-2. **Register the scheduled task.** `.un_worker.ps1 -Store <galaxy> -Once` to
+2. **Register the scheduled task.** `.
+un_worker.ps1 -Store <galaxy> -Once` to
    watch it decide nothing is due, then `-WriteTaskXml` and `schtasks /Create`.
    Nothing was registered for you.
 3. **Reboot mid-galaxy and watch the next turn close.** That is N1's whole claim
@@ -570,3 +571,74 @@ the largest unverified item three agents in a row had carried.
   call or a test.
 - `operator_view`'s allowlist does not carry `submitted_civs`, which is exactly
   the cheap accessor it wants.
+
+---
+
+## Third push, 27 September 2026
+
+### I gave the operator a wrong premise, and they decided on it
+
+I reported that a joiner "arrives with a homeworld, a shipyard and no hulls, so
+they start strictly behind anyone with a fleet", and asked for a balance ruling
+on that basis. **It was wrong in both directions.** Measured on the turn-180 war
+galaxy, a joiner was receiving a copy of **seat one's 418-byte capital with 21
+citizens, its 8 designs, 10,820 credits, its research field, recruitment 20 and
+97 production points**, and no hulls. On `galaxy_demo` turn 11: 11 citizens, 834
+credits, research set. A joiner was not behind. They were a copy of the leader
+minus the fleet.
+
+The ruling given, everyone starts with what everyone starts with, is the right
+answer to the real situation as well as to the one I described, so nothing was
+decided wrongly. But the description was not measured before it was reported,
+and it should have been.
+
+### The starting kit, counted rather than assumed
+
+Eleven civs across five independent generations and two turn-1 captures, all
+agreeing: one homeworld with a 240-byte `PLPR`, 7 citizens as 4 farmers, 2
+workers and 1 scientist, no stationed military, recruitment 0, 0 production
+points, an empty production queue byte-identical to a never-colonised planet's
+in the same galaxy, **2 Colony Ship hulls with 2 crew**, 1 design, 200 credits,
+and research unset. Plus seat one's `PLPR` rate pair, which is the one field a
+newcomer is meant to inherit and the only one that has to come from the donor.
+
+**Two defects found on the way.** A `SHIP` record carries its object id twice
+and `add_ship` left the donor's in the second slot: 553 of 685 ships across 151
+blobs read their own id in both places, and all 132 that do not are ships this
+tool cloned. And `pick_donor` was choosing the smallest unordered hull, which in
+a played galaxy is an engine-built 86-byte hull with no crew rather than the
+104-byte generated one with two, so a newcomer got two empty hulls.
+
+**Still not "the same", and this is the honest remainder.** The transplanted
+homeworld differs from that galaxy's own turn-0 homeworld at 17 offsets once the
+owner id is masked, which are stores, food and facilities. A joiner in a turn-80
+galaxy still gets **seat one's buildings and stockpiles** on an otherwise
+starting world. The bytes were not guessed at: two galaxies agreeing on an
+offset is not evidence of what it means.
+
+### The Firebase store was throwing away the version gate
+
+`FirebaseTurnStore.state()` is an allowlist and it silently dropped `min_build`.
+L2's gate reads that out of the state, so **on the one deployment that will have
+strangers in it, every build passed**. Not a missing write: the field was
+written and discarded on read. `joined` was going the same way, which is why
+`join_turn_acceptance` read nothing on a Firebase galaxy. Both are in
+`STATE_FIELDS` now and exercised through all three stores.
+
+### The largest remaining instance of the Firestore steer
+
+`has_submitted` over HTTP is a **bucket listing per poll**. The Games page polls
+it every 120 seconds per joined galaxy: roughly **21,900 Class A operations a
+month from one player with the launcher open**, against a 5,000 a month
+allowance. A `submitted` array on the galaxy document, written where the relay
+already commits, rides the `/state` read the launcher already makes and costs
+nothing. `abandonment.find_template` is the same shape, downloading up to ten
+whole turn blobs to find one with a free planet.
+
+### Still blocked on the operator
+
+- **A real launcher cannot reach a Firebase join.** `FirebaseGalaxyDirectory`
+  hands every launcher a `firebase://` spec, which builds an admin store a
+  player cannot authenticate. Until a directory row names a deployed relay URL,
+  the route built tonight is unreachable from a real client. H7's done-when.
+- The scheduled task, the reboot, and the relay deploy, all unchanged.
