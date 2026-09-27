@@ -565,10 +565,54 @@ is out of scope here.
   **Done when:** a player who has never opened a config file joins the sandbox
   and plays a turn.
 
-- [ ] **J3. Joining is a request resolved at a turn boundary.** The launcher
+- [~] **J3. Joining is a request resolved at a turn boundary.** The launcher
   writes a join request; the worker applies it during the next tick, on the
   authoritative blob, never on a copy a player holds. A player who clicks Join
   during turn N is playing at turn N+1.
+
+  **The referee half is done and verified with a real client.** `server/joins.py`
+  applies requests in `resolve_turn`, on the blob the tick produced, **after
+  `abandonment.enforce` and before `publish`**, with the durable writes in a
+  second call after `publish`.
+
+  **The order was chosen and then proved.** A reclaim frees planets and a name a
+  join in the same tick can use, which is the state a full sandbox is actually
+  in; and a wipe needs an uncolonised planet for its blank `PLPR`, which is the
+  one resource a join consumes. Mutation-confirmed: joins first and the same
+  galaxy refuses for want of room.
+
+  **The split across `publish` is deliberate.** A referee killed between the two
+  leaves an empire nobody is seated on, which an operator fixes by adding a
+  name. The other order leaves a roster naming a civ the galaxy does not hold,
+  which fails `screen_submission` for that player every turn forever.
+
+  Live: `Joiner` seated on planet #6 at turn 12 of a real galaxy, **every
+  incumbent's planets, ships and `OWNR` bytes byte-identical to a control run of
+  the same turn with no join**, counters agreeing, then the turn-13 blob
+  cold-loaded in the player build as `Joiner` with one planet. 121 headless
+  checks and 40 live ones.
+
+  **A newcomer no longer inherits the donor's explored map.** `add_civ` clones
+  seat one, a live player, so in a fifty-turn galaxy that was their whole map
+  including where everybody lives.
+
+  **Still open, and it is the other half of the dead end:** a **refused** player
+  is never told. The reason is written to `notes/` and to
+  `joins/done/<key>.json`, and nothing in the launcher reads either, because a
+  refused player is on no roster and `player_turn.follow` never runs for them.
+  Their Games row says "you have asked to join" forever, which is where this
+  item started.
+
+  **And only a folder store can take a join at all.** `HttpTurnStore` and
+  `FirebaseTurnStore` have no join route, so the launcher raises
+  `JoinNotAccepted` against them. **The beta galaxy is Firebase.** The seam is
+  there, `joins.pending` asks a store for `join_requests()` when it has one, and
+  it is unexercised.
+
+  **A decision nobody has made:** a newcomer gets a homeworld with a shipyard and
+  no hulls, so a joiner starts strictly behind anyone who already has a fleet.
+  `make_multiplayer_galaxy` matches starting ships at generation; what "matching"
+  means in a turn-80 galaxy is a balance question, not a technical one.
 
   **Done when:** a join clicked mid-turn produces a playable civ at the next
   turn, and the player is told which system they landed in by a note rather than
@@ -1016,7 +1060,7 @@ is out of scope here.
 
 ## N. Operating it
 
-- [ ] **N1. The worker runs unattended.** A scheduled task that starts on boot,
+- [~] **N1. The worker runs unattended.** A scheduled task that starts on boot,
   the machine set not to sleep, and a startup rule that immediately closes any
   turn whose deadline has already passed. A 4-hour clock over a permanent galaxy
   means the machine's uptime is the galaxy's uptime.
