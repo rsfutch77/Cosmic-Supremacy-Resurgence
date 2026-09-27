@@ -431,3 +431,59 @@ the restriction was sitting on the wrong verb.
   request. It also means the reclaim refusal on `lapsed` is still unverified: the
   row offers View rather than Play, because a reclaimed player is no longer in
   the roster.
+
+### The turn loop was dying two seconds after every serve
+
+Reported as "my citizen role changes are not saving". The diagnosis I was about
+to give, that the 20-second submit window was eating quick edits, was plausible,
+consistent with everything visible, and wrong. The log said what had actually
+happened:
+
+    multiplayer stopped: SaveGame succeeded but no capture appeared in
+    ...elease\data\saves; is the launcher's server running?
+
+**The launcher was reusing a foreign server.** A checkout `cs_server` was left
+running on 8888 from the referee testing. `_boot` found the port busy, confirmed
+the holder speaks the protocol, and reused it, logging "port 8888 already serving
+our protocol, reusing it". That server writes to `server/saves`; the launcher
+looks in `release/data/saves`. So the capture genuinely succeeded and genuinely
+appeared, in the wrong directory, and every turn died two seconds in. The
+captures are all there, timestamps matching the failures to the second.
+
+The message is worse than the bug: **"is the launcher's server running?" when one
+is running and is not the launcher's.** The memory note about port 8888 covers a
+packaged launcher outranking a checkout server; this is the same trap from the
+other side, and two copies on one machine would meet it.
+
+Being fixed: the launcher refuses to reuse a server whose data directory it
+cannot know, rather than half-working with it. There is no protocol message to
+ask a server where it writes, so refusing is the only honest option.
+
+**Verified once the port was freed:** the operator changed a citizen role,
+waited, saw it submit, closed and reopened, and the change was there. The resume
+path works.
+
+### Accepted on the second look
+
+- **The reclaim refusal fires and reads correctly.** Last piece of launcher
+  wiring nobody had seen. `multiplayer.json` has to name the galaxy directly,
+  since a reclaimed player is out of the roster and the row offers View.
+- **The switch dialog is wanted after all.** It did not appear the first time
+  because the turn loop had already died, so `playing_now()` saw nothing running
+  and the `running_clients` check answered instead. With a live loop it appears
+  and the operator finds it useful. The instruction to delete it was withdrawn
+  before anything was deleted.
+
+### Open from this round
+
+- **20 seconds is too long to lose work to**, and a local capture is cheap while
+  an upload is metered by H5's binding Class A quota. Being split into two
+  cadences, with an indicator beside the server dot so a player can see whether
+  their work is safe.
+- **The Save button is singleplayer-only** and does nothing useful during a
+  multiplayer turn, where it is a second caller of `SaveGame` on a client the
+  turn loop already drives. Becoming "send my turn now", which is also the
+  manual answer to the cadence.
+- **The turn readout lingers after the game window closes.** It is a fact about
+  a client that is gone; it should clear at once while the final submission
+  finishes in the background.
