@@ -31,7 +31,7 @@ What it does:
     rename the existing civs            one per player, in order
     rename their homeworlds             "<player>'s HQ", the engine's own idiom
     add civs for any players beyond two `inject_civ`, each with a homeworld
-    give added civs matching ships      so seat three is not a worse start
+                                        and this galaxy's own starting fleet
     clear every ship's order            generation seeds one; see below
     equalise homeworlds                 generation does not; see below
     empty every civ's EXSY              an added civ inherits its donor's
@@ -56,7 +56,6 @@ import save_parser as sp
 import exsy
 import inject_civ as icv
 import inject_order as ino
-import inject_ship as ish
 import merge_orders as mo
 
 NAME_LIMIT = 15          # the engine's name buffer
@@ -346,21 +345,18 @@ def build(blob: bytes, players, log=print) -> bytes:
                 blob = rename_civ(blob, o['name'], want, log=log)
                 break
 
-    # How many ships a starting civ has, so added ones start level. inject_civ
-    # transplants a homeworld and explicitly does not give ships, so without
-    # this every player past the second begins with no colony ship at all while
-    # the first two have two each. That is not visible in any count the
-    # generator prints, and the player who drew third seat is the one who finds
-    # out.
+    # How many ships a starting civ has, so added ones start level. `add_civ`
+    # gives a newcomer `inject_civ.STARTING_SHIPS`, which is what a generation
+    # hands a civ measured across the captures in `server/saves`; this galaxy
+    # is in front of us, so its own count is the better answer and is what gets
+    # passed. They agree on every generated galaxy in this repository, and the
+    # one that would not is a galaxy whose civs already disagree, which
+    # `_starting_ships` reports before choosing the smaller.
     want_ships = _starting_ships(blob, log=log)
 
     for extra in players[len(existing):]:
         log(f'\nadding {extra!r}')
-        blob, _used = icv.add_civ(blob, extra, log=log)
-        for _ in range(want_ships):
-            blob = ish.add_ship(blob, extra, log=lambda *a: None)
-        if want_ships:
-            log(f'  {want_ships} ship(s) to match the starting civs')
+        blob, _used = icv.add_civ(blob, extra, ships=want_ships, log=log)
 
     log('\nnaming homeworlds')
     for name in players:
