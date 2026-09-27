@@ -87,6 +87,61 @@ PLAYER_BUILD = "player"       # see game_cycle.resolve_exe for why
 CAPTURE_EVERY = 5.0
 UPLOADS_PER_TURN = 2
 
+# ── How often the store is read ──────────────────────────────────────────────
+# Reading the store is a Firestore document read, and docs\Public_Beta_Plan.md
+# H5 measures 50,000 of those a day as the whole project's free allowance. A
+# fixed two-second poll held through a turn and through the wait after it is
+# 43,200 reads a day for one player, 86% of that allowance, which is why two
+# players could not both leave a launcher open.
+#
+# What a poll is for is noticing that the deadline arrived, and every read
+# hands the deadline over. So the gap to the next read is taken from the
+# distance to that deadline rather than from a constant.
+#
+# POLL_SHARE is the fraction of that distance this loop is willing to be late
+# by. Sleeping a twentieth of it wakes with 95% of the wait still ahead, so a
+# turn published before its deadline, or a deadline that moved, costs at most a
+# twentieth of what was left rather than a whole fixed interval. The same rule
+# runs on the far side of a deadline, where the distance is how overdue the
+# turn is: N5 measures the referee's tick at about ten seconds, so a turn
+# published ten seconds late is picked up on the next read rather than waited
+# for, and a referee that has been down for an hour is asked every three
+# minutes instead of every two seconds.
+#
+# POLL_FLOOR is the last stretch before a deadline, and is the interval the
+# launcher used everywhere. Nothing near a deadline got slower than it was.
+#
+# POLL_CEILING puts a read every five minutes however far away the deadline
+# is, so a clock that changed under this loop is still noticed.
+#
+# The arithmetic, one player with a launcher left open all day. Backing off
+# from a distance L to POLL_FLOOR x POLL_SHARE = 40 seconds, where the floor
+# takes over, is ln(L/40)/ln(20/19) reads, about 19.5 ln(L/40), and the floor
+# itself is another 20.
+#
+#   4-hour turns, 6 a day   28 + 19.5 ln(6000/40) + 20 + 5 = 151 a turn
+#                           151 x 6                        = 906 a day, 1.8%
+#   15-minute turns, 96     19.5 ln(900/40) + 20 + 5       =  86 a turn
+#                            86 x 96                       = 8,256 a day, 17%
+#
+# The 28 is the ceiling doing the first 8,400 seconds of a four-hour turn and
+# the 5 is the referee's tick. So the allowance holds 55 players at four-hour
+# turns and 6 at fifteen-minute ones, against one either way before this.
+POLL_FLOOR = 2.0
+POLL_CEILING = 300.0
+POLL_SHARE = 20.0
+
+
+def poll_gap(distance: float, floor: float = POLL_FLOOR,
+             ceiling: float = POLL_CEILING) -> float:
+    """How long the store can be left alone, given the distance to a deadline.
+
+    `distance` is signed: seconds until the deadline while a turn is open, and
+    minus how overdue it is once the deadline has passed. Both matter and both
+    are tightest at zero, which is the one moment worth watching closely.
+    """
+    return max(floor, min(ceiling, abs(distance) / POLL_SHARE))
+
 
 def hold_clock(seconds=HOLD_SECONDS, log=print):
     """Push the next turn boundary out of reach of a play session."""
@@ -316,6 +371,7 @@ def report_refusals(store: TurnStore, civ: str, turn: int, log=print,
 
 def follow(store: TurnStore, civ: str, poll: float = 5.0, rounds: int = 0,
            on_state=None, exe=PLAYER_BUILD, save_dir=None, stop=None,
+           poll_max: float = POLL_CEILING,
            capture_every: float = CAPTURE_EVERY,
            uploads_per_turn: int = UPLOADS_PER_TURN,
            submit_every: float = None, send_now=None, reopen=None,
@@ -333,6 +389,14 @@ def follow(store: TurnStore, civ: str, poll: float = 5.0, rounds: int = 0,
     `stop()` is checked wherever this would otherwise sleep, so a UI can end the
     loop between turns without killing the thread mid-capture and losing the
     player's orders.
+
+    **The store is read against the deadline it has already given, not on a
+    fixed interval.** `poll` is the floor of that schedule rather than all of
+    it, and `poll_max` the ceiling: see POLL_SHARE above for what sets the
+    gap between them and what a day of it costs. The deadline is an absolute
+    time, so between reads this loop knows how long is left by subtracting, and
+    the capture cadence and the countdown run off that rather than off the
+    store.
 
     `send_now` is anything with `is_set()` and `clear()`, a `threading.Event` in
     the launcher. Setting it captures and sends at once instead of waiting for
@@ -390,11 +454,33 @@ def follow(store: TurnStore, civ: str, poll: float = 5.0, rounds: int = 0,
         """Has a player asked for their turn to go now, and can it go?"""
         return bool(playing[0] and send_now is not None and send_now.is_set())
 
-    def nap(seconds):
-        """Sleep, but wake early if asked to stop or to send now."""
+    def wants_turn():
+        """Has a player asked for the game window back, with a wait to end?
+
+        The mirror of `asked()` on the other side of a turn, and gated the same
+        way: a request can only be acted on while this loop is waiting for the
+        referee, and it is cleared where it is acted on.
+        """
+        return bool(not playing[0] and reopen is not None
+                    and reopen.is_set())
+
+    def nap(seconds, until=None):
+        """Sleep, but wake early if asked to stop, to send now, or for `until`.
+
+        `until` is this particular wait ending for a reason of its own, which
+        between turns is a player pressing Play. It is a parameter rather than
+        another clause in here because the naps that retry an unreadable store
+        must not take it: nothing clears that request while the store cannot be
+        read, so a nap waking for it there would return at once and turn the
+        retry into a spin on a store that is already failing.
+
+        Sleeping in half seconds rather than in one go is what keeps stop and
+        Send Turn answered inside half a second of being asked, whatever the
+        schedule above decided the gap should be.
+        """
         end = clock() + seconds
         while clock() < end:
-            if halted() or asked():
+            if halted() or asked() or (until is not None and until()):
                 return
             sleep(min(0.5, max(0.0, end - clock())))
 
@@ -486,7 +572,7 @@ def follow(store: TurnStore, civ: str, poll: float = 5.0, rounds: int = 0,
                 got = current_or_wait()
                 if got is None or got[0] != turn:
                     break
-                nap(poll)
+                nap(poll_gap(got[1] - clock(), poll, poll_max))
             continue
 
         if reopen is not None:
@@ -591,10 +677,9 @@ def follow(store: TurnStore, civ: str, poll: float = 5.0, rounds: int = 0,
         # budget is per turn because that is how the quota is spent, so a
         # galaxy with short turns does not spend more per turn than a galaxy
         # with long ones.
-        try:
-            left0 = store.seconds_left()
-        except OSError:
-            left0 = None
+        # `deadline` came back with the turn, so how long is left is a
+        # subtraction rather than another read of the same document.
+        left0 = deadline - clock() if deadline else None
         if submit_every is not None:
             gap = float(submit_every)
         elif left0 and left0 > 0:
@@ -611,31 +696,41 @@ def follow(store: TurnStore, civ: str, poll: float = 5.0, rounds: int = 0,
         started = clock()
         last_capture = started
         last_upload = started
+        # The first read confirms the deadline after a serve, which takes long
+        # enough to start a client that the read before it is stale.
+        next_read = started
         playing[0] = True
 
         while not halted():
-            # A store read can fail transiently , the store lives on an SMB
-            # share and the referee rewrites it from another machine. `state()`
-            # already retries for a couple of seconds, and when an outage
-            # outlasts that the right answer is still not to exit: this loop
-            # dying is how a player silently stops taking turns. Measured, a
-            # `FileNotFoundError` on `state.json` here killed the loop at turn
-            # 18 and the galaxy was at turn 20 before anyone noticed.
-            try:
-                left = store.seconds_left()
-                cur, _d = store.current()
-            except OSError as exc:
-                log(f"[{civ}] turn {turn}: store unreadable ({exc.__class__.__name__}), "
-                    f"retrying in {poll}s")
-                nap(poll)
-                continue
-            if cur != turn:
-                # The referee moved on without us, which happens if this player
-                # joined late or the machine slept. Nothing to submit for a turn
-                # that is already closed.
-                log(f"[{civ}] turn {turn} closed while playing; skipping submit")
-                emit("overtaken", turn=turn, current=cur)
-                break
+            # The deadline is an absolute time, so how long is left is known
+            # between reads. This loop wakes for the capture cadence far more
+            # often than it needs the store, and subtracting here is what lets
+            # the two run at different rates.
+            left = deadline - clock()
+            if clock() >= next_read:
+                # A store read can fail transiently , the store lives on an SMB
+                # share and the referee rewrites it from another machine. `state()`
+                # already retries for a couple of seconds, and when an outage
+                # outlasts that the right answer is still not to exit: this loop
+                # dying is how a player silently stops taking turns. Measured, a
+                # `FileNotFoundError` on `state.json` here killed the loop at turn
+                # 18 and the galaxy was at turn 20 before anyone noticed.
+                try:
+                    cur, deadline = store.current()
+                except OSError as exc:
+                    log(f"[{civ}] turn {turn}: store unreadable ({exc.__class__.__name__}), "
+                        f"retrying in {poll}s")
+                    nap(poll)
+                    continue
+                left = deadline - clock()
+                next_read = clock() + poll_gap(left, poll, poll_max)
+                if cur != turn:
+                    # The referee moved on without us, which happens if this
+                    # player joined late or the machine slept. Nothing to submit
+                    # for a turn that is already closed.
+                    log(f"[{civ}] turn {turn} closed while playing; skipping submit")
+                    emit("overtaken", turn=turn, current=cur)
+                    break
             if left <= 0:
                 emit("collecting", turn=turn, civ=civ)
                 log(f"[{civ}] turn {turn}: time is up, collecting")
@@ -704,12 +799,16 @@ def follow(store: TurnStore, civ: str, poll: float = 5.0, rounds: int = 0,
                     log(f"[{civ}] turn {turn}: interim submit failed, {exc}")
 
             emit("playing", turn=turn, civ=civ, seconds_left=left)
-            # Wake for whichever comes first: the next poll, the next capture,
-            # or the deadline. Sleeping a whole poll regardless would stretch
-            # the capture cadence to the poll above it, so a five-second
-            # capture on a two-second poll would really be every six.
+            # Wake for whichever comes first: the next capture, the next store
+            # read, or the deadline. Sleeping a whole interval regardless would
+            # stretch the capture cadence to the interval above it, so a
+            # five-second capture on a two-second poll would really be every
+            # six, and on a poll that has backed off to five minutes it would
+            # be every five minutes. Waking for a capture costs nothing at the
+            # store, which is what the separate `next_read` is for.
             due = last_capture + capture_every - clock()
-            nap(max(0.1, min(poll, due if due > 0 else capture_every, left)))
+            nap(max(0.1, min(due if due > 0 else capture_every, left,
+                             next_read - clock())))
 
         playing[0] = False
         if send_now is not None:
@@ -737,7 +836,12 @@ def follow(store: TurnStore, civ: str, poll: float = 5.0, rounds: int = 0,
                 reopen.clear()
                 reopening = True
                 break
-            nap(poll)
+            # This is the wait that costs the day: at four hours a turn, a
+            # player who has closed their game window spends nearly all of it
+            # here. The deadline the store just gave is the earliest the next
+            # turn can exist, so the gap grows while that is far off and comes
+            # back to the floor around it, where a turn actually appears.
+            nap(poll_gap(got[1] - clock(), poll, poll_max), until=wants_turn)
         if reopening:
             # Round the outer loop rather than serving from here. Everything
             # that decides what a turn is opened on lives at the top of it:
@@ -783,7 +887,11 @@ def main():
     f.add_argument("--civ", required=True)
     f.add_argument("--rounds", type=int, default=0,
                    help="stop after this many turns; 0 keeps going")
-    f.add_argument("--poll", type=float, default=5.0)
+    f.add_argument("--poll", type=float, default=5.0,
+                   help="the tightest the store is read, which is what "
+                        "the last stretch before a deadline uses")
+    f.add_argument("--poll-max", type=float, default=POLL_CEILING,
+                   help="the slackest it is read, far from a deadline")
     f.add_argument("--exe", default=PLAYER_BUILD)
     f.add_argument("--capture-every", type=float, default=CAPTURE_EVERY,
                    help="seconds between captures, which cost nothing but a "
@@ -806,7 +914,8 @@ def main():
         store = open_store(a.store)
         if not store.exists():
             raise SystemExit(f"no galaxy at {a.store}")
-        follow(store, a.civ, poll=a.poll, rounds=a.rounds, exe=a.exe,
+        follow(store, a.civ, poll=a.poll, poll_max=a.poll_max,
+               rounds=a.rounds, exe=a.exe,
                capture_every=a.capture_every,
                uploads_per_turn=a.uploads_per_turn,
                submit_every=a.submit_every)

@@ -73,15 +73,23 @@ class Widget:
 
 
 class Store:
-    """A galaxy clock the readout can ask about."""
+    """A galaxy clock the readout can ask about, counting what it is asked.
+
+    Each of these is a Firestore document read on a live galaxy, against
+    50,000 a day for the whole project, so what the count is for is the
+    readout asking once rather than once a second.
+    """
 
     def __init__(self, turn=14, left=930.0):
         self.turn, self.left = turn, left
+        self.reads = 0
 
     def current(self):
+        self.reads += 1
         return self.turn, time.time() + self.left
 
     def seconds_left(self):
+        self.reads += 1
         return self.left
 
 
@@ -104,6 +112,7 @@ def bare(**over):
     app.mp_store = None
     app.mp_note = ""
     app.mp_turn = None
+    app.mp_deadline = None
     app.mp_civ = "DemoPlayer"
     app.mp_capture = None
     app.mp_playing = None
@@ -293,7 +302,35 @@ check("with the galaxy's clock on it",
       app.turn_label.cget("text"), lambda t: t.startswith("turn 14"))
 check("and Save live again", app.ctl_buttons["save"].cget("state"), "normal")
 
-print("\n7. a foreign server on the port is refused, not reused")
+print("\n7. the countdown subtracts, it does not poll the store")
+# This runs once a second for as long as a game window is open. Asking the
+# store for the turn and the clock was two Firestore document reads a second,
+# 7,200 an hour, against 50,000 a day for the whole project: the readout was
+# costing more than the turn loop it was reporting on. The loop reads the
+# store on a schedule taken from the deadline and says how long is left with
+# every capture, so this counts down from that.
+store = Store(turn=14, left=930.0)
+app = bare(mp_store=store, mp_thread=Thread(alive=True))
+app._refresh_turn()
+check("the first tick asks the store, because nothing has been heard yet",
+      store.reads, 1)
+check("and it says the turn", app.turn_label.cget("text"),
+      lambda t: t.startswith("turn 14"))
+for _ in range(600):
+    app._refresh_turn()
+check("ten minutes of ticks after it ask the store nothing more",
+      store.reads, 1)
+check("while the readout goes on saying the turn",
+      app.turn_label.cget("text"), lambda t: t.startswith("turn 14"))
+app._mp_state("playing", turn=15, civ="DemoPlayer", seconds_left=14400.0)
+app._refresh_turn()
+check("a new turn reaches it from the loop rather than from a read",
+      (app.turn_label.cget("text").startswith("turn 15"), store.reads),
+      (True, 1))
+check("with the loop's own clock on it",
+      app.turn_label.cget("text"), lambda t: t.endswith("left"))
+
+print("\n8. a foreign server on the port is refused, not reused")
 boot = inspect.getsource(L.Launcher._boot)
 taken = boot[boot.index("if not port_is_free("):
              boot.index("self.servers, logfile = start_server")]
@@ -321,7 +358,7 @@ mp = inspect.getsource(L.Launcher.start_multiplayer)
 check("and a turn will not start without one",
       "if not self.server_ok:" in mp, True)
 
-print("\n8. the port check itself, against a socket nothing is on")
+print("\n9. the port check itself, against a socket nothing is on")
 import socket                                                   # noqa: E402
 probe = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
 probe.bind(("127.0.0.1", 0))

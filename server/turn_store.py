@@ -86,12 +86,14 @@ say there is no such seat reads as the galaxy having lost them rather than as a
 consequence of not playing. The record says which turn took the seat and how
 many turns were missed, so the refusal can explain itself.
 """
+import base64
 import json
 import os
 import struct
 import sys
 import time
 import urllib.parse
+import zlib
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.join(HERE, 'dev_tools'))
@@ -107,6 +109,23 @@ STATE_RETRY_SECONDS = 2.0
 # _atomic_write: this is the other half of STATE_RETRY_SECONDS, and it is the
 # side that was missing.
 WRITE_RETRY_SECONDS = 10.0
+
+# The largest blob a submission is allowed to decompress to. The wire form is
+# capped at 2 MB by `beta_storage.rules` and the decoded form at 8 MB by
+# `referee.MAX_SUBMISSION_BYTES`, and neither of those reaches this: the store
+# decompresses a submission before the referee is given it, so a 30 KB payload
+# that inflates to a gigabyte is held in this process before anything has had a
+# chance to measure it.
+#
+# The number is `referee.MAX_SUBMISSION_BYTES`, written out rather than
+# imported because `referee` imports this module. Two limits that can disagree
+# would be worse than one that is generous: a submission this accepts is one
+# the referee will also read, and one it refuses the referee would have
+# refused. Generous is the right word for it. N5 and H5 measured real
+# submissions at 39 KB and 129 KB decoded, and the largest save this checkout
+# holds is 129,853 bytes, so a real submission is under two per cent of the
+# ceiling and only a payload built to expand can reach it.
+MAX_DECODED_BYTES = 8 * 1024 * 1024
 
 # The two words a galaxy's status can be, and the key it lives under. A state
 # with no status at all is open, which is every galaxy written before there was
@@ -128,6 +147,83 @@ class GalaxyClosed(RuntimeError):
     malformed is worth retrying and one refused for arriving after the galaxy
     ended never will be.
     """
+
+
+class SubmissionTooLarge(ValueError):
+    """A submission refused for expanding past `MAX_DECODED_BYTES`.
+
+    A `ValueError` because that is what every other refusal of bad bytes on
+    this interface raises, so the referee's existing per-civ fallback drops the
+    one submission and names the civ rather than ending the turn. Its own class
+    so that a caller which wants to tell "too big" from "not a save" can.
+    """
+
+
+def decode_capped(raw, limit: int = MAX_DECODED_BYTES) -> bytes:
+    """`save_parser.decode_save`, refusing a payload that inflates past a cap.
+
+    `zlib.decompress` has no ceiling: it allocates whatever the stream asks
+    for, and a compressed submission a player can send in 30 KB expands as far
+    as it likes inside this process. Decompressing incrementally with
+    `max_length` is what makes the refusal happen during the read rather than
+    after it, so the bytes are never all held at once.
+
+    The size dword the wire form carries is checked first, and is not trusted:
+    it is the sender's own claim about the blob and a bomb would simply lie. It
+    is worth reading anyway because an honest oversized submission is then
+    refused without inflating anything at all.
+    """
+    if isinstance(raw, str):
+        raw = raw.encode('ascii')
+    decoded = base64.b64decode(raw)
+    expected = struct.unpack_from('<I', decoded, 0)[0]
+    if expected > limit:
+        raise SubmissionTooLarge(
+            f'this submission says it is {expected:,} bytes decompressed, over '
+            f'the {limit:,} byte limit')
+    engine = zlib.decompressobj()
+    blob = engine.decompress(decoded[4:], limit + 1)
+    if len(blob) > limit:
+        raise SubmissionTooLarge(
+            f'this submission expands past the {limit:,} byte limit and was '
+            f'refused while it was being read')
+    if not engine.eof:
+        # Everything the stream held came out under the cap and the stream did
+        # not end, which is a truncated payload rather than an oversized one.
+        # `zlib.error` is what `save_parser.decode_save` raises for it, and the
+        # referee already screens for that.
+        raise zlib.error('incomplete or truncated stream')
+    if len(blob) != expected:
+        raise ValueError(f'size mismatch: header says {expected}, '
+                         f'got {len(blob)}')
+    return blob
+
+
+def load_capped(path: str, limit: int = MAX_DECODED_BYTES) -> bytes:
+    """`save_parser.load_any` for a submission, with the cap applied.
+
+    Either form is accepted here as it is there. A blob that is already
+    decompressed is capped by its own length, which is why the file is read
+    with one byte of headroom rather than whole: a caller that read the file
+    first and measured it afterwards would have done the thing the cap exists
+    to prevent.
+    """
+    with open(path, 'rb') as f:
+        raw = f.read(limit + 1)
+        over = bool(f.read(1)) or len(raw) > limit
+    if raw[:4] in sp.KNOWN_TAGS:
+        if over:
+            raise SubmissionTooLarge(
+                f'this submission is over the {limit:,} byte limit')
+        return raw
+    if over:
+        # A wire form this long is past the 2 MB the storage rule allows before
+        # it is decompressed at all, so there is nothing to gain by inflating
+        # it to find out how much further it goes.
+        raise SubmissionTooLarge(
+            f'this submission is over the {limit:,} byte limit before it has '
+            f'been decompressed')
+    return decode_capped(raw.strip(), limit)
 
 
 def status_of(state) -> str:
@@ -401,15 +497,30 @@ class TurnStore:
         would let it overwrite one.
         """
         try:
-            return sp.load_any(self.submission_path(civ, turn))
+            return load_capped(self.submission_path(civ, turn))
         except FileNotFoundError:
             return None
+
+    def submitted_civs(self, turn: int) -> list:
+        """Who has handed something back, by name and without the blobs.
+
+        A directory can answer this from the listing alone, and the other two
+        stores can too: a caller that wants the names has no business
+        downloading everyone's orders to find them, which on Firebase is a
+        download per player and is refused outright by the rule that stops one
+        player reading another's.
+        """
+        d = self.submission_dir(turn)
+        if not os.path.isdir(d):
+            return []
+        return sorted(n[:-4] for n in os.listdir(d) if n.endswith('.b64'))
 
     def submissions(self, turn: int) -> dict:
         """{civ: blob} for everyone who handed something back for this turn.
 
         The referee's view, at the turn boundary. A caller after one player's
-        own submission wants `submission`.
+        own submission wants `submission`, and one after the names wants
+        `submitted_civs`.
         """
         out = {}
         d = self.submission_dir(turn)
@@ -418,7 +529,7 @@ class TurnStore:
         for name in sorted(os.listdir(d)):
             if not name.endswith('.b64'):
                 continue
-            out[name[:-4]] = sp.load_any(os.path.join(d, name))
+            out[name[:-4]] = load_capped(os.path.join(d, name))
         return out
 
     # ── archive ──────────────────────────────────────────────────────────────
@@ -559,16 +670,26 @@ class HttpTurnStore:
             raise
         return json.loads(body) if want_json else body
 
-    def _blob(self, path):
+    def _blob(self, path, limit: int = None):
         """A blob route's bytes, in whichever form the far end serves them.
 
         None stays None: a turn nobody published and a submission nobody made
         are ordinary answers on this interface.
+
+        `limit` caps the decompression the way the directory store caps it, and
+        is passed for a submission and not for a turn. A turn is the referee's
+        own output and a galaxy is free to grow; a submission is a player's
+        upload and is the one a stranger chooses the bytes of.
         """
         data = self._get(path, want_json=False)
         if data is None or data[:4] in sp.KNOWN_TAGS:
+            if limit is not None and data is not None and len(data) > limit:
+                raise SubmissionTooLarge(
+                    f'this submission is over the {limit:,} byte limit')
             return data
-        return sp.decode_save(data.strip())
+        if limit is None:
+            return sp.decode_save(data.strip())
+        return decode_capped(data.strip(), limit)
 
     def _send(self, path, body=b'', method='POST', headers=None,
               want_json=True):
@@ -697,7 +818,15 @@ class HttpTurnStore:
         return f'{self.base}/submission/{turn}/{civ}'
 
     def has_submitted(self, civ: str, turn: int) -> bool:
-        return civ in (self._get(f'/submissions/{turn}') or [])
+        return civ in self.submitted_civs(turn)
+
+    def submitted_civs(self, turn: int) -> list:
+        """The names, from the route that has only ever served names.
+
+        `/submissions/<n>` answers a list of civs, so this is the shape of the
+        service call and `submissions` is the one built on top of it.
+        """
+        return sorted(self._get(f'/submissions/{turn}') or [])
 
     def submission(self, civ: str, turn: int):
         """One civ's submission, or None when there is not one.
@@ -705,11 +834,12 @@ class HttpTurnStore:
         `_get` turns the service's 404 into None, which is the same answer the
         directory store gives for a file that is not there.
         """
-        return self._blob(f'/submission/{turn}/{urllib.parse.quote(civ)}')
+        return self._blob(f'/submission/{turn}/{urllib.parse.quote(civ)}',
+                          limit=MAX_DECODED_BYTES)
 
     def submissions(self, turn: int) -> dict:
         out = {}
-        for civ in (self._get(f'/submissions/{turn}') or []):
+        for civ in self.submitted_civs(turn):
             blob = self.submission(civ, turn)
             if blob is not None:
                 out[civ] = blob

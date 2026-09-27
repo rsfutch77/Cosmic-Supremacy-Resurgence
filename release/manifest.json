@@ -48,7 +48,7 @@
       "id": "multiplayer",
       "title": "Multiplayer",
       "short": "Multiplayer",
-      "blurb": "Persistent galaxies against other players, the way the original was played. The launcher takes your turn back when time is up and starts the next one for you.",
+      "blurb": "Battle or ally with other players in the main game mode.",
       "enabled": true,
       "show": true,
       "needs_server": true,

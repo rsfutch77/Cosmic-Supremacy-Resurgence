@@ -122,6 +122,7 @@ def resolve(config_path: str = CONFIG, host: str = '127.0.0.1'):
 # where only the emulator ever sees it.
 STORAGE_RULES = os.path.join(os.path.dirname(HERE), 'server',
                              'beta_storage.rules')
+LOCAL_STORAGE_RULES = '.storage.emulator.rules'
 
 
 def add_storage_rules(cfg):
@@ -135,8 +136,18 @@ def add_storage_rules(cfg):
     """
     if not os.path.exists(STORAGE_RULES):
         return cfg
-    rel = os.path.relpath(STORAGE_RULES, HERE).replace(os.sep, '/')
-    cfg.setdefault('storage', {}).setdefault('rules', rel)
+    # Copied in rather than referenced where it lives. The first version pointed
+    # at `../server/beta_storage.rules` and the Storage emulator refused it as
+    # "outside of project directory", so the emulator went from failing for want
+    # of a rules file to failing for the path to one, which is worse: the second
+    # message does not name the fix. The copy is a build product beside the
+    # generated config and is gitignored with it.
+    local = os.path.join(HERE, LOCAL_STORAGE_RULES)
+    with open(STORAGE_RULES, encoding='utf-8') as src:
+        body = src.read()
+    with open(local, 'w', encoding='utf-8', newline=chr(10)) as out:
+        out.write(body)
+    cfg.setdefault('storage', {}).setdefault('rules', LOCAL_STORAGE_RULES)
     return cfg
 
 

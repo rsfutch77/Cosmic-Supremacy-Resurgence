@@ -36,6 +36,13 @@ sys.path.insert(0, os.path.join(REPO, 'server'))
 
 import turn_store
 
+# `net use` is a console program, and a console child started from a windowed
+# parent gets a window of its own. Nothing this tool reads comes from that
+# window; the output is captured and parsed below. `release/stamp_build.py`
+# carries the same constant.
+CREATE_NO_WINDOW = 0x08000000
+NO_WINDOW = CREATE_NO_WINDOW if os.name == 'nt' else 0
+
 
 def show_config(data_dir):
     path = os.path.join(data_dir, 'multiplayer.json')
@@ -112,7 +119,7 @@ def sessions():
     """Existing SMB sessions, so a session to another spelling is visible."""
     try:
         r = subprocess.run(['net', 'use'], capture_output=True, text=True,
-                           timeout=15)
+                           timeout=15, creationflags=NO_WINDOW)
     except Exception:
         return []
     out = []
@@ -244,7 +251,11 @@ def main():
     civs = store.civs()
     print(f'\ngalaxy: turn {turn}, {store.seconds_left():.0f}s left')
     print(f'  roster: {civs}')
-    print(f'  submitted for this turn: {sorted(store.submissions(turn)) or "(none)"}')
+    # `submitted_civs` and not `submissions`: only the names are printed, and
+    # the dict would have downloaded every player's blob to throw it away,
+    # which on a Firebase store is a download per player.
+    print(f'  submitted for this turn: '
+          f'{store.submitted_civs(turn) or "(none)"}')
     if civ:
         print(f'  playing as {civ!r}: '
               f'{"in the roster" if civ in civs else "NOT IN THE ROSTER"}')

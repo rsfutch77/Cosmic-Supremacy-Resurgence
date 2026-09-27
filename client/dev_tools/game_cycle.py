@@ -33,6 +33,25 @@ PARSER = os.path.join(REPO, "server", "dev_tools", "save_parser.py")
 
 sys.path.insert(0, os.path.join(HERE, "ai_player"))
 
+# Every helper below shells out to a console program, and a console program
+# started from a windowed parent gets a console window of its own. The launcher
+# is windowed, and `client_pids` runs once per poll of the turn loop, so the
+# operator saw a cmd window appear and vanish several times a minute for the
+# whole of a sandbox turn. The flag suppresses the window and nothing else:
+# redirected output still arrives, which is what every caller here reads.
+# `release/stamp_build.py` carries the same constant for the same reason.
+CREATE_NO_WINDOW = 0x08000000
+
+
+def no_window() -> int:
+    """`creationflags` that hide a console child, and zero off Windows.
+
+    A helper rather than the constant inline because the dev tools call it from
+    several places and a flag that is silently wrong on another platform is
+    worse than one that is absent.
+    """
+    return CREATE_NO_WINDOW if os.name == "nt" else 0
+
 
 def log(msg):
     print(msg, flush=True)
@@ -50,7 +69,7 @@ def client_pids():
          "Get-Process -Name 'CosmicSupremacy*' -ErrorAction SilentlyContinue "
          "| Where-Object { $_.ProcessName -ne 'CosmicSupremacyLauncher' } "
          "| Select-Object -ExpandProperty Id"],
-        capture_output=True, text=True).stdout
+        capture_output=True, text=True, creationflags=no_window()).stdout
     return [int(x) for x in out.split() if x.strip().isdigit()]
 
 
@@ -84,7 +103,8 @@ def close_client(timeout=20, force=False):
         return True
     for pid in pids:
         subprocess.run(["powershell", "-NoProfile", "-Command",
-                        f"Stop-Process -Id {pid} -Force"], capture_output=True)
+                        f"Stop-Process -Id {pid} -Force"],
+                       capture_output=True, creationflags=no_window())
     deadline = time.time() + timeout
     while time.time() < deadline:
         if not client_pids():
@@ -119,7 +139,8 @@ BUILDS = {"resurgence": EXE, "testbed": TESTBED_EXE, "player": PLAYER_EXE}
 def _pid_alive(pid):
     try:
         out = subprocess.run(["tasklist", "/FI", f"PID eq {int(pid)}", "/NH"],
-                             capture_output=True, text=True, timeout=15)
+                             capture_output=True, text=True, timeout=15,
+                             creationflags=no_window())
         return str(pid) in (out.stdout or "")
     except Exception:
         return True          # cannot tell, so assume the holder is alive

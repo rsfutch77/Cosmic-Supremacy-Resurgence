@@ -436,7 +436,23 @@ class FirebaseTurnStore:
         data = self._get(self.submission_object(civ, turn))
         if data is None:
             return None
-        return sp.decode_save(data)
+        return turn_store.decode_capped(data)
+
+    def submitted_civs(self, turn: int) -> list:
+        """Who has handed something back, by name and without the blobs.
+
+        A listing and no downloads, which is one Class A operation against one
+        per player. `functions/relay.py` answers its own `/submissions` route
+        this way for the same reason, and this is that code living where the
+        interface is so the two cannot drift apart.
+        """
+        start = self.submission_prefix(turn)
+        out = []
+        for blob in self.gcs.list_blobs(self.bucket, prefix=start):
+            name = blob.name[len(start):]
+            if name.endswith('.b64') and '/' not in name:
+                out.append(name[:-4])
+        return sorted(out)
 
     def submissions(self, turn: int) -> dict:
         """{civ: blob} for everyone who handed something back for this turn.
@@ -444,7 +460,8 @@ class FirebaseTurnStore:
         Listed from Storage rather than from an index in Firestore. An index
         would be a second thing to keep true, and this is not on the path that
         gets polled: the referee reads it once a turn, while a launcher asks
-        `has_submitted` or `submission` about one civ.
+        `has_submitted`, `submission` or `submitted_civs`, none of which
+        downloads anybody else's orders.
         """
         out = {}
         start = self.submission_prefix(turn)
@@ -452,7 +469,8 @@ class FirebaseTurnStore:
             name = blob.name[len(start):]
             if not name.endswith('.b64') or '/' in name:
                 continue
-            out[name[:-4]] = sp.decode_save(blob.download_as_bytes())
+            out[name[:-4]] = turn_store.decode_capped(
+                blob.download_as_bytes())
         return dict(sorted(out.items()))
 
     # ── archive ──────────────────────────────────────────────────────────────

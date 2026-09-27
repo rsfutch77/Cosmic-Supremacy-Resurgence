@@ -144,7 +144,14 @@ class Handler(BaseHTTPRequestHandler):
                     return self._fail(404, f'no turn {n}')
                 return self._blob(STORE.turn_blob(n))
             if len(parts) == 2 and parts[0] == 'submissions':
-                return self._json(sorted(STORE.submissions(int(parts[1]))))
+                # Names, from the store's names-only accessor. Building the
+                # whole dict to answer with its keys read every player's
+                # submission off disk per poll, and behind a Firebase store it
+                # would have been a download per player. `functions/relay.py`
+                # answers this route from a listing for the same reason, and a
+                # route that is cheap on one of the two services and expensive
+                # on the other is this project's characteristic bug.
+                return self._json(STORE.submitted_civs(int(parts[1])))
             if len(parts) == 3 and parts[0] == 'submission':
                 n, civ = int(parts[1]), parts[2]
                 blob = STORE.submission(civ, n)
