@@ -664,12 +664,13 @@ def follow(store: TurnStore, civ: str, poll: float = 5.0, rounds: int = 0,
                         log(f"[{civ}] turn {turn}: the game has closed, "
                             f"sending what was captured before it did")
                         try:
+                            # `send` emits `submitted` itself. Emitting it here
+                            # as well told the launcher twice and printed
+                            # "orders sent" twice in the log.
                             send(final=True)
                         except Exception as bad:            # noqa: BLE001
                             log(f"[{civ}] turn {turn}: LOST, {bad}")
                             emit("lost", turn=turn, civ=civ, error=str(bad))
-                        else:
-                            emit("submitted", turn=turn, civ=civ, final=True)
                         break
                     log(f"[{civ}] turn {turn}: could not capture, {exc}")
                     emit("capture_failed", turn=turn, civ=civ, error=str(exc))

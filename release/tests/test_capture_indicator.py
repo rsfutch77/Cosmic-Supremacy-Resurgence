@@ -318,5 +318,46 @@ finally:
 check("a port nothing holds reads as free",
       L.port_is_free("127.0.0.1", held), True)
 
+print()
+print("the status line while the loop outlives the game window")
+
+
+class _St:
+    """Just enough Launcher to drive the status branch."""
+
+    def __init__(self, sending, gone, civ="DemoPlayer"):
+        self.mp_sending, self.mp_client_gone, self.mp_civ = sending, gone, civ
+        self.said = []
+
+    def _status_if_changed(self, text, colour):
+        self.said.append((text, colour))
+
+
+def _status_for(sending, gone):
+    """The branch as `_watch_game` runs it, with mp_live true and no client."""
+    st = _St(sending, gone)
+    if st.mp_sending:
+        st._status_if_changed("sending your turn , keep this window open", "warn")
+    elif st.mp_client_gone:
+        st._status_if_changed(f"Multiplayer , waiting for the next turn", "ok")
+    else:
+        st._status_if_changed(f"Multiplayer , {st.mp_civ}", "ok")
+    return st.said[0][0]
+
+
+playing = _status_for(False, False)
+waiting = _status_for(False, True)
+sending = _status_for(True, True)
+check("playing names the civ", "DemoPlayer" in playing, True)
+# The bug: the loop stays alive between turns, so a closed game read as an open
+# one for hours. Fails if waiting and playing say the same thing.
+check("waiting does not read as playing", waiting == playing, False)
+check("and says what it is waiting for", "waiting" in waiting, True)
+check("sending is distinct from both",
+      sending not in (playing, waiting), True)
+check("the real launcher carries the waiting branch",
+      "waiting for the next turn" in inspect.getsource(L.Launcher._watch_game),
+      True)
+
 print("\n" + ("ALL PASSED" if not fails else f"FAILURES: {fails}"))
 sys.exit(1 if fails else 0)

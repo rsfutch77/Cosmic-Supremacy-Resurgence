@@ -3780,6 +3780,15 @@ class Launcher:
             if mp_live and self.mp_sending:
                 self._status_if_changed(
                     "sending your turn , keep this window open", WARN)
+            elif mp_live and self.mp_client_gone:
+                # The loop outlives the game window: after a turn is sent it
+                # waits for the referee to publish the next one, which at four
+                # hours a turn is most of the day. Saying "Multiplayer , <civ>"
+                # through all of it reads as a game that is open, and the
+                # player closed it themselves and can see that it is not.
+                self._status_if_changed(
+                    f"Multiplayer , waiting for the next turn"
+                    if self.mp_civ else "Multiplayer , waiting", OK)
             elif mp_live:
                 self._status_if_changed(
                     f"Multiplayer , {self.mp_civ}" if self.mp_civ
