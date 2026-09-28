@@ -270,18 +270,26 @@ print("\n4. and what to do about it, in a player's words")
 hint = L.stall_hint([(by_id["sandbox"], 7200.0)])
 print(f"       {hint}")
 check("it names the galaxy", "Sandbox" in hint, True)
+# The time column reads "time is up" and never how long ago, so this line is
+# the only place the difference between six minutes late and three days dead
+# appears. Losing it would make those two rows read the same.
 check("and says roughly how long", "2h ago" in hint, True)
-check("it says nothing the player has played is lost",
-      "lost" in hint.lower(), True)
 check("and asks them to tell whoever runs it, which is the only act there is",
       "tell whoever runs" in hint.lower(), True)
-check("it explains why, without a word out of the plan",
-      hint, lambda t: "one person's computer" in t
-      and not any(w in t for w in ("referee", "worker", "scheduled task",
-                                   "N1", "store", "Firestore")))
-check("two stopped galaxies are one message naming both",
+check("it tells them to come back, which is true most of the time",
+      "check back" in hint.lower(), True)
+check("in a player's words rather than the plan's",
+      hint, lambda t: not any(w in t for w in (
+          "referee", "worker", "scheduled task", "N1", "store", "Firestore")))
+# Two sentences. A longer line repeated what the table already shows one word
+# per row, and grew with the number of stopped rows.
+check("it is short", hint.count(".") <= 2 and len(hint) < 120, True)
+# Fails if the names came back: several stopped galaxies is one machine being
+# off, the table marks which, and listing them made the line scale.
+check("several stopped galaxies are counted, not listed",
       L.stall_hint([(by_id["sandbox"], 7200.0), (by_id["outpost"], 400.0)]),
-      lambda t: "Sandbox" in t and "Outpost" in t and "2 galaxies" in t)
+      lambda t: "2 galaxies" in t and "Sandbox" not in t
+      and "Outpost" not in t)
 check("timed by the one that has been down longest",
       L.stall_hint([(by_id["outpost"], 400.0), (by_id["sandbox"], 7200.0)]),
       lambda t: "2h ago" in t)
@@ -406,9 +414,9 @@ check("nor lapsed, six minutes past a four-hour one",
 check("the closed galaxy is closed rather than stopped",
       said["retired"], "closed")
 check("and the running one is untouched", said["frontier"], "open")
-check("the line under the table names both stopped galaxies",
+check("the line under the table counts both stopped galaxies",
       hint_for(rows, now=live.clock),
-      lambda t: "Sandbox" in t and "Outpost" in t)
+      lambda t: "2 galaxies" in t)
 check("originals untouched", fingerprint(SRC), before)
 
 

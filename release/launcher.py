@@ -1443,12 +1443,21 @@ def row_stalled_for(g, view=None) -> float:
 def stall_hint(stalled) -> str:
     """The line under the table when a galaxy's turns have stopped.
 
-    Written for a player who has never read a plan, which is what N4 asks of
-    every line like this one. It says what has happened, that nothing they
-    played is gone, and the one thing only a player can do about it, which is
-    to tell the person whose computer the turns are worked out on. Without
-    that last sentence the message is a complaint rather than a report, and
-    the operator has asked to be told.
+    Two sentences: how long, and the two things a player can do. Everything
+    else a longer version of this line said is already on screen. Which
+    galaxies are stopped is in the table, one word per row, and saying it twice
+    made the line scale with the number of stopped rows. Why it happens and
+    that nothing is lost are true and are not what a player reads this line to
+    find out.
+
+    How long stays, because it is the one thing here that is nowhere else. The
+    time column says `time is up` and not how long ago, so without this a
+    galaxy six minutes late and one three days dead read the same, and that is
+    the difference between waiting and writing an email.
+
+    Telling the operator stays because it is the only act available and the
+    operator asked to be told. `Check back later` is first because it is what
+    is true most of the time.
 
     `stalled` is the (row, seconds) pairs that are stopped, and the time given
     is the longest of them: several stopped galaxies on one referee is one
@@ -1457,13 +1466,11 @@ def stall_hint(stalled) -> str:
     names = [g.name or g.id for g, _ in stalled]
     worst = max(seconds for _, seconds in stalled)
     if len(names) == 1:
-        head = f"{names[0]} has stopped."
+        head = f"{names[0]} has stopped, its turn was due {fmt_ago(worst)}."
     else:
-        head = f"{len(names)} galaxies have stopped: {', '.join(names)}."
-    return (f"{head} The turn was due {fmt_ago(worst)} and nothing has closed "
-            f"it. Turns are worked out on one person's computer, so it is "
-            f"probably switched off. Nothing you have played is lost. Tell "
-            f"whoever runs the beta, and it carries on where it stopped.")
+        head = (f"{len(names)} galaxies have stopped, the longest due "
+                f"{fmt_ago(worst)}.")
+    return f"{head} Check back later, or tell whoever runs the beta."
 
 
 # ── The table the Galaxies page draws ────────────────────────────────────────
