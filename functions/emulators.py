@@ -4,6 +4,7 @@ emulators.py , start the emulator suite on ports that are actually free.
     python functions/emulators.py                  , start, printing the env
     python functions/emulators.py --print-env      , just resolve and print
     python functions/emulators.py --only firestore,storage
+    python functions/emulators.py --project demo-other
 
 The Firebase CLI binds whatever `firebase.json` names and fails if something
 already holds it. The defaults it ships are popular numbers: 8080 is the first
@@ -169,6 +170,16 @@ def main(argv=None) -> int:
     ap.add_argument('--host', default='127.0.0.1')
     ap.add_argument('--print-env', action='store_true',
                     help='resolve and print, start nothing')
+    # A demo project by default, and named rather than left to the CLI. Without
+    # a --project the CLI takes the default out of .firebaserc, which is the
+    # live project, and the Auth emulator then mints tokens whose `aud` is that
+    # name. A test running as a demo project refuses those as minted for
+    # another project, and the message says nothing about which project or why,
+    # so the documented way to start the suite produced a run that failed for a
+    # reason nothing on screen named. A `demo-` project is also the suite's own
+    # guard against an emulator run reaching real resources.
+    ap.add_argument('--project', default='demo-cs-resurgence',
+                    help='the project the emulators serve')
     args = ap.parse_args(argv)
 
     cfg, ports, env = resolve(host=args.host)
@@ -188,7 +199,7 @@ def main(argv=None) -> int:
     for var, val in env:
         os.environ[var] = val
     cmd = ['firebase', 'emulators:start', '--only', args.only,
-           '--config', path]
+           '--config', path, '--project', args.project]
     print('  ' + ' '.join(cmd), file=sys.stderr)
     try:
         return subprocess.call(cmd, cwd=HERE, shell=(os.name == 'nt'))
