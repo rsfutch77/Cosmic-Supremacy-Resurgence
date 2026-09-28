@@ -113,6 +113,33 @@ Nothing in the launcher calls it. This is a launcher change, not a server one.
 - `operator_view`'s allowlist does not carry `submitted_civs`, which is exactly
   the cheap accessor it wants.
 
+### A killed worker no longer takes the galaxy down with it
+
+Closed 28 September 2026. It stopped being theoretical when a console window
+was closed on 27 September: `CTRL_CLOSE_EVENT` reached the worker, it died
+without a log line, and the `cs_server` it had started went on holding 8888.
+The replacement refused to start and named a `taskkill` for somebody to run,
+which is correct and is also a galaxy that stays down until a person reads a
+log. Nobody reads a log on an unattended machine.
+
+That case is ended and replaced now rather than refused. It was never the guess
+the refusal exists to prevent: the process is one this galaxy's own worker
+started and wrote down, and it is about to be replaced by one started here, so
+what directory it was given stops mattering the moment it is gone.
+
+**The pid is checked against what is running under it**, because Windows reuses
+pids and a worker that killed a number out of a file would be committing a
+worse version of the error the refusal was written for. The command line has to
+name this checkout's `cs_server.py`. A recorded pid that now belongs to
+somebody else is a stranger with a familiar number and is refused like any
+other stranger.
+
+`--adopt-server` is answered first, so an operator who would rather share a
+leftover than replace it still can.
+
+Fifteen checks, including the recovery end to end: a real server is started,
+orphaned without `stop`, and the next worker ends it and starts its own.
+
 ### `adopt_server` is a hand-edited key
 
 A launcher on the same machine as the referee finds port 8888 held and refuses
