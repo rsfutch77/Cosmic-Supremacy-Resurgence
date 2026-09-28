@@ -229,7 +229,7 @@ is out of scope here.
   no forwarding rule anywhere, confirmed by reading the router's configuration
   rather than by the turn having worked.
 
-- [ ] **H3. Firebase is the record; the PC is a worker.** State, turns,
+- [ ]~ **H3. Firebase is the record; the PC is a worker.** State, turns,
   submissions, notes and the archive live in Firebase. The PC holds the game
   client, the client lock, and files it is free to lose.
 
@@ -237,8 +237,21 @@ is out of scope here.
   for Windows Update loses nothing and resumes. And the cloud offload later swaps
   which machine runs the worker, with no data to migrate.
 
-  **Done when:** the referee is killed mid-galaxy and the machine rebooted, and
-  the loop resumes and closes the next turn with nothing restored by hand.
+  **The resume half is done**, 27 September 2026: the referee was killed
+  mid-galaxy, the machine rebooted, and the loop closed the overdue turn sixteen
+  seconds after logon with nothing restored by hand. N1 records the measurement.
+
+  **The half this item is actually about is not.** That galaxy was
+  `server\uidemo\sandbox`, a folder on the same disk as the worker. Every byte
+  that survived the reboot survived because the machine did. A store that is the
+  record is one the machine can be rebuilt without, and nothing has yet shown
+  that: the same test on a `firebase://` galaxy is what this item claims, and it
+  has never been run. The reboot is evidence for N1 and is not evidence for
+  this.
+
+  **Done when:** the referee is killed mid-galaxy **on a Firebase galaxy** and
+  the machine rebooted, and the loop resumes and closes the next turn with
+  nothing restored by hand.
 
 - [ ]~ **H4. Anonymous auth and security rules.** Firebase Anonymous Auth gives
   each install a stable UID with no login screen, no password and no account.
@@ -1148,7 +1161,7 @@ is out of scope here.
 
 ## N. Operating it
 
-- [ ]~ **N1. The worker runs unattended.** A scheduled task that starts on boot,
+- [x] **N1. The worker runs unattended.** A scheduled task that starts on boot,
   the machine set not to sleep, and a startup rule that immediately closes any
   turn whose deadline has already passed. A 4-hour clock over a permanent galaxy
   means the machine's uptime is the galaxy's uptime.
@@ -1168,8 +1181,36 @@ is out of scope here.
   before launching anything and leaves no client process; with the server up the
   same turn resolves normally.
 
-  **Done when:** the machine is rebooted mid-galaxy with nobody watching and the
-  next turn closes on time.
+  **Done, 27 September 2026, twice and by two different routes.**
+
+  Unattended, with nobody watching and nothing arranged: at 20:07:34 the worker
+  closed turn 12 with zero submissions, launched the client, captured and
+  published turn 13. Nobody was at the machine.
+
+  Then across a reboot. The worker was killed at about 22:35 by a console
+  window being closed, the machine was rebooted, and at logon:
+
+      23:16:03  worker: turn 13, due 23:07:48 (-495s)
+      23:16:06  worker: turn 13 came due 8 minute(s) ago and nothing closed
+                        it; closing it now rather than at the next deadline
+      23:16:19  referee: published turn 14, canonical 12d6da0d0baedcc5
+
+  Sixteen seconds from the worker starting to the turn being published, with
+  nothing restored by hand. The hash moved from `633f3da78cadb602`, so the
+  galaxy genuinely advanced rather than being rewritten.
+
+  **The startup rule is what made it sixteen seconds.** A worker that waited
+  for the next deadline would have taken four hours to show the same thing.
+  `close_overdue` is the difference between a machine that resumes and a
+  machine that is merely running again.
+
+  **How it was killed is the finding.** The task ran the worker with
+  `-WindowStyle Minimized`, which is a button in the taskbar, and closing a
+  console window sends `CTRL_CLOSE_EVENT` to everything attached to it. One
+  tidying-up click ended the galaxy, wrote nothing to the log, and left only
+  `0xC000013A` in the task's result column. The task runs hidden now, and two
+  checks in `test_referee_worker.py` keep it that way. A worker run by hand
+  still shows its window, which is the case where one is wanted.
 
 - [x] **N2. One bad submission cannot stall the galaxy.** The referee already
   does the right thing structurally, extracting orders and applying them to its

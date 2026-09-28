@@ -36,9 +36,12 @@ Each of these is a thing the code claims and nobody has watched happen.
 - [ ] **H2, the referee is pull-only.** Nothing has confirmed the router carries
   no forwarding rule. The property is architectural, the evidence is absent.
   Reading the router's configuration is the check, not a turn having worked.
-- [ ] **H3, Firebase is the record.** The referee has never been killed
-  mid-galaxy and the machine rebooted. The scheduled task is registered and
-  running, so this is now one reboot away rather than blocked on anything.
+- [ ] **H3, Firebase is the record.** The reboot happened, and it does not
+  count for this. The galaxy under test was `server\uidemo\sandbox`, a folder on
+  the worker's own disk, so everything that survived the reboot survived because
+  the machine did. A store that is the record is one the machine can be rebuilt
+  without. The same test on a `firebase://` galaxy is the one this item means.
+  N1 is closed by that reboot; this is not.
 - [ ] **J4 and H7's done-when, which are the same test.** No uid has ever been
   refused a seat another holds, and no launcher without a Google credential has
   played a turn end to end. The relay half is proven: a signed-in caller lists
@@ -57,12 +60,19 @@ Each of these is a thing the code claims and nobody has watched happen.
 
 ## Needs the operator
 
-1. **Reboot mid-galaxy and watch the next turn close.** That is N1's whole claim
-   and H3's, and nobody has done it. Everything it needed is now in place.
+1. **The same reboot, on a Firebase galaxy.** The folder-store reboot is done
+   and closed N1. H3 is the one that needs a `firebase://` galaxy under it, and
+   it needs a beta galaxy to exist first.
 2. **Hosting version retention.** Last counted at 20 finalized versions, 449.9
    MB, 4.4% of the 10 GB tier, growing about 22 MB per deploy with no cap. Read
    it in the Firebase console rather than from the CLI, since no
    `firebase hosting:*` command may be run against this project.
+
+**A note on running any of these.** Every command in this file and in the plan
+is written relative to the repository root, and a fresh PowerShell opens in
+`C:\WINDOWS\system32`. `-File .\run_worker.ps1` from there fails with a message
+about the file not existing, which names neither the working directory nor the
+fix. Either `cd` to the repo first or give the script its full path.
 
 ---
 
