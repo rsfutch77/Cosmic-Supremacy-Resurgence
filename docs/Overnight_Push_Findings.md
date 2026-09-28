@@ -48,13 +48,21 @@ Each of these is a thing the code claims and nobody has watched happen.
   galaxies, reads state, and pulls a turn blob through a signed URL, measured
   against the deployed service. What is unproven is two installs disagreeing
   about a seat, and that needs a second machine or a faked data directory.
-- [ ] **M1, the upload.** Redaction is built and measured; nothing has ever
-  uploaded anything.
-- [ ] **L2, `min_build`.** The gate works, it survives all three stores now, and
-  **nothing writes the field**, so no galaxy is gated in practice. It needs an
-  operator action or a tool, not more code in the gate.
 - [ ] **K1, the live half.** An injected galaxy has not been loaded since the
   seat-order fix, and no colony ship has been watched completing after a join.
+  Needs the client and somebody watching it.
+
+**Two things that were listed here and do not belong.** Neither is waiting on a
+person; both are unwritten code, and filing them as verifications made the
+human list look longer than it is.
+
+- **M1, the upload.** Not "built but never run". The redaction is built and the
+  upload is not: M1 says the upload waits on the relay, the relay is deployed
+  now, and no route on it accepts a log. Nothing to verify until something
+  sends one. Moved to open engineering.
+- **L2, `min_build`.** The gate works through all three stores and nothing
+  anywhere writes the field. There is no operator tool that sets it, so this is
+  not an operator action that nobody got round to. Moved to open engineering.
 
 ---
 
@@ -99,6 +107,27 @@ join" forever, which is exactly where J3 started.
 
 The relay serves it: `GET /<galaxy>/join/<key>/answer` exists and is covered.
 Nothing in the launcher calls it. This is a launcher change, not a server one.
+
+### Nothing writes `min_build`, so no galaxy is gated
+
+L2's gate reads the minimum out of the galaxy's state, refuses an older build
+with a message, and survives all three stores since the allowlist fix. No code
+anywhere sets the field, and there is no operator tool that would. So on the
+one deployment that will have strangers in it, every build passes.
+
+Small: somewhere for the operator to say it, and the value carried into the
+galaxy document. The gate itself needs nothing.
+
+### The launcher still cannot send its log
+
+M1's redaction is built and measured, capped at 256 KiB by keeping the tail.
+The upload was written as waiting on the relay. The relay is deployed now and
+carries no route that accepts a log, and the launcher calls nothing, so a
+failure an operator did not witness is still a slow conversation.
+
+Two halves: a route that takes a redacted log for a galaxy and a caller in the
+launcher. Worth having before strangers arrive, because it is the difference
+between a bug report and a bug.
 
 ### Three small ones, all recorded before and all still true
 
