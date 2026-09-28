@@ -609,10 +609,40 @@ is out of scope here.
   there, `joins.pending` asks a store for `join_requests()` when it has one, and
   it is unexercised.
 
-  **A decision nobody has made:** a newcomer gets a homeworld with a shipyard and
-  no hulls, so a joiner starts strictly behind anyone who already has a fleet.
-  `make_multiplayer_galaxy` matches starting ships at generation; what "matching"
-  means in a turn-80 galaxy is a balance question, not a technical one.
+  **The balance question is settled and mostly built.** The description above was
+  wrong and is kept because a decision was taken on it: a joiner was not starting
+  behind, they were receiving a **copy of seat one** minus the fleet, measured on
+  the turn-180 war galaxy at 21 citizens, 8 designs, 10,820 credits, a chosen
+  research field, recruitment 20 and 97 production points. The operator's ruling,
+  everyone starts with what everyone starts with, is the right answer to the real
+  situation as well as to the one reported.
+
+  A joiner now gets the generation kit, counted across eleven civs in five
+  independent generations: one homeworld with a 240-byte `PLPR`, 7 citizens as 4
+  farmers, 2 workers and 1 scientist, no military, recruitment 0, no production
+  points, an empty queue, **2 Colony Ship hulls with 2 crew**, 1 design, 200
+  credits, research unset, plus seat one's `PLPR` rate pair.
+
+- [ ] **J5. A joiner still inherits seat one's buildings and stockpiles.** The
+  unfinished half of the balance ruling, here rather than in the reconstruction
+  report because it has to be settled **before the beta opens** and not merely
+  recorded as a fact about the format.
+
+  A transplanted homeworld still differs from the same galaxy's own turn-0
+  homeworld at **17 offsets** once the owner id is masked: `+15`, `+19`, `+20`,
+  `+177`, `+179` to `+188`, `+193`, `+207`, `+208`. Those are the planet's
+  stores, food and facilities. So a player joining a turn-80 galaxy lands on a
+  world carrying the leader's warehouses on an otherwise starting planet.
+
+  The bytes were deliberately not guessed at: two galaxies agreeing on an offset
+  is not evidence of what it means, and the `PLPR` work at K4 records the same
+  discipline. Decoding them is the task, and `server/tests/test_starting_kit.py`
+  already compares a joiner against a generated civ field by field, so it is the
+  place a decoded field gets asserted.
+
+  **Done when:** a joiner's homeworld is byte-identical to a generated one except
+  for the object id and seat one's rate pair, or each surviving difference is
+  named and deliberate.
 
   **Done when:** a join clicked mid-turn produces a playable civ at the next
   turn, and the player is told which system they landed in by a note rather than
