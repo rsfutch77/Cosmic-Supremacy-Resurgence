@@ -236,7 +236,7 @@ is out of scope here.
   usual way, and nothing here would fail if it did. Worth re-reading whenever
   the network changes rather than treating as settled forever.
 
-- [ ]~ **H3. Firebase is the record; the PC is a worker.** State, turns,
+- [x] **H3. Firebase is the record; the PC is a worker.** State, turns,
   submissions, notes and the archive live in Firebase. The PC holds the game
   client, the client lock, and files it is free to lose.
 
@@ -244,21 +244,34 @@ is out of scope here.
   for Windows Update loses nothing and resumes. And the cloud offload later swaps
   which machine runs the worker, with no data to migrate.
 
-  **The resume half is done**, 27 September 2026: the referee was killed
-  mid-galaxy, the machine rebooted, and the loop closed the overdue turn sixteen
-  seconds after logon with nothing restored by hand. N1 records the measurement.
+  **Done, 28 September 2026**, on `firebase://cs-resurgence/h3check`. The first
+  reboot, on 27 September, closed N1 and not this: that galaxy was
+  `server\uidemo\sandbox`, a folder on the same disk, so every byte that
+  survived survived because the machine did.
 
-  **The half this item is actually about is not.** That galaxy was
-  `server\uidemo\sandbox`, a folder on the same disk as the worker. Every byte
-  that survived the reboot survived because the machine did. A store that is the
-  record is one the machine can be rebuilt without, and nothing has yet shown
-  that: the same test on a `firebase://` galaxy is what this item claims, and it
-  has never been run. The reboot is evidence for N1 and is not evidence for
-  this.
+  This run took the machine's half away first. Before the reboot, **1,867 files
+  were deleted**: `server\referee_work`, `server\saves` and `server\worker_work`
+  entire. The galaxy read identically before and after that deletion, because it
+  is not on this machine. Then the reboot, and at logon:
 
-  **Done when:** the referee is killed mid-galaxy **on a Firebase galaxy** and
-  the machine rebooted, and the loop resumes and closes the next turn with
-  nothing restored by hand.
+      01:46:28  worker: galaxy firebase://cs-resurgence/h3check
+      01:46:28  worker: turn 12, due 01:42:15 (-253s)
+      01:46:31  worker: turn 12 came due 4 minute(s) ago and nothing closed it
+      01:46:44  captured save_000_20260928_014644_g0_t13.b64
+      01:46:48  referee: published turn 13, canonical c3ed83764b25527e
+
+  Turn 12 to 13, hash `ac809c9532c32a6b` to `c3ed83764b25527e`, read back out of
+  Firebase rather than off the machine under test. Twenty seconds from the
+  worker starting to the turn being published, with nothing restored by hand.
+
+  **`save_000` is the part worth keeping.** The capture counter restarted at
+  zero because `server\saves` was genuinely gone, so the resume cannot have come
+  from a capture or a tick file left behind. That is the difference between a
+  machine that rebooted and a machine whose state was rebuilt from the store.
+
+  **The worker had never refereed a Firebase galaxy before this.** Every referee
+  run in the project until now was against a folder. The first one, an hour
+  earlier, closed turn 11 and published turn 12 in fifteen seconds.
 
 - [ ]~ **H4. Anonymous auth and security rules.** Firebase Anonymous Auth gives
   each install a stable UID with no login screen, no password and no account.
@@ -717,6 +730,55 @@ is out of scope here.
   discipline. Decoding them is the task, and `server/tests/test_starting_kit.py`
   already compares a joiner against a generated civ field by field, so it is the
   place a decoded field gets asserted.
+
+  **Two of the seventeen are now named, 28 September 2026, and the screen is
+  what named them.** The operator opened a joined galaxy as the civ that had
+  just joined and read **104/1280** food on its homeworld. Those two numbers sit
+  at `+15` and `+19`, both already in the list above.
+
+  | planet | owner | `+15` | `+19` | citizens |
+  |---|---|---|---|---|
+  | #138 | Neighbor | 141 | 240 | 4 |
+  | #136 | DemoPlayer | 25 | 360 | 5 |
+  | #196 | BadGuy | 38 | 760 | 8 |
+  | #140 | Neighbor | 38 | 760 | 8 |
+  | #139 | DemoPlayer | 104 | **1280** | 11 |
+  | #47 | Joiner | 104 | **1280** | **7** |
+
+  `+19` is the food capacity and `+15` the store. Across six planets and two
+  turns of the same galaxy `+19` rises monotonically with population, 2 citizens
+  to 80 and 11 to 1280, and `+15` is never above it anywhere. The joiner carries
+  **an eleven-citizen capital's capacity on a seven-citizen world**, byte for
+  byte its donor's, where a seven-citizen world in the same galaxy reads 600.
+
+  **Fixed the same day.** `starting_kit` now sets the pair, and
+  `test_starting_kit.py` compares it against a generated civ field by field
+  like every other kit field:
+
+      food 104/1280 -> 0/600
+
+  0/600 is measured, not computed. `client\SinglePlayerGalaxy.dat` is a
+  generated galaxy and **both** its starting civs, on separately placed
+  homeworlds, read exactly 0/600. Capacity is not a plain function of
+  population, since 4, 5, 8 and 11 citizens give 240, 360, 760 and 1280, so
+  nothing but a generated homeworld can say what a generated homeworld holds.
+
+  **A reference that looked right and was not**, recorded because it nearly
+  became evidence. `make_multiplayer_galaxy.build` **renames** a fixture's
+  existing civs rather than generating new ones, so building "fresh" civs on a
+  turn-11 galaxy returns that galaxy's turn-11 civs under new names, one of
+  which is the donor. Read straight, it says a generated civ has 1280 and the
+  transplant is innocent. `test_starting_kit.py` uses the same call correctly
+  because its fixture is already a generated galaxy. The check that settled it
+  instead was planet #47 itself, unowned at 0/40 in the base galaxy and 104/1280
+  after the transplant.
+
+  **Fourteen of the seventeen are still open**, `+177`, `+179` to `+188`, `+193`,
+  `+207` and `+208`. A generated homeworld is nearly empty there, `+177 = 7` and
+  `+193 = 1` with everything else zero, while a joiner reads `+177 = 11` and
+  `+179` to `+188` as `10, 16, 10, 16, 10, 16, 9, 16, 7, 16`. That matches
+  neither the generated civ nor the donor, so something other than the clone is
+  writing them and what it is should be known before they are reset to anything.
 
   **Done when:** a joiner's homeworld is byte-identical to a generated one except
   for the object id and seat one's rate pair, or each surviving difference is

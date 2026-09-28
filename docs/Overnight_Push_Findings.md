@@ -37,12 +37,12 @@ Each of these is a thing the code claims and nobody has watched happen.
   router's configuration and reported no forwarding rule. Worth re-reading when
   the network changes, since a rule can appear without anyone adding one, but
   there is nothing left to do about it now.
-- [ ] **H3, Firebase is the record.** The reboot happened, and it does not
-  count for this. The galaxy under test was `server\uidemo\sandbox`, a folder on
-  the worker's own disk, so everything that survived the reboot survived because
-  the machine did. A store that is the record is one the machine can be rebuilt
-  without. The same test on a `firebase://` galaxy is the one this item means.
-  N1 is closed by that reboot; this is not.
+- [x] **H3, Firebase is the record.** Done 28 September on
+  `firebase://cs-resurgence/h3check`, with the machine's half taken away first:
+  1,867 local files deleted, then the reboot, then turn 12 to 13 twenty seconds
+  after logon. The capture came back as `save_000`, the counter having restarted
+  from nothing, which is what says the resume was not leaning on a leftover.
+  Measurements are in the plan under H3.
 - [ ] **J4 and H7's done-when, which are the same test.** No uid has ever been
   refused a seat another holds, and no launcher without a Google credential has
   played a turn end to end. The relay half is proven: a signed-in caller lists

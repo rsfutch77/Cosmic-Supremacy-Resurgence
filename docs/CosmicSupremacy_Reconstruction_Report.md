@@ -334,6 +334,10 @@ So the score list holds one row per distinct `Owner:4`, and the collision, not t
 
 [ ] **`EXSY` is cloned, not reset, and that is a cheat rather than a cosmetic defect.** An injected civ inherits the donor's explored-systems map, so cloning a developed donor tells the newcomer where the home planets are. Two things keep it from mattering yet and neither is a fix: the AI player does not read `EXSY` (it keeps its own discovery set, persisted per civ name), and cloning from a turn-1 capture inherits an empty map, so only the developed-donor fixture leaks. The fix needs the record layout, which is not decoded, the leading `u32` reads 63 on a civ that had explored 105 systems, so it is not a plain count and the obvious guess is already falsified. **That `EXSY` is the explored-systems map is itself inferred** from the tag and from its size tracking exploration across two civs; confirm it while decoding it.
 
+[ ] **A joiner inherits the donor's civ traits, bonuses included.** Seen on screen 28 September 2026: a civ that joined at turn 11 carried the donor's food-output trait bonus. `add_civ` clones the donor's `OWNR` whole and the traits are inside it, so this is the same mechanism as `EXSY` and the food stores rather than a separate defect. Accepted for the beta, where everybody starts with the same extra anyway, and wrong afterwards: a new civ should get the homeworld button back and choose its own traits. That needs the trait block located **in the blob**, which is not the same thing as `Owner:744…940` from the memory report, those being offsets into the live object and not into the `OWNR` payload, whose whole length here is 715 bytes. `CVTR` is the obvious candidate section and was byte-identical across three civs in a turn-5 capture, which is consistent with nobody having chosen traits rather than with it being the wrong section.
+
+[ ] **Does a joiner inherit the donor's corruption?** Unknown, and it matters more than it looks. A civ joining a galaxy whose seat one is failing late would take on that civ's corruption along with its warehouses, which could cripple a newcomer at the moment they arrive. Corruption has **resisted location in memory entirely** (see the memory report) and is plausibly derived at display time from population, buildings and military rather than stored, in which case copying the planet copies the corruption and there is no field to clear. `GSET.corruption_multiplier = 100` is a galaxy-level knob and the cheapest way to make it vary. Settle whether it is stored or derived first: the two answers need completely different fixes, and only one of them has a field to blank. Observed at −0.5% on a turn-11 joiner, which is unremarkable on its own and says nothing about a late-game donor.
+
 [ ] **An injected civ gets no ships.** `SHIP`/`DYNO` records are galaxy-level rather than per-civ, so a starting colony ship is a separate job. Against civs that start with two, that is a real handicap at turn 1, the civ can build its own only if the donor's homeworld had a shipyard.
 
 [ ] **Homeworld placement is one hardcoded policy.** New civs are placed as far from every claimed planet as possible, which is the right default for testing an AI (contact becomes something it has to earn) but not the only one worth having, random placement is what a real generator does and is the only way to test a hostile neighbour two systems away, and clustered or per-team placement follow from it. Wants a `--placement` option rather than a second function.
@@ -655,6 +659,18 @@ was destroyed there and its owner still received nothing. **Not discovery**, sin
 `make_multiplayer_galaxy`. Worth settling, because a player losing a fleet and being told nothing
 about where is a bad enough experience to be worth knowing whether it is the engine's rule or an
 artefact of how these galaxies are made.
+
+[ ] **Does a joined civ inherit its donor's `NEWS`?** `inject_civ.add_civ` clones a donor's `OWNR`
+whole, and `NEWS` lives inside that `OWNR`'s `DATA` block, so the same reasoning that made a joiner
+inherit the donor's `EXSY` applies here and nothing empties `NEWS` the way `joins` now empties
+`EXSY`. Observed on 28 September in a real client: a civ joined at turn 11 of `galaxy_demo` and its
+news tab was **empty**, which is consistent with the donor having no news to inherit rather than with
+the field being cleared. The donor in that galaxy is seat one at turn 11 and has fought nothing.
+
+The test is a donor that **does** have news: take a galaxy where a civ holds `NEWS` records, inject
+against that civ, and read the newcomer's tab. If the items come across, a player joins knowing where
+somebody else's battles happened, which is a smaller version of the `EXSY` map leak and the same
+class of bug. If they do not, something clears it and that something is worth naming.
 
 ### `EXSY`, a civ's explored systems and what it calls them
 
