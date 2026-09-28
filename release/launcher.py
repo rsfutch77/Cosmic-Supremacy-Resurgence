@@ -1443,27 +1443,19 @@ def row_stalled_for(g, view=None) -> float:
 def stall_hint(stalled) -> str:
     """The line under the table when a galaxy's turns have stopped.
 
-    Written for a player who has never read a plan, which is what N4 asks of
-    every line like this one. It says what has happened, that nothing they
-    played is gone, and the one thing only a player can do about it, which is
-    to tell the person whose computer the turns are worked out on. Without
-    that last sentence the message is a complaint rather than a report, and
-    the operator has asked to be told.
+    One sentence, the same one however many galaxies are stopped. Which ones
+    they are is in the table, a word per row, and the operator's call is that
+    repeating it underneath was not worth the length. So nothing here varies,
+    and `stalled` is taken and not read.
 
-    `stalled` is the (row, seconds) pairs that are stopped, and the time given
-    is the longest of them: several stopped galaxies on one referee is one
-    machine being off, and the oldest deadline is the one that says since when.
+    The argument stays in the signature because the callers pass it and because
+    what this line is allowed to say is a question that gets revisited. Two
+    things a longer version carried are gone and are worth naming in case they
+    are wanted back: how long it has been stopped, which appears nowhere else
+    on the page because the time column reads `time is up` and never how long
+    ago, and who to tell, which was the only act the line offered.
     """
-    names = [g.name or g.id for g, _ in stalled]
-    worst = max(seconds for _, seconds in stalled)
-    if len(names) == 1:
-        head = f"{names[0]} has stopped."
-    else:
-        head = f"{len(names)} galaxies have stopped: {', '.join(names)}."
-    return (f"{head} The turn was due {fmt_ago(worst)} and nothing has closed "
-            f"it. Turns are worked out on one person's computer, so it is "
-            f"probably switched off. Nothing you have played is lost. Tell "
-            f"whoever runs the beta, and it carries on where it stopped.")
+    return "Some galaxies are stopped on the server, check back later"
 
 
 # ── The table the Galaxies page draws ────────────────────────────────────────

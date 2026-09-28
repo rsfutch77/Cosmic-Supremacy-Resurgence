@@ -23,6 +23,12 @@ rearchitecture.
 
 Each item names what "done" looks like.
 
+**The markers.** `- [x]` is done, `- [ ]` is not started, and `- [ ]~` is
+partly done. The tilde sits outside the brackets rather than inside because a
+todo extension reading this file filters on `- [ ]` and `- [x]` and hides
+anything else, so a `- [~]` item disappears from the list that is supposed to
+be tracking it. Do not tidy the tilde back inside.
+
 ---
 
 ## What this phase inherits
@@ -234,7 +240,7 @@ is out of scope here.
   **Done when:** the referee is killed mid-galaxy and the machine rebooted, and
   the loop resumes and closes the next turn with nothing restored by hand.
 
-- [~] **H4. Anonymous auth and security rules.** Firebase Anonymous Auth gives
+- [ ]~ **H4. Anonymous auth and security rules.** Firebase Anonymous Auth gives
   each install a stable UID with no login screen, no password and no account.
   The username stays exactly what it is today, a claim typed into the launcher.
 
@@ -291,7 +297,7 @@ is out of scope here.
   another player's submission, refused publishing a turn, and refused deleting
   anything, each by the rules rather than by the application declining to try.
 
-- [~] **H7. The player's launcher cannot reach Firebase, and nothing in the
+- [ ]~ **H7. The player's launcher cannot reach Firebase, and nothing in the
   tests could have noticed.** What H1 delivered is the *referee's* transport. It
   is not the player's.
 
@@ -583,7 +589,7 @@ is out of scope here.
 
 ## J. The lobby
 
-- [~] **J1. A galaxy directory above the store.** `server/galaxy_directory.py`
+- [ ]~ **J1. A galaxy directory above the store.** `server/galaxy_directory.py`
   holds `LocalGalaxyDirectory` and `FirebaseGalaxyDirectory` behind
   `open_directory(spec)`, mirroring `open_store`. 59 checks pass against both.
 
@@ -605,7 +611,7 @@ is out of scope here.
   **Done when:** the launcher lists the sandbox from the directory and opens its
   store from what the directory gave it, with no galaxy path in any config file.
 
-- [~] **J2. A Games tab in the launcher.** Replaces the old flow, where the
+- [ ]~ **J2. A Games tab in the launcher.** Replaces the old flow, where the
   website listed active galaxies and a downloaded file was both the galaxy and
   the key. The tab shows the sandbox, its turn, its deadline, how many players
   are in it, and a Join button, and after joining it shows whether this player
@@ -617,7 +623,7 @@ is out of scope here.
   **Done when:** a player who has never opened a config file joins the sandbox
   and plays a turn.
 
-- [~] **J3. Joining is a request resolved at a turn boundary.** The launcher
+- [ ]~ **J3. Joining is a request resolved at a turn boundary.** The launcher
   writes a join request; the worker applies it during the next tick, on the
   authoritative blob, never on a copy a player holds. A player who clicks Join
   during turn N is playing at turn N+1.
@@ -700,7 +706,7 @@ is out of scope here.
   turn, and the player is told which system they landed in by a note rather than
   having to find it.
 
-- [~] **J4. A seat is bound to the anonymous UID that claimed it.** A second
+- [ ]~ **J4. A seat is bound to the anonymous UID that claimed it.** A second
   install claiming a name already in the roster is refused. Because the UID is
   per-install, a player who reinstalls Windows would otherwise be locked out of
   their own empire, so the operator can rebind a seat to a new UID.
@@ -859,7 +865,7 @@ is out of scope here.
   them loads, plays and ticks, with the civ count and high-water id correct at
   the end.
 
-- [~] **K3. Detect abandonment.** Countable out of the store already: the archive
+- [ ]~ **K3. Detect abandonment.** Countable out of the store already: the archive
   records which civs submitted for each turn, so consecutive misses need no new
   bookkeeping. Two stages, a warning and a reclaim, with the thresholds
   configurable per galaxy. At 4-hour turns, 12 missed turns is two days.
@@ -1008,7 +1014,7 @@ is out of scope here.
   carrying the original across would preserve a homeworld's customisation boost,
   but `+5`, `+6`, `+12`, `+120` and `+121` still have no established meaning.
 
-- [~] **K5. Ending a galaxy is an operator action.** No season timer. The
+- [ ]~ **K5. Ending a galaxy is an operator action.** No season timer. The
   operator calls a galaxy over and starts a fresh one, so there has to be a way
   to close one that stops accepting submissions, keeps the archive readable, and
   tells every launcher why.
@@ -1095,7 +1101,7 @@ is out of scope here.
 
 ## M. Diagnostics
 
-- [~] **M1. The launcher uploads its own log.** Every finding in the blob push
+- [ ]~ **M1. The launcher uploads its own log.** Every finding in the blob push
   plan came from watching a screen, and that stops being available the moment
   players are elsewhere. Without this, every beta report is a slow conversation.
 
@@ -1142,7 +1148,7 @@ is out of scope here.
 
 ## N. Operating it
 
-- [~] **N1. The worker runs unattended.** A scheduled task that starts on boot,
+- [ ]~ **N1. The worker runs unattended.** A scheduled task that starts on boot,
   the machine set not to sleep, and a startup rule that immediately closes any
   turn whose deadline has already passed. A 4-hour clock over a permanent galaxy
   means the machine's uptime is the galaxy's uptime.
@@ -1177,14 +1183,14 @@ is out of scope here.
   **Done when:** a truncated blob, an oversized one and a blob from a different
   galaxy are each dropped with a note, and the turn closes for everyone else.
 
-- [~] **N3. An operator view.** One page showing the galaxy, its turn, who has
+- [ ]~ **N3. An operator view.** One page showing the galaxy, its turn, who has
   submitted, when the last tick ran and what it took, and any errors. Otherwise
   the only way to know the beta is healthy is to read a log on one machine.
 
   **Done when:** the state of the galaxy can be read without opening a log file
   or a terminal.
 
-- [~] **N4. What players are told, in the launcher and wherever they sign up.**
+- [ ]~ **N4. What players are told, in the launcher and wherever they sign up.**
   Not a footnote: several of these are properties the design has accepted rather
   than faults waiting to be fixed, and a beta tester who learns them by discovery
   reports them as bugs.
