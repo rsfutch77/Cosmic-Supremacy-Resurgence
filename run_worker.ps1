@@ -104,8 +104,20 @@ if ($WriteTaskXml) {
 
     # The task runs this script rather than python directly, so that what the
     # machine does at 3am is the same command an operator can type.
+    #
+    # Hidden rather than minimized. A minimized window is a button in the
+    # taskbar, and closing a console window sends CTRL_CLOSE_EVENT to
+    # everything attached to it, so one tidying-up click ends the galaxy and
+    # writes nothing to the log saying why. That happened on 27 September: the
+    # worker had closed a turn unattended two hours earlier and was still
+    # healthy, and the only trace was the task reporting 0xC000013A.
+    #
+    # This is the task's command line and not the one an operator types.
+    # Running run_worker.ps1 by hand still shows its window, which is the case
+    # where a window is wanted. What the task is doing is read with -Status or
+    # out of the log, neither of which needs a window to exist.
     $Pass = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle',
-              'Minimized', '-File', ('"{0}"' -f $ThisScript), '-Store',
+              'Hidden', '-File', ('"{0}"' -f $ThisScript), '-Store',
               ('"{0}"' -f $Store))
     if ($DataDir)     { $Pass += @('-DataDir', ('"{0}"' -f $DataDir)) }
     if ($SaveDir)     { $Pass += @('-SaveDir', ('"{0}"' -f $SaveDir)) }
