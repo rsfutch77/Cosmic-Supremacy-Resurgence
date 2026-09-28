@@ -11,40 +11,89 @@ still being worked through.
 
 ## What you need to do
 
-### 1. The scheduled task
+### 1. The scheduled task, step by step
 
-The task starts at **logon**, not at boot, so no automatic logon is needed.
-Computing a turn launches the game client, and a task that runs whether or not a
-user is logged on has no desktop to draw it on. Your plan, that you log in and
-turns resume, is what this is built for.
+A scheduled task is a Windows thing that runs a program for you at some moment.
+Here the moment is **you logging in**, and the program is the referee, which
+closes each turn as its deadline passes. You never start it by hand again, and
+after a reboot it comes back when you log in.
 
-```
-# Watch it decide, closing nothing you care about
-.\run_worker.ps1 -Store <your galaxy> -Once
+It starts at logon rather than at boot on purpose. Closing a turn launches the
+game client, and a task that runs before anyone has logged in has no desktop to
+draw the game on. So the galaxy resumes when you log in, which is the
+arrangement you asked for.
 
-# Write the definition for that galaxy. This registers nothing.
-.\run_worker.ps1 -Store <your galaxy> -WriteTaskXml .\referee_task.xml
+**None of this needs Administrator.**
 
-# Register it, then start it without waiting for a logon
-schtasks /Create /TN "CosmicSupremacy Referee" /XML ".\referee_task.xml"
-schtasks /Run /TN "CosmicSupremacy Referee"
+#### Open a PowerShell window
 
-# Later
-.\run_worker.ps1 -Store <your galaxy> -Status
-type server\worker_work\referee_worker.log
-schtasks /Query /TN "CosmicSupremacy Referee" /V /FO LIST
-```
+Press the **Windows key**, type `powershell`, press **Enter** on *Windows
+PowerShell*. A blue window opens. Then go to the project:
 
-Verified in the generated XML: logon trigger present, boot trigger absent,
-`InteractiveToken`, a 10-minute repetition so a crash costs at most ten minutes,
-and the three Windows defaults that would otherwise stop the galaxy on their own
-(start on battery, stop on battery, three-day execution limit) all inverted.
+    cd "C:\Users\tmog7\Desktop\Working\resurgence_workspace\resurgence"
 
-Ignore the script's closing paragraph recommending automatic logon. It is
-generic advice and you have decided otherwise.
+Leave that window open for all four steps.
 
-A dry run tonight closed turn 11 of `uidemo/sandbox` using your own orders from
-the UI testing, ticked a real client and published turn 12.
+#### Step 1, watch it work once
+
+    powershell -ExecutionPolicy Bypass -File .\run_worker.ps1 -Store "server\uidemo\sandbox" -Once
+
+`-Once` means do at most one turn, then stop. **This really does advance that
+galaxy** if a turn is due, so point it at one you do not mind moving. Swap the
+path for your real beta galaxy when there is one.
+
+You should see your power settings read back, a line saying it asked Windows not
+to sleep, the galaxy and its turn, and then either `nothing to do` if no turn is
+due, or the referee closing a turn and publishing the next. If a turn closes, a
+game window opens by itself, ticks, and closes again. That is the referee taking
+the turn. Do not touch it while it is up.
+
+#### Step 2, write the task definition
+
+    powershell -ExecutionPolicy Bypass -File .\run_worker.ps1 -Store "server\uidemo\sandbox" -WriteTaskXml .\referee_task.xml
+
+This **registers nothing**. It writes a file describing the task and prints the
+two commands in step 3.
+
+#### Step 3, register it and start it
+
+    schtasks /Create /TN "CosmicSupremacy Referee" /XML ".\referee_task.xml"
+    schtasks /Run   /TN "CosmicSupremacy Referee"
+
+The first prints `SUCCESS: The scheduled task "CosmicSupremacy Referee" has
+successfully been created.` The second starts it now, so you do not have to log
+out and back in to see it run.
+
+If the first one complains about access being denied, something is asking for
+Administrator that should not be, since this task runs as you. Stop and tell me
+rather than elevating.
+
+#### Step 4, check on it
+
+    powershell -ExecutionPolicy Bypass -File .\run_worker.ps1 -Store "server\uidemo\sandbox" -Status
+    type server\worker_work\referee_worker.log
+
+There is a graphical view too: Windows key, type `Task Scheduler`, Enter. The
+task is in **Task Scheduler Library**, named *CosmicSupremacy Referee*. Its
+**Last Run Result** column reads `0x0` when the last run was fine.
+
+#### If you want it gone
+
+    schtasks /End    /TN "CosmicSupremacy Referee"
+    schtasks /Delete /TN "CosmicSupremacy Referee" /F
+
+`/End` stops it now, `/Delete` removes it. Neither touches any galaxy.
+
+#### What is already set for you
+
+Checked in the generated file: triggers at logon and not at boot, runs as you
+with a real desktop, retries every 10 minutes if it has died, and has the three
+Windows defaults inverted that would otherwise stop your galaxy on their own,
+refusing to start on battery, stopping when you unplug, and a three-day limit on
+how long a task may run.
+
+Ignore the paragraph the script prints about automatic logon. That is generic
+advice written before you decided against it.
 
 ### 2. Deploy the relay, still
 
