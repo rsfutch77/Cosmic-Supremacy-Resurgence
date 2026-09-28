@@ -269,30 +269,24 @@ check("the colour is the status cell's, not the whole row's",
 print("\n4. and what to do about it, in a player's words")
 hint = L.stall_hint([(by_id["sandbox"], 7200.0)])
 print(f"       {hint}")
-check("it names the galaxy", "Sandbox" in hint, True)
-# The time column reads "time is up" and never how long ago, so this line is
-# the only place the difference between six minutes late and three days dead
-# appears. Losing it would make those two rows read the same.
-check("and says roughly how long", "2h ago" in hint, True)
-check("and asks them to tell whoever runs it, which is the only act there is",
-      "tell whoever runs" in hint.lower(), True)
+check("it says something has stopped", "stopped" in hint.lower(), True)
 check("it tells them to come back, which is true most of the time",
       "check back" in hint.lower(), True)
 check("in a player's words rather than the plan's",
       hint, lambda t: not any(w in t for w in (
           "referee", "worker", "scheduled task", "N1", "store", "Firestore")))
-# Two sentences. A longer line repeated what the table already shows one word
-# per row, and grew with the number of stopped rows.
-check("it is short", hint.count(".") <= 2 and len(hint) < 120, True)
-# Fails if the names came back: several stopped galaxies is one machine being
-# off, the table marks which, and listing them made the line scale.
-check("several stopped galaxies are counted, not listed",
+# One sentence, by the operator's call. The table marks which galaxies are
+# stopped a word per row, and repeating that underneath was not worth the
+# length.
+check("it is one short line", hint.count(".") <= 1 and len(hint) < 80, True)
+# Fails if the line started varying again. Whatever is stopped and however
+# long ago, this reads the same, which is what makes it one string to review
+# rather than four.
+check("the same line however many galaxies are stopped",
       L.stall_hint([(by_id["sandbox"], 7200.0), (by_id["outpost"], 400.0)]),
-      lambda t: "2 galaxies" in t and "Sandbox" not in t
-      and "Outpost" not in t)
-check("timed by the one that has been down longest",
-      L.stall_hint([(by_id["outpost"], 400.0), (by_id["sandbox"], 7200.0)]),
-      lambda t: "2h ago" in t)
+      hint)
+check("and however long they have been stopped",
+      L.stall_hint([(by_id["outpost"], 60.0)]), hint)
 
 
 class Hint:
@@ -331,7 +325,7 @@ def hint_for(rows, recs=None, now=NOW):
 
 healthy = [g for g in ROWS if not L.row_stalled_for(g, VIEW)]
 check("a table with a stopped galaxy in it carries the line",
-      hint_for(ROWS), lambda t: "has stopped" in t or "have stopped" in t)
+      hint_for(ROWS), lambda t: "stopped" in t)
 check("a table with none does not, however late two of its rows are",
       hint_for(healthy), lambda t: "stopped" not in t)
 check("and the player with no seat still gets the line that was there before",
@@ -340,7 +334,7 @@ check("and the player with no seat still gets the line that was there before",
 check("which the stopped line takes precedence over, being the one to act on",
       hint_for([gx("frontier", "Frontier", left=600),
                 gx("sandbox", "Sandbox", over=7200)]),
-      lambda t: "has stopped" in t and "View" not in t)
+      lambda t: "stopped" in t and "View" not in t)
 
 
 print("\n5. the galaxies the operator tests against, read off disk")
@@ -414,9 +408,9 @@ check("nor lapsed, six minutes past a four-hour one",
 check("the closed galaxy is closed rather than stopped",
       said["retired"], "closed")
 check("and the running one is untouched", said["frontier"], "open")
-check("the line under the table counts both stopped galaxies",
+check("the line under the table reports them",
       hint_for(rows, now=live.clock),
-      lambda t: "2 galaxies" in t)
+      lambda t: "stopped" in t)
 check("originals untouched", fingerprint(SRC), before)
 
 

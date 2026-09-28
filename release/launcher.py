@@ -1443,34 +1443,19 @@ def row_stalled_for(g, view=None) -> float:
 def stall_hint(stalled) -> str:
     """The line under the table when a galaxy's turns have stopped.
 
-    Two sentences: how long, and the two things a player can do. Everything
-    else a longer version of this line said is already on screen. Which
-    galaxies are stopped is in the table, one word per row, and saying it twice
-    made the line scale with the number of stopped rows. Why it happens and
-    that nothing is lost are true and are not what a player reads this line to
-    find out.
+    One sentence, the same one however many galaxies are stopped. Which ones
+    they are is in the table, a word per row, and the operator's call is that
+    repeating it underneath was not worth the length. So nothing here varies,
+    and `stalled` is taken and not read.
 
-    How long stays, because it is the one thing here that is nowhere else. The
-    time column says `time is up` and not how long ago, so without this a
-    galaxy six minutes late and one three days dead read the same, and that is
-    the difference between waiting and writing an email.
-
-    Telling the operator stays because it is the only act available and the
-    operator asked to be told. `Check back later` is first because it is what
-    is true most of the time.
-
-    `stalled` is the (row, seconds) pairs that are stopped, and the time given
-    is the longest of them: several stopped galaxies on one referee is one
-    machine being off, and the oldest deadline is the one that says since when.
+    The argument stays in the signature because the callers pass it and because
+    what this line is allowed to say is a question that gets revisited. Two
+    things a longer version carried are gone and are worth naming in case they
+    are wanted back: how long it has been stopped, which appears nowhere else
+    on the page because the time column reads `time is up` and never how long
+    ago, and who to tell, which was the only act the line offered.
     """
-    names = [g.name or g.id for g, _ in stalled]
-    worst = max(seconds for _, seconds in stalled)
-    if len(names) == 1:
-        head = f"{names[0]} has stopped, its turn was due {fmt_ago(worst)}."
-    else:
-        head = (f"{len(names)} galaxies have stopped, the longest due "
-                f"{fmt_ago(worst)}.")
-    return f"{head} Check back later, or tell whoever runs the beta."
+    return "Some galaxies are stopped on the server, check back later"
 
 
 # ── The table the Galaxies page draws ────────────────────────────────────────
