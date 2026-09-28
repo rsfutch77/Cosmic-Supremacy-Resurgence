@@ -236,7 +236,7 @@ is out of scope here.
   usual way, and nothing here would fail if it did. Worth re-reading whenever
   the network changes rather than treating as settled forever.
 
-- [ ]~ **H3. Firebase is the record; the PC is a worker.** State, turns,
+- [x] **H3. Firebase is the record; the PC is a worker.** State, turns,
   submissions, notes and the archive live in Firebase. The PC holds the game
   client, the client lock, and files it is free to lose.
 
@@ -244,21 +244,34 @@ is out of scope here.
   for Windows Update loses nothing and resumes. And the cloud offload later swaps
   which machine runs the worker, with no data to migrate.
 
-  **The resume half is done**, 27 September 2026: the referee was killed
-  mid-galaxy, the machine rebooted, and the loop closed the overdue turn sixteen
-  seconds after logon with nothing restored by hand. N1 records the measurement.
+  **Done, 28 September 2026**, on `firebase://cs-resurgence/h3check`. The first
+  reboot, on 27 September, closed N1 and not this: that galaxy was
+  `server\uidemo\sandbox`, a folder on the same disk, so every byte that
+  survived survived because the machine did.
 
-  **The half this item is actually about is not.** That galaxy was
-  `server\uidemo\sandbox`, a folder on the same disk as the worker. Every byte
-  that survived the reboot survived because the machine did. A store that is the
-  record is one the machine can be rebuilt without, and nothing has yet shown
-  that: the same test on a `firebase://` galaxy is what this item claims, and it
-  has never been run. The reboot is evidence for N1 and is not evidence for
-  this.
+  This run took the machine's half away first. Before the reboot, **1,867 files
+  were deleted**: `server\referee_work`, `server\saves` and `server\worker_work`
+  entire. The galaxy read identically before and after that deletion, because it
+  is not on this machine. Then the reboot, and at logon:
 
-  **Done when:** the referee is killed mid-galaxy **on a Firebase galaxy** and
-  the machine rebooted, and the loop resumes and closes the next turn with
-  nothing restored by hand.
+      01:46:28  worker: galaxy firebase://cs-resurgence/h3check
+      01:46:28  worker: turn 12, due 01:42:15 (-253s)
+      01:46:31  worker: turn 12 came due 4 minute(s) ago and nothing closed it
+      01:46:44  captured save_000_20260928_014644_g0_t13.b64
+      01:46:48  referee: published turn 13, canonical c3ed83764b25527e
+
+  Turn 12 to 13, hash `ac809c9532c32a6b` to `c3ed83764b25527e`, read back out of
+  Firebase rather than off the machine under test. Twenty seconds from the
+  worker starting to the turn being published, with nothing restored by hand.
+
+  **`save_000` is the part worth keeping.** The capture counter restarted at
+  zero because `server\saves` was genuinely gone, so the resume cannot have come
+  from a capture or a tick file left behind. That is the difference between a
+  machine that rebooted and a machine whose state was rebuilt from the store.
+
+  **The worker had never refereed a Firebase galaxy before this.** Every referee
+  run in the project until now was against a folder. The first one, an hour
+  earlier, closed turn 11 and published turn 12 in fifteen seconds.
 
 - [ ]~ **H4. Anonymous auth and security rules.** Firebase Anonymous Auth gives
   each install a stable UID with no login screen, no password and no account.
