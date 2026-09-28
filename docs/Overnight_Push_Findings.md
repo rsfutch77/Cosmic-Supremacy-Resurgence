@@ -176,6 +176,25 @@ leftover than replace it still can.
 Fifteen checks, including the recovery end to end: a real server is started,
 orphaned without `stop`, and the next worker ends it and starts its own.
 
+### The launcher has no orphan recovery, and the worker does
+
+Found on 28 September by walking into it. A console window was closed, which
+killed the worker and left its `cs_server` holding 8888. The packaged launcher
+then said "port 8888 is held" and stopped. Closing the window again did not
+help, because the window was never what held the port.
+
+The worker recovers from this now and the launcher does not, which is the same
+failure on the same machine with only one side of it able to act. The launcher
+has the harder version of the problem, since it has no status file naming a pid
+it started, so it cannot tell a referee's leftover from a stranger by the means
+the worker uses. What it can do is read the holder's command line, which is
+what `is_our_cs_server` already does, and at minimum say that the port is held
+by a `cs_server` from this install rather than leaving the player at "port 8888
+is held".
+
+`adopt_server` does not answer this. It shares a server that is running and
+wanted; this is one that is running and abandoned.
+
 ### `adopt_server` is a hand-edited key
 
 A launcher on the same machine as the referee finds port 8888 held and refuses
@@ -206,11 +225,26 @@ build has no `__pycache__` at all, and a full custom scan of
 is a developer-machine problem and not, on this evidence, something a beta player
 meets.
 
-**NOT VERIFIED and worth knowing before the beta opens:** an on-disk scan is not
-behavioural detection. A packaged launcher that actually calls
-`CreateRemoteThread` into the game process at runtime could still be stopped, and
-nothing here has run a packaged save. That is the test, and it needs a real
-frozen build taking a real turn.
+**The behavioural half is now done too, 28 September 2026.** An on-disk scan is
+not behavioural detection, so the open question was whether Defender would stop
+a packaged launcher that actually calls `CreateRemoteThread` into the game
+process at runtime. A frozen v0.1.3 build took a real multiplayer turn against a
+throwaway galaxy, the capture fired, the turn was sent, and there was **no
+Defender dialog, no quarantine and no interference of any kind**.
+
+`trigger_save` is reached only from the multiplayer turn loop, which is why the
+test had to be a multiplayer turn: the Save button in single player goes over
+HTTP through `gamectl` and never touches the injection. Anything short of a
+packaged multiplayer turn would have tested the wrong path and come back clean
+for the wrong reason.
+
+That build also carries **no `__pycache__` and no `.pyc` anywhere**, checked
+directly rather than inferred, so the static half holds for a current build and
+not only for the v0.1.2 one that was scanned in September.
+
+What is still unknown is other people's machines. This is one Defender install
+with one configuration and no third-party AV in the way. A beta report of "it
+will not save" should be read with this near the top of the list.
 
 A dev-side fix that needs no antivirus exclusion, and which is **not done**: stop
 writing bytecode for these tools, with `PYTHONDONTWRITEBYTECODE` or
