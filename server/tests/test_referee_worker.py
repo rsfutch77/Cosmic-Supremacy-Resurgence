@@ -518,6 +518,20 @@ def test_task_definition():
         el = root.find(path, ns)
         return el.text if el is not None else None
 
+    # The command line the task will carry, read out of the script that writes
+    # it. Fails if the task ever gets a window an operator can close: closing a
+    # console window sends CTRL_CLOSE_EVENT to everything attached to it, so a
+    # minimized one is a taskbar button whose only behaviour is to stop the
+    # galaxy, silently, with nothing in the log saying why. That happened once,
+    # and the only trace was the task reporting 0xC000013A.
+    script = open(os.path.join(ROOT, 'run_worker.ps1'),
+                  encoding='utf-8').read()
+    task_args = script.split('$Pass = @(', 1)[1].split(')', 1)[0]
+    check('the task runs without a window to close', "'Hidden'" in task_args,
+          True)
+    check('and not merely minimized into the taskbar',
+          "'Minimized'" in task_args, False)
+
     check('it triggers at logon, because a turn needs a desktop',
           root.find('.//t:LogonTrigger', ns) is not None, True)
     check('and not at boot', root.find('.//t:BootTrigger', ns) is None, True)
