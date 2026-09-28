@@ -219,15 +219,22 @@ is out of scope here.
   referee resolves a real turn end to end through it with the directory and the
   Firebase store reporting the same canonical hash.
 
-- [ ] **H2. The referee machine is pull-only.** It opens outbound connections to
+- [x] **H2. The referee machine is pull-only.** It opens outbound connections to
   Firebase and accepts nothing inbound: no port forward, no dynamic DNS, no
   router change. This is the property that keeps a home address out of the beta,
   and it is a constraint rather than a consequence, because the first "just
   expose `turn_server.py`" shortcut removes it without anything failing.
 
-  **Done when:** a full turn resolves with the machine's inbound ports closed and
-  no forwarding rule anywhere, confirmed by reading the router's configuration
-  rather than by the turn having worked.
+  **Done, 28 September 2026.** The operator read the router's configuration and
+  reported no forwarding rule. Turns had already been resolving unattended for
+  a day by then, which is the evidence this item specifically refuses to accept:
+  a turn works identically whether or not a rule exists, so only the
+  configuration can answer it.
+
+  What this closes is today's arrangement, not a property that keeps itself.
+  A rule can appear later without anyone deciding to add one, UPnP being the
+  usual way, and nothing here would fail if it did. Worth re-reading whenever
+  the network changes rather than treating as settled forever.
 
 - [ ]~ **H3. Firebase is the record; the PC is a worker.** State, turns,
   submissions, notes and the archive live in Firebase. The PC holds the game
@@ -860,11 +867,29 @@ is out of scope here.
   difference D3 measured as worth two `PLPR` bytes and a citizen every few turns,
   applied to every player in the galaxy at creation.
 
-  **Still open:** the live half. An injected galaxy has not been loaded in the
-  engine since this change, and no colony ship has been watched completing its
-  colonisation after a join. The injection path itself is unchanged from what D4
-  confirmed and only the planet chosen differs, which is a reason to expect it
-  holds and not evidence that it does.
+  **The live half, done 28 September 2026.** `join_acceptance.py k1 --turns 60`,
+  in a real client, 60 turns of each galaxy:
+
+  | | base | with `Joiner` injected |
+  |---|---|---|
+  | planet #141, the near target | taken turn 13 | **turn 13** |
+  | planet #6, the contested one | taken turn 63 | **turn 63** |
+  | ships under orders, 60 turns | | **0 divergences** |
+
+  Both colonisations completed on the same turn and to the same civ. At turn 71
+  both galaxies read the same ship with the same waypoints and the same fuel.
+
+  **The contested planet is the whole point.** #6 is what `pick_homeworld`
+  returns when reservations are not fed to it, and the colony ship needed 52
+  turns to reach it, so a run short enough to see #141 settle would have said
+  nothing about the case the reservation exists for. `Joiner` was placed on
+  #47, neither ship's destination and none of the 12 reserved planets, and grew
+  from 7 population to 27 while #6 was colonised on schedule by its owner.
+
+  The injected civ also arrived with the starting kit rather than the leader's:
+  200 credits, 0 production points, an empty queue, research unset, 2 hulls. So
+  the K1 placement and the starting kit hold together on one galaxy rather than
+  only in separate tests.
 
   **Done when:** a civ is injected into a galaxy with a colony ship in flight,
   the newcomer's homeworld is not that ship's destination, and the colony ship

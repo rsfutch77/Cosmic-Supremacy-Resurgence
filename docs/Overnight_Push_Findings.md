@@ -33,9 +33,10 @@ readout, and the live rules. What follows is what is actually left.
 
 Each of these is a thing the code claims and nobody has watched happen.
 
-- [ ] **H2, the referee is pull-only.** Nothing has confirmed the router carries
-  no forwarding rule. The property is architectural, the evidence is absent.
-  Reading the router's configuration is the check, not a turn having worked.
+- [x] **H2, the referee is pull-only.** Done 28 September: the operator read the
+  router's configuration and reported no forwarding rule. Worth re-reading when
+  the network changes, since a rule can appear without anyone adding one, but
+  there is nothing left to do about it now.
 - [ ] **H3, Firebase is the record.** The reboot happened, and it does not
   count for this. The galaxy under test was `server\uidemo\sandbox`, a folder on
   the worker's own disk, so everything that survived the reboot survived because
@@ -48,13 +49,23 @@ Each of these is a thing the code claims and nobody has watched happen.
   galaxies, reads state, and pulls a turn blob through a signed URL, measured
   against the deployed service. What is unproven is two installs disagreeing
   about a seat, and that needs a second machine or a faked data directory.
-- [ ] **M1, the upload.** Redaction is built and measured; nothing has ever
-  uploaded anything.
-- [ ] **L2, `min_build`.** The gate works, it survives all three stores now, and
-  **nothing writes the field**, so no galaxy is gated in practice. It needs an
-  operator action or a tool, not more code in the gate.
-- [ ] **K1, the live half.** An injected galaxy has not been loaded since the
-  seat-order fix, and no colony ship has been watched completing after a join.
+- [x] **K1, the live half.** Done 28 September, in a real client over 60 turns
+  of each galaxy. Both colonisations completed on the same turn to the same
+  civ with the joiner present, and ships under orders never diverged. The
+  contested planet took 52 turns, so the length of the run was what made it
+  mean anything. Measurements are in the plan under K1.
+
+**Two things that were listed here and do not belong.** Neither is waiting on a
+person; both are unwritten code, and filing them as verifications made the
+human list look longer than it is.
+
+- **M1, the upload.** Not "built but never run". The redaction is built and the
+  upload is not: M1 says the upload waits on the relay, the relay is deployed
+  now, and no route on it accepts a log. Nothing to verify until something
+  sends one. Moved to open engineering.
+- **L2, `min_build`.** The gate works through all three stores and nothing
+  anywhere writes the field. There is no operator tool that sets it, so this is
+  not an operator action that nobody got round to. Moved to open engineering.
 
 ---
 
@@ -63,10 +74,14 @@ Each of these is a thing the code claims and nobody has watched happen.
 1. **The same reboot, on a Firebase galaxy.** The folder-store reboot is done
    and closed N1. H3 is the one that needs a `firebase://` galaxy under it, and
    it needs a beta galaxy to exist first.
-2. **Hosting version retention.** Last counted at 20 finalized versions, 449.9
-   MB, 4.4% of the 10 GB tier, growing about 22 MB per deploy with no cap. Read
-   it in the Firebase console rather than from the CLI, since no
-   `firebase hosting:*` command may be run against this project.
+2. **Hosting version retention, closed as accepted.** Last counted at 20
+   finalized versions, 449.9 MB, 4.4% of the 10 GB tier, growing about 22 MB
+   per deploy with no cap. More have been published since and the operator's
+   call on 28 September is that the headroom is fine, so no retention limit is
+   being set. It is a number that only moves one way, so it is worth a look if
+   a deploy ever fails for space, and is otherwise not a task. Read it in the
+   Firebase console rather than from the CLI, since no `firebase hosting:*`
+   command may be run against this project.
 
 **A note on running any of these.** Every command in this file and in the plan
 is written relative to the repository root, and a fresh PowerShell opens in
@@ -100,6 +115,27 @@ join" forever, which is exactly where J3 started.
 The relay serves it: `GET /<galaxy>/join/<key>/answer` exists and is covered.
 Nothing in the launcher calls it. This is a launcher change, not a server one.
 
+### Nothing writes `min_build`, so no galaxy is gated
+
+L2's gate reads the minimum out of the galaxy's state, refuses an older build
+with a message, and survives all three stores since the allowlist fix. No code
+anywhere sets the field, and there is no operator tool that would. So on the
+one deployment that will have strangers in it, every build passes.
+
+Small: somewhere for the operator to say it, and the value carried into the
+galaxy document. The gate itself needs nothing.
+
+### The launcher still cannot send its log
+
+M1's redaction is built and measured, capped at 256 KiB by keeping the tail.
+The upload was written as waiting on the relay. The relay is deployed now and
+carries no route that accepts a log, and the launcher calls nothing, so a
+failure an operator did not witness is still a slow conversation.
+
+Two halves: a route that takes a redacted log for a galaxy and a caller in the
+launcher. Worth having before strangers arrive, because it is the difference
+between a bug report and a bug.
+
 ### Three small ones, all recorded before and all still true
 
 - `server/referee.py:269` spawns `advance_turns.py` on **every tick** without
@@ -112,6 +148,52 @@ Nothing in the launcher calls it. This is a launcher change, not a server one.
   not by a shared call or a test.
 - `operator_view`'s allowlist does not carry `submitted_civs`, which is exactly
   the cheap accessor it wants.
+
+### A killed worker no longer takes the galaxy down with it
+
+Closed 28 September 2026. It stopped being theoretical when a console window
+was closed on 27 September: `CTRL_CLOSE_EVENT` reached the worker, it died
+without a log line, and the `cs_server` it had started went on holding 8888.
+The replacement refused to start and named a `taskkill` for somebody to run,
+which is correct and is also a galaxy that stays down until a person reads a
+log. Nobody reads a log on an unattended machine.
+
+That case is ended and replaced now rather than refused. It was never the guess
+the refusal exists to prevent: the process is one this galaxy's own worker
+started and wrote down, and it is about to be replaced by one started here, so
+what directory it was given stops mattering the moment it is gone.
+
+**The pid is checked against what is running under it**, because Windows reuses
+pids and a worker that killed a number out of a file would be committing a
+worse version of the error the refusal was written for. The command line has to
+name this checkout's `cs_server.py`. A recorded pid that now belongs to
+somebody else is a stranger with a familiar number and is refused like any
+other stranger.
+
+`--adopt-server` is answered first, so an operator who would rather share a
+leftover than replace it still can.
+
+Fifteen checks, including the recovery end to end: a real server is started,
+orphaned without `stop`, and the next worker ends it and starts its own.
+
+### The launcher has no orphan recovery, and the worker does
+
+Found on 28 September by walking into it. A console window was closed, which
+killed the worker and left its `cs_server` holding 8888. The packaged launcher
+then said "port 8888 is held" and stopped. Closing the window again did not
+help, because the window was never what held the port.
+
+The worker recovers from this now and the launcher does not, which is the same
+failure on the same machine with only one side of it able to act. The launcher
+has the harder version of the problem, since it has no status file naming a pid
+it started, so it cannot tell a referee's leftover from a stranger by the means
+the worker uses. What it can do is read the holder's command line, which is
+what `is_our_cs_server` already does, and at minimum say that the port is held
+by a `cs_server` from this install rather than leaving the player at "port 8888
+is held".
+
+`adopt_server` does not answer this. It shares a server that is running and
+wanted; this is one that is running and abandoned.
 
 ### `adopt_server` is a hand-edited key
 
@@ -143,11 +225,26 @@ build has no `__pycache__` at all, and a full custom scan of
 is a developer-machine problem and not, on this evidence, something a beta player
 meets.
 
-**NOT VERIFIED and worth knowing before the beta opens:** an on-disk scan is not
-behavioural detection. A packaged launcher that actually calls
-`CreateRemoteThread` into the game process at runtime could still be stopped, and
-nothing here has run a packaged save. That is the test, and it needs a real
-frozen build taking a real turn.
+**The behavioural half is now done too, 28 September 2026.** An on-disk scan is
+not behavioural detection, so the open question was whether Defender would stop
+a packaged launcher that actually calls `CreateRemoteThread` into the game
+process at runtime. A frozen v0.1.3 build took a real multiplayer turn against a
+throwaway galaxy, the capture fired, the turn was sent, and there was **no
+Defender dialog, no quarantine and no interference of any kind**.
+
+`trigger_save` is reached only from the multiplayer turn loop, which is why the
+test had to be a multiplayer turn: the Save button in single player goes over
+HTTP through `gamectl` and never touches the injection. Anything short of a
+packaged multiplayer turn would have tested the wrong path and come back clean
+for the wrong reason.
+
+That build also carries **no `__pycache__` and no `.pyc` anywhere**, checked
+directly rather than inferred, so the static half holds for a current build and
+not only for the v0.1.2 one that was scanned in September.
+
+What is still unknown is other people's machines. This is one Defender install
+with one configuration and no third-party AV in the way. A beta report of "it
+will not save" should be read with this near the top of the list.
 
 A dev-side fix that needs no antivirus exclusion, and which is **not done**: stop
 writing bytecode for these tools, with `PYTHONDONTWRITEBYTECODE` or

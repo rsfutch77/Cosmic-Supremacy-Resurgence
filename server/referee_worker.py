@@ -344,6 +344,96 @@ def port_holder(port: int = STUB_PORT):
     return pid, image
 
 
+def process_command_line(pid: int):
+    """The full command line of `pid`, or None when it cannot be read.
+
+    None on every failure, because the one caller treats "cannot tell" as "do
+    not touch it". `tasklist` is not enough for this: it reports an image name,
+    and every Python on this machine is `python.exe`, including another agent's
+    and the operator's.
+    """
+    if not WINDOWS:
+        return None
+    try:
+        out = subprocess.run(
+            ['powershell', '-NoProfile', '-NonInteractive', '-Command',
+             f'(Get-CimInstance Win32_Process -Filter '
+             f'"ProcessId={int(pid)}").CommandLine'],
+            capture_output=True, text=True, timeout=30,
+            creationflags=_NO_WINDOW).stdout
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return None
+    return (out or '').strip() or None
+
+
+def is_our_cs_server(pid: int) -> bool:
+    """Whether `pid` is a Python running this checkout's `cs_server.py`.
+
+    Asked before anything is ended, and false whenever the answer cannot be
+    established. A pid recorded in a status file hours ago may since have been
+    handed by Windows to an unrelated process, and a worker that killed it on
+    the strength of a number in a file would be committing a worse version of
+    the error this whole path exists to prevent.
+
+    The check is the command line naming `cs_server.py` **in this checkout**.
+    Another checkout's server on this port is still a server whose data
+    directory this worker cannot ask about, so it is a stranger and is refused
+    like one, however familiar its script name looks.
+    """
+    line = process_command_line(pid)
+    if not line:
+        return False
+    want = os.path.normcase(os.path.join(HERE, 'cs_server.py'))
+    return want in os.path.normcase(line)
+
+
+def end_left_over(pid: int, port: int = STUB_PORT, log=print) -> bool:
+    """End a `cs_server` a previous worker of this galaxy left behind, and say
+    whether the port came free.
+
+    A worker killed outright runs no cleanup, so the server it started outlives
+    it and goes on holding the port. Until this existed the replacement worker
+    refused to start and named a `taskkill` for the operator to run, which is
+    correct and is also a galaxy that stays down until somebody reads a log. On
+    an unattended machine the likeliest way to get here is somebody closing a
+    console window, which is not an event that comes with anyone looking.
+
+    Ending it is not the guess that `ensure_stub_server` refuses to make. That
+    refusal is about a server whose data directory cannot be asked for; this
+    process is one this galaxy's own worker started and recorded, it is
+    verified to be this checkout's `cs_server.py`, and it is about to be
+    replaced by one started here, so what directory it was using stops
+    mattering the moment it is gone.
+
+    **What this can interrupt.** A launcher on this machine that was told to
+    share this server, see `adopt_server`, is using it too, and ending it
+    mid-capture loses that turn. The galaxy being stalled is the worse of the
+    two, and an operator who wants the other trade has `--adopt-server`, which
+    is answered before this is reached.
+
+    The tree is killed by pid, never by image name: a kill by name reaches
+    every Python on the machine. Then it waits, for the reason `stop` waits.
+    Freeing a port takes a moment and a caller that looked immediately would
+    find it still answering and conclude a stranger had it.
+    """
+    log(f'  worker: port {port} is held by pid {pid}, which is the cs_server '
+        f'a previous worker of this galaxy started and did not live to stop. '
+        f'Its command line names this checkout, so it is ended here rather '
+        f'than left for an operator to find.')
+    if WINDOWS:
+        subprocess.run(['taskkill', '/T', '/F', '/PID', str(pid)],
+                       capture_output=True, creationflags=_NO_WINDOW)
+    end = time.time() + 10
+    while time.time() < end and port_listening(port, timeout=0.5):
+        time.sleep(0.1)
+    if port_listening(port, timeout=0.5):
+        log(f'  worker: WARNING pid {pid} was ended and port {port} is still '
+            f'held, so something else is on it as well')
+        return False
+    log(f'  worker: port {port} is free again')
+    return True
+
+
 class StubServer:
     """`cs_server.py` started by the worker, against a data directory it named.
 
@@ -470,38 +560,66 @@ def ensure_stub_server(data_dir: str, port: int = STUB_PORT, adopt: bool = False
     the default would be to guess.
 
     `left_over` is the pid a previous worker of this galaxy recorded for the
-    server it started. When the holder is that pid the refusal says so and
-    names the one command that clears it, because a worker killed outright runs
-    no cleanup and the server it started outlives it. Without that line the
-    operator is told a stranger holds the port about a process this code
-    started itself.
+    server it started. A worker killed outright runs no cleanup, so that server
+    outlives it and goes on holding the port. That case is **ended and
+    replaced** rather than refused, because it is not the guess the paragraph
+    above declines to make: the process is one this galaxy's own worker started
+    and wrote down, and it is about to be replaced by one started here, so what
+    directory it was given stops mattering the moment it is gone. See
+    `end_left_over`, and `is_our_cs_server` for why a recorded pid is checked
+    against what is running under it before anything is ended.
+
+    A fourth case, and it is the reason the check exists: the recorded pid
+    matches but the process is somebody else's, because Windows reused the
+    number. That is a stranger with a familiar pid and is refused like any
+    other stranger.
     """
     if port_listening(port):
         held = port_holder(port)
         who = 'something this worker did not start'
         if held:
             who = f'pid {held[0]}' + (f' ({held[1]})' if held[1] else '')
-        if held and left_over and held[0] == left_over and not adopt:
+        # The pid this galaxy's own previous worker recorded for the server it
+        # started. `adopt` is answered before this, so an operator who would
+        # rather share a leftover than replace it still can.
+        mine = bool(held) and bool(left_over) and held[0] == left_over \
+            and not adopt
+        # A pid alone is not evidence, because Windows reuses them. What is
+        # still answering to that number has to be this checkout's cs_server
+        # before anything is ended.
+        if mine and is_our_cs_server(held[0]):
+            if not end_left_over(held[0], port, log=log):
+                raise ServerRefused(
+                    f'port {port} was held by {who}, the cs_server a previous '
+                    f'worker of this galaxy left behind. It was ended and the '
+                    f'port is still held, so something else is on it too. '
+                    f'Look with: netstat -ano | findstr :{port}')
+            # Falls through to start a fresh one, deliberately rather than
+            # returning: what this worker needs is a server whose data
+            # directory it named, and the port is now free for exactly that.
+        elif mine:
             raise ServerRefused(
-                f'port {port} is held by {who}, which is the cs_server a '
-                f'previous worker of this galaxy started and did not live to '
-                f'stop. Nothing is wrong with it except that this worker '
-                f'cannot ask it what data directory it was given. End it '
-                f'with: taskkill /F /PID {held[0]}')
-        if adopt:
+                f'port {port} is held by {who}. A previous worker of this '
+                f'galaxy recorded that pid for the cs_server it started, but '
+                f'what holds it now is not this checkout\'s cs_server, so the '
+                f'number has been reused and this is a stranger. Stop it '
+                f'yourself, or point --data-dir at its data directory and '
+                f'pass --adopt-server.')
+        elif adopt:
             log(f'  worker: port {port} is held by {who}; adopting it because '
                 f'--adopt-server was given. Captures are collected from '
                 f'{os.path.join(os.path.abspath(data_dir), "saves")}, and if '
                 f'that is not where this server writes then every turn will '
                 f'compute and then be lost.')
             return None
-        raise ServerRefused(
-            f'port {port} is already held by {who}. A capture arrives over '
-            f'that port and lands in whatever data directory its server was '
-            f'given, which nothing in the protocol can ask it. Reusing it is '
-            f'how a turn is computed in full and then reported missing. Stop '
-            f'that server, or point --data-dir at its data directory and pass '
-            f'--adopt-server.')
+        else:
+            raise ServerRefused(
+                f'port {port} is already held by {who}. A capture arrives over '
+                f'that port and lands in whatever data directory its server was '
+                f'given, which nothing in the protocol can ask it. Reusing it is '
+                f'how a turn is computed in full and then reported missing. Stop '
+                f'that server, or point --data-dir at its data directory and pass '
+                f'--adopt-server.')
     server = StubServer(data_dir, port=port, work_dir=work_dir, log=log)
     server.start()
     if not server.wait_until_listening():

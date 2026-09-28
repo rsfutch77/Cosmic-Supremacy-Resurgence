@@ -398,22 +398,28 @@ def test_stub_server():
         check('and says why reusing it is not an option',
               refused and 'data directory' in refused, True)
 
-        # A worker that was killed rather than stopped leaves its server
-        # running, and the next one must not describe its own predecessor as a
-        # stranger. The pid is the one holding the socket, which on a
-        # virtualenv is not the pid Popen returned.
-        mine = None
+        # The recorded pid matches and the process under it is this test, not
+        # a cs_server. That is what a reused pid looks like, and it is the
+        # case the safety check exists for: without it the worker would end a
+        # process picked by a number in a file.
+        reused = None
         try:
             rw.ensure_stub_server(tmpdir('data'), port=port,
                                   left_over=os.getpid(), log=lambda *a: None)
         except rw.ServerRefused as exc:
-            mine = str(exc)
-        check('a server a previous worker left is recognised',
-              mine and 'previous worker of this galaxy' in mine, True)
-        check('and the refusal says what to run about it',
-              mine and f'taskkill /F /PID {os.getpid()}' in mine, True)
-        check('while a stranger is still described as one',
+            reused = str(exc)
+        check('a recorded pid that is now somebody else is refused',
+              reused is not None, True)
+        check('and the refusal says the number was reused',
+              reused and 'reused' in reused, True)
+        check('and this process is still running', os.getpid() > 0, True)
+        check('while a stranger with no recorded pid is described as one',
               'previous worker of this galaxy' in refused, False)
+        # Fails if the check were satisfied by the script name alone. This
+        # process is a Python running a file in this project and is still not
+        # a cs_server.
+        check('the test itself is not mistaken for one',
+              rw.is_our_cs_server(os.getpid()), False)
 
         # The operator who knows whose server it is says so, and is not
         # refused. Without this the flag would be untested in the only
@@ -445,6 +451,52 @@ def test_stub_server():
         server.stop()
     check('and it stops with the worker', server.alive(), False)
     check('leaving the port free', rw.port_listening(port), False)
+
+    # ── a worker killed outright, and the one that comes after it ────────────
+    # The whole point: a console window closed at 22:35 left a cs_server
+    # holding 8888, and until this the replacement refused to start and named
+    # a taskkill for somebody to run. Nobody is watching an unattended
+    # machine, so the galaxy stayed down.
+    print('  recovering a server a killed worker left behind')
+    data, work = tmpdir('data'), tmpdir('work')
+    orphan = rw.ensure_stub_server(data, port=port, work_dir=work,
+                                   log=lambda *a: None)
+    check('a server is up to be orphaned', rw.port_listening(port), True)
+    stale = orphan.listener_pid
+    check('and its listener pid was recorded', isinstance(stale, int), True)
+    # Fails if the check cannot recognise a cs_server this code just started,
+    # which would make the recovery below dead and every other check here pass
+    # for the wrong reason.
+    check('which is recognisable as ours', rw.is_our_cs_server(stale), True)
+
+    # The worker is now gone without running `stop`. Nothing holds `orphan`
+    # any more; only the pid in the status file names it.
+    said, log = lines()
+    replacement = None
+    try:
+        replacement = rw.ensure_stub_server(data, port=port, work_dir=work,
+                                            left_over=stale, log=log)
+        check('the next worker starts rather than refusing',
+              replacement is not None, True)
+        check('it said it was ending the leftover',
+              any('did not live to stop' in x for x in said), True)
+        check('and that the port came free',
+              any('is free again' in x for x in said), True)
+        check('the orphan is gone', rw.is_our_cs_server(stale), False)
+        check('the port is held by the new server',
+              rw.port_listening(port), True)
+        # Fails if the replacement adopted the orphan instead of starting one,
+        # which would leave the worker guessing about a save directory again.
+        check('which is a server this worker started',
+              replacement.listener_pid != stale, True)
+        check('and writes where this worker said',
+              replacement.save_dir, os.path.join(data, 'saves'))
+    finally:
+        if replacement is not None:
+            replacement.stop()
+        if rw.port_listening(port):
+            rw.end_left_over(stale, port, log=lambda *a: None)
+    check('and the port is free at the end', rw.port_listening(port), False)
 
 
 # ── the machine must not sleep ───────────────────────────────────────────────
