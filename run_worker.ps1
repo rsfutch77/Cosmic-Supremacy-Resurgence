@@ -148,9 +148,9 @@ if ($WriteTaskXml) {
     Write-Host ""
     Write-Host "The task starts at logon, not at boot: computing a turn launches" -ForegroundColor Yellow
     Write-Host "the game client, which needs a desktop, and a task that runs" -ForegroundColor Yellow
-    Write-Host "whether or not a user is logged on has none. For a reboot to" -ForegroundColor Yellow
-    Write-Host "reach the galaxy with nobody there, set this account to log on" -ForegroundColor Yellow
-    Write-Host "automatically: control userpasswords2." -ForegroundColor Yellow
+    Write-Host "whether or not a user is logged on has none. So the galaxy" -ForegroundColor Yellow
+    Write-Host "resumes when you log in, and until then players are shown" -ForegroundColor Yellow
+    Write-Host "that its turns have stopped." -ForegroundColor Yellow
     exit 0
 }
 

@@ -787,6 +787,35 @@ def multiplayer_file(data_dir: str):
     return _read_json(os.path.join(data_dir, MP_CONFIG))
 
 
+def adopted_server(data_dir: str):
+    """Where an already-running server keeps its captures, or None.
+
+    `multiplayer.json`'s `adopt_server`: the saves directory of a server this
+    launcher did not start and is allowed to share. Absent, which is the usual
+    case, the launcher refuses a held port rather than reusing one blindly.
+
+    That refusal is right and stays: a capture lands in whatever directory the
+    server that took it was started with, there is no message in the protocol
+    to ask it which, and reusing one silently sent every turn to a folder this
+    launcher never read. What the refusal cannot know is the case where the
+    operator knows perfectly well whose server it is, which on a machine that
+    is both the referee and a player is every time: the unattended worker
+    holds the port and writes to its own saves directory. `referee_worker`
+    has the same escape for the same reason, `--adopt-server` with
+    `--save-dir`.
+
+    So this is not a way round the guard, it is the operator supplying the one
+    fact the protocol cannot: not "share it" but "share it, and it writes
+    here". A wrong directory fails the same way the bug did, so it is checked
+    and refused rather than believed.
+    """
+    cfg = multiplayer_file(data_dir) or {}
+    where = cfg.get("adopt_server")
+    if not where or not isinstance(where, str):
+        return None
+    return os.path.abspath(os.path.expandvars(os.path.expanduser(where)))
+
+
 def multiplayer_config(data_dir: str):
     """{"store": <dir or URL>} for this galaxy, or None.
 
@@ -983,7 +1012,13 @@ JOINED_VERSION = 2
 
 # The directory listed when nothing names another one. A player who has never
 # opened a config file gets this, which is the point of the Galaxies page.
-BETA_DIRECTORY = "firebase://cs-resurgence"
+#
+# The relay rather than `firebase://cs-resurgence`, which is the same galaxies
+# read the other way: reading Firestore directly authenticates as the project,
+# and a player is not the project. It is the Cloud Run host rather than the
+# cloudfunctions.net one because the two are gated separately and only this one
+# is open to callers who are not members of the project.
+BETA_DIRECTORY = "https://relay-r5t6py5oxa-uw.a.run.app"
 
 # Where a join request goes in a galaxy that is a folder. A store that knows its
 # own route is asked instead: see send_join_request.
@@ -1033,19 +1068,25 @@ def directory_to_list(cfg, mp_cfg=None):
     return directory_spec(cfg, mp_cfg)
 
 
-def open_galaxy_directory(spec: str):
+def open_galaxy_directory(spec: str, token=None):
     """The directory named by `spec`, or None when this build cannot open one.
 
     `galaxy_directory` sits in server\\ beside the turn machinery and is reached
     the same way, so multiplayer_modules() is what puts that directory on
     sys.path in a checkout. A build frozen without it lists nothing rather than
     failing to start, which is the rule the whole multiplayer half follows.
+
+    The token is asked for rather than assumed, the way `open_player_store`
+    asks: a launcher running against a `galaxy_directory` that predates the
+    relay listing still has to list a folder, without a TypeError.
     """
     multiplayer_modules()
     try:
         import galaxy_directory
     except ImportError:
         return None
+    if token is not None and _takes_token(galaxy_directory.open_directory):
+        return galaxy_directory.open_directory(spec, token=token)
     return galaxy_directory.open_directory(spec)
 
 
@@ -1769,7 +1810,16 @@ def galaxy_rows(data_dir: str, spec, player: "str | None" = None):
     rows, problem = [], None
     if spec:
         try:
-            directory = open_galaxy_directory(spec)
+            # The same rule a store follows, and asked the same way so that the
+            # `auth` key which points the launcher at a local emulator answers
+            # for the listing as well as for the galaxy: an https directory is
+            # the relay and wants this install's identity, a folder does not
+            # read one, and a player who is offline should not be waiting on a
+            # sign-up to see the galaxy they already have.
+            want = dict(multiplayer_file(data_dir) or {})
+            want["store"] = spec
+            token = player_token(data_dir) if store_wants_token(want) else None
+            directory = open_galaxy_directory(spec, token=token)
             if directory is None:
                 problem = ("This build cannot list galaxies: the directory it "
                            "would read is not in it.")
@@ -2222,6 +2272,8 @@ class Launcher:
         # foreign server holds it, which is a state multiplayer cannot run in:
         # the turn would be captured into that server's data directory.
         self.server_ok = False
+        # Set when a server this launcher did not start is being shared.
+        self.save_dir = None
         self.log_visible = False
         self.buttons: "list" = []
         self.game_root = self.galaxy_root = self.data_dir = None
@@ -2471,6 +2523,25 @@ class Launcher:
             # a server that was not this one. Half-working that way is worse
             # than refusing, so this refuses.
             ours = stub_server_answers(host, port)
+            adopt = adopted_server(self.data_dir)
+            if ours and adopt and os.path.isdir(adopt):
+                # The operator has said whose server it is and where it
+                # writes, which is the one fact the protocol cannot supply.
+                # On a machine that is both the referee and a player this is
+                # every time: the unattended worker holds the port.
+                self.save_dir = adopt
+                self.server_ok = True
+                self.set_ready_status(
+                    f"sharing the server on {host}:{port}", OK)
+                self.say(f"port {port} is held by a server this launcher did "
+                         f"not start; sharing it as multiplayer.json asks")
+                self.say(f"captures are collected from {adopt}")
+                return
+            if ours and adopt:
+                # A directory that is not there fails exactly the way the
+                # bug did, so it is refused rather than believed.
+                self.say(f"adopt_server names {adopt}, which is not a "
+                         f"directory; not sharing the server")
             self.set_ready_status(f"port {port} is held by another server", BAD)
             self.say(f"port {port} is in use by "
                      + ("a server speaking our protocol" if ours
@@ -3500,7 +3571,9 @@ class Launcher:
         self.set_status(f"Multiplayer , {civ}", OK)
         self._show_controls(True)
 
-        save_dir = os.path.join(self.data_dir, "saves")
+        # Where this launcher's captures land, which is not its own saves
+        # directory when it is sharing a server it did not start.
+        save_dir = self.save_dir or os.path.join(self.data_dir, "saves")
         os.makedirs(save_dir, exist_ok=True)
 
         def work():
