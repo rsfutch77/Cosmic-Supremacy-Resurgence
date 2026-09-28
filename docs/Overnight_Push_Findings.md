@@ -49,9 +49,11 @@ Each of these is a thing the code claims and nobody has watched happen.
   galaxies, reads state, and pulls a turn blob through a signed URL, measured
   against the deployed service. What is unproven is two installs disagreeing
   about a seat, and that needs a second machine or a faked data directory.
-- [ ] **K1, the live half.** An injected galaxy has not been loaded since the
-  seat-order fix, and no colony ship has been watched completing after a join.
-  Needs the client and somebody watching it.
+- [x] **K1, the live half.** Done 28 September, in a real client over 60 turns
+  of each galaxy. Both colonisations completed on the same turn to the same
+  civ with the joiner present, and ships under orders never diverged. The
+  contested planet took 52 turns, so the length of the run was what made it
+  mean anything. Measurements are in the plan under K1.
 
 **Two things that were listed here and do not belong.** Neither is waiting on a
 person; both are unwritten code, and filing them as verifications made the
