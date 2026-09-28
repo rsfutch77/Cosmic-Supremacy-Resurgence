@@ -321,12 +321,92 @@ class FirebaseGalaxyDirectory:
         self.fs.collection(self.prefix).document(gid).set(fields, merge=True)
 
 
-def open_directory(spec: str):
-    """A directory from a folder path or a `firebase://project`, whichever.
+class HttpGalaxyDirectory:
+    """Galaxies from the relay, for a launcher that holds no Google credential.
+
+    `FirebaseGalaxyDirectory` authenticates as the project and reads the
+    collection directly. A player is not the project, so the beta's list has to
+    come from the relay, which reads that collection on their behalf and serves
+    each galaxy the fields it would serve about itself anyway.
+
+    A row's store is a URL back through this same relay, so a galaxy opened
+    from this list is played over the door it was listed through rather than
+    over one the player would have no credential for.
+    """
+
+    def __init__(self, base: str, timeout: float = 30.0, token=None):
+        self.base = base.rstrip('/')
+        # An HttpTurnStore for its transport alone. The bearer header, the rule
+        # that drops it across a redirect and the convention that 404 is an
+        # answer are the same over this route as over a galaxy's, and a second
+        # copy of them is a second thing to keep right.
+        self.http = turn_store.HttpTurnStore(self.base, timeout=timeout,
+                                             token=token)
+
+    def __repr__(self):
+        return f'HttpGalaxyDirectory({self.base})'
+
+    def _spec(self, gid: str) -> str:
+        import urllib.parse
+        return f'{self.base}/{urllib.parse.quote(gid)}'
+
+    def _one(self, row, player):
+        row = row or {}
+        gid = row.get('id')
+        state = row if 'turn' in row else None
+        return _row(gid, row.get('name') or gid, row.get(turn_store.STATUS_KEY)
+                    or OPEN, state, player, self._spec(gid))
+
+    # ── reading ──────────────────────────────────────────────────────────────
+    def galaxies(self, player: str = None) -> list:
+        listing = self.http.get_json('/') or {}
+        return [self._one(row, player) for row in listing.get('galaxies', [])]
+
+    def galaxy(self, gid: str, player: str = None):
+        """One galaxy, found by listing them.
+
+        The listing rather than that galaxy's own `/state`, which would be the
+        smaller call, because `/state` is the store's answer and carries no
+        name: the name is the directory's field. A row labelled by its id when
+        the operator gave it one would be this directory quietly losing
+        something the others keep.
+        """
+        for g in self.galaxies(player=player):
+            if g.id == gid:
+                return g
+        return None
+
+    def store(self, gid: str):
+        return turn_store.open_store(self._spec(gid),
+                                     token=self.http.token)
+
+    # ── writing ──────────────────────────────────────────────────────────────
+    # Naming a galaxy and opening or closing it are the operator's, and the
+    # relay refuses them for the same reason it refuses the referee's routes.
+    # Refused here rather than left off the class, so a caller that reaches for
+    # them is told which directory it is holding.
+    def register(self, gid: str, name: str = None, status: str = OPEN,
+                 store: str = None):
+        raise NotImplementedError(
+            'a galaxy is registered by its operator, not through the relay')
+
+    def set_status(self, gid: str, status: str, reason: str = None) -> None:
+        raise NotImplementedError(
+            'a galaxy is opened and closed by its operator, not through the '
+            'relay')
+
+
+def open_directory(spec: str, token=None):
+    """A directory from a folder, a `firebase://project`, or a relay URL.
 
     The mirror of `open_store`, and for the same reason: a caller is handed a
-    string and never learns which kind it got.
+    string and never learns which kind it got. `token` follows the same rule it
+    follows there, reaching the HTTP directory only and being ignored rather
+    than refused by the other two, so a caller holding an identity does not
+    have to know which kind its config named.
     """
+    if spec.startswith('http://') or spec.startswith('https://'):
+        return HttpGalaxyDirectory(spec, token=token)
     if spec.startswith('firebase://'):
         import firebase_store
         project, _galaxy, bucket, prefix = firebase_store.parse_spec(spec)

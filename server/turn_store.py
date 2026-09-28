@@ -909,6 +909,17 @@ class HttpTurnStore:
             raise
         return json.loads(body) if want_json else body
 
+    def get_json(self, path):
+        """One JSON route on this service, or None when it answers 404.
+
+        Public because a galaxy directory speaks to the same service under the
+        same identity. Without it that directory would carry its own copy of
+        the bearer header, the rule that drops it across a redirect, and the
+        convention that 404 is an answer rather than a fault, and three copies
+        of a rule are three chances for one of them to drift.
+        """
+        return self._get(path)
+
     def _blob(self, path, limit: int = None):
         """A blob route's bytes, in whichever form the far end serves them.
 

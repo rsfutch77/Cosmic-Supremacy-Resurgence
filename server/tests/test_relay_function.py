@@ -1,27 +1,25 @@
 """
 test_relay_function.py , what the relay lets a player do, and what it does not
 ==============================================================================
-    python functions/emulators.py --only firestore,storage,auth --print-env
-    cd functions && firebase emulators:start --only firestore,storage,auth \
-        --config .firebase.emulators.json --project demo-cs-resurgence
+    python functions/emulators.py --only firestore,storage,auth
 
     set FIRESTORE_EMULATOR_HOST=127.0.0.1:8080
     set STORAGE_EMULATOR_HOST=http://127.0.0.1:9199
     set FIREBASE_AUTH_EMULATOR_HOST=127.0.0.1:9099
     server\\.venv\\Scripts\\python.exe server\\tests\\test_relay_function.py
 
-`--print-env` resolves each port before anything binds and writes the config
-the second line runs; the ports it prints are the three variables.
+`emulators.py` resolves each port before anything binds and prints the three
+variables. Add `--print-env` to have it resolve and print without starting.
 
-**The project has to be named and `emulators.py` does not name one.** Without
-`--project`, the CLI takes the default out of `functions/.firebaserc`, which is
-the live project `cs-resurgence`, and the Auth emulator then mints tokens whose
-`aud` is that. This test is a `demo-` project, which the emulator suite refuses
-to let reach a real one, so every token is refused as minted for another
-project and the run fails at "a real emulator token is accepted" with nothing
-in the message about the project. The store equivalence test does not care,
-because it mints no tokens, which is why the two runs disagree about whether
-the same emulator is usable.
+**The project has to be named**, and `emulators.py` names `demo-cs-resurgence`,
+which is what this test runs as. Started without a `--project`, the CLI takes
+the default out of `functions/.firebaserc`, which is the live project
+`cs-resurgence`, and the Auth emulator then mints tokens whose `aud` is that.
+The emulator suite refuses to let a `demo-` project reach a real one, so every
+token is refused as minted for another project and the run fails at "a real
+emulator token is accepted" with nothing in the message about the project. The
+store equivalence test does not care, because it mints no tokens, which is why
+the two runs disagree about whether the same emulator is usable.
 
 The equivalence test proves three stores agree. It cannot prove anything about
 this, and H7 recorded why: every run of it, on the emulator and against the live
@@ -91,6 +89,7 @@ os.environ['CS_RELAY_BUCKET'] = BUCKET
 os.environ['CS_RELAY_MAX_BYTES'] = '2048'
 os.environ.setdefault('FIREBASE_AUTH_EMULATOR_HOST', AUTH_HOST)
 
+import galaxy_directory                                         # noqa: E402
 import save_parser as sp                                        # noqa: E402
 import turn_store                                               # noqa: E402
 from firebase_store import FirebaseTurnStore                     # noqa: E402
@@ -253,10 +252,13 @@ def main():
     player_c = HttpTurnStore(base, token=lambda: token_c)
     anonymous = HttpTurnStore(base)
 
+    root = f'http://127.0.0.1:{httpd.server_address[1]}'
+
     try:
         run(referee, galaxy, base, player_a, player_b, player_c, anonymous,
             {'a': (uid_a, token_a), 'b': (uid_b, token_b),
              'c': (uid_c, token_c), 'd': (uid_d, token_d)})
+        run_catalog(referee, galaxy, root, token_a, token_c)
     finally:
         httpd.shutdown()
         httpd.server_close()
@@ -550,6 +552,83 @@ def run(referee, galaxy, base, player_a, player_b, player_c, anonymous, ids):
               os.environ['STORAGE_EMULATOR_HOST'].rstrip('/')), True)
 
     run_joins(referee, galaxy, call, ids)
+
+
+def run_catalog(referee, galaxy, root, token_a, token_c):
+    """The one route that is about no galaxy, and the directory over it.
+
+    A player holds no Google credential, so the collection the referee streams
+    is unreadable to them and the listing is the only way they learn a galaxy
+    exists. What it may say about a galaxy is what `/state` may say, and this
+    is where that stays true.
+    """
+    def call(method, path, token=None):
+        headers = {'Authorization': f'Bearer {token}'} if token else {}
+        return relay.handle(method, path, headers, b'')
+
+    print('the listing, which is about no galaxy')
+    # Fails if the listing were open where every other route is closed, which
+    # would make the id of every galaxy readable by anyone who found the URL.
+    check('a listing with no token is refused', call('GET', '/')[0], 401)
+    check('and one with a token that is not a token is refused',
+          call('GET', '/', 'not-a-token')[0], 401)
+    code, _headers, body = call('GET', '/', token_a)
+    check('a signed-in caller gets a listing', code, 200)
+    rows = json.loads(body)['galaxies']
+    mine = [r for r in rows if r['id'] == galaxy]
+    check('the galaxy the referee started is in it', len(mine), 1)
+    row = mine[0]
+    # Fails if the listing read the galaxy document rather than the same
+    # allowlist `/state` reads. The seat map is in that document, and a listing
+    # that carried it would hand every player the uid to civ mapping that the
+    # galaxy's own state is filtered to protect.
+    check('a row carries no seat map', 'seats' in row, False)
+    check('and not the record of who was seated when',
+          turn_store.JOINED_KEY in row, False)
+    check('a row says which galaxy it is', row.get('id'), galaxy)
+    check('and carries the turn the referee published',
+          row.get('turn'), referee.state()['turn'])
+
+    print('the directory a launcher holds over it')
+    directory = galaxy_directory.open_directory(root, token=lambda: token_a)
+    check('an https spec opens the HTTP directory',
+          type(directory).__name__, 'HttpGalaxyDirectory')
+    listed = {g.id: g for g in directory.galaxies(player='DemoPlayer')}
+    check('it lists the galaxy', galaxy in listed, True)
+    g = listed[galaxy]
+    check('a row is joined for a player who holds a civ', g.joined, True)
+    check('and not for one who does not',
+          directory.galaxy(galaxy, player='Nobody').joined, False)
+    check('players is how many civs the galaxy has',
+          g.players, len(referee.state()['civs']))
+    check('the row names a store back through this same relay',
+          g.store, f'{root}/{galaxy}')
+    # Fails if the spec a row hands out were one the player cannot open: the
+    # whole point of listing through the relay is that what is listed is also
+    # what is playable.
+    played = directory.store(galaxy)
+    check('and that store reads the same turn the row showed',
+          played.state()['turn'], g.turn)
+    check('galaxy() answers None for one that is not there',
+          directory.galaxy('no-such-galaxy'), None)
+
+    print('what a player may not do to the listing')
+    check('a POST to the listing is not a route',
+          call('POST', '/', token_a)[0], 404)
+    # Naming a galaxy and opening or closing it are the operator's, and a
+    # directory that quietly did nothing would be worse than one that refuses.
+    check('registering through the relay is refused',
+          type(refusal(directory.register, galaxy)).__name__,
+          'NotImplementedError')
+    check('and so is opening or closing a galaxy',
+          type(refusal(directory.set_status, galaxy, 'closed')).__name__,
+          'NotImplementedError')
+    # Fails if the listing trusted the caller rather than the token: a second
+    # identity must see the same galaxies and be joined to none of them.
+    other = galaxy_directory.open_directory(root, token=lambda: token_c)
+    check('another signed-in caller sees the same galaxies',
+          sorted(r.id for r in other.galaxies()),
+          sorted(r.id for r in directory.galaxies()))
 
 
 def run_joins(referee, galaxy, call, ids):

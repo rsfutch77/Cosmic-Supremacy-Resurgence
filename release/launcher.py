@@ -1012,7 +1012,13 @@ JOINED_VERSION = 2
 
 # The directory listed when nothing names another one. A player who has never
 # opened a config file gets this, which is the point of the Galaxies page.
-BETA_DIRECTORY = "firebase://cs-resurgence"
+#
+# The relay rather than `firebase://cs-resurgence`, which is the same galaxies
+# read the other way: reading Firestore directly authenticates as the project,
+# and a player is not the project. It is the Cloud Run host rather than the
+# cloudfunctions.net one because the two are gated separately and only this one
+# is open to callers who are not members of the project.
+BETA_DIRECTORY = "https://relay-r5t6py5oxa-uw.a.run.app"
 
 # Where a join request goes in a galaxy that is a folder. A store that knows its
 # own route is asked instead: see send_join_request.
@@ -1062,19 +1068,25 @@ def directory_to_list(cfg, mp_cfg=None):
     return directory_spec(cfg, mp_cfg)
 
 
-def open_galaxy_directory(spec: str):
+def open_galaxy_directory(spec: str, token=None):
     """The directory named by `spec`, or None when this build cannot open one.
 
     `galaxy_directory` sits in server\\ beside the turn machinery and is reached
     the same way, so multiplayer_modules() is what puts that directory on
     sys.path in a checkout. A build frozen without it lists nothing rather than
     failing to start, which is the rule the whole multiplayer half follows.
+
+    The token is asked for rather than assumed, the way `open_player_store`
+    asks: a launcher running against a `galaxy_directory` that predates the
+    relay listing still has to list a folder, without a TypeError.
     """
     multiplayer_modules()
     try:
         import galaxy_directory
     except ImportError:
         return None
+    if token is not None and _takes_token(galaxy_directory.open_directory):
+        return galaxy_directory.open_directory(spec, token=token)
     return galaxy_directory.open_directory(spec)
 
 
@@ -1798,7 +1810,16 @@ def galaxy_rows(data_dir: str, spec, player: "str | None" = None):
     rows, problem = [], None
     if spec:
         try:
-            directory = open_galaxy_directory(spec)
+            # The same rule a store follows, and asked the same way so that the
+            # `auth` key which points the launcher at a local emulator answers
+            # for the listing as well as for the galaxy: an https directory is
+            # the relay and wants this install's identity, a folder does not
+            # read one, and a player who is offline should not be waiting on a
+            # sign-up to see the galaxy they already have.
+            want = dict(multiplayer_file(data_dir) or {})
+            want["store"] = spec
+            token = player_token(data_dir) if store_wants_token(want) else None
+            directory = open_galaxy_directory(spec, token=token)
             if directory is None:
                 problem = ("This build cannot list galaxies: the directory it "
                            "would read is not in it.")

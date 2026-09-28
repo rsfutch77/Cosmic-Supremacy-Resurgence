@@ -368,14 +368,58 @@ is out of scope here.
   `roles/iam.serviceAccountTokenCreator` granted to the runtime service account
   **on itself**. Both commands are in `functions/deploy.py`'s docstring.
 
-  **Not deployed.** That is the operator's call. The deploy cannot reach Hosting
-  for three independent reasons: `functions/firebase.json` carries no `hosting`
-  key and `deploy.py --check` refuses if one appears, `--only functions:relay`
-  names one function of one codebase, and the CLI reads only the config in the
-  directory it runs from, which is never `site/`.
+  **Deployed, 27 September 2026**, to `us-west1`. The deploy could not reach
+  Hosting for three independent reasons: `functions/firebase.json` carries no
+  `hosting` key and `deploy.py --check` refuses if one appears,
+  `--only functions:relay` names one function of one codebase, and the CLI reads
+  only the config in the directory it runs from, which is never `site/`.
+  Container images are on a three-day cleanup policy so they stop accumulating.
+
+  Measured against the live service with an anonymous token and a throwaway
+  galaxy, since deleted: `/state` answered 200, `/turn/11` answered 302 to a
+  `storage.googleapis.com` URL carrying `X-Goog-Signature`, and following it
+  returned 12,908 bytes that parse as a save blob. The signed URL is what proves
+  the `serviceAccountTokenCreator` grant, because nothing else in the relay
+  needs it.
+
+  **A deployed function has two hostnames and they are gated separately.** The
+  `cloudfunctions.net` URL the deploy prints answers 401 with an HTML body,
+  which is Cloud Run refusing the request before any of this code runs: that
+  hostname checks a function-level IAM policy which is empty. The `run.app`
+  hostname checks the Cloud Run policy, which `firebase deploy` had already set
+  to `allUsers: roles/run.invoker`, and answers from the relay itself. So the
+  beta reaches the relay at its `run.app` hostname and no permission had to be
+  granted to make that work. Diagnosing this the other way round cost a wrong
+  guess: an HTML 401 was read as a missing invoker binding, and the binding was
+  already there.
 
   **Done when:** a launcher holding no Google Cloud credentials plays a turn in a
   galaxy hosted on Firebase.
+
+- [x] **H8. A player can find a galaxy without being the project.** The relay
+  answered every question about a galaxy a player already knew the id of, and no
+  question about which galaxies exist. The launcher's default directory was
+  `firebase://cs-resurgence`, which builds a `firestore.Client` and streams the
+  collection as an administrator, so the Galaxies page worked on the operator's
+  machine and could not have worked on anyone else's. The same shape of gap as
+  H7 and in the half H7 did not cover.
+
+  `GET /` on the relay is the one route that is about no galaxy. It serves each
+  galaxy the fields `/state` serves plus `id` and `name`, through the same
+  allowlist and the same private-field filter, so a galaxy says the same about
+  itself in a listing as it does when asked directly. Signed in like every other
+  route: anonymous sign-up is open, so the gate costs a stranger nothing and
+  keeps one rule rather than two.
+
+  `HttpGalaxyDirectory` is the launcher's side of it, and the row it hands back
+  names a store back through the same relay, so what is listed is also what is
+  playable. Registering a galaxy and opening or closing it refuse rather than
+  silently doing nothing: those are the operator's, and the relay refuses them
+  for the same reason it refuses the referee's routes.
+
+  **Done when:** done. 20 checks in `test_relay_function.py`, covering the
+  refusals, the filtered fields, the row a directory builds from them, and a
+  store opened from that row reading the same turn the row showed.
 
 - [x] **H6. A store fetches one submission, not all of them.** `player_turn.py`
   reached its own submission through `store.submissions(turn).get(civ)`, which

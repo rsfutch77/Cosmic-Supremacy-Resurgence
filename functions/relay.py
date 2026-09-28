@@ -267,6 +267,43 @@ def store_for(galaxy: str):
     return _STORES[galaxy]
 
 
+# A store is one galaxy, and a listing is about the collection they sit in, so
+# `catalog` borrows a store for its Firestore client and never asks it about a
+# galaxy. The name is a placeholder the constructor accepts; a galaxy that
+# happened to carry it would share the client and nothing else.
+CATALOG = '_catalog'
+
+
+def catalog():
+    """The collection every galaxy document sits in.
+
+    Borrowed from a store rather than built from a second client, because the
+    first Firestore call in a process pays for grpc and a cold instance
+    answering a listing should pay it once.
+    """
+    store = store_for(CATALOG)
+    return store.fs.collection(store.prefix)
+
+
+def catalog_rows() -> list:
+    """Every galaxy, carrying what `/state` serves about it plus which it is.
+
+    The same allowlist and the same private fields as `/state`, so a galaxy
+    says the same about itself in a listing as it does when asked directly.
+    `name` is added to that because it is the directory's field rather than the
+    store's, and a row without it could only be labelled by its id.
+    """
+    rows = []
+    for snap in catalog().stream():
+        doc = snap.to_dict() or {}
+        row = {k: doc[k] for k in firebase_store.STATE_FIELDS
+               if k in doc and k not in PRIVATE_FIELDS}
+        row['id'] = snap.id
+        row['name'] = doc.get('name') or snap.id
+        rows.append(row)
+    return sorted(rows, key=lambda r: r['id'])
+
+
 def galaxy_doc(store) -> dict:
     """The whole galaxy document, seats included.
 
@@ -711,6 +748,14 @@ def _route(method: str, path: str, headers: dict, body: bytes):
     path = (path or '').split('?', 1)[0]
     parts = [p for p in path.split('/') if p]
     if not parts:
+        # The one route that is about no galaxy. A player holds no Google
+        # credential and so cannot read the collection the referee reads, and
+        # without this there is no way for them to learn a galaxy exists.
+        # Signed in like every other route: anonymous sign-up is open, so the
+        # gate costs a stranger nothing and keeps one rule rather than two.
+        if method in ('GET', 'HEAD'):
+            verify(bearer(headers))
+            return _json({'galaxies': catalog_rows()})
         raise Refused(404, 'the galaxy is the first part of the path')
     galaxy, parts = parts[0], parts[1:]
     uid = verify(bearer(headers))
