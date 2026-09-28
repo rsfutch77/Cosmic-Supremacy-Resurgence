@@ -787,6 +787,35 @@ def multiplayer_file(data_dir: str):
     return _read_json(os.path.join(data_dir, MP_CONFIG))
 
 
+def adopted_server(data_dir: str):
+    """Where an already-running server keeps its captures, or None.
+
+    `multiplayer.json`'s `adopt_server`: the saves directory of a server this
+    launcher did not start and is allowed to share. Absent, which is the usual
+    case, the launcher refuses a held port rather than reusing one blindly.
+
+    That refusal is right and stays: a capture lands in whatever directory the
+    server that took it was started with, there is no message in the protocol
+    to ask it which, and reusing one silently sent every turn to a folder this
+    launcher never read. What the refusal cannot know is the case where the
+    operator knows perfectly well whose server it is, which on a machine that
+    is both the referee and a player is every time: the unattended worker
+    holds the port and writes to its own saves directory. `referee_worker`
+    has the same escape for the same reason, `--adopt-server` with
+    `--save-dir`.
+
+    So this is not a way round the guard, it is the operator supplying the one
+    fact the protocol cannot: not "share it" but "share it, and it writes
+    here". A wrong directory fails the same way the bug did, so it is checked
+    and refused rather than believed.
+    """
+    cfg = multiplayer_file(data_dir) or {}
+    where = cfg.get("adopt_server")
+    if not where or not isinstance(where, str):
+        return None
+    return os.path.abspath(os.path.expandvars(os.path.expanduser(where)))
+
+
 def multiplayer_config(data_dir: str):
     """{"store": <dir or URL>} for this galaxy, or None.
 
@@ -2222,6 +2251,8 @@ class Launcher:
         # foreign server holds it, which is a state multiplayer cannot run in:
         # the turn would be captured into that server's data directory.
         self.server_ok = False
+        # Set when a server this launcher did not start is being shared.
+        self.save_dir = None
         self.log_visible = False
         self.buttons: "list" = []
         self.game_root = self.galaxy_root = self.data_dir = None
@@ -2471,6 +2502,25 @@ class Launcher:
             # a server that was not this one. Half-working that way is worse
             # than refusing, so this refuses.
             ours = stub_server_answers(host, port)
+            adopt = adopted_server(self.data_dir)
+            if ours and adopt and os.path.isdir(adopt):
+                # The operator has said whose server it is and where it
+                # writes, which is the one fact the protocol cannot supply.
+                # On a machine that is both the referee and a player this is
+                # every time: the unattended worker holds the port.
+                self.save_dir = adopt
+                self.server_ok = True
+                self.set_ready_status(
+                    f"sharing the server on {host}:{port}", OK)
+                self.say(f"port {port} is held by a server this launcher did "
+                         f"not start; sharing it as multiplayer.json asks")
+                self.say(f"captures are collected from {adopt}")
+                return
+            if ours and adopt:
+                # A directory that is not there fails exactly the way the
+                # bug did, so it is refused rather than believed.
+                self.say(f"adopt_server names {adopt}, which is not a "
+                         f"directory; not sharing the server")
             self.set_ready_status(f"port {port} is held by another server", BAD)
             self.say(f"port {port} is in use by "
                      + ("a server speaking our protocol" if ours
@@ -3500,7 +3550,9 @@ class Launcher:
         self.set_status(f"Multiplayer , {civ}", OK)
         self._show_controls(True)
 
-        save_dir = os.path.join(self.data_dir, "saves")
+        # Where this launcher's captures land, which is not its own saves
+        # directory when it is sharing a server it did not start.
+        save_dir = self.save_dir or os.path.join(self.data_dir, "saves")
         os.makedirs(save_dir, exist_ok=True)
 
         def work():

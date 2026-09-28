@@ -342,12 +342,21 @@ taken = boot[boot.index("if not port_is_free("):
              boot.index("self.servers, logfile = start_server")]
 check("nothing reuses a server this launcher did not start",
       "already serving our protocol" in boot, False)
-check("a taken port never reports a healthy server",
-      ", OK)" in taken, False)
-check("a taken port has one way out and it is not a server",
-      taken.count("return"), 1)
+# These three used to assert a taken port had exactly one way out and never
+# reported a healthy server. It now has two, and the second reports one on
+# purpose: an operator who has said in multiplayer.json where the holding
+# server writes is supplying the one fact the protocol cannot, and on a machine
+# that is both the referee and a player that is every time. What has to stay
+# true is the half that was actually protecting anything: a taken port that
+# nobody has said anything about is still refused.
+check("a taken port with nothing said about it is still refused",
+      "not reusing it" in taken, True)
+check("sharing is the only other way out",
+      taken.count("return"), 2)
+check("and it is gated on the operator having named the directory",
+      "if ours and adopt and os.path.isdir(adopt)" in taken, True)
 check("the refusal really is the branch that was read",
-      len(taken), lambda n: 400 < n < 3000)
+      len(taken), lambda n: 400 < n < 4000)
 check("the refusal names the port",
       "Another server already holds port" in boot, True)
 check("and tells the player to close it",
@@ -358,8 +367,9 @@ check("and the protocol probe only runs once the port is known to be taken",
       boot.index("port_is_free(") < boot.index("stub_server_answers("), True)
 check("the ordinary case, a free port, still starts a server",
       boot.index("stub_server_answers(") < boot.index("start_server("), True)
-check("only a server this launcher started counts as ours",
-      boot.count("self.server_ok = True"), 1)
+check("a server is healthy either because we started it or because we were "
+      "told where it writes",
+      boot.count("self.server_ok = True"), 2)
 mp = inspect.getsource(L.Launcher.start_multiplayer)
 check("and a turn will not start without one",
       "if not self.server_ok:" in mp, True)
@@ -510,4 +520,37 @@ check("a finished turn closes the window of sending",
       "mp_turn_open = False" in st, True)
 check("and serving a turn opens it again",
       "mp_turn_open = True" in st, True)
+
+print()
+print("sharing a server this launcher did not start")
+import tempfile, json as _json
+_d = tempfile.mkdtemp()
+
+check("with no adopt_server there is nothing to share",
+      L.adopted_server(_d), None)
+
+_saves = os.path.join(_d, 'their_saves')
+os.makedirs(_saves, exist_ok=True)
+_json.dump({'adopt_server': _saves},
+           open(os.path.join(_d, 'multiplayer.json'), 'w'))
+check("and with one it names where that server writes",
+      L.adopted_server(_d), os.path.abspath(_saves))
+
+_json.dump({'adopt_server': 12},
+           open(os.path.join(_d, 'multiplayer.json'), 'w'))
+check("a value that is not a path is not one", L.adopted_server(_d), None)
+
+# The guard it does not remove: a held port with no adopt_server is still
+# refused, because a capture lands wherever that server was started and
+# nothing in the protocol can ask it which folder that is.
+bsrc = inspect.getsource(L.Launcher._boot)
+check("a held port with nothing said about it is still refused",
+      'not reusing it' in bsrc, True)
+check("sharing needs the server to answer our protocol",
+      'if ours and adopt and os.path.isdir(adopt)' in bsrc, True)
+check("and a directory that is not there is refused, not believed",
+      'which is not a ' in bsrc, True)
+check("the turn loop collects from the shared directory",
+      'self.save_dir or os.path.join' in
+      inspect.getsource(L.Launcher.start_multiplayer), True)
 sys.exit(1 if fails else 0)
