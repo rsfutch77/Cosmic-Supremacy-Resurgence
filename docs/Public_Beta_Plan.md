@@ -393,6 +393,14 @@ is out of scope here.
   guess: an HTML 401 was read as a missing invoker binding, and the binding was
   already there.
 
+  **The `run.app` hostname is the one the beta ships with**, decided 27
+  September rather than opening the function resource to `allUsers` as well for
+  a tidier URL. It carries a project-and-region hash rather than a chosen name.
+  Recreating the service in the same project and region returns the same host,
+  so a redeploy is safe; changing region or project would not, and every shipped
+  launcher reaches it through `BETA_DIRECTORY`. A custom domain is the answer if
+  that ever has to move.
+
   **Done when:** a launcher holding no Google Cloud credentials plays a turn in a
   galaxy hosted on Firebase.
 

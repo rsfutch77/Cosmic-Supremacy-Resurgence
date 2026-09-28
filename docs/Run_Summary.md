@@ -25,20 +25,24 @@ to bind over a port it did not take.
 it again and the red popup should become a green **sharing the server on
 127.0.0.1:8888**.
 
-### 2. Decide whether the ugly hostname is acceptable
+### 2. The hostname, settled
 
-The beta reaches the relay at
+Nothing to do. The beta reaches the relay at
 
     https://relay-r5t6py5oxa-uw.a.run.app
 
-rather than the tidier `https://us-west1-cs-resurgence.cloudfunctions.net/relay`.
-Both are the same function. They are gated separately, and only the first is
-open to callers who are not members of the project; the second answers 401
-before any of the relay's code runs. Making the tidy one work means granting
-`allUsers` the invoker role on the **function** resource, which is a second
-public grant for a cosmetic gain. Nothing needs it, so nothing was granted.
+and you have accepted that rather than the tidier
+`https://us-west1-cs-resurgence.cloudfunctions.net/relay`. Both are the same
+function, gated separately, and only the first is open to callers who are not
+members of the project. Keeping it means no second public IAM grant exists for
+a cosmetic gain.
 
-Say the word if you would rather have the readable URL, or a custom domain.
+One thing to know about it: the host carries a project-and-region hash, not a
+name you chose. Deleting and recreating the service in the same project and
+region gives the same host back, so an ordinary redeploy is safe, but moving
+region or project would change it and every shipped launcher points at it
+through `BETA_DIRECTORY`. That is an argument for a custom domain later, not
+today.
 
 ### 3. One UI check that needs no client
 
