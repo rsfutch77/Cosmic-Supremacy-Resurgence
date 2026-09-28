@@ -718,6 +718,31 @@ is out of scope here.
   already compares a joiner against a generated civ field by field, so it is the
   place a decoded field gets asserted.
 
+  **Two of the seventeen are now named, 28 September 2026, and the screen is
+  what named them.** The operator opened a joined galaxy as the civ that had
+  just joined and read **104/1280** food on its homeworld. Those two numbers sit
+  at `+15` and `+19`, both already in the list above.
+
+  | planet | owner | `+15` | `+19` | citizens |
+  |---|---|---|---|---|
+  | #138 | Neighbor | 141 | 240 | 4 |
+  | #136 | DemoPlayer | 25 | 360 | 5 |
+  | #196 | BadGuy | 38 | 760 | 8 |
+  | #140 | Neighbor | 38 | 760 | 8 |
+  | #139 | DemoPlayer | 104 | **1280** | 11 |
+  | #47 | Joiner | 104 | **1280** | **7** |
+
+  `+19` is the food capacity and `+15` the store. Across six planets and two
+  turns of the same galaxy `+19` rises monotonically with population, 2 citizens
+  to 80 and 11 to 1280, and `+15` is never above it anywhere. The joiner carries
+  **an eleven-citizen capital's capacity on a seven-citizen world**, byte for
+  byte its donor's, where a seven-citizen world in the same galaxy reads 600.
+
+  This is the first time J5 has been seen as a number a player looks at rather
+  than an offset in a list, and it is the test for the fix: a joiner's food pair
+  should match a generated civ's, not seat one's. The other fifteen are still
+  undecoded and are not being guessed at on the strength of this.
+
   **Done when:** a joiner's homeworld is byte-identical to a generated one except
   for the object id and seat one's rate pair, or each surviving difference is
   named and deliberate.

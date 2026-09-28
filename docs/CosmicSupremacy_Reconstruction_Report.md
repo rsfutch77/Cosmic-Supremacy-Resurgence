@@ -656,6 +656,18 @@ was destroyed there and its owner still received nothing. **Not discovery**, sin
 about where is a bad enough experience to be worth knowing whether it is the engine's rule or an
 artefact of how these galaxies are made.
 
+[ ] **Does a joined civ inherit its donor's `NEWS`?** `inject_civ.add_civ` clones a donor's `OWNR`
+whole, and `NEWS` lives inside that `OWNR`'s `DATA` block, so the same reasoning that made a joiner
+inherit the donor's `EXSY` applies here and nothing empties `NEWS` the way `joins` now empties
+`EXSY`. Observed on 28 September in a real client: a civ joined at turn 11 of `galaxy_demo` and its
+news tab was **empty**, which is consistent with the donor having no news to inherit rather than with
+the field being cleared. The donor in that galaxy is seat one at turn 11 and has fought nothing.
+
+The test is a donor that **does** have news: take a galaxy where a civ holds `NEWS` records, inject
+against that civ, and read the newcomer's tab. If the items come across, a player joins knowing where
+somebody else's battles happened, which is a smaller version of the `EXSY` map leak and the same
+class of bug. If they do not, something clears it and that something is worth naming.
+
 ### `EXSY`, a civ's explored systems and what it calls them
 
     +0   u32  record count
