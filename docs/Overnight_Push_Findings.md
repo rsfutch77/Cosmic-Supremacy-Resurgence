@@ -33,9 +33,10 @@ readout, and the live rules. What follows is what is actually left.
 
 Each of these is a thing the code claims and nobody has watched happen.
 
-- [ ] **H2, the referee is pull-only.** Nothing has confirmed the router carries
-  no forwarding rule. The property is architectural, the evidence is absent.
-  Reading the router's configuration is the check, not a turn having worked.
+- [x] **H2, the referee is pull-only.** Done 28 September: the operator read the
+  router's configuration and reported no forwarding rule. Worth re-reading when
+  the network changes, since a rule can appear without anyone adding one, but
+  there is nothing left to do about it now.
 - [ ] **H3, Firebase is the record.** The reboot happened, and it does not
   count for this. The galaxy under test was `server\uidemo\sandbox`, a folder on
   the worker's own disk, so everything that survived the reboot survived because
@@ -71,10 +72,14 @@ human list look longer than it is.
 1. **The same reboot, on a Firebase galaxy.** The folder-store reboot is done
    and closed N1. H3 is the one that needs a `firebase://` galaxy under it, and
    it needs a beta galaxy to exist first.
-2. **Hosting version retention.** Last counted at 20 finalized versions, 449.9
-   MB, 4.4% of the 10 GB tier, growing about 22 MB per deploy with no cap. Read
-   it in the Firebase console rather than from the CLI, since no
-   `firebase hosting:*` command may be run against this project.
+2. **Hosting version retention, closed as accepted.** Last counted at 20
+   finalized versions, 449.9 MB, 4.4% of the 10 GB tier, growing about 22 MB
+   per deploy with no cap. More have been published since and the operator's
+   call on 28 September is that the headroom is fine, so no retention limit is
+   being set. It is a number that only moves one way, so it is worth a look if
+   a deploy ever fails for space, and is otherwise not a task. Read it in the
+   Firebase console rather than from the CLI, since no `firebase hosting:*`
+   command may be run against this project.
 
 **A note on running any of these.** Every command in this file and in the plan
 is written relative to the repository root, and a fresh PowerShell opens in

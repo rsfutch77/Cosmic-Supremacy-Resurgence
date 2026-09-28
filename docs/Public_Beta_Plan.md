@@ -219,15 +219,22 @@ is out of scope here.
   referee resolves a real turn end to end through it with the directory and the
   Firebase store reporting the same canonical hash.
 
-- [ ] **H2. The referee machine is pull-only.** It opens outbound connections to
+- [x] **H2. The referee machine is pull-only.** It opens outbound connections to
   Firebase and accepts nothing inbound: no port forward, no dynamic DNS, no
   router change. This is the property that keeps a home address out of the beta,
   and it is a constraint rather than a consequence, because the first "just
   expose `turn_server.py`" shortcut removes it without anything failing.
 
-  **Done when:** a full turn resolves with the machine's inbound ports closed and
-  no forwarding rule anywhere, confirmed by reading the router's configuration
-  rather than by the turn having worked.
+  **Done, 28 September 2026.** The operator read the router's configuration and
+  reported no forwarding rule. Turns had already been resolving unattended for
+  a day by then, which is the evidence this item specifically refuses to accept:
+  a turn works identically whether or not a rule exists, so only the
+  configuration can answer it.
+
+  What this closes is today's arrangement, not a property that keeps itself.
+  A rule can appear later without anyone deciding to add one, UPnP being the
+  usual way, and nothing here would fail if it did. Worth re-reading whenever
+  the network changes rather than treating as settled forever.
 
 - [ ]~ **H3. Firebase is the record; the PC is a worker.** State, turns,
   submissions, notes and the archive live in Firebase. The PC holds the game
