@@ -42,9 +42,27 @@ Say the word if you would rather have the readable URL, or a custom domain.
 
 ### 3. One UI check that needs no client
 
-Still outstanding from the last run. Six galaxies with hand-set deadlines, where
-exactly two should read `stopped` in amber and two past-deadline rows should
-**not**. The recipe is in `Overnight_Push_Findings.md` under the stall section.
+Still outstanding, and now a single command rather than a recipe:
+
+    python server\dev_tools\set_demo_deadlines.py
+
+It prints what the Galaxies page should show and how long that will stay true,
+then you look at the page and see whether it agrees. Two rows in amber reading
+`stopped`, two past their deadline and **not** stopped, one closed, one counting
+down.
+
+The pair that carries it is `outpost` against `lapsed`: the same twelve minutes
+late, opposite verdicts, because one is late for a fifteen-minute turn and the
+other for a four-hour one.
+
+**Why this needed a tool.** The fixture's deadlines are absolute timestamps, so
+the arrangement they were set up to produce lasted about an hour and then
+decayed into every row reading `stopped`. That is what you saw tonight: four
+stopped rows, all of them correct, against a fixture roughly 22 hours stale.
+The code was never wrong, but a stale fixture and a broken threshold look
+identical on screen, which is the failure the tool removes. The automated
+coverage was never affected, because `test_stalled_galaxy.py` copies the fixture
+and rewrites the deadlines in the copy.
 
 ---
 
