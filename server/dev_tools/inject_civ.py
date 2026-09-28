@@ -87,6 +87,23 @@ STARTING_CREDITS = 200          # 200 at turn 0; the turn-1 captures read 216,
 STARTING_RECRUIT = 0
 STARTING_PROGRESS = 0
 
+# The homeworld's food, store over capacity, as the client shows it. Measured
+# on `client\\SinglePlayerGalaxy.dat`, whose two starting civs sit on separately
+# placed homeworlds and **both** read 0/600, so it is the starting value rather
+# than one planet's.
+#
+# Found because a joiner showed 104/1280 on screen, which is its donor's
+# eleven-citizen capital on a seven-citizen world. An unowned planet in the
+# same galaxy reads 0/40, so the transplant was overwriting the planet's own
+# figure with the donor's rather than leaving something untouched.
+#
+# Not computed from population on purpose: capacity rises with a planet's
+# development and 4, 5, 8 and 11 citizens give 240, 360, 760 and 1280, which
+# fits no simple curve in population alone. A generated homeworld is the only
+# thing that can say what a generated homeworld holds.
+STARTING_FOOD_STORE = 0
+STARTING_FOOD_CAP = 600
+
 # Both research fields read this at generation, and picking a field overwrites
 # it, so it is the marker for "nothing chosen" rather than a field id.
 RESEARCH_UNSET = b"\xff\xff\xff\xff"
@@ -543,12 +560,23 @@ def starting_kit(blob, name, home_id, design_id, ships=STARTING_SHIPS,
     **What it cannot put back, and what a joiner therefore still inherits.** A
     homeworld `PLPR` is 240 bytes at generation and the arrays above account
     for about a hundred of them; the rest carries the planet's stores, food and
-    facilities and is undecoded, so a homeworld transplanted out of a developed
-    capital keeps that capital's buildings and stockpiles. Inside `OWNR`,
-    `OWPR` grows from 138 bytes to 178 on a civ that has researched, and
-    `CVTR`, `SERV`, `GOVS`, `ADMS`, `SPQS` and `USSE` are untouched. Each is a
-    place a donor's history still reaches a newcomer, and none of them is a
-    field this can name.
+    facilities. A transplanted homeworld differs from a generated one at 17
+    offsets, so a homeworld taken out of a developed capital keeps that
+    capital's buildings and stockpiles.
+
+    **Three of those seventeen are now put back**, the food pair at `+15` and
+    `+19`. They were found by an operator reading 104/1280 off a joined
+    galaxy's homeworld, which was its donor's eleven-citizen capital on a
+    seven-citizen world; a generated homeworld reads 0/600. The other fourteen
+    are `+177`, `+179` to `+188`, `+193`, `+207` and `+208`, and they are still
+    undecoded. A joiner does not match a generated civ there and does not match
+    its donor either, so something besides the clone is writing them and that
+    is worth knowing before they are reset to anything.
+
+    Inside `OWNR`, `OWPR` grows from 138 bytes to 178 on a civ that has
+    researched, and `CVTR`, `SERV`, `GOVS`, `ADMS`, `SPQS` and `USSE` are
+    untouched. Each is a place a donor's history still reaches a newcomer, the
+    civ traits among them.
 
     Nothing raises. `joins._grant` turns any exception out of `add_civ` into a
     refusal, which costs the player their seat, and a seat is worth more than a
@@ -586,6 +614,14 @@ def starting_kit(blob, name, home_id, design_id, ships=STARTING_SHIPS,
         log(f"  production points {before} -> {STARTING_PROGRESS}")
         return mo.set_progress(b, home_id, STARTING_PROGRESS)
 
+    def food(b):
+        want = (STARTING_FOOD_STORE, STARTING_FOOD_CAP)
+        before = mo.food_of(planet_plpr(b, home_id))
+        if before is None or before == want:
+            return b
+        log(f"  food {before[0]}/{before[1]} -> {want[0]}/{want[1]}")
+        return mo.set_food(b, home_id, *want)
+
     def queue(b):
         fresh = empty_prod(b)
         if fresh is None:
@@ -618,6 +654,7 @@ def starting_kit(blob, name, home_id, design_id, ships=STARTING_SHIPS,
     for what, step in (("the homeworld population", people),
                        ("the recruitment rate", recruit),
                        ("the production points", progress),
+                       ("the homeworld food", food),
                        ("the production queue", queue),
                        ("the credit balance", money),
                        ("the research topic", research)):

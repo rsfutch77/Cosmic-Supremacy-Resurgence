@@ -738,10 +738,34 @@ is out of scope here.
   **an eleven-citizen capital's capacity on a seven-citizen world**, byte for
   byte its donor's, where a seven-citizen world in the same galaxy reads 600.
 
-  This is the first time J5 has been seen as a number a player looks at rather
-  than an offset in a list, and it is the test for the fix: a joiner's food pair
-  should match a generated civ's, not seat one's. The other fifteen are still
-  undecoded and are not being guessed at on the strength of this.
+  **Fixed the same day.** `starting_kit` now sets the pair, and
+  `test_starting_kit.py` compares it against a generated civ field by field
+  like every other kit field:
+
+      food 104/1280 -> 0/600
+
+  0/600 is measured, not computed. `client\SinglePlayerGalaxy.dat` is a
+  generated galaxy and **both** its starting civs, on separately placed
+  homeworlds, read exactly 0/600. Capacity is not a plain function of
+  population, since 4, 5, 8 and 11 citizens give 240, 360, 760 and 1280, so
+  nothing but a generated homeworld can say what a generated homeworld holds.
+
+  **A reference that looked right and was not**, recorded because it nearly
+  became evidence. `make_multiplayer_galaxy.build` **renames** a fixture's
+  existing civs rather than generating new ones, so building "fresh" civs on a
+  turn-11 galaxy returns that galaxy's turn-11 civs under new names, one of
+  which is the donor. Read straight, it says a generated civ has 1280 and the
+  transplant is innocent. `test_starting_kit.py` uses the same call correctly
+  because its fixture is already a generated galaxy. The check that settled it
+  instead was planet #47 itself, unowned at 0/40 in the base galaxy and 104/1280
+  after the transplant.
+
+  **Fourteen of the seventeen are still open**, `+177`, `+179` to `+188`, `+193`,
+  `+207` and `+208`. A generated homeworld is nearly empty there, `+177 = 7` and
+  `+193 = 1` with everything else zero, while a joiner reads `+177 = 11` and
+  `+179` to `+188` as `10, 16, 10, 16, 10, 16, 9, 16, 7, 16`. That matches
+  neither the generated civ nor the donor, so something other than the clone is
+  writing them and what it is should be known before they are reset to anything.
 
   **Done when:** a joiner's homeworld is byte-identical to a generated one except
   for the object id and seat one's rate pair, or each surviving difference is

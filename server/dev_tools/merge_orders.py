@@ -310,6 +310,26 @@ PROD_DESIGN_AT = 8 + 29
 
 RECRUIT_OFF = 27
 PROGRESS_OFF = 23
+
+# A planet's food, as the client shows it: store over capacity. Both are u16
+# and they sit next to each other, which is how they were found, an operator
+# reading 104/1280 off a joined galaxy's homeworld and those two numbers being
+# at these two offsets.
+#
+# What supports the reading, since two numbers matching once is a coincidence:
+# every unowned planet in `galaxy_demo` carries 0/40 and every owned one a
+# larger pair that rises with the planet's development, 4 citizens to 240, 5 to
+# 360, 8 to 760 and 11 to 1280; the store is never above the capacity on any
+# planet of any blob checked; and the two starting civs of a freshly generated
+# `SinglePlayerGalaxy.dat`, on separately placed homeworlds, both read exactly
+# 0/600.
+#
+# Capacity is not a plain function of population. 4, 5, 8 and 11 citizens give
+# 240, 360, 760 and 1280, which fits neither a line nor a quadratic in
+# population alone, so buildings are in it somewhere. That is why the starting
+# value below is measured rather than computed.
+FOOD_STORE_OFF = 15
+FOOD_CAP_OFF = 19
 PROD_HURRIED_OFF = 8            # PROD's own payload begins after its header
 CREDITS_AFTER_ID = 20           # past the object id, which is itself past
                                 # OWNR's length-prefixed name
@@ -970,6 +990,37 @@ def recruit_of(plpr):
     if plpr is None or len(plpr) <= RECRUIT_OFF:
         return None
     return plpr[RECRUIT_OFF]
+
+
+def food_of(plpr):
+    """A planet's (food store, food capacity), or None.
+
+    The pair the client renders as `store/capacity`.
+    """
+    if plpr is None or len(plpr) < FOOD_CAP_OFF + 2:
+        return None
+    return (struct.unpack_from('<H', plpr, FOOD_STORE_OFF)[0],
+            struct.unpack_from('<H', plpr, FOOD_CAP_OFF)[0])
+
+
+def set_food(blob, planet_oid, store, capacity):
+    """Write a planet's food pair. Size does not change."""
+    tree = sp.parse_blob(blob)
+    glxy = next(tree[0].find('GLXY'))
+    for sola in (c for c in glxy.children if c.tag == b'SOLA'):
+        for sec in sola.find('PLNT'):
+            if struct.unpack_from('<I', blob, sec.payload)[0] != planet_oid:
+                continue
+            plpr = next(sec.find('PLPR'), None)
+            if plpr is None:
+                raise SystemExit(f'planet {planet_oid} has no PLPR')
+            out = bytearray(blob)
+            struct.pack_into('<H', out, plpr.payload + FOOD_STORE_OFF,
+                             int(store) & 0xFFFF)
+            struct.pack_into('<H', out, plpr.payload + FOOD_CAP_OFF,
+                             int(capacity) & 0xFFFF)
+            return bytes(out)
+    raise SystemExit(f'planet {planet_oid} not found')
 
 
 def set_recruit(blob, planet_oid, value):

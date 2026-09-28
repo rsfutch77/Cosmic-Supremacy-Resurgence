@@ -98,6 +98,7 @@ def kit_of(blob, name):
         'rates': (plpr[4], plpr[11]),
         'recruit': mo.recruit_of(plpr),
         'progress': mo.progress_of(plpr),
+        'food': mo.food_of(plpr),
         'prod': icv.planet_prod(blob, hq['id']),
         'credits': mo.credits_of(blob, o['oid']),
         'research': mo.research_of(blob, o['oid']),
@@ -246,7 +247,7 @@ def main():
 
     print('\nfield by field against the civ generation would have made')
     for field in ('planets', 'plpr_len', 'jobs', 'military', 'recruit',
-                  'progress', 'prod', 'credits', 'research', 'designs',
+                  'progress', 'food', 'prod', 'credits', 'research', 'designs',
                   'ships', 'hulls'):
         check(f'{field} matches the generated civ', got[field], ref[field])
     check('the design is seat one\'s, renamed by nothing',
