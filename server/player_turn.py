@@ -443,6 +443,31 @@ def note_parts(lines) -> tuple:
     return lines[:head], lines[head:tail], lines[tail:]
 
 
+def failure_text(exc) -> str:
+    """What went wrong with a store call, in the relay's own sentence when it
+    gave one.
+
+    A relay refusal is an HTTPError whose text is only the status line, "HTTP
+    Error 400: Bad Request", and whose body holds the sentence that says why.
+    That line is all a turn loop's log kept of a lost turn, and the log is what
+    the operator reads when nobody watched the turn fail. The body is read
+    here, so this is only for an exception the loop does not raise on.
+    """
+    text = str(exc)
+    code = getattr(exc, "code", None)
+    read = getattr(exc, "read", None)
+    if isinstance(code, int) and callable(read):
+        try:
+            import json
+            body = json.loads(read() or b"{}")
+            said = body.get("error") if isinstance(body, dict) else None
+        except Exception:                                   # noqa: BLE001
+            said = None
+        if isinstance(said, str) and said.strip():
+            text = f"{text}: {said.strip()}"
+    return text
+
+
 def follow(store: TurnStore, civ: str, poll: float = 5.0, rounds: int = 0,
            on_state=None, exe=PLAYER_BUILD, save_dir=None, stop=None,
            poll_max: float = POLL_CEILING,
@@ -815,8 +840,9 @@ def follow(store: TurnStore, civ: str, poll: float = 5.0, rounds: int = 0,
                     # abandons every turn after it, which is how one bad
                     # collect became a player who had simply stopped. Say it
                     # loudly, then carry on to the next turn.
-                    log(f"[{civ}] turn {turn}: LOST, {exc}")
-                    emit("lost", turn=turn, civ=civ, error=str(exc))
+                    why = failure_text(exc)
+                    log(f"[{civ}] turn {turn}: LOST, {why}")
+                    emit("lost", turn=turn, civ=civ, error=why)
                 break
 
             now = clock()
@@ -856,8 +882,9 @@ def follow(store: TurnStore, civ: str, poll: float = 5.0, rounds: int = 0,
                             # "orders sent" twice in the log.
                             send(final=True)
                         except Exception as bad:            # noqa: BLE001
-                            log(f"[{civ}] turn {turn}: LOST, {bad}")
-                            emit("lost", turn=turn, civ=civ, error=str(bad))
+                            why = failure_text(bad)
+                            log(f"[{civ}] turn {turn}: LOST, {why}")
+                            emit("lost", turn=turn, civ=civ, error=why)
                         break
                     log(f"[{civ}] turn {turn}: could not capture, {exc}")
                     emit("capture_failed", turn=turn, civ=civ, error=str(exc))
@@ -870,7 +897,8 @@ def follow(store: TurnStore, civ: str, poll: float = 5.0, rounds: int = 0,
                     # A failed interim write is worth saying and not worth
                     # stopping for: the next one is a cadence away, and the one
                     # at the deadline still has to succeed or raise.
-                    log(f"[{civ}] turn {turn}: interim submit failed, {exc}")
+                    log(f"[{civ}] turn {turn}: interim submit failed, "
+                        f"{failure_text(exc)}")
 
             emit("playing", turn=turn, civ=civ, seconds_left=left)
             # Wake for whichever comes first: the next capture, the next store
