@@ -2129,23 +2129,46 @@ HELD = "held"               # captured here, not in the store yet
 SENT = "sent"               # the store holds everything captured
 CAPTURE_FAILED = "failed"   # the last capture did not come back
 
+# How long the indicator stays up after the game closes and the last send
+# finishes. Without it the answer a player closed the game to get was never
+# drawn at all: the send completing is the same event as the indicator being
+# hidden, so the amber "sending your turn" was replaced by nothing and the
+# green "turn sent" existed only between two frames. Ten seconds is long
+# enough to read on the way past and short enough that it is gone before the
+# next turn arrives.
+CAPTURE_HOLD = 10.0
 
-def capture_readout(state, age: float):
+
+def capture_readout(state, age: float, client_open: bool = True):
     """(text, colour) for the capture indicator, or ("", colour) to hide it.
 
     `age` is how long ago the state was recorded. It is in the text for the two
     states where staleness is the thing worth knowing: "sent 4m ago" on a turn
     the player is still playing says the cadence is working, and the same line
     frozen at "sent 40m ago" says it is not.
+
+    **The colour answers "is my work safe", and what that means moves when the
+    client closes.** While the game is open, work held here is safe: it is on
+    disk, the player is still playing, and the upload is not due yet, so green.
+    Once the game is gone there is nothing left to do but send, so held stops
+    being good news and only sent is green. Colouring a held capture amber
+    during play was the launcher warning a player about a cadence working
+    exactly as designed, on a 4-hour turn, for two hours.
     """
-    if state == CAPTURING:
-        return "saving your turn…", WARN
-    if state == HELD:
-        return f"saved here {fmt_ago(age)}, not sent yet", WARN
-    if state == SENT:
-        return f"turn sent {fmt_ago(age)}", OK
     if state == CAPTURE_FAILED:
         return "could not save your turn", BAD
+    if client_open:
+        if state == CAPTURING:
+            return "saving your turn…", WARN
+        if state == HELD:
+            return f"saved {fmt_ago(age)}", OK
+        if state == SENT:
+            return f"turn sent {fmt_ago(age)}", OK
+    else:
+        if state == SENT:
+            return f"turn sent {fmt_ago(age)}", OK
+        if state in (HELD, CAPTURING):
+            return "sending your turn…", WARN
     return "", FAINT
 
 
@@ -3962,9 +3985,14 @@ class Launcher:
             # store and returns without emitting anything. Nothing superseded
             # it. While the final submission is still in flight there is
             # something worth saying, so that case keeps the indicator.
+            age = time.time() - when
             if self.mp_client_gone and not self.mp_sending:
-                state = None
-            self._show_capture(state, time.time() - when)
+                # Held, not hidden. The send finishing and the indicator
+                # disappearing used to be the same moment, so the one thing a
+                # player closes the game to find out was never on screen.
+                if age > CAPTURE_HOLD:
+                    state = None
+            self._show_capture(state, age, client_open=not self.mp_client_gone)
             if self.mp_client_gone:
                 # The turn number and the countdown are facts about a client
                 # that has gone. Holding them on screen until the next poll
@@ -4072,14 +4100,14 @@ class Launcher:
         if btn is not None and btn.cget("text") != text:
             btn.configure(text=text)
 
-    def _show_capture(self, state, age: float):
+    def _show_capture(self, state, age: float, client_open: bool = True):
         """Paint the capture indicator, or take it away when there is none.
 
         Packed and unpacked rather than blanked, so that a launcher with no
         turn loop running shows one dot and one status, which is what it had
         before any of this.
         """
-        text, colour = capture_readout(state, age)
+        text, colour = capture_readout(state, age, client_open)
         if not text:
             if self.cap_dot.winfo_ismapped():
                 self.cap_status.pack_forget()

@@ -159,17 +159,35 @@ for state in (L.CAPTURING, L.HELD, L.SENT):
     seen[state] = L.capture_readout(state, 8.0)
 check("capturing now says so", seen[L.CAPTURING][0],
       lambda t: "saving" in t.lower())
-check("captured and not sent says both halves", seen[L.HELD][0],
-      lambda t: "saved" in t.lower() and "not sent" in t.lower())
+check("captured says saved", seen[L.HELD][0],
+      lambda t: "saved" in t.lower())
 check("sent says sent", seen[L.SENT][0], lambda t: "sent" in t.lower())
 check("all three read differently",
       len({t for t, _c in seen.values()}), 3)
-check("and are three different colours",
-      len({c for _t, c in seen.values()}), 2)      # held shares warn with busy
-check("held is not the colour of sent",
-      seen[L.HELD][1] != seen[L.SENT][1], True)
+# While the game is open, work held here is safe: it is on disk, the player is
+# still playing, and the upload is not due yet. Amber there was the launcher
+# warning about a cadence working as designed, for two hours of a four-hour
+# turn.
+check("a capture held while the game is open is good news",
+      seen[L.HELD][1], L.OK)
 check("sent is the colour the server dot uses when it is up",
       seen[L.SENT][1], L.OK)
+
+print("\n1b. and what those states mean once the game has closed")
+# Fails if the colour did not move with the client. Once the game is gone
+# there is nothing left to do but send, so held stops being good news.
+closed = {s: L.capture_readout(s, 8.0, client_open=False)
+          for s in (L.CAPTURING, L.HELD, L.SENT)}
+check("a capture still unsent after the game closed is amber",
+      closed[L.HELD][1], L.WARN)
+check("and says it is sending rather than that it is saved",
+      closed[L.HELD][0], lambda t: "sending" in t.lower())
+check("a capture mid-flight reads the same, because it is the same wait",
+      closed[L.CAPTURING][0], closed[L.HELD][0])
+check("and sent is still the answer the player is waiting for",
+      closed[L.SENT][1], L.OK)
+check("which is the one thing that differs from the open case",
+      closed[L.SENT][0], seen[L.SENT][0])
 check("a failed capture is the bad colour",
       L.capture_readout(L.CAPTURE_FAILED, 1.0)[1], L.BAD)
 check("nothing captured yet shows nothing at all",
@@ -277,7 +295,7 @@ check("Save has nothing left to ask for and goes grey",
 app.mp_capture = (L.HELD, time.time())
 app._refresh_turn()
 check("while the indicator keeps reporting the send",
-      app.cap_status.cget("text"), lambda t: "not sent" in t)
+      app.cap_status.cget("text"), lambda t: "sending" in t.lower())
 
 app._mp_state("submitted", turn=14, civ="DemoPlayer", final=True)
 check("the final submission ends the sending", app.mp_sending, False)
@@ -286,6 +304,23 @@ check("and the readout stops saying it",
       app.turn_label.cget("text"), lambda t: "sending" not in t)
 check("without putting the closed turn's countdown back",
       app.turn_label.cget("text"), lambda t: "turn 14" not in t)
+
+# The answer the player closed the game to get. Until 28 September it was
+# never drawn: the send finishing and the indicator being hidden were the same
+# event, so the amber "sending your turn" was replaced by nothing at all and
+# the operator reported never having seen a confirmation.
+check("the confirmation is on screen after the send, not skipped",
+      app.cap_status.cget("text"), lambda t: "sent" in t.lower())
+check("and it is green, because the turn is safe",
+      app.cap_dot.cget("fg"), L.OK)
+check("and the indicator is still packed to be read",
+      app.cap_status.winfo_ismapped(), True)
+# Held, not kept. Fails if the confirmation became permanent, which would
+# outlast the turn it is about and greet the next one.
+app.mp_capture = (L.SENT, time.time() - L.CAPTURE_HOLD - 1)
+app._refresh_turn()
+check("and it goes once it has been up long enough",
+      app.cap_status.winfo_ismapped(), False)
 
 # Play, on the galaxy this loop is following with its window closed, asks the
 # loop to open the game again. Between the press and the client coming up the
