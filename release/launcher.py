@@ -195,6 +195,244 @@ def stub_server_answers(host: str, port: int, timeout: float = 1.5) -> bool:
                 pass
 
 
+# ── Who holds the port ────────────────────────────────────────────────────────
+# A held port is refused (see `_boot`), and the refusal is only useful if it
+# says what holds it. On a PC that is both a referee and a player the answer is
+# usually the referee worker's own cs_server, and after a worker is killed
+# rather than stopped it is that same cs_server outliving it. Both are told
+# apart the way server\referee_worker.py `is_our_cs_server` does it, by the
+# process's command line, plus one step it does not need: whether a
+# referee_worker.py is still among its parents. Nothing here ends a process.
+HOLDER_REFEREE = "referee"          # this install's cs_server, its worker alive
+HOLDER_LEFT_OVER = "left_over"      # this install's cs_server, no worker
+HOLDER_OTHER_COPY = "other_copy"    # a cs_server from some other folder
+HOLDER_LAUNCHER = "launcher"        # another copy of this launcher
+HOLDER_OTHER = "other"              # a program that is not part of the game
+HOLDER_UNKNOWN = "unknown"          # nothing could be read
+
+LAUNCHER_EXE = "CosmicSupremacyLauncher.exe"
+SERVER_SCRIPT = "cs_server.py"
+WORKER_SCRIPT = "referee_worker.py"
+
+# The listener and up to this many parents. A venv interpreter adds one level
+# between the worker and the server it starts, so three is the usual depth.
+_HOLDER_DEPTH = 5
+
+# One PowerShell process: the listener's pid from the TCP table, then each
+# process's parent in turn, as JSON. `-InputObject @()` keeps a one-element
+# answer a list in Windows PowerShell 5.1.
+_HOLDER_PS = (
+    "$c = Get-NetTCPConnection -LocalPort {port} -State Listen "
+    "-ErrorAction SilentlyContinue | Select-Object -First 1; "
+    "$out = @(); if ($c) {{ $id = [int]$c.OwningProcess; "
+    "for ($i = 0; $i -lt {depth} -and $id -gt 0; $i++) {{ "
+    "$p = Get-CimInstance Win32_Process -Filter \"ProcessId=$id\"; "
+    "if (-not $p) {{ break }}; "
+    "$out += [pscustomobject]@{{pid = [int]$p.ProcessId; "
+    "ppid = [int]$p.ParentProcessId; name = [string]$p.Name; "
+    "cmd = [string]$p.CommandLine}}; $id = [int]$p.ParentProcessId }} }}; "
+    "ConvertTo-Json -Compress -InputObject @($out)")
+
+
+def port_holder_chain(port: int) -> list:
+    """[{pid, ppid, name, cmd}] for whatever listens on `port`, then its
+    parents, nearest first. [] when nothing can be read.
+
+    Asked only once the port is known to be held, to word the refusal. A
+    parent that has exited leaves its pid in the child's record, and a pid
+    Windows has since reused names a stranger, so a parent is only believed
+    for what its command line says.
+    """
+    if os.name != "nt":
+        return []
+    try:
+        out = subprocess.run(
+            ["powershell", "-NoProfile", "-NonInteractive", "-Command",
+             _HOLDER_PS.format(port=int(port), depth=_HOLDER_DEPTH)],
+            capture_output=True, text=True, timeout=30,
+            creationflags=CREATE_NO_WINDOW).stdout
+    except (OSError, subprocess.SubprocessError, ValueError):
+        return []
+    try:
+        got = json.loads(out or "[]")
+    except ValueError:
+        return []
+    if isinstance(got, dict):
+        got = [got]
+    chain, seen = [], set()
+    for row in got if isinstance(got, list) else []:
+        if not isinstance(row, dict) or not _whole(row.get("pid")):
+            continue
+        if row["pid"] in seen:
+            break
+        seen.add(row["pid"])
+        chain.append({"pid": row["pid"], "ppid": row.get("ppid"),
+                      "name": str(row.get("name") or ""),
+                      "cmd": str(row.get("cmd") or "")})
+    return chain
+
+
+def install_server_scripts() -> list:
+    """The cs_server.py files that count as this install's own.
+
+    A checkout's is server\\cs_server.py beside release\\. A packaged build in
+    dist\\<name>\\ under a checkout counts that checkout's, which is the layout
+    on the machine that builds and referees. A package unzipped anywhere else
+    finds none, and a referee there is from another copy.
+    """
+    out, d = [], app_dir()
+    for _ in range(4):
+        cand = os.path.join(d, "server", SERVER_SCRIPT)
+        if os.path.isfile(cand) and cand not in out:
+            out.append(cand)
+        parent = os.path.dirname(d)
+        if parent == d:
+            break
+        d = parent
+    return out
+
+
+def _script_in(cmd: str, name: str):
+    """The full path of the `name` script a command line runs, or None."""
+    pattern = r'([A-Za-z]:\\[^"]*?\\' + re.escape(name) + r')(?=["\s]|$)'
+    found = re.search(pattern, cmd or "", re.IGNORECASE)
+    return found.group(1) if found else None
+
+
+def _cmd_option(cmd: str, flag: str):
+    """The value of `--flag` in a command line, quoted or not, or None."""
+    found = re.search(re.escape(flag) + r'(?:=|\s+)(?:"([^"]+)"|(\S+))',
+                      cmd or "")
+    return (found.group(1) or found.group(2)) if found else None
+
+
+def referee_saves(worker_cmd: str, server_script: str) -> str:
+    """Where a referee worker's captures land, read off its command line.
+
+    `--save-dir` when given, else `--data-dir`\\saves, else the default the
+    worker documents, which is the server directory's own saves folder.
+    """
+    saves = _cmd_option(worker_cmd, "--save-dir")
+    if saves:
+        return saves
+    data = _cmd_option(worker_cmd, "--data-dir")
+    if data:
+        return os.path.join(data, "saves")
+    return os.path.join(os.path.dirname(server_script or ""), "saves")
+
+
+def port_holder(chain, scripts) -> dict:
+    """What holds the port, from `port_holder_chain` and this install's
+    `install_server_scripts`.
+
+    {kind, pid, name} always, and for a cs_server also `script`, `worker`
+    (the pid of a live referee_worker.py among its parents, or None) and
+    `saves` (where that worker collects captures).
+    """
+    if not chain:
+        return {"kind": HOLDER_UNKNOWN, "pid": None, "name": ""}
+    top = chain[0]
+    info = {"kind": HOLDER_OTHER, "pid": top["pid"], "name": top["name"]}
+    cmd = os.path.normcase(top["cmd"])
+    if SERVER_SCRIPT in cmd:
+        script = _script_in(top["cmd"], SERVER_SCRIPT) or ""
+        mine = any(os.path.normcase(s) in cmd for s in scripts or ())
+        worker = next((p for p in chain[1:]
+                       if WORKER_SCRIPT in os.path.normcase(p["cmd"])), None)
+        info.update(script=script,
+                    worker=worker["pid"] if worker else None,
+                    saves=referee_saves(worker["cmd"], script)
+                    if worker else None)
+        if not mine:
+            info["kind"] = HOLDER_OTHER_COPY
+        else:
+            info["kind"] = HOLDER_REFEREE if worker else HOLDER_LEFT_OVER
+    elif (LAUNCHER_EXE.lower() in cmd
+          or os.path.normcase(os.path.join("release", "launcher.py")) in cmd):
+        info["kind"] = HOLDER_LAUNCHER
+    return info
+
+
+def port_held_message(port: int, holder: dict, speaks_protocol: bool,
+                      data_dir: str):
+    """(status line, log line, box text) for a port this launcher cannot use.
+    """
+    pid, kind = holder.get("pid"), holder.get("kind")
+    saves_here = os.path.join(data_dir, "saves")
+    retry = "Close it and start this launcher again."
+    if kind == HOLDER_REFEREE:
+        line = json.dumps({"adopt_server": holder.get("saves") or ""})[1:-1]
+        return (f"port {port} is held by this PC's referee",
+                f"port {port} is held by pid {pid}, the cs_server of this "
+                f"install's referee worker (pid {holder.get('worker')})",
+                f"The referee running on this PC holds port {port}. It keeps "
+                f"the game's server there for its own turns (pid {pid}), so "
+                "it must not be closed while it is refereeing.\n\n"
+                "To play on this PC as well, this launcher can share that "
+                f"server. Add this entry to {MP_CONFIG} in\n{data_dir}\n\n"
+                f"    {line}\n\n"
+                "inside its braces, then start this launcher again.")
+    if kind == HOLDER_LEFT_OVER:
+        return (f"port {port} is held by a leftover referee server",
+                f"port {port} is held by pid {pid}, a cs_server of this "
+                "install with no referee worker running",
+                f"Port {port} is held by a game server that a referee on "
+                "this PC started and left running when it stopped "
+                f"(pid {pid}, {holder.get('name') or 'python.exe'}). No "
+                "referee is running to use it.\n\n"
+                "Starting the referee again normally ends it and takes the "
+                "port back. Or end it yourself in Task Manager, on the "
+                "Details tab, "
+                f"pid {pid}. Then start this launcher again.")
+    if kind == HOLDER_OTHER_COPY:
+        where = os.path.dirname(holder.get("script") or "") or "another folder"
+        ref = (f", and a referee from that copy is running (pid "
+               f"{holder.get('worker')})" if holder.get("worker") else "")
+        return (f"port {port} is held by another copy's server",
+                f"port {port} is held by pid {pid}, a cs_server from {where}",
+                f"Port {port} is held by a game server from another copy of "
+                f"the game, in\n{where}\n\n(pid {pid}){ref}.\n\nIt keeps its "
+                "saved turns in its own folder, so this launcher cannot "
+                "share it. " + retry)
+    if kind == HOLDER_LAUNCHER:
+        return (f"port {port} is held by another launcher",
+                f"port {port} is held by pid {pid}, another copy of this "
+                "launcher",
+                "Another copy of this launcher is already running and holds "
+                f"port {port} (pid {pid}).\n\nUse that window, or close it "
+                "and start this one again.")
+    if kind == HOLDER_OTHER and not speaks_protocol:
+        what = holder.get("name") or "another program"
+        return (f"port {port} is held by {what}",
+                f"port {port} is held by pid {pid} ({what}), not part of "
+                "this game",
+                f"Port {port} is held by {what} "
+                f"(pid {pid}), which is not part of this game.\n\nThe game "
+                "can only talk to that exact port, so multiplayer and TestBed "
+                "will not work until it is free. Tutorial and Demo are "
+                "unaffected.\n\n" + retry)
+    # Nothing could be read about the holder, or it speaks the protocol from
+    # a process none of the above describes. What was said before this
+    # existed is still the most that can be said.
+    return (f"port {port} is held by another server",
+            f"port {port} is in use by "
+            + ("a server speaking our protocol" if speaks_protocol
+               else "something that did not answer testconnection")
+            + " , not reusing it",
+            f"Another server already holds port {port}.\n\n"
+            + ("It speaks this game's protocol, so it is probably a second "
+               "copy of this launcher or a cs_server you started yourself. "
+               "It cannot be shared: it keeps its saved turns in its own "
+               "folder, this launcher would look for them in\n"
+               f"{saves_here}\n\nand every turn "
+               "would be captured somewhere this launcher never reads.\n\n"
+               if speaks_protocol else
+               "The game can only talk to that exact port, so multiplayer "
+               "and TestBed will not work until it is free. Tutorial and "
+               "Demo are unaffected.\n\n")
+            + retry)
+
+
 def start_server(host: str, port: int, data_dir: str, galaxy_dir: str, sink):
     """
     Import cs_server and serve it on daemon threads. Returns (servers, logfile).
@@ -595,7 +833,8 @@ def roster_problem(name: str, civs, reclaimed=None):
                  f" after {missed} missed turns in a row")
         return (f"This galaxy took the seat {name!r} back{when}{after}.\n\n"
                 "An empire that stops playing is removed so its "
-                "planets are freed up for others. ")
+                "planets are freed up for others. To play again, ask for a "
+                "new seat from the Galaxies list.")
     near = next((c for c in seats if str(c).lower() == name.lower()), None)
     if near is not None:
         return (f"This galaxy spells your seat {near!r} and you are calling "
@@ -751,8 +990,110 @@ def closed_problem(state) -> "str | None":
     said = f"\n\n{reason}" if isinstance(reason, str) and reason.strip() else ""
     return (f"This galaxy has been closed.{said}\n\nIt still reads, so its "
             "turns are all still there, but it takes no more of them and a "
-            "turn played into it would be refused.\n\nThe Galaxies list shows "
-            "whatever else is running.")
+            "turn played into it would be refused.\n\nPick another galaxy "
+            "from the Galaxies list to keep playing.")
+
+
+# What the turn readout says once the galaxy being followed has closed.
+GALAXY_ENDED_NOTE = "this galaxy has ended"
+
+
+# ── The referee's warning about missed turns ──────────────────────────────────
+# server\abandonment.py warns a player who has missed too many turns in a row
+# through `put_note`, on the turn they missed, and repeats it every turn until
+# they play or the seat goes. Its first line is `warning_note`'s opening, which
+# is how the launcher tells it apart from the refusal lines the same note
+# carries. The two files have to agree on it and neither imports the other,
+# the way `JOIN_DIR` and `MIN_BUILD_KEY` are shared; release\tests checks this
+# constant against `warning_note`'s own output.
+MISSED_WARNING_OPENING = "You have missed "
+
+
+def abandonment_warning(lines):
+    """The warning part of a referee's note, or None when it holds none.
+
+    From the warning's first line to the end, since `abandonment` appends it
+    after anything already in the note.
+    """
+    if not isinstance(lines, (list, tuple)):
+        return None
+    for i, line in enumerate(lines):
+        if isinstance(line, str) and line.startswith(MISSED_WARNING_OPENING):
+            return [str(x) for x in lines[i:]]
+    return None
+
+
+def warning_text(galaxy: str, lines) -> str:
+    """The box a warned player reads: the referee's own lines, whole."""
+    where = f" in {galaxy}" if galaxy else ""
+    return (f"A warning from the referee{where}:\n\n" + "\n".join(lines)
+            + "\n\nThis turn is open now, and playing it counts.")
+
+
+# ── A refusal from the relay ──────────────────────────────────────────────────
+# The relay answers a refused request with a status and a JSON body holding
+# one sentence, `{"error": ...}`. `urllib` raises that as an HTTPError whose
+# text is only the status line, so without this a player whose seat is held by
+# another sign-in read "HTTP Error 403: Forbidden".
+SEAT_HELD = "already held by another sign-in"
+
+
+def relay_refusal(exc):
+    """(status, sentence) from a refused relay request, or None.
+
+    None for anything that is not an HTTP error, and for one whose body holds
+    no sentence to show, so the caller falls back to the exception's text.
+    """
+    code = getattr(exc, "code", None)
+    read = getattr(exc, "read", None)
+    if not _whole(code) or not callable(read):
+        return None
+    try:
+        body = json.loads(read() or b"{}")
+    except Exception:                       # not the relay's shape
+        return None
+    said = body.get("error") if isinstance(body, dict) else None
+    if not isinstance(said, str) or not said.strip():
+        return None
+    return code, said.strip()
+
+
+# ── The support code ──────────────────────────────────────────────────────────
+# A player who reinstalls, moves the game, or runs a second copy signs in as a
+# new anonymous user, and the seat they held is refused to it (J4). The
+# operator rebinds the seat with server\dev_tools\seat_tool.py, whose
+# `candidates` lists every unseated sign-in by uid. The support code is the
+# first characters of this install's uid, which is enough for the operator to
+# pick the right line and is not a credential: what signs in is the refresh
+# token in fb_identity.json, which is never shown. The uid itself stays out of
+# sight, as H4 has it.
+SUPPORT_CODE_LENGTH = 8
+
+
+def support_code(uid) -> "str | None":
+    """The short code a player reads out to the operator, or None."""
+    if not isinstance(uid, str) or len(uid) < SUPPORT_CODE_LENGTH:
+        return None
+    return uid[:SUPPORT_CODE_LENGTH]
+
+
+def build_line(build: str, code) -> str:
+    """The line under the title: the build, and the support code if any."""
+    return f"v{build}" + (f"   \u00b7   support code {code}" if code else "")
+
+
+def seat_held_text(civ: str, code) -> str:
+    """What a player reads when their seat belongs to another sign-in."""
+    said = (f"The seat {civ!r} in this galaxy is held by another sign-in. "
+            "That usually means it was claimed from another copy of the "
+            "game, or from this one before it was reinstalled or moved.")
+    if code:
+        return (said + "\n\nIf the seat is yours, send the galaxy's operator "
+                f"this support code and they can move it to this copy:\n\n"
+                f"    {code}\n\nThe same code is shown under the launcher's "
+                "title.")
+    return (said + "\n\nIf the seat is yours, ask the galaxy's operator to "
+            "move it to this copy.")
 
 
 # ── Multiplayer ───────────────────────────────────────────────────────────────
@@ -1406,10 +1747,10 @@ def awaiting_answer(g, recs) -> bool:
     """Whether the request for a seat in `g` is still with the galaxy.
 
     The only rows a Games refresh asks an answer for. A galaxy the player is
-    in has nothing to answer, and a request already answered is not asked
-    about again.
+    in has nothing to answer, a request already answered is not asked
+    about again, and a closed galaxy resolves no more requests.
     """
-    return (pending_join(g, recs)
+    return (pending_join(g, recs) and g.status != CLOSED
             and not isinstance(recs[g.id].get("answer"), dict))
 
 
@@ -1484,6 +1825,131 @@ def joinable(g, recs=None) -> bool:
     if g.joined or pending_join(g, recs):
         return False
     return g.status == OPEN
+
+
+# ── A seat that was granted and then taken back ───────────────────────────────
+# A player who joined, was seated, and then stopped playing has their civ
+# reclaimed by the referee (server\abandonment.py). The roster no longer names
+# them, so the directory's `joined` goes false, and their joined record, which
+# still holds the granted answer, would otherwise leave the row reading
+# "joining next turn" with no control on it for as long as the galaxy runs.
+#
+# The directory row does not carry the galaxy's `reclaimed` map, so it is read
+# from the state, once per galaxy, and only for a record whose request was
+# granted while its row says the player is not in: that combination is what a
+# reclaim leaves behind, and it is rare. What comes back is kept in the joined
+# record, the way an answer is, so a row left on screen costs no further read.
+RECLAIMED_REC_KEY = "reclaimed"
+
+
+def seat_reclaimed(g, recs):
+    """This player's reclaim record for `g`, kept in their joined record, or
+    None."""
+    if not pending_join(g, recs):
+        return None
+    got = recs[g.id].get(RECLAIMED_REC_KEY)
+    return got if isinstance(got, dict) and got else None
+
+
+def reclaim_suspect(g, recs) -> bool:
+    """Whether a Games refresh should ask `g`'s state if this seat was taken
+    back.
+
+    A request that was granted, on a row that says the player is not in, and
+    not already known to be reclaimed. A listing can lag the answer by one
+    refresh, since the answer is filed once the civ is in the roster, so the
+    state is what decides and this only chooses which rows to ask.
+    """
+    if not pending_join(g, recs) or seat_reclaimed(g, recs):
+        return False
+    answer = recs[g.id].get("answer")
+    return isinstance(answer, dict) and answer.get("outcome") == JOIN_GRANTED
+
+
+def read_reclaims(rows, recs, read_state):
+    """{galaxy id: (requested_at, record)} for seats the state says were taken
+    back.
+
+    `read_state(g)` is one read of that galaxy's state. It is called once per
+    row that `reclaim_suspect` names and for no other. Total, for the reason
+    `read_join_answers` is.
+    """
+    out = {}
+    for g in rows:
+        if not reclaim_suspect(g, recs):
+            continue
+        rec = recs[g.id]
+        try:
+            taken = reclaimed_seat(read_state(g), rec.get("name") or "")
+        except Exception:               # a readout is not worth an error path
+            continue
+        if taken:
+            out[g.id] = (rec.get("requested_at"), dict(taken))
+    return out
+
+
+def record_reclaims(data_dir: str, reclaims) -> None:
+    """Keep each reclaim in the record of the seat it took.
+
+    A record that has changed since it was asked about is left alone, as
+    `record_join_answers` leaves one.
+    """
+    if not reclaims:
+        return
+    records = load_joined(data_dir)
+    changed = False
+    for gid, (asked_at, taken) in reclaims.items():
+        rec = records.get(gid)
+        if rec is None or rec.get("requested_at") != asked_at:
+            continue
+        if rec.get(RECLAIMED_REC_KEY) == taken:
+            continue
+        records[gid] = dict(rec, **{RECLAIMED_REC_KEY: taken})
+        changed = True
+    if changed:
+        write_joined(data_dir, records)
+
+
+def reclaimed_text(g, rec) -> str:
+    """What a player whose seat was taken back reads from the row's Reason."""
+    name = (rec or {}).get("name") or "you"
+    said = roster_problem(name, (), (rec or {}).get(RECLAIMED_REC_KEY))
+    return (f"{said}\n\nPress Clear to forget this seat and put View back "
+            f"on the {g.name or g.id} row.")
+
+
+# ── A galaxy the operator has ended ───────────────────────────────────────────
+def in_galaxy(g, recs=None, own=None) -> bool:
+    """Whether `g` is this player's business: seated, asked for, or named in
+    multiplayer.json."""
+    return bool(g.joined or pending_join(g, recs) or same_store(g.store, own))
+
+
+def ended_hint(ended) -> str:
+    """The line under the table when a galaxy this player is in has ended."""
+    names = ", ".join(g.name or g.id for g in ended)
+    return (f"{names} has ended. Press Reason on its row to read why, and "
+            "pick another galaxy to keep playing.")
+
+
+def ended_text(g, state) -> str:
+    """What the Reason button on an ended galaxy shows.
+
+    The operator's words come from the galaxy's state, which the directory row
+    does not carry, so the caller reads it once when the button is pressed. A
+    state that cannot be read, or that no longer says closed because the
+    galaxy was reopened since the listing, still gets a sentence rather than
+    an empty box.
+    """
+    said = closed_problem(state)
+    if said:
+        return said
+    if state is None:
+        return (f"{g.name or g.id} is listed as closed, and its reason could "
+                "not be read just now. Try again in a minute, or pick another "
+                "galaxy from the list.")
+    return (f"{g.name or g.id} is no longer closed. The list will show it "
+            "again at its next refresh.")
 
 
 # ── When a galaxy has stopped ────────────────────────────────────────────────
@@ -1596,7 +2062,13 @@ def stall_hint(stalled) -> str:
 PLAY = "play"
 VIEW = "view"
 REASON = "reason"
-ACTION_TEXT = {PLAY: "Play", VIEW: "View", REASON: "Reason"}
+# Two more rows that only explain: a galaxy this player is in that the operator
+# has ended, and a seat the galaxy took back. Both read "Reason" on the button,
+# because that is what pressing it gives.
+ENDED = "ended"
+RECLAIMED = "reclaimed"
+ACTION_TEXT = {PLAY: "Play", VIEW: "View", REASON: "Reason",
+               ENDED: "Reason", RECLAIMED: "Reason"}
 
 # How far along a galaxy is, which is what the status column orders by. Not the
 # spelling of the word: alphabetically the closed galaxies come first, which is
@@ -1719,6 +2191,8 @@ def _you_value(g, view):
 
 def _you_text(g, view):
     if g.joined:
+        if g.status == CLOSED:
+            return "galaxy ended"
         played = (view.submitted or {}).get(g.id)
         if played is True:
             return "turn played"
@@ -1727,8 +2201,11 @@ def _you_text(g, view):
         return "you are in"
     if join_refusal(g, view.recs):
         return "join refused"
+    if seat_reclaimed(g, view.recs):
+        return "seat reclaimed"
     if pending_join(g, view.recs):
-        return "joining next turn"
+        # A request lodged before the galaxy ended is never going to land.
+        return "galaxy ended" if g.status == CLOSED else "joining next turn"
     return ""
 
 
@@ -1820,10 +2297,16 @@ def row_action(g, recs=None, own=None):
     notice, which is where the joining is confirmed, so the row itself joins
     nothing.
 
-    A closed galaxy offers neither, whoever is in it, because a turn played
-    into one is refused at the submission. Nor does a galaxy this launcher has
-    already asked for a seat in: the request is with the worker and there is
+    A closed galaxy offers neither, because a turn played into one is refused
+    at the submission. One this player is in, has asked for, or named in
+    multiplayer.json offers Reason instead, which reads the operator's reason
+    for ending it: a row that went quiet with no control on it reads as the
+    launcher failing. Nor does a galaxy this launcher has already asked for a
+    seat in offer anything: the request is with the worker and there is
     nothing for a second click to do.
+
+    A seat the galaxy took back offers Reason, which says so and lets the
+    player clear the record, since it holds a join the galaxy has undone.
 
     `own` is the store multiplayer.json names, and it is offered Play whatever
     the roster says. It is the galaxy the launcher was pointed at by hand, its
@@ -1835,8 +2318,10 @@ def row_action(g, recs=None, own=None):
     """
     if join_refusal(g, recs):
         return REASON
+    if seat_reclaimed(g, recs):
+        return RECLAIMED
     if g.status == CLOSED:
-        return None
+        return ENDED if in_galaxy(g, recs, own) else None
     if same_store(g.store, own):
         return PLAY
     if g.joined:
@@ -2379,6 +2864,10 @@ class Launcher:
         # client coming back up.
         self.mp_reopen = threading.Event()
         self.mp_reopening = False
+        # Whether the galaxy being followed has been found closed, and the
+        # deadline a stall last sent a probe for. See `_mp_probe_closed`.
+        self.mp_closed = False
+        self.mp_probed = None
         # Whether the game client was up when the watcher last looked, so that
         # it closing clears the turn readout at once rather than at the next
         # poll, and whether the turn it was playing is still on its way to the
@@ -2466,8 +2955,13 @@ class Launcher:
         # The build, not the manifest's version: a build made with build.ps1's
         # -Version switch carries a name the manifest does not hold, and this
         # line is where a player reads back what a galaxy is about to refuse.
-        tk.Label(self.root, text=f"v{build_id()}",
-                 bg=BG, fg=DIM, font=("Segoe UI", 10)).pack(anchor="w", **pad)
+        #
+        # The support code goes on the same line once this install has a
+        # Firebase sign-in, because this is the line a player is already
+        # asked to read back: see `support_code`.
+        self.build_label = tk.Label(self.root, text=f"v{build_id()}",
+                                    bg=BG, fg=DIM, font=("Segoe UI", 10))
+        self.build_label.pack(anchor="w", **pad)
 
         # The window's body, which is one page at a time. The home page holds
         # the mode cards; Multiplayer swaps in the Galaxies page and Back swaps
@@ -2692,24 +3186,16 @@ class Launcher:
                 # bug did, so it is refused rather than believed.
                 self.say(f"adopt_server names {adopt}, which is not a "
                          f"directory; not sharing the server")
-            self.set_ready_status(f"port {port} is held by another server", BAD)
-            self.say(f"port {port} is in use by "
-                     + ("a server speaking our protocol" if ours
-                        else "something that did not answer testconnection")
-                     + " , not reusing it")
-            self.warn(
-                f"Another server already holds port {port}.\n\n"
-                + ("It speaks this game's protocol, so it is probably a second "
-                   "copy of this launcher or a cs_server you started yourself. "
-                   "It cannot be shared: it keeps its saved turns in its own "
-                   "folder, this launcher would look for them in\n"
-                   f"{os.path.join(self.data_dir, 'saves')}\n\nand every turn "
-                   "would be captured somewhere this launcher never reads.\n\n"
-                   if ours else
-                   "The game can only talk to that exact port, so multiplayer "
-                   "and TestBed will not work until it is free. Tutorial and "
-                   "Demo are unaffected.\n\n")
-                + "Close it and start this launcher again.")
+            # Said by what holds it: the referee on this PC, one it left
+            # behind, another copy of the game or of this launcher, or a
+            # program that is not the game at all. Read, never ended.
+            holder = port_holder(port_holder_chain(port),
+                                 install_server_scripts())
+            status, line, box = port_held_message(port, holder, ours,
+                                                  self.data_dir)
+            self.set_ready_status(status, BAD)
+            self.say(line)
+            self.warn(box)
             return
 
         try:
@@ -2766,6 +3252,19 @@ class Launcher:
         self.name_label.configure(text=self.player or "nobody yet",
                                   fg=TEXT if self.player else FAINT)
         self.name_btn.configure(text="change" if self.player else "set name")
+        self._show_support_code()
+
+    def _show_support_code(self):
+        """Put this install's support code beside the build, once it has one.
+
+        Read from fb_identity.json and never minted here: an install that has
+        only played folder galaxies has no sign-in and shows no code. Asked
+        again after every listing and every Play, which is when a first
+        sign-in happens.
+        """
+        text = build_line(build_id(), support_code(install_uid(self.data_dir)))
+        if self.build_label.cget("text") != text:
+            self.build_label.configure(text=text)
 
     def ask_player_name(self, reason: str = ""):
         """Ask for the player's name, store it, and return it. None if cancelled.
@@ -3000,6 +3499,13 @@ class Launcher:
                 extra["submitted"] = self._submitted_state(rows, recs, player)
             if recs:
                 extra["answers"] = self._join_answers(rows, recs)
+                # Asked with this refresh's answers folded in, so a seat
+                # whose granted answer arrives now is looked at now rather
+                # than one listing later.
+                seen = {gid: dict(recs[gid], answer=answer)
+                        for gid, (_at, answer) in extra["answers"].items()
+                        if gid in recs}
+                extra["reclaims"] = self._reclaims(rows, dict(recs, **seen))
             self.msgs.put(("__games__", rows, extra, err))
 
         threading.Thread(target=work, daemon=True, name="games").start()
@@ -3032,7 +3538,8 @@ class Launcher:
         out = {}
         for g in rows:
             rec = (recs or {}).get(g.id)
-            if not g.joined or g.turn is None:
+            # A closed galaxy has no turn left to play, so it is not asked.
+            if not g.joined or g.turn is None or g.status == CLOSED:
                 continue
             try:
                 mods = multiplayer_modules()
@@ -3079,6 +3586,27 @@ class Launcher:
         except Exception:                   # a readout is not worth an error path
             return {}
 
+    def _reclaims(self, rows, recs):
+        """Which granted seats the galaxy has since taken back.
+
+        One state read per galaxy `reclaim_suspect` names, and none for any
+        other. Total, for the reason `_submitted_state` is.
+        """
+        mods = multiplayer_modules()
+        if mods is None:
+            return {}
+        _player_turn, turn_store = mods
+
+        def read_state(g):
+            token = (player_token(self.data_dir)
+                     if store_wants_token({"store": g.store}) else None)
+            return open_player_store(turn_store, g.store, token).state()
+
+        try:
+            return read_reclaims(rows, recs, read_state)
+        except Exception:                   # a readout is not worth an error path
+            return {}
+
     def _on_games(self, rows, extra, err):
         """Take a listing in. Runs on the Tk thread, off the message queue.
 
@@ -3089,6 +3617,7 @@ class Launcher:
         self.games_busy = False
         try:
             record_join_answers(self.data_dir, (extra or {}).get("answers"))
+            record_reclaims(self.data_dir, (extra or {}).get("reclaims"))
         except OSError as exc:
             self.say(f"games   could not keep a join answer ({exc})")
         self.games_rows = list(rows)
@@ -3149,7 +3678,7 @@ class Launcher:
             # The rows lit are the ones that are this player's business: the
             # galaxy they are in, the one they have asked to join, and the one
             # they named themselves.
-            near = bool(g.joined or action == PLAY
+            near = bool(g.joined or action in (PLAY, ENDED, RECLAIMED)
                         or pending_join(g, view.recs))
             for i, col in enumerate(GALAXY_COLUMNS):
                 cell = tk.Label(self.games_table, text=col.text(g, view),
@@ -3215,7 +3744,9 @@ class Launcher:
         actions = [row_action(g, view.recs, view.own) for g in rows]
         stalled = [(g, s) for g, s in
                    ((g, row_stalled_for(g, view)) for g in rows) if s]
-        refused = [g for g in rows if join_refusal(g, view.recs)]
+        refused = [g for g, a in zip(rows, actions) if a == REASON]
+        reclaimed = [g for g, a in zip(rows, actions) if a == RECLAIMED]
+        ended = [g for g, a in zip(rows, actions) if a == ENDED]
         text = ""
         if stalled:
             text = stall_hint(stalled)
@@ -3223,6 +3754,12 @@ class Launcher:
             names = ", ".join(g.name or g.id for g in refused)
             text = (f"Your request to join {names} was refused. Press Reason "
                     "on its row to read why, then ask again or clear it.")
+        elif reclaimed:
+            names = ", ".join(g.name or g.id for g in reclaimed)
+            text = (f"Your seat in {names} was taken back after missed turns. "
+                    "Press Reason on its row to read more.")
+        elif ended:
+            text = ended_hint(ended)
         elif rows and PLAY not in actions:
             if VIEW in actions:
                 text = ("You are not in a galaxy yet. Press View on one to "
@@ -3270,11 +3807,15 @@ class Launcher:
 
     def on_row(self, g, action: str):
         """What a row's one button does. View reads, Play plays, Reason
-        explains a refusal."""
+        explains a refusal, an ended galaxy or a seat taken back."""
         if action == PLAY:
             self.play_galaxy(g)
         elif action == REASON:
             self.show_refusal(g)
+        elif action == ENDED:
+            self.show_ended(g)
+        elif action == RECLAIMED:
+            self.show_reclaimed(g)
         else:
             self.on_join(g)
 
@@ -3286,19 +3827,77 @@ class Launcher:
         before a second request is sent. Clear forgets this galaxy's record
         and nothing else, which puts View back on the row.
         """
-        tk = self.tk
         rec = load_joined(self.data_dir).get(g.id)
         if not join_refusal(g, {g.id: rec} if rec else None):
             self._draw_galaxies()
             return
+        what = self._choice_dialog("Join refused", refusal_text(g, rec),
+                                   (("Ask again", "again", True),
+                                    ("Clear", "clear", False),
+                                    ("Close", None, False)))
+        if what == "clear":
+            clear_joined(self.data_dir, g.id)
+            self.say(f"join: cleared the refused request for {g.id}")
+            self._draw_galaxies()
+        elif what == "again":
+            self.on_join(g)
+
+    def show_reclaimed(self, g):
+        """Tell a player their seat was taken back, and let them clear it.
+
+        Everything shown is in the joined record already, so nothing is read.
+        Clear forgets this galaxy's record, which puts View back on the row so
+        a new seat can be asked for through Join and its notice.
+        """
+        rec = load_joined(self.data_dir).get(g.id)
+        if not seat_reclaimed(g, {g.id: rec} if rec else None):
+            self._draw_galaxies()
+            return
+        what = self._choice_dialog("Seat reclaimed", reclaimed_text(g, rec),
+                                   (("Clear", "clear", True),
+                                    ("Close", None, False)))
+        if what == "clear":
+            clear_joined(self.data_dir, g.id)
+            self.say(f"games   cleared the reclaimed seat in {g.id}")
+            self._draw_galaxies()
+
+    def show_ended(self, g):
+        """Say that a galaxy has ended, in the operator's words.
+
+        One read of the galaxy's state, made when the button is pressed, since
+        the directory row carries the status and not the reason. On the Tk
+        thread, as Play's own reads are: it is one request and the player has
+        just asked for its answer.
+        """
+        state = None
+        mods = multiplayer_modules()
+        if mods is not None:
+            try:
+                token = (player_token(self.data_dir)
+                         if store_wants_token({"store": g.store}) else None)
+                state = open_player_store(mods[1], g.store, token).state()
+            except Exception as exc:        # said in the box below as well
+                self.say(f"games   could not read {g.id}'s state ({exc})")
+        self.say(f"games   {g.id} has ended")
+        self._choice_dialog("Galaxy ended", ended_text(g, state),
+                            (("Close", None, True),))
+
+    def _choice_dialog(self, title: str, body: str, choices):
+        """A modal box with a title, a body and a row of buttons.
+
+        `choices` is (label, value, primary) per button, left to right, and
+        the value of the one pressed comes back. Escape and the window's own
+        close answer None.
+        """
+        tk = self.tk
         win = tk.Toplevel(self.root)
         win.title(self.cfg["product"])
         win.configure(bg=BG)
         win.transient(self.root)
-        tk.Label(win, text="Join refused", bg=BG, fg=WARN,
+        tk.Label(win, text=title, bg=BG, fg=WARN,
                  font=("Segoe UI", 14, "bold")).pack(anchor="w", padx=20,
                                                      pady=(18, 6))
-        tk.Label(win, text=refusal_text(g, rec), bg=BG, fg=TEXT,
+        tk.Label(win, text=body, bg=BG, fg=TEXT,
                  justify="left", anchor="w", wraplength=460,
                  font=("Segoe UI", 9)).pack(anchor="w", fill="x", padx=20)
 
@@ -3310,10 +3909,9 @@ class Launcher:
 
         row = tk.Frame(win, bg=BG)
         row.pack(fill="x", padx=20, pady=(14, 18))
-        for label, what, bg, hi in (("Ask again", "again", BTN, BTN_HI),
-                                    ("Clear", "clear", PANEL, EDGE),
-                                    ("Close", None, PANEL, EDGE)):
-            tk.Button(row, text=label, bg=bg, fg="#ffffff" if bg == BTN
+        for label, what, primary in choices:
+            bg, hi = (BTN, BTN_HI) if primary else (PANEL, EDGE)
+            tk.Button(row, text=label, bg=bg, fg="#ffffff" if primary
                       else TEXT, activebackground=hi,
                       activeforeground="#ffffff", relief="flat", bd=0,
                       cursor="hand2", width=12, font=("Segoe UI", 9, "bold"),
@@ -3326,14 +3924,7 @@ class Launcher:
         except tk.TclError:
             pass
         self.root.wait_window(win)
-
-        what = chosen.get("what")
-        if what == "clear":
-            clear_joined(self.data_dir, g.id)
-            self.say(f"join: cleared the refused request for {g.id}")
-            self._draw_galaxies()
-        elif what == "again":
-            self.on_join(g)
+        return chosen.get("what")
 
     def play_galaxy(self, g):
         """Take turns in one row's galaxy, which is what Multiplayer did.
@@ -3830,8 +4421,22 @@ class Launcher:
                     self.on_change_name()
                 return
 
+        # A player coming back after missing turns is the one the referee has
+        # left a warning for, and the turn loop only reads a note once a turn
+        # it followed has closed, which for this player is none of them. So
+        # the last closed turn's note is read once here, before the game
+        # opens over the top of anything said.
+        warning = self._warning_note(store, civ, (state or {}).get("turn"))
+        if warning:
+            self.say(f"multiplayer: the referee has warned {civ} about "
+                     f"missed turns")
+            self.warn(warning_text(g.name or g.id if g is not None
+                                   else store_label(cfg["store"]), warning))
+
         self.mp_store = store
         self.mp_civ = civ
+        self.mp_closed = False
+        self.mp_probed = None
         self.mp_playing = {"id": g.id if g is not None else cfg["store"],
                            "name": (g.name or g.id) if g is not None
                            else store_label(cfg["store"]),
@@ -3856,6 +4461,7 @@ class Launcher:
         if joined and joined.get("name") and joined["name"] != civ:
             self.say(f"multiplayer: this galaxy was joined as "
                      f"{joined['name']!r}")
+        self._show_support_code()
         self.say(f"multiplayer: following {cfg['store']} as {civ}")
         self.set_status(f"Multiplayer , {civ}", OK)
         self._show_controls(True)
@@ -3882,9 +4488,16 @@ class Launcher:
                     log=self.say_threadsafe)
             except BaseException as exc:            # noqa: BLE001
                 # A dead worker must say so. Silence here reads as "my turn is
-                # still being set up", and the player waits forever.
-                self.say_threadsafe(f"multiplayer stopped: {exc}")
-                self._mp_state("failed", error=str(exc))
+                # still being set up", and the player waits forever. A relay
+                # refusal is said in the relay's own sentence, which is in the
+                # body of the response rather than in the exception's text.
+                said = relay_refusal(exc)
+                why = said[1] if said else str(exc)
+                self.say_threadsafe(f"multiplayer stopped: {why}")
+                self._mp_state("failed", error=why)
+                if said and SEAT_HELD in said[1]:
+                    self.msgs.put(("__mp_refused__", seat_held_text(
+                        civ, support_code(install_uid(self.data_dir)))))
 
         self.mp_thread = threading.Thread(target=work, daemon=True,
                                           name="multiplayer")
@@ -3924,6 +4537,24 @@ class Launcher:
         if kind == "capture_failed":
             self.mp_capture = (CAPTURE_FAILED, time.time())
             return
+        if kind == "refused_orders":
+            # The loop has logged the note's lines as refusals. A warning
+            # about missed turns travels in the same note, and it is shown in
+            # a box rather than left in the log. Read only when there is a
+            # note, which is the rare turn, and not a step of the turn, so the
+            # readout is left alone.
+            store = self.mp_store
+            if store is not None:
+                warning = self._warning_note(store, civ, (turn or 0) + 1)
+                if warning:
+                    self.msgs.put(("__mp_warning__", store, warning))
+            return
+        if kind in ("lost", "failed") and not getattr(self, "mp_closed",
+                                                      False):
+            # A turn that could not be sent is how a galaxy closed under a
+            # followed loop first shows: every store refuses the submission.
+            # One read of the state says whether that is what happened.
+            self._mp_probe_closed(self.mp_store)
         if kind == "submitted":
             self.mp_capture = (SENT, time.time())
             if facts.get("final"):
@@ -3955,10 +4586,15 @@ class Launcher:
             "reopening": "opening the game again",
             "waiting": "waiting for the next turn",
             "overtaken": "that turn closed without you",
+            "lost": "that turn could not be sent",
             "failed": f"stopped: {facts.get('error', 'unknown')}",
             "stopped": "stopped",
             "done": "finished",
         }.get(kind, kind)
+        if getattr(self, "mp_closed", False):
+            # Whatever the loop does on its way out, the galaxy has ended and
+            # that is the one thing worth reading beside the turn number.
+            self.mp_note = GALAXY_ENDED_NOTE
         # Set beside the note and from the same kind, so the two cannot come
         # apart: the readout asks this before it falls back to "waiting for
         # the next turn", and a galaxy that has stopped is what that wait has
@@ -3992,7 +4628,69 @@ class Launcher:
         self.mp_send_now.clear()
         self.mp_reopen.clear()
         self.mp_reopening = False
+        self.mp_closed = False
+        self.mp_probed = None
         self._show_capture(None, 0.0)
+
+    def _warning_note(self, store, civ, current):
+        """The referee's missed-turns warning for `civ` on the turn before
+        `current`, or None.
+
+        One read of that turn's note. A turn with no note, a store that cannot
+        be read, and a galaxy with no turn yet all answer None: a warning is
+        worth one read and not worth a failed Play.
+        """
+        if not civ or not _whole(current) or current < 1:
+            return None
+        try:
+            lines = store.note(civ, current - 1)
+        except Exception:                   # a readout is not worth an error path
+            return None
+        return abandonment_warning(lines)
+
+    def _mp_probe_closed(self, store):
+        """Read the followed galaxy's state once, and say so if it has closed.
+
+        Called on the worker thread when a turn could not be sent, and on a
+        thread of its own when the wait between turns runs past the point the
+        page would call the galaxy stopped: a closed galaxy's referee ticks
+        nothing, so from inside the loop the two look the same. The answer
+        goes to the Tk thread through the message queue.
+        """
+        if store is None:
+            return
+        try:
+            state = store.state()
+        except Exception:                   # a readout is not worth an error path
+            return
+        problem = closed_problem(state)
+        if problem:
+            self.msgs.put(("__mp_closed__", store, problem))
+
+    def _on_mp_closed(self, store, problem):
+        """The followed galaxy has closed. Stop following it and say why.
+
+        Runs on the Tk thread. A report about a store that is no longer the one
+        being followed is dropped, since Play on another galaxy has moved on.
+        """
+        if store is not self.mp_store or self.mp_closed:
+            return
+        self.mp_closed = True
+        self.mp_note = GALAXY_ENDED_NOTE
+        self.mp_stop = True
+        self.say("multiplayer: this galaxy has been closed; the turn loop "
+                 "stops here")
+        self.refresh_games()
+        self.warn(problem)
+
+    def _on_mp_warning(self, store, lines):
+        """Show a missed-turns warning the followed loop found. Tk thread."""
+        if store is not self.mp_store:
+            return
+        name = (self.mp_playing or {}).get("name") or ""
+        self.say(f"multiplayer: the referee has warned {self.mp_civ} about "
+                 f"missed turns")
+        self.warn(warning_text(name, lines))
 
     def start_ai(self, mode):
         """Start the opponent, and say clearly if there is not one to start."""
@@ -4222,9 +4920,19 @@ class Launcher:
         `playing` reports and the turn length was read once when the galaxy
         was opened, which is what keeps a once-a-second check free.
         """
-        if not self.mp_waiting:
+        if not self.mp_waiting or getattr(self, "mp_closed", False):
             return 0.0
-        return stalled_for(self.mp_deadline, self.mp_turn_seconds)
+        stopped = stalled_for(self.mp_deadline, self.mp_turn_seconds)
+        if stopped and getattr(self, "mp_probed", None) != self.mp_deadline:
+            # A closed galaxy stops ticking by design, and from here that is
+            # the same wait as a referee that is off. One state read per
+            # deadline tells them apart; it is off the Tk thread because this
+            # runs once a second.
+            self.mp_probed = self.mp_deadline
+            threading.Thread(target=self._mp_probe_closed,
+                             args=(self.mp_store,), daemon=True,
+                             name="closed-probe").start()
+        return stopped
 
     def _refresh_turn(self):
         """Update the turn readout
@@ -4603,6 +5311,17 @@ class Launcher:
                 elif isinstance(msg, tuple) and msg and msg[0] == "__games__":
                     _tag, rows, extra, err = msg
                     self._on_games(rows, extra, err)
+                    # A listing of the beta's directory is often this
+                    # install's first sign-in, so its code can appear now.
+                    self._show_support_code()
+                elif isinstance(msg, tuple) and msg and msg[0] == "__mp_closed__":
+                    _tag, store, problem = msg
+                    self._on_mp_closed(store, problem)
+                elif isinstance(msg, tuple) and msg and msg[0] == "__mp_warning__":
+                    _tag, store, lines = msg
+                    self._on_mp_warning(store, lines)
+                elif isinstance(msg, tuple) and msg and msg[0] == "__mp_refused__":
+                    self.warn(msg[1])
                 else:
                     self.say(msg)
         except queue.Empty:

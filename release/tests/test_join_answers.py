@@ -122,6 +122,9 @@ class Page:
     def _join_answers(self, rows, recs):
         return L.Launcher._join_answers(self, rows, recs)
 
+    def _reclaims(self, rows, recs):
+        return L.Launcher._reclaims(self, rows, recs)
+
     def refresh(self):
         """One Games refresh, run to the end: listed, posted, taken in."""
         L.Launcher.refresh_games(self)

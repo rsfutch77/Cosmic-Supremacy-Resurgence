@@ -341,8 +341,8 @@ check("a forming galaxy is offered neither",
       L.row_action(row(status="forming")), None)
 check("a closed one is offered neither",
       L.row_action(row(status="closed")), None)
-check("nor a closed one you are in",
-      L.row_action(row(status="closed", joined=True)), None)
+check("nor Play on a closed one you are in, which offers Reason",
+      L.row_action(row(status="closed", joined=True)), L.ENDED)
 check("nor one you have already asked for", L.row_action(row(), mine), None)
 
 waiting = {"sandbox": {"galaxy": "sandbox", "store": "x", "name": "Alice"},
