@@ -1624,6 +1624,38 @@ is out of scope here.
   launcher displays, a reclaim at the configured threshold, and a refusal message
   that explains itself.
 
+  **The server half, 29 September 2026.** Most of it was already there:
+  `server/abandonment.py` counts consecutive misses out of the archive,
+  `warn_after_misses` and `reclaim_after_misses` on the galaxy's state set the
+  two thresholds (defaults 6 and 12, 0 turns a stage off), the reclaim wipes
+  the civ with `wipe_civ`, takes it off the roster and records `reclaimed[civ]
+  = {turn, missed, at}`, which every store serves in its state, and
+  `launcher.roster_problem` turns that record into "This galaxy took the seat
+  back at turn T after N missed turns in a row".
+
+  **One gap was real: the warning was written where nobody reads it.** It went
+  on the note of the turn just missed, and a launcher reads the note of a turn
+  it plays. A player who missed a turn played none of the turns that note sat
+  on, so the warning never reached anyone. It now goes on the note of the turn
+  the silent player is served next, once per turn, carrying the count as that
+  turn opened, and a referee rerun over a turn it already closed does not add
+  it twice.
+
+  `test_abandonment.py` runs a galaxy through `resolve_turn` with one player
+  silent and the thresholds at 2 and 4: no note after one miss, the warning on
+  turn 3 saying two turns are left, the next count alone on turn 4, the seat
+  reclaimed at the fourth miss with `reclaimed` reading turn 4 and 4 missed,
+  and the launcher's own refusal built from that state. 43 checks became 57,
+  and each of four mutations fails a named check.
+
+  **Still open, in files this half does not own.** The relay still lets a
+  reclaimed sign-in's seat pass `seat_or_refuse`, because the seat map keeps
+  the reclaimed entry, so its upload is accepted and then dropped by the
+  referee as not on the roster; the relay should refuse it saying the seat was
+  reclaimed, when and after how many misses. And `player_turn.report_refusals`
+  prints every note line under "the referee refused N of your change(s)",
+  which is the wrong heading for a warning.
+
 - [x] **K4. Wipe a reclaimed civ from the galaxy.** Answered, and the unknown this
   item was built around does not exist. `server/dev_tools/wipe_civ.py` does the
   wipe and `server/dev_tools/wipe_acceptance.py` is the live harness.
@@ -1763,6 +1795,50 @@ is out of scope here.
   operator calls a galaxy over and starts a fresh one, so there has to be a way
   to close one that stops accepting submissions, keeps the archive readable, and
   tells every launcher why.
+
+  **The operator's half is built, 29 September 2026, and proved on the
+  emulator.** Closing already existed underneath: `status: closed` and a
+  `closed_reason` on the galaxy's state, every store refusing a submission
+  with `GalaxyClosed`, the relay refusing an upload ticket with the reason in
+  the refusal, the worker, `joins` and `abandonment` all leaving a closed galaxy
+  alone, and `launcher.closed_problem` saying the galaxy has ended in the
+  operator's words. What was missing was a way to do it that is not a Python
+  prompt. `server/dev_tools/galaxy_tool.py` is that, run with the referee's
+  administrator credentials and never through the relay:
+
+      python server/dev_tools/galaxy_tool.py firebase://cs-resurgence list
+      python server/dev_tools/galaxy_tool.py firebase://cs-resurgence close sandbox --reason "..."
+      python server/dev_tools/galaxy_tool.py firebase://cs-resurgence start season2 \
+          --name "Season Two" --generate fresh.b64 --player Alice --player Bob \
+          --replaces sandbox --dry-run
+
+  `close` requires a reason, since a player reads it, deletes nothing, and
+  reads the current turn and its archive back afterwards. `start` registers
+  the galaxy in the directory, which is what puts it on the Galaxies page, and
+  publishes turn one from either a generated galaxy made into one civ per
+  player by `make_multiplayer_galaxy.build`, or a blob that already holds a
+  civ for every player. It refuses an id that already has a turn, and takes
+  `--warn`, `--reclaim` and, on Firebase only, `--seat-claim first-use`.
+  `--replaces` closes the old galaxy only after the new one is published, so a
+  failed start leaves players with the galaxy they had, and its default reason
+  names the new galaxy. `--dry-run` checks everything, building a generated
+  galaxy in memory, and writes nothing.
+
+  A directory row now carries `closed_reason` for a closed galaxy, so the
+  Galaxies page can say why a galaxy ended from the listing it already holds.
+
+  `server/tests/test_galaxy_tool.py`, 54 checks, runs it against a folder and
+  then against Firebase on the emulator, and looks at the result through the
+  relay in process: the listing shows the old galaxy closed with its reason and
+  the new one open on turn one, `closed_problem` on the old galaxy's `/state`
+  gives the reason, a submission is refused by the launcher's store and the
+  relay's upload ticket is refused 409 with the reason, and the old turn is
+  still served. Each of nine mutations fails a named check.
+
+  **Not done by the tool, on purpose.** The referee worker ticks the one galaxy
+  its `--store` names, so a fresh galaxy is not ticked until the scheduled task
+  is pointed at it; the tool prints the command. Nothing has been closed or
+  started on `cs-resurgence`.
 
   **Done when:** a galaxy is closed and a fresh one started, and a launcher
   pointed at the closed one says so rather than failing.
