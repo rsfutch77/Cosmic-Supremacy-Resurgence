@@ -34,6 +34,7 @@ Requires `cs_server.py` on port 8888, which is where `collect` receives the blob
 import argparse
 import ctypes
 import os
+import re
 import sys
 import time
 
@@ -365,8 +366,30 @@ def report_refusals(store: TurnStore, civ: str, turn: int, log=print,
     for line in lines:
         log(f"[{civ}]     {line}")
     if emit:
-        emit("refused_orders", turn=turn, civ=civ, count=len(lines))
+        emit("refused_orders", turn=turn, civ=civ, count=len(lines),
+             lines=list(lines))
+        warning = warning_lines(lines)
+        if warning:
+            emit("warned", turn=turn, civ=civ, lines=warning)
     return len(lines)
+
+
+# The first line of `abandonment.warning_note`. The note is one list of lines,
+# refusals first and the warning appended after them by `abandonment`, so the
+# warning is this line and everything after it.
+WARNING_OPENS = re.compile(r"You have missed \d+ turns? in a row\.")
+
+
+def warning_lines(lines) -> list:
+    """The part of a referee's note that warns a silent player, or [].
+
+    Named here so a launcher reads the `warned` event rather than matching the
+    note's wording itself.
+    """
+    for i, line in enumerate(lines):
+        if WARNING_OPENS.fullmatch(line.strip()):
+            return list(lines[i:])
+    return []
 
 
 def follow(store: TurnStore, civ: str, poll: float = 5.0, rounds: int = 0,

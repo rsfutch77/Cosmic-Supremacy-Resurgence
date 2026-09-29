@@ -666,11 +666,10 @@ def run_token_checks(base, root, turn):
               any('Absent' in ln and 'identity offered' in ln
                   for ln in lines), False)
 
-        # The relay cannot see a submission's bytes, because they go to Cloud
-        # Storage directly, so it checks the object after it lands and removes
-        # one that is not a save. This service checks the same thing at the
-        # same point and leaves the store in the same state, which is the only
-        # way a launcher can treat the two as one.
+        # The relay refuses a body that is not a save of the turn before it
+        # stores anything. This service checks the same thing at the same
+        # point and leaves the store in the same state, which is the only way
+        # a launcher can treat the two as one.
         check('http: the service refuses a submission that is not a save',
               raises(post_junk, base, turn), 'HTTPError')
         check('http: and does not leave it for the referee to read',
@@ -679,6 +678,15 @@ def run_token_checks(base, root, turn):
               raises(post_stale, base, turn), 'HTTPError')
         check('http: and does not leave that either',
               TurnStore(root).submission('Stale', turn), None)
+        # The relay refuses before it stores, so a bad body leaves the
+        # submission it was sent over standing. Fails if this service stored
+        # first and removed after, which leaves the player with nothing.
+        plain.submit('Standing', turn, mine)
+        check('http: a refused body over a good submission raises',
+              raises(plain._post, f'/submission/{turn}/Standing',
+                     b'not a save at all'), 'HTTPError')
+        check('http: and the good one still stands',
+              TurnStore(root).submission('Standing', turn), mine)
     finally:
         turn_server.log, turn_server.VERBOSE = kept_log, kept_verbose
 
@@ -785,7 +793,7 @@ def run_submitted_field(spec):
         check('firebase: a submission is recorded once however often it is '
               'made', recorded(), {str(TURN): ['DemoPlayer']})
         store.submit('Neighbor', TURN, THEIRS)
-        check('firebase: the document and the bucket agree',
+        check('firebase: the document and the stored submissions agree',
               store.submitted_civs(TURN), store.listed_civs(TURN))
         check('firebase: CONTROL, and both name the two who submitted',
               store.listed_civs(TURN), ['DemoPlayer', 'Neighbor'])
@@ -799,19 +807,26 @@ def run_submitted_field(spec):
         # would keep every past turn and grow the document for ever.
         check('firebase: publish replaces the record with the new turn alone',
               recorded(), {str(TURN + 1): []})
-        check('firebase: a past turn is answered from the bucket',
+        check('firebase: a past turn is answered from the stored submissions',
               store.submitted_civs(TURN), ['DemoPlayer', 'Neighbor'])
         check('firebase: and the new turn from the document, as nobody',
               store.submitted_civs(TURN + 1), [])
 
-        # A galaxy last published by a store without the field, which is every
-        # galaxy live when this shipped.
+        # A galaxy last published by a store without either field, which is
+        # every galaxy live when H9 shipped, with a submission uploaded as a
+        # Storage object before H13.
         from google.cloud import firestore
-        store.doc.update({fs.SUBMITTED_KEY: firestore.DELETE_FIELD})
+        store.doc.update({fs.SUBMITTED_KEY: firestore.DELETE_FIELD,
+                          fs.SUBMISSIONS_FROM_KEY: firestore.DELETE_FIELD})
         store._put(store.submission_object('Neighbor', TURN + 1),
                    sp.encode_save(THEIRS), 'text/plain')
         check('firebase: a document without the field falls back to the '
               'bucket', store.submitted_civs(TURN + 1), ['Neighbor'])
+        # Fails if a galaxy started with submissions as documents still asked
+        # the bucket, which is a Class A listing for every past turn asked.
+        store.doc.update({fs.SUBMISSIONS_FROM_KEY: TURN})
+        check('firebase: CONTROL, and one started with documents does not',
+              store.submitted_civs(TURN + 1), [])
     finally:
         n = store.delete_everything()
         print(f'  removed {n} object(s) and document(s)')

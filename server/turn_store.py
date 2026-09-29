@@ -29,8 +29,9 @@ three, so a caller is given a string and never learns which it got.
 builds Google Cloud admin clients, and a player has no Google Cloud credential.
 So a player's launcher keeps speaking `HttpTurnStore`, and what answers is
 either `turn_server.py` on a LAN or the relay function in `functions/`, which
-holds the admin credential, verifies a Firebase ID token, and hands back signed
-URLs. `HttpTurnStore` carries the token and speaks to both.
+holds the admin credential, verifies a Firebase ID token, hands back signed
+URLs for turns, and carries submissions itself. `HttpTurnStore` carries the
+token and speaks to both.
 
 The layout is a directory, which is enough for one machine and for a shared
 folder between two:
@@ -89,6 +90,7 @@ consequence of not playing. The record says which turn took the seat and how
 many turns were missed, so the refusal can explain itself.
 """
 import base64
+import hashlib
 import json
 import os
 import struct
@@ -195,7 +197,15 @@ def decode_capped(raw, limit: int = MAX_DECODED_BYTES) -> bytes:
     """
     if isinstance(raw, str):
         raw = raw.encode('ascii')
-    decoded = base64.b64decode(raw)
+    return inflate_capped(base64.b64decode(raw), limit)
+
+
+def inflate_capped(decoded: bytes, limit: int = MAX_DECODED_BYTES) -> bytes:
+    """`decode_capped` for bytes already out of base64: the size dword and the
+    zlib stream. The Firebase store keeps a submission in this form, because
+    base64 would spend a third of a Firestore document on nothing."""
+    if len(decoded) < 4:
+        raise ValueError('a submission is at least a four-byte size header')
     expected = struct.unpack_from('<I', decoded, 0)[0]
     if expected > limit:
         raise SubmissionTooLarge(
@@ -891,6 +901,10 @@ class HttpTurnStore:
         self._held = None
         self._writes = 0
         self._held_lock = threading.Lock()
+        # (civ, turn) -> (tag, blob) for the submission this store last sent
+        # or was sent, so asking for it again can be answered 304 without a
+        # body. See `submission`.
+        self._known = {}
 
     # -- plumbing --
     def _url(self, path: str) -> str:
@@ -918,17 +932,29 @@ class HttpTurnStore:
                 _drop_auth_on_redirect())
         return self._opener.open(req, timeout=self.timeout)
 
-    def _get(self, path, want_json=True):
+    def _get(self, path, want_json=True, headers=None, answer=None):
+        """One GET, None for a 404.
+
+        `answer`, when given, is a dict that receives the response's `status`
+        and `etag`, which is how `submission` tells a 304 from a body.
+        """
         import urllib.error
         import urllib.request
         url = self._url(path)
         req = urllib.request.Request(url, method='GET')
-        for k, v in self._headers(url).items():
+        for k, v in dict(headers or {}, **self._headers(url)).items():
             req.add_header(k, v)
         try:
             with self._open(req) as r:
                 body = r.read()
+                if answer is not None:
+                    answer['status'] = r.status
+                    answer['etag'] = r.headers.get('ETag')
         except urllib.error.HTTPError as exc:
+            if exc.code == 304 and answer is not None:
+                answer['status'] = 304
+                answer['etag'] = exc.headers.get('ETag')
+                return None
             if exc.code == 404:
                 return None
             raise
@@ -956,7 +982,12 @@ class HttpTurnStore:
         own output and a galaxy is free to grow; a submission is a player's
         upload and is the one a stranger chooses the bytes of.
         """
-        data = self._get(path, want_json=False)
+        return self._decode_blob(self._get(path, want_json=False), limit)
+
+    @staticmethod
+    def _decode_blob(data, limit: int = None):
+        """`_blob`'s decoding half, for a caller that made the request itself.
+        """
         if data is None or data[:4] in sp.KNOWN_TAGS:
             if limit is not None and data is not None and len(data) > limit:
                 raise SubmissionTooLarge(
@@ -1088,12 +1119,14 @@ class HttpTurnStore:
     def submit(self, civ: str, turn: int, blob: bytes) -> str:
         """Hand a player's state back, by whichever route the far end offers.
 
-        Two shapes, one code path. `turn_server.py` takes the bytes itself and
-        its ticket says so. The relay function will not carry a blob at all: it
-        authorises the write and hands back a signed Cloud Storage URL, so the
-        bytes go to Storage directly and the function stays the control plane.
-        Asking for the ticket first is what lets one store speak to both, and
-        what will let the far end change again without a new launcher.
+        The ticket names where the bytes go, in what encoding, and whether a
+        commit follows. `turn_server.py` names its own POST route and a
+        commit. The relay names its own POST route and no commit, because it
+        checks and stores the body in the one call; a relay deployed before
+        H13 named a signed Cloud Storage URL and a commit, and builds that
+        predate H13 follow either ticket unchanged. Asking for the ticket first
+        is what lets one store speak to all of them, and what let the far end
+        change again without a new launcher.
 
         A service that predates the ticket route answers 404 and the bytes are
         posted as they always were. A service that has the route and refuses
@@ -1110,16 +1143,19 @@ class HttpTurnStore:
             raise GalaxyClosed(f'this galaxy is closed and is not taking '
                                f'submissions ({self.base})')
         path = f'/submission/{turn}/{urllib.parse.quote(civ)}'
+        self._known.pop((civ, turn), None)
         ticket = self._get(f'/upload{path}')
         if ticket is None:
             self._post(path, blob)
-            return f'{self.base}/submission/{turn}/{civ}'
-        body = sp.encode_save(blob) if ticket.get('encoding') == 'b64' else blob
-        self._send(ticket['url'], body,
-                   method=ticket.get('method', 'PUT'),
-                   headers=ticket.get('headers'), want_json=False)
-        if ticket.get('commit'):
-            self._post(ticket['commit'], b'')
+        else:
+            body = (sp.encode_save(blob) if ticket.get('encoding') == 'b64'
+                    else blob)
+            self._send(ticket['url'], body,
+                       method=ticket.get('method', 'PUT'),
+                       headers=ticket.get('headers'), want_json=False)
+            if ticket.get('commit'):
+                self._post(ticket['commit'], b'')
+        self._known[(civ, turn)] = (submission_tag(blob), blob)
         return f'{self.base}/submission/{turn}/{civ}'
 
     def has_submitted(self, civ: str, turn: int) -> bool:
@@ -1138,9 +1174,31 @@ class HttpTurnStore:
 
         `_get` turns the service's 404 into None, which is the same answer the
         directory store gives for a file that is not there.
+
+        **A submission this store already holds is asked for by its tag.**
+        `player_turn` reads its own submission before every upload and again
+        after it, so nearly every read is of bytes this launcher sent. The
+        relay answers `If-None-Match` with 304 and no body when the stored
+        submission has that tag, so the read still proves what the far end
+        holds and costs no egress. A service that ignores the header sends the
+        body, which is handled the same as always.
         """
-        return self._blob(f'/submission/{turn}/{urllib.parse.quote(civ)}',
-                          limit=MAX_DECODED_BYTES)
+        path = f'/submission/{turn}/{urllib.parse.quote(civ)}'
+        known = self._known.get((civ, turn))
+        headers = {'If-None-Match': f'"{known[0]}"'} if known else None
+        answer = {}
+        data = self._get(path, want_json=False, headers=headers,
+                         answer=answer)
+        if answer.get('status') == 304 and known:
+            return known[1]
+        if data is None:
+            self._known.pop((civ, turn), None)
+            return None
+        blob = self._decode_blob(data, limit=MAX_DECODED_BYTES)
+        tag = (answer.get('etag') or '').strip('"')
+        if tag and tag == submission_tag(blob):
+            self._known[(civ, turn)] = (tag, blob)
+        return blob
 
     def submissions(self, turn: int) -> dict:
         out = {}
@@ -1251,19 +1309,26 @@ def turn_of(blob: bytes) -> int:
     return struct.unpack_from('<I', blob, glob.payload)[0]
 
 
+def submission_tag(blob: bytes) -> str:
+    """The tag a stored submission is known by: SHA-256 of the decompressed
+    bytes, hex. The relay serves it as the ETag of `/submission/<n>/<civ>`,
+    and `HttpTurnStore` sends it back as `If-None-Match`. Taken over the
+    decompressed blob rather than the wire form, so the tag does not depend
+    on which side compressed it."""
+    return hashlib.sha256(blob).hexdigest()
+
+
 def check_save(blob: bytes, turn: int = None) -> int:
     """Refuse bytes that are not a save of this galaxy's current turn.
 
     Raises `ValueError` naming what was wrong, and returns the turn the blob
     carries when there was nothing wrong with it.
 
-    Two callers want this and they want it for different reasons. The relay
-    function cannot see a submission's bytes, because they go to Cloud Storage
-    directly, so it checks the object once after it lands; `turn_server.py`
-    checks the same thing at the same point so that the two services refuse the
-    same submissions. Without it the first thing to read a bad submission is the
-    referee, at the turn boundary, where one player's junk stops everyone's
-    turn.
+    Two callers want this. The relay function checks a submission's body
+    before it stores it, and `turn_server.py` checks the same thing at its
+    commit so that the two services refuse the same submissions. Without it
+    the first thing to read a bad submission is the referee, at the turn
+    boundary, where one player's junk stops everyone's turn.
 
     The check is deliberately shallow: the wire form decodes, the section tree
     parses, and the turn number in `GLOB` is the one being played. It does not

@@ -41,11 +41,12 @@ The upload ticket and its commit exist here because the relay function in
 `functions/` has them, and a route that exists on one side of this seam and not
 the other is this project's characteristic bug: F3 shipped a launcher against a
 service that had grown a route it did not have, and the failure arrived as a 404
-in the middle of a rehearsal rather than as a mismatch anyone could see. The
-relay's ticket names a signed Cloud Storage URL, because it will not carry a
-blob; this service's ticket names its own POST route, because carrying the blob
-is all it does. `HttpTurnStore.submit` asks for a ticket and follows whichever
-it is given, so one launcher speaks to both.
+in the middle of a rehearsal rather than as a mismatch anyone could see. Both
+tickets name the service's own POST route. The relay's asks for the base64
+wire form and names no commit, because it checks and stores the body in one
+call; this one asks for the raw blob and names a commit, which checks what was
+stored. `HttpTurnStore.submit` asks for a ticket and follows whichever it is
+given, so one launcher speaks to both.
 
 **There is no authentication here.** Anyone who can reach the port can publish a
 turn or submit as any civ. That is deliberate for a closed beta among people who
@@ -80,10 +81,10 @@ from turn_store import TurnStore, check_save
 STORE = None
 VERBOSE = True
 
-# The ceiling the relay function signs into a submission upload. Named here as
-# well so that the ticket this service hands out carries the same number, and a
+# The ceiling the relay function puts on a submission body. Named here as well
+# so that the ticket this service hands out carries the same number, and a
 # launcher that checks a save before uploading it gets one answer from both.
-MAX_SUBMISSION_BYTES = 2 * 1024 * 1024
+MAX_SUBMISSION_BYTES = 1024 * 1024
 
 
 def log(msg):
@@ -227,6 +228,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({'turn': n})
             if len(parts) == 3 and parts[0] == 'submission':
                 n, civ = int(parts[1]), parts[2]
+                # Checked before it is stored, as the relay checks it, so a
+                # body that is not a save of this turn leaves the submission
+                # it was sent over standing on both services.
+                check_save(body, n)
                 STORE.submit(civ, n, body)
                 log(f'  {civ} submitted for turn {n}, {len(body):,} bytes'
                     f'{self._who()}')
@@ -243,11 +248,11 @@ class Handler(BaseHTTPRequestHandler):
                 try:
                     check_save(blob, n)
                 except ValueError:
-                    # Removed rather than left, because the relay removes it
-                    # and the two have to leave the store in the same state.
-                    # A submission that does not parse stops the referee at the
-                    # turn boundary, where it is one player's junk and
-                    # everyone's turn.
+                    # Reachable only for a file written into the directory by
+                    # something other than the POST above, which checks first.
+                    # Removed rather than left: a submission that does not
+                    # parse stops the referee at the turn boundary, where it is
+                    # one player's junk and everyone's turn.
                     os.remove(STORE.submission_path(civ, n))
                     raise
                 log(f'  {civ} committed turn {n}, {len(blob):,} bytes'
@@ -293,9 +298,8 @@ def upload_ticket(turn: int, civ: str) -> dict:
     The same shape the relay function answers with, deliberately: a launcher
     reads `url`, `method`, `encoding` and `commit`, and never learns which
     service it is talking to. `encoding` is `raw` because this service encodes
-    to the wire form itself, where the relay hands out a signed URL that writes
-    straight into Cloud Storage and the launcher has to send the bytes the store
-    keeps.
+    to the wire form itself; the relay asks for `b64`, the smaller form, and
+    decodes it on its side.
     """
     quoted = urllib.parse.quote(civ)
     return {

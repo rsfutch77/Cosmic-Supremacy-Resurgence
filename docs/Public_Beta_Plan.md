@@ -825,17 +825,19 @@ is out of scope here.
   | allowance | per launcher per month | launchers inside it |
   |---|---|---|
   | Cloud Run requests, 2 million | about 71,700 | about 28 |
-  | Storage Class A, 5,000 | at least 180, one upload a turn | about 27 |
-  | Storage Class B, 50,000 | 1,440 before, about 1,080 after | 34 before, about 46 after |
-  | Firestore reads, 50,000 a day | see above | inside at 1 galaxy |
+  | Storage Class A, 5,000 | at least 180, one upload a turn; 0 after H13 | about 27; not a launcher term after H13 |
+  | Storage Class B, 50,000 | 1,440 before, about 1,080 after; about 182 after H13 | 34 before, about 46 after; about 270 after H13 |
+  | Firestore reads, 50,000 a day | see above, and H13 adds about 30 a day | inside at 1 galaxy |
   | Cloud Run CPU, 180,000 vCPU-seconds | not measured | not known |
 
   Requests are the binding poll cost now, and nothing in the relay reduces
   them: only asking less often does. The Games page is 60% of a launcher's
   requests, so its 120-second timer is the largest lever, and it is the
-  launcher's. Class A is H5's constraint and is uploads rather than polls.
-  The Class B figures are per turn from the code paths, 8 operations before
-  and 6 after, with the route-level savings measured. CPU needs Cloud
+  launcher's. Class A is H5's constraint and is uploads rather than polls;
+  H13 moved submissions and notes to Firestore, which leaves Class A a term
+  per galaxy, one turn published a tick. The Class B figures are per turn
+  from the code paths, 8 operations before and 6 after, with the route-level
+  savings measured, and 1 after H13, the turn download. CPU needs Cloud
   Monitoring from the live function, since the emulator says nothing about
   billed instance time.
 
@@ -862,6 +864,150 @@ is out of scope here.
   function's request count, Firestore reads and CPU seconds is written here
   against the estimates above, and the Games page poll is set from that
   measurement.
+
+- [ ] **H13. Submissions at hundreds of players.** H12 found Storage Class A
+  capping the beta at about 27 players, and every one of those operations was
+  a submission upload: a PUT to the signed URL the relay handed out. The
+  target is hundreds of players who leave the launcher open all month, and
+  the backend is not bound to the original game's design, so the question was
+  where a submission should live rather than how to make fewer of them.
+
+  **How many uploads a player makes, measured.** H5 describes a submit every
+  20 seconds. That is no longer the code: `follow` captures every 5 seconds
+  and uploads on its own cadence, `UPLOADS_PER_TURN = 2`, one at the halfway
+  point and one at the deadline, skipping a capture identical to the one last
+  sent, and once more for each press of Save. Counted through the real
+  `follow` on a fake clock at four-hour turns, and now asserted in
+  `test_submission_path.py`:
+
+  | one four-hour turn, measured | uploads |
+  |---|---|
+  | idle, game window open all turn | 1 |
+  | played the first half hour, window left open | 1 |
+  | played the first half hour, then closed the window | 1 |
+  | played across the whole turn | 2 |
+  | played across the turn, pressed Save three times | 4 |
+
+  An idle turn still uploads once, because the first capture of a turn always
+  differs from nothing sent. So a player is 182 to 364 uploads a month at 182
+  turns, more with Save: before this item, 182 to 364 Class A operations a
+  month each, against 5,000 for the project.
+
+  **Three candidates.** (a) The relay takes the body itself and stores it as a
+  Firestore document per turn and civ, with Storage kept for published turns.
+  (b) Interim submissions in Firestore and only the final one in Storage.
+  (c) Keep Storage and upload less often. (c) cannot reach hundreds: at its
+  floor of one upload a turn it is still 182 Class A a player a month, 27
+  players. (b) keeps one Class A a player a turn for the final upload, the
+  same 27, and needs both paths in the relay and the store. (a) is the only
+  one whose Class A term does not grow with players.
+
+  **Decided: (a), built 29 September 2026.** What it costs instead:
+
+  - **Firestore writes.** One per upload, and one more on a civ's first upload
+    of a turn, which records them on the galaxy document; measured in
+    `test_relay_costs.py` as 2 then 1. Estimated at 12 to 18 a player a day at
+    six turns, before Save: 1,200 to 1,800 a day at 100 players, 6% to 9% of
+    20,000, and 6,000 to 9,000 at 500, 30% to 45%. Before this item a commit
+    also wrote the galaxy document every upload, so this is about one more
+    write a player a turn than before, not a new term.
+  - **Firestore deletes.** `publish` deletes submissions and notes older than
+    `SUBMISSION_TURNS_KEPT`, 18 turns, three days at four-hour turns, so
+    `referee --verify` can still recompute any recent turn. One delete a
+    player a turn: 600 a day at 100 players, 3%, and 3,000 at 500, 15%.
+  - **Firestore storage.** About 10 KB a submission compressed (the measured
+    `DemoPlayer` submission is 12,952 bytes in base64, 39,210 decoded).
+    Estimated at 18 MB kept at 100 players and 90 MB at 500, of 1 GiB.
+    Without the deletes it grows by about 180 MB a month at 100 players.
+  - **Firestore reads.** A submission read is two document reads (the galaxy
+    document for the seat, then the submission), where it was one read and a
+    Class B download; the ticket reads nothing, where it read one; the POST
+    reads one, as the commit did. The referee reads each submission once at
+    the boundary and `has_submitted` is a read rather than a Class B. Estimated
+    at about 30 reads a player a day more than H12's figures: 3,000 a day at
+    100 players and 15,000 at 500. At 500 players on one galaxy that takes
+    H12's 30,500 to about 45,000 of 50,000, so Firestore reads are the next
+    allowance to bind once requests are dealt with.
+  - **The document cap.** A Firestore document is capped at 1 MiB. The relay's
+    body cap, `MAX_BYTES`, drops from 2 MiB to 1 MiB of base64, which is
+    768 KiB once decoded; the store refuses anything over
+    `MAX_SUBMISSION_DATA`, 900 KiB compressed, before Firestore can. A real
+    submission is about 13 KB of base64, so 1 MiB is about 80 times one. The
+    largest save in the checkout, 129,853 bytes decoded, was not measured in
+    wire form; at the measured one's ratio it is about 43 KB, an estimate.
+  - **Relay CPU and egress.** The relay already downloaded and parsed every
+    upload at commit, so the decode and `check_save` are the same work at a
+    different moment. What is new is the body arriving at the function
+    rather than at Storage, about 13 KB an upload, and submissions served
+    from the function. A launcher reads its own submission before every
+    upload and after it, so `HttpTurnStore` sends the tag of the bytes it
+    holds as `If-None-Match` and the relay answers 304 with no body when they
+    match; measured, a read after an upload is a 304 of 0 bytes. Builds from
+    before this item do not send the tag and get the body, about 26 KB an
+    upload. **Whether Cloud Run ingress and egress at these sizes are inside
+    a free allowance needs verifying against current Google billing
+    documentation**; no figure for them is given here.
+
+  **What it keeps.** The seat is checked in code on a fresh read of the
+  galaxy document, never a held copy; a closed galaxy is refused; the turn
+  must be the one being played; the body is capped before it is decoded, is
+  inflated under `MAX_DECODED_BYTES` so a body built to expand is refused
+  while it is read, and must be a save of the current turn. Every refusal now
+  comes before the write, so a bad upload leaves the submission it was sent
+  over standing, where the commit used to delete it. `turn_server.py` checks
+  before storing too, so the two services still leave a store in the same
+  state. `referee.py` and the three stores keep one interface: `submit`,
+  `submission`, `submissions`, `has_submitted` and `submitted_civs` are
+  unchanged in signature and in what they answer. Notes moved with
+  submissions, because every launcher asks for its note once a turn and as an
+  object that was a Class B whether or not a note existed.
+
+  **Launchers already shipped, v0.1.4 and v0.1.5.** Both still submit after
+  the relay is redeployed, unchanged: they ask `GET /upload/submission` for a
+  ticket and follow its `url`, `method`, `encoding` and `commit`. The ticket
+  now names the relay's own route, `/submission/<n>/<civ>`, `POST`, `b64`, and
+  a `commit` of null, which is the shape `turn_server.py` has always answered
+  with and which both builds already follow: a relative `url` goes to the
+  launcher's own base with its token, and a null `commit` is skipped. Tested
+  by running the `turn_store.py` each build carries, recovered from git at
+  the commits stamped into their `build.json` (`7940532` and `9b39f0d`, both
+  marked dirty), against this relay on the emulator: each submission lands,
+  reads back, shows as submitted, and a bad body is refused with the good one
+  left standing. A ticket handed out before the redeploy still names a signed
+  Storage URL for up to 10 minutes; its commit reads the object, stores it as
+  a document and deletes it.
+
+  **Changing over mid-turn.** A galaxy started before this item carries no
+  `submissions_from`, so a submission or note not found as a document is
+  looked for as an object, and a document wins over an object for the same
+  civ. `publish` writes the marker at the first turn it publishes, after
+  which no Storage is consulted. So the relay can be redeployed and the
+  worker restarted in the middle of a turn without losing a submission
+  already uploaded, provided **both happen before that turn's deadline**:
+  a new relay with an old worker writes documents the old worker does not
+  read.
+
+  | per player per month, four-hour turns | before | after |
+  |---|---|---|
+  | uploads, measured per turn | 182 to 364 | 182 to 364 |
+  | Storage Class A | 182 to 364 | **0** |
+  | Storage Class B, from the code paths | about 1,090 to 1,640 | about 182 |
+  | players inside Class A, estimate | about 27 | not a player term |
+
+  Class A is a term per galaxy now, one turn published a tick, 182 a month,
+  and the referee's listing of each turn's submissions is gone with it: about
+  27 galaxies at four-hour turns, an estimate. **Cloud Run requests still
+  bind first**, at about 28 launchers, and this item does not change them: an
+  upload is still three relay requests, the closed check, the ticket and the
+  POST, where it was the closed check, the ticket and the commit.
+
+  Tests: `test_submission_path.py`, 46 checks, new. `test_relay_costs.py`
+  32 to 49, `test_relay_function.py` 155 to 161, `test_store_equivalence.py`
+  306 to 309. 25 changes mutation-confirmed, each caught by a named check.
+
+  **Done when:** the relay is redeployed and the worker restarted within one
+  turn, a live turn closes with submissions read from documents, and Cloud
+  Monitoring shows no Storage write for a submission across a day.
 
 - [x] **H6. A store fetches one submission, not all of them.** `player_turn.py`
   reached its own submission through `store.submissions(turn).get(civ)`, which
@@ -960,6 +1106,12 @@ is out of scope here.
   out, and they are not exclusive: lengthen the interval, keep interim
   submissions in Firestore and write only the final one to Storage, or take the
   Firestore-only variant in H0 and the constraint disappears.
+
+  The 20-second cadence above is no longer the code, and H13 measures what
+  replaced it: one or two uploads a four-hour turn, plus one per Save. H13
+  also took the second way out, further than written: every submission is a
+  Firestore document, not only the interim ones, so uploads spend no Class A
+  at all.
 
   **This sentence described a design, not the code, and the code is the opposite.**
   It read: the launcher polls against the deadline it already knows rather than
