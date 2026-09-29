@@ -1147,11 +1147,62 @@ is out of scope here.
   playing anything, or that let A quietly accumulate a second seat, would have
   passed a test written only around the headline.
 
-  **Rebinding is the third and is not built.** Nothing anywhere writes a seat
-  except `claim_seat`, and `operator_view` has no way to move one. Until it
-  does, a player who reinstalls Windows gets a new anonymous uid and is locked
-  out of their own empire with no way back that does not involve editing
-  Firestore by hand.
+  **Rebinding is the third, and is built on the emulator, 29 September 2026.**
+  `server/dev_tools/seat_tool.py` runs with the operator's administrator
+  credentials, the ones the referee holds, and never through the relay:
+
+      python server/dev_tools/seat_tool.py firebase://cs-resurgence/<galaxy> list
+      python server/dev_tools/seat_tool.py firebase://cs-resurgence/<galaxy> candidates
+      python server/dev_tools/seat_tool.py firebase://cs-resurgence/<galaxy> rebind <civ> <uid>
+
+  `rebind` moves a held seat in one Firestore transaction and records the last
+  move of each civ under `seats_rebound`, which is not a state field and so is
+  never served to a player. It refuses a civ not on the roster (a reclaimed one
+  included), a civ no uid holds, a target uid that already holds another seat,
+  a string that is not a uid, and a uid Firebase Auth does not know, because a
+  typo would lock the player out a second time. `--dry-run` says what it would
+  do and writes nothing.
+
+  **How the operator learns the new uid.** Not from the player: the uid is
+  never shown, and `fb_identity.json`, the only place it is written, also holds
+  the refresh token, which is a credential nobody should ask for. `candidates`
+  answers from the operator's side instead. It lists every Firebase sign-in
+  that holds no seat in the galaxy, most recently active first, with when it
+  was created and when it last refreshed a token, and marks sign-ins seated in
+  another galaxy. A launcher refreshes on start, so a player who has just been
+  refused on a fresh install is the unseated sign-in created minutes ago. With
+  more than a handful of strangers signing in at once this becomes a judgement,
+  and the launcher showing a short support code would make it exact.
+
+  **Release was considered and not built.** Deleting the seat and letting the
+  next first-use claim take it hands an established empire to whichever sign-in
+  submits as that civ first, and the roster is public. With first-use off it
+  leaves the civ unplayable until the operator binds it anyway. A rebind names
+  the uid and leaves no window.
+
+  **`bind` seats a civ nobody holds**, with the same refusals, and refuses a
+  held one. It exists because a join granted at a boundary records the asking
+  uid under `joined` and does not write `seats`, so on a galaxy with first-use
+  off a joiner is on the roster and cannot play through the relay until the
+  operator binds them. The operator view names that uid.
+
+  Measured by `server/tests/test_seat_rebind.py`, the relay in process on the
+  Firestore, Storage and Auth emulators with real anonymous sign-ins, 59 checks:
+
+  | | |
+  |---|---|
+  | A plays `DemoPlayer` | submission lands |
+  | B asks for `DemoPlayer` | **403, already held by another sign-in**; A's submission stands |
+  | six operator refusals | each refused with its reason, seat map unchanged |
+  | `candidates` | B is the newest unseated sign-in; no seated uid offered |
+  | operator rebinds `DemoPlayer` to B | A's entry gone, B's written, every other seat unchanged |
+  | B plays `DemoPlayer` | submission lands |
+  | A asks for `DemoPlayer` again | **403**; B's submission stands |
+
+  Not yet run against `cs-resurgence`. The Auth lookups use the Identity
+  Toolkit admin API with default credentials there, and the emulator takes a
+  fixed stand-in token, so the first live `candidates` is also the first test
+  of that credential path.
 
   **Done when:** a name in the roster is refused from a second install, allowed
   from the install that claimed it, and rebindable by the operator.
@@ -1709,7 +1760,22 @@ is out of scope here.
   **Done when:** the state of the galaxy can be read without opening a log file
   or a terminal.
 
-- [ ]~ **N4. What players are told, in the launcher and wherever they sign up.**
+  **Seats and the worker's heartbeat, 29 September 2026.** On Firebase, which is
+  where the live galaxy is, the view showed neither: `FirebaseTurnStore.state`
+  returns only the store interface's fields, and `seats`, `worker_seen` and
+  `worker_failures` are not among them. The view now makes one `get` of the
+  galaxy document for those fields and nothing else, still behind the
+  `STORE_READS` allowlist for every other read. Each galaxy gains a `referee`
+  line, when the worker was last heard from and how many failures in a row, and
+  a `seats` block, each civ with the first eight characters of its uid and when
+  it last moved. Three new problems: a worker failing and retrying, a worker
+  silent since before an overdue turn fell due, which is a stopped machine
+  rather than a failing one, and a roster civ nobody can play because no uid
+  holds it and first-use is off.
+
+  What stands between this and the done-when is the terminal: `--serve` and
+  `--html` are both started from one.
+ What players are told, in the launcher and wherever they sign up.**
   Not a footnote: several of these are properties the design has accepted rather
   than faults waiting to be fixed, and a beta tester who learns them by discovery
   reports them as bugs.
@@ -1765,7 +1831,7 @@ is out of scope here.
   config file to do it, and a launcher meeting an abandoned `cs_server` says
   what it is.
 
-- [ ] **N7. The referee flashes a console window on every tick.**
+- [ ]~ **N7. The referee flashes a console window on every tick.**
   `server/referee.py:269` spawns `advance_turns.py` without `CREATE_NO_WINDOW`.
   The client-side tools were fixed; this one is the referee's own. Checked
   across the tree in September 2026: every other console-spawning site is
@@ -1775,6 +1841,14 @@ is out of scope here.
 
   **Done when:** a turn closes with nothing appearing on the desktop but the
   game client.
+
+  **The flag is set, 29 September 2026**, the `_NO_WINDOW` way
+  `referee_worker.py` already does it. `test_no_console_windows.py` runs
+  `referee.tick` whole with the client stood in for and reads the flag off the
+  one call it makes, and its sweep now covers `referee.py` and
+  `referee_worker.py`, so a new bare spawn in either fails it. What is left is
+  the done-when itself, which only a person watching the desktop through a
+  real tick can confirm, and it takes effect once the worker is restarted.
 
 ---
 
