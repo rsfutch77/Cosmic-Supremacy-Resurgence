@@ -36,13 +36,14 @@ third of the document on nothing.
                                         the directory's row for this galaxy
       beta/<galaxy>/archive/<turn>      what the referee recorded for a turn
       beta/<galaxy>/submissions/0007~X  what civ X handed back for turn 7
+      beta/<galaxy>/notes/0007~X        what the referee refused from X
       beta/<galaxy>/joins/<key>         a seat a stranger has asked for
       beta/<galaxy>/joins_done/<key>    what the worker decided about it
 
     Cloud Storage
       beta/<galaxy>/turns/0007.b64            the state for turn 7
       beta/<galaxy>/submissions/0007/X.b64    a submission made before H13
-      beta/<galaxy>/notes/0007/X.txt          what the referee refused from X
+      beta/<galaxy>/notes/0007/X.txt          a note left before H13
 
 Everything sits under one prefix so it cannot collide with the website the same
 Firebase project hosts.
@@ -50,11 +51,12 @@ Firebase project hosts.
 **A civ name is never a Firestore field name.** A civ name is a username a
 player typed. Firestore restricts what a document id and a field name may
 contain, so an archive record keyed by civ name is stored as one JSON string
-rather than as a map, which also keeps it identical to what `referee` wrote,
-and notes keep the directory store's own layout as objects. A submission
-document's id carries the civ name escaped by `join_doc_id`, one to one, and
-the name itself is a field of the document, which is what every reader takes
-it from.
+rather than as a map, which also keeps it identical to what `referee` wrote. A
+submission or note document's id carries the civ name escaped by
+`join_doc_id`, one to one, and the name itself is a field of the document,
+which is what every reader takes it from. Notes moved with submissions because
+every launcher asks for its note once a turn, and as an object that ask was a
+Class B operation whether or not there was a note.
 
 Objects hold the same base64 wire bytes the directory store writes to disk, so
 an object downloaded here and a file copied out of a directory store decode
@@ -170,6 +172,9 @@ SUBMITTED_KEY = 'submitted'
 # Where submissions live, one document per turn and civ. See the module
 # docstring and the plan's H13.
 SUBMISSION_COLLECTION = 'submissions'
+
+# The referee's notes, the same way and kept for the same number of turns.
+NOTE_COLLECTION = 'notes'
 
 # The first turn whose submissions are documents only, on the galaxy document.
 # `start` writes it, and `publish` writes it once on a galaxy that lacks it,
@@ -409,11 +414,21 @@ class FirebaseTurnStore:
         The turn leads the id so the console lists a turn's submissions
         together. `~` cannot appear in the turn half, so the id splits one way.
         """
+        return self.submission_collection.document(self._civ_turn_id(civ,
+                                                                     turn))
+
+    def note_doc(self, civ: str, turn: int):
+        """The document the referee's note to one civ for one turn lives in."""
+        return self.doc.collection(NOTE_COLLECTION).document(
+            self._civ_turn_id(civ, turn))
+
+    @staticmethod
+    def _civ_turn_id(civ: str, turn: int) -> str:
         name = f'{int(turn):04d}~{join_doc_id(civ)}'
         if len(name.encode('utf-8')) > MAX_DOC_ID:
-            raise ValueError(f'a civ name this long cannot name a submission '
+            raise ValueError(f'a civ name this long cannot name a document '
                              f'({len(civ)} characters)')
-        return self.submission_collection.document(name)
+        return name
 
     def _object(self, *parts) -> str:
         return '/'.join((self.prefix, self.galaxy) + parts)
@@ -801,16 +816,20 @@ class FirebaseTurnStore:
         return dict(sorted(out.items()))
 
     def prune_submissions(self, before: int) -> int:
-        """Delete every submission document for a turn before `before`.
+        """Delete every submission and note document for a turn before
+        `before`, and say how many went.
 
         Called by `publish`. One read per document found and one delete each,
         in batches under Firestore's 500 writes a batch. The objects of a turn
         before the submissions were documents are left where they are.
         """
         from google.cloud.firestore_v1.base_query import FieldFilter
-        snaps = list(self.submission_collection.where(
-            filter=FieldFilter('turn', '<', int(before))).select(
-                ['turn']).stream())
+        snaps = []
+        for coll in (self.submission_collection,
+                     self.doc.collection(NOTE_COLLECTION)):
+            snaps += list(coll.where(
+                filter=FieldFilter('turn', '<', int(before))).select(
+                    ['turn']).stream())
         for i in range(0, len(snaps), 400):
             batch = self.fs.batch()
             for snap in snaps[i:i + 400]:
@@ -842,13 +861,29 @@ class FirebaseTurnStore:
     # ── notes ────────────────────────────────────────────────────────────────
     def put_note(self, civ: str, turn: int, lines) -> None:
         """Leave one player the referee's reasons for refusing part of a turn.
+
+        A document, for the reason a submission is one: every player's
+        launcher asks for its note once a turn, and as an object that ask was
+        a Class B operation whether or not a note existed.
         """
-        self._put(self.note_object(civ, turn),
-                  '\n'.join(lines).encode('utf-8'),
-                  'text/plain; charset=utf-8')
+        self.note_doc(civ, turn).set({
+            'turn': int(turn),
+            'civ': civ,
+            'lines': [str(line) for line in lines],
+        })
 
     def note(self, civ: str, turn: int) -> list:
-        """Those reasons, or [] when the turn was taken whole."""
+        """Those reasons, or [] when the turn was taken whole.
+
+        One Firestore read. A turn from before notes were documents is looked
+        for as an object when there is no document.
+        """
+        snap = self.note_doc(civ, turn).get()
+        if snap.exists:
+            return [line for line in (snap.to_dict() or {}).get('lines') or []
+                    if line]
+        if not self.before_documents(turn):
+            return []
         data = self._get(self.note_object(civ, turn))
         if not data:
             return []
@@ -961,7 +996,8 @@ class FirebaseTurnStore:
                                         prefix=self._object() + '/'):
             blob.delete()
             n += 1
-        for name in ('archive', SUBMISSION_COLLECTION, JOIN_COLLECTION,
+        for name in ('archive', SUBMISSION_COLLECTION, NOTE_COLLECTION,
+                     JOIN_COLLECTION,
                      JOIN_DONE_COLLECTION):
             for snap in self.doc.collection(name).stream():
                 snap.reference.delete()

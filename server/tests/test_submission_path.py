@@ -138,6 +138,39 @@ def test_uploads_per_turn():
         check(f'{name}: uploads', len(r.uploads), want)
 
 
+def test_warned_event():
+    """The loop names the warning part of a note, so a launcher need not.
+
+    Checked against the note `abandonment` actually writes: refusals first,
+    the warning appended. Fails if the warning were matched by a sentence
+    that `warning_note` no longer opens with, or if refusals leaked into it.
+    """
+    print('the warning part of a note is its own event')
+    import abandonment
+    import player_turn
+    refusals = ['system 193: rename DROPPED, not a majority']
+    warning = abandonment.warning_note('DemoPlayer', 2, 4)
+    events = []
+
+    class Notes:
+        def note(self, civ, turn):
+            return refusals + warning
+
+    player_turn.report_refusals(Notes(), 'DemoPlayer', 9, log=lambda *a: None,
+                                emit=lambda kind, **f: events.append((kind, f)))
+    kinds = [k for k, _f in events]
+    check('refused_orders is still emitted, with every line',
+          (kinds[:1], events[0][1].get('lines')),
+          (['refused_orders'], refusals + warning))
+    check('and warned carries the warning and nothing else',
+          [f.get('lines') for k, f in events if k == 'warned'], [warning])
+    check('a note with no warning emits no warned event',
+          player_turn.warning_lines(refusals), [])
+    check('a one-line warning is found too',
+          player_turn.warning_lines(abandonment.warning_note('X', 1, 0)),
+          abandonment.warning_note('X', 1, 0))
+
+
 # ── the relay behind a socket ────────────────────────────────────────────────
 class RelayHandler(BaseHTTPRequestHandler):
     """`relay.handle` behind a socket, as test_relay_function.py has it."""
@@ -334,6 +367,36 @@ def test_old_ticket_commit(referee, call, turn):
           referee.submission('DemoPlayer', turn), mine)
 
 
+def test_notes(referee, call):
+    """A note is a document, read by the relay with no Storage operation.
+
+    Fails if the note were still an object, which costs every launcher a
+    Class B each turn whether or not there is a note, or if a note left
+    before H13 could no longer be read.
+    """
+    print('notes are documents')
+    turn = referee.current()[0]
+    reasons = ['people DROPPED, 9 served and 10 came back']
+    referee.put_note('DemoPlayer', turn, reasons)
+    check('a note is written as a document',
+          referee.note_doc('DemoPlayer', turn).get().exists, True)
+    check('and not as an object',
+          referee._has(referee.note_object('DemoPlayer', turn)), False)
+    code, _h, body = call('GET', f'/note/{turn}/DemoPlayer')
+    check('the relay serves it', (code, body.decode('utf-8')),
+          (200, reasons[0]))
+    check('a turn with no note is empty',
+          referee.note('DemoPlayer', turn + 1), [])
+    from google.cloud import firestore
+    referee.doc.update(
+        {firebase_store.SUBMISSIONS_FROM_KEY: firestore.DELETE_FIELD})
+    referee._put(referee.note_object('Neighbor', turn), b'an old note',
+                 'text/plain; charset=utf-8')
+    check('a note left as an object before H13 is still read',
+          referee.note('Neighbor', turn), ['an old note'])
+    referee.doc.update({firebase_store.SUBMISSIONS_FROM_KEY: turn})
+
+
 def test_pruning(referee):
     """`publish` keeps `SUBMISSION_TURNS_KEPT` turns and deletes the rest.
 
@@ -348,6 +411,7 @@ def test_pruning(referee):
         start = referee.current()[0]
         for turn in range(start, start + 5):
             referee.submit('DemoPlayer', turn, make_blob(turn, b'p'))
+            referee.put_note('DemoPlayer', turn, [f'turn {turn}'])
             referee.publish(turn + 1, make_blob(turn + 1))
         last = start + 5
         have = sorted({(s.to_dict() or {}).get('turn')
@@ -355,6 +419,11 @@ def test_pruning(referee):
         check('after five publishes only the two turns before the one being '
               'played are kept, three with it',
               have, [last - 2, last - 1])
+        notes = sorted({(s.to_dict() or {}).get('turn') for s in
+                        referee.doc.collection(
+                            firebase_store.NOTE_COLLECTION).stream()})
+        check('and notes are kept for the same turns', notes,
+              [last - 2, last - 1])
         check('the newest closed turn is still readable',
               referee.submission('DemoPlayer', last - 1),
               make_blob(last - 1, b'p'))
@@ -366,6 +435,7 @@ def test_pruning(referee):
 
 def main():
     test_uploads_per_turn()
+    test_warned_event()
     if not os.environ.get('FIRESTORE_EMULATOR_HOST'):
         print('SKIPPED the relay half: no FIRESTORE_EMULATOR_HOST.')
     else:
@@ -389,6 +459,7 @@ def main():
             test_reads_by_tag(referee, base, token)
             test_caps(referee, call, TURN)
             test_old_ticket_commit(referee, call, TURN)
+            test_notes(referee, call)
             test_pruning(referee)
         finally:
             httpd.shutdown()
