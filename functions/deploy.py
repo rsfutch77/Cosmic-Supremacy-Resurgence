@@ -98,7 +98,13 @@ def main():
             raise SystemExit('refused: this firebase.json has a hosting key')
         print('  no hosting key, so this config cannot deploy the website')
         return 0
-    return subprocess.call(COMMAND, cwd=HERE)
+    # On Windows the CLI is `firebase.cmd`, which `CreateProcess` does not find
+    # from the bare name, so the executable is resolved first.
+    import shutil
+    exe = shutil.which(COMMAND[0])
+    if exe is None:
+        raise SystemExit(f'{COMMAND[0]} is not on PATH')
+    return subprocess.call([exe] + COMMAND[1:], cwd=HERE)
 
 
 if __name__ == '__main__':
