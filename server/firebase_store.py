@@ -136,6 +136,23 @@ STATE_FIELDS = ('turn', 'deadline', 'turn_seconds', 'civs', 'hash',
                 turn_store.RECLAIMED_KEY, turn_store.JOINED_KEY,
                 turn_store.MIN_BUILD_KEY)
 
+# Who has handed the current turn back, as `{"<turn>": [civ, ...]}` on the
+# galaxy document. A launcher asks this every poll, and the only other place
+# the answer lives is a Cloud Storage listing, which is a Class A operation: at
+# the Games page's 120-second poll that was about 21,900 a month from one open
+# launcher, against the 5,000 a month the bucket's allowance carries. Read from
+# here it rides the document read the relay makes for every request anyway.
+#
+# Keyed by turn so that a commit racing a publish lands under the turn it was
+# for and cannot be read as a submission for the next one. `publish` replaces
+# the whole map with the new turn's empty list, so it holds one or two keys and
+# never grows. Civ names are values here and never keys, which keeps this
+# module's rule about names a player typed.
+#
+# Not in `STATE_FIELDS`: it is answered through `submitted_civs`, which all
+# three stores already have, and the directory store has no such field.
+SUBMITTED_KEY = 'submitted'
+
 # The two subcollections a join lives in: waiting, and answered. Two rather
 # than one document with a flag on it, because "what is waiting" is then a
 # plain stream of a small collection. One collection filtered by a flag and
@@ -172,6 +189,31 @@ def join_doc_id(key: str) -> str:
     """
     return ''.join(chr(b) if chr(b) in ID_SAFE else f'%{b:02X}'
                    for b in key.encode('utf-8'))
+
+
+def submitted_of(doc: dict, turn: int):
+    """The civs a galaxy document records as having submitted for `turn`.
+
+    None when the document says nothing about that turn, which is a past turn,
+    or a galaxy last published by a store that predates the field. None is not
+    an empty list: an empty list is the document saying nobody has, and None
+    sends the caller to the bucket to find out.
+
+    Only the turn the document is on is answered. A commit that read turn N
+    and landed just after the publish of N+1 writes a key for N holding only
+    that one civ, and a past turn read from it would be missing everyone who
+    committed before the publish.
+    """
+    doc = doc or {}
+    if doc.get('turn') is None or int(doc['turn']) != int(turn):
+        return None
+    by_turn = doc.get(SUBMITTED_KEY)
+    if not isinstance(by_turn, dict):
+        return None
+    civs = by_turn.get(str(int(turn)))
+    if not isinstance(civs, list):
+        return None
+    return sorted(str(c) for c in civs)
 
 
 def parse_spec(spec: str):
@@ -442,6 +484,7 @@ class FirebaseTurnStore:
             'civs': list(civs),
             'hash': canonical.canonical_hash(blob),
             'created': time.time(),
+            SUBMITTED_KEY: {str(int(turn)): []},
         }, merge=True)
         return turn
 
@@ -462,16 +505,22 @@ class FirebaseTurnStore:
         writes it back whole because a file is all or nothing; a Firestore
         write names the fields it changes, which also means a referee cannot
         clobber a status the operator set during the turn.
+
+        The merge names its fields rather than merging everything, because
+        `SUBMITTED_KEY` has to be replaced whole: merged, the map would keep
+        every past turn's list and grow for the life of the galaxy.
         """
         import canonical
         seconds = turn_seconds or self.state()['turn_seconds']
         self._put(self.turn_object(turn), sp.encode_save(blob), 'text/plain')
-        self.doc.set({
+        fields = {
             'turn': int(turn),
             'deadline': time.time() + seconds,
             'turn_seconds': int(seconds),
             'hash': canonical.canonical_hash(blob),
-        }, merge=True)
+            SUBMITTED_KEY: {str(int(turn)): []},
+        }
+        self.doc.set(fields, merge=list(fields))
 
     # ── submissions ──────────────────────────────────────────────────────────
     def submit(self, civ: str, turn: int, blob: bytes) -> str:
@@ -491,9 +540,40 @@ class FirebaseTurnStore:
                 f'({self.project}/{self.galaxy})')
         name = self.submission_object(civ, turn)
         self._put(name, sp.encode_save(blob), 'text/plain')
+        self.record_submitted(civ, turn)
         return f'gs://{self.bucket.name}/{name}'
 
+    def record_submitted(self, civ: str, turn: int) -> None:
+        """Note on the galaxy document that `civ` has submitted for `turn`.
+
+        Called once the object is in place: by `submit`, and by the relay once
+        a commit has read the upload back and found it a save. An array union,
+        so two players committing at the same moment cannot drop each other.
+        A turn the document no longer records gets a key of its own, which
+        `submitted_of` never reads and the next `publish` removes.
+        """
+        from google.cloud import firestore
+        self.doc.set({SUBMITTED_KEY: {
+            str(int(turn)): firestore.ArrayUnion([civ])}}, merge=True)
+
+    def forget_submitted(self, civ: str, turn: int) -> None:
+        """Undo `record_submitted`, for an object that has been deleted.
+
+        The relay deletes an upload it refuses at commit, and that upload may
+        have replaced a submission recorded earlier in the turn. Without this
+        the document would go on naming a civ whose object is gone.
+        """
+        from google.cloud import firestore
+        self.doc.set({SUBMITTED_KEY: {
+            str(int(turn)): firestore.ArrayRemove([civ])}}, merge=True)
+
     def has_submitted(self, civ: str, turn: int) -> bool:
+        """Whether the object exists, asked of the bucket and not the document.
+
+        One Class B operation. The referee asks this of past turns, which the
+        document does not record, and `abandonment` wants the bucket's answer
+        in any case because the bucket is what the referee merges.
+        """
         return self._has(self.submission_object(civ, turn))
 
     def submission(self, civ: str, turn: int):
@@ -511,13 +591,32 @@ class FirebaseTurnStore:
             return None
         return turn_store.decode_capped(data)
 
-    def submitted_civs(self, turn: int) -> list:
+    def submitted_civs(self, turn: int, doc: dict = None) -> list:
         """Who has handed something back, by name and without the blobs.
 
-        A listing and no downloads, which is one Class A operation against one
-        per player. `functions/relay.py` answers its own `/submissions` route
-        this way for the same reason, and this is that code living where the
-        interface is so the two cannot drift apart.
+        The current turn is answered from the galaxy document, one Firestore
+        read and no Storage operation, which is what makes it safe on a path a
+        launcher polls. `doc` is that document when the caller has already read
+        it, which the relay has, so its `/submissions` route costs nothing
+        beyond the read it makes for every request.
+
+        Any other turn is a bucket listing, one Class A operation. That is a
+        past turn, asked by an operator rather than a poll, or a galaxy last
+        published before the document carried the field.
+        """
+        if doc is None:
+            snap = self.doc.get()
+            doc = (snap.to_dict() or {}) if snap.exists else {}
+        known = submitted_of(doc, turn)
+        if known is not None:
+            return known
+        return self.listed_civs(turn)
+
+    def listed_civs(self, turn: int) -> list:
+        """Who has an object under this turn's prefix, from a bucket listing.
+
+        The ground truth `submitted_civs` stands in for, and one Class A
+        operation each time it is asked.
         """
         start = self.submission_prefix(turn)
         out = []
@@ -530,9 +629,10 @@ class FirebaseTurnStore:
     def submissions(self, turn: int) -> dict:
         """{civ: blob} for everyone who handed something back for this turn.
 
-        Listed from Storage rather than from an index in Firestore. An index
-        would be a second thing to keep true, and this is not on the path that
-        gets polled: the referee reads it once a turn, while a launcher asks
+        Listed from Storage rather than from `SUBMITTED_KEY`, because the
+        objects are what gets merged and an object uploaded without a commit
+        is still one the referee reads. This is not on the path that gets
+        polled: the referee reads it once a turn, while a launcher asks
         `has_submitted`, `submission` or `submitted_civs`, none of which
         downloads anybody else's orders.
         """

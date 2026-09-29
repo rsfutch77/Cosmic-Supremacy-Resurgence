@@ -72,7 +72,8 @@ rather than the order they were found:
 
 1. **H9**, the polling cost. One player with a launcher open spends more than
    four times the entire monthly Class A allowance. This caps the beta at
-   roughly nobody and is the only item that does.
+   roughly nobody and is the only item that does. Built and verified on the
+   emulator; it waits on a relay deploy, a worker restart and a measured day.
 2. **J5**, the fourteen remaining transplanted bytes. Three of seventeen are
    fixed. A joiner still lands on the leader's buildings, which the operator has
    already ruled against.
@@ -569,7 +570,7 @@ is out of scope here.
   refusals, the filtered fields, the row a directory builds from them, and a
   store opened from that row reading the same turn the row showed.
 
-- [ ] **H9. `has_submitted` is a bucket listing per poll, and it is the item
+- [ ]~ **H9. `has_submitted` is a bucket listing per poll, and it is the item
   that caps how many players the beta can have.** The Games page asks it every
   120 seconds for each joined galaxy. Over HTTP that is a Class A listing
   operation each time: roughly **21,900 Class A operations a month from one
@@ -586,11 +587,56 @@ is out of scope here.
   `abandonment.find_template` is the same shape and smaller: it downloads up to
   ten whole turn blobs to find one with a free planet.
 
+  **Built and verified on the emulator, 28 September 2026. Not yet deployed.**
+  The galaxy document carries `submitted`, a map from the current turn to the
+  civs that have committed for it. `start` and `publish` write the new turn
+  with an empty list, `publish` replacing the map whole so it never grows, and
+  a relay commit adds the civ with an array union once it has read the upload
+  back and found it a save. A commit that refuses and deletes an upload takes
+  the civ off again, because that upload may have replaced a submission
+  recorded earlier in the turn.
+
+  `FirebaseTurnStore.submitted_civs` answers the current turn from that field
+  and any other turn from the bucket. The relay's `/submissions` route passes
+  in the document it already reads for every request, so a Games page poll is
+  that one Firestore read and no Storage operation at all. Measured by counting
+  `list_blobs` at the client the relay holds: three polls of the current turn,
+  **zero listings**; the control, one poll of a past turn, one listing.
+
+  Three decisions worth naming. **The field is keyed by turn and only the
+  document's own turn is answered.** A commit that read turn N and landed just
+  after the publish of N+1 writes a key for N holding one civ, and answering a
+  past turn from that would drop everyone who committed before the publish.
+  **`has_submitted` on the Firebase store still asks the bucket**, one Class B,
+  because `abandonment` asks it of past turns and wants the answer the referee
+  merges from. **A galaxy without the field falls back to listing**, which is
+  every live galaxy until the worker restarts on this code, so nothing breaks
+  in between.
+
+  No launcher change was needed. The launcher reaches a Firebase galaxy
+  through `HttpTurnStore`, whose `has_submitted` was already the relay's
+  `/submissions` route, so builds already in players' hands get the saving
+  once the relay is redeployed.
+
+  Mutation-confirmed: the route listing again, `publish` merging rather than
+  replacing, a refused commit not forgetting, the turn guard removed, and a
+  commit never recording each fail a named check.
+
+  **What is left:** deploy the relay, restart the worker so `publish` writes
+  the field, then read the bucket's Class A count for a day with a launcher
+  open. The turn that is live at the deploy is transitional: a player who
+  submitted before it reads as not submitted until they submit again, which is
+  a readout and not the referee's view.
+
+  `abandonment.find_template` is untouched and still downloads up to ten turn
+  blobs when a join needs a free planet. It runs on the referee at a turn
+  boundary, not on a poll.
+
   **Done when:** a launcher left open on a joined galaxy costs no Class A
   operations beyond the reads it was already making, measured rather than
   reasoned about.
 
-- [ ] **H10. The relay and the store keep separate copies of the submission
+- [x] **H10. The relay and the store keep separate copies of the submission
   listing.** `functions/relay.py` has its own `_submitted_civs` and
   `turn_store` has `submitted_civs`. They agree by inspection, not by a shared
   call or a test, so the two can drift and the first sign would be a galaxy
@@ -599,6 +645,16 @@ is out of scope here.
   `operator_view`'s allowlist does not carry `submitted_civs` either, which is
   exactly the cheap accessor it wants and would want more once H9 makes it a
   field rather than a listing.
+
+  **Done, 28 September 2026, with H9.** `_submitted_civs` is gone from the
+  relay, and its route calls `FirebaseTurnStore.submitted_civs` with the
+  document it already holds. The relay test checks that the relay has no
+  listing of its own and that the document agrees with the bucket for the
+  current turn.
+
+  `operator_view` now asks `submitted_civs` once per refresh rather than
+  `has_submitted` once per civ, which on Firebase was a Class B per player,
+  and it is on the allowlist.
 
   **Done when:** one implementation answers both, or a test fails when they
   disagree.

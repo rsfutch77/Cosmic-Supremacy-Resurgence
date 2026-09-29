@@ -756,6 +756,63 @@ def run_firebase(spec, keep=False):
             print(f'  removed {n} object(s) and document(s) from {spec}')
 
 
+def run_submitted_field(spec):
+    """H9: who has submitted, carried on the galaxy document.
+
+    Firebase only, because only Firebase charges for a listing. What is checked
+    is that the document and the bucket never disagree about the current turn,
+    and that the document says nothing about any other turn, since a turn it
+    answers wrongly is worse than one it sends to the bucket.
+    """
+    import firebase_store as fs
+    path, sep, query = spec.partition('?')
+    store = open_store(f'{path}_submitted{sep}{query}')
+    print(f'firebase: who has submitted, on {store!r}')
+
+    def recorded():
+        return (store.doc.get().to_dict() or {}).get(fs.SUBMITTED_KEY)
+
+    try:
+        store.start(BLOB1, ['DemoPlayer', 'Neighbor'], turn_seconds=1800)
+        check('firebase: start records that nobody has submitted',
+              recorded(), {str(TURN): []})
+        store.submit('DemoPlayer', TURN, MINE)
+        store.submit('DemoPlayer', TURN, MINE2)
+        check('firebase: a submission is recorded once however often it is '
+              'made', recorded(), {str(TURN): ['DemoPlayer']})
+        store.submit('Neighbor', TURN, THEIRS)
+        check('firebase: the document and the bucket agree',
+              store.submitted_civs(TURN), store.listed_civs(TURN))
+        check('firebase: CONTROL, and both name the two who submitted',
+              store.listed_civs(TURN), ['DemoPlayer', 'Neighbor'])
+        store.forget_submitted('Neighbor', TURN)
+        check('firebase: forgetting a civ takes it off the document',
+              store.submitted_civs(TURN), ['DemoPlayer'])
+        store.record_submitted('Neighbor', TURN)
+
+        store.publish(TURN + 1, BLOB2)
+        # Fails if publish merged the map rather than replacing it, which
+        # would keep every past turn and grow the document for ever.
+        check('firebase: publish replaces the record with the new turn alone',
+              recorded(), {str(TURN + 1): []})
+        check('firebase: a past turn is answered from the bucket',
+              store.submitted_civs(TURN), ['DemoPlayer', 'Neighbor'])
+        check('firebase: and the new turn from the document, as nobody',
+              store.submitted_civs(TURN + 1), [])
+
+        # A galaxy last published by a store without the field, which is every
+        # galaxy live when this shipped.
+        from google.cloud import firestore
+        store.doc.update({fs.SUBMITTED_KEY: firestore.DELETE_FIELD})
+        store._put(store.submission_object('Neighbor', TURN + 1),
+                   sp.encode_save(THEIRS), 'text/plain')
+        check('firebase: a document without the field falls back to the '
+              'bucket', store.submitted_civs(TURN + 1), ['Neighbor'])
+    finally:
+        n = store.delete_everything()
+        print(f'  removed {n} object(s) and document(s)')
+
+
 # ── the factory ──────────────────────────────────────────────────────────────
 def check_factory():
     print('the factory hands back the right one')
@@ -809,6 +866,7 @@ def main():
         spec = firebase_spec(a.firebase)
         if spec:
             summaries['firebase'] = run_firebase(spec, keep=a.keep)
+            run_submitted_field(spec)
         else:
             print('firebase: SKIPPED, no emulator and no --firebase spec. '
                   'This run does not say whether H1 is done.')

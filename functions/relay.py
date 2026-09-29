@@ -490,24 +490,6 @@ def _current_turn(doc: dict) -> int:
     return int(turn)
 
 
-def _submitted_civs(store, turn: int) -> list:
-    """Who has handed something back, by name and without the blobs.
-
-    `FirebaseTurnStore.submissions` downloads every submission, which is right
-    for the referee at a turn boundary and wrong here: a launcher polls this,
-    and it would be a download of every player's orders per poll, refused by the
-    rule at H4 that stops one player reading another's. So the listing is done
-    through the store's own client and stops at the names.
-    """
-    start = store.submission_prefix(turn)
-    out = []
-    for blob in store.gcs.list_blobs(store.bucket, prefix=start):
-        name = blob.name[len(start):]
-        if name.endswith('.b64') and '/' not in name:
-            out.append(name[:-4])
-    return sorted(out)
-
-
 def refuse_if_closed(store, doc):
     """A closed galaxy takes no more submissions, enforced here.
 
@@ -572,7 +554,9 @@ def _commit_submission(store, doc, uid, turn, civ):
     whether they were a save of this turn is afterwards, against the object.
 
     One Class B operation on the happy path, and a Class A delete only when
-    something is refused. The alternative, staging the upload elsewhere and
+    something is refused. Either way one Firestore write follows, recording or
+    forgetting the civ on the galaxy document, which is what lets the
+    `/submissions` poll answer without listing the bucket. The alternative, staging the upload elsewhere and
     copying it into place once it checked out, costs a copy and a delete on
     *every* submission, and H5 measured Class A operations as the binding free
     quota: 1,456 a month of 5,000 at six players saving once a turn. Tripling
@@ -601,6 +585,7 @@ def _commit_submission(store, doc, uid, turn, civ):
         raise Refused(404, f'{civ} has uploaded nothing for turn {turn}')
     if len(data) > MAX_BYTES:
         blob.delete()
+        store.forget_submitted(civ, turn)
         raise Refused(413, f'a submission may be {MAX_BYTES:,} bytes and this '
                            f'one is larger')
     try:
@@ -608,7 +593,9 @@ def _commit_submission(store, doc, uid, turn, civ):
         turn_store.check_save(decoded, turn)
     except ValueError as exc:
         blob.delete()
+        store.forget_submitted(civ, turn)
         raise Refused(400, f'this is not a save of turn {turn}: {exc}')
+    store.record_submitted(civ, turn)
     return _json({'turn': turn, 'civ': civ, 'bytes': len(decoded)})
 
 
@@ -772,7 +759,10 @@ def _route(method: str, path: str, headers: dict, body: bytes):
                 raise Refused(404, f'no turn {turn}')
             return _redirect(signed_url(store, store.turn_object(turn), 'GET'))
         if len(parts) == 2 and parts[0] == 'submissions':
-            return _json(_submitted_civs(store, _turn_number(parts[1])))
+            # A launcher polls this. The store answers the current turn from
+            # the document already read above, so the poll costs no Storage
+            # operation; see `FirebaseTurnStore.submitted_civs`.
+            return _json(store.submitted_civs(_turn_number(parts[1]), doc=doc))
         if len(parts) == 3 and parts[0] == 'submission':
             turn, civ = _turn_number(parts[1]), parts[2]
             # A caller holding no seat at all has no submission, because the
