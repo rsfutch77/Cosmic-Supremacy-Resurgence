@@ -88,6 +88,12 @@ os.environ['CS_RELAY_PROJECT'] = PROJECT
 os.environ['CS_RELAY_BUCKET'] = BUCKET
 os.environ['CS_RELAY_MAX_BYTES'] = '2048'
 os.environ.setdefault('FIREBASE_AUTH_EMULATOR_HOST', AUTH_HOST)
+# The referee writes below and the relay is asked straight after, so a held copy
+# of the galaxy's public face would answer from before the write, and a check
+# that something is absent would pass on it. Every answer here is read fresh;
+# test_relay_costs.py covers the held copies.
+os.environ['CS_RELAY_STATE_CEILING'] = '0'
+os.environ['CS_RELAY_LISTING_SECONDS'] = '0'
 
 import galaxy_directory                                         # noqa: E402
 import save_parser as sp                                        # noqa: E402
