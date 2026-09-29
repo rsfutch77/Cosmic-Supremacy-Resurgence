@@ -685,7 +685,7 @@ is out of scope here.
   **Done when:** one implementation answers both, or a test fails when they
   disagree.
 
-- [ ] **H11. A follow poll reads the galaxy state five times.** Seen in the
+- [x] **H11. A follow poll reads the galaxy state five times.** Seen in the
   relay's request log on 28 September, not yet traced in the code: each time
   the second machine's v0.1.3 launcher began following h3check it made five
   `GET /h3check/state` requests inside one second, before fetching the turn.
@@ -700,6 +700,168 @@ is out of scope here.
 
   **Done when:** one follow poll makes one `/state` request, or the count is
   measured and written into H5.
+
+  **Done, 29 September 2026.** Traced and measured with a real `HttpTurnStore`
+  against `turn_server.py`, counting requests at the server, with the real
+  `player_turn.follow` and the client stubbed out. The five are not the loop
+  repeating itself. Four come from the launcher before the loop starts:
+  `start_multiplayer` asks `exists`, `state` and `civs`, and `_refresh_turn`
+  asks `current` once while it has heard nothing from the loop. The fifth is
+  the loop's own first `current`. The harness reproduced exactly five before
+  the first `/turn/7`. The steady poll was already one `current` per read,
+  plus one `/state` per upload from `submit`'s own closed check.
+
+  `HttpTurnStore` now answers every state accessor asked inside
+  `STATE_SECONDS`, 1.5 seconds, from one `/state` answer. Any write through
+  the store forgets it, so a caller reads its own writes at once, and an
+  answer whose request overlapped a write is not kept. A write made
+  elsewhere, which is the referee publishing, is seen at most 1.5 seconds
+  late. The window is under the loop's 2-second floor, so every read the loop
+  schedules still reaches the service.
+
+  | measured at the service | before | after |
+  |---|---|---|
+  | `/state` before the turn is fetched | 5 | **1** |
+  | `/state` inside the first second of a follow | 6 | **1** |
+  | scheduled loop reads answered from memory | | **0** |
+
+  The equivalence test's HTTP run passes `state_seconds=0`, because it writes
+  through the directory and reads straight back over HTTP. It had been
+  passing only because the check before it ends on a write. The window has
+  its own test, `test_state_reads.py`, 18 checks, each mutation-confirmed:
+  no window, a write that keeps the answer, an overlapping read kept, one
+  parsed object handed to every caller, and a window over the floor.
+
+  **This reaches a player only in a new launcher build.** A frozen launcher
+  carries its own copy of `turn_store.py`, so builds already in players'
+  hands keep making five.
+
+- [ ] **H12. A poll budget for hundreds of always-open launchers.** The target
+  is hundreds of players who leave the launcher open all month. Everything
+  below is at 4-hour turns, one launcher following one galaxy, and the worst
+  case H9 named: the Galaxies page left on screen with one joined galaxy.
+
+  **Free tiers**, read from Google's "Free Tier usage limits" page on 29
+  September 2026. Firestore: 50,000 reads a day per project. Cloud Storage:
+  5,000 Class A and 50,000 Class B operations a month, in `us-west1` among
+  others. Cloud Run: 2 million requests, 180,000 vCPU-seconds and 360,000
+  GB-seconds a month. The same page lists Cloud Run functions separately at
+  2 million invocations, 400,000 GB-seconds and 200,000 GHz-seconds. **Which
+  of those two allowances a Firebase 2nd gen function draws on needs
+  verifying against current Google billing documentation.** The request
+  count is 2 million either way. No price beyond a free tier is given here,
+  since none was verified.
+
+  **What one launcher asks, per day.** The follow loop was counted on a fake
+  clock across a whole day with the referee publishing 10 seconds after each
+  deadline. The Games page figure is the code's 120-second timer, one listing
+  and one `/submissions` per joined galaxy per tick.
+
+  | per launcher per day | relay requests | how known |
+  |---|---|---|
+  | follow loop, window closed 5 minutes into each turn | 941, of which `/state` 893 | measured |
+  | follow loop, window open all day | 960, of which `/state` 888 | measured |
+  | Games page on screen, one joined galaxy | 1,440 | from the code |
+  | **both, all day** | **about 2,390** | |
+
+  **What each request cost at the relay, before this item**, counted on the
+  emulator at the client libraries: every galaxy route one Firestore read of
+  the galaxy document, `/turn` and `/submission` one Class B existence check
+  each, `/note` one Class B download, and `GET /` one read per galaxy in the
+  catalog, because it streams them all. So a launcher's Firestore reads were
+  its request count plus the listing's multiplier, and the project's reads
+  grew with launchers times galaxies.
+
+  **Built, 29 September 2026: a warm relay instance holds a galaxy's public
+  face.** `/state`, `/submissions` and `/turn` are served from a copy of the
+  galaxy document read by that instance. A copy is held up to the galaxy's
+  deadline, because the referee publishes only once a turn is due, and past
+  it for a twentieth of how overdue the turn is, floored at 1 second and
+  capped at 60 (`STATE_CEILING`). The listing is held the same way, for the
+  shortest window of the galaxies in it, so a row is never held across a
+  publish and the Games page is not sent to ask about a past turn, which
+  would be a bucket listing. Every route that checks a seat, a closed galaxy
+  or the turn being played still reads the document afresh, and a commit
+  through the instance drops its copy. Two Storage checks went with it: the
+  turn the document is on is redirected without asking whether it exists,
+  since `start` and `publish` write the object before the document names it,
+  and a submission the document records is redirected the same way. A
+  submission it does not record is still asked of the bucket, so a missing
+  record can never make a submission look absent to the turn loop's guard.
+
+  Measured on the emulator by `test_relay_costs.py`: a cold listing of three
+  galaxies reads 3 and the next inside its window reads 0; twenty `/state`
+  requests inside a window read 0; the current turn and a recorded submission
+  redirect with 0 existence checks where they had 1. Beside each saving, the
+  thing it must not cost: a galaxy closed while a copy says open is refused
+  its upload ticket at once, a seat moved while a copy is held is refused its
+  old civ at once, and a player's own commit is read back at once. 32 checks,
+  and each of the 12 changes is mutation-confirmed.
+
+  **What that makes the project's reads.** Held copies cap reads per galaxy
+  per warm instance however many launchers ask, so the per-launcher term is
+  only the routes that read afresh. Those per-instance caps were computed by
+  stepping the relay's own `hold_for` through a day of demand that never
+  stops; the per-launcher remainder is the day count above.
+
+  | Firestore reads a day | 100 launchers | 500 launchers |
+  |---|---|---|
+  | before, 1 galaxy | 239,000, 478% | 1,195,000, 2,390% |
+  | before, 5 galaxies | 527,000, 1,054% | 2,635,000, 5,270% |
+  | after, 1 galaxy, 1 instance, estimate | 8,500, 17% | 30,500, 61% |
+  | after, 1 galaxy, 3 instances, estimate | 14,500, 29% | 36,500, 73% |
+  | after, 5 galaxies, 3 instances, estimate | 54,600, 109% | 76,600, 153% |
+
+  The parts of the estimate: 1,506 reads a day per galaxy per instance for
+  the public face, 1,501 a day for the listing at one galaxy and 8,850 at
+  five with staggered deadlines, and about 36 to 55 reads a launcher a day
+  for the routes read afresh (its own submission, the upload ticket and
+  commit, the note). **The number of warm instances is not measured.** It
+  depends on concurrency, which for this function is Firebase's default and
+  was not verified, and `max_instances` caps it at 10.
+
+  **What is left, in the order it binds.**
+
+  | allowance | per launcher per month | launchers inside it |
+  |---|---|---|
+  | Cloud Run requests, 2 million | about 71,700 | about 28 |
+  | Storage Class A, 5,000 | at least 180, one upload a turn | about 27 |
+  | Storage Class B, 50,000 | 1,440 before, about 1,080 after | 34 before, about 46 after |
+  | Firestore reads, 50,000 a day | see above | inside at 1 galaxy |
+  | Cloud Run CPU, 180,000 vCPU-seconds | not measured | not known |
+
+  Requests are the binding poll cost now, and nothing in the relay reduces
+  them: only asking less often does. The Games page is 60% of a launcher's
+  requests, so its 120-second timer is the largest lever, and it is the
+  launcher's. Class A is H5's constraint and is uploads rather than polls.
+  The Class B figures are per turn from the code paths, 8 operations before
+  and 6 after, with the route-level savings measured. CPU needs Cloud
+  Monitoring from the live function, since the emulator says nothing about
+  billed instance time.
+
+  **Decided, and why.** The listing is held in the instance's memory rather
+  than served from a catalog summary document. A warm hit costs no read at
+  all where a summary costs one, and it needs no second copy of every
+  galaxy's row kept in step by every writer, which is H10's failure shape.
+  The cost is the listing term growing with galaxies squared, 21,000 reads a
+  day per instance at ten galaxies, so a summary document is the next step if
+  the catalog grows past five or so. Cache-Control headers were not added:
+  the launcher's `urllib` keeps no HTTP cache, and nothing stands in front of
+  the function that would.
+
+  **The trade the held copy makes.** A galaxy's public face can be up to 60
+  seconds old in the middle of a turn: an operator's close, a new minimum
+  build, or another player's submission on the Games page. A turn the
+  operator resolves by hand before its deadline is seen up to 60 seconds late
+  by a following launcher. At the deadline, where the referee publishes, a
+  copy lives 1 second. `CS_RELAY_STATE_CEILING` and `CS_RELAY_LISTING_SECONDS`
+  set the windows, and 0 turns either off. `test_relay_function.py` runs with
+  both at 0, because it writes through the referee and reads straight back.
+
+  **Done when:** the relay is redeployed and a measured day of the live
+  function's request count, Firestore reads and CPU seconds is written here
+  against the estimates above, and the Games page poll is set from that
+  measurement.
 
 - [x] **H6. A store fetches one submission, not all of them.** `player_turn.py`
   reached its own submission through `store.submissions(turn).get(civ)`, which

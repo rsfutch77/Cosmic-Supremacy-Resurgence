@@ -152,8 +152,40 @@ PREFIX = os.environ.get('CS_RELAY_PREFIX', firebase_store.PREFIX)
 # `GET /<galaxy>/join` is where they get that.
 PRIVATE_FIELDS = (turn_store.JOINED_KEY,)
 
+# How long a warm instance answers a galaxy's public face, `/state`,
+# `/submissions` and `/turn`, from a galaxy document it has already read. Every
+# launcher following a galaxy polls `/state`, so without this the project's
+# Firestore reads grow with the number of launchers open; with it they grow
+# with the number of galaxies and instances, and a launcher costs a request and
+# no read. A copy is held up to the deadline and then for a twentieth of how
+# overdue the turn is, floored at STATE_FLOOR and capped at STATE_CEILING, so
+# it is shortest exactly where a turn is published. See `hold_for` and the
+# plan's H12.
+#
+# Only those routes. Every route that checks a seat, a closed galaxy or the
+# turn being played reads the document afresh, so what a player may do is
+# never decided from a held copy. CS_RELAY_STATE_CEILING of 0 turns it off.
+STATE_FLOOR = 1.0
+STATE_SHARE = 20.0
+STATE_CEILING = float(os.environ.get('CS_RELAY_STATE_CEILING', '60'))
+
+# The same for the listing, which streams every galaxy document in the catalog
+# and so costs one read per galaxy per request. A listing is held for the
+# shortest window any galaxy in it would be held for, and never longer than
+# this. CS_RELAY_LISTING_SECONDS of 0 turns it off.
+LISTING_SECONDS = float(os.environ.get('CS_RELAY_LISTING_SECONDS', '60'))
+
 _STORES = {}
 _APP = None
+# galaxy -> (when it was read, how long it may be served, the document)
+_HELD = {}
+# (when it was read, how long it may be served, the rows), or None
+_LISTING = None
+
+
+def _now() -> float:
+    """The clock the held copies age by. A function so a test can move it."""
+    return time.monotonic()
 
 
 class Refused(Exception):
@@ -304,18 +336,86 @@ def catalog_rows() -> list:
     return sorted(rows, key=lambda r: r['id'])
 
 
+def hold_for(doc: dict, ceiling: float = None) -> float:
+    """How long a copy of this galaxy's public face may be served.
+
+    Before the deadline a copy is held up to the deadline and no further,
+    because the referee publishes at or after it. Past the deadline the turn
+    can change at any moment, so the copy is held for a twentieth of how
+    overdue it is, which is the floor while the referee's tick is due and
+    backs off if the referee is down. Measured on the wall clock, because that
+    is the clock a deadline is written in. A galaxy with no deadline is held
+    for the ceiling, since nothing is due to change in it.
+    """
+    ceiling = STATE_CEILING if ceiling is None else ceiling
+    if ceiling <= 0:
+        return 0.0
+    deadline = (doc or {}).get('deadline')
+    if deadline is None:
+        return ceiling
+    left = float(deadline) - time.time()
+    return min(ceiling, max(STATE_FLOOR,
+                            left if left > 0 else -left / STATE_SHARE))
+
+
+def listing() -> list:
+    """`catalog_rows`, held on this instance while no galaxy in it is due.
+
+    The rows carry the turn each galaxy is on, and a launcher asks
+    `/submissions` about that turn next. A row held across a publish sends it
+    to a past turn, which is a bucket listing, so the listing takes the
+    shortest window of the galaxies in it: held to the soonest deadline, and
+    for the floor while any galaxy in it is overdue.
+    """
+    global _LISTING
+    held = _LISTING
+    if held is not None and _now() - held[0] < held[1]:
+        return held[2]
+    rows = catalog_rows()
+    window = min([LISTING_SECONDS] +
+                 [hold_for(r, LISTING_SECONDS) for r in rows])
+    _LISTING = (_now(), window, rows) if window > 0 else None
+    return rows
+
+
 def galaxy_doc(store) -> dict:
-    """The whole galaxy document, seats included.
+    """The whole galaxy document, seats included, read afresh.
 
     `FirebaseTurnStore.state` deliberately returns only the five fields the
     store interface names, so the seat map is invisible above the store seam and
     stays that way. The relay is below that seam and reads the document itself,
-    once per request, which is also the read that answers `/state`.
+    once per request.
+
+    A fresh read is also the newest copy this instance has, so it replaces the
+    one `public_doc` holds.
     """
     snap = store.doc.get()
     if not snap.exists:
+        _HELD.pop(store.galaxy, None)
         raise Refused(404, f'no galaxy {store.galaxy} in {store.project}')
-    return snap.to_dict() or {}
+    doc = snap.to_dict() or {}
+    window = hold_for(doc)
+    if window > 0:
+        _HELD[store.galaxy] = (_now(), window, doc)
+    return doc
+
+
+def public_doc(store) -> dict:
+    """The galaxy document for a route that serves only its public face.
+
+    A copy read inside its window is served again rather than read again. Only
+    `/state`, `/submissions` and `/turn` take this, and none of them decides
+    what a caller may do.
+    """
+    held = _HELD.get(store.galaxy)
+    if held is not None and _now() - held[0] < held[1]:
+        return held[2]
+    return galaxy_doc(store)
+
+
+def forget_doc(store) -> None:
+    """Drop the held copy after this instance has written the document."""
+    _HELD.pop(store.galaxy, None)
 
 
 def seat_of(doc: dict, uid: str):
@@ -586,6 +686,7 @@ def _commit_submission(store, doc, uid, turn, civ):
     if len(data) > MAX_BYTES:
         blob.delete()
         store.forget_submitted(civ, turn)
+        forget_doc(store)
         raise Refused(413, f'a submission may be {MAX_BYTES:,} bytes and this '
                            f'one is larger')
     try:
@@ -594,8 +695,10 @@ def _commit_submission(store, doc, uid, turn, civ):
     except ValueError as exc:
         blob.delete()
         store.forget_submitted(civ, turn)
+        forget_doc(store)
         raise Refused(400, f'this is not a save of turn {turn}: {exc}')
     store.record_submitted(civ, turn)
+    forget_doc(store)
     return _json({'turn': turn, 'civ': civ, 'bytes': len(decoded)})
 
 
@@ -692,17 +795,22 @@ def _own_join(store, doc, uid):
     `player_turn.follow` never runs for them and the note the worker left is on
     a path they cannot read. The answer is on a path they can.
 
-    Two named document reads and no listing, for the reason H6 gives about a
-    submission: this is a path a launcher polls while it waits for a boundary,
-    and reading the whole waiting collection to find one row in it would cost a
-    read per player waiting, per poll.
+    The waiting request is looked for first. Answering a request consumes it,
+    so one that is waiting is always newer than any answer on file, and a
+    player refused once who asks again is waiting on the new request rather
+    than refused by the old one.
+
+    At most two named document reads and no listing, for the reason H6 gives
+    about a submission: this is a path a launcher polls while it waits for a
+    boundary, and reading the whole waiting collection to find one row in it
+    would cost a read per player waiting, per poll.
     """
-    answer = store.join_answer(uid)
-    if answer is not None:
-        return _json({'state': 'answered', 'answer': answer})
     waiting = store.join_request(uid)
     if waiting is not None:
         return _json({'state': 'waiting', 'request': waiting})
+    answer = store.join_answer(uid)
+    if answer is not None:
+        return _json({'state': 'answered', 'answer': answer})
     return _json({'state': 'none'})
 
 
@@ -742,27 +850,36 @@ def _route(method: str, path: str, headers: dict, body: bytes):
         # gate costs a stranger nothing and keeps one rule rather than two.
         if method in ('GET', 'HEAD'):
             verify(bearer(headers))
-            return _json({'galaxies': catalog_rows()})
+            return _json({'galaxies': listing()})
         raise Refused(404, 'the galaxy is the first part of the path')
     galaxy, parts = parts[0], parts[1:]
     uid = verify(bearer(headers))
     store = store_for(galaxy)
-    doc = galaxy_doc(store)
 
     if method in ('GET', 'HEAD'):
         if parts == ['state']:
+            doc = public_doc(store)
             return _json({k: doc[k] for k in firebase_store.STATE_FIELDS
                           if k in doc and k not in PRIVATE_FIELDS})
         if len(parts) == 2 and parts[0] == 'turn':
             turn = _turn_number(parts[1])
-            if not store.has_turn(turn):
+            # `start` and `publish` write the turn's object before the
+            # document names it, so the turn the document is on exists and
+            # asking Storage would be a Class B operation to learn nothing.
+            doc = public_doc(store)
+            if turn != doc.get('turn') and not store.has_turn(turn):
                 raise Refused(404, f'no turn {turn}')
             return _redirect(signed_url(store, store.turn_object(turn), 'GET'))
         if len(parts) == 2 and parts[0] == 'submissions':
             # A launcher polls this. The store answers the current turn from
-            # the document already read above, so the poll costs no Storage
+            # the document already read, so the poll costs no Storage
             # operation; see `FirebaseTurnStore.submitted_civs`.
-            return _json(store.submitted_civs(_turn_number(parts[1]), doc=doc))
+            return _json(store.submitted_civs(_turn_number(parts[1]),
+                                              doc=public_doc(store)))
+
+    doc = galaxy_doc(store)
+
+    if method in ('GET', 'HEAD'):
         if len(parts) == 3 and parts[0] == 'submission':
             turn, civ = _turn_number(parts[1]), parts[2]
             # A caller holding no seat at all has no submission, because the
@@ -778,7 +895,12 @@ def _route(method: str, path: str, headers: dict, body: bytes):
                 raise Refused(404, f'no submission of yours for {turn}')
             seat_or_refuse(store, doc, uid, civ)
             name = store.submission_object(civ, turn)
-            if not store.bucket.blob(name).exists():
+            # A civ the document records for the turn it is on has an object,
+            # because it is recorded only once the object is in place. Any
+            # other answer is asked of the bucket, so a record that is missing
+            # can never make a submission look absent.
+            recorded = firebase_store.submitted_of(doc, turn) or []
+            if civ not in recorded and not store.bucket.blob(name).exists():
                 raise Refused(404, f'{civ} has not submitted for {turn}')
             return _redirect(signed_url(store, name, 'GET'))
         if len(parts) == 4 and parts[:2] == ['upload', 'submission']:

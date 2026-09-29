@@ -578,7 +578,11 @@ def run_http(tmp):
         # holding and read back through the service, which is the pair that
         # matters: a launcher reads L2's gate over HTTP and an operator sets it
         # where the galaxy lives.
-        summary = run_sequence(HttpTurnStore(base), 'http',
+        #
+        # `state_seconds=0` because the directory's write is read back at once,
+        # and an HTTP store sees a write it did not make up to that window
+        # late. test_state_reads.py covers the window itself.
+        summary = run_sequence(HttpTurnStore(base, state_seconds=0), 'http',
                                writer=TurnStore(root))
         run_token_checks(base, root, summary['turn'])
     finally:

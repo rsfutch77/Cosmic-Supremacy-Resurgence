@@ -93,6 +93,7 @@ import json
 import os
 import struct
 import sys
+import threading
 import time
 import urllib.parse
 import zlib
@@ -111,6 +112,12 @@ STATE_RETRY_SECONDS = 2.0
 # _atomic_write: this is the other half of STATE_RETRY_SECONDS, and it is the
 # side that was missing.
 WRITE_RETRY_SECONDS = 10.0
+
+# How long one `/state` answer from a service serves `HttpTurnStore`'s state
+# accessors. Long enough to cover the handful of them a launcher asks in a row
+# before it starts a turn, and under the turn loop's two-second floor, so a
+# read the loop schedules is never answered from memory.
+STATE_SECONDS = 1.5
 
 # The largest blob a submission is allowed to decompress to. The wire form is
 # capped at 2 MB by `beta_storage.rules` and the decoded form at 8 MB by
@@ -859,13 +866,31 @@ class HttpTurnStore:
     holder refresh without this store, or its owner, knowing that it did. It
     returns None when there is no identity yet, and then no header is sent and
     this behaves exactly as it did before there was one.
+
+    **One `/state` answer serves every state accessor asked inside
+    `state_seconds`.** `exists`, `state`, `current`, `civs`, `is_closed` and
+    the rest are each a view of that one document, and the launcher asks
+    several of them in a row before it starts a turn loop: measured, that was
+    five requests inside a second, each a relay invocation and a Firestore
+    read. Any write this store makes forgets the answer, so a caller reads its
+    own writes at once. A write made somewhere else is seen at most
+    `state_seconds` late. STATE_SECONDS sits under `player_turn.POLL_FLOOR`,
+    so every read the turn loop schedules still reaches the service.
     """
 
-    def __init__(self, base: str, timeout: float = 30.0, token=None):
+    def __init__(self, base: str, timeout: float = 30.0, token=None,
+                 state_seconds: float = None):
         self.base = base.rstrip('/')
         self.timeout = timeout
         self.token = token
         self._opener = None
+        self.state_seconds = (STATE_SECONDS if state_seconds is None
+                              else float(state_seconds))
+        # (monotonic time it arrived, the raw body or None for a 404), and a
+        # count of writes so an answer fetched across one is not kept.
+        self._held = None
+        self._writes = 0
+        self._held_lock = threading.Lock()
 
     # -- plumbing --
     def _url(self, path: str) -> str:
@@ -951,22 +976,52 @@ class HttpTurnStore:
         sent.update(self._headers(url))
         for k, v in sent.items():
             req.add_header(k, v)
-        with self._open(req) as r:
-            out = r.read()
+        # Whether or not it succeeds, since a write that fails part way may
+        # still have landed.
+        try:
+            with self._open(req) as r:
+                out = r.read()
+        finally:
+            self._forget_state()
         return json.loads(out) if want_json and out else out
 
     def _post(self, path, body=b'', want_json=True):
         return self._send(path, body, 'POST', want_json=want_json)
 
     # -- state --
+    def _forget_state(self):
+        with self._held_lock:
+            self._held = None
+            self._writes += 1
+
+    def _state_body(self):
+        """The `/state` body, or None for a 404, fetched at most once a window.
+
+        The raw bytes are what is kept, so every caller parses its own copy and
+        none of them can change what the next one is handed. An answer whose
+        request overlapped a write is returned and not kept, because it may
+        describe the galaxy from before that write.
+        """
+        now = time.monotonic()
+        with self._held_lock:
+            held, writes = self._held, self._writes
+        if held is not None and now - held[0] < self.state_seconds:
+            return held[1]
+        body = self._get('/state', want_json=False)
+        if self.state_seconds > 0:
+            with self._held_lock:
+                if self._writes == writes:
+                    self._held = (time.monotonic(), body)
+        return body
+
     def exists(self) -> bool:
-        return self._get('/state') is not None
+        return self._state_body() is not None
 
     def state(self) -> dict:
-        s = self._get('/state')
-        if s is None:
+        body = self._state_body()
+        if body is None:
             raise FileNotFoundError(f'no galaxy at {self.base}')
-        return s
+        return json.loads(body)
 
     def current(self):
         s = self.state()

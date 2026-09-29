@@ -88,6 +88,12 @@ os.environ['CS_RELAY_PROJECT'] = PROJECT
 os.environ['CS_RELAY_BUCKET'] = BUCKET
 os.environ['CS_RELAY_MAX_BYTES'] = '2048'
 os.environ.setdefault('FIREBASE_AUTH_EMULATOR_HOST', AUTH_HOST)
+# The referee writes below and the relay is asked straight after, so a held copy
+# of the galaxy's public face would answer from before the write, and a check
+# that something is absent would pass on it. Every answer here is read fresh;
+# test_relay_costs.py covers the held copies.
+os.environ['CS_RELAY_STATE_CEILING'] = '0'
+os.environ['CS_RELAY_LISTING_SECONDS'] = '0'
 
 import galaxy_directory                                         # noqa: E402
 import save_parser as sp                                        # noqa: E402
@@ -850,6 +856,24 @@ def run_joins(referee, galaxy, call, ids):
           [r['key'] for r in referee.join_requests()], [uid_c])
     check('and another caller cannot read that answer',
           call('GET', f'/join/{uid_d}/answer', token_a)[0], 403)
+
+    print('a refused player who asks again is waiting, not refused')
+    # Answering a request consumes it, so a request that is waiting is always
+    # newer than any answer on file. Fails if the route looked at the answer
+    # first, which tells a player who pressed Join again that the galaxy has
+    # already refused a request it has not seen yet.
+    lodge(token_d, name='Newcomer3')
+    out = json.loads(call('GET', '/join', token_d)[2])
+    check('the second request is what the player reads back',
+          (out['state'], (out.get('request') or {}).get('name')),
+          ('waiting', 'Newcomer3'))
+    check('while the first answer is still on file',
+          referee.join_answer(uid_d)['reason'], 'this galaxy had no room')
+    referee.answer_join(uid_d, {'key': uid_d, 'name': 'Newcomer3',
+                                'outcome': 'refused',
+                                'reason': 'this galaxy had no room'})
+    check('and once that one is answered, the answer is what it reads',
+          json.loads(call('GET', '/join', token_d)[2])['state'], 'answered')
 
     print('the record of who was seated stays behind the door')
     referee.update_state({turn_store.JOINED_KEY: {
