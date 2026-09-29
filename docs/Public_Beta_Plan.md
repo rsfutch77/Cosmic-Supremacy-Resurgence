@@ -31,6 +31,62 @@ be tracking it. Do not tidy the tilde back inside.
 
 ---
 
+## Where this stands, 28 September 2026
+
+Written as a handover. `docs/Overnight_Push_Findings.md` was deleted on this
+date and everything in it that was still open is an item here, so this file is
+the only list.
+
+**The beta path works end to end.** A Windows machine with no checkout, no
+virtualenv and no Google credential ran the packaged build, listed a galaxy
+through the relay, signed in anonymously, claimed a seat, played a turn, and
+had the referee merge it. The referee survives a reboot with its local files
+deleted, because the galaxy is in Firebase and the machine holds nothing that
+matters.
+
+**What the machine is doing right now.** A scheduled task, `CosmicSupremacy
+Referee`, is refereeing `firebase://cs-resurgence/h3check`, listed as "Beta
+rehearsal", at four-hour turns and has been since 01:46 on 28 September. It was
+at turn 18 with no failures when this was written, one seat bound to the second
+test machine's anonymous uid. `h3check` was made for the H3 reboot test and
+then became the rehearsal galaxy because it was the only Firebase galaxy and
+stopping it would have left nothing live to test against. It is still
+disposable: nothing depends on it, and the next real decision is what the
+actual beta galaxy should be and whether it starts fresh.
+
+**Do not be alarmed by the task's Last Result**, which reads `-2147020576`
+while Status reads Running and the worker is healthy. That is left over from
+the task being deleted and re-registered on 28 September while an instance of
+it was running. The galaxy advancing and `worker_failures` being 0 are the
+facts; the task's result column is about a run that was interrupted
+administratively and says nothing about the referee.
+
+To point the referee somewhere else, write the task again with a different
+`-Store` and re-register it; `run_worker.ps1 -WriteTaskXml` prints the two
+`schtasks` commands. Every command in this file is relative to the repository
+root, and a fresh PowerShell opens in `C:\WINDOWS\system32`, which has produced
+two wasted attempts: `cd` first or give full paths.
+
+**The three things most worth doing next**, in the order they block a beta
+rather than the order they were found:
+
+1. **H9**, the polling cost. One player with a launcher open spends more than
+   four times the entire monthly Class A allowance. This caps the beta at
+   roughly nobody and is the only item that does. **Done 28 September**,
+   measured live: eleven polls, no bucket listings.
+2. **J5**, the fourteen remaining transplanted bytes. **Done 29 September**:
+   a facility list and a settled block, all reset, checked in the real client.
+3. **J3's refused half**, which is the one a tester meets. A refused player's
+   row says "you have asked to join" forever; the relay serves the answer and
+   nothing reads it.
+
+**What needs the operator and cannot be done from here:** a seat rebind path
+exists nowhere, so a player who reinstalls Windows is locked out of their own
+empire (J4); and no machine but this one and the second test PC has ever run
+the build, so the antivirus question is answered for one configuration (M3).
+
+---
+
 ## What this phase inherits
 
 These are measured, in the blob push plan at the commit named above, and this
@@ -326,9 +382,30 @@ is out of scope here.
   deploy can pick them up from beside them; this project serves the live website
   and rules are deployed by hand, deliberately, once.
 
-  **Done when:** a test client authenticated as one player is refused writing
-  another player's submission, refused publishing a turn, and refused deleting
-  anything, each by the rules rather than by the application declining to try.
+  **This done-when outlived the design it was written for.** "By the rules"
+  presupposes Security Rules doing the enforcement, which is design A. B was
+  chosen precisely because no rule can express the thing that matters: a rule
+  can test `request.auth.uid` and nothing else about who is asking, and a
+  submission object is named for a username the player typed, so no rule can
+  relate the two. See H7. Enforcement is an `if` statement in the relay, on
+  purpose, and the deny-all rules exist so that nothing reaches the bucket
+  except through it.
+
+  **The substance is measured**, against the deployed service rather than the
+  emulator: a caller authenticated as one player is refused writing another's
+  submission, refused every referee route, and cannot delete anything because
+  no route deletes. J4 records the seat half, with two anonymous sign-ins and a
+  second machine.
+
+  What is genuinely unverified is the rules themselves, and the only thing they
+  have left to say is "nothing gets in except through the relay". Reading the
+  live rules back on 27 September showed both Firestore and Storage deny-all,
+  which is the whole of their job now.
+
+  **Done when:** a client authenticated as one player is refused writing another
+  player's submission, refused publishing a turn, and refused deleting
+  anything, and a client bypassing the relay reaches neither Firestore nor the
+  bucket.
 
 - [x] **H7. The player's launcher cannot reach Firebase, and nothing in the
   tests could have noticed.** What H1 delivered is the *referee's* transport. It
@@ -492,7 +569,7 @@ is out of scope here.
   refusals, the filtered fields, the row a directory builds from them, and a
   store opened from that row reading the same turn the row showed.
 
-- [ ] **H9. `has_submitted` is a bucket listing per poll, and it is the item
+- [x] **H9. `has_submitted` is a bucket listing per poll, and it is the item
   that caps how many players the beta can have.** The Games page asks it every
   120 seconds for each joined galaxy. Over HTTP that is a Class A listing
   operation each time: roughly **21,900 Class A operations a month from one
@@ -509,11 +586,83 @@ is out of scope here.
   `abandonment.find_template` is the same shape and smaller: it downloads up to
   ten whole turn blobs to find one with a free planet.
 
+  **Built and verified on the emulator, 28 September 2026, and measured live
+  the same night.**
+  The galaxy document carries `submitted`, a map from the current turn to the
+  civs that have committed for it. `start` and `publish` write the new turn
+  with an empty list, `publish` replacing the map whole so it never grows, and
+  a relay commit adds the civ with an array union once it has read the upload
+  back and found it a save. A commit that refuses and deletes an upload takes
+  the civ off again, because that upload may have replaced a submission
+  recorded earlier in the turn.
+
+  `FirebaseTurnStore.submitted_civs` answers the current turn from that field
+  and any other turn from the bucket. The relay's `/submissions` route passes
+  in the document it already reads for every request, so a Games page poll is
+  that one Firestore read and no Storage operation at all. Measured by counting
+  `list_blobs` at the client the relay holds: three polls of the current turn,
+  **zero listings**; the control, one poll of a past turn, one listing.
+
+  Three decisions worth naming. **The field is keyed by turn and only the
+  document's own turn is answered.** A commit that read turn N and landed just
+  after the publish of N+1 writes a key for N holding one civ, and answering a
+  past turn from that would drop everyone who committed before the publish.
+  **`has_submitted` on the Firebase store still asks the bucket**, one Class B,
+  because `abandonment` asks it of past turns and wants the answer the referee
+  merges from. **A galaxy without the field falls back to listing**, which is
+  every live galaxy until the worker restarts on this code, so nothing breaks
+  in between.
+
+  No launcher change was needed. The launcher reaches a Firebase galaxy
+  through `HttpTurnStore`, whose `has_submitted` was already the relay's
+  `/submissions` route, so builds already in players' hands get the saving
+  once the relay is redeployed.
+
+  Mutation-confirmed: the route listing again, `publish` merging rather than
+  replacing, a refused commit not forgetting, the turn guard removed, and a
+  commit never recording each fail a named check.
+
+  **Measured live, 28 September 2026.** The relay was redeployed, the worker
+  restarted on the new code, and turn 18's field backfilled once from the
+  bucket so the live turn did not fall back to listing. The second machine ran
+  v0.1.4 on the Galaxies page from 23:25 to 23:46 and made **eleven
+  `/submissions/18` polls**, one every two minutes, each answered 200, read
+  from the relay's request log. Cloud Monitoring's
+  `storage.googleapis.com/api/request_count` for the bucket shows **no
+  operation of any kind** in that window, `ListObjects` included.
+
+  An empty series can also mean Monitoring had not caught up, so a control:
+  one deliberate listing at 23:46:47 was counted in the 23:48 point, three
+  minutes later. So the zero is a count and not a gap.
+
+  | | `/submissions` polls | `ListObjects` |
+  |---|---|---|
+  | before, by the code | one per poll | one per poll |
+  | after, 23:25 to 23:46 | 11 | **0** |
+  | control, one deliberate listing | | 1, seen 3 minutes later |
+
+  **Getting a launcher to poll at all took two findings of its own.** The poll
+  runs only while the Galaxies page is on screen, and only for galaxies with a
+  record in `joined.json`, which only the Join button writes; see J6. Four
+  hours of the second machine's traffic before tonight held no `/submissions`
+  call. So the 21,900 a month above is a launcher parked on that page all
+  month by a player who clicked Join: still the worst case the allowance has to
+  survive, and not what an ordinary session does. The same log is where H11
+  came from.
+
+  The turn live at the deploy was transitional: a submission made before it
+  was missing from the field until backfilled, and a galaxy without a backfill
+  would read it as not submitted until the player submitted again.
+
+  `abandonment.find_template` is untouched and still downloads up to ten turn
+  blobs when a join needs a free planet. It runs on the referee at a turn
+  boundary, not on a poll.
+
   **Done when:** a launcher left open on a joined galaxy costs no Class A
   operations beyond the reads it was already making, measured rather than
   reasoned about.
 
-- [ ] **H10. The relay and the store keep separate copies of the submission
+- [x] **H10. The relay and the store keep separate copies of the submission
   listing.** `functions/relay.py` has its own `_submitted_civs` and
   `turn_store` has `submitted_civs`. They agree by inspection, not by a shared
   call or a test, so the two can drift and the first sign would be a galaxy
@@ -523,8 +672,34 @@ is out of scope here.
   exactly the cheap accessor it wants and would want more once H9 makes it a
   field rather than a listing.
 
+  **Done, 28 September 2026, with H9.** `_submitted_civs` is gone from the
+  relay, and its route calls `FirebaseTurnStore.submitted_civs` with the
+  document it already holds. The relay test checks that the relay has no
+  listing of its own and that the document agrees with the bucket for the
+  current turn.
+
+  `operator_view` now asks `submitted_civs` once per refresh rather than
+  `has_submitted` once per civ, which on Firebase was a Class B per player,
+  and it is on the allowlist.
+
   **Done when:** one implementation answers both, or a test fails when they
   disagree.
+
+- [ ] **H11. A follow poll reads the galaxy state five times.** Seen in the
+  relay's request log on 28 September, not yet traced in the code: each time
+  the second machine's v0.1.3 launcher began following h3check it made five
+  `GET /h3check/state` requests inside one second, before fetching the turn.
+  Each is a relay invocation and a Firestore document read. H5's read figures
+  assume one `store.current()` per poll, so if this repeats on the steady
+  poll and not only at the start of a follow, those figures are low by up to
+  five times. The likely shape is several `HttpTurnStore` methods, `current`,
+  `is_closed`, `reclaimed` and the like, each fetching `/state` for itself.
+
+  Firestore reads are not the binding allowance, so this does not block the
+  beta the way H9 did, but each request is also a Cloud Run invocation.
+
+  **Done when:** one follow poll makes one `/state` request, or the count is
+  measured and written into H5.
 
 - [x] **H6. A store fetches one submission, not all of them.** `player_turn.py`
   reached its own submission through `store.submissions(turn).get(civ)`, which
@@ -680,7 +855,7 @@ is out of scope here.
 
 ## J. The lobby
 
-- [ ]~ **J1. A galaxy directory above the store.** `server/galaxy_directory.py`
+- [x] **J1. A galaxy directory above the store.** `server/galaxy_directory.py`
   holds `LocalGalaxyDirectory` and `FirebaseGalaxyDirectory` behind
   `open_directory(spec)`, mirroring `open_store`. 59 checks pass against both.
 
@@ -699,6 +874,17 @@ is out of scope here.
   **Still open:** the launcher half. Nothing in the UI reads this yet and
   `multiplayer.json` still names a store, which is J2's work.
 
+  **Done, 28 September 2026**, and by the hardest available route: a second
+  machine with no checkout listed `h3check` through the relay's directory,
+  opened its store from the row the listing gave it, and played a turn. No
+  config file on that machine named a galaxy; the launcher fell back to
+  `BETA_DIRECTORY`, which is the relay, exactly as a beta player's would.
+
+  A third implementation landed with it. `HttpGalaxyDirectory` sits behind the
+  same `open_directory(spec)` as the folder and Firebase ones, because
+  `FirebaseGalaxyDirectory` authenticates as the project and a player is not
+  the project. See H8.
+
   **Done when:** the launcher lists the sandbox from the directory and opens its
   store from what the directory gave it, with no galaxy path in any config file.
 
@@ -710,6 +896,18 @@ is out of scope here.
 
   `multiplayer.json` stops naming a galaxy. What the player has joined is written
   by the launcher, beside `identity.json`, rather than hand-edited.
+
+  **Most of it is done and the remaining word is "joins".** On 28 September a
+  second machine with no checkout listed galaxies in the launcher rather than
+  on a website, picked one, and played a turn with no downloaded galaxy file
+  and no config file naming a galaxy. That is the flow this item exists to
+  replace, gone.
+
+  What it did was take a seat in an existing roster under `seat_claim:
+  first-use`, which is not the same act as joining: a join is a request the
+  referee resolves at a turn boundary, and that path, J3, has never been
+  exercised from a machine that was not this one. Until it is, this reads
+  "a player played" rather than "a player joined and played".
 
   **Done when:** a player who has never opened a config file joins the sandbox
   and plays a turn.
@@ -752,11 +950,11 @@ is out of scope here.
   Their Games row says "you have asked to join" forever, which is where this
   item started.
 
-  **And only a folder store can take a join at all.** `HttpTurnStore` and
-  `FirebaseTurnStore` have no join route, so the launcher raises
-  `JoinNotAccepted` against them. **The beta galaxy is Firebase.** The seam is
-  there, `joins.pending` asks a store for `join_requests()` when it has one, and
-  it is unexercised.
+  **All three stores take a join now.** The relay lodges a request in
+  Firestore (`POST /<galaxy>/join`) and serves the caller its own answer by
+  key, and `HttpTurnStore` and `FirebaseTurnStore` both carry `request_join`
+  and `join_answer`, so the launcher no longer raises `JoinNotAccepted` against
+  a Firebase galaxy. What had never reached a player, the refusal, is below.
 
   **The balance question is settled and mostly built.** The description above was
   wrong and is kept because a decision was taken on it: a joiner was not starting
@@ -770,9 +968,50 @@ is out of scope here.
   independent generations: one homeworld with a 240-byte `PLPR`, 7 citizens as 4
   farmers, 2 workers and 1 scientist, no military, recruitment 0, no production
   points, an empty queue, **2 Colony Ship hulls with 2 crew**, 1 design, 200
-  credits, research unset, plus seat one's `PLPR` rate pair.
+  credits, research unset, plus seat one's `PLPR` rate pair, and since 28
+  September the generated food pair rather than the donor's. See J5.
 
-- [ ] **J5. A joiner still inherits seat one's buildings and stockpiles.** The
+  **This item had no done-when until 28 September**, which is how the refused
+  half stayed open while the item read as nearly finished. The two halves are
+  not the same size: the accept path is verified against a real client and the
+  refuse path has never reached a player at all.
+
+  **The launcher half of the refusal is built, 29 September 2026, and checked
+  headless and on the emulator.** For each Games row with a pending joined
+  record and no answer kept in it, the refresh asks the store's `join_answer`
+  under the request's key (`turn_store.join_key`, which is the uid on the
+  relay). That is `GET /<galaxy>/join/<uid>/answer`, one request per waiting
+  galaxy per refresh at the existing two-minute cadence, and none for galaxies
+  the player is in or has no request in. An answer is written into the joined
+  record, so a refusal left on screen costs no further read.
+
+  A refused row reads **join refused** in the You column and offers a
+  **Reason** button, and the line under the table says a request was refused
+  and to press Reason. Reason shows the worker's own reason string with **Ask
+  again**, which goes through the ordinary Join path with every check and the
+  notice, and **Clear**, which forgets that galaxy's record and puts View back
+  on the row. A granted answer changes nothing on screen: the civ is in the
+  roster by the time the answer is filed, so the row is already Play.
+
+  **An old answer stays filed under the same key after a second request**, and
+  `_own_join` on the relay reports `answered` ahead of `waiting`, so a player
+  who asked again would be shown the old refusal. The launcher tells them apart
+  by turn: the worker stamps an answer with the turn it seats into, which is
+  later than the turn the request was lodged during, and the record now keeps
+  the turn read from the store at the moment of joining rather than the
+  listing's, which can be a boundary behind.
+
+  `release/tests/test_join_answers.py` covers it, and its section 7 runs on the
+  emulator: a request lodged through the relay as an anonymous user, refused by
+  `joins.apply` and `joins.commit` for an overlong name, and read back by the
+  launcher's own method with the worker's sentence intact. Each of nine
+  mutations to the launcher change fails a named check.
+
+  **Done when:** a player who clicks Join during turn N is playing at turn N+1,
+  and a player whose request is refused is told so and why, from a machine that
+  is not the referee's.
+
+- [x] **J5. A joiner still inherits seat one's buildings and stockpiles.** The
   unfinished half of the balance ruling, here rather than in the reconstruction
   report because it has to be settled **before the beta opens** and not merely
   recorded as a fact about the format.
@@ -837,6 +1076,50 @@ is out of scope here.
   `+179` to `+188` as `10, 16, 10, 16, 10, 16, 9, 16, 7, 16`. That matches
   neither the generated civ nor the donor, so something other than the clone is
   writing them and what it is should be known before they are reset to anything.
+
+  **Done, 29 September 2026. The fourteen were not fourteen bytes.** Read as a
+  section tree rather than at fixed offsets, the rest of `PLPR` is a facility
+  list and a 51-byte settled block after `PROD`, and the offsets only looked
+  scattered because the facility list is variable length: a donor that has
+  built one more facility shifts everything after it by eight bytes. The
+  "10, 16, 10, 16" above is a u16 population history, `0x100A`, read a byte at
+  a time. Decoded across 627 owned planets in 94 local blobs and 18 turns of
+  h3check, with the layout in `merge_orders.SETTLED_LEN`:
+
+  | field | generated homeworld | what a joiner carried |
+  |---|---|---|
+  | facilities, `(type, count)` | `(2,1) (6,1) (9,1)` | the donor's, plus `(0,1)` it built |
+  | population mirror | 7 | the donor's 14 |
+  | population history, 7 turns | zeros | the donor's |
+  | counter at +16, undecoded | 1 | the donor's |
+  | colony age, f32 turns | 0.0 at turn 0 | the donor's, equal to the turn |
+  | founding turn, twice | 0 | the donor's 0 |
+  | value at +47, undecoded | 10 | the donor's 7 |
+
+  **The facilities are the leader's buildings the ruling was about.** Every
+  generated homeworld has types 2, 6 and 9 once each, colonies have none, and
+  type 0 appears on played planets with counts up to 8. The h3check capital
+  built its first between turns 11 and 18.
+
+  `starting_kit` resets each to the generation value, field by field. A whole
+  generated `PLPR` is not copied in, because `wipe_civ` measured fields that
+  are uniform within a galaxy and differ between galaxies.
+
+  **One deliberate difference, and it is a judgment.** The founding turn stays
+  0 and the age equals the turn, which is how every incumbent homeworld reads,
+  rather than a colony founded today. Whether the engine treats founded-at-0 as
+  the capital is not known, and matching every capital in the galaxy is the
+  reading that cannot be wrong about it.
+
+  **Measured.** A joiner on h3check's turn 18 now differs from a generated
+  homeworld at twelve offsets and every one is named: the rate pair at `+4` and
+  `+11`, the owner id in the seven citizens and the settled block, and the age.
+  `test_starting_kit.py` goes from 61 to 66, including a whole-record byte
+  comparison, and removing any one of the resets fails it. The real client
+  closed the join turn and two more in `join_kit_acceptance.py`, 57 passed, 0
+  failed, and through those ticks the engine ran the reset fields as decoded:
+  age 12.0, 13.0, 14.0; the history filling from the front; the counter rising
+  from 1.
 
   **Done when:** a joiner's homeworld is byte-identical to a generated one except
   for the object id and seat one's rate pair, or each surviving difference is
@@ -903,6 +1186,54 @@ is out of scope here.
 
   **Done when:** a name in the roster is refused from a second install, allowed
   from the install that claimed it, and rebindable by the operator.
+
+- [ ]~ **J6. A player seated without clicking Join has no joined record, so the
+  Galaxies page never says whether they have played.** Found on 28 September
+  while measuring H9 on the second machine. `joined.json` is written in one
+  place, the Join path (`launcher.py`, `save_joined` after
+  `send_join_request`), and the Games refresh asks `/submissions/<turn>` only
+  for galaxies with a record in it (`if recs and player`, then
+  `_submitted_state`).
+
+  Neighbor was seeded into h3check's roster by the operator and took its seat
+  by playing under `seat_claim: first-use`, which is every seat on a galaxy an
+  operator starts with names in it. So its row showed a Play button and never
+  a submitted state. The directory row said `joined=True` the whole time,
+  because that flag is `player in civs`; the two notions of "in this galaxy"
+  disagree and nothing reconciles them.
+
+  Found by reading the relay's request log rather than the screen: four hours
+  of that launcher's traffic held no `/submissions` call at all. Writing the
+  record a Join would have written by hand started the polls at the next
+  refresh, with no restart.
+
+  Two ways to close it: write a record when a directory row that reads
+  `joined` is played, or have `_submitted_state` take `g.joined` rows with no
+  record under the player's current name. The first keeps one source of truth
+  for "which galaxies am I in"; the second is smaller.
+
+  **Built 29 September 2026, the second way, and checked headless only.** The
+  Games refresh asks `/submissions/<turn>` for every row whose directory entry
+  reads `joined`, record or not. A row with a record is asked under the record's
+  name, as before; one without is asked under the player's current name, which
+  is the name `joined` was computed for. Nothing is written into `joined.json`.
+
+  The first way was not taken because a record means "this player asked for a
+  seat", and J3 now reads it that way: a pending record with no answer is what
+  the refresh polls a join answer for. A record written on Play for a seat that
+  is later reclaimed would put the row back into "joining next turn" and start
+  answer polls for a request nobody made. With the second way the directory's
+  `joined` is the single answer to "am I in this galaxy" and the record is only
+  the history of Join presses.
+
+  The poll cost is unchanged per galaxy: one `/submissions` call per refresh for
+  each galaxy the player is in, which is what a player who had clicked Join
+  already paid. `release/tests/test_join_answers.py` section 1 seats a player by
+  roster alone and reads "turn played" and "your turn" off the row; restoring
+  either half of the old condition fails it.
+
+  **Done when:** a player seated by first-use sees their submitted state on the
+  Galaxies page without having clicked Join.
 
 ---
 

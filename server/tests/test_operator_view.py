@@ -162,13 +162,14 @@ def check_read_only(root: str):
 
 
 def check_no_bulk_download(root: str):
-    print('efficiency: who has submitted is asked per civ, not by listing')
+    print('efficiency: who has submitted is one names-only call')
     inner = turn_store.TurnStore(root)
     counting = CountingStore(inner)
     report = ov.galaxy_report(counting)
-    civs = inner.civs()
-    check('efficiency: has_submitted called once per civ',
-          counting.calls.get('has_submitted'), len(civs))
+    check('efficiency: submitted_civs called once for the whole roster',
+          counting.calls.get('submitted_civs'), 1)
+    check('efficiency: has_submitted is not asked per civ as well',
+          'has_submitted' in counting.calls, False)
     check('efficiency: submissions() was never called',
           'submissions' in counting.calls, False)
     check('efficiency: turn_blob() was never called, the page needs no blob',

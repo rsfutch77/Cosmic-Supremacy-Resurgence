@@ -99,6 +99,8 @@ def kit_of(blob, name):
         'recruit': mo.recruit_of(plpr),
         'progress': mo.progress_of(plpr),
         'food': mo.food_of(plpr),
+        'facilities': mo.facilities_of(plpr),
+        'settled': settled_masked(blob, hq['id']),
         'prod': icv.planet_prod(blob, hq['id']),
         'credits': mo.credits_of(blob, o['oid']),
         'research': mo.research_of(blob, o['oid']),
@@ -107,6 +109,31 @@ def kit_of(blob, name):
         'ships': len(ships),
         'hulls': sorted(masked_ship(blob, s, o['oid']) for s in ships),
     }
+
+
+def settled_masked(blob, planet_id):
+    """The settled block without its owner, which is the civ's own id."""
+    got = mo.settled_of(blob, planet_id)
+    if got is None:
+        return None
+    got = dict(got)
+    got.pop('owner')
+    return got
+
+
+def masked_plpr(blob, name):
+    """A civ's homeworld PLPR with its owner id and rate pair blanked.
+
+    Those are the differences a joiner is allowed from a generated civ, so two
+    records that agree here agree on every byte that is anybody's decision.
+    """
+    o = civ(blob, name)
+    hq = homeworld(blob, name)
+    rec = bytearray(blob[hq['plpr_payload']:hq['plpr_end']])
+    icv.replace_u32(rec, o['oid'], 0, 0, len(rec))
+    for off in mmg.RATE_OFFSETS:
+        rec[off] = 0
+    return bytes(rec)
 
 
 def masked_ship(blob, ship, owner_oid):
@@ -174,6 +201,16 @@ def develop(blob, name, log=quiet):
         + b'\x00\x00'
     blob = mo.set_people(blob, hq['id'], citizen * 19, [soldier] * 3)
 
+    # a facility built on the capital, and a settled block that has lived
+    # through some turns: a population history, and both undecoded counters
+    # moved, which is what the h3check capital looked like at turn 18
+    blob = mo.set_facilities(blob, hq['id'],
+                             [(0, 4)] + list(icv.STARTING_FACILITIES))
+    blob = mo.set_settled(blob, hq['id'], pop=19,
+                          history=[0x1012, 0x1012, 0x1011, 0x1010, 0x100f,
+                                   0x100e, 0x100d],
+                          counter=6, last=7, age=5.0, founded=3)
+
     blob = mo.set_recruit(blob, hq['id'], 20)
     blob = mo.set_progress(blob, hq['id'], 97)
     blob = mo.set_credits(blob, o['oid'], 10820)
@@ -235,8 +272,10 @@ def main():
            donor['designs'] == 1,
            donor['recruit'] == icv.STARTING_RECRUIT,
            donor['progress'] == icv.STARTING_PROGRESS,
-           donor['military'] == 0],
-          [False] * 6)
+           donor['military'] == 0,
+           donor['facilities'] == list(icv.STARTING_FACILITIES),
+           donor['settled'] == ref['settled']],
+          [False] * 8)
     check('and its research topic is set',
           donor['research'] != (icv.RESEARCH_UNSET, icv.RESEARCH_UNSET))
 
@@ -247,9 +286,14 @@ def main():
 
     print('\nfield by field against the civ generation would have made')
     for field in ('planets', 'plpr_len', 'jobs', 'military', 'recruit',
-                  'progress', 'food', 'prod', 'credits', 'research', 'designs',
-                  'ships', 'hulls'):
+                  'progress', 'food', 'facilities', 'settled', 'prod',
+                  'credits', 'research', 'designs', 'ships', 'hulls'):
         check(f'{field} matches the generated civ', got[field], ref[field])
+    # J5's done-when. Fails on any byte the fields above do not name, which is
+    # how the 17 offsets were found in the first place.
+    check('the homeworld PLPR is the generated one, byte for byte, but for '
+          'the owner id and the rate pair',
+          masked_plpr(joined, 'Newcomer'), masked_plpr(fresh, 'Gamma'))
     check('the design is seat one\'s, renamed by nothing',
           got['design_names'], kit_of(played, 'DemoPlayer')['design_names'][:1])
     check('the rate pair is seat one\'s, which is the one field that is '
@@ -270,6 +314,10 @@ def main():
           raw['recruit'], donor['recruit'])
     check('inherits the donor\'s production points',
           raw['progress'], donor['progress'])
+    check('inherits the donor\'s facilities',
+          raw['facilities'], donor['facilities'])
+    check('inherits the donor\'s settled block',
+          raw['settled'], donor['settled'])
     check('and has no ships at all', raw['ships'], 0)
 
     print('\nnobody who was already in the galaxy moved')

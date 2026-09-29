@@ -92,6 +92,7 @@ os.environ.setdefault('FIREBASE_AUTH_EMULATOR_HOST', AUTH_HOST)
 import galaxy_directory                                         # noqa: E402
 import save_parser as sp                                        # noqa: E402
 import turn_store                                               # noqa: E402
+import firebase_store                                           # noqa: E402
 from firebase_store import FirebaseTurnStore                     # noqa: E402
 from turn_store import HttpTurnStore                             # noqa: E402
 
@@ -452,6 +453,11 @@ def run(referee, galaxy, base, player_a, player_b, player_c, anonymous, ids):
     check('an oversized submission is refused', status_of(refused), 413)
     check('and it is not left where the referee would read it',
           referee.submission('DemoPlayer', 8), None)
+    # Fails if the commit deleted the object and left the document naming the
+    # civ, which is the one way the two can disagree: this upload replaced a
+    # submission recorded a moment ago, and that object is gone.
+    check('and the galaxy document no longer says they have submitted',
+          firebase_store.submitted_of(referee.doc.get().to_dict(), 8), [])
 
     ticket = json.loads(call('GET', '/upload/submission/8/DemoPlayer',
                              token_a)[2])
@@ -476,6 +482,52 @@ def run(referee, galaxy, base, player_a, player_b, player_c, anonymous, ids):
     player_a.submit('DemoPlayer', 8, MINE8)
     check('and a good one still goes through afterwards',
           referee.submission('DemoPlayer', 8), MINE8)
+
+    print('who has submitted is answered without listing the bucket')
+    # H9. A launcher asks this every poll, and a bucket listing is a Class A
+    # operation, the allowance that binds. Counted at the client the relay
+    # holds, so any listing the route makes, by any path, is seen.
+    under = relay.store_for(galaxy)
+    client = under.gcs
+    listed = []
+    real_list = client.list_blobs
+
+    def counting_list(*a, **kw):
+        listed.append(kw.get('prefix'))
+        return real_list(*a, **kw)
+
+    client.list_blobs = counting_list
+    try:
+        check('the relay names who has submitted for the current turn',
+              json.loads(call('GET', '/submissions/8', token_a)[2]),
+              ['DemoPlayer'])
+        check('has_submitted through the relay is True for them',
+              player_a.has_submitted('DemoPlayer', 8), True)
+        check('and False for a player who has not',
+              player_b.has_submitted('Neighbor', 8), False)
+        check('and none of those three polls listed the bucket', listed, [])
+        # The control. Fails if the counter could not see a listing at all, in
+        # which case the line above would pass whatever the route did.
+        check('CONTROL: a past turn is listed, and the counter sees it',
+              json.loads(call('GET', '/submissions/7', token_a)[2]),
+              ['DemoPlayer', 'Neighbor'])
+        check('CONTROL: exactly one listing, for turn 7', len(listed), 1)
+    finally:
+        client.list_blobs = real_list
+    # H10. The relay used to carry its own copy of the listing, which agreed
+    # with the store's by inspection only.
+    check('the relay has no listing of its own',
+          hasattr(relay, '_submitted_civs'), False)
+    check('the document agrees with the bucket for the current turn',
+          referee.submitted_civs(8), referee.listed_civs(8))
+    # A commit that read turn 7 and landed after the publish of turn 8. Fails
+    # if it read as a turn-8 submission, or if the partial turn-7 key it leaves
+    # hid the real turn-7 submissions from a later reader.
+    referee.record_submitted('Third', 7)
+    check('a commit landing after the publish is not read as this turn',
+          'Third' in referee.submitted_civs(8), False)
+    check('and a past turn is still answered from the bucket',
+          referee.submitted_civs(7), ['DemoPlayer', 'Neighbor'])
 
     print('notes go to the player they were left for')
     reasons = ['system 193: rename DROPPED, not a majority']

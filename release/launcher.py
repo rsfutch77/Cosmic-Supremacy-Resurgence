@@ -1202,15 +1202,22 @@ def clear_joined(data_dir: str, galaxy=None) -> None:
         pass
 
 
-def joined_record(galaxy, name: str, uid, directory: str, now=None) -> dict:
-    """What the launcher writes down when a player joins a galaxy."""
+def joined_record(galaxy, name: str, uid, directory: str, now=None,
+                  turn=None) -> dict:
+    """What the launcher writes down when a player joins a galaxy.
+
+    `turn` is the galaxy's turn as read at the moment of joining, when the
+    caller has one, and the listing's otherwise. It is what `answer_for`
+    tells this request's answer apart from an older one by, and the listing
+    can be a boundary behind.
+    """
     return {"directory": directory,
             "galaxy": galaxy.id,
             "name": name,
             "store": galaxy.store,
             "uid": uid,
             "requested_at": now if now is not None else time.time(),
-            "requested_turn": galaxy.turn}
+            "requested_turn": turn if _whole(turn) else galaxy.turn}
 
 
 def newest_joined(records):
@@ -1346,6 +1353,126 @@ def pending_join(g, recs) -> bool:
     return bool(recs) and g.id in recs and not g.joined
 
 
+# ── What became of a join ─────────────────────────────────────────────────────
+# The worker answers each request at the turn boundary it is resolved at, and
+# files the answer under the request's key: the uid when there is one and the
+# name when there is not, which is `turn_store.join_key`. A granted player
+# needs nothing read back, because the civ appears in the roster and the row
+# turns into Play. A refused one is on no roster, so the answer is the only
+# place the refusal and its reason reach them.
+#
+# The answer is asked for only while a request is pending and unanswered, and
+# kept in the joined record once it arrives, so a refusal a player leaves on
+# screen costs no read after the first.
+JOIN_GRANTED, JOIN_REFUSED = "granted", "refused"
+
+
+def _whole(n) -> bool:
+    return isinstance(n, int) and not isinstance(n, bool)
+
+
+def answer_for(rec, answer):
+    """`answer` when it answers the request this record holds, else None.
+
+    An answer stays filed after it is read and a second request is filed
+    under the same key, so a player refused once and asking again would
+    otherwise be shown the old refusal. The worker stamps an answer with the
+    turn it seats the player into, which is later than the turn the request
+    was lodged during, so an answer at or before the recorded turn belongs to
+    an earlier request. An answer or record with no turn is taken as it is,
+    because there is nothing to tell them apart by.
+    """
+    if not isinstance(rec, dict) or not isinstance(answer, dict):
+        return None
+    if answer.get("outcome") not in (JOIN_GRANTED, JOIN_REFUSED):
+        return None
+    at, asked = answer.get("turn"), rec.get("requested_turn")
+    if _whole(at) and _whole(asked) and at <= asked:
+        return None
+    return answer
+
+
+def join_refusal(g, recs):
+    """The refusal answering this player's request for a seat in `g`, or None."""
+    if not pending_join(g, recs):
+        return None
+    got = recs[g.id].get("answer")
+    if isinstance(got, dict) and got.get("outcome") == JOIN_REFUSED:
+        return got
+    return None
+
+
+def awaiting_answer(g, recs) -> bool:
+    """Whether the request for a seat in `g` is still with the galaxy.
+
+    The only rows a Games refresh asks an answer for. A galaxy the player is
+    in has nothing to answer, and a request already answered is not asked
+    about again.
+    """
+    return (pending_join(g, recs)
+            and not isinstance(recs[g.id].get("answer"), dict))
+
+
+def read_join_answers(rows, recs, ask):
+    """{galaxy id: (requested_at, answer)} for the requests that have one.
+
+    `ask(g, rec)` reads one galaxy's answer for one record, None while there
+    is none. It is called once per row that `awaiting_answer` names and for no
+    other. `requested_at` goes back with the answer so the record it is
+    written into can be checked to be the same request: a player can press
+    Join again while this runs off the Tk thread.
+
+    Total, for the reason `_submitted_state` is: a galaxy that cannot be read
+    is left out rather than failing the listing.
+    """
+    out = {}
+    for g in rows:
+        if not awaiting_answer(g, recs):
+            continue
+        rec = recs[g.id]
+        try:
+            got = answer_for(rec, ask(g, rec))
+        except Exception:               # a readout is not worth an error path
+            continue
+        if got is not None:
+            out[g.id] = (rec.get("requested_at"), dict(got))
+    return out
+
+
+def record_join_answers(data_dir: str, answers) -> None:
+    """Keep each answer in the record of the request it answers.
+
+    A record that has changed since it was asked about, because the player
+    asked again or cleared it, is left alone.
+    """
+    if not answers:
+        return
+    records = load_joined(data_dir)
+    changed = False
+    for gid, (asked_at, answer) in answers.items():
+        rec = records.get(gid)
+        if rec is None or rec.get("requested_at") != asked_at:
+            continue
+        if rec.get("answer") == answer:
+            continue
+        records[gid] = dict(rec, answer=answer)
+        changed = True
+    if changed:
+        write_joined(data_dir, records)
+
+
+def refusal_text(g, rec) -> str:
+    """What a refused player reads: that they were refused, why, and what next."""
+    answer = (rec or {}).get("answer") or {}
+    name = answer.get("name") or (rec or {}).get("name") or "you"
+    reason = str(answer.get("reason") or "").strip() or (
+        "The galaxy gave no reason.")
+    return (f"Your request to join {g.name or g.id} as {name} was refused."
+            f"\n\n{reason}\n\nPress Ask again to send a new request, or "
+            "Clear to forget this one and offer View on the row again. "
+            "Nothing else has changed.")
+
+
 def joinable(g, recs=None) -> bool:
     """Whether this galaxy would take a join request from this player.
 
@@ -1468,7 +1595,8 @@ def stall_hint(stalled) -> str:
 # So the table sorts on the value and never on the cell.
 PLAY = "play"
 VIEW = "view"
-ACTION_TEXT = {PLAY: "Play", VIEW: "View"}
+REASON = "reason"
+ACTION_TEXT = {PLAY: "Play", VIEW: "View", REASON: "Reason"}
 
 # How far along a galaxy is, which is what the status column orders by. Not the
 # spelling of the word: alphabetically the closed galaxies come first, which is
@@ -1597,6 +1725,8 @@ def _you_text(g, view):
         if played is False:
             return "your turn"
         return "you are in"
+    if join_refusal(g, view.recs):
+        return "join refused"
     if pending_join(g, view.recs):
         return "joining next turn"
     return ""
@@ -1699,7 +1829,12 @@ def row_action(g, recs=None, own=None):
     the roster says. It is the galaxy the launcher was pointed at by hand, its
     state may not even be readable from here, and the checks in
     start_multiplayer are what answer whether a turn can be taken in it.
+
+    A request the galaxy refused offers Reason, closed or not, because that
+    button is the only way to read why and to clear the request or ask again.
     """
+    if join_refusal(g, recs):
+        return REASON
     if g.status == CLOSED:
         return None
     if same_store(g.store, own):
@@ -2861,8 +2996,10 @@ class Launcher:
         def work():
             extra = {}
             rows, err = galaxy_rows(data_dir, spec, player)
-            if recs and player:
+            if player:
                 extra["submitted"] = self._submitted_state(rows, recs, player)
+            if recs:
+                extra["answers"] = self._join_answers(rows, recs)
             self.msgs.put(("__games__", rows, extra, err))
 
         threading.Thread(target=work, daemon=True, name="games").start()
@@ -2870,23 +3007,32 @@ class Launcher:
     def _submitted_state(self, rows, recs, player):
         """Which of this player's galaxies have had the current turn handed in.
 
-        One extra read per galaxy this launcher holds a seat in, which is why
-        it is not asked of every row: a listing is one query and each of these
-        is a request per refresh on a store that may charge for it. A galaxy
-        left out of the answer is one that could not be read, which its row
-        prints as "you are in" rather than as "you have not played".
+        One extra read per galaxy this player is in, which is why it is not
+        asked of every row: a listing is one query and each of these is a
+        request per refresh on a store that may charge for it. A galaxy left
+        out of the answer is one that could not be read, which its row prints
+        as "you are in" rather than as "you have not played".
 
-        Each galaxy is asked for under the name its own seat was claimed
-        under, because a player who has since changed their name still holds
-        the seat they joined with.
+        Being in a galaxy is the directory's `joined`, and a joined record is
+        not required. An operator can seed a name into a roster and the player
+        takes that seat by playing under `seat_claim: first-use`, which never
+        passes through Join and so never writes a record. Writing one on Play
+        instead was not done: a record means "this player asked for a seat",
+        and one made for a seat that is later reclaimed would show that galaxy
+        as a join waiting on an answer nobody was asked for.
+
+        A galaxy with a record is asked for under the name its seat was
+        claimed under, because a player who has since changed their name
+        still holds the seat they joined with. One without is asked for under
+        the current name, which is the name `joined` was answered for.
 
         Total, because the listing is posted back to the window after this and
         an exception here would leave the page saying it is still listing.
         """
         out = {}
         for g in rows:
-            rec = recs.get(g.id)
-            if rec is None or not g.joined or g.turn is None:
+            rec = (recs or {}).get(g.id)
+            if not g.joined or g.turn is None:
                 continue
             try:
                 mods = multiplayer_modules()
@@ -2896,15 +3042,55 @@ class Launcher:
                 token = (player_token(self.data_dir)
                          if store_wants_token({"store": g.store}) else None)
                 store = open_player_store(turn_store, g.store, token)
-                out[g.id] = bool(store.has_submitted(rec.get("name") or player,
-                                                     g.turn))
+                name = (rec or {}).get("name") or player
+                out[g.id] = bool(store.has_submitted(name, g.turn))
             except Exception:               # a readout is not worth an error path
                 continue
         return out
 
+    def _join_answers(self, rows, recs):
+        """What each galaxy decided about a join this launcher is waiting on.
+
+        One read per galaxy with a request pending and unanswered, and none for
+        any other: `read_join_answers` picks the rows. The read is the store's
+        `join_answer`, which the relay answers from one named document, keyed
+        by the request's own key so a player is only ever handed their own
+        answer. A store that has no such read is skipped.
+
+        Total, for the reason `_submitted_state` is.
+        """
+        mods = multiplayer_modules()
+        if mods is None:
+            return {}
+        _player_turn, turn_store = mods
+
+        def ask(g, rec):
+            key = turn_store.join_key(rec)
+            if not key:
+                return None
+            token = (player_token(self.data_dir)
+                     if store_wants_token({"store": g.store}) else None)
+            store = open_player_store(turn_store, g.store, token)
+            read = getattr(store, "join_answer", None)
+            return read(key) if callable(read) else None
+
+        try:
+            return read_join_answers(rows, recs, ask)
+        except Exception:                   # a readout is not worth an error path
+            return {}
+
     def _on_games(self, rows, extra, err):
-        """Take a listing in. Runs on the Tk thread, off the message queue."""
+        """Take a listing in. Runs on the Tk thread, off the message queue.
+
+        Join answers are written into joined.json here rather than on the
+        listing thread, because Join and Clear write that file from this
+        thread too.
+        """
         self.games_busy = False
+        try:
+            record_join_answers(self.data_dir, (extra or {}).get("answers"))
+        except OSError as exc:
+            self.say(f"games   could not keep a join answer ({exc})")
         self.games_rows = list(rows)
         self.games_extra = extra or {}
         self.games_err = err
@@ -3029,15 +3215,20 @@ class Launcher:
         actions = [row_action(g, view.recs, view.own) for g in rows]
         stalled = [(g, s) for g, s in
                    ((g, row_stalled_for(g, view)) for g in rows) if s]
+        refused = [g for g in rows if join_refusal(g, view.recs)]
         text = ""
         if stalled:
             text = stall_hint(stalled)
+        elif refused:
+            names = ", ".join(g.name or g.id for g in refused)
+            text = (f"Your request to join {names} was refused. Press Reason "
+                    "on its row to read why, then ask again or clear it.")
         elif rows and PLAY not in actions:
             if VIEW in actions:
                 text = ("You are not in a galaxy yet. Press View on one to "
                         "read what you would be joining, and join from "
                         "there.")
-            elif any(pending_join(g, view.recs) for g in rows):
+            elif any(awaiting_answer(g, view.recs) for g in rows):
                 text = ("Your join is with the galaxy. A seat appears at the "
                         "next turn boundary, and Play appears with it.")
         if text:
@@ -3078,10 +3269,70 @@ class Launcher:
                                       self.sort_desc, view), view)
 
     def on_row(self, g, action: str):
-        """What a row's one button does. View reads, Play plays."""
+        """What a row's one button does. View reads, Play plays, Reason
+        explains a refusal."""
         if action == PLAY:
             self.play_galaxy(g)
+        elif action == REASON:
+            self.show_refusal(g)
         else:
+            self.on_join(g)
+
+    def show_refusal(self, g):
+        """Tell a refused player why, and let them ask again or clear it.
+
+        The reason is the worker's own sentence from the answer, shown whole.
+        Ask again goes through Join, so every check and the notice come
+        before a second request is sent. Clear forgets this galaxy's record
+        and nothing else, which puts View back on the row.
+        """
+        tk = self.tk
+        rec = load_joined(self.data_dir).get(g.id)
+        if not join_refusal(g, {g.id: rec} if rec else None):
+            self._draw_galaxies()
+            return
+        win = tk.Toplevel(self.root)
+        win.title(self.cfg["product"])
+        win.configure(bg=BG)
+        win.transient(self.root)
+        tk.Label(win, text="Join refused", bg=BG, fg=WARN,
+                 font=("Segoe UI", 14, "bold")).pack(anchor="w", padx=20,
+                                                     pady=(18, 6))
+        tk.Label(win, text=refusal_text(g, rec), bg=BG, fg=TEXT,
+                 justify="left", anchor="w", wraplength=460,
+                 font=("Segoe UI", 9)).pack(anchor="w", fill="x", padx=20)
+
+        chosen = {}
+
+        def choose(what):
+            chosen["what"] = what
+            win.destroy()
+
+        row = tk.Frame(win, bg=BG)
+        row.pack(fill="x", padx=20, pady=(14, 18))
+        for label, what, bg, hi in (("Ask again", "again", BTN, BTN_HI),
+                                    ("Clear", "clear", PANEL, EDGE),
+                                    ("Close", None, PANEL, EDGE)):
+            tk.Button(row, text=label, bg=bg, fg="#ffffff" if bg == BTN
+                      else TEXT, activebackground=hi,
+                      activeforeground="#ffffff", relief="flat", bd=0,
+                      cursor="hand2", width=12, font=("Segoe UI", 9, "bold"),
+                      command=lambda w=what: choose(w)).pack(side="left",
+                                                             padx=(0, 6))
+        win.bind("<Escape>", lambda e: win.destroy())
+        win.update_idletasks()
+        try:
+            win.grab_set()
+        except tk.TclError:
+            pass
+        self.root.wait_window(win)
+
+        what = chosen.get("what")
+        if what == "clear":
+            clear_joined(self.data_dir, g.id)
+            self.say(f"join: cleared the refused request for {g.id}")
+            self._draw_galaxies()
+        elif what == "again":
             self.on_join(g)
 
     def play_galaxy(self, g):
@@ -3270,7 +3521,11 @@ class Launcher:
                       "nothing has changed.")
             return
 
-        save_joined(self.data_dir, joined_record(g, civ, uid, self.games_dir))
+        # The turn just read rather than the listing's, which can be a
+        # boundary behind; see `answer_for`.
+        now_turn = (state or {}).get("turn")
+        save_joined(self.data_dir, joined_record(g, civ, uid, self.games_dir,
+                                                 turn=now_turn))
         self.say(f"join: asked {g.id} for a seat as {civ} ({where})")
         when = f"turn {g.turn + 1}" if g.turn is not None else "the first turn"
         messagebox.showinfo(

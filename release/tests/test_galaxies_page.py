@@ -218,8 +218,10 @@ check("a closed galaxy is offered neither",
       L.row_action(ROWS[1], JOINING), None)
 check("nor a closed galaxy you are in",
       L.row_action(gx("x", "X", status="closed", joined=True)), None)
-check("View and Play are the only two labels",
-      sorted(L.ACTION_TEXT.values()), ["Play", "View"])
+# Reason is the third, and only a refused join offers it: see
+# test_join_answers.py.
+check("View, Play and Reason are the only labels",
+      sorted(L.ACTION_TEXT.values()), ["Play", "Reason", "View"])
 
 own = ROWS[3].store
 check("the galaxy multiplayer.json names is played whatever its state says",

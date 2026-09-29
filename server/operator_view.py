@@ -24,8 +24,9 @@ method is refused by default rather than forwarded by default.
 other half of the H6 finding. It returns `{civ: blob}`, so asking it who has
 handed a turn back downloads every player's save to read the keys and throw the
 bytes away. On a folder that is free and on Firebase it is a download per
-player per refresh. This asks `has_submitted(civ, turn)` once per civ instead,
-which is an existence check on all three stores. Leaving the method off the
+player per refresh. This asks `submitted_civs(turn)` once instead, which is a
+directory listing on a folder and one document read on Firebase. Leaving the
+method off the
 proxy means a later edit that reaches for it fails loudly rather than costing
 money quietly.
 
@@ -72,7 +73,7 @@ import turn_store
 STORE_READS = frozenset((
     'exists', 'state', 'current', 'seconds_left', 'civs',
     'turn_blob', 'has_turn', 'has_submitted', 'submission',
-    'archive_record', 'note',
+    'archive_record', 'note', 'submitted_civs',
     # Added when a galaxy learned to be closed and a seat learned to be taken
     # back. The view reads both out of the state it already holds rather than
     # calling these, so they are here for a caller of this module rather than
@@ -267,14 +268,13 @@ def galaxy_report(store, gid: str = None, name: str = None, status: str = None,
         out['seconds_left'] = out['deadline'] - out['read_at']
 
     civs = list(state.get('civs', []))
+    try:
+        played, err = set(store.submitted_civs(turn)), None
+    except Exception as exc:                                # noqa: BLE001
+        played, err = None, f'{type(exc).__name__}: {exc}'
+        out['problems'].append(f'could not tell who has submitted, {err}')
     for civ in civs:
-        try:
-            done = bool(store.has_submitted(civ, turn))
-            err = None
-        except Exception as exc:                            # noqa: BLE001
-            done, err = None, f'{type(exc).__name__}: {exc}'
-            out['problems'].append(f'could not tell whether {civ} has '
-                                   f'submitted, {err}')
+        done = None if played is None else civ in played
         out['civs'].append({'name': civ, 'submitted': done, 'error': err})
     out['submitted'] = [c['name'] for c in out['civs'] if c['submitted']]
     out['waiting'] = [c['name'] for c in out['civs'] if c['submitted'] is False]
