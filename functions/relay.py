@@ -692,17 +692,22 @@ def _own_join(store, doc, uid):
     `player_turn.follow` never runs for them and the note the worker left is on
     a path they cannot read. The answer is on a path they can.
 
-    Two named document reads and no listing, for the reason H6 gives about a
-    submission: this is a path a launcher polls while it waits for a boundary,
-    and reading the whole waiting collection to find one row in it would cost a
-    read per player waiting, per poll.
+    The waiting request is looked for first. Answering a request consumes it,
+    so one that is waiting is always newer than any answer on file, and a
+    player refused once who asks again is waiting on the new request rather
+    than refused by the old one.
+
+    At most two named document reads and no listing, for the reason H6 gives
+    about a submission: this is a path a launcher polls while it waits for a
+    boundary, and reading the whole waiting collection to find one row in it
+    would cost a read per player waiting, per poll.
     """
-    answer = store.join_answer(uid)
-    if answer is not None:
-        return _json({'state': 'answered', 'answer': answer})
     waiting = store.join_request(uid)
     if waiting is not None:
         return _json({'state': 'waiting', 'request': waiting})
+    answer = store.join_answer(uid)
+    if answer is not None:
+        return _json({'state': 'answered', 'answer': answer})
     return _json({'state': 'none'})
 
 

@@ -851,6 +851,24 @@ def run_joins(referee, galaxy, call, ids):
     check('and another caller cannot read that answer',
           call('GET', f'/join/{uid_d}/answer', token_a)[0], 403)
 
+    print('a refused player who asks again is waiting, not refused')
+    # Answering a request consumes it, so a request that is waiting is always
+    # newer than any answer on file. Fails if the route looked at the answer
+    # first, which tells a player who pressed Join again that the galaxy has
+    # already refused a request it has not seen yet.
+    lodge(token_d, name='Newcomer3')
+    out = json.loads(call('GET', '/join', token_d)[2])
+    check('the second request is what the player reads back',
+          (out['state'], (out.get('request') or {}).get('name')),
+          ('waiting', 'Newcomer3'))
+    check('while the first answer is still on file',
+          referee.join_answer(uid_d)['reason'], 'this galaxy had no room')
+    referee.answer_join(uid_d, {'key': uid_d, 'name': 'Newcomer3',
+                                'outcome': 'refused',
+                                'reason': 'this galaxy had no room'})
+    check('and once that one is answered, the answer is what it reads',
+          json.loads(call('GET', '/join', token_d)[2])['state'], 'answered')
+
     print('the record of who was seated stays behind the door')
     referee.update_state({turn_store.JOINED_KEY: {
         'Third': {'turn': 8, 'uid': uid_c, 'planet': 6, 'system': 'Tau Ceti'}}})
