@@ -159,9 +159,9 @@ def test_warned_event():
     player_turn.report_refusals(Notes(), 'DemoPlayer', 9, log=lambda *a: None,
                                 emit=lambda kind, **f: events.append((kind, f)))
     kinds = [k for k, _f in events]
-    check('refused_orders is still emitted, with every line',
-          (kinds[:1], events[0][1].get('lines')),
-          (['refused_orders'], refusals + warning))
+    check('refused_orders is emitted with the refusals and not the warning',
+          (kinds[:1], events[0][1].get('lines'), events[0][1].get('count')),
+          (['refused_orders'], refusals, len(refusals)))
     check('and warned carries the warning and nothing else',
           [f.get('lines') for k, f in events if k == 'warned'], [warning])
     check('a note with no warning emits no warned event',

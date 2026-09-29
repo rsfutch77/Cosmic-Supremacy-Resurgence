@@ -89,6 +89,60 @@ def main():
     check('a player who was refused nothing is told nothing',
           (n, quiet), (0, []))
 
+    print('a note that is not a refusal is not headed as one')
+    import abandonment
+    import joins
+    welcome = joins.welcome_note('Laptop', 7, 'Sol', 12)
+    warning = abandonment.warning_note('Laptop', 2, 5)
+    reclaim = abandonment.reclaim_note('Laptop', 5, 9)
+    # Fails if a pattern drifted from the sentence its writer produces.
+    check('a welcome is recognised whole',
+          player_turn.note_parts(welcome), (welcome, [], []))
+    check('a welcome with no planet number is still one',
+          player_turn.note_parts(joins.welcome_note('X', 3, 'Sol', None))[0],
+          joins.welcome_note('X', 3, 'Sol', None))
+    check('a warning is recognised whole',
+          player_turn.note_parts(warning), ([], [], warning))
+    check('a one-line warning too',
+          player_turn.note_parts(abandonment.warning_note('X', 1, 0)),
+          ([], [], abandonment.warning_note('X', 1, 0)))
+    check('a reclaim notice is recognised whole',
+          player_turn.note_parts(reclaim), ([], [], reclaim))
+    check('the three parts in the order the writers leave them',
+          player_turn.note_parts(welcome + reasons + warning),
+          (welcome, reasons, warning))
+    check('a partial welcome is refusals, not a welcome',
+          player_turn.note_parts(welcome[:1]), ([], welcome[:1], []))
+
+    s.put_note('Laptop', 7, welcome + reasons[:1])
+    said, events = [], []
+    n = player_turn.report_refusals(
+        s, 'Laptop', 7, log=said.append,
+        emit=lambda kind, **f: events.append((kind, f)))
+    text = '\n'.join(said)
+    check('a welcome with one refusal counts one refusal', n, 1)
+    # Fails with the old heading, which counted every line as a refusal.
+    check('and the heading says one', 'refused 1 of your' in text, True)
+    check('the welcome is under a note heading, not the refusal one',
+          text.index('left you a note') < text.index(welcome[0]), True)
+    check('refused_orders carries the refusal only',
+          [f['lines'] for k, f in events if k == 'refused_orders'],
+          [reasons[:1]])
+
+    s.put_note('Laptop', 8, warning)
+    said, events = [], []
+    n = player_turn.report_refusals(
+        s, 'Laptop', 8, log=said.append,
+        emit=lambda kind, **f: events.append((kind, f)))
+    check('a warning alone is no refusal', n, 0)
+    check('and is not headed as one', any('refused' in x for x in said),
+          False)
+    check('it is headed as a note', any('left you a note' in x for x in said),
+          True)
+    check('with every line printed', all(any(w in x for x in said)
+                                         for w in warning), True)
+    check('and only warned is emitted', [k for k, _f in events], ['warned'])
+
     print('it does not take the turn loop down with it')
 
     class Broken:
