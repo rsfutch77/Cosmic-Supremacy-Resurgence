@@ -223,8 +223,10 @@ def run_emulator(blob):
 
         print('\nafter it, with first use off')
         mine = rf.make_blob(new_turn, b'x')
-        x.submit('Joiner', new_turn, mine)
-        check('X plays Joiner with no operator bind',
+        check('X is let submit as Joiner',
+              rf.status_of(rf.refusal(x.submit, 'Joiner', new_turn, mine)),
+              None)
+        check('and it lands, with no operator bind',
               ref.submission('Joiner', new_turn), mine)
         refused = rf.refusal(y.submit, 'Joiner', new_turn,
                              rf.make_blob(new_turn, b'y'))
