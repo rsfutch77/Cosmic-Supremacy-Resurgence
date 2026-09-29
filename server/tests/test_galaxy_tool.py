@@ -285,12 +285,14 @@ def run_firebase():
         check('the launcher\'s store refuses a submission into it',
               type(refused).__name__, 'GalaxyClosed')
         # And the relay refuses it as well, for a launcher that skipped that
-        # check: the upload ticket is the door a submission goes through.
+        # check: the submission POST is the door a submission goes through,
+        # since the ticket in front of it authorises nothing.
         import relay
         code, _h, body = relay.handle(
-            'GET', f'/{one}/upload/submission/{first}/{CIVS[0]}',
-            {'Authorization': f'Bearer {token}'})
-        check('the relay refuses the upload ticket as closed, with the reason',
+            'POST', f'/{one}/submission/{first}/{CIVS[0]}',
+            {'Authorization': f'Bearer {token}'},
+            sp.encode_save(rf.make_blob(first)))
+        check('the relay refuses the submission as closed, with the reason',
               (code, b'is closed' in body, b'Season one is over' in body),
               (409, True, True))
         check('and its turn is still served',
