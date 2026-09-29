@@ -1559,10 +1559,15 @@ is out of scope here.
   the uid and leaves no window.
 
   **`bind` seats a civ nobody holds**, with the same refusals, and refuses a
-  held one. It exists because a join granted at a boundary records the asking
-  uid under `joined` and does not write `seats`, so on a galaxy with first-use
-  off a joiner is on the roster and cannot play through the relay until the
-  operator binds them. The operator view names that uid.
+  held one. A granted join binds its own seat: `joins.commit` writes
+  `seats[uid] = civ` in the same write as the roster (J3), so an ordinary
+  joiner plays with first-use off and needs no `bind`. `bind` is for the
+  cases that write leaves unseated: a referee killed between `publish` and
+  the commit, after which the operator adds the name and binds the uid the
+  waiting request still names, and a uid already playing another civ on the
+  roster, which keeps that seat and leaves the new civ for the operator. The
+  operator view names the `joined` uid of any civ on the roster that no seat
+  holds.
 
   Measured by `server/tests/test_seat_rebind.py`, the relay in process on the
   Firestore, Storage and Auth emulators with real anonymous sign-ins, 59 checks:
@@ -1813,13 +1818,21 @@ is out of scope here.
   and the launcher's own refusal built from that state. 43 checks became 57,
   and each of four mutations fails a named check.
 
-  **Still open, in files this half does not own.** The relay still lets a
-  reclaimed sign-in's seat pass `seat_or_refuse`, because the seat map keeps
-  the reclaimed entry, so its upload is accepted and then dropped by the
-  referee as not on the roster; the relay should refuse it saying the seat was
-  reclaimed, when and after how many misses. And `player_turn.report_refusals`
-  prints every note line under "the referee refused N of your change(s)",
-  which is the wrong heading for a warning.
+  **A reclaimed seat's upload is refused at the relay.** The seat map keeps a
+  reclaimed sign-in's entry, and `seat_or_refuse` used to let it pass, so its
+  upload was accepted and then dropped by the referee as not on the roster.
+  `reclaimed_refusal` now refuses it with 403, naming the turn of the reclaim
+  and the missed count.
+
+  **The log heading is honest, 29 September 2026.** `player_turn.report_refusals`
+  printed every note line under "the referee refused N of your change(s)",
+  including a warning and a welcome. `note_parts` now splits a note into the
+  welcome at its head, the refusals, and a warning or reclaim notice at its
+  tail; refusals keep the counted heading and the rest print under "the
+  referee left you a note". `refused_orders` carries the refusals only, and
+  `warned` the warning. `server/tests/test_refusal_notes.py` checks each
+  pattern against the sentence `joins` or `abandonment` writes, 15 checks to
+  31.
 
   **The launcher half, 29 September 2026, checked headless only.** The warning
   was written but never displayed where a silent player would see it: the turn
@@ -1827,9 +1840,11 @@ is out of scope here.
   player who has stopped playing is none, and even then it logged the warning
   as refused orders. Play now reads the note on the turn before the one open,
   once, and shows the referee's warning in a box before the game opens. A
-  followed loop that meets the warning shows the same box. The launcher tells
-  a warning from refusals by `warning_note`'s opening line, and the test checks
-  that against `abandonment.warning_note` itself so the two cannot drift.
+  followed loop that meets the warning shows the same box, from the lines of
+  the loop's `warned` event and with no second read of the note. At Play, where
+  no loop is running yet, the launcher tells a warning from refusals by
+  `warning_note`'s opening line, and the test checks that against
+  `abandonment.warning_note` itself so the two cannot drift.
 
   The refusal half: Play already answered a reclaimed seat through
   `roster_problem` with the turn and the missed count, and now also says to
@@ -2048,8 +2063,9 @@ is out of scope here.
   | a turn loop following the galaxy when it closes | the submission failed as a lost turn, then "waiting for the next turn" forever, later "turns have stopped" | the loop stops, the readout says **this galaxy has ended**, and the reason is shown |
   | the Games refresh | still polled `/submissions` and join answers on the closed galaxy | asks it nothing |
 
-  The directory row carries the status and not the reason, so Reason makes one
-  state read when pressed. The followed loop is checked with one state read
+  Reason shows the row's own `closed_reason` and reads nothing when pressed;
+  a row for the galaxy `multiplayer.json` names carries it the same way. The
+  followed loop is checked with one state read
   when a turn could not be sent and once per deadline when the wait passes the
   point the page would call the galaxy stopped, because from inside the loop a
   closed galaxy and a stopped referee look the same. A closed galaxy nobody on
