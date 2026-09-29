@@ -31,6 +31,53 @@ be tracking it. Do not tidy the tilde back inside.
 
 ---
 
+## Where this stands, 28 September 2026
+
+Written as a handover. `docs/Overnight_Push_Findings.md` was deleted on this
+date and everything in it that was still open is an item here, so this file is
+the only list.
+
+**The beta path works end to end.** A Windows machine with no checkout, no
+virtualenv and no Google credential ran the packaged build, listed a galaxy
+through the relay, signed in anonymously, claimed a seat, played a turn, and
+had the referee merge it. The referee survives a reboot with its local files
+deleted, because the galaxy is in Firebase and the machine holds nothing that
+matters.
+
+**What the machine is doing right now.** A scheduled task, `CosmicSupremacy
+Referee`, is refereeing `firebase://cs-resurgence/h3check` at four-hour turns
+and has been since 01:46 on 28 September. `h3check` was made for the H3 reboot
+test and then became the rehearsal galaxy because it was the only Firebase
+galaxy and stopping it would have left nothing live to test against. It is
+still disposable: nothing depends on it, and the next real decision is what the
+actual beta galaxy should be and whether it starts fresh.
+
+To point the referee somewhere else, write the task again with a different
+`-Store` and re-register it; `run_worker.ps1 -WriteTaskXml` prints the two
+`schtasks` commands. Every command in this file is relative to the repository
+root, and a fresh PowerShell opens in `C:\WINDOWS\system32`, which has produced
+two wasted attempts: `cd` first or give full paths.
+
+**The three things most worth doing next**, in the order they block a beta
+rather than the order they were found:
+
+1. **H9**, the polling cost. One player with a launcher open spends more than
+   four times the entire monthly Class A allowance. This caps the beta at
+   roughly nobody and is the only item that does.
+2. **J5**, the fourteen remaining transplanted bytes. Three of seventeen are
+   fixed. A joiner still lands on the leader's buildings, which the operator has
+   already ruled against.
+3. **J3's refused half**, which is the one a tester meets. A refused player's
+   row says "you have asked to join" forever; the relay serves the answer and
+   nothing reads it.
+
+**What needs the operator and cannot be done from here:** a seat rebind path
+exists nowhere, so a player who reinstalls Windows is locked out of their own
+empire (J4); and no machine but this one and the second test PC has ever run
+the build, so the antivirus question is answered for one configuration (M3).
+
+---
+
 ## What this phase inherits
 
 These are measured, in the blob push plan at the commit named above, and this
@@ -326,9 +373,30 @@ is out of scope here.
   deploy can pick them up from beside them; this project serves the live website
   and rules are deployed by hand, deliberately, once.
 
-  **Done when:** a test client authenticated as one player is refused writing
-  another player's submission, refused publishing a turn, and refused deleting
-  anything, each by the rules rather than by the application declining to try.
+  **This done-when outlived the design it was written for.** "By the rules"
+  presupposes Security Rules doing the enforcement, which is design A. B was
+  chosen precisely because no rule can express the thing that matters: a rule
+  can test `request.auth.uid` and nothing else about who is asking, and a
+  submission object is named for a username the player typed, so no rule can
+  relate the two. See H7. Enforcement is an `if` statement in the relay, on
+  purpose, and the deny-all rules exist so that nothing reaches the bucket
+  except through it.
+
+  **The substance is measured**, against the deployed service rather than the
+  emulator: a caller authenticated as one player is refused writing another's
+  submission, refused every referee route, and cannot delete anything because
+  no route deletes. J4 records the seat half, with two anonymous sign-ins and a
+  second machine.
+
+  What is genuinely unverified is the rules themselves, and the only thing they
+  have left to say is "nothing gets in except through the relay". Reading the
+  live rules back on 27 September showed both Firestore and Storage deny-all,
+  which is the whole of their job now.
+
+  **Done when:** a client authenticated as one player is refused writing another
+  player's submission, refused publishing a turn, and refused deleting
+  anything, and a client bypassing the relay reaches neither Firestore nor the
+  bucket.
 
 - [x] **H7. The player's launcher cannot reach Firebase, and nothing in the
   tests could have noticed.** What H1 delivered is the *referee's* transport. It
@@ -793,7 +861,17 @@ is out of scope here.
   independent generations: one homeworld with a 240-byte `PLPR`, 7 citizens as 4
   farmers, 2 workers and 1 scientist, no military, recruitment 0, no production
   points, an empty queue, **2 Colony Ship hulls with 2 crew**, 1 design, 200
-  credits, research unset, plus seat one's `PLPR` rate pair.
+  credits, research unset, plus seat one's `PLPR` rate pair, and since 28
+  September the generated food pair rather than the donor's. See J5.
+
+  **This item had no done-when until 28 September**, which is how the refused
+  half stayed open while the item read as nearly finished. The two halves are
+  not the same size: the accept path is verified against a real client and the
+  refuse path has never reached a player at all.
+
+  **Done when:** a player who clicks Join during turn N is playing at turn N+1,
+  and a player whose request is refused is told so and why, from a machine that
+  is not the referee's.
 
 - [ ] **J5. A joiner still inherits seat one's buildings and stockpiles.** The
   unfinished half of the balance ruling, here rather than in the reconstruction
