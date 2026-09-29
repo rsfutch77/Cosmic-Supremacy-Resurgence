@@ -46,6 +46,7 @@ for d in (os.path.join(ROOT, 'client', 'dev_tools'),
 import check_store
 import game_cycle
 import make_single_player_galaxy as msp
+import referee
 
 PASS, FAIL = [], []
 
@@ -53,11 +54,14 @@ CREATE_NO_WINDOW = 0x08000000
 
 # The tools swept for a missing flag. `client/dev_tools` is where the operator
 # saw the windows; `check_store.py` is the one tool outside it that shells out
-# on a path a player can reach.
+# on a path a player can reach; the referee and its worker run unattended
+# behind a scheduled task, where every window is one nobody asked for.
 SWEPT = ([os.path.join(ROOT, 'client', 'dev_tools', n)
           for n in sorted(os.listdir(os.path.join(ROOT, 'client', 'dev_tools')))
           if n.endswith('.py')] +
-         [os.path.join(ROOT, 'server', 'dev_tools', 'check_store.py')])
+         [os.path.join(ROOT, 'server', 'dev_tools', 'check_store.py')] +
+         [os.path.join(ROOT, 'server', n)
+          for n in ('referee.py', 'referee_worker.py')])
 
 SPAWNERS = {'run', 'Popen', 'call', 'check_call', 'check_output'}
 
@@ -230,6 +234,66 @@ def test_check_store_sessions():
           rows[0].endswith('\\\\POWERHOUSE1\\galaxies'), True)
 
 
+def test_referee_tick():
+    """The `advance_turns` child, once per tick on an unattended machine (N7).
+
+    `tick` is run whole with the client's half stood in for: `game_cycle` and
+    `player_turn` are replaced in `sys.modules` for the length of the call, so
+    nothing is launched, closed or locked, and the capture it reads back is a
+    file written here. What comes out is the one subprocess call a tick makes.
+    """
+    print('referee.tick, the advance_turns child')
+    tmp = tempfile.mkdtemp(prefix='nowin_tick_')
+    capture = os.path.join(tmp, 'capture.raw')
+    blob = b'SAVE' + bytes(8)
+    with open(capture, 'wb') as f:
+        f.write(blob)
+
+    class Snap:
+        turn = 7
+
+    class FakeClient:
+        closed = []
+
+        @staticmethod
+        def restart(dat, purpose=None, wait_for_lock=None):
+            return Snap()
+
+        @staticmethod
+        def close_client():
+            FakeClient.closed.append(True)
+
+    class FakePlayerTurn:
+        @staticmethod
+        def collect(who, save_dir=None, log=None):
+            return capture
+
+    kept = {n: sys.modules.get(n) for n in ('game_cycle', 'player_turn')}
+    sys.modules['game_cycle'] = FakeClient
+    sys.modules['player_turn'] = FakePlayerTurn
+    got = []
+    try:
+        rec = with_recorder(referee, {}, lambda: got.append(referee.tick(
+            blob, turns=1, secs=10, work_dir=tmp, log=lambda *_: None,
+            check_save_path=False)))
+    finally:
+        for n, m in kept.items():
+            if m is None:
+                sys.modules.pop(n, None)
+            else:
+                sys.modules[n] = m
+    check('a tick makes one subprocess call', len(rec.calls), 1)
+    check('and it is advance_turns',
+          any(str(a).endswith('advance_turns.py') for a in rec.calls[0][0]),
+          True)
+    check('and it asks for no window', rec.flagged(), [CREATE_NO_WINDOW])
+    check('and its output is still captured, so a failure is still logged',
+          rec.calls[0][1].get('capture_output'), True)
+    check('and the tick still returns the capture it read', got, [blob])
+    check('and the stand-in client was closed, not the real one',
+          FakeClient.closed, [True])
+
+
 # ── the two that are deliberately left alone ─────────────────────────────────
 def test_the_client_launches_are_left_detached():
     """`launch` starts the game, which is a windowed program with no console.
@@ -306,6 +370,7 @@ if __name__ == '__main__':
     test_close_client()
     test_capture_save()
     test_check_store_sessions()
+    test_referee_tick()
     test_the_client_launches_are_left_detached()
     test_sweep()
     print(f'\n{len(PASS)} passed, {len(FAIL)} failed')
