@@ -51,11 +51,13 @@ os.environ.setdefault('FIREBASE_AUTH_EMULATOR_HOST', AUTH_HOST)
 os.environ.pop('CS_RELAY_STATE_CEILING', None)
 os.environ.pop('CS_RELAY_LISTING_SECONDS', None)
 
-from google.cloud.firestore_v1 import document, query          # noqa: E402
+from google.cloud.firestore_v1 import batch, document, query   # noqa: E402
 from google.cloud.storage import blob as gcs_blob               # noqa: E402
+from google.cloud.storage import client as gcs_client           # noqa: E402
 
 import relay                                                    # noqa: E402
 from firebase_store import FirebaseTurnStore                     # noqa: E402
+import save_parser as sp                                        # noqa: E402
 from test_store_equivalence import make_blob                    # noqa: E402
 from turn_store import HttpTurnStore                             # noqa: E402
 
@@ -63,7 +65,9 @@ PASS, FAIL = [], []
 TURN = 7
 FOUR_HOURS = 14400
 
-COUNT = {'reads': 0, 'exists': 0}
+COUNT = {'reads': 0, 'exists': 0, 'writes': 0, 'storage': 0}
+# (status, body length) of every submission read the socket served.
+SERVED = []
 
 
 def check(name, got, want):
@@ -101,9 +105,30 @@ def _count_exists(orig):
     return exists
 
 
+def _count_commit(orig):
+    # A batch is billed a write per operation in it, and a lone `set` is a
+    # batch of one inside the client library, so this sees both.
+    def commit(self, *a, **k):
+        COUNT['writes'] += len(getattr(self, '_write_pbs', []) or [])
+        return orig(self, *a, **k)
+    return commit
+
+
+def _count_storage(orig):
+    def call(self, *a, **k):
+        COUNT['storage'] += 1
+        return orig(self, *a, **k)
+    return call
+
+
 document.DocumentReference.get = _count_get(document.DocumentReference.get)
 query.Query.stream = _count_stream(query.Query.stream)
 gcs_blob.Blob.exists = _count_exists(gcs_blob.Blob.exists)
+batch.WriteBatch.commit = _count_commit(batch.WriteBatch.commit)
+for _name in ('exists', 'upload_from_string', 'download_as_bytes', 'delete'):
+    setattr(gcs_blob.Blob, _name,
+            _count_storage(getattr(gcs_blob.Blob, _name)))
+gcs_client.Client.list_blobs = _count_storage(gcs_client.Client.list_blobs)
 
 
 class Clock:
@@ -151,6 +176,8 @@ class RelayHandler(BaseHTTPRequestHandler):
         path = urllib.parse.urlparse(self.path).path
         status, headers, out = relay.handle(
             self.command, path, dict(self.headers), body)
+        if self.command == 'GET' and '/submission/' in path:
+            SERVED.append((status, len(out)))
         self.send_response(status)
         for key, value in headers.items():
             self.send_header(key, value)
@@ -282,8 +309,8 @@ def test_decisions_are_read_fresh(stores, uid, token):
     """A held copy says the galaxy is open. The door still reads it closed.
 
     Fails if any route that decides what a caller may do took the held copy:
-    the upload ticket would be issued into a closed galaxy, and a seat moved
-    to another civ would still read its old submission.
+    a submission would be stored into a closed galaxy, and a seat moved to
+    another civ would still read its old submission.
     """
     print('what a caller may do is never decided from a held copy')
     fresh()
@@ -295,9 +322,11 @@ def test_decisions_are_read_fresh(stores, uid, token):
     state = json.loads(relay.handle('GET', f'/{g.galaxy}/state', H, b'')[2])
     check('the held /state still reads open', state.get('status'), None)
     code, _h, body = relay.handle(
-        'GET', f'/{g.galaxy}/upload/submission/{turn}/DemoPlayer', H, b'')
-    check('while the upload ticket is refused as closed',
+        'POST', f'/{g.galaxy}/submission/{turn}/DemoPlayer', H,
+        sp.encode_save(make_blob(turn, b'c')))
+    check('while a submission is refused as closed',
           (code, 'closed' in json.loads(body).get('error', '')), (409, True))
+    check('and nothing was stored', g.submission('DemoPlayer', turn), None)
     g.reopen()
 
     relay.handle('GET', f'/{g.galaxy}/state', H, b'')
@@ -332,11 +361,11 @@ def test_own_commit_is_read_at_once(stores, token, base):
 
 
 def test_storage_is_not_asked_what_the_document_says(stores, token):
-    """The turn the document is on, and a submission the document records.
+    """The turn the document is on, and a submission stored as a document.
 
     Fails if either asks the bucket whether an object exists, which is one
-    Class B operation per launcher per turn for each. The control beside each
-    is a case the document cannot answer, which still asks.
+    Class B operation per launcher per turn for each. The control beside the
+    turn is a case the document cannot answer, which still asks.
     """
     print('what the document already says')
     fresh()
@@ -353,17 +382,114 @@ def test_storage_is_not_asked_what_the_document_says(stores, token):
           (out[0], cost[1]), (404, 1))
     cost, out = costs(lambda: relay.handle(
         'GET', f'/{g.galaxy}/submission/{turn}/DemoPlayer', H, b''))
-    check('a recorded submission redirects without an existence check',
-          (out[0], cost[1]), (302, 0))
+    check('a stored submission is served from two document reads and no '
+          'Storage operation', (out[0], cost), (200, (2, 0)))
     g.doc.set({'submitted': {str(turn): []}}, merge=True)
     cost, out = costs(lambda: relay.handle(
         'GET', f'/{g.galaxy}/submission/{turn}/DemoPlayer', H, b''))
-    check('one the document does not record is asked of the bucket, and found',
-          (out[0], cost[1]), (302, 1))
+    check('and still found when the galaxy document does not record it',
+          (out[0], cost), (200, (2, 0)))
     cost, out = costs(lambda: relay.handle(
-        'GET', f'/{g.galaxy}/submission/{turn - 1}/DemoPlayer', H, b''))
-    check('and a submission that is not there is still 404',
-          (out[0], cost[1]), (404, 1))
+        'GET', f'/{g.galaxy}/submission/{turn + 1}/DemoPlayer', H, b''))
+    check('and a submission that is not there is 404 without asking the '
+          'bucket', (out[0], cost), (404, (2, 0)))
+
+
+def test_a_submission_costs(stores, token, base):
+    """What one upload costs at the relay, since submissions are documents.
+
+    H13. Every upload was a Cloud Storage Class A operation, and Class A is
+    5,000 a month for the whole project. Counted here at the client
+    libraries: Firestore reads and writes, and every Storage call a
+    submission could make. Fails if an upload reaches Storage at all, if a
+    player's second upload in a turn still writes the galaxy document, or if
+    the ticket reads anything.
+    """
+    print('what a submission costs')
+    fresh()
+    g = stores[2]
+    H = {'Authorization': f'Bearer {token}'}
+    turn = g.current()[0]
+    cost, out = costs(lambda: relay.handle(
+        'GET', f'/{g.galaxy}/upload/submission/{turn}/DemoPlayer', H, b''))
+    check('the upload ticket reads nothing and names the relay route',
+          (cost, json.loads(out[2])['url']),
+          ((0, 0), f'/submission/{turn}/DemoPlayer'))
+    first = make_blob(turn, b'1')
+    COUNT['writes'] = COUNT['storage'] = 0
+    cost, out = costs(lambda: relay.handle(
+        'POST', f'/{g.galaxy}/submission/{turn}/DemoPlayer', H,
+        sp.encode_save(first)))
+    check('a first upload of the turn: one read, two writes, no Storage',
+          (out[0], cost[0], COUNT['writes'], COUNT['storage']),
+          (200, 1, 2, 0))
+    COUNT['writes'] = COUNT['storage'] = 0
+    cost, out = costs(lambda: relay.handle(
+        'POST', f'/{g.galaxy}/submission/{turn}/DemoPlayer', H,
+        sp.encode_save(make_blob(turn, b'2'))))
+    check('a second upload: one read, one write, no Storage',
+          (out[0], cost[0], COUNT['writes'], COUNT['storage']),
+          (200, 1, 1, 0))
+
+    # The same through a store, the way a launcher does it: ticket, POST, and
+    # the read back `player_turn` makes, answered 304 with no body.
+    player = HttpTurnStore(f'{base}/{g.galaxy}', token=lambda: token,
+                           state_seconds=0)
+    mine = make_blob(turn, b'3')
+    COUNT['writes'] = COUNT['storage'] = 0
+    player.submit('DemoPlayer', turn, mine)
+    check('a launcher upload makes no Storage call', COUNT['storage'], 0)
+    SERVED.clear()
+    check('the read back is the bytes sent', player.submission(
+        'DemoPlayer', turn), mine)
+    check('and came back as 304 with no body', SERVED, [(304, 0)])
+    check('the referee reads the same bytes', g.submission('DemoPlayer', turn),
+          mine)
+    COUNT['writes'] = COUNT['storage'] = 0
+    g.submissions(turn)
+    check('the referee reading the turn makes no Storage call',
+          COUNT['storage'], 0)
+
+
+def test_before_documents(stores, token):
+    """A galaxy started before H13, whose current turn has Storage objects.
+
+    The relay and the worker change over within a turn, and a submission
+    uploaded before that is an object. Fails if it went missing: the player's
+    launcher skips an upload identical to the last, so the object would be
+    their turn.
+    """
+    print('a turn from before submissions were documents')
+    fresh()
+    g = stores[0]
+    H = {'Authorization': f'Bearer {token}'}
+    turn = g.current()[0]
+    from google.cloud import firestore
+    import firebase_store
+    g.doc.update({firebase_store.SUBMISSIONS_FROM_KEY: firestore.DELETE_FIELD})
+    old = make_blob(turn, b'o')
+    g._put(g.submission_object('DemoPlayer', turn), sp.encode_save(old),
+           'text/plain')
+    check('the referee still reads the object',
+          g.submissions(turn).get('DemoPlayer'), old)
+    check('and so does one civ read', g.submission('DemoPlayer', turn), old)
+    check('and has_submitted', g.has_submitted('DemoPlayer', turn), True)
+    cost, out = costs(lambda: relay.handle(
+        'GET', f'/{g.galaxy}/submission/{turn}/DemoPlayer', H, b''))
+    check('the relay redirects to it, asking the bucket once',
+          (out[0], cost[1]), (302, 1))
+    new = make_blob(turn, b'n')
+    relay.handle('POST', f'/{g.galaxy}/submission/{turn}/DemoPlayer', H,
+                 sp.encode_save(new))
+    check('a document written after it wins, for the referee',
+          g.submissions(turn).get('DemoPlayer'), new)
+    check('and for one civ read', g.submission('DemoPlayer', turn), new)
+    g.publish(turn + 1, make_blob(turn + 1), turn_seconds=FOUR_HOURS)
+    check('the first publish on this code marks where documents begin',
+          (g.doc.get().to_dict() or {}).get(
+              firebase_store.SUBMISSIONS_FROM_KEY), turn + 1)
+    check('after which a missing submission does not ask the bucket',
+          costs(lambda: g.submission('Neighbor', turn + 1)), ((2, 0), None))
 
 
 def main():
@@ -390,6 +516,8 @@ def main():
         test_decisions_are_read_fresh(stores, uid, token)
         test_own_commit_is_read_at_once(stores, token, base)
         test_storage_is_not_asked_what_the_document_says(stores, token)
+        test_a_submission_costs(stores, token, base)
+        test_before_documents(stores, token)
     finally:
         httpd.shutdown()
         httpd.server_close()

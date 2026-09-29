@@ -22,17 +22,25 @@ costs work to keep three of in step; and ownership becomes an `if` statement
 here rather than a rule Security Rules cannot express, which is the thing H4
 recorded as unsolved.
 
-The control plane, not the data plane
--------------------------------------
-A blob never passes through this function. Every route that would have carried
-one answers with a Cloud Storage URL instead: a redirect for a download, an
-upload ticket for a write. The function decides *whether*, Storage moves the
-bytes. That keeps the function's memory and its per-invocation time flat in the
-size of a galaxy, and it keeps egress on the path Storage's free allowance is
-measured against rather than on the function's.
+Turns go through Storage, submissions through here
+---------------------------------------------------
+A turn blob never passes through this function: `/turn/<n>` answers with a
+redirect to a signed Cloud Storage URL. A turn is the one blob every launcher
+downloads, and it can grow with the galaxy, so it stays on Storage's egress
+allowance and off the function's memory.
 
-The cost of it is that the function cannot see what a player uploaded, which is
-why there is a commit call after the upload. See `_commit_submission`.
+**A submission does pass through**, since H13. It is a few tens of kilobytes
+and capped, and a player uploads it every time their state changes in a turn.
+Written to Cloud Storage each of those was a Class A operation, 5,000 a month
+for the whole project, which capped the beta at about 27 players. So the
+upload ticket names this function's own route, the body is checked and then
+stored as a Firestore document in one call, and the document is served back
+from here, with a 304 and no body to a launcher that already holds it. See
+`_take_submission`.
+
+Builds from before H13 follow that ticket unchanged: they read `url`,
+`method`, `encoding` and `commit` from it, and a relative `url` with no
+`commit` is the shape `turn_server.py` has always answered with.
 
 What it enforces, which is what rules could not
 ------------------------------------------------
@@ -41,10 +49,11 @@ What it enforces, which is what rules could not
   * only the referee publishes a turn, starts a galaxy, archives, or notes;
     there is no authenticated path here that does any of those at all
   * a submission is accepted only for the turn being played
-  * a submission is size capped, twice: the cap is signed into the upload URL
-    so Cloud Storage refuses an oversized body itself, and it is checked again
-    at commit because the emulator cannot enforce a signed header
-  * a submission that is not a save of this galaxy's current turn is deleted
+  * a submission is size capped, before it is decoded and again before it is
+    stored, and one that would inflate past the store's cap is refused while
+    it inflates
+  * a submission that is not a save of this galaxy's current turn is refused
+    before it is stored, so it never replaces the one it was sent over
   * a join request is filed under the uid in the token and not the one in the
     body, and a caller reads back only the request it lodged itself
 
@@ -122,12 +131,15 @@ import turn_store                                               # noqa: E402
 # enough that one copied out of a log is not a standing grant.
 URL_SECONDS = int(os.environ.get('CS_RELAY_URL_SECONDS', '600'))
 
-# The ceiling on a submission. `turn_server.MAX_SUBMISSION_BYTES` is the same
-# number, because a launcher must not be told two different limits by two
-# services that are meant to be interchangeable. Real submissions measured
-# against this are tens of kilobytes; the cap is there to stop a bucket being
-# filled, not to be tight.
-MAX_BYTES = int(os.environ.get('CS_RELAY_MAX_BYTES', str(2 * 1024 * 1024)))
+# The ceiling on a submission body, in the base64 wire form a launcher sends.
+# `turn_server.MAX_SUBMISSION_BYTES` is the same number, because a launcher
+# must not be told two different limits by two services that are meant to be
+# interchangeable. Real submissions are about 13 KB in this form, and the
+# largest save this checkout holds, 129,853 bytes decompressed, is well under
+# a tenth of it. A body this size is 768 KiB once out of base64, which is what
+# the store keeps, so it fits `firebase_store.MAX_SUBMISSION_DATA` and a
+# Firestore document's 1 MiB with room to spare.
+MAX_BYTES = int(os.environ.get('CS_RELAY_MAX_BYTES', str(1024 * 1024)))
 
 # The ceiling on a join request, which is a name, a build string and two
 # numbers. Three orders of magnitude above what one is and small enough that
@@ -594,12 +606,10 @@ def refuse_if_closed(store, doc):
     """A closed galaxy takes no more submissions, enforced here.
 
     Every store's `submit` already refuses one, but the relay never calls
-    `submit`: it mints a signed Cloud Storage ticket and the launcher uploads
-    straight to Storage. So the store's own guard sits on the far side of the
-    door a player actually uses, and a launcher that skipped its client-side
-    check could upload into a galaxy the operator had ended. Both halves of the
-    ticket check, because an upload authorised before a close would otherwise
-    still commit after one.
+    `submit`: it makes its own checks on the document it has read and writes
+    through `write_submission`. So the store's own guard is not on the door a
+    player actually uses, and a launcher that skipped its client-side check
+    could submit into a galaxy the operator had ended.
     """
     if doc.get(turn_store.STATUS_KEY) == turn_store.CLOSED:
         why = doc.get(turn_store.CLOSED_REASON_KEY)
@@ -607,22 +617,12 @@ def refuse_if_closed(store, doc):
                            + (f': {why}' if why else ''))
 
 
-def _upload_ticket(store, doc, uid, turn, civ):
-    """Where to put a submission, and what the far end will accept.
+def _may_submit(store, doc, uid, turn, civ):
+    """Everything that has to be true before a submission is stored.
 
-    The same shape `turn_server.upload_ticket` answers with, so that one
-    launcher speaks to both and neither has to know which it reached.
-
-    `x-goog-content-length-range` is signed into the URL, so the cap is Cloud
-    Storage's to enforce and not this function's: an oversized body is refused
-    at the edge without the bytes ever being offered here. `commit` is the
-    second half, and exists because a function that never sees the bytes cannot
-    say whether they were a save.
-
-    `url` is absolute because it is Storage's, and `commit` is relative because
-    it is this relay's: the launcher's base already carries the galaxy, and a
-    ticket that repeated it would send the next request to
-    `/<galaxy>/<galaxy>/commit`.
+    The galaxy is open, this caller is that civ, taking the seat when the
+    galaxy allows first use, and the turn is the one being played. `doc` is a
+    fresh read, never a held copy.
     """
     refuse_if_closed(store, doc)
     seat_or_refuse(store, doc, uid, civ, claim=True)
@@ -630,76 +630,160 @@ def _upload_ticket(store, doc, uid, turn, civ):
     if turn != current:
         raise Refused(409, f'{store.galaxy} is playing turn {current}, '
                            f'not turn {turn}')
-    name = store.submission_object(civ, turn)
-    cap = f'0,{MAX_BYTES}'
+
+
+def _upload_ticket(turn, civ):
+    """Where to put a submission, which is this relay's own route.
+
+    The shape `turn_server.upload_ticket` answers with, so one launcher speaks
+    to both: `url` relative to the launcher's base, `method`, `encoding`, and
+    no `commit`, because the POST checks and stores the body in one call.
+    Builds from before H13 follow it unchanged; they asked for this ticket
+    when it named a signed Cloud Storage URL, and they read the same four
+    fields out of it now.
+
+    Nothing is read to answer it. A ticket authorises nothing: the POST it
+    names makes every check afresh, so a ticket handed to a caller with no
+    seat, or into a galaxy that has closed, is refused when it is used.
+
+    `b64` because that is the smaller of the two forms a launcher can send,
+    about a third of the decompressed blob, and it is what the store keeps
+    once it is out of base64.
+    """
     quoted = urllib.parse.quote(civ)
     return _json({
-        'url': signed_url(store, name, 'PUT', content_type='text/plain',
-                          headers={'x-goog-content-length-range': cap}),
-        'method': 'POST' if os.environ.get('STORAGE_EMULATOR_HOST') else 'PUT',
+        'url': f'/submission/{turn}/{quoted}',
+        'method': 'POST',
         'encoding': 'b64',
-        'headers': {'Content-Type': 'text/plain',
-                    'x-goog-content-length-range': cap},
-        'commit': f'/commit/submission/{turn}/{quoted}',
+        'headers': {'Content-Type': 'text/plain'},
+        'commit': None,
         'max_bytes': MAX_BYTES,
-        'expires': int(time.time() + URL_SECONDS),
     })
 
 
-def _commit_submission(store, doc, uid, turn, civ):
-    """Read back what was uploaded, and remove it if it was not a save.
+def _submission_body(body: bytes, turn: int) -> bytes:
+    """The decompressed blob a submission body carries, checked.
 
-    The price of never carrying a blob. The function authorised an upload to one
-    object and Cloud Storage took the bytes, so the only place left to ask
-    whether they were a save of this turn is afterwards, against the object.
-
-    One Class B operation on the happy path, and a Class A delete only when
-    something is refused. Either way one Firestore write follows, recording or
-    forgetting the civ on the galaxy document, which is what lets the
-    `/submissions` poll answer without listing the bucket. The alternative, staging the upload elsewhere and
-    copying it into place once it checked out, costs a copy and a delete on
-    *every* submission, and H5 measured Class A operations as the binding free
-    quota: 1,456 a month of 5,000 at six players saving once a turn. Tripling
-    the one that binds to protect against a case the referee already survives
-    badly is the wrong trade.
-
-    The window this leaves is between the upload and this call, when an object
-    that is not a save sits where the referee would read it. It is milliseconds
-    of a turn that is hours long, the caller that opened it is the only one who
-    can close it, and before this existed the window was the whole turn.
+    Either form is taken, by the rule `save_parser.load_any` uses: a body that
+    opens with a section tag is the blob itself, and anything else is the
+    base64 wire form. The wire form is inflated under the store's cap, so a
+    body built to expand is refused while it is read.
     """
-    refuse_if_closed(store, doc)
-    seat_or_refuse(store, doc, uid, civ, claim=True)
-    current = _current_turn(doc)
-    if turn != current:
-        raise Refused(409, f'{store.galaxy} is playing turn {current}, '
-                           f'not turn {turn}')
-    name = store.submission_object(civ, turn)
-    blob = store.bucket.blob(name)
+    if len(body) > MAX_BYTES:
+        raise Refused(413, f'a submission may be {MAX_BYTES:,} bytes and this '
+                           f'one is {len(body):,}')
+    import save_parser as sp
+    try:
+        if body[:4] in sp.KNOWN_TAGS:
+            blob = body
+        else:
+            blob = turn_store.decode_capped(body.strip())
+        turn_store.check_save(blob, turn)
+    except turn_store.SubmissionTooLarge as exc:
+        raise Refused(413, str(exc))
+    except Exception as exc:                                    # noqa: BLE001
+        raise Refused(400, f'this is not a save of turn {turn}: '
+                           f'{type(exc).__name__}: {exc}')
+    return blob
+
+
+def _take_submission(store, doc, uid, turn, civ, body):
+    """Check a submission and store it, in one call.
+
+    Every refusal happens before anything is written, so a bad upload leaves
+    the player's previous submission for this turn standing rather than
+    replacing it and then being deleted.
+
+    The cost, from `write_submission`: one Firestore write, and a second only
+    on the civ's first submission of the turn, when the galaxy document does
+    not yet record them. No Cloud Storage operation of either class.
+    """
+    _may_submit(store, doc, uid, turn, civ)
+    blob = _submission_body(body, turn)
+    try:
+        tag = store.write_submission(civ, turn, blob, doc=doc)
+    except turn_store.SubmissionTooLarge as exc:
+        raise Refused(413, str(exc))
+    forget_doc(store)
+    return _json({'turn': turn, 'civ': civ, 'bytes': len(blob), 'tag': tag})
+
+
+def _serve_submission(store, doc, turn, civ, headers):
+    """One civ's submission, as a body, or 304 when the caller has it.
+
+    The stored bytes are served in the base64 wire form, which is what every
+    launcher already decodes, and the ETag is the blob's `submission_tag`.
+    `HttpTurnStore` sends the tag of the submission it last sent back as
+    `If-None-Match`, and `player_turn` reads its own submission before every
+    upload and after it, so nearly every read is answered with no body.
+
+    A turn from before submissions were documents is served the way it was
+    then, as a redirect to the object.
+    """
+    rec = store.submission_record(civ, turn)
+    if rec is not None:
+        tag = str(rec.get('tag') or '')
+        etag = f'"{tag}"'
+        asked = [t.strip() for t in
+                 (_header(headers, 'if-none-match') or '').split(',')]
+        out = {'ETag': etag, 'Cache-Control': 'no-cache'}
+        if tag and etag in asked:
+            return 304, out, b''
+        out['Content-Type'] = 'text/plain'
+        return 200, out, base64.b64encode(bytes(rec['data']))
+    if store.before_documents(turn, doc):
+        name = store.submission_object(civ, turn)
+        if store.bucket.blob(name).exists():
+            return _redirect(signed_url(store, name, 'GET'))
+    raise Refused(404, f'{civ} has not submitted for {turn}')
+
+
+def _commit_submission(store, doc, uid, turn, civ):
+    """Bring in an upload made to a Storage ticket from before H13.
+
+    A launcher holding a ticket this relay handed out before it was redeployed
+    uploads to Cloud Storage and then commits here, for up to `URL_SECONDS`
+    after the redeploy. The object is read back once, checked as a body sent
+    to `_take_submission` is, stored as a document, and deleted either way, so
+    the upload is not lost and does not linger. The current ticket carries no
+    commit, so nothing else arrives here.
+    """
+    _may_submit(store, doc, uid, turn, civ)
+    blob = store.bucket.blob(store.submission_object(civ, turn))
     # One range read rather than a size check and then a read: an object above
     # the cap must not be downloaded to discover that it is above the cap.
     from google.api_core import exceptions
     try:
         data = blob.download_as_bytes(start=0, end=MAX_BYTES)
     except exceptions.NotFound:
+        if store.submission_record(civ, turn) is not None:
+            return _json({'turn': turn, 'civ': civ})
         raise Refused(404, f'{civ} has uploaded nothing for turn {turn}')
-    if len(data) > MAX_BYTES:
-        blob.delete()
-        store.forget_submitted(civ, turn)
-        forget_doc(store)
-        raise Refused(413, f'a submission may be {MAX_BYTES:,} bytes and this '
-                           f'one is larger')
     try:
-        decoded = sp_decode(data)
-        turn_store.check_save(decoded, turn)
-    except ValueError as exc:
+        decoded = _submission_body(data, turn)
+        tag = store.write_submission(civ, turn, decoded, doc=doc)
+    except (Refused, turn_store.SubmissionTooLarge) as exc:
+        # The upload replaced whatever object was there, so with no document
+        # either the civ has nothing stored for this turn now.
         blob.delete()
-        store.forget_submitted(civ, turn)
+        if store.submission_record(civ, turn) is None:
+            store.forget_submitted(civ, turn)
         forget_doc(store)
-        raise Refused(400, f'this is not a save of turn {turn}: {exc}')
-    store.record_submitted(civ, turn)
+        if isinstance(exc, Refused):
+            raise
+        raise Refused(413, str(exc))
+    blob.delete()
     forget_doc(store)
-    return _json({'turn': turn, 'civ': civ, 'bytes': len(decoded)})
+    return _json({'turn': turn, 'civ': civ, 'bytes': len(decoded),
+                  'tag': tag})
+
+
+def _header(headers: dict, name: str):
+    """One request header, whatever its case."""
+    for key, value in (headers or {}).items():
+        if key.lower() == name:
+            return value
+    return None
 
 
 def _lodge_join(store, doc, uid, body):
@@ -814,22 +898,6 @@ def _own_join(store, doc, uid):
     return _json({'state': 'none'})
 
 
-def sp_decode(data: bytes) -> bytes:
-    """The wire form a submission is stored in, decoded, or a ValueError.
-
-    `save_parser.decode_save` raises whatever base64 and zlib raise, and this
-    turns all of them into the one exception the caller refuses on, so a
-    corrupt upload reads as a refusal rather than a 500.
-    """
-    import save_parser as sp
-    try:
-        return sp.decode_save(data.strip())
-    except ValueError:
-        raise
-    except Exception as exc:                                    # noqa: BLE001
-        raise ValueError(f'{type(exc).__name__}: {exc}')
-
-
 REFEREE_ONLY = ('only the referee publishes a turn, and it does not come '
                 'through here')
 
@@ -876,6 +944,10 @@ def _route(method: str, path: str, headers: dict, body: bytes):
             # operation; see `FirebaseTurnStore.submitted_civs`.
             return _json(store.submitted_civs(_turn_number(parts[1]),
                                               doc=public_doc(store)))
+        if len(parts) == 4 and parts[:2] == ['upload', 'submission']:
+            # Answered without reading the document, because the POST it
+            # names decides everything on a fresh read of its own.
+            return _upload_ticket(_turn_number(parts[2]), parts[3])
 
     doc = galaxy_doc(store)
 
@@ -883,8 +955,8 @@ def _route(method: str, path: str, headers: dict, body: bytes):
         if len(parts) == 3 and parts[0] == 'submission':
             turn, civ = _turn_number(parts[1]), parts[2]
             # A caller holding no seat at all has no submission, because the
-            # only way an object gets written is the ticket and commit pair and
-            # both of those need a seat. So 404 is the true answer and 403 was
+            # only way one gets written is the submission route and that needs
+            # a seat. So 404 is the true answer and 403 was
             # a wrong one, in the way that mattered most: under `first-use` a
             # seat binds when a player submits, so before their first
             # submission every player is seatless, and the turn loop asks this
@@ -894,18 +966,7 @@ def _route(method: str, path: str, headers: dict, body: bytes):
             if seat_of(doc, uid) is None:
                 raise Refused(404, f'no submission of yours for {turn}')
             seat_or_refuse(store, doc, uid, civ)
-            name = store.submission_object(civ, turn)
-            # A civ the document records for the turn it is on has an object,
-            # because it is recorded only once the object is in place. Any
-            # other answer is asked of the bucket, so a record that is missing
-            # can never make a submission look absent.
-            recorded = firebase_store.submitted_of(doc, turn) or []
-            if civ not in recorded and not store.bucket.blob(name).exists():
-                raise Refused(404, f'{civ} has not submitted for {turn}')
-            return _redirect(signed_url(store, name, 'GET'))
-        if len(parts) == 4 and parts[:2] == ['upload', 'submission']:
-            return _upload_ticket(store, doc, uid, _turn_number(parts[2]),
-                                  parts[3])
+            return _serve_submission(store, doc, turn, civ, headers)
         if len(parts) == 2 and parts[0] == 'archive':
             record = store.archive_record(_turn_number(parts[1]))
             if record is None:
@@ -958,9 +1019,8 @@ def _route(method: str, path: str, headers: dict, body: bytes):
             return _commit_submission(store, doc, uid,
                                       _turn_number(parts[2]), parts[3])
         if len(parts) == 3 and parts[0] == 'submission':
-            raise Refused(405, 'a submission is uploaded to the URL that '
-                               f'/{galaxy}/upload/submission/{parts[1]}/'
-                               f'{parts[2]} hands out')
+            return _take_submission(store, doc, uid, _turn_number(parts[1]),
+                                    parts[2], body)
         if parts and parts[0] in ('start', 'turn', 'archive', 'note'):
             raise Refused(403, REFEREE_ONLY)
 

@@ -262,9 +262,9 @@ def test_a_follow_poll_is_one_request():
     order = []
     real_get = store._get
 
-    def spy(path, want_json=True):
+    def spy(path, want_json=True, **kw):
         order.append(path)
-        return real_get(path, want_json)
+        return real_get(path, want_json, **kw)
     store._get = spy
 
     # start_multiplayer, then _refresh_turn once the loop is running.
