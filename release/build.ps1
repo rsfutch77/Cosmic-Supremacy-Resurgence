@@ -57,6 +57,87 @@ function Write-Step { param($m) Write-Host "`n==> $m" -ForegroundColor Cyan }
 function Write-Ok   { param($m) Write-Host "    OK  $m" -ForegroundColor Green }
 function Write-Warn2{ param($m) Write-Host "    !   $m" -ForegroundColor Yellow }
 
+# Throws if a folder holds compiled Python outside an executable.
+function Assert-NoLooseBytecode {
+    param([string]$Dir)
+    $loose = @(Get-ChildItem $Dir -Recurse -Force |
+               Where-Object { $_.Name -eq '__pycache__' -or $_.Extension -in '.pyc', '.pyo' })
+    if ($loose.Count -gt 0) {
+        $loose | ForEach-Object { Write-Host "    loose: $($_.FullName)" -ForegroundColor Red }
+        throw "$Dir carries Python bytecode outside the executables"
+    }
+}
+
+# The processes that have a file open, by name and pid, from the file system's
+# own list (FileProcessIdsUsingFileInformation). Opening the file for this asks
+# only for its attributes and shares everything, so it cannot itself be the
+# thing holding the file. Used to name the holder when the archive step is
+# refused, which is otherwise only a guess.
+function Get-FileHolders {
+    param([string]$Path)
+    if (-not ('CsBuild.Holders' -as [type])) {
+        Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+using Microsoft.Win32.SafeHandles;
+namespace CsBuild {
+public static class Holders {
+    [StructLayout(LayoutKind.Sequential)] struct IoStatus { public IntPtr Status; public IntPtr Info; }
+    [DllImport("ntdll.dll")]
+    static extern int NtQueryInformationFile(SafeFileHandle h, out IoStatus io, IntPtr buf, int len, int cls);
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    static extern SafeFileHandle CreateFileW(string name, uint access, uint share, IntPtr sa, uint disp, uint flags, IntPtr tmpl);
+    public static long[] Pids(string path) {
+        using (var h = CreateFileW(path, 0x80, 7, IntPtr.Zero, 3, 0, IntPtr.Zero)) {
+            if (h.IsInvalid) return new long[0];
+            const int len = 64 * 1024;
+            IntPtr buf = Marshal.AllocHGlobal(len);
+            try {
+                IoStatus io;
+                if (NtQueryInformationFile(h, out io, buf, len, 47) != 0) return new long[0];
+                int n = Marshal.ReadInt32(buf);
+                var pids = new long[n];
+                for (int i = 0; i < n; i++) pids[i] = Marshal.ReadIntPtr(buf, IntPtr.Size * (i + 1)).ToInt64();
+                return pids;
+            } finally { Marshal.FreeHGlobal(buf); }
+        }
+    }
+}
+}
+'@
+    }
+    @([CsBuild.Holders]::Pids($Path) | ForEach-Object {
+        $p = Get-Process -Id $_ -ErrorAction SilentlyContinue
+        if ($p) { "$($p.ProcessName) ($_)" } else { "pid $_" }
+    })
+}
+
+# Waits until no process has any of the files open, or the timeout passes.
+# Returns whether they were released, how long it took, and every holder seen.
+function Wait-FilesReleased {
+    param([string[]]$Paths, [double]$TimeoutSeconds = 60)
+    $clock = [Diagnostics.Stopwatch]::StartNew()
+    $seen = [ordered]@{}
+    while ($true) {
+        $busy = $false
+        foreach ($path in $Paths) {
+            foreach ($h in @(Get-FileHolders $path)) {
+                $busy = $true
+                $seen["$(Split-Path -Leaf $path) in $h"] = $true
+            }
+        }
+        $done = (-not $busy) -or ($clock.Elapsed.TotalSeconds -ge $TimeoutSeconds)
+        if ($done) {
+            return [pscustomobject]@{
+                Released = -not $busy
+                Seconds  = [math]::Round($clock.Elapsed.TotalSeconds, 1)
+                Holders  = @($seen.Keys)
+            }
+        }
+        Start-Sleep -Milliseconds 250
+    }
+}
+
 Write-Host "Cosmic Supremacy - Resurgence : release build" -ForegroundColor White
 
 # ── 0. Manifest and version ───────────────────────────────────────────────────
@@ -367,23 +448,47 @@ if ($mpModes.Count -gt 0) {
     }
 }
 
+# ── 7c. No loose bytecode ─────────────────────────────────────────────────────
+# PyInstaller carries every module, trigger_save included, inside the launcher's
+# PYZ archive, so a release has no .pyc files and no __pycache__ folders. A
+# loose trigger_save .pyc is what Defender quarantines as
+# Exploit:Python/Leivion.C in a checkout, so one appearing here fails the build
+# rather than reaching a player's scanner.
+Write-Step "Checking for loose bytecode"
+Assert-NoLooseBytecode $Stage
+Write-Ok "no .pyc and no __pycache__ in $StageName"
+
 # ── 8. Zip ────────────────────────────────────────────────────────────────────
 if (-not $SkipZip) {
     Write-Step "Creating archive"
     $Zip = "$Stage.zip"
     if (Test-Path $Zip) { Remove-Item -Force $Zip }
-    # Retried because the executables copied a moment ago are held open while
-    # the antivirus scans them, and the first attempt fails PermissionDenied on
-    # CosmicSupremacy.exe. Two builds on 28 and 29 September both hit it and
-    # both zipped on a second attempt a minute later.
+    # The executables copied a moment ago are held open while the antivirus
+    # scans them, and Compress-Archive fails PermissionDenied on one it cannot
+    # open. A build on 29 September named the holder as MsMpEng, Defender's
+    # engine. So the archive waits for the scan to finish rather than failing
+    # into it, and the retry below stays for a holder that outlasts the wait.
+    $staged = @(Get-ChildItem $Stage -Recurse -File -Filter *.exe | ForEach-Object { $_.FullName })
+    $wait = Wait-FilesReleased $staged 60
+    if ($wait.Holders.Count -gt 0) {
+        $state = if ($wait.Released) { 'released' } else { 'still held' }
+        Write-Ok "waited $($wait.Seconds)s for $($wait.Holders -join '; '), $state"
+    }
     for ($try = 1; ; $try++) {
         try {
             if (Test-Path $Zip) { Remove-Item -Force $Zip }
             Compress-Archive -Path $Stage -DestinationPath $Zip -CompressionLevel Optimal -ErrorAction Stop
             break
         } catch {
+            Write-Warn2 "archive attempt $try failed ($($_.Exception.Message))"
+            foreach ($exe in @(Get-ChildItem $Stage -Recurse -File -Filter *.exe)) {
+                $held = @(Get-FileHolders $exe.FullName)
+                if ($held.Count -gt 0) {
+                    Write-Warn2 "    $($exe.Name) is open in: $($held -join ', ')"
+                }
+            }
             if ($try -ge 6) { throw }
-            Write-Warn2 "archive attempt $try failed ($($_.Exception.Message)); retrying in 10s"
+            Write-Warn2 "retrying in 10s"
             Start-Sleep -Seconds 10
         }
     }
