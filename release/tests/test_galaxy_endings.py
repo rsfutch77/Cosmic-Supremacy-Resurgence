@@ -287,6 +287,7 @@ class App:
         self.data_dir = fresh_dir()
         self.msgs = queue.Queue()
         self.said, self.warned, self.refreshed = [], [], 0
+        self.offered = []
 
     def say(self, line):
         self.said.append(line)
@@ -321,6 +322,12 @@ class App:
                 L.Launcher._on_mp_closed(self, msg[1], msg[2])
             elif msg[0] == "__mp_warning__":
                 L.Launcher._on_mp_warning(self, msg[1], msg[2])
+            elif msg[0] == "__log_offer__":
+                L.Launcher._on_log_offer(self, msg[1])
+
+    def offer_log(self, why=None, quiet_if_nowhere=False):
+        """The box offering to send the log, recorded rather than shown."""
+        self.offered.append(why)
 
 
 class CountingStore:
@@ -353,8 +360,11 @@ app = App(CountingStore(live))
 app.state("lost", turn=7, civ="Ada", error=str(refused))
 check("a turn that could not be sent reads the state once",
       app.mp_store.reads, 1)
-check("and hands the closure to the Tk thread", app.drain(),
-      ["__mp_closed__"])
+check("and hands the closure to the Tk thread, ahead of the log offer",
+      app.drain(), ["__mp_closed__", "__log_offer__"])
+# Fails if the offer to send the log were made for a galaxy that ended,
+# which is the operator's decision and not a fault (M1).
+check("which is then not made", app.offered, [])
 # Fails without the stop: the loop waited for a turn that never comes.
 check("which stops the loop", app.mp_stop, True)
 check("says so beside the turn number", app.mp_note, L.GALAXY_ENDED_NOTE)
@@ -374,7 +384,9 @@ open_store = turn_store.open_store(make_galaxy(os.path.join(root, "open"),
                                                ["Ada"], turn=7))
 app = App(CountingStore(open_store))
 app.state("lost", turn=7, civ="Ada", error="network")
-check("an open galaxy's lost turn posts nothing", app.drain(), [])
+check("an open galaxy's lost turn posts no closure, only the log offer",
+      app.drain(), ["__log_offer__"])
+check("which is made, as for a failed turn", app.offered, [L.LOG_WHY_TURN])
 check("and does not stop the loop", app.mp_stop, False)
 check("the readout says the turn could not be sent", app.mp_note,
       "that turn could not be sent")
