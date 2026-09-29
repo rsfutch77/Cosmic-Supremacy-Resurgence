@@ -37,6 +37,9 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(HERE, "ai_player"))
 
+# No bytecode for trigger_save: Defender quarantines its .pyc as
+# Exploit:Python/Leivion.C. See game_cycle.import_without_bytecode.
+sys.dont_write_bytecode = True
 from trigger_save import (find_pid, write, kernel32,
                           PROCESS_VM_READ, PROCESS_VM_WRITE, PROCESS_VM_OPERATION,
                           PROCESS_QUERY_INFORMATION, PROCESS_CREATE_THREAD,

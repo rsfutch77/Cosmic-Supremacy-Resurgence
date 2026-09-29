@@ -332,6 +332,25 @@ def launch(dat, timeout=180, exe=None, purpose=None, wait_for_lock=0.0,
 
 
 # ── the pieces ────────────────────────────────────────────────────────────────
+def import_without_bytecode(name):
+    """Import a module without writing its compiled bytecode to __pycache__.
+
+    trigger_save calls OpenProcess, VirtualAllocEx, WriteProcessMemory and
+    CreateRemoteThread. Windows Defender quarantines the .pyc a checkout writes
+    for it as Exploit:Python/Leivion.C and leaves the .py alone, so the import
+    is made with bytecode writing off and that file is never produced. An
+    existing .pyc is still read. A frozen build loads the module from its PYZ
+    archive and writes nothing either way.
+    """
+    import importlib
+    previous = sys.dont_write_bytecode
+    sys.dont_write_bytecode = True
+    try:
+        return importlib.import_module(name)
+    finally:
+        sys.dont_write_bytecode = previous
+
+
 def trigger_save(name, gameid=0, timeout=30):
     """Make the running client save. Returns (exit code, the tool's output).
 
@@ -348,7 +367,7 @@ def trigger_save(name, gameid=0, timeout=30):
     """
     import contextlib
     import io
-    import trigger_save as ts
+    ts = import_without_bytecode("trigger_save")
 
     out = io.StringIO()
     argv = sys.argv
