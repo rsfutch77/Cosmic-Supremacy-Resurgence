@@ -2188,29 +2188,142 @@ is out of scope here.
   injection and it is the only mechanism this path has, so a scanner objecting
   is describing what the file does rather than making a mistake.
 
-  **Both halves measured, 28 September 2026, and both came back clean.**
-  Defender twice quarantined the **compiled bytecode** in a checkout
-  `__pycache__`, never the `.py` beside it; a frozen build carries no
-  `__pycache__` and no `.pyc` at all, checked directly against v0.1.3. And the
-  behavioural half, which an on-disk scan cannot answer: a packaged build took
-  a real multiplayer turn, the capture fired, the turn sent, and there was no
-  dialog, no quarantine and no interference. `trigger_save` is reached only
-  from the multiplayer turn loop, so a single-player save would have tested the
-  wrong path and come back clean for the wrong reason.
+  **What Defender recorded on this machine, read on 29 September 2026.**
+  Measured with `Get-MpThreatDetection`, `Get-MpThreat` and the
+  `Microsoft-Windows-Windows Defender/Operational` log, all read-only and none
+  needing elevation. Every detection is the same threat,
+  `Exploit:Python/Leivion.C` (id 2147726920, severity Severe, category
+  Exploit), found by real-time protection and quarantined, and every one is the
+  **compiled bytecode** `client\dev_tools\__pycache__\trigger_save.cpython-312.pyc`
+  or the temporary `trigger_save.cpython-312.pyc.<number>` that Python's import
+  system writes and then renames over it. Never the `.py`, never anything under
+  `dist\`, never a frozen build.
 
-  **What is still open is other people's machines.** That is one Defender
-  install with one configuration and no third-party AV in the way. A beta
-  report of "it will not save" belongs near the top of the list of things to
-  suspect.
+  | when (local) | detections | process that wrote or opened the file |
+  |---|---|---|
+  | 20 Sep 01:26 | 1 | not recorded |
+  | 26 Sep 22:23 to 27 Sep 01:06 | 12 | `pythonw.exe` of uv's CPython 3.12.14 |
+  | 29 Sep 02:04 | 1 | Git's `ls.exe` |
 
-  **A dev-side fix that needs no exclusion, and is not done:** stop writing
-  bytecode for these tools, with `PYTHONDONTWRITEBYTECODE` or
-  `sys.dont_write_bytecode`, so the file a scanner objects to never exists. An
-  exclusion would also work and is worse, since it trains the habit and hides
-  the next thing.
+  The twelve are a checkout launcher taking multiplayer turns: `pythonw.exe` is
+  what a checkout launcher runs under, each launcher process imports
+  `trigger_save` at its first capture, the import finds the `.pyc` gone and
+  writes a new one, and Defender takes that too. The last is this investigation's own `ls -la` of that folder, which
+  opened a copy written at 27 Sep 01:41 that had sat there undetected; it is
+  quarantined and the main checkout holds no `trigger_save` bytecode now.
+  `Get-MpThreat` reports `DidThreatExecute: False`. The operational log reaches
+  back to 25 January 2026 and holds no detection before 20 September. This item
+  said twice; the log holds thirteen before tonight.
+
+  Defender also uploaded seven game binaries for cloud analysis (event 2050),
+  the patched prototype clients between March and April and, on 13 September,
+  the released v0.1.0 `game\CosmicSupremacy_Resurgence.exe` in a Downloads
+  folder. None was detected. A player's Defender with cloud protection on can
+  be expected to do the same with a fresh download, which is a delay and an
+  upload rather than a block.
+
+  This machine: real-time, on-access, behaviour monitoring and IOAV protection
+  all on, tamper protection on, engine 4.18.26080.4, intelligence 1.459.456.0.
+
+  **The checkout no longer writes that file.** `game_cycle.import_without_bytecode`
+  imports a module with `sys.dont_write_bytecode` set for the length of the
+  import, and `game_cycle.trigger_save` loads `trigger_save` through it. That is
+  the path a checkout launcher reaches. The three dev scripts that import it at
+  top level, `trigger_load.py`, `set_local_player.py` and `list_dialogs.py`, set
+  the flag before the import. Measured: importing the real `trigger_save`
+  through the helper in a worktree left no `trigger_save` file in
+  `__pycache__`, and Defender recorded nothing in the 20 seconds after. An
+  existing `.pyc` is still read, so a checkout that already has one keeps it
+  until it is deleted or quarantined. `release/tests/test_packaging.py` proves
+  the mechanism on harmless probe modules, since a test that wrote the real
+  file would be a test that trips Defender, and checks every importer in the
+  checkout turns bytecode off first. No exclusion was added and no setting
+  changed.
+
+  **The build never wrote it.** PyInstaller carries `trigger_save` inside the
+  launcher's PYZ archive (`PYZ-00.toc` lists it), and a release folder has no
+  `.pyc` and no `__pycache__`. `build.ps1` now refuses to zip a release folder
+  that has either, so that stays true rather than being checked by hand.
+
+  **The build's permission errors are Defender, measured.** A worktree build at
+  29 Sep 02:13 hit the same `Compress-Archive` refusal on
+  `game\CosmicSupremacy.exe`, and the build, asking the file system which
+  processes had the file open, named `MsMpEng`, Defender's engine. The event log
+  records no event for a clean scan, which is why the 28 Sep 22:28 window
+  holds only health reports and two `ToastOrSsoTrigger` changes and the
+  29 Sep 01:12 window only health reports; the log neither confirms nor rules those two out, and the holder
+  measurement is what answers it. The archive step now waits for the staged
+  executables to be released, up to 60 seconds, and keeps its retry behind
+  that. A second build at 02:17 waited 3.1 s for `MsMpEng` on
+  `CosmicSupremacy_Resurgence.exe` and `CosmicSupremacy_TestBed.exe`, then
+  zipped on its first attempt. A copy of the same executable made with nothing
+  else running showed no holder at all, so the scan only outlasts the copy
+  while Defender is busy with the executables PyInstaller has just written; why
+  is not measured.
+
+  PyInstaller's `_append_data_to_exe` failed on attempt 1 and succeeded on
+  attempt 2, 0.05 s later, for both executables in both builds. PyInstaller's
+  own source describes that retry as covering antivirus locking the new
+  executable. The holder is not measured, since it happens inside PyInstaller,
+  and it costs nothing.
+
+  **The save path itself, a finding.** A frozen launcher performs the same
+  four calls against the game client on every multiplayer capture. On this
+  machine, with behaviour monitoring on, a packaged build took a real
+  multiplayer turn with no dialog, no quarantine and no interference, measured
+  28 September. Another product that blocks remote threads would most likely
+  show as `SaveGame did not report success` in the player's log with nothing
+  on screen, so a beta report of "it will not save" belongs near the top of the
+  list of things to suspect. Two ways on, for the operator:
+
+  - Keep the injection for the beta and say so to players. Nothing to build;
+    the risk is a tester whose antivirus blocks it and who reports a hang.
+  - Replace it with a client-side trigger. `SaveGame` has one caller, the
+    Save/Load dialog, reached through a message map
+    (Reconstruction Report, "The caveat: the client never uploads state on its own"), so a byte patch that gives the
+    player client a message the launcher can post would remove the remote
+    thread entirely. It is unexplored reverse engineering of unknown size, and
+    the player client is already a patched binary, so it would ride the same
+    build step.
+
+  **What a player is told, for the operator.** Nothing tells a player today
+  that the launcher writes into the game process. Recommended: one plain
+  sentence in `PLAYER_README.txt` and the beta notice saying that the launcher
+  makes the game save by running the game's own save routine inside it, that
+  some antivirus products report this, and that a blocked save should be
+  reported rather than worked around. Not recommended: telling players to add
+  an exclusion, which trains the habit and hides the next thing. The wording is
+  an operator decision because it is a public statement about the product.
+
+  **Code signing, for the operator, not doable from here.** It needs a legal
+  identity, which this checkout cannot supply. In steps:
+
+  1. Decide whose name goes on the certificate. An organisation needs to exist
+     and be verifiable by the certificate authority through public records; an
+     individual certificate would show a personal name to every player.
+     Whether individual certificates are still offered, and by which
+     authorities, needs verification.
+  2. Obtain a certificate from an authority, or use Microsoft's cloud signing
+     service (Trusted Signing). Its eligibility rules for individuals and for
+     young organisations need verification.
+  3. Hold the key on a hardware token or in a cloud HSM. Industry rules since
+     2023 require that for code signing keys, as best understood here; needs
+     verification. Either way the key never enters this repository.
+  4. Add a `signtool` step to `build.ps1` after each freeze, signing
+     `CosmicSupremacyLauncher.exe` and `CosmicSupremacyAI.exe` with a
+     timestamp. The original game binaries are not ours and should not carry
+     our signature.
+  5. Expect SmartScreen reputation to build per certificate over downloads
+     rather than arrive with it. Whether any certificate type still skips that
+     wait needs verification.
+
+  Signing helps reputation-based checks such as SmartScreen and cloud lookups.
+  It does not change what `trigger_save` does, and behaviour monitoring judges
+  the calls rather than the signature.
 
   **Done when:** the checkout stops producing the file that gets quarantined,
-  and a beta tester on a machine nobody here configured takes a turn.
+  and a beta tester on a machine nobody here configured takes a turn. The
+  first half is met on this branch; the second is still open.
 
 ---
 
