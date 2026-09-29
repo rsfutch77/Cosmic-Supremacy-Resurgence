@@ -1095,6 +1095,26 @@ is out of scope here.
   name. The other order leaves a roster naming a civ the galaxy does not hold,
   which fails `screen_submission` for that player every turn forever.
 
+  **A granted join binds its seat, 29 September 2026.** `joins.commit` writes
+  `seats[uid] = civ` for the uid that asked, in the same `update_state` merge
+  as the roster, which on a Firebase galaxy is one document write. So there is
+  no moment when the roster names the new civ and no seat holds it, which is
+  the window a stranger's first-use claim would use, and a joiner plays with
+  first-use off and no `seat_tool.py bind`. A referee killed before that write
+  leaves the recoverable half as before, and the operator adds the name and
+  binds the uid the waiting request still names. Three rules decide what
+  moves: a uid already playing a civ on the roster keeps it and the new civ is
+  left for `bind`, a uid whose seat was reclaimed moves to the new civ, and any
+  other uid still holding the new civ's name from before a reclaim loses it,
+  since otherwise the reclaimed sign-in could play the newcomer's empire. The
+  directory and HTTP stores get no seat map: nothing on those transports
+  checks a uid, and writing one into their state would serve every uid to
+  every player. `server/tests/test_join_seat.py` runs it on the emulator with
+  the relay in process, 33 checks: a join lodged through the relay by X, the
+  turn closed through `resolve_turn`, X playing the new civ with first-use off,
+  a second sign-in refused with first-use off and on, and a leftover seat of a
+  reclaimed name removed. Each of seven mutations fails a named check.
+
   Live: `Joiner` seated on planet #6 at turn 12 of a real galaxy, **every
   incumbent's planets, ships and `OWNR` bytes byte-identical to a control run of
   the same turn with no join**, counters agreeing, then the turn-13 blob
