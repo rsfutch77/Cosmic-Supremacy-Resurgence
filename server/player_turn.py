@@ -339,7 +339,13 @@ def close():
 
 def report_refusals(store: TurnStore, civ: str, turn: int, log=print,
                     emit=None) -> int:
-    """Print what the referee refused from this civ's turn. Returns how many.
+    """Print what the referee refused from this civ's turn, and any other note
+    it left. Returns how many changes were refused.
+
+    Refusals go under a heading that counts them, and a welcome or a
+    missed-turns warning under one that calls it a note, so neither is
+    printed as a refused change. `refused_orders` carries the refusals and
+    `warned` the warning.
 
     The player's half of the refusal note. Everything the merge drops is
     already written down; until this it was written down on the referee's
@@ -361,23 +367,44 @@ def report_refusals(store: TurnStore, civ: str, turn: int, log=print,
         return 0
     if not lines:
         return 0
-    log(f"[{civ}] turn {turn}: the referee refused {len(lines)} of your "
-        f"change(s):")
-    for line in lines:
-        log(f"[{civ}]     {line}")
+    welcome, refused, told = note_parts(lines)
+    if refused:
+        log(f"[{civ}] turn {turn}: the referee refused {len(refused)} of your "
+            f"change(s):")
+        for line in refused:
+            log(f"[{civ}]     {line}")
+    if welcome or told:
+        log(f"[{civ}] turn {turn}: the referee left you a note:")
+        for line in welcome + told:
+            log(f"[{civ}]     {line}")
     if emit:
-        emit("refused_orders", turn=turn, civ=civ, count=len(lines),
-             lines=list(lines))
+        if refused:
+            emit("refused_orders", turn=turn, civ=civ, count=len(refused),
+                 lines=refused)
         warning = warning_lines(lines)
         if warning:
             emit("warned", turn=turn, civ=civ, lines=warning)
-    return len(lines)
+    return len(refused)
 
 
-# The first line of `abandonment.warning_note`. The note is one list of lines,
-# refusals first and the warning appended after them by `abandonment`, so the
-# warning is this line and everything after it.
+# A referee's note for one civ and turn is one list of lines with up to three
+# parts, in this order. `joins` writes a welcome at the head of the first turn
+# a newcomer plays. The referee appends what the merge refused. `abandonment`
+# appends a missed-turns warning, or the notice that the seat was reclaimed,
+# after anything already there. These patterns are the first lines of
+# `abandonment.warning_note` and `abandonment.reclaim_note` and every line of
+# `joins.welcome_note`; `test_refusal_notes.py` checks them against the
+# functions' own output, since this module is bundled into the launcher and
+# does not import either.
 WARNING_OPENS = re.compile(r"You have missed \d+ turns? in a row\.")
+RECLAIM_OPENS = re.compile(r"This civ was wiped at turn \d+ after \d+ missed "
+                           r"turns? in a row\.")
+WELCOME_LINES = (
+    re.compile(r"You joined this galaxy as .+ at turn \d+\."),
+    re.compile(r"Your homeworld is .+, planet #\S+, in .+\."),
+    re.compile(r"It is the only thing you own\. Everything else is yours to "
+               r"build\."),
+)
 
 
 def warning_lines(lines) -> list:
@@ -390,6 +417,30 @@ def warning_lines(lines) -> list:
         if WARNING_OPENS.fullmatch(line.strip()):
             return list(lines[i:])
     return []
+
+
+def note_parts(lines) -> tuple:
+    """(welcome, refused, told): a referee's note split into its three parts.
+
+    `welcome` is the leading welcome block, `told` the warning or reclaim
+    notice from its first line to the end, and `refused` what lies between,
+    which is the merge's refusals. A line nothing recognises counts as a
+    refusal, since that is what the note held before it held anything else.
+    """
+    lines = [str(x) for x in lines]
+    head = 0
+    while (head < len(WELCOME_LINES) and head < len(lines)
+           and WELCOME_LINES[head].fullmatch(lines[head].strip())):
+        head += 1
+    if head < len(WELCOME_LINES):
+        head = 0
+    tail = len(lines)
+    for i in range(head, len(lines)):
+        text = lines[i].strip()
+        if WARNING_OPENS.fullmatch(text) or RECLAIM_OPENS.fullmatch(text):
+            tail = i
+            break
+    return lines[:head], lines[head:tail], lines[tail:]
 
 
 def follow(store: TurnStore, civ: str, poll: float = 5.0, rounds: int = 0,

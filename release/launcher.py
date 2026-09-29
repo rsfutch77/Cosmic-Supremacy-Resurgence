@@ -1001,11 +1001,13 @@ GALAXY_ENDED_NOTE = "this galaxy has ended"
 # ── The referee's warning about missed turns ──────────────────────────────────
 # server\abandonment.py warns a player who has missed too many turns in a row
 # through `put_note`, on the turn they missed, and repeats it every turn until
-# they play or the seat goes. Its first line is `warning_note`'s opening, which
-# is how the launcher tells it apart from the refusal lines the same note
-# carries. The two files have to agree on it and neither imports the other,
-# the way `JOIN_DIR` and `MIN_BUILD_KEY` are shared; release\tests checks this
-# constant against `warning_note`'s own output.
+# they play or the seat goes. A followed turn loop names it in a `warned`
+# event. Play reads the last closed turn's note once, before any loop runs,
+# and finds the warning by `warning_note`'s opening line, which is how it
+# tells it apart from the refusal lines the same note carries. The two files
+# have to agree on it and neither imports the other, the way `JOIN_DIR` and
+# `MIN_BUILD_KEY` are shared; release\tests checks this constant against
+# `warning_note`'s own output.
 MISSED_WARNING_OPENING = "You have missed "
 
 
@@ -1932,24 +1934,17 @@ def ended_hint(ended) -> str:
             "pick another galaxy to keep playing.")
 
 
-def ended_text(g, state) -> str:
+def ended_text(g) -> str:
     """What the Reason button on an ended galaxy shows.
 
-    The operator's words come from the galaxy's state, which the directory row
-    does not carry, so the caller reads it once when the button is pressed. A
-    state that cannot be read, or that no longer says closed because the
-    galaxy was reopened since the listing, still gets a sentence rather than
-    an empty box.
+    The operator's words come from the row's `closed_reason`, which the
+    directory carries for a closed galaxy, so pressing the button reads
+    nothing. A galaxy closed without a reason, or listed by a relay from
+    before rows carried one, still gets the sentence that it has closed.
     """
-    said = closed_problem(state)
-    if said:
-        return said
-    if state is None:
-        return (f"{g.name or g.id} is listed as closed, and its reason could "
-                "not be read just now. Try again in a minute, or pick another "
-                "galaxy from the list.")
-    return (f"{g.name or g.id} is no longer closed. The list will show it "
-            "again at its next refresh.")
+    return closed_problem({STATUS_KEY: CLOSED,
+                           CLOSED_REASON_KEY: getattr(g, "closed_reason",
+                                                      None)})
 
 
 # ── When a galaxy has stopped ────────────────────────────────────────────────
@@ -2348,6 +2343,7 @@ class OwnGalaxy(typing.NamedTuple):
     joined: bool
     store: str
     turn_seconds: "int | None" = None
+    closed_reason: "str | None" = None
 
 
 def store_label(spec: str) -> str:
@@ -2378,10 +2374,13 @@ def named_galaxy(spec: str, state, player: "str | None" = None) -> OwnGalaxy:
     if not state:
         return OwnGalaxy(spec, name, FORMING, None, None, 0, False, spec)
     civs = list(state.get("civs", []))
-    return OwnGalaxy(spec, name, state.get(STATUS_KEY) or OPEN,
+    status = state.get(STATUS_KEY) or OPEN
+    # Dropped from a galaxy that is not closed, as the directory's row does.
+    reason = state.get(CLOSED_REASON_KEY) if status == CLOSED else None
+    return OwnGalaxy(spec, name, status,
                      state.get("turn"), state.get("deadline"), len(civs),
                      bool(player) and player in civs, spec,
-                     state.get("turn_seconds"))
+                     state.get("turn_seconds"), reason)
 
 
 def own_row(data_dir: str, cfg, player: "str | None" = None) -> OwnGalaxy:
@@ -3864,22 +3863,11 @@ class Launcher:
     def show_ended(self, g):
         """Say that a galaxy has ended, in the operator's words.
 
-        One read of the galaxy's state, made when the button is pressed, since
-        the directory row carries the status and not the reason. On the Tk
-        thread, as Play's own reads are: it is one request and the player has
-        just asked for its answer.
+        From the row the Galaxies page already holds, which carries the reason
+        for a closed galaxy, so nothing is read when the button is pressed.
         """
-        state = None
-        mods = multiplayer_modules()
-        if mods is not None:
-            try:
-                token = (player_token(self.data_dir)
-                         if store_wants_token({"store": g.store}) else None)
-                state = open_player_store(mods[1], g.store, token).state()
-            except Exception as exc:        # said in the box below as well
-                self.say(f"games   could not read {g.id}'s state ({exc})")
         self.say(f"games   {g.id} has ended")
-        self._choice_dialog("Galaxy ended", ended_text(g, state),
+        self._choice_dialog("Galaxy ended", ended_text(g),
                             (("Close", None, True),))
 
     def _choice_dialog(self, title: str, body: str, choices):
@@ -4537,17 +4525,21 @@ class Launcher:
         if kind == "capture_failed":
             self.mp_capture = (CAPTURE_FAILED, time.time())
             return
-        if kind == "refused_orders":
-            # The loop has logged the note's lines as refusals. A warning
-            # about missed turns travels in the same note, and it is shown in
-            # a box rather than left in the log. Read only when there is a
-            # note, which is the rare turn, and not a step of the turn, so the
-            # readout is left alone.
+        if kind == "warned":
+            # The loop found a missed-turns warning in the referee's note for
+            # a closed turn and names its lines, so no second read of the note
+            # is made here. It is shown in a box rather than left in the log,
+            # and it is not a step of the turn, so the readout is left alone.
+            # The loop is the `player_turn` this launcher bundles, so every
+            # loop that can drive it emits this event.
+            lines = facts.get("lines")
             store = self.mp_store
-            if store is not None:
-                warning = self._warning_note(store, civ, (turn or 0) + 1)
-                if warning:
-                    self.msgs.put(("__mp_warning__", store, warning))
+            if store is not None and lines:
+                self.msgs.put(("__mp_warning__", store,
+                               [str(x) for x in lines]))
+            return
+        if kind == "refused_orders":
+            # Already in the log, which is where refusals are read.
             return
         if kind in ("lost", "failed") and not getattr(self, "mp_closed",
                                                       False):
