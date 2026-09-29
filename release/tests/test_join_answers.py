@@ -282,8 +282,8 @@ check("and the refusal is still shown", you.text(rows["sandbox"], page.view()),
 print("\n5. asking again, and clearing")
 # Ask again is Join again: a new request and a record written over the old.
 store.update_state({"turn": 5})
-L.send_join_request(store, L.join_request("Ada2", None, "0.1.5", turn=5))
-L.save_joined(data, L.joined_record(rows["sandbox"], "Ada2", None, root,
+L.send_join_request(store, L.join_request("Ada", None, "0.1.5", turn=5))
+L.save_joined(data, L.joined_record(rows["sandbox"], "Ada", None, root,
                                     turn=5))
 rows, extra = page.refresh()
 # Fails if an old answer were matched to a new request: the refusal for turn 5
@@ -295,9 +295,8 @@ check("so the row is waiting again", you.text(rows["sandbox"], page.view()),
 check("with the waiting line rather than the refused one",
       page.hint(rows.values()), lambda t: "refused" not in t)
 
-key2 = turn_store.join_key({"uid": None, "name": "Ada2"})
-store.answer_join(key2, {"key": key2, "name": "Ada2", "outcome": "refused",
-                         "reason": "Another reason.", "turn": 6})
+store.answer_join(key, {"key": key, "name": "Ada", "outcome": "refused",
+                        "reason": "Another reason.", "turn": 6})
 rows, _extra = page.refresh()
 check("the second refusal is read when it comes",
       (L.load_joined(data)["sandbox"].get("answer") or {}).get("reason"),
