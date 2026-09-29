@@ -330,7 +330,7 @@ is out of scope here.
   another player's submission, refused publishing a turn, and refused deleting
   anything, each by the rules rather than by the application declining to try.
 
-- [ ]~ **H7. The player's launcher cannot reach Firebase, and nothing in the
+- [x] **H7. The player's launcher cannot reach Firebase, and nothing in the
   tests could have noticed.** What H1 delivered is the *referee's* transport. It
   is not the player's.
 
@@ -440,8 +440,32 @@ is out of scope here.
   launcher reaches it through `BETA_DIRECTORY`. A custom domain is the answer if
   that ever has to move.
 
-  **Done when:** a launcher holding no Google Cloud credentials plays a turn in a
-  galaxy hosted on Firebase.
+  **Done, 28 September 2026, on a second machine.** A Windows PC with no
+  checkout, no virtualenv, no `gcloud` and no Google credential of any kind ran
+  the packaged v0.1.3 build, listed `h3check` through the relay's directory
+  route, signed in anonymously, claimed the `Neighbor` seat, played a turn and
+  sent it. The referee then closed that turn:
+
+      referee: no submission from ['DemoPlayer', 'BadGuy']
+      referee: closing turn 17 with 1 submission(s)
+      referee: published turn 18, canonical 75962d6e6cace503
+
+  Naming only the other two as missing is the proof it counted the stranger's.
+
+  **The order survived, not just the bytes.** The operator moved one farmer to
+  a miner on a non-homeworld planet. Diffed against the served turn, planet
+  #138 went from 7 farmers to 6 farmers and one miner, planet #140 was
+  untouched, and `DemoPlayer` and `BadGuy` were byte-identical. One citizen
+  moved, on the planet it was moved on, and nobody else's empire changed.
+
+  **It found a bug that made this impossible for everyone.** The turn loop asks
+  whether this civ has already played before serving it, and that read required
+  a seat, while under `first-use` a seat binds only when a player submits. So
+  every player's first turn on every galaxy was unreachable: to play you had to
+  read your submission, to read it you needed a seat, to get a seat you had to
+  submit. It had never shown up because every previous test seated its players
+  by hand. A seatless caller is now told there is no submission of theirs,
+  which is true, rather than refused.
 
 - [x] **H8. A player can find a galaxy without being the project.** The relay
   answered every question about a galaxy a player already knew the id of, and no
@@ -853,6 +877,29 @@ is out of scope here.
   The refusal still does not name the other players, for the reason F4 already
   gives: a launcher that could list the roster makes "is there a seat for me"
   into a way to enumerate who is playing.
+
+  **Two of the three are done, 28 September 2026**, measured against the
+  deployed relay with two anonymous sign-ins rather than reasoned about:
+
+  | | |
+  |---|---|
+  | A claims `DemoPlayer` | ticket issued |
+  | B asks for `DemoPlayer` | **403, already held by another sign-in** |
+  | B reads the galaxy's public face | allowed |
+  | B claims `Neighbor` | allowed |
+  | A asks again for its own seat | still A's |
+  | A also asks for `Neighbor` | refused |
+  | seats on the document | two, no civ held twice |
+
+  The last two rows are the ones worth having. A refusal that also stopped B
+  playing anything, or that let A quietly accumulate a second seat, would have
+  passed a test written only around the headline.
+
+  **Rebinding is the third and is not built.** Nothing anywhere writes a seat
+  except `claim_seat`, and `operator_view` has no way to move one. Until it
+  does, a player who reinstalls Windows gets a new anonymous uid and is locked
+  out of their own empire with no way back that does not involve editing
+  Firestore by hand.
 
   **Done when:** a name in the roster is refused from a second install, allowed
   from the install that claimed it, and rebindable by the operator.
