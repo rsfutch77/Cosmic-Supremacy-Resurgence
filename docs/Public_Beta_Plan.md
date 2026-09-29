@@ -976,6 +976,37 @@ is out of scope here.
   not the same size: the accept path is verified against a real client and the
   refuse path has never reached a player at all.
 
+  **The launcher half of the refusal is built, 29 September 2026, and checked
+  headless and on the emulator.** For each Games row with a pending joined
+  record and no answer kept in it, the refresh asks the store's `join_answer`
+  under the request's key (`turn_store.join_key`, which is the uid on the
+  relay). That is `GET /<galaxy>/join/<uid>/answer`, one request per waiting
+  galaxy per refresh at the existing two-minute cadence, and none for galaxies
+  the player is in or has no request in. An answer is written into the joined
+  record, so a refusal left on screen costs no further read.
+
+  A refused row reads **join refused** in the You column and offers a
+  **Reason** button, and the line under the table says a request was refused
+  and to press Reason. Reason shows the worker's own reason string with **Ask
+  again**, which goes through the ordinary Join path with every check and the
+  notice, and **Clear**, which forgets that galaxy's record and puts View back
+  on the row. A granted answer changes nothing on screen: the civ is in the
+  roster by the time the answer is filed, so the row is already Play.
+
+  **An old answer stays filed under the same key after a second request**, and
+  `_own_join` on the relay reports `answered` ahead of `waiting`, so a player
+  who asked again would be shown the old refusal. The launcher tells them apart
+  by turn: the worker stamps an answer with the turn it seats into, which is
+  later than the turn the request was lodged during, and the record now keeps
+  the turn read from the store at the moment of joining rather than the
+  listing's, which can be a boundary behind.
+
+  `release/tests/test_join_answers.py` covers it, and its section 7 runs on the
+  emulator: a request lodged through the relay as an anonymous user, refused by
+  `joins.apply` and `joins.commit` for an overlong name, and read back by the
+  launcher's own method with the worker's sentence intact. Each of nine
+  mutations to the launcher change fails a named check.
+
   **Done when:** a player who clicks Join during turn N is playing at turn N+1,
   and a player whose request is refused is told so and why, from a machine that
   is not the referee's.
@@ -1156,7 +1187,7 @@ is out of scope here.
   **Done when:** a name in the roster is refused from a second install, allowed
   from the install that claimed it, and rebindable by the operator.
 
-- [ ] **J6. A player seated without clicking Join has no joined record, so the
+- [ ]~ **J6. A player seated without clicking Join has no joined record, so the
   Galaxies page never says whether they have played.** Found on 28 September
   while measuring H9 on the second machine. `joined.json` is written in one
   place, the Join path (`launcher.py`, `save_joined` after
@@ -1180,6 +1211,26 @@ is out of scope here.
   `joined` is played, or have `_submitted_state` take `g.joined` rows with no
   record under the player's current name. The first keeps one source of truth
   for "which galaxies am I in"; the second is smaller.
+
+  **Built 29 September 2026, the second way, and checked headless only.** The
+  Games refresh asks `/submissions/<turn>` for every row whose directory entry
+  reads `joined`, record or not. A row with a record is asked under the record's
+  name, as before; one without is asked under the player's current name, which
+  is the name `joined` was computed for. Nothing is written into `joined.json`.
+
+  The first way was not taken because a record means "this player asked for a
+  seat", and J3 now reads it that way: a pending record with no answer is what
+  the refresh polls a join answer for. A record written on Play for a seat that
+  is later reclaimed would put the row back into "joining next turn" and start
+  answer polls for a request nobody made. With the second way the directory's
+  `joined` is the single answer to "am I in this galaxy" and the record is only
+  the history of Join presses.
+
+  The poll cost is unchanged per galaxy: one `/submissions` call per refresh for
+  each galaxy the player is in, which is what a player who had clicked Join
+  already paid. `release/tests/test_join_answers.py` section 1 seats a player by
+  roster alone and reads "turn played" and "your turn" off the row; restoring
+  either half of the old condition fails it.
 
   **Done when:** a player seated by first-use sees their submitted state on the
   Galaxies page without having clicked Join.
