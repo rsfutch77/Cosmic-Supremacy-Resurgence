@@ -198,7 +198,9 @@ SKIP_DIRS = {".git", ".claude", "dist", "build", "__pycache__", "wayback",
              "node_modules"}
 importers = []
 for root, dirs, files in os.walk(REPO):
-    dirs[:] = [d for d in dirs if d not in SKIP_DIRS and not d.startswith(".venv")]
+    # Dot directories hold other worktrees and tool state, which are copies of
+    # the checkout at other commits rather than part of it.
+    dirs[:] = [d for d in dirs if d not in SKIP_DIRS and not d.startswith(".")]
     for f in files:
         if not f.endswith(".py") or f == "trigger_save.py":
             continue
