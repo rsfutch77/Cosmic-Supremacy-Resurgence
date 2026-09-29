@@ -976,9 +976,8 @@ class HttpTurnStore:
         sent.update(self._headers(url))
         for k, v in sent.items():
             req.add_header(k, v)
-        # Before the request rather than after it, so a write that fails part
-        # way is not followed by an answer from before it.
-        self._forget_state()
+        # Whether or not it succeeds, since a write that fails part way may
+        # still have landed.
         try:
             with self._open(req) as r:
                 out = r.read()
