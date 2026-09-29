@@ -372,7 +372,21 @@ if (-not $SkipZip) {
     Write-Step "Creating archive"
     $Zip = "$Stage.zip"
     if (Test-Path $Zip) { Remove-Item -Force $Zip }
-    Compress-Archive -Path $Stage -DestinationPath $Zip -CompressionLevel Optimal
+    # Retried because the executables copied a moment ago are held open while
+    # the antivirus scans them, and the first attempt fails PermissionDenied on
+    # CosmicSupremacy.exe. Two builds on 28 and 29 September both hit it and
+    # both zipped on a second attempt a minute later.
+    for ($try = 1; ; $try++) {
+        try {
+            if (Test-Path $Zip) { Remove-Item -Force $Zip }
+            Compress-Archive -Path $Stage -DestinationPath $Zip -CompressionLevel Optimal -ErrorAction Stop
+            break
+        } catch {
+            if ($try -ge 6) { throw }
+            Write-Warn2 "archive attempt $try failed ($($_.Exception.Message)); retrying in 10s"
+            Start-Sleep -Seconds 10
+        }
+    }
     Write-Ok "$Zip  ($([math]::Round((Get-Item $Zip).Length / 1MB, 1)) MB)"
 
     # Published in the release notes so a player can verify the download, and so
