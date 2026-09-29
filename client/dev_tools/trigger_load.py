@@ -15,6 +15,9 @@ import ctypes
 import sys
 from ctypes import wintypes
 
+# No bytecode for trigger_save: Defender quarantines its .pyc as
+# Exploit:Python/Leivion.C. See game_cycle.import_without_bytecode.
+sys.dont_write_bytecode = True
 from trigger_save import (PROCESS_VM_READ, PROCESS_VM_WRITE, PROCESS_VM_OPERATION,
                           PROCESS_QUERY_INFORMATION, PROCESS_CREATE_THREAD,
                           MEM_COMMIT, MEM_RESERVE, MEM_RELEASE,
