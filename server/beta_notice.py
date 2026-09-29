@@ -71,8 +71,8 @@ UNFILLED = re.compile(r'\[SET BEFORE THE BETA OPENS:\s*([A-Za-z_]+),[^\]]*\]')
 KEYS = {
     'log_upload':
         'one clause saying whether the redacted log copy is sent '
-        'automatically or only when the player chooses to send it, which is '
-        'M1 to settle',
+        'automatically or only when the player chooses to send it; M1 sends '
+        'it only when the player presses Send',
 }
 
 HERE = os.path.dirname(os.path.abspath(__file__))
