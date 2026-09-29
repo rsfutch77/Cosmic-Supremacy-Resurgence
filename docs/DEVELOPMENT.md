@@ -1,7 +1,9 @@
 # Development
 
 Everything needed to work on the project. If you only want to *play*, you do not
-need any of this, see the [README](../README.md) and download a release.
+need any of this, see the [README](../README.md) and download a release. If you
+want to help but do not write code, skip to
+[Help without writing code](#help-without-writing-code).
 
 ## Project goals
 
@@ -11,6 +13,29 @@ need any of this, see the [README](../README.md) and download a release.
    protocol so the unmodified (patched for localhost) client can connect.
 3. **Preserve and share**, make the findings, tools, and server code available
    so anyone who remembers the game can help bring it back.
+4. **Let players steer it**, the people who play the game decide what
+   gets built next. See
+   [Help without writing code](#help-without-writing-code).
+
+## Help without writing code
+
+You don't need to be a developer to shape this project. Two things matter most,
+and both happen on the
+
+with nothing more than a GitHub account.
+
+**Pick the next feature.** Go to the [issue tracker](https://github.com/rsfutch77/Cosmic-Supremacy-Resurgence/issues)
+If one of those features matters to you, comment 
+or add a 👍 reaction to an issue that already asks for it. If what you want is
+not on the list, open an issue describing it.
+
+**Make the AI play better.** The computer opponent follows a written strategy,
+[STRATEGY.md](../client/dev_tools/ai_player/STRATEGY.md), organised by the four
+X's: explore, expand, exploit, exterminate. Veteran knowledge of gaming strategy is the key to making a fun AI to play against.
+Leave a comment or recommend a change. 
+
+**Test the game.** Playing the game and reporting what broke, as described in the
+[README](../README.md#something-went-wrong), helps just as much.
 
 ## Repository layout
 
