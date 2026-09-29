@@ -2920,6 +2920,21 @@ class Launcher:
                              self.sort_desc, view)
         self._show_sort()
         self._show_source(rows)
+        # An empty table while the listing is in flight reads as a galaxy list
+        # with nothing in it, and the line above the table is not where
+        # somebody waiting for rows is looking. Said in the table, where the
+        # rows will be. `games_rows` is None only before the first listing
+        # lands, which is the one moment this is true.
+        if self.games_rows is None:
+            waiting = tk.Label(self.games_table,
+                               text="Please wait, loading galaxies…",
+                               bg=PANEL, fg=DIM, anchor="w",
+                               font=("Segoe UI", 9))
+            waiting.grid(row=1, column=0, columnspan=len(GALAXY_COLUMNS) + 1,
+                         sticky="w", pady=6)
+            self._cells.append(waiting)
+            self._show_hint(rows, view)
+            return
         for r, g in enumerate(rows, start=1):
             action = row_action(g, view.recs, view.own)
             # The rows lit are the ones that are this player's business: the
@@ -2963,7 +2978,11 @@ class Launcher:
             self.games_status.configure(
                 text="No galaxies are listed here yet.", fg=DIM)
         elif self.games_dir:
-            self.games_status.configure(text=str(self.games_dir), fg=FAINT)
+            # Labelled, because the beta's directory is a Cloud Run hostname
+            # with a project hash in it and a bare URL above a table reads as
+            # something gone wrong rather than as where the list came from.
+            self.games_status.configure(
+                text=f"Connected to: {self.games_dir}", fg=FAINT)
         else:
             self.games_status.configure(
                 text=f"{MP_CONFIG} names this galaxy, so no directory is "
