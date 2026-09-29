@@ -203,21 +203,33 @@ check("the refresh did not ask the closed galaxy whether a turn was played",
       extra.get("submitted", {}).get("season1"), None)
 check("nor open its store at all", old in asked, False)
 
-print("\n2. Reason reads the operator's own words")
-L.Launcher.show_ended(page, rows["season1"])
+print("\n2. Reason shows the operator's own words, from the row")
+check("the listing's row carries the reason", rows["season1"].closed_reason,
+      REASON_TEXT)
+asked.clear()
+L.open_player_store = counting_open
+try:
+    L.Launcher.show_ended(page, rows["season1"])
+finally:
+    L.open_player_store = real_open
+# Fails if Reason went back to reading the galaxy's state.
+check("pressing Reason reads no store", asked, [])
 title, body, _choices = page.dialogs[-1]
 check("the box is titled for an ended galaxy", title, "Galaxy ended")
 check("it says the galaxy has been closed", "has been closed" in body, True)
-# Fails if the reason were not read from the state: the directory row does
-# not carry it.
+# Fails if the row's reason were not used.
 check("with the operator's reason in it", REASON_TEXT in body, True)
 check("and says what to do", "Pick another galaxy" in body, True)
-check("a state that cannot be read still gets a sentence",
-      L.ended_text(rows["season1"], None),
-      lambda t: "closed" in t and "another galaxy" in t)
-check("a galaxy reopened since the listing says so",
-      L.ended_text(rows["season1"], {"status": "open"}),
-      lambda t: "no longer closed" in t)
+check("a row closed with no reason still gets a sentence",
+      L.ended_text(rows["season1"]._replace(closed_reason=None)),
+      lambda t: "has been closed" in t and "another galaxy" in t
+      and REASON_TEXT not in t)
+own = L.named_galaxy(old, turn_store.open_store(old).state(), "Ada")
+check("a galaxy multiplayer.json names carries its reason too",
+      (own.status, own.closed_reason), (L.CLOSED, REASON_TEXT))
+check("and an open one carries none",
+      L.named_galaxy("x", {"status": "open", "closed_reason": "old"},
+                     "Ada").closed_reason, None)
 
 print("\n3. a request lodged before the galaxy ended")
 root = fresh_dir()
@@ -455,19 +467,55 @@ check("Play reads the warning after the roster check and before following",
       -1 not in at and at == sorted(at), True)
 
 print("\n   and one met by a followed loop is shown too")
-app = App(quiet)
+
+
+
+class NoNotes:
+    """A store that counts note reads: the event carries the lines, so a
+    followed loop's warning needs none."""
+
+    def __init__(self):
+        self.reads = 0
+
+    def note(self, civ, turn):
+        self.reads += 1
+        return abandonment.warning_note(civ, 2, 5)
+
+
+app = App(NoNotes())
 app.mp_note = "waiting for the next turn"
-app.state("refused_orders", turn=4, civ="Ada", count=len(got))
-check("the note the loop logged is read as a warning", app.drain(),
+# The event as `player_turn.report_refusals` emits it, from the note the
+# referee's own enforcement wrote above.
+events = []
+import player_turn
+player_turn.report_refusals(quiet, "Ada", 4, log=lambda *_a: None,
+                            emit=lambda kind, **f: events.append((kind, f)))
+check("the loop names the warning in a warned event",
+      [k for k, _f in events], ["warned"])
+for kind, facts in events:
+    app.state(kind, **facts)
+check("the warned event is shown as a warning", app.drain(),
       ["__mp_warning__"])
+# Fails if the launcher went back to reading the note.
+check("with no read of the note", app.mp_store.reads, 0)
 check("and shown", app.warned, lambda w: len(w) == 1 and "missed" in w[0])
+check("with the event's lines whole",
+      all(line in app.warned[0] for line in got), True)
 # Fails if the raw kind leaked into the readout, which it used to.
 check("the readout is left alone", app.mp_note, "waiting for the next turn")
-quiet.put_note("Bob", 4, ["system rename dropped"])
-app = App(quiet)
+app = App(NoNotes())
 app.mp_civ = "Bob"
-app.state("refused_orders", turn=4, civ="Bob", count=1)
-check("a note of refusals only shows nothing extra", app.drain(), [])
+app.mp_note = "waiting for the next turn"
+app.state("refused_orders", turn=4, civ="Bob", count=1,
+          lines=["system rename dropped"])
+# Fails if refused_orders still triggered a read of the note, which here
+# holds a warning and would post one.
+check("refusals alone show nothing extra", app.drain(), [])
+check("and read nothing", app.mp_store.reads, 0)
+check("and leave the readout alone", app.mp_note,
+      "waiting for the next turn")
+app.state("warned", turn=4, civ="Bob", lines=[])
+check("a warned event with no lines shows nothing", app.drain(), [])
 
 print("\n7. a seat taken back says so on the Galaxies page (K3)")
 root = fresh_dir()
