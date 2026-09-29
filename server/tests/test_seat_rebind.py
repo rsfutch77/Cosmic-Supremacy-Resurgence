@@ -246,6 +246,23 @@ def run(referee, galaxy, spec, player_a, player_b,
     check('and the civ that was bound', f'Fourth           {uid_e}' in text,
           True)
 
+    print('the operator view reads the same document, and only reads it')
+    import operator_view as ov
+    referee.update_state({ov.WORKER_SEEN_KEY: time.time() - 30,
+                          ov.WORKER_FAILURES_KEY: 2})
+    stamp = referee.doc.get().update_time
+    r = ov.galaxy_report(referee)
+    rows = {row['civ']: row['uid'] for row in r['seats'] or []}
+    check('the view shows each seat as the tool left it',
+          rows, {'DemoPlayer': uid_b, 'Neighbor': uid_c, 'Player.One': uid_a,
+                 'Fourth': uid_e})
+    check('and the heartbeat a Firebase store\'s state leaves out',
+          r['worker']['failures'], 2)
+    check('and calls the failures a problem',
+          any('failed 2 time(s)' in p for p in r['problems']), True)
+    check('and the document was not written by reading it',
+          referee.doc.get().update_time, stamp)
+
 
 if __name__ == '__main__':
     sys.exit(main())

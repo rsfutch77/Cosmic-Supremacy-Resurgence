@@ -45,6 +45,19 @@ the tick was. That is the number an operator watching for a stalled worker
 wants, and it is not the tick's own duration. If a future referee records a
 duration under `seconds`, `duration` or `elapsed`, it is shown as measured.
 
+Seats and the worker
+--------------------
+Two answers live on the galaxy document and nowhere in the store interface:
+whether the referee is up, which `referee_worker` records as `worker_seen` and
+`worker_failures` when it closes a turn or fails to, and who can play, which is
+the relay's `seats` map from Firebase uid to civ. A folder store's `state` is
+the whole of `state.json` and already carries them. `FirebaseTurnStore.state`
+returns only the fields the store interface names, so for Firebase the view
+makes one more read, a `get` of the galaxy document, and keeps only the fields
+in `DOCUMENT_FIELDS`. The document reference never leaves that function. A
+uid is shown by its first eight characters, which is enough to match it
+against `seat_tool.py list` and not enough to be worth copying off a screen.
+
 Serving it
 ----------
 `--html` writes a self-contained file with no external references. `--serve`
@@ -84,6 +97,26 @@ STORE_READS = frozenset((
     # than calls, and they say which machine or project is being read.
     'root', 'base', 'project', 'galaxy', 'bucket', 'prefix',
 ))
+
+# What the view reads from the galaxy document beyond the store's state, for
+# the reason the module header gives. The names are the ones `referee_worker`,
+# the relay and `seat_tool.py` write.
+WORKER_SEEN_KEY = 'worker_seen'
+WORKER_FAILURES_KEY = 'worker_failures'
+SEATS_KEY = 'seats'
+SEAT_CLAIM_KEY = 'seat_claim'
+REBOUND_KEY = 'seats_rebound'
+DOCUMENT_FIELDS = (WORKER_SEEN_KEY, WORKER_FAILURES_KEY, SEATS_KEY,
+                   SEAT_CLAIM_KEY, REBOUND_KEY)
+
+# How long past its deadline a turn may be before a worker that has not
+# reported since the deadline is called stopped. The worker closes a turn
+# within its grace and a few polls of the deadline, and either outcome writes a
+# heartbeat, so silence past this is not a worker that is busy.
+STOPPED_AFTER = 120
+
+# How much of a uid the view shows.
+UID_SHOWN = 8
 
 # The same for the directory above it. `register` and `set_status` are writes.
 DIRECTORY_READS = frozenset(('galaxies', 'galaxy', 'store', 'root', 'project',
@@ -207,6 +240,39 @@ def _archive_history(store, turn: int, history: int, look_back: int):
     return found
 
 
+def _document_fields(store) -> dict:
+    """`DOCUMENT_FIELDS` from a Firebase galaxy's document, by one read.
+
+    Empty for any other store, whose state already carries them. Reaches past
+    the read-only wrapper to the store it holds, and does exactly one thing
+    there: a `get` of the document, whose snapshot is turned into a plain dict
+    before it is returned.
+    """
+    inner = (object.__getattribute__(store, '_wrapped')
+             if isinstance(store, _ReadOnly) else store)
+    import firebase_store
+    if not isinstance(inner, firebase_store.FirebaseTurnStore):
+        return {}
+    snap = inner.doc.get()
+    data = (snap.to_dict() or {}) if snap.exists else {}
+    return {k: data[k] for k in DOCUMENT_FIELDS if k in data}
+
+
+def short_uid(uid) -> str:
+    return str(uid)[:UID_SHOWN] if uid else ''
+
+
+def _seat_rows(fields: dict, civs: list) -> list:
+    """One row per civ on the roster: who holds it and when it last moved."""
+    by_civ = {c: u for u, c in (fields.get(SEATS_KEY) or {}).items()}
+    moved = fields.get(REBOUND_KEY) or {}
+    joined = fields.get(getattr(turn_store, 'JOINED_KEY', 'joined')) or {}
+    return [{'civ': c, 'uid': by_civ.get(c),
+             'rebound_at': (moved.get(c) or {}).get('at'),
+             'joined_uid': (joined.get(c) or {}).get('uid')}
+            for c in civs]
+
+
 def galaxy_report(store, gid: str = None, name: str = None, status: str = None,
                   history: int = HISTORY, look_back: int = LOOK_BACK) -> dict:
     """Everything the view shows for one galaxy, read through a read-only store.
@@ -228,6 +294,8 @@ def galaxy_report(store, gid: str = None, name: str = None, status: str = None,
         'turn_seconds': None, 'hash': None,
         'civs': [], 'submitted': [], 'waiting': [],
         'last_tick': None, 'history': [],
+        'worker': {'seen': None, 'failures': None},
+        'seats': None, 'seat_claim': None,
         'read_at': time.time(),
     }
     try:
@@ -268,6 +336,23 @@ def galaxy_report(store, gid: str = None, name: str = None, status: str = None,
         out['seconds_left'] = out['deadline'] - out['read_at']
 
     civs = list(state.get('civs', []))
+
+    fields = dict(state)
+    try:
+        fields.update(_document_fields(store))
+    except Exception as exc:                                # noqa: BLE001
+        out['problems'].append(f'the galaxy document could not be read for '
+                               f'its seats and worker, {type(exc).__name__}: '
+                               f'{exc}')
+    out['worker'] = {'seen': fields.get(WORKER_SEEN_KEY),
+                     'failures': fields.get(WORKER_FAILURES_KEY)}
+    # Seats are shown wherever there is a seat map to show, and always for
+    # Firebase, where a galaxy with none is one nobody can play through the
+    # relay and that is worth seeing rather than hiding.
+    if SEATS_KEY in fields or out['kind'] == 'FirebaseTurnStore':
+        out['seat_claim'] = fields.get(SEAT_CLAIM_KEY) or None
+        out['seats'] = _seat_rows(fields, civs)
+
     try:
         played, err = set(store.submitted_civs(turn)), None
     except Exception as exc:                                # noqa: BLE001
@@ -319,10 +404,33 @@ def _problems(r: dict) -> list:
     """
     out = []
     turn, last = r['turn'], r['last_tick']
+    worker = r.get('worker') or {}
+    seen, fails = worker.get('seen'), worker.get('failures') or 0
 
     if r['seconds_left'] is not None and r['seconds_left'] < 0:
         out.append(f'the turn is overdue by {fmt_span(-r["seconds_left"])}, so '
                    f'the worker has not closed it')
+    if fails > 0:
+        out.append(f'the worker has failed {fails} time(s) in a row on turn '
+                   f'{turn} and is retrying, last heard from '
+                   f'{fmt_when(seen)}')
+    elif (seen is not None and r['deadline'] is not None
+          and r['seconds_left'] is not None
+          and r['seconds_left'] < -STOPPED_AFTER and seen < r['deadline']):
+        out.append(f'the worker has not been heard from since '
+                   f'{fmt_when(seen)}, before this turn fell due, so it is '
+                   f'stopped rather than retrying')
+
+    if r.get('seats') is not None and r.get('seat_claim') != 'first-use':
+        for row in r['seats']:
+            if row['uid']:
+                continue
+            asked = (f' It joined as {short_uid(row["joined_uid"])}.'
+                     if row.get('joined_uid') else '')
+            out.append(f'{row["civ"]} is on the roster and no sign-in holds '
+                       f'its seat, and first-use claiming is off, so nobody '
+                       f'can play it through the relay; `seat_tool.py bind` '
+                       f'seats it.{asked}')
 
     if last is None:
         out.append(f'no archive record for any of the {LOOK_BACK} turns before '
@@ -369,6 +477,8 @@ def _error_row(gid, name, store_spec, exc, note, **extra) -> dict:
            'turn': None, 'deadline': None, 'seconds_left': None,
            'turn_seconds': None, 'hash': None, 'civs': [], 'submitted': [],
            'waiting': [], 'last_tick': None, 'history': [],
+           'worker': {'seen': None, 'failures': None},
+           'seats': None, 'seat_claim': None,
            'read_at': time.time()}
     row.update(extra)
     return row
@@ -475,6 +585,34 @@ def _tick_line(row: dict) -> str:
     return ', '.join(parts)
 
 
+def _worker_line(r: dict) -> str:
+    w = r.get('worker') or {}
+    if w.get('seen') is None:
+        return 'no heartbeat recorded'
+    return (f'last heard from {fmt_when(w["seen"])}, '
+            f'{fmt_span(time.time() - w["seen"])} ago, '
+            f'{int(w.get("failures") or 0)} failure(s) in a row')
+
+
+def _seat_lines(r: dict) -> list:
+    """The seat map, one civ a line, or [] when there is none to show."""
+    if r.get('seats') is None:
+        return []
+    claim = 'on' if r.get('seat_claim') == 'first-use' else 'off'
+    lines = [f'first-use claiming {claim}']
+    for row in r['seats']:
+        if row['uid']:
+            line = f'{row["civ"]:<16} {short_uid(row["uid"])}'
+            if row.get('rebound_at'):
+                line += f'  moved {fmt_when(row["rebound_at"])}'
+        else:
+            line = f'{row["civ"]:<16} no seat'
+            if row.get('joined_uid'):
+                line += f', joined as {short_uid(row["joined_uid"])}'
+        lines.append(line)
+    return lines
+
+
 def render_text(rows: list) -> str:
     """The same page as one screen of terminal text."""
     out = [f'galaxies at {fmt_when(time.time())}', '']
@@ -508,6 +646,9 @@ def render_text(rows: list) -> str:
             out.append(f'  last     {_tick_line(r["last_tick"])}')
             for row in r['history'][1:]:
                 out.append(f'           {_tick_line(row)}')
+            out.append(f'  referee  {_worker_line(r)}')
+            for i, line in enumerate(_seat_lines(r)):
+                out.append(f'  {"seats" if i == 0 else "":<7}  {line}')
         if r['problems']:
             for p in r['problems']:
                 out.append(f'  PROBLEM  {p}')
@@ -578,6 +719,13 @@ def _row_html(r: dict) -> str:
                                 for row in r['history'][1:])
             body.append(cell('before that', f'<span class="muted">{older}'
                                             f'</span>'))
+        failing = (r.get('worker') or {}).get('failures') or 0
+        body.append(cell('referee', html.escape(_worker_line(r)),
+                         'err' if failing else ''))
+        seat_lines = _seat_lines(r)
+        if seat_lines:
+            body.append(cell('seats', '<br>'.join(
+                html.escape(line) for line in seat_lines)))
     if r['problems']:
         items = ''.join(f'<li>{html.escape(p)}</li>' for p in r['problems'])
         body.append(cell('problems', f'<ul>{items}</ul>', 'err'))
