@@ -216,20 +216,22 @@ check("a forming galaxy is offered neither",
       L.row_action(ROWS[3], JOINING), None)
 check("a closed galaxy is offered neither",
       L.row_action(ROWS[1], JOINING), None)
-check("nor a closed galaxy you are in",
-      L.row_action(gx("x", "X", status="closed", joined=True)), None)
-# Reason is the third, and only a refused join offers it: see
-# test_join_answers.py.
+# A closed galaxy you are in offers Reason, which reads why it ended, and
+# never Play: see test_galaxy_endings.py.
+check("nor Play on a closed galaxy you are in",
+      L.row_action(gx("x", "X", status="closed", joined=True)), L.ENDED)
+# Reason is the third label. A refused join, an ended galaxy and a seat taken
+# back all offer it: see test_join_answers.py and test_galaxy_endings.py.
 check("View, Play and Reason are the only labels",
-      sorted(L.ACTION_TEXT.values()), ["Play", "Reason", "View"])
+      sorted(set(L.ACTION_TEXT.values())), ["Play", "Reason", "View"])
 
 own = ROWS[3].store
 check("the galaxy multiplayer.json names is played whatever its state says",
       L.row_action(ROWS[3], JOINING, own=own), L.PLAY)
 check("which it is not without that, being a galaxy with no first turn",
       L.row_action(ROWS[3], JOINING), None)
-check("and not even it is played once it is closed",
-      L.row_action(ROWS[1], JOINING, own=ROWS[1].store), None)
+check("and not even it is played once it is closed, only explained",
+      L.row_action(ROWS[1], JOINING, own=ROWS[1].store), L.ENDED)
 
 print("\n5a. a player who is in several galaxies is in several galaxies")
 # Being in a galaxy is membership; playing one is the client's limit. So every

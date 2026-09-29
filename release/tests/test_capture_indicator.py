@@ -385,17 +385,23 @@ check("nothing reuses a server this launcher did not start",
 # true is the half that was actually protecting anything: a taken port that
 # nobody has said anything about is still refused.
 check("a taken port with nothing said about it is still refused",
-      "not reusing it" in taken, True)
+      "not reusing it" in inspect.getsource(L.port_held_message)
+      and "self.warn(box)" in taken, True)
 check("sharing is the only other way out",
       taken.count("return"), 2)
 check("and it is gated on the operator having named the directory",
       "if ours and adopt and os.path.isdir(adopt)" in taken, True)
 check("the refusal really is the branch that was read",
       len(taken), lambda n: 400 < n < 4000)
+# The words are in `port_held_message`, which `_boot` hands what holds the
+# port; the unreadable-holder case keeps the sentence it always had.
+said = inspect.getsource(L.port_held_message)
+check("the refusal hands its words to port_held_message",
+      "port_held_message(port, holder, ours" in taken, True)
 check("the refusal names the port",
-      "Another server already holds port" in boot, True)
+      "Another server already holds port" in said, True)
 check("and tells the player to close it",
-      "Close it and start this launcher again" in boot, True)
+      "Close it and start this launcher again" in said, True)
 check("the port check is still one bind",
       boot.count("port_is_free("), 1)
 check("and the protocol probe only runs once the port is known to be taken",
@@ -580,7 +586,8 @@ check("a value that is not a path is not one", L.adopted_server(_d), None)
 # nothing in the protocol can ask it which folder that is.
 bsrc = inspect.getsource(L.Launcher._boot)
 check("a held port with nothing said about it is still refused",
-      'not reusing it' in bsrc, True)
+      'not reusing it' in inspect.getsource(L.port_held_message)
+      and 'self.warn(box)' in bsrc, True)
 check("sharing needs the server to answer our protocol",
       'if ours and adopt and os.path.isdir(adopt)' in bsrc, True)
 check("and a directory that is not there is refused, not believed",

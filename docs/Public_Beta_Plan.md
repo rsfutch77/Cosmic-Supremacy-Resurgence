@@ -1367,6 +1367,19 @@ is out of scope here.
   more than a handful of strangers signing in at once this becomes a judgement,
   and the launcher showing a short support code would make it exact.
 
+  **The launcher shows one, 29 September 2026, checked headless only.** The
+  support code is the first eight characters of this install's uid, read from
+  `fb_identity.json` without a sign-in. It appears on the line under the
+  launcher's title beside the build, once the install has signed in at all,
+  and in the box a player gets when the relay refuses their seat as held by
+  another sign-in, which until now read "HTTP Error 403: Forbidden" because
+  the relay's sentence is in the response body. The operator matches it to
+  the start of a uid in the `candidates` listing. The rest of the uid and the
+  refresh token are never shown. `release/tests/test_port_and_support.py`
+  sections 5 and 6 cover it, including the relay's sentence read back through
+  `HttpTurnStore` from a local server, and each of six mutations fails a named
+  check.
+
   **Release was considered and not built.** Deleting the seat and letting the
   next first-use claim take it hands an established empire to whichever sign-in
   submits as that civ first, and the roster is public. With first-use off it
@@ -1604,6 +1617,35 @@ is out of scope here.
   launcher displays, a reclaim at the configured threshold, and a refusal message
   that explains itself.
 
+  **The launcher half, 29 September 2026, checked headless only.** The warning
+  was written but never displayed where a silent player would see it: the turn
+  loop reads a note only after a turn it followed has closed, which for a
+  player who has stopped playing is none, and even then it logged the warning
+  as refused orders. Play now reads the note on the turn before the one open,
+  once, and shows the referee's warning in a box before the game opens. A
+  followed loop that meets the warning shows the same box. The launcher tells
+  a warning from refusals by `warning_note`'s opening line, and the test checks
+  that against `abandonment.warning_note` itself so the two cannot drift.
+
+  The refusal half: Play already answered a reclaimed seat through
+  `roster_problem` with the turn and the missed count, and now also says to
+  ask for a new seat from the Galaxies list. The Galaxies page did not: a
+  player who joined and was then reclaimed kept a granted joined record, and
+  the row read "joining next turn" with no button for as long as the galaxy
+  ran. A granted record on a row the player is not in now gets one state
+  read, and a `reclaimed` entry for that name is kept in the record. The row
+  reads **seat reclaimed**, and Reason says the seat was taken back at turn N
+  after M missed turns, names nobody else, and offers Clear, which puts View
+  back.
+
+  `release/tests/test_galaxy_endings.py` sections 6 and 7 cover it, with the
+  warning written by `abandonment.enforce` on a real directory galaxy, and
+  each of fourteen mutations fails a named check.
+
+  **Still open:** a player seated by first-use rather than Join has no record,
+  so their reclaimed row is a plain View row until they press Play, which
+  explains it. Not yet seen on a packaged build.
+
 - [x] **K4. Wipe a reclaimed civ from the galaxy.** Answered, and the unknown this
   item was built around does not exist. `server/dev_tools/wipe_civ.py` does the
   wipe and `server/dev_tools/wipe_acceptance.py` is the live harness.
@@ -1746,6 +1788,29 @@ is out of scope here.
 
   **Done when:** a galaxy is closed and a fresh one started, and a launcher
   pointed at the closed one says so rather than failing.
+
+  **The launcher half, 29 September 2026, checked headless only.** Play on a
+  closed galaxy already refused with `closed_problem`, which shows the
+  operator's `closed_reason`. Three places still failed quietly, and each now
+  says the galaxy has ended and to pick another one:
+
+  | where | before | now |
+  |---|---|---|
+  | Galaxies row of a closed galaxy the player is in, asked to join, or named in `multiplayer.json` | "your turn" or "joining next turn", no button | **galaxy ended** and a **Reason** button showing the operator's reason, with a line under the table |
+  | a turn loop following the galaxy when it closes | the submission failed as a lost turn, then "waiting for the next turn" forever, later "turns have stopped" | the loop stops, the readout says **this galaxy has ended**, and the reason is shown |
+  | the Games refresh | still polled `/submissions` and join answers on the closed galaxy | asks it nothing |
+
+  The directory row carries the status and not the reason, so Reason makes one
+  state read when pressed. The followed loop is checked with one state read
+  when a turn could not be sent and once per deadline when the wait passes the
+  point the page would call the galaxy stopped, because from inside the loop a
+  closed galaxy and a stopped referee look the same. A closed galaxy nobody on
+  this install is in still offers nothing. `release/tests/test_galaxy_endings.py`
+  sections 1 to 5 cover it, and each of thirteen mutations to the change fails
+  a named check.
+
+  Not yet seen on a packaged build, and not yet run against a galaxy closed on
+  `cs-resurgence`.
 
 ---
 
@@ -2043,6 +2108,30 @@ is out of scope here.
   **Done when:** a player who referees and plays on one machine never edits a
   config file to do it, and a launcher meeting an abandoned `cs_server` says
   what it is.
+
+  **The message half, 29 September 2026, checked headless and against the
+  live holder.** A held port is still refused and nothing is ended. What
+  changed is what the refusal says. One PowerShell call reads the listener's
+  pid from the TCP table and walks its parents' command lines, and the holder
+  is named as one of:
+
+  | holder | what the player reads |
+  |---|---|
+  | this install's `cs_server.py` with a `referee_worker.py` among its parents | the referee on this PC holds it and must not be closed; the exact `adopt_server` entry to add, naming the worker's saves folder read off its `--save-dir` or `--data-dir`, or the default |
+  | this install's `cs_server.py` with no worker left | a server a referee left running when it stopped, with its pid; start the referee again, or end it in Task Manager |
+  | a `cs_server.py` from another folder | another copy's server, with that folder |
+  | `CosmicSupremacyLauncher.exe` or a checkout's `launcher.py` | another copy of this launcher is running; use that window |
+  | anything else | its image name and pid, and that it is not part of the game |
+
+  "This install" is a `server\cs_server.py` in the launcher's folder or up to
+  three folders above it, which covers a checkout and a package built into its
+  `dist\`. Read against the live referee on this PC it named the worker's
+  cs_server, found the worker two parents up, and gave `server\saves` as the
+  folder to share. `release/tests/test_port_and_support.py` sections 1 to 4
+  cover it, and each of seven mutations fails a named check.
+
+  **Still open:** the done-when's first half. A player on the referee's PC is
+  now told exactly which line to add, and still has to add it.
 
 - [ ]~ **N7. The referee flashes a console window on every tick.**
   `server/referee.py:269` spawns `advance_turns.py` without `CREATE_NO_WINDOW`.
