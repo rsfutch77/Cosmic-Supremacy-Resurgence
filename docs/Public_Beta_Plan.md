@@ -1559,10 +1559,15 @@ is out of scope here.
   the uid and leaves no window.
 
   **`bind` seats a civ nobody holds**, with the same refusals, and refuses a
-  held one. It exists because a join granted at a boundary records the asking
-  uid under `joined` and does not write `seats`, so on a galaxy with first-use
-  off a joiner is on the roster and cannot play through the relay until the
-  operator binds them. The operator view names that uid.
+  held one. A granted join binds its own seat: `joins.commit` writes
+  `seats[uid] = civ` in the same write as the roster (J3), so an ordinary
+  joiner plays with first-use off and needs no `bind`. `bind` is for the
+  cases that write leaves unseated: a referee killed between `publish` and
+  the commit, after which the operator adds the name and binds the uid the
+  waiting request still names, and a uid already playing another civ on the
+  roster, which keeps that seat and leaves the new civ for the operator. The
+  operator view names the `joined` uid of any civ on the roster that no seat
+  holds.
 
   Measured by `server/tests/test_seat_rebind.py`, the relay in process on the
   Firestore, Storage and Auth emulators with real anonymous sign-ins, 59 checks:
@@ -1813,13 +1818,21 @@ is out of scope here.
   and the launcher's own refusal built from that state. 43 checks became 57,
   and each of four mutations fails a named check.
 
-  **Still open, in files this half does not own.** The relay still lets a
-  reclaimed sign-in's seat pass `seat_or_refuse`, because the seat map keeps
-  the reclaimed entry, so its upload is accepted and then dropped by the
-  referee as not on the roster; the relay should refuse it saying the seat was
-  reclaimed, when and after how many misses. And `player_turn.report_refusals`
-  prints every note line under "the referee refused N of your change(s)",
-  which is the wrong heading for a warning.
+  **A reclaimed seat's upload is refused at the relay.** The seat map keeps a
+  reclaimed sign-in's entry, and `seat_or_refuse` used to let it pass, so its
+  upload was accepted and then dropped by the referee as not on the roster.
+  `reclaimed_refusal` now refuses it with 403, naming the turn of the reclaim
+  and the missed count.
+
+  **The log heading is honest, 29 September 2026.** `player_turn.report_refusals`
+  printed every note line under "the referee refused N of your change(s)",
+  including a warning and a welcome. `note_parts` now splits a note into the
+  welcome at its head, the refusals, and a warning or reclaim notice at its
+  tail; refusals keep the counted heading and the rest print under "the
+  referee left you a note". `refused_orders` carries the refusals only, and
+  `warned` the warning. `server/tests/test_refusal_notes.py` checks each
+  pattern against the sentence `joins` or `abandonment` writes, 15 checks to
+  31.
 
   **The launcher half, 29 September 2026, checked headless only.** The warning
   was written but never displayed where a silent player would see it: the turn
@@ -1827,9 +1840,11 @@ is out of scope here.
   player who has stopped playing is none, and even then it logged the warning
   as refused orders. Play now reads the note on the turn before the one open,
   once, and shows the referee's warning in a box before the game opens. A
-  followed loop that meets the warning shows the same box. The launcher tells
-  a warning from refusals by `warning_note`'s opening line, and the test checks
-  that against `abandonment.warning_note` itself so the two cannot drift.
+  followed loop that meets the warning shows the same box, from the lines of
+  the loop's `warned` event and with no second read of the note. At Play, where
+  no loop is running yet, the launcher tells a warning from refusals by
+  `warning_note`'s opening line, and the test checks that against
+  `abandonment.warning_note` itself so the two cannot drift.
 
   The refusal half: Play already answered a reclaimed seat through
   `roster_problem` with the turn and the missed count, and now also says to
@@ -2048,8 +2063,9 @@ is out of scope here.
   | a turn loop following the galaxy when it closes | the submission failed as a lost turn, then "waiting for the next turn" forever, later "turns have stopped" | the loop stops, the readout says **this galaxy has ended**, and the reason is shown |
   | the Games refresh | still polled `/submissions` and join answers on the closed galaxy | asks it nothing |
 
-  The directory row carries the status and not the reason, so Reason makes one
-  state read when pressed. The followed loop is checked with one state read
+  Reason shows the row's own `closed_reason` and reads nothing when pressed;
+  a row for the galaxy `multiplayer.json` names carries it the same way. The
+  followed loop is checked with one state read
   when a turn could not be sent and once per deadline when the wait passes the
   point the page would call the galaxy stopped, because from inside the loop a
   closed galaxy and a stopped referee look the same. A closed galaxy nobody on
@@ -2132,6 +2148,62 @@ is out of scope here.
   same either way, so the later version is a change to the launcher's UI and not
   to anything on the server.
 
+  **Built, 29 September 2026, headless and offline; not run on a packaged
+  build.** Both version gates, Play and Join, now answer a low build with an
+  **Update** button beside the refusal. Update reads GitHub's
+  `releases/latest` (one unauthenticated GET), downloads the first `.zip`
+  asset into `data\updates\`, and refuses it if it is over 200 MB, if its size
+  is not the one the release lists, or if its SHA-256 is not the one the
+  release notes publish (`build.ps1` prints it and the v0.1.0 notes carry it;
+  notes with no digest are not checked). It unpacks the zip's one folder
+  beside the current install under a temporary name and renames it into
+  place, and refuses a zip naming a path outside that folder, one with no
+  `CosmicSupremacyLauncher.exe`, and a target folder that already exists.
+  The box that follows says where the new build is, with **Start**, **Show
+  the folder** and **Later**.
+
+  **The data directory goes with it, and this was the part a download by
+  hand gets wrong.** `data\` is inside the install and holds
+  `fb_identity.json`, the sign-in every seat is bound to. A player who
+  unpacks a new release into a new folder starts it with an empty `data\`,
+  signs in as someone new, and is refused their own seat as held by another
+  sign-in (J4). So `identity.json`, `fb_identity.json`, `joined.json` and
+  `multiplayer.json` are copied into the new folder before it is offered,
+  and nothing else: logs and captured saves stay where they were. This also
+  means the "nearest safe equivalent" of opening the download page in the
+  browser and explaining the steps was not taken: those steps are the ones
+  that lose the seat.
+
+  **Starting a downloaded executable, and why it is done.** Start is the
+  player's click. The launcher stops its turn loop and its server first,
+  because the new one needs port 8888, then starts the new launcher through
+  ShellExecute (`os.startfile`), as a double-click would, and closes. A
+  running game refuses Start with a sentence. Every `.exe` unpacked is given
+  the `Zone.Identifier` mark a browser download carries (zone 3, with the
+  download URL), so SmartScreen and the antivirus see the files as the
+  download they are rather than as files this launcher wrote, which would
+  have skipped the check a player downloading by hand gets. The download is
+  over HTTPS from the same GitHub release a player would use, checked
+  against that release's published digest, so it is the same trust as the
+  manual path and no weaker. What it does not settle is M3's question from
+  the other side: a program that downloads and starts an executable is a
+  pattern some antivirus heuristics flag, and that is unmeasured. A
+  checkout, which is updated with git, gets the refusal alone.
+
+  A launcher cannot replace its own running executable, so the old folder
+  is left in place and the ready box says it can be deleted once the new one
+  works. Silent update is still deferred.
+
+  `release/tests/test_update.py`, 46 checks, serves a release listing and a
+  zip in `build.ps1`'s layout from a local server, and runs the refusal at
+  `min_build` 0.2.0 through Update and Start: the new launcher is started
+  after the loop and the server stop, and its `data\` holds this install's
+  sign-in. Each of 14 mutations fails a named check.
+
+  Left: a real release to update to. That needs a release published with a
+  `.zip` asset and its digest in the notes, and one packaged build below it
+  pointed at a galaxy with a `min_build` above it.
+
   **Done when:** a player below the minimum build reaches a current one without
   being told where to click by a human.
 
@@ -2143,9 +2215,97 @@ is out of scope here.
   plan came from watching a screen, and that stops being available the moment
   players are elsewhere. Without this, every beta report is a slow conversation.
 
-  **The redaction is built; nothing uploads yet.** `redact_log_text`,
-  `redacted_log` and `write_redacted_log` produce the sendable copy, capped at
-  256 KiB by keeping the tail. The upload itself waits on the relay in H1.
+  **The redaction is built.** `redact_log_text`, `redacted_log` and
+  `write_redacted_log` produce the sendable copy, capped at 256 KiB by keeping
+  the tail.
+
+  **The upload is built, 29 September 2026, on the emulator; not deployed.**
+
+  *When it goes, and what the player is told.* Only when the player presses
+  Send. Two ways to reach Send: a **send log** link beside "show log", and a
+  box offered once per followed galaxy when a turn is lost, the loop stops
+  with an error, or a turn cannot be opened. Not for a galaxy found closed,
+  which is a decision rather than a fault, nor for a seat held by another
+  sign-in, which has its own box. The box says what the copy holds (the
+  player name, the galaxy, turn numbers, which parts of the game started and
+  stopped, and any errors), that the Windows account name and the saved-game
+  data are taken out, that nothing else is sent, and that nothing is sent
+  unless they press Send. **Read it first** opens the exact copy that would
+  go. Sending automatically was considered and not built: the notice clause
+  says nothing is sent by itself, and a player who agreed to that would be
+  surprised by an upload they did not ask for. A player whose launcher
+  reaches no relay (a folder or a LAN referee) gets no box after a failed
+  turn, and the link tells them where the copy is so they can attach it to a
+  bug report. After Send they are given the log's id to quote.
+
+  *Where it is stored.* The relay's `POST /_logs`, signed in like every other
+  route, about no galaxy since a failure can come before a player is in one.
+  The body is JSON carrying the text zlib-compressed and in base64, and the
+  build, reason, galaxy, civ and turn as claims capped at 128 characters; the
+  uid is the token's. One Firestore document per log in `beta_logs`, a
+  collection of its own so the listing never streams it, with the text
+  compressed again by the relay so every stored log is known to inflate.
+  Nothing in the relay serves a log back, to its sender or anyone else, and a
+  GET under `/_logs` is refused 403.
+
+  | numbers, all in `functions/relay.py` | value | how known |
+  |---|---|---|
+  | a redacted copy of the 423,203-byte `release/data/launcher.log` | 103,780 bytes | measured |
+  | the same, zlib level 6 | 10,094 bytes | measured |
+  | the same, as the request body | 13,471 bytes | measured |
+  | body cap, `LOG_BODY_MAX`, checked before decoding | 512 KiB | set |
+  | text cap once inflated, `LOG_TEXT_MAX`, refused while inflating | 257 KiB | set |
+  | per sign-in, `LOG_PER_UID_PER_DAY` | 5 a UTC day | set |
+  | whole project, `LOG_PER_DAY` | 100 a UTC day | set |
+  | cost of one upload | 1 read, 2 writes, 1 small query | from the code |
+  | at the daily cap | about 200 writes a day of 20,000 | estimate |
+  | kept, `LOG_KEEP_DAYS` | 14 days | set |
+  | stored at the cap, measured size | about 14 MB | estimate |
+  | stored at the cap, every log incompressible | under 360 MiB | estimate |
+
+  The count and the log are written in one transaction on a document per UTC
+  day in `beta_log_quota`. Anonymous sign-up is open, so the per-sign-in
+  limit stops a launcher in a loop and the daily total is what bounds the
+  spend; the trade is that someone minting sign-ins can use up a day's total
+  and the next player's Send is refused until the next UTC day, with a
+  sentence saying so. Retention runs in the relay: each upload deletes up to
+  five logs past 14 days, which keeps up with anything under the cap.
+  `expire_at` is written as well, for a Firestore TTL policy if the operator
+  sets one; whether TTL deletes count against the free delete allowance was
+  not verified.
+
+  *How the operator reads it.* With the administrator credentials the referee
+  holds, never through the relay:
+
+      python server/dev_tools/log_tool.py firebase://cs-resurgence list
+      python server/dev_tools/log_tool.py firebase://cs-resurgence list --code <support code>
+      python server/dev_tools/log_tool.py firebase://cs-resurgence show <id>
+      python server/dev_tools/log_tool.py firebase://cs-resurgence prune --dry-run
+
+  `list` shows each log's id, arrival time, the sender's support code (the
+  first eight characters of the uid, which the launcher shows under its
+  title), reason, build, galaxy, civ, turn and size, newest first.
+
+  **What the done-when run found.** A turn lost to a relay refusal left only
+  `LOST, HTTP Error 400: Bad Request` in the log, because the relay's sentence
+  is in the response body and the loop logged the exception's text. So the
+  uploaded copy of the failure diagnosed nothing. `player_turn.failure_text`
+  now adds the relay's sentence, on the lost-turn and interim-upload lines.
+
+  **The done-when, on the emulator.** `server/tests/test_log_upload.py` runs
+  the real `player_turn.follow` against the relay in process with a client
+  that ticked past its turn, so every capture is a save of turn 8 in turn 7.
+  Every upload is refused, the launcher's own `_mp_state` and `offer_log`
+  offer the log once, Send goes, and `log_tool.py` finds it by the support
+  code. Read from the stored copy alone, it gives the build, `DemoPlayer`,
+  turn 7, and `this is not a save of turn 7: ValueError: this save is turn 8,
+  not turn 7`; the account name and the save data are not in it. 67 checks,
+  and `release/tests/test_log_send.py`, 34 checks, covers when the box is
+  offered and what it says with a stand-in relay. 29 mutations, each caught
+  by a named check.
+
+  Left: redeploy the relay, rebuild the launcher, and send one log from the
+  packaged build to `cs-resurgence`.
 
   **The log records the save protocol's HTTP bodies**, which is base64 of the
   save blob in `body+` lines and diagnoses nothing. Each run of them now
@@ -2176,7 +2336,9 @@ is out of scope here.
   excepted, plus a literal match on the expanded home directory for a redirected
   profile. No account name is hard-coded. The redacted copy's contents are
   itemised in the launcher's own section header, which is what N4 gets written
-  from.
+  from. The box a player presses Send in (M1) says the same in their words,
+  `LOG_SEND_TEXT` in `release/launcher.py`, and `test_log_send.py` fails if
+  it stops naming what is taken out.
 
   **Two things are deliberately not scrubbed** and are named rather than left to
   be found: the referee's machine name in a UNC store path, and bare occurrences

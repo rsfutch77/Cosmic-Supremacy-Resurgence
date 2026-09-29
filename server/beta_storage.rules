@@ -4,49 +4,49 @@
 // beta_firestore.rules about there being no firebase.json beside these files
 // applies here for the same reason.
 //
-// The layout firebase_store.py writes:
+// The layout firebase_store.py writes to Cloud Storage:
 //
 //     beta/<galaxy>/turns/0007.b64            the state for turn 7
-//     beta/<galaxy>/submissions/0007/X.b64    what civ X handed back
-//     beta/<galaxy>/notes/0007/X.txt          what the referee refused from X
+//
+// Submissions and notes are Firestore documents (plan item H13), stored and
+// served by the relay's `POST /<galaxy>/submission/<n>/<civ>` and
+// `GET /<galaxy>/note/<n>/<civ>`, and they are not in this bucket. Two object
+// paths remain for the changeover H13 describes:
+//
+//     beta/<galaxy>/submissions/0007/X.b64    turns from before a galaxy's
+//     beta/<galaxy>/notes/0007/X.txt          `submissions_from`, read only
+//
+// A galaxy started or published since H13 carries `submissions_from`, and
+// nothing reads or writes those paths for its later turns. The one writer
+// left is a launcher holding an upload ticket handed out before the relay was
+// redeployed, which names a signed URL for up to `URL_SECONDS`; the relay's
+// commit reads that object back, stores it as a document and deletes it.
 //
 // The worker holds a service account and bypasses these rules, so nothing
-// below grants the worker anything. Everything here is what a launcher may do.
+// below grants the worker anything. A signed URL is authorised by its
+// signature and not by these rules either. Everything here is what a client
+// using the Firebase SDK directly may do, and no launcher does that: every
+// launcher request goes through the relay, which checks the seat in code.
 //
-// THE ONE PROPERTY THESE RULES CANNOT EXPRESS AS THE STORE IS WRITTEN TODAY
-// -------------------------------------------------------------------------
+// WHAT THESE RULES CANNOT EXPRESS
+// -------------------------------
 // H4 asks that a client may write only *its own* submission. A Storage rule
 // can test `request.auth.uid` and custom claims and nothing else about who is
 // asking. A submission object is named for the civ, which is a username the
 // player typed, and there is no relation a rule can evaluate between a uid and
 // a username. So `allow write: if request.auth != null` below lets any signed
-// in client write any civ's submission, which is not the rule that was asked
-// for.
+// in client write any civ's submission object, which is not an ownership rule
+// and should not be described as one. Ownership is enforced by the relay's
+// seat map, on the Firestore document the relay writes.
 //
-// Two ways to close it, and the choice belongs to H4 and J4 together:
+// The 2 MB size test on the submission path below predates H13 and is not the
+// cap a submission is held to. The relay caps a submission body at
+// `MAX_BYTES`, 1 MiB of base64, and the store refuses one over
+// `MAX_SUBMISSION_DATA` before Firestore can.
 //
-//   1. Name the object for the uid: beta/<galaxy>/submissions/0007/<uid>.b64,
-//      and let the worker resolve uid to civ through the roster it already
-//      keeps. The rule is then `uid == request.auth.uid`, which is exact. This
-//      costs a parameter on the store's `submit`, because the store is given a
-//      civ name today and would have to be given both.
-//   2. Have the worker set a custom claim on each uid naming its civ, and test
-//      `file == request.auth.token.civ + '.b64'`. No change to the layout, but
-//      a claim has to be minted at join and refreshed when a seat is rebound,
-//      which is J4's rebind case.
-//
-// Until one of them is done, the rule below is a size cap and a deletion
-// refusal and not an ownership rule, and it should not be described as one.
-//
-// A SECOND THING THE RULES BREAK, WHICH IS A CODE PROBLEM AND NOT A RULE ONE
-// --------------------------------------------------------------------------
-// `read: if false` on submissions is right: one player has no business reading
-// another's. But `player_turn.py` reaches its own submission through
-// `store.submissions(turn).get(civ)`, which lists and downloads every player's
-// submission and then throws all but one away. Under these rules that call is
-// refused, and under Firebase it is also a download per player per poll. The
-// fix is an accessor for one submission on the store interface rather than a
-// change to these rules.
+// A player reaches its own submission through `store.submission(civ, turn)`,
+// one document read at the relay (plan item H6), so `read: if false` on the
+// submission path costs a launcher nothing.
 
 rules_version = '2';
 
@@ -61,8 +61,8 @@ service firebase.storage {
       allow write: if false;
     }
 
-    // A submission. See the note above: this is a size cap and a deletion
-    // refusal, and the ownership half is not expressible yet.
+    // A submission object from before H13. See the note above: this is a
+    // size cap and a deletion refusal, and not an ownership rule.
     match /beta/{galaxy}/submissions/{turn}/{file} {
       allow read: if false;
       allow create, update: if request.auth != null
@@ -71,7 +71,7 @@ service firebase.storage {
       allow delete: if false;
     }
 
-    // A note the referee left one player. Readable by anyone signed in for the
+    // A note object from before H13. Readable by anyone signed in for the
     // same reason the roster is: the object is named for the civ, so a rule
     // cannot tell whose it is. A note says which of a player's own orders were
     // refused, which is not worth a redesign to hide, and N2's dropped

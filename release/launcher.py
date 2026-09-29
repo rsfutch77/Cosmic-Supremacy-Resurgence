@@ -1001,11 +1001,13 @@ GALAXY_ENDED_NOTE = "this galaxy has ended"
 # ── The referee's warning about missed turns ──────────────────────────────────
 # server\abandonment.py warns a player who has missed too many turns in a row
 # through `put_note`, on the turn they missed, and repeats it every turn until
-# they play or the seat goes. Its first line is `warning_note`'s opening, which
-# is how the launcher tells it apart from the refusal lines the same note
-# carries. The two files have to agree on it and neither imports the other,
-# the way `JOIN_DIR` and `MIN_BUILD_KEY` are shared; release\tests checks this
-# constant against `warning_note`'s own output.
+# they play or the seat goes. A followed turn loop names it in a `warned`
+# event. Play reads the last closed turn's note once, before any loop runs,
+# and finds the warning by `warning_note`'s opening line, which is how it
+# tells it apart from the refusal lines the same note carries. The two files
+# have to agree on it and neither imports the other, the way `JOIN_DIR` and
+# `MIN_BUILD_KEY` are shared; release\tests checks this constant against
+# `warning_note`'s own output.
 MISSED_WARNING_OPENING = "You have missed "
 
 
@@ -1932,24 +1934,17 @@ def ended_hint(ended) -> str:
             "pick another galaxy to keep playing.")
 
 
-def ended_text(g, state) -> str:
+def ended_text(g) -> str:
     """What the Reason button on an ended galaxy shows.
 
-    The operator's words come from the galaxy's state, which the directory row
-    does not carry, so the caller reads it once when the button is pressed. A
-    state that cannot be read, or that no longer says closed because the
-    galaxy was reopened since the listing, still gets a sentence rather than
-    an empty box.
+    The operator's words come from the row's `closed_reason`, which the
+    directory carries for a closed galaxy, so pressing the button reads
+    nothing. A galaxy closed without a reason, or listed by a relay from
+    before rows carried one, still gets the sentence that it has closed.
     """
-    said = closed_problem(state)
-    if said:
-        return said
-    if state is None:
-        return (f"{g.name or g.id} is listed as closed, and its reason could "
-                "not be read just now. Try again in a minute, or pick another "
-                "galaxy from the list.")
-    return (f"{g.name or g.id} is no longer closed. The list will show it "
-            "again at its next refresh.")
+    return closed_problem({STATUS_KEY: CLOSED,
+                           CLOSED_REASON_KEY: getattr(g, "closed_reason",
+                                                      None)})
 
 
 # ── When a galaxy has stopped ────────────────────────────────────────────────
@@ -2348,6 +2343,7 @@ class OwnGalaxy(typing.NamedTuple):
     joined: bool
     store: str
     turn_seconds: "int | None" = None
+    closed_reason: "str | None" = None
 
 
 def store_label(spec: str) -> str:
@@ -2378,10 +2374,13 @@ def named_galaxy(spec: str, state, player: "str | None" = None) -> OwnGalaxy:
     if not state:
         return OwnGalaxy(spec, name, FORMING, None, None, 0, False, spec)
     civs = list(state.get("civs", []))
-    return OwnGalaxy(spec, name, state.get(STATUS_KEY) or OPEN,
+    status = state.get(STATUS_KEY) or OPEN
+    # Dropped from a galaxy that is not closed, as the directory's row does.
+    reason = state.get(CLOSED_REASON_KEY) if status == CLOSED else None
+    return OwnGalaxy(spec, name, status,
                      state.get("turn"), state.get("deadline"), len(civs),
                      bool(player) and player in civs, spec,
-                     state.get("turn_seconds"))
+                     state.get("turn_seconds"), reason)
 
 
 def own_row(data_dir: str, cfg, player: "str | None" = None) -> OwnGalaxy:
@@ -2466,14 +2465,15 @@ def galaxy_rows(data_dir: str, spec, player: "str | None" = None):
 # A rule with a blank where the number should be reads as no rule at all, and a
 # missing notice reads as there being nothing to agree to.
 
-# What can honestly be said about the log copy today. M1 built the redaction
-# and nothing uploads: write_redacted_log writes the copy beside launcher.log
-# and the upload itself waits on the relay. This is the clause to change when
-# that lands, and it is deliberately the narrower of the two claims the notice
-# offers, because the notice is read once and believed afterwards.
+# What can honestly be said about the log copy today. write_redacted_log
+# writes the copy beside launcher.log, and the launcher uploads it only when
+# the player presses Send: on the "send log" link, or in the box offered when
+# a turn goes wrong (M1). The notice is read once and believed afterwards, so
+# this is the clause that has to change if anything is ever sent without that.
 LOG_UPLOAD_CLAUSE = ("Nothing is sent by itself. The launcher writes that "
                      "copy to a file on your own machine, and it reaches us "
-                     "only if you send it to us yourself.")
+                     "only when you press Send, on the launcher's send log "
+                     "link or when it offers after a turn goes wrong.")
 
 
 def beta_notice_module():
@@ -2687,14 +2687,350 @@ def write_redacted_log(data_dir: str, out_path: "str | None" = None,
                        cap: int = LOG_UPLOAD_CAP) -> str:
     """Write the uploadable copy beside the log and return where it went.
 
-    Nothing sends it. The file is the deliverable: a player can be pointed at
-    it and asked to attach it, and whatever uploads it later reads this file
-    rather than redacting a second time in its own way.
+    The file is what a player reads before sending, what they attach to a
+    bug report when there is nowhere to send it, and what Send uploads, so
+    the copy sent is the copy they could read.
     """
     out_path = out_path or os.path.join(data_dir, REDACTED_LOG_NAME)
     with open(out_path, "w", encoding="utf-8", newline="\n") as fh:
         fh.write(redacted_log(data_dir, cap))
     return out_path
+
+
+# ── Sending the log ───────────────────────────────────────────────────────────
+# The redacted copy goes to the relay's `POST /_logs`, which stores it where
+# the operator reads it with server\dev_tools\log_tool.py and serves it to no
+# player (plan item M1). It is sent only when the player presses Send: from
+# the "send log" link beside "show log", or from the box offered once when a
+# followed turn could not be sent or the turn loop stopped with an error. The
+# box says what the copy holds before anything goes.
+#
+# The relay takes the text zlib-compressed and in base64 inside a small JSON
+# object. A measured 103,780-byte redacted copy is 10,094 bytes compressed.
+# It counts uploads per sign-in and per day and refuses past either with a
+# sentence, which is shown as it is.
+LOG_ROUTE = "_logs"
+LOG_WHY_TURN = "turn_failed"
+LOG_WHY_PLAYER = "player"
+
+# The loop kinds after which the box is offered. A closed galaxy is not among
+# them in effect: `mp_closed` is set first and the box is not offered for it.
+LOG_OFFER_KINDS = ("lost", "failed", "serve_failed")
+
+LOG_SEND_TITLE = "Send your log"
+LOG_TURN_LEAD = ("Something went wrong with your turn. The launcher's log is "
+                 "what the galaxy's operator needs to see what happened.\n\n")
+LOG_SEND_TEXT = (
+    "Send the launcher's log to the galaxy's operator?\n\n"
+    "It is the launcher's record of what it did: your player name, the "
+    "galaxy, turn numbers, which parts of the game started and stopped, and "
+    "any errors. Your Windows account name is taken out of it first, and the "
+    "saved-game data in it is removed. Nothing else on this computer is "
+    "sent.\n\n"
+    "Nothing is sent unless you press Send.")
+
+
+def log_upload_base(data_dir: str, store_spec, directory) -> "str | None":
+    """The relay a log goes to, or None when this install reaches none.
+
+    The followed galaxy's relay first, then the directory's. A spec counts
+    when it is http(s) and wants this install's identity by the rule a store
+    follows (`store_wants_token`), so a folder or a LAN referee is never sent
+    a log and an emulator relay named with `auth` is.
+    """
+    want = dict(multiplayer_file(data_dir) or {})
+    for spec, is_store in ((store_spec, True), (directory, False)):
+        if not isinstance(spec, str):
+            continue
+        spec = spec.strip().rstrip("/")
+        if not spec.startswith(("http://", "https://")):
+            continue
+        want["store"] = spec
+        if not store_wants_token(want):
+            continue
+        if is_store:
+            spec = spec.rsplit("/", 1)[0]
+        return spec
+    return None
+
+
+def log_payload(text: str, build, why: str, galaxy=None, civ=None,
+                turn=None) -> bytes:
+    """The body of a log upload."""
+    import base64
+    import zlib
+    packed = base64.b64encode(zlib.compress(text.encode("utf-8"), 6))
+    return json.dumps({
+        "log": packed.decode("ascii"),
+        "build": build,
+        "why": why,
+        "galaxy": galaxy,
+        "civ": civ,
+        "turn": turn if _whole(turn) else None,
+    }).encode("utf-8")
+
+
+def send_log(base: str, token, payload: bytes, timeout: float = 30.0) -> dict:
+    """Upload one log. The relay's reply, or the HTTPError it refused with.
+
+    `token` is a callable answering an ID token, or a token, or None.
+    """
+    import urllib.request
+    req = urllib.request.Request(f"{base.rstrip('/')}/{LOG_ROUTE}",
+                                 data=payload, method="POST",
+                                 headers={"Content-Type": "application/json"})
+    said = token() if callable(token) else token
+    if said:
+        req.add_header("Authorization", f"Bearer {said}")
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return json.loads(resp.read() or b"{}")
+
+
+def log_sent_text(reply) -> str:
+    """What a player reads once their log is sent."""
+    ref = (reply or {}).get("id")
+    said = "Your log was sent to the galaxy's operator."
+    if ref:
+        said += (f"\n\nIf you write to them about it, quote this reference:"
+                 f"\n\n    {ref}")
+    return said
+
+
+def log_not_sent_text(why, path) -> str:
+    """What a player reads when their log could not be sent, or had nowhere
+    to go. `why` is None for a launcher that reaches no relay."""
+    if why is None:
+        said = ("This launcher is not connected to the beta, so there is "
+                "nowhere to send the log.")
+    else:
+        said = f"Your log could not be sent: {why}"
+    return (f"{said}\n\nThe same copy is saved at\n\n{path}\n\nand you can "
+            "attach it to a bug report instead.")
+
+
+# ── Updating to the current release (L3) ──────────────────────────────────────
+# A galaxy's `min_build` refuses an older launcher (L2), and the refusal offers
+# Update. That reads the latest GitHub release, downloads its zip, checks it
+# against the SHA-256 the release notes publish, and unpacks it beside this
+# install as its own folder, which is the layout a player who downloads by
+# hand ends up with.
+#
+# **The data directory goes with it.** It is `data\` inside the install, and it
+# holds `fb_identity.json`, the anonymous sign-in every seat is bound to (J4).
+# A new folder with an empty `data\` is a new sign-in, and the relay refuses
+# it the player's own seat as held by another. So the files that make this
+# install who it is are copied into the new one before it is offered, and
+# nothing else: logs and captured saves stay where they are.
+#
+# **Starting it is the player's click.** The new launcher is started through
+# ShellExecute, as double-clicking it would be, and every executable the zip
+# carries is given the mark a browser download gets (`Zone.Identifier`, zone
+# 3), so SmartScreen and the antivirus treat it as the download it is rather
+# than as a file this launcher wrote. This launcher shuts its own server down
+# first, since the new one needs the same port.
+#
+# A launcher cannot replace its own running executable, so the old folder is
+# left in place; the box says it can be deleted once the new one works.
+RELEASES_API = ("https://api.github.com/repos/rsfutch77/"
+                "Cosmic-Supremacy-Resurgence/releases/latest")
+LAUNCHER_EXE = "CosmicSupremacyLauncher.exe"
+
+# What the new install is given from this one's data directory.
+UPDATE_CARRIED = (IDENTITY_FILE, "fb_identity.json", JOINED_FILE, MP_CONFIG)
+
+# The largest download taken. A release is about 30 MB.
+UPDATE_MAX_BYTES = 200 * 1024 * 1024
+
+_SHA_RE = re.compile(r"\b[0-9a-fA-F]{64}\b")
+
+
+class UpdateRefused(Exception):
+    """An update that could not be made, with a sentence for the player."""
+
+
+def update_possible() -> bool:
+    """Whether this launcher is a packaged release that can update itself.
+    A checkout is updated with git, and its folder is not a release's."""
+    return bool(getattr(sys, "frozen", False))
+
+
+def release_info(doc) -> dict:
+    """What an update needs from a GitHub `releases/latest` answer.
+
+    `{"tag", "build", "name", "url", "size", "sha256"}`. The zip is the first
+    asset ending in `.zip`. The digest is the one 64-hex-digit string in the
+    notes, or of several the one nearest the zip's name, and None when the
+    notes carry none.
+    """
+    if not isinstance(doc, dict):
+        raise UpdateRefused("the release listing could not be read")
+    tag = str(doc.get("tag_name") or "")
+    assets = [a for a in (doc.get("assets") or []) if isinstance(a, dict)
+              and str(a.get("name") or "").lower().endswith(".zip")]
+    if not assets:
+        raise UpdateRefused(f"the current release {tag} has no download "
+                            "attached yet")
+    asset = assets[0]
+    body = str(doc.get("body") or "")
+    found = list(_SHA_RE.finditer(body))
+    sha = None
+    if len(found) == 1:
+        sha = found[0].group(0).lower()
+    elif found:
+        at = body.find(str(asset["name"]))
+        if at >= 0:
+            sha = min(found, key=lambda m: abs(m.start() - at)).group(0).lower()
+    return {"tag": tag, "build": tag.lstrip("vV"),
+            "name": str(asset["name"]),
+            "url": str(asset.get("browser_download_url") or ""),
+            "size": asset.get("size"), "sha256": sha}
+
+
+def fetch_release(api: str = RELEASES_API, timeout: float = 20.0) -> dict:
+    """The latest release, read from GitHub. One unauthenticated GET."""
+    import urllib.request
+    req = urllib.request.Request(api, headers={
+        "Accept": "application/vnd.github+json",
+        "User-Agent": "CosmicSupremacyLauncher"})
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return release_info(json.loads(resp.read()))
+
+
+def download_release(info: dict, dest_dir: str, cap: int = UPDATE_MAX_BYTES,
+                     timeout: float = 60.0, progress=None) -> str:
+    """Download the release zip into `dest_dir` and check it. Returns the path.
+
+    A download over `cap`, of another size than the release lists, or with
+    another digest than the notes publish is deleted and refused.
+    """
+    import hashlib
+    import urllib.request
+    if not str(info.get("url") or "").startswith(("https://", "http://")):
+        raise UpdateRefused("the release names no download")
+    os.makedirs(dest_dir, exist_ok=True)
+    path = os.path.join(dest_dir, os.path.basename(info["name"]))
+    part = path + ".part"
+    digest = hashlib.sha256()
+    got = 0
+    req = urllib.request.Request(info["url"], headers={
+        "User-Agent": "CosmicSupremacyLauncher"})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp, \
+                open(part, "wb") as fh:
+            while True:
+                chunk = resp.read(1 << 16)
+                if not chunk:
+                    break
+                got += len(chunk)
+                if got > cap:
+                    raise UpdateRefused("the download is larger than any "
+                                        "release should be")
+                digest.update(chunk)
+                fh.write(chunk)
+                if progress:
+                    progress(got, info.get("size"))
+        size = info.get("size")
+        if _whole(size) and size != got:
+            raise UpdateRefused(f"the download stopped at {got:,} of "
+                                f"{size:,} bytes")
+        if info.get("sha256") and digest.hexdigest() != info["sha256"]:
+            raise UpdateRefused("the download does not match the checksum "
+                                "the release publishes")
+        os.replace(part, path)
+    except BaseException:
+        try:
+            os.remove(part)
+        except OSError:
+            pass
+        raise
+    return path
+
+
+def _mark_downloaded(path: str, url: str) -> None:
+    """Give a file the mark a browser download carries. NTFS only; a volume
+    with no alternate streams is left alone."""
+    try:
+        with open(path + ":Zone.Identifier", "w", encoding="ascii") as fh:
+            fh.write(f"[ZoneTransfer]\nZoneId=3\nHostUrl={url}\n")
+    except OSError:
+        pass
+
+
+def install_release(zip_path: str, install_dir: str, data_dir: str,
+                    url: str = "") -> str:
+    """Unpack a release zip beside `install_dir` and carry this install's
+    identity into it. Returns the new install's folder.
+
+    The zip holds one folder, the release's own name. It is unpacked under a
+    temporary name and renamed into place, so an interrupted unpack never
+    leaves a folder that looks finished. A folder of that name that already
+    exists is refused rather than overwritten.
+    """
+    import shutil
+    import zipfile
+    parent = os.path.dirname(os.path.abspath(install_dir))
+    try:
+        zf = zipfile.ZipFile(zip_path)
+    except (OSError, zipfile.BadZipFile) as exc:
+        raise UpdateRefused(f"the download is not a zip ({exc})")
+    with zf:
+        names = [n.replace("\\", "/") for n in zf.namelist()]
+        for n in names:
+            if n.startswith("/") or ":" in n or ".." in n.split("/"):
+                raise UpdateRefused("the download names a file outside its "
+                                    "own folder")
+        tops = {n.split("/", 1)[0] for n in names if n.strip("/")}
+        if len(tops) != 1:
+            raise UpdateRefused("the download is not laid out as a release")
+        top = tops.pop()
+        if f"{top}/{LAUNCHER_EXE}" not in names:
+            raise UpdateRefused("the download carries no launcher")
+        target = os.path.join(parent, top)
+        if os.path.normcase(os.path.abspath(target)) == \
+                os.path.normcase(os.path.abspath(install_dir)):
+            raise UpdateRefused("this launcher is already that release")
+        if os.path.exists(target):
+            raise UpdateRefused(f"a folder called {top} is already beside "
+                                "this one. Start the launcher in it, or move "
+                                "it away and try again.")
+        staging = os.path.join(parent, f".{top}.unpacking")
+        shutil.rmtree(staging, ignore_errors=True)
+        try:
+            zf.extractall(staging)
+            unpacked = os.path.join(staging, top)
+            new_data = os.path.join(unpacked, "data")
+            os.makedirs(new_data, exist_ok=True)
+            for name in UPDATE_CARRIED:
+                src = os.path.join(data_dir, name)
+                if os.path.isfile(src):
+                    shutil.copy2(src, os.path.join(new_data, name))
+            for root, _dirs, files in os.walk(unpacked):
+                for f in files:
+                    if f.lower().endswith(".exe"):
+                        _mark_downloaded(os.path.join(root, f), url)
+            os.replace(unpacked, target)
+        finally:
+            shutil.rmtree(staging, ignore_errors=True)
+    return target
+
+
+UPDATE_OFFER = ("\n\nUpdate downloads the current release and sets it up in "
+                "a folder beside this one, with your name and your seats.")
+
+
+def update_ready_text(build: str, target: str) -> str:
+    """What a player reads once the new build is unpacked."""
+    return (f"Build {build} is ready, in\n\n{target}\n\nYour name and your "
+            "seats in every galaxy come with it. Press Start to open it. "
+            "This window closes first, because the new one needs the same "
+            "connection.\n\nThe old folder is left where it is, and you can "
+            "delete it once the new one works.")
+
+
+def update_failed_text(why: str) -> str:
+    """What a player reads when the update could not be made."""
+    return (f"Could not update: {why}\n\nThe current release can be "
+            f"downloaded by hand from\n{UPDATE_URL}")
 
 
 # ── UI ────────────────────────────────────────────────────────────────────────
@@ -2868,6 +3204,12 @@ class Launcher:
         # deadline a stall last sent a probe for. See `_mp_probe_closed`.
         self.mp_closed = False
         self.mp_probed = None
+        # Whether this galaxy's player has been offered to send their log
+        # after a turn went wrong, and whether a log is on its way.
+        self.mp_log_offered = False
+        self.log_sending = False
+        # Whether an update to the current release is being downloaded.
+        self.updating = False
         # Whether the game client was up when the watcher last looked, so that
         # it closing clears the turn readout at once rather than at the next
         # poll, and whether the turn it was playing is still on its way to the
@@ -3069,6 +3411,11 @@ class Launcher:
                                 font=("Segoe UI", 8, "underline"), cursor="hand2")
         self.log_btn.pack(side="right")
         self.log_btn.bind("<Button-1>", lambda e: self.toggle_log())
+        self.send_log_btn = tk.Label(status, text="send log", bg=BG, fg=FAINT,
+                                     font=("Segoe UI", 8, "underline"),
+                                     cursor="hand2")
+        self.send_log_btn.pack(side="right", padx=(0, 10))
+        self.send_log_btn.bind("<Button-1>", lambda e: self.offer_log())
 
         self.log_frame = tk.Frame(self.root, bg=BG)
         self.log = tk.Text(self.log_frame, height=11, bg="#02060f", fg=DIM,
@@ -3864,22 +4211,11 @@ class Launcher:
     def show_ended(self, g):
         """Say that a galaxy has ended, in the operator's words.
 
-        One read of the galaxy's state, made when the button is pressed, since
-        the directory row carries the status and not the reason. On the Tk
-        thread, as Play's own reads are: it is one request and the player has
-        just asked for its answer.
+        From the row the Galaxies page already holds, which carries the reason
+        for a closed galaxy, so nothing is read when the button is pressed.
         """
-        state = None
-        mods = multiplayer_modules()
-        if mods is not None:
-            try:
-                token = (player_token(self.data_dir)
-                         if store_wants_token({"store": g.store}) else None)
-                state = open_player_store(mods[1], g.store, token).state()
-            except Exception as exc:        # said in the box below as well
-                self.say(f"games   could not read {g.id}'s state ({exc})")
         self.say(f"games   {g.id} has ended")
-        self._choice_dialog("Galaxy ended", ended_text(g, state),
+        self._choice_dialog("Galaxy ended", ended_text(g),
                             (("Close", None, True),))
 
     def _choice_dialog(self, title: str, body: str, choices):
@@ -4062,7 +4398,7 @@ class Launcher:
             if problem:
                 self.say(f"join: build {build_id()} is below {g.id}'s minimum "
                          f"{state.get(MIN_BUILD_KEY)!r}")
-                self.warn(problem)
+                self._offer_update(problem)
                 return
             # Beside it, and ahead of the seat: the listing that offered this
             # Join is as old as the last refresh, and a galaxy closed since
@@ -4362,7 +4698,7 @@ class Launcher:
             if problem:
                 self.say(f"multiplayer: build {build_id()} is below this "
                          f"galaxy's minimum {state.get(MIN_BUILD_KEY)!r}")
-                self.warn(problem)
+                self._offer_update(problem)
                 return
             # Beside the build check and ahead of the roster, because a closed
             # galaxy is one of the reasons the roster would read wrong: it
@@ -4437,6 +4773,7 @@ class Launcher:
         self.mp_civ = civ
         self.mp_closed = False
         self.mp_probed = None
+        self.mp_log_offered = False
         self.mp_playing = {"id": g.id if g is not None else cfg["store"],
                            "name": (g.name or g.id) if g is not None
                            else store_label(cfg["store"]),
@@ -4537,17 +4874,21 @@ class Launcher:
         if kind == "capture_failed":
             self.mp_capture = (CAPTURE_FAILED, time.time())
             return
-        if kind == "refused_orders":
-            # The loop has logged the note's lines as refusals. A warning
-            # about missed turns travels in the same note, and it is shown in
-            # a box rather than left in the log. Read only when there is a
-            # note, which is the rare turn, and not a step of the turn, so the
-            # readout is left alone.
+        if kind == "warned":
+            # The loop found a missed-turns warning in the referee's note for
+            # a closed turn and names its lines, so no second read of the note
+            # is made here. It is shown in a box rather than left in the log,
+            # and it is not a step of the turn, so the readout is left alone.
+            # The loop is the `player_turn` this launcher bundles, so every
+            # loop that can drive it emits this event.
+            lines = facts.get("lines")
             store = self.mp_store
-            if store is not None:
-                warning = self._warning_note(store, civ, (turn or 0) + 1)
-                if warning:
-                    self.msgs.put(("__mp_warning__", store, warning))
+            if store is not None and lines:
+                self.msgs.put(("__mp_warning__", store,
+                               [str(x) for x in lines]))
+            return
+        if kind == "refused_orders":
+            # Already in the log, which is where refusals are read.
             return
         if kind in ("lost", "failed") and not getattr(self, "mp_closed",
                                                       False):
@@ -4555,6 +4896,15 @@ class Launcher:
             # followed loop first shows: every store refuses the submission.
             # One read of the state says whether that is what happened.
             self._mp_probe_closed(self.mp_store)
+        if (kind in LOG_OFFER_KINDS
+                and not getattr(self, "mp_log_offered", False)
+                and SEAT_HELD not in str(facts.get("error") or "")):
+            # Once per followed galaxy, however many turns go wrong. Queued
+            # behind anything the probe above posted, so a galaxy found closed
+            # is marked closed before this is handled, and is not offered. A
+            # seat held by another sign-in has its own box saying what to do.
+            self.mp_log_offered = True
+            self.msgs.put(("__log_offer__", self.mp_store))
         if kind == "submitted":
             self.mp_capture = (SENT, time.time())
             if facts.get("final"):
@@ -4630,6 +4980,7 @@ class Launcher:
         self.mp_reopening = False
         self.mp_closed = False
         self.mp_probed = None
+        self.mp_log_offered = False
         self._show_capture(None, 0.0)
 
     def _warning_note(self, store, civ, current):
@@ -4691,6 +5042,193 @@ class Launcher:
         self.say(f"multiplayer: the referee has warned {self.mp_civ} about "
                  f"missed turns")
         self.warn(warning_text(name, lines))
+
+    # ── sending the log ──
+    def _on_log_offer(self, store):
+        """A followed turn went wrong: offer to send the log. Tk thread.
+
+        Not for a store that is no longer the one followed, nor for a galaxy
+        found closed, which is a decision rather than a fault; and not where
+        there is no relay to send to, since a box saying so after every
+        failed turn would be noise. The link beside "show log" still says it.
+        """
+        if store is not self.mp_store or getattr(self, "mp_closed", False):
+            return
+        self.offer_log(LOG_WHY_TURN, quiet_if_nowhere=True)
+
+    def offer_log(self, why: str = LOG_WHY_PLAYER,
+                  quiet_if_nowhere: bool = False):
+        """Write the redacted copy, say what it holds, and send it on Send.
+
+        Tk thread. The copy is written first and is what is sent, so "Read it
+        first" opens exactly the bytes that would go.
+        """
+        if getattr(self, "log_sending", False):
+            self.say("log: one is already on its way")
+            return
+        playing = getattr(self, "mp_playing", None) or {}
+        multiplayer_modules()           # puts fb_auth on sys.path in a checkout
+        base = log_upload_base(self.data_dir, playing.get("store"),
+                               getattr(self, "games_dir", None))
+        try:
+            path = write_redacted_log(self.data_dir)
+        except OSError as exc:
+            self.say(f"log: could not write the copy to send ({exc})")
+            if not quiet_if_nowhere:
+                self.warn(f"Could not write a copy of the log to send:\n\n"
+                          f"{exc}")
+            return
+        if base is None:
+            self.say(f"log: no relay to send to; the copy is at {path}")
+            if not quiet_if_nowhere:
+                self.warn(log_not_sent_text(None, path))
+            return
+        lead = LOG_TURN_LEAD if why == LOG_WHY_TURN else ""
+        while True:
+            what = self._choice_dialog(
+                LOG_SEND_TITLE, lead + LOG_SEND_TEXT,
+                (("Send", "send", True), ("Read it first", "read", False),
+                 ("Not now", None, False)))
+            if what != "read":
+                break
+            self._open_file(path)
+        if what != "send":
+            self.say("log: not sent")
+            return
+        try:
+            with open(path, encoding="utf-8", errors="replace") as fh:
+                text = fh.read()
+        except OSError as exc:
+            self.warn(log_not_sent_text(str(exc), path))
+            return
+        payload = log_payload(
+            text, build_info().get("build"), why,
+            galaxy=playing.get("id"),
+            civ=getattr(self, "mp_civ", None) if playing else None,
+            turn=getattr(self, "mp_turn", None) if playing else None)
+        token = player_token(self.data_dir)
+        self.log_sending = True
+        self.say(f"log: sending {len(text.encode('utf-8')):,} bytes "
+                 f"({len(payload):,} on the wire)")
+
+        def work():
+            try:
+                reply = send_log(base, token, payload)
+                self.msgs.put(("__log_sent__", reply, None, path))
+            except Exception as exc:        # said to the player either way
+                said = relay_refusal(exc)
+                self.msgs.put(("__log_sent__", None,
+                               said[1] if said else str(exc), path))
+
+        threading.Thread(target=work, daemon=True, name="send-log").start()
+
+    def _on_log_sent(self, reply, err, path):
+        """Say whether the log went. Tk thread."""
+        self.log_sending = False
+        if err is None:
+            self.say(f"log: sent as {(reply or {}).get('id')}")
+            self._choice_dialog("Log sent", log_sent_text(reply),
+                                (("Close", None, True),))
+        else:
+            self.say(f"log: not sent ({err})")
+            self.warn(log_not_sent_text(err, path))
+
+    def _open_file(self, path: str):
+        """Open a file in the program Windows has for it, which for a .log is
+        a text editor."""
+        try:
+            os.startfile(path)              # noqa: S606, Windows only
+        except (OSError, AttributeError) as exc:
+            self.say(f"log: could not open {path} ({exc})")
+
+    # ── updating (L3) ──
+    def _offer_update(self, problem: str):
+        """The version gate's refusal, with Update on it. Tk thread.
+
+        A checkout cannot update itself, so it gets the refusal alone.
+        """
+        if not update_possible():
+            self.warn(problem)
+            return
+        what = self._choice_dialog("Update needed", problem + UPDATE_OFFER,
+                                   (("Update", "update", True),
+                                    ("Close", None, False)))
+        if what != "update":
+            return
+        if getattr(self, "updating", False):
+            self.say("update: already under way")
+            return
+        self.updating = True
+        self.say("update: reading the current release")
+        current = build_id()
+        install, data = app_dir(), self.data_dir
+
+        def work():
+            try:
+                info = fetch_release()
+                if not build_is_below(current, info["build"]):
+                    raise UpdateRefused(
+                        f"the newest release is {info['build'] or 'unnamed'}, "
+                        f"which is not newer than this build, {current}. The "
+                        "galaxy's operator needs to know.")
+                self.say_threadsafe(f"update: downloading {info['name']}")
+                zip_path = download_release(
+                    info, os.path.join(data, "updates"))
+                target = install_release(zip_path, install, data,
+                                         url=info["url"])
+                self.msgs.put(("__update__", info, target, None))
+            except Exception as exc:        # said to the player either way
+                why = str(exc) if isinstance(exc, UpdateRefused) else (
+                    f"{type(exc).__name__}: {exc}")
+                self.msgs.put(("__update__", None, None, why))
+
+        threading.Thread(target=work, daemon=True, name="update").start()
+
+    def _on_update(self, info, target, why):
+        """Say how the update went, and offer to start it. Tk thread."""
+        self.updating = False
+        if why is not None:
+            self.say(f"update: not made ({why})")
+            self.warn(update_failed_text(why))
+            return
+        self.say(f"update: build {info['build']} is in {target}")
+        what = self._choice_dialog(
+            "Update ready", update_ready_text(info["build"], target),
+            (("Start", "start", True), ("Show the folder", "show", False),
+             ("Later", None, False)))
+        if what == "start":
+            self._start_install(target)
+        elif what == "show":
+            try:
+                subprocess.Popen(["explorer", "/select,",
+                                  os.path.join(target, LAUNCHER_EXE)])
+            except OSError as exc:
+                self.say(f"update: could not open the folder ({exc})")
+
+    def _start_install(self, target: str):
+        """Close this launcher and start the one in `target`, as a
+        double-click would. Refused while a game is running, since closing
+        the launcher under it abandons whatever has not been sent."""
+        exe = os.path.join(target, LAUNCHER_EXE)
+        if running_clients(self.client_exes):
+            self.warn("A game is still running.\n\nClose it first, then "
+                      "press Start again from the launcher in\n\n" + target)
+            return
+        self.stop_multiplayer("updating to a new build")
+        self.stop_ai("updating to a new build")
+        for srv in self.servers:
+            try:
+                srv.shutdown()
+            except Exception:
+                pass
+        try:
+            os.startfile(exe)               # noqa: S606, Windows only
+        except (OSError, AttributeError) as exc:
+            self.warn(f"Could not start the new build:\n\n{exc}\n\nIt is in"
+                      f"\n{target}")
+            return
+        self.say(f"update: started {exe}")
+        self.root.destroy()
 
     def start_ai(self, mode):
         """Start the opponent, and say clearly if there is not one to start."""
@@ -5322,6 +5860,14 @@ class Launcher:
                     self._on_mp_warning(store, lines)
                 elif isinstance(msg, tuple) and msg and msg[0] == "__mp_refused__":
                     self.warn(msg[1])
+                elif isinstance(msg, tuple) and msg and msg[0] == "__log_offer__":
+                    self._on_log_offer(msg[1])
+                elif isinstance(msg, tuple) and msg and msg[0] == "__log_sent__":
+                    _tag, reply, err, path = msg
+                    self._on_log_sent(reply, err, path)
+                elif isinstance(msg, tuple) and msg and msg[0] == "__update__":
+                    _tag, info, target, why = msg
+                    self._on_update(info, target, why)
                 else:
                     self.say(msg)
         except queue.Empty:
