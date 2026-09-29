@@ -28,6 +28,9 @@ from ctypes import wintypes
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 
+# No bytecode for trigger_save: Defender quarantines its .pyc as
+# Exploit:Python/Leivion.C. See game_cycle.import_without_bytecode.
+sys.dont_write_bytecode = True
 from trigger_save import find_pid
 
 user32 = ctypes.WinDLL('user32', use_last_error=True)
