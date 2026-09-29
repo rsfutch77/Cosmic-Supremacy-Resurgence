@@ -95,12 +95,13 @@ published turn, the list of who has submitted, and the archive.** That is the
 Games tab's view of a galaxy it has not joined, so a launcher can show a galaxy
 before its player is in it.
 
-**Nothing writes `seats` yet.** Seat binding is J4's, and until it exists a
-galaxy has no seats and no player can submit through this door, which is a real
-gap rather than a detail: the operator binds them by hand or sets
-`seat_claim: 'first-use'` on the galaxy document, which lets a uid take an
-unheld civ from the roster on its first submission and holds it to that from
-then on. A read never takes a seat, so browsing a galaxy is not joining it.
+**Three things write `seats`.** A granted join binds the new civ to the uid
+that asked, in the same write as the roster (`joins.commit`); the operator
+binds or moves one with `server/dev_tools/seat_tool.py`; and a galaxy with
+`seat_claim: 'first-use'` on its document lets a uid take an unheld civ from
+the roster on its first submission and holds it to that from then on. A
+reclaim leaves the uid's entry in place, so a write from it can be refused
+saying the seat was reclaimed rather than that it never existed. A read never takes a seat, so browsing a galaxy is not joining it.
 First use is a land grab among strangers and is off by default for that reason. Neither is
 identity; Google login is, and H4 says so.
 """
@@ -435,6 +436,25 @@ def seat_of(doc: dict, uid: str):
     return (doc.get('seats') or {}).get(uid)
 
 
+def reclaimed_refusal(store, doc: dict, civ: str) -> Refused:
+    """The refusal for writing as a civ that is no longer on the roster.
+
+    Names the turn and the missed count when the galaxy recorded a reclaim, so
+    the player reads why the seat went rather than that it never existed.
+    """
+    rec = (doc.get(turn_store.RECLAIMED_KEY) or {}).get(civ)
+    if rec is None:
+        return Refused(403, f'{civ} is no longer on the roster of '
+                            f'{store.galaxy}')
+    text = f'{civ} was reclaimed in {store.galaxy}'
+    if rec.get('turn') is not None:
+        text += f' at turn {rec["turn"]}'
+    if rec.get('missed'):
+        text += f' after {rec["missed"]} missed turns in a row'
+    return Refused(403, text + '; the seat is no longer on the roster. Ask to '
+                               'join again to play.')
+
+
 def claim_seat(store, doc: dict, uid: str, civ: str) -> str:
     """Bind an unheld civ to this uid, when the operator allowed it.
 
@@ -451,6 +471,8 @@ def claim_seat(store, doc: dict, uid: str, civ: str) -> str:
         raise Refused(403, f'no seat in {store.galaxy} is bound to this '
                            f'sign-in')
     if civ not in list(doc.get('civs') or []):
+        if civ in (doc.get(turn_store.RECLAIMED_KEY) or {}):
+            raise reclaimed_refusal(store, doc, civ)
         raise Refused(403, f'{civ} is not a civ in {store.galaxy}')
     from google.cloud import firestore
 
@@ -485,6 +507,10 @@ def seat_or_refuse(store, doc: dict, uid: str, civ: str,
     whoever browsed first rather than to whoever played.
     """
     held = seat_of(doc, uid)
+    # A write only. A reclaimed player may still read back what they handed in
+    # before the reclaim, and refusing that would explain nothing more.
+    if claim and held is not None and held not in (doc.get('civs') or []):
+        raise reclaimed_refusal(store, doc, held)
     if held is None and claim:
         held = claim_seat(store, doc, uid, civ)
     if held is None:

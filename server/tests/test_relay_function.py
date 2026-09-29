@@ -855,6 +855,20 @@ def run_joins(referee, galaxy, call, ids):
     check('and the referee sees both requests',
           sorted(r['key'] for r in referee.join_requests()),
           sorted([uid_c, uid_d]))
+    # The seat map still names Third for this uid, as a reclaim leaves it.
+    # Fails if a write from it were taken, which the referee would then drop
+    # for not being on the roster, or refused as if the seat never existed.
+    referee.update_state({turn_store.RECLAIMED_KEY: {
+        'Third': {'turn': 8, 'missed': 12}}})
+    now_turn = referee.current()[0]
+    code, _h, body = call('POST', f'/submission/{now_turn}/Third', token_c,
+                          sp.encode_save(make_blob(now_turn)))
+    check('a reclaimed seat may not submit', code, 403)
+    check('and is told it was reclaimed, when and after how many misses',
+          all(w in body.decode('utf-8', 'replace')
+              for w in ('reclaimed', 'turn 8', '12 missed', 'join again')),
+          True)
+    referee.update_state({turn_store.RECLAIMED_KEY: {}})
     referee.update_state({'civs': ['DemoPlayer', 'Neighbor', 'Third']})
 
     print('what a join request may not be')
