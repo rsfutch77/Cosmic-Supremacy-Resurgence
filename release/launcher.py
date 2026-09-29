@@ -2808,6 +2808,231 @@ def log_not_sent_text(why, path) -> str:
             "attach it to a bug report instead.")
 
 
+# ── Updating to the current release (L3) ──────────────────────────────────────
+# A galaxy's `min_build` refuses an older launcher (L2), and the refusal offers
+# Update. That reads the latest GitHub release, downloads its zip, checks it
+# against the SHA-256 the release notes publish, and unpacks it beside this
+# install as its own folder, which is the layout a player who downloads by
+# hand ends up with.
+#
+# **The data directory goes with it.** It is `data\` inside the install, and it
+# holds `fb_identity.json`, the anonymous sign-in every seat is bound to (J4).
+# A new folder with an empty `data\` is a new sign-in, and the relay refuses
+# it the player's own seat as held by another. So the files that make this
+# install who it is are copied into the new one before it is offered, and
+# nothing else: logs and captured saves stay where they are.
+#
+# **Starting it is the player's click.** The new launcher is started through
+# ShellExecute, as double-clicking it would be, and every executable the zip
+# carries is given the mark a browser download gets (`Zone.Identifier`, zone
+# 3), so SmartScreen and the antivirus treat it as the download it is rather
+# than as a file this launcher wrote. This launcher shuts its own server down
+# first, since the new one needs the same port.
+#
+# A launcher cannot replace its own running executable, so the old folder is
+# left in place; the box says it can be deleted once the new one works.
+RELEASES_API = ("https://api.github.com/repos/rsfutch77/"
+                "Cosmic-Supremacy-Resurgence/releases/latest")
+LAUNCHER_EXE = "CosmicSupremacyLauncher.exe"
+
+# What the new install is given from this one's data directory.
+UPDATE_CARRIED = (IDENTITY_FILE, "fb_identity.json", JOINED_FILE, MP_CONFIG)
+
+# The largest download taken. A release is about 30 MB.
+UPDATE_MAX_BYTES = 200 * 1024 * 1024
+
+_SHA_RE = re.compile(r"\b[0-9a-fA-F]{64}\b")
+
+
+class UpdateRefused(Exception):
+    """An update that could not be made, with a sentence for the player."""
+
+
+def update_possible() -> bool:
+    """Whether this launcher is a packaged release that can update itself.
+    A checkout is updated with git, and its folder is not a release's."""
+    return bool(getattr(sys, "frozen", False))
+
+
+def release_info(doc) -> dict:
+    """What an update needs from a GitHub `releases/latest` answer.
+
+    `{"tag", "build", "name", "url", "size", "sha256"}`. The zip is the first
+    asset ending in `.zip`. The digest is the one 64-hex-digit string in the
+    notes, or of several the one nearest the zip's name, and None when the
+    notes carry none.
+    """
+    if not isinstance(doc, dict):
+        raise UpdateRefused("the release listing could not be read")
+    tag = str(doc.get("tag_name") or "")
+    assets = [a for a in (doc.get("assets") or []) if isinstance(a, dict)
+              and str(a.get("name") or "").lower().endswith(".zip")]
+    if not assets:
+        raise UpdateRefused(f"the current release {tag} has no download "
+                            "attached yet")
+    asset = assets[0]
+    body = str(doc.get("body") or "")
+    found = list(_SHA_RE.finditer(body))
+    sha = None
+    if len(found) == 1:
+        sha = found[0].group(0).lower()
+    elif found:
+        at = body.find(str(asset["name"]))
+        if at >= 0:
+            sha = min(found, key=lambda m: abs(m.start() - at)).group(0).lower()
+    return {"tag": tag, "build": tag.lstrip("vV"),
+            "name": str(asset["name"]),
+            "url": str(asset.get("browser_download_url") or ""),
+            "size": asset.get("size"), "sha256": sha}
+
+
+def fetch_release(api: str = RELEASES_API, timeout: float = 20.0) -> dict:
+    """The latest release, read from GitHub. One unauthenticated GET."""
+    import urllib.request
+    req = urllib.request.Request(api, headers={
+        "Accept": "application/vnd.github+json",
+        "User-Agent": "CosmicSupremacyLauncher"})
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return release_info(json.loads(resp.read()))
+
+
+def download_release(info: dict, dest_dir: str, cap: int = UPDATE_MAX_BYTES,
+                     timeout: float = 60.0, progress=None) -> str:
+    """Download the release zip into `dest_dir` and check it. Returns the path.
+
+    A download over `cap`, of another size than the release lists, or with
+    another digest than the notes publish is deleted and refused.
+    """
+    import hashlib
+    import urllib.request
+    if not str(info.get("url") or "").startswith(("https://", "http://")):
+        raise UpdateRefused("the release names no download")
+    os.makedirs(dest_dir, exist_ok=True)
+    path = os.path.join(dest_dir, os.path.basename(info["name"]))
+    part = path + ".part"
+    digest = hashlib.sha256()
+    got = 0
+    req = urllib.request.Request(info["url"], headers={
+        "User-Agent": "CosmicSupremacyLauncher"})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp, \
+                open(part, "wb") as fh:
+            while True:
+                chunk = resp.read(1 << 16)
+                if not chunk:
+                    break
+                got += len(chunk)
+                if got > cap:
+                    raise UpdateRefused("the download is larger than any "
+                                        "release should be")
+                digest.update(chunk)
+                fh.write(chunk)
+                if progress:
+                    progress(got, info.get("size"))
+        size = info.get("size")
+        if _whole(size) and size != got:
+            raise UpdateRefused(f"the download stopped at {got:,} of "
+                                f"{size:,} bytes")
+        if info.get("sha256") and digest.hexdigest() != info["sha256"]:
+            raise UpdateRefused("the download does not match the checksum "
+                                "the release publishes")
+        os.replace(part, path)
+    except BaseException:
+        try:
+            os.remove(part)
+        except OSError:
+            pass
+        raise
+    return path
+
+
+def _mark_downloaded(path: str, url: str) -> None:
+    """Give a file the mark a browser download carries. NTFS only; a volume
+    with no alternate streams is left alone."""
+    try:
+        with open(path + ":Zone.Identifier", "w", encoding="ascii") as fh:
+            fh.write(f"[ZoneTransfer]\nZoneId=3\nHostUrl={url}\n")
+    except OSError:
+        pass
+
+
+def install_release(zip_path: str, install_dir: str, data_dir: str,
+                    url: str = "") -> str:
+    """Unpack a release zip beside `install_dir` and carry this install's
+    identity into it. Returns the new install's folder.
+
+    The zip holds one folder, the release's own name. It is unpacked under a
+    temporary name and renamed into place, so an interrupted unpack never
+    leaves a folder that looks finished. A folder of that name that already
+    exists is refused rather than overwritten.
+    """
+    import shutil
+    import zipfile
+    parent = os.path.dirname(os.path.abspath(install_dir))
+    try:
+        zf = zipfile.ZipFile(zip_path)
+    except (OSError, zipfile.BadZipFile) as exc:
+        raise UpdateRefused(f"the download is not a zip ({exc})")
+    with zf:
+        names = [n.replace("\\", "/") for n in zf.namelist()]
+        for n in names:
+            if n.startswith("/") or ":" in n or ".." in n.split("/"):
+                raise UpdateRefused("the download names a file outside its "
+                                    "own folder")
+        tops = {n.split("/", 1)[0] for n in names if n.strip("/")}
+        if len(tops) != 1:
+            raise UpdateRefused("the download is not laid out as a release")
+        top = tops.pop()
+        if f"{top}/{LAUNCHER_EXE}" not in names:
+            raise UpdateRefused("the download carries no launcher")
+        target = os.path.join(parent, top)
+        if os.path.normcase(os.path.abspath(target)) == \
+                os.path.normcase(os.path.abspath(install_dir)):
+            raise UpdateRefused("this launcher is already that release")
+        if os.path.exists(target):
+            raise UpdateRefused(f"a folder called {top} is already beside "
+                                "this one. Start the launcher in it, or move "
+                                "it away and try again.")
+        staging = os.path.join(parent, f".{top}.unpacking")
+        shutil.rmtree(staging, ignore_errors=True)
+        try:
+            zf.extractall(staging)
+            unpacked = os.path.join(staging, top)
+            new_data = os.path.join(unpacked, "data")
+            os.makedirs(new_data, exist_ok=True)
+            for name in UPDATE_CARRIED:
+                src = os.path.join(data_dir, name)
+                if os.path.isfile(src):
+                    shutil.copy2(src, os.path.join(new_data, name))
+            for root, _dirs, files in os.walk(unpacked):
+                for f in files:
+                    if f.lower().endswith(".exe"):
+                        _mark_downloaded(os.path.join(root, f), url)
+            os.replace(unpacked, target)
+        finally:
+            shutil.rmtree(staging, ignore_errors=True)
+    return target
+
+
+UPDATE_OFFER = ("\n\nUpdate downloads the current release and sets it up in "
+                "a folder beside this one, with your name and your seats.")
+
+
+def update_ready_text(build: str, target: str) -> str:
+    """What a player reads once the new build is unpacked."""
+    return (f"Build {build} is ready, in\n\n{target}\n\nYour name and your "
+            "seats in every galaxy come with it. Press Start to open it. "
+            "This window closes first, because the new one needs the same "
+            "connection.\n\nThe old folder is left where it is, and you can "
+            "delete it once the new one works.")
+
+
+def update_failed_text(why: str) -> str:
+    """What a player reads when the update could not be made."""
+    return (f"Could not update: {why}\n\nThe current release can be "
+            f"downloaded by hand from\n{UPDATE_URL}")
+
+
 # ── UI ────────────────────────────────────────────────────────────────────────
 BG      = "#050a1a"
 PANEL   = "#080f22"
@@ -2983,6 +3208,8 @@ class Launcher:
         # after a turn went wrong, and whether a log is on its way.
         self.mp_log_offered = False
         self.log_sending = False
+        # Whether an update to the current release is being downloaded.
+        self.updating = False
         # Whether the game client was up when the watcher last looked, so that
         # it closing clears the turn readout at once rather than at the next
         # poll, and whether the turn it was playing is still on its way to the
@@ -4171,7 +4398,7 @@ class Launcher:
             if problem:
                 self.say(f"join: build {build_id()} is below {g.id}'s minimum "
                          f"{state.get(MIN_BUILD_KEY)!r}")
-                self.warn(problem)
+                self._offer_update(problem)
                 return
             # Beside it, and ahead of the seat: the listing that offered this
             # Join is as old as the last refresh, and a galaxy closed since
@@ -4471,7 +4698,7 @@ class Launcher:
             if problem:
                 self.say(f"multiplayer: build {build_id()} is below this "
                          f"galaxy's minimum {state.get(MIN_BUILD_KEY)!r}")
-                self.warn(problem)
+                self._offer_update(problem)
                 return
             # Beside the build check and ahead of the roster, because a closed
             # galaxy is one of the reasons the roster would read wrong: it
@@ -4913,6 +5140,95 @@ class Launcher:
             os.startfile(path)              # noqa: S606, Windows only
         except (OSError, AttributeError) as exc:
             self.say(f"log: could not open {path} ({exc})")
+
+    # ── updating (L3) ──
+    def _offer_update(self, problem: str):
+        """The version gate's refusal, with Update on it. Tk thread.
+
+        A checkout cannot update itself, so it gets the refusal alone.
+        """
+        if not update_possible():
+            self.warn(problem)
+            return
+        what = self._choice_dialog("Update needed", problem + UPDATE_OFFER,
+                                   (("Update", "update", True),
+                                    ("Close", None, False)))
+        if what != "update":
+            return
+        if getattr(self, "updating", False):
+            self.say("update: already under way")
+            return
+        self.updating = True
+        self.say("update: reading the current release")
+        current = build_id()
+        install, data = app_dir(), self.data_dir
+
+        def work():
+            try:
+                info = fetch_release()
+                if not build_is_below(current, info["build"]):
+                    raise UpdateRefused(
+                        f"the newest release is {info['build'] or 'unnamed'}, "
+                        f"which is not newer than this build, {current}. The "
+                        "galaxy's operator needs to know.")
+                self.say_threadsafe(f"update: downloading {info['name']}")
+                zip_path = download_release(
+                    info, os.path.join(data, "updates"))
+                target = install_release(zip_path, install, data,
+                                         url=info["url"])
+                self.msgs.put(("__update__", info, target, None))
+            except Exception as exc:        # said to the player either way
+                why = str(exc) if isinstance(exc, UpdateRefused) else (
+                    f"{type(exc).__name__}: {exc}")
+                self.msgs.put(("__update__", None, None, why))
+
+        threading.Thread(target=work, daemon=True, name="update").start()
+
+    def _on_update(self, info, target, why):
+        """Say how the update went, and offer to start it. Tk thread."""
+        self.updating = False
+        if why is not None:
+            self.say(f"update: not made ({why})")
+            self.warn(update_failed_text(why))
+            return
+        self.say(f"update: build {info['build']} is in {target}")
+        what = self._choice_dialog(
+            "Update ready", update_ready_text(info["build"], target),
+            (("Start", "start", True), ("Show the folder", "show", False),
+             ("Later", None, False)))
+        if what == "start":
+            self._start_install(target)
+        elif what == "show":
+            try:
+                subprocess.Popen(["explorer", "/select,",
+                                  os.path.join(target, LAUNCHER_EXE)])
+            except OSError as exc:
+                self.say(f"update: could not open the folder ({exc})")
+
+    def _start_install(self, target: str):
+        """Close this launcher and start the one in `target`, as a
+        double-click would. Refused while a game is running, since closing
+        the launcher under it abandons whatever has not been sent."""
+        exe = os.path.join(target, LAUNCHER_EXE)
+        if running_clients(self.client_exes):
+            self.warn("A game is still running.\n\nClose it first, then "
+                      "press Start again from the launcher in\n\n" + target)
+            return
+        self.stop_multiplayer("updating to a new build")
+        self.stop_ai("updating to a new build")
+        for srv in self.servers:
+            try:
+                srv.shutdown()
+            except Exception:
+                pass
+        try:
+            os.startfile(exe)               # noqa: S606, Windows only
+        except (OSError, AttributeError) as exc:
+            self.warn(f"Could not start the new build:\n\n{exc}\n\nIt is in"
+                      f"\n{target}")
+            return
+        self.say(f"update: started {exe}")
+        self.root.destroy()
 
     def start_ai(self, mode):
         """Start the opponent, and say clearly if there is not one to start."""
@@ -5549,6 +5865,9 @@ class Launcher:
                 elif isinstance(msg, tuple) and msg and msg[0] == "__log_sent__":
                     _tag, reply, err, path = msg
                     self._on_log_sent(reply, err, path)
+                elif isinstance(msg, tuple) and msg and msg[0] == "__update__":
+                    _tag, info, target, why = msg
+                    self._on_update(info, target, why)
                 else:
                     self.say(msg)
         except queue.Empty:

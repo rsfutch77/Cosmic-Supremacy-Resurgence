@@ -2148,6 +2148,62 @@ is out of scope here.
   same either way, so the later version is a change to the launcher's UI and not
   to anything on the server.
 
+  **Built, 29 September 2026, headless and offline; not run on a packaged
+  build.** Both version gates, Play and Join, now answer a low build with an
+  **Update** button beside the refusal. Update reads GitHub's
+  `releases/latest` (one unauthenticated GET), downloads the first `.zip`
+  asset into `data\updates\`, and refuses it if it is over 200 MB, if its size
+  is not the one the release lists, or if its SHA-256 is not the one the
+  release notes publish (`build.ps1` prints it and the v0.1.0 notes carry it;
+  notes with no digest are not checked). It unpacks the zip's one folder
+  beside the current install under a temporary name and renames it into
+  place, and refuses a zip naming a path outside that folder, one with no
+  `CosmicSupremacyLauncher.exe`, and a target folder that already exists.
+  The box that follows says where the new build is, with **Start**, **Show
+  the folder** and **Later**.
+
+  **The data directory goes with it, and this was the part a download by
+  hand gets wrong.** `data\` is inside the install and holds
+  `fb_identity.json`, the sign-in every seat is bound to. A player who
+  unpacks a new release into a new folder starts it with an empty `data\`,
+  signs in as someone new, and is refused their own seat as held by another
+  sign-in (J4). So `identity.json`, `fb_identity.json`, `joined.json` and
+  `multiplayer.json` are copied into the new folder before it is offered,
+  and nothing else: logs and captured saves stay where they were. This also
+  means the "nearest safe equivalent" of opening the download page in the
+  browser and explaining the steps was not taken: those steps are the ones
+  that lose the seat.
+
+  **Starting a downloaded executable, and why it is done.** Start is the
+  player's click. The launcher stops its turn loop and its server first,
+  because the new one needs port 8888, then starts the new launcher through
+  ShellExecute (`os.startfile`), as a double-click would, and closes. A
+  running game refuses Start with a sentence. Every `.exe` unpacked is given
+  the `Zone.Identifier` mark a browser download carries (zone 3, with the
+  download URL), so SmartScreen and the antivirus see the files as the
+  download they are rather than as files this launcher wrote, which would
+  have skipped the check a player downloading by hand gets. The download is
+  over HTTPS from the same GitHub release a player would use, checked
+  against that release's published digest, so it is the same trust as the
+  manual path and no weaker. What it does not settle is M3's question from
+  the other side: a program that downloads and starts an executable is a
+  pattern some antivirus heuristics flag, and that is unmeasured. A
+  checkout, which is updated with git, gets the refusal alone.
+
+  A launcher cannot replace its own running executable, so the old folder
+  is left in place and the ready box says it can be deleted once the new one
+  works. Silent update is still deferred.
+
+  `release/tests/test_update.py`, 46 checks, serves a release listing and a
+  zip in `build.ps1`'s layout from a local server, and runs the refusal at
+  `min_build` 0.2.0 through Update and Start: the new launcher is started
+  after the loop and the server stop, and its `data\` holds this install's
+  sign-in. Each of 14 mutations fails a named check.
+
+  Left: a real release to update to. That needs a release published with a
+  `.zip` asset and its digest in the notes, and one packaged build below it
+  pointed at a galaxy with a `min_build` above it.
+
   **Done when:** a player below the minimum build reaches a current one without
   being told where to click by a human.
 
