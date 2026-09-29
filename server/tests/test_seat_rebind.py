@@ -216,12 +216,34 @@ def run(referee, galaxy, spec, player_a, player_b,
           sorted((doc.get(seat_tool.REBOUND_KEY) or {}).keys()),
           ['DemoPlayer', 'Player.One'])
 
+    print('binding a civ nobody holds')
+    # A granted join writes `joined` and not `seats`, so this is how a joiner
+    # on a galaxy with first-use off gets a seat at all.
+    uid_e, _ = rf.sign_up()
+    held = seat_map(referee)
+    code, text = tool(spec, 'bind', 'DemoPlayer', uid_e)
+    check('bind refuses a civ somebody holds',
+          code == 2 and f'held by {uid_b}' in text, True)
+    check('and moves nothing', seat_map(referee), held)
+    code, text = tool(spec, 'bind', 'Fourth', uid_e, '--dry-run')
+    check('a dry run of a bind writes nothing',
+          code == 0 and 'from nobody' in text and seat_map(referee) == held,
+          True)
+    code, text = tool(spec, 'bind', 'Fourth', uid_e)
+    check('bind seats a civ nobody held', code == 0 and 'seated Fourth' in text,
+          True)
+    check('and only that seat was added',
+          seat_map(referee), dict(held, **{uid_e: 'Fourth'}))
+    check('and the record says it came from nobody',
+          ((referee.doc.get().to_dict() or {}).get(seat_tool.REBOUND_KEY)
+           or {}).get('Fourth', {}).get('from', 'missing'), None)
+
     code, text = tool(spec, 'list')
     check('list shows each civ with its uid',
           f'DemoPlayer       {uid_b}' in text and f'Player.One       {uid_a}'
           in text, True)
-    check('and which seats were moved', text.count('rebound'), 2)
-    check('and the civ nobody holds', 'Fourth           (no seat)' in text,
+    check('and which seats were moved', text.count('rebound'), 3)
+    check('and the civ that was bound', f'Fourth           {uid_e}' in text,
           True)
 
 
