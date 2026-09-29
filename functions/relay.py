@@ -56,6 +56,8 @@ What it enforces, which is what rules could not
     before it is stored, so it never replaces the one it was sent over
   * a join request is filed under the uid in the token and not the one in the
     body, and a caller reads back only the request it lodged itself
+  * a launcher's log is capped before and while it is inflated, counted per
+    sign-in and per day, and never served back to anyone; see `_take_log`
 
 The one caller with no seat
 ----------------------------
@@ -924,6 +926,180 @@ def _own_join(store, doc, uid):
     return _json({'state': 'none'})
 
 
+# ── a launcher's log ─────────────────────────────────────────────────────────
+# A player whose turn failed, or who presses Send log, uploads the launcher's
+# redacted log here (plan item M1). It is stored as one Firestore document in
+# a collection of its own, beside the galaxies rather than in theirs, so the
+# listing never streams it. Nothing in this relay reads one back: the operator
+# reads them with administrator credentials through
+# `server/dev_tools/log_tool.py`, and no player can read any log, their own
+# included, through this door.
+#
+# The route is about no galaxy, like the listing, because a failure worth
+# reporting can come before a player is in one. The body names the galaxy,
+# civ and turn it was sent about, as claims the operator reads, and the uid is
+# the token's.
+LOG_ROUTE = '_logs'
+LOG_COLLECTION = f'{PREFIX}_logs'
+LOG_QUOTA_COLLECTION = f'{PREFIX}_log_quota'
+
+# `launcher.LOG_UPLOAD_CAP`, the size the launcher trims its redacted copy to,
+# plus room for the line that says what the trim dropped. The text arrives
+# zlib-compressed and is inflated under this, so a body built to expand is
+# refused while it is read. A measured 103,780-byte redacted log compresses to
+# 10,094 bytes, so a real upload is a small fraction of a Firestore document's
+# 1 MiB, and one that does not compress at all still fits.
+LOG_TEXT_MAX = 256 * 1024 + 1024
+
+# The ceiling on the request body, the compressed text in base64 inside a
+# small JSON object. Checked before anything is decoded.
+LOG_BODY_MAX = 512 * 1024
+
+# How many logs one sign-in may upload in a UTC day, and how many the project
+# takes in a day from everyone. Anonymous sign-up is open, so the per-sign-in
+# limit stops a launcher stuck in a loop and the daily total is what bounds
+# the spend: at 100 a day an upload is one quota read, two writes and one
+# small query, so at most about 200 writes a day of the 20,000 free.
+LOG_PER_UID_PER_DAY = int(os.environ.get('CS_RELAY_LOG_PER_UID', '5'))
+LOG_PER_DAY = int(os.environ.get('CS_RELAY_LOG_PER_DAY', '100'))
+
+# How long a log is kept. Each upload deletes up to `LOG_PRUNE_BATCH` logs
+# older than this, so the collection holds at most about 14 days of uploads:
+# 1,400 at the daily cap, about 14 MB at the measured size and under 360 MiB
+# if every one were incompressible. `expire_at` is written as well, for a
+# Firestore TTL policy should the operator set one.
+LOG_KEEP_DAYS = 14
+LOG_PRUNE_BATCH = 5
+
+# Why a log was sent. Anything else is recorded as `other`.
+LOG_REASONS = ('turn_failed', 'player')
+
+# The longest string any other field of the body may carry.
+LOG_FIELD_CHARS = 128
+
+
+def _wall() -> float:
+    """The calendar clock a log is stamped and counted by. A function so a
+    test can move it."""
+    return time.time()
+
+
+def _log_text(body: bytes) -> tuple:
+    """(request, text) from a log upload body, checked, or a refusal."""
+    import zlib
+    if len(body or b'') > LOG_BODY_MAX:
+        raise Refused(413, f'a log upload may be {LOG_BODY_MAX:,} bytes and '
+                           f'this one is {len(body):,}')
+    try:
+        req = json.loads(body or b'{}')
+    except ValueError:
+        raise Refused(400, 'a log upload is a JSON object')
+    if not isinstance(req, dict) or not isinstance(req.get('log'), str):
+        raise Refused(400, 'a log upload carries `log`, the text compressed '
+                           'with zlib and then in base64')
+    try:
+        packed = base64.b64decode(req['log'], validate=True)
+        inflate = zlib.decompressobj()
+        raw = inflate.decompress(packed, LOG_TEXT_MAX + 1)
+    except Exception:                                           # noqa: BLE001
+        raise Refused(400, 'the log is not zlib-compressed text in base64')
+    if len(raw) > LOG_TEXT_MAX or inflate.unconsumed_tail:
+        raise Refused(413, f'a log may be {LOG_TEXT_MAX:,} bytes once '
+                           f'inflated')
+    if not inflate.eof:
+        raise Refused(400, 'the log is not zlib-compressed text in base64')
+    return req, raw.decode('utf-8', 'replace')
+
+
+def _log_field(req: dict, key: str):
+    value = req.get(key)
+    if value is None:
+        return None
+    return str(value)[:LOG_FIELD_CHARS]
+
+
+def log_day(when: float) -> str:
+    """The UTC day a log is counted against, as `YYYY-MM-DD`."""
+    return datetime.datetime.fromtimestamp(
+        when, datetime.timezone.utc).strftime('%Y-%m-%d')
+
+
+def _take_log(uid: str, body: bytes):
+    """Store a launcher's redacted log, inside the per-sign-in and daily caps.
+
+    The count and the log are written in one transaction, so two uploads in
+    the same second cannot both take the last place. The text is compressed
+    again here rather than stored as it came, so every stored log is known
+    to inflate.
+
+    After the write, up to `LOG_PRUNE_BATCH` logs past `LOG_KEEP_DAYS` are
+    deleted. That is best effort: a failure there is not the uploader's.
+    """
+    import secrets
+    import zlib
+    from google.cloud import firestore
+
+    req, text = _log_text(body)
+    now = _wall()
+    day = log_day(now)
+    fs = store_for(CATALOG).fs
+    quota = fs.collection(LOG_QUOTA_COLLECTION).document(day)
+    stamp = datetime.datetime.fromtimestamp(now, datetime.timezone.utc)
+    log_id = (stamp.strftime('%Y%m%dT%H%M%SZ') + f'-{uid[:8]}-'
+              + secrets.token_hex(3))
+    ref = fs.collection(LOG_COLLECTION).document(log_id)
+    why = req.get('why')
+    record = {
+        'uid': uid,
+        'received_at': now,
+        'expire_at': stamp + datetime.timedelta(days=LOG_KEEP_DAYS),
+        'why': why if why in LOG_REASONS else 'other',
+        'build': _log_field(req, 'build'),
+        'galaxy': _log_field(req, 'galaxy'),
+        'civ': _log_field(req, 'civ'),
+        'turn': req['turn'] if isinstance(req.get('turn'), int) else None,
+        'bytes': len(text.encode('utf-8')),
+        'data': zlib.compress(text.encode('utf-8'), 6),
+    }
+
+    @firestore.transactional
+    def _put(tx):
+        counts = quota.get(transaction=tx).to_dict() or {}
+        mine = int((counts.get('uids') or {}).get(uid) or 0)
+        total = int(counts.get('total') or 0)
+        if mine >= LOG_PER_UID_PER_DAY:
+            raise Refused(429, f'this sign-in has sent {mine} logs today, '
+                               f'which is the most one may send in a day')
+        if total >= LOG_PER_DAY:
+            raise Refused(429, 'the operator has had as many logs today as '
+                               'can be kept; try again tomorrow')
+        tx.set(quota, {'total': total + 1, 'uids': {uid: mine + 1}},
+               merge=True)
+        tx.set(ref, record)
+
+    _put(fs.transaction())
+    _prune_logs(fs, now)
+    return _json({'id': log_id, 'bytes': record['bytes'],
+                  'stored': len(record['data'])})
+
+
+def _prune_logs(fs, now: float) -> int:
+    """Delete up to `LOG_PRUNE_BATCH` logs older than `LOG_KEEP_DAYS`."""
+    from google.cloud.firestore_v1.base_query import FieldFilter
+    cutoff = now - LOG_KEEP_DAYS * 86400
+    gone = 0
+    try:
+        old = fs.collection(LOG_COLLECTION).where(
+            filter=FieldFilter('received_at', '<', cutoff)).limit(
+                LOG_PRUNE_BATCH).stream()
+        for snap in old:
+            snap.reference.delete()
+            gone += 1
+    except Exception:                                           # noqa: BLE001
+        pass
+    return gone
+
+
 REFEREE_ONLY = ('only the referee publishes a turn, and it does not come '
                 'through here')
 
@@ -946,6 +1122,13 @@ def _route(method: str, path: str, headers: dict, body: bytes):
             verify(bearer(headers))
             return _json({'galaxies': listing()})
         raise Refused(404, 'the galaxy is the first part of the path')
+    if parts[0] == LOG_ROUTE:
+        # About no galaxy, and signed in like every other route.
+        uid = verify(bearer(headers))
+        if method == 'POST' and len(parts) == 1:
+            return _take_log(uid, body)
+        raise Refused(403, 'a log is sent here and read by the operator, and '
+                           'this door serves none back')
     galaxy, parts = parts[0], parts[1:]
     uid = verify(bearer(headers))
     store = store_for(galaxy)
