@@ -18,6 +18,10 @@ links to it in old forum posts and search results are dead. The archived site is
 rebuilt and served at **[cosmicresurgence.com](https://cosmicresurgence.com)**,
 use that one.
 
+**Not a developer? You can still help.** Vote on the next feature or suggest how
+the AI should play, see
+[Help without writing code](docs/DEVELOPMENT.md#help-without-writing-code).
+
 ---
 
 ## Play it
