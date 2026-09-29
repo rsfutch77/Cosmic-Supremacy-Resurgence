@@ -229,6 +229,113 @@ helper_calls = [c for c in ast.walk(ts_fn)
 check("game_cycle.trigger_save imports it through import_without_bytecode",
       len(helper_calls), 1)
 
+# ── build.ps1 keeps loose bytecode out and names what holds a file ────────────
+# The two functions are taken out of build.ps1 by PowerShell's own parser and
+# run on their own, so these checks exercise the script's code and not a copy.
+import subprocess                                               # noqa: E402
+
+
+def build_functions_command(command):
+    """A powershell command line running `command` with build.ps1's functions."""
+    script = (
+        "$ErrorActionPreference = 'Stop'\n"
+        "$ast = [System.Management.Automation.Language.Parser]::ParseFile("
+        f"'{BUILD_PS1}', [ref]$null, [ref]$null)\n"
+        "$ast.FindAll({ param($a) $a -is "
+        "[System.Management.Automation.Language.FunctionDefinitionAst] }, $false)"
+        " | ForEach-Object { . ([scriptblock]::Create($_.Extent.Text)) }\n"
+        + command)
+    return ["powershell", "-NoProfile", "-NonInteractive",
+            "-ExecutionPolicy", "Bypass", "-Command", script]
+
+
+NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+
+def run_build_functions(command):
+    """Run `command` with build.ps1's functions defined. Returns (rc, output)."""
+    p = subprocess.run(build_functions_command(command), capture_output=True,
+                       text=True, timeout=120, creationflags=NO_WINDOW)
+    return p.returncode, p.stdout + p.stderr
+
+
+def ps_quote(path):
+    return "'" + path.replace("'", "''") + "'"
+
+
+import shutil                                                   # noqa: E402
+
+stage = tempfile.mkdtemp(prefix="stage_")
+os.makedirs(os.path.join(stage, "game"))
+open(os.path.join(stage, "game", "readme.txt"), "w").close()
+rc, _ = run_build_functions(f"Assert-NoLooseBytecode {ps_quote(stage)}")
+check("a release folder with no bytecode passes the guard", rc, 0)
+
+os.makedirs(os.path.join(stage, "game", "__pycache__"))
+rc, out = run_build_functions(f"Assert-NoLooseBytecode {ps_quote(stage)}")
+check("a __pycache__ folder fails it", rc != 0 and "__pycache__" in out, True)
+shutil.rmtree(os.path.join(stage, "game", "__pycache__"))
+
+open(os.path.join(stage, "stray.pyc"), "wb").close()
+rc, out = run_build_functions(f"Assert-NoLooseBytecode {ps_quote(stage)}")
+check("a stray .pyc fails it", rc != 0 and "stray.pyc" in out, True)
+shutil.rmtree(stage, ignore_errors=True)
+
+held_dir = tempfile.mkdtemp(prefix="held_")
+held = os.path.join(held_dir, "held.exe")
+with open(held, "wb") as fh:
+    fh.write(b"MZ")
+    fh.flush()
+    rc, out = run_build_functions(f"Get-FileHolders {ps_quote(held)}")
+    check("Get-FileHolders names this process while it holds the file",
+          f"({os.getpid()})" in out, True)
+rc, out = run_build_functions(f"Get-FileHolders {ps_quote(held)}")
+check("and not once it has let go", f"({os.getpid()})" in out, False)
+
+WAIT_REPORT = ("; \"released=$($r.Released) seconds=$($r.Seconds) "
+               "holders=$($r.Holders -join '|')\"")
+rc, out = run_build_functions(
+    f"$r = Wait-FilesReleased @({ps_quote(held)}) 5" + WAIT_REPORT)
+check("Wait-FilesReleased returns at once for a file nobody holds",
+      "released=True" in out and f"({os.getpid()})" not in out, True)
+
+with open(held, "rb"):
+    rc, out = run_build_functions(
+        f"$r = Wait-FilesReleased @({ps_quote(held)}) 1" + WAIT_REPORT)
+check("and gives up at its timeout on one that stays held",
+      "released=False" in out, True)
+check("and names the holder it waited on", f"({os.getpid()})" in out, True)
+
+# Let go part way through the wait, the way a scan finishes.
+import time                                                     # noqa: E402
+fh = open(held, "rb")
+proc = subprocess.Popen(
+    build_functions_command(
+        f"$r = Wait-FilesReleased @({ps_quote(held)}) 30" + WAIT_REPORT),
+    stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+    creationflags=NO_WINDOW)
+time.sleep(8)
+fh.close()
+out = proc.communicate(timeout=60)[0]
+m = re.search(r"seconds=([\d.]+)", out)
+check("and returns once a holder lets go mid-wait",
+      "released=True" in out and f"({os.getpid()})" in out, True)
+check("well before its timeout", m is not None and float(m.group(1)) < 25, True)
+shutil.rmtree(held_dir, ignore_errors=True)
+
+build_text = open(BUILD_PS1, encoding="utf-8-sig").read()
+guard_at = build_text.find("Assert-NoLooseBytecode $Stage")
+zip_at = build_text.find("Compress-Archive -Path $Stage")
+check("build.ps1 checks the release folder for bytecode before zipping it",
+      0 < guard_at < zip_at, True)
+wait_at = build_text.find("Wait-FilesReleased $staged")
+check("and waits for the staged executables to be released before that",
+      0 < guard_at < wait_at < zip_at, True)
+catch_at = build_text.find("catch", zip_at)
+check("and names the holders when the archive step is refused",
+      catch_at > 0 and "Get-FileHolders" in build_text[catch_at:catch_at + 600],
+      True)
+
 print()
 if fails:
     print("FAILED: " + ", ".join(fails))
