@@ -173,19 +173,25 @@ def test_the_window(stores):
     """The window's shape, which every count below comes out of.
 
     Fails if it stops following the deadline: a constant would hold a copy
-    across the moment a turn is published.
+    across the moment a turn is published, and a window that ignored which
+    side of the deadline it is on would either hold a copy past it or read
+    every few seconds through the hours before it, when nothing can change.
     """
     print('the window')
     now = time.time()
     h = relay.hold_for
     check('four hours from a deadline, the ceiling',
           h({'deadline': now + FOUR_HOURS}), relay.STATE_CEILING)
-    check('ten minutes out, thirty seconds',
-          round(h({'deadline': now + 600})), 30)
+    check('twenty seconds out, held up to the deadline and no further',
+          round(h({'deadline': now + 20})), 20)
     check('at the deadline, the floor', h({'deadline': now}),
           relay.STATE_FLOOR)
     check('ten seconds overdue, still the floor',
           h({'deadline': now - 10}), relay.STATE_FLOOR)
+    check('ten minutes overdue, thirty seconds',
+          round(h({'deadline': now - 600})), 30)
+    check('an hour overdue, the ceiling', h({'deadline': now - 3600}),
+          relay.STATE_CEILING)
     check('a ceiling of 0 turns it off', h({'deadline': now}, 0), 0.0)
 
 
@@ -214,14 +220,26 @@ def test_the_listing(stores, token):
     check('a caller with no token is still refused inside the window',
           relay.handle('GET', '/', {}, b'')[0], 401)
 
-    # One galaxy nearly due holds the whole listing to the floor, because a
-    # row held across a publish sends the Games page to a past turn.
+    # One galaxy nearly due holds the whole listing to its deadline, and one
+    # overdue holds it to the floor, because a row held across a publish sends
+    # the Games page to a past turn.
     stores[2].doc.set({'deadline': time.time() + 5}, merge=True)
+    CLOCK.move(relay.LISTING_SECONDS + 1)
+    costs(listed)
+    CLOCK.move(4)
+    cost, _ = costs(listed)
+    check('with a galaxy due in five seconds, held four seconds later',
+          cost, (0, 0))
+    CLOCK.move(1.5)
+    cost, _ = costs(listed)
+    check('and read again once that deadline has passed',
+          cost, (len(stores), 0))
+    stores[2].doc.set({'deadline': time.time() - 10}, merge=True)
     CLOCK.move(relay.LISTING_SECONDS + 1)
     costs(listed)
     CLOCK.move(relay.STATE_FLOOR + 0.1)
     cost, _ = costs(listed)
-    check('with a galaxy due in seconds the listing is held for the floor',
+    check('with a galaxy overdue the listing is held for the floor',
           cost, (len(stores), 0))
     stores[2].doc.set({'deadline': time.time() + FOUR_HOURS}, merge=True)
 

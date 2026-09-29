@@ -157,9 +157,10 @@ PRIVATE_FIELDS = (turn_store.JOINED_KEY,)
 # launcher following a galaxy polls `/state`, so without this the project's
 # Firestore reads grow with the number of launchers open; with it they grow
 # with the number of galaxies and instances, and a launcher costs a request and
-# no read. The window is shaped like `player_turn.poll_gap`: a twentieth of the
-# distance to the deadline, floored at STATE_FLOOR and capped at STATE_CEILING,
-# so it is shortest exactly where a turn is published. See the plan's H12.
+# no read. A copy is held up to the deadline and then for a twentieth of how
+# overdue the turn is, floored at STATE_FLOOR and capped at STATE_CEILING, so
+# it is shortest exactly where a turn is published. See `hold_for` and the
+# plan's H12.
 #
 # Only those routes. Every route that checks a seat, a closed galaxy or the
 # turn being played reads the document afresh, so what a player may do is
@@ -338,9 +339,13 @@ def catalog_rows() -> list:
 def hold_for(doc: dict, ceiling: float = None) -> float:
     """How long a copy of this galaxy's public face may be served.
 
-    Measured from its deadline on the wall clock, because that is the clock a
-    deadline is written in. A galaxy with no deadline is held for the ceiling,
-    since nothing is due to change in it.
+    Before the deadline a copy is held up to the deadline and no further,
+    because the referee publishes at or after it. Past the deadline the turn
+    can change at any moment, so the copy is held for a twentieth of how
+    overdue it is, which is the floor while the referee's tick is due and
+    backs off if the referee is down. Measured on the wall clock, because that
+    is the clock a deadline is written in. A galaxy with no deadline is held
+    for the ceiling, since nothing is due to change in it.
     """
     ceiling = STATE_CEILING if ceiling is None else ceiling
     if ceiling <= 0:
@@ -348,8 +353,9 @@ def hold_for(doc: dict, ceiling: float = None) -> float:
     deadline = (doc or {}).get('deadline')
     if deadline is None:
         return ceiling
-    distance = abs(float(deadline) - time.time())
-    return min(ceiling, max(STATE_FLOOR, distance / STATE_SHARE))
+    left = float(deadline) - time.time()
+    return min(ceiling, max(STATE_FLOOR,
+                            left if left > 0 else -left / STATE_SHARE))
 
 
 def listing() -> list:
@@ -358,7 +364,8 @@ def listing() -> list:
     The rows carry the turn each galaxy is on, and a launcher asks
     `/submissions` about that turn next. A row held across a publish sends it
     to a past turn, which is a bucket listing, so the listing takes the
-    shortest window of the galaxies in it.
+    shortest window of the galaxies in it: held to the soonest deadline, and
+    for the floor while any galaxy in it is overdue.
     """
     global _LISTING
     held = _LISTING
