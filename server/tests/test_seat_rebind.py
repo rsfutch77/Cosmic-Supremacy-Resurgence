@@ -217,8 +217,8 @@ def run(referee, galaxy, spec, player_a, player_b,
           ['DemoPlayer', 'Player.One'])
 
     print('binding a civ nobody holds')
-    # A granted join writes `joined` and not `seats`, so this is how a joiner
-    # on a galaxy with first-use off gets a seat at all.
+    # A civ seeded into the roster by hand, or one a join left unseated, gets
+    # its seat this way on a galaxy with first-use off.
     uid_e, _ = rf.sign_up()
     held = seat_map(referee)
     code, text = tool(spec, 'bind', 'DemoPlayer', uid_e)

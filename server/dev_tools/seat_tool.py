@@ -51,9 +51,11 @@ What it refuses
 A target that already holds this very civ changes nothing and says so.
 
 `bind` is the same write for a civ that no uid holds, and refuses a held one.
-A join granted at a boundary records the uid that asked under `joined` and
-does not write `seats`, so on a galaxy with first-use off a joiner is on the
-roster and cannot play until the operator binds them; `joined` names the uid.
+A join granted at a boundary binds its own seat (`joins.commit`), so `bind` is
+for the cases that leaves unseated: a referee killed between publishing the
+new civ and committing it, a civ seeded into the roster by hand, and a joiner
+whose sign-in was already playing another civ. `joined` names the uid that
+asked, and a request still waiting names it too.
 
 The last move of each seat is kept on the document under `seats_rebound`, which
 is not in the store's state allowlist and so is never served to a player.

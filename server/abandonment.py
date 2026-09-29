@@ -271,6 +271,13 @@ def reclaim_note(civ: str, missed: int, turn: int) -> list:
     ]
 
 
+def _holds(existing: list, lines: list) -> bool:
+    """Whether `lines` already appear in `existing`, in order and together."""
+    n = len(lines)
+    return bool(n) and any(existing[i:i + n] == lines
+                           for i in range(len(existing) - n + 1))
+
+
 def _append_note(store, civ: str, turn: int, lines, log=print) -> None:
     """Add to whatever note that civ already has for that turn.
 
@@ -280,8 +287,14 @@ def _append_note(store, civ: str, turn: int, lines, log=print) -> None:
     stays impossible if that ever stops being true.
     """
     try:
-        existing = store.note(civ, turn)
-        store.put_note(civ, turn, list(existing) + list(lines))
+        existing = list(store.note(civ, turn))
+        lines = list(lines)
+        if _holds(existing, lines):
+            # A referee rerun over a turn it already closed once writes the
+            # same note again, and a warning read twice in one note looks like
+            # two warnings.
+            return
+        store.put_note(civ, turn, existing + lines)
     except OSError as exc:
         # The same rule the referee applies to a refusal note: a note that
         # cannot be written is not worth losing a turn over.
@@ -333,13 +346,21 @@ def reclaim(store, civ: str, blob: bytes, turn: int, missed: int, log=print):
                    'ships': ships}
 
 
-def enforce(store, turn: int, blob: bytes, log=print):
+def enforce(store, turn: int, blob: bytes, log=print, new_turn: int = None):
     """Warn, reclaim, and hand back the blob to publish. The referee's seam.
 
     Called with the turn that has just been closed and the blob the tick
     produced for the next one, before `publish`. Before, because a reclaim
     changes that blob, and republishing a turn to change it afterwards would
     restart the clock on a turn players are already holding.
+
+    A warning is written on `new_turn`, the turn the player is served next,
+    and not on the turn they missed. A launcher reads the note of a turn it is
+    playing, and a player who missed a turn played none of the turns a note on
+    the missed one would sit on, so it would be read by nobody. Each turn's
+    note then carries one warning, the count as that turn opened. `new_turn`
+    defaults to the turn number the blob carries, and a blob no later than
+    `turn` puts the warning on `turn`.
 
     Everything here is skipped for a closed galaxy. Nobody is required to play
     a galaxy that has ended, and a run of the referee over one would otherwise
@@ -352,6 +373,11 @@ def enforce(store, turn: int, blob: bytes, log=print):
     if not warn and not reclaim_at:
         return blob
     limit = max(warn, reclaim_at) or None
+    if new_turn is None:
+        try:
+            new_turn = turn_store.turn_of(blob)
+        except Exception:                                   # noqa: BLE001
+            new_turn = None
 
     for civ in list(state.get('civs', [])):
         missed = missed_streak(store, civ, turn, limit=limit)
@@ -364,9 +390,11 @@ def enforce(store, turn: int, blob: bytes, log=print):
             # The wipe did not happen, so the warning is still the honest
             # thing to leave them.
         if warn and missed >= warn:
-            _append_note(store, civ, turn,
+            on = new_turn if new_turn is not None and new_turn > turn else turn
+            _append_note(store, civ, on,
                          warning_note(civ, missed, reclaim_at), log=log)
-            log(f'  abandonment: warned {civ}, {missed} missed turn(s)')
+            log(f'  abandonment: warned {civ}, {missed} missed turn(s), on '
+                f'turn {on}')
     return blob
 
 
