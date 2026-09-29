@@ -66,10 +66,11 @@ service cloud.firestore {
       }
     }
 
-    // J3 will add a join request path under beta/<galaxy>, written by the
-    // client and applied by the worker at a turn boundary. It is not written
-    // here because its shape is not decided, and a rule that guesses at a
-    // schema is a rule that will be wrong. It will need: create and update by
-    // the owning uid only, no delete, and a size cap on the claimed name.
+    // Everything else the beta keeps is written and read only through the
+    // relay's admin credentials, which these rules do not govern, and is
+    // denied to clients by the default above: join requests and answers under
+    // beta/<galaxy>/joins and joins_done, submissions and notes under
+    // beta/<galaxy>/submissions and notes (H13), and uploaded logs and their
+    // daily counts in beta_logs and beta_log_quota (M1).
   }
 }
