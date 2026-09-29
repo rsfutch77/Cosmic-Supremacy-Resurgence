@@ -4140,13 +4140,22 @@ class Launcher:
             self.log_btn.configure(text="show log")
 
     def on_close(self):
+        """Ask before quitting out from under a running game.
+
+        The warning is about the player's turn rather than about the local
+        server. It used to name the server and TestBed, which is the reason
+        this matters and not the thing a player can act on, and it only
+        described single player: in multiplayer the launcher is also the turn
+        loop, so quitting it with the game open abandons whatever has not been
+        sent. One sentence covers both, because in both the answer is the same
+        and it is the only one the player has.
+        """
         from tkinter import messagebox
         if running_clients(self.client_exes):
             if not messagebox.askokcancel(
                     "Quit launcher?",
-                    "A game is still running.\n\nClosing the launcher stops the "
-                    "local server, and TestBed needs it. Saving and loading "
-                    "will fail from that point on.\n\nClose anyway?"):
+                    "A game is still running.\n\nClose your client first to "
+                    "make sure your turn is saved.\n\nClose anyway?"):
                 return
         self.stop_multiplayer("the launcher is closing")
         self.stop_ai("the launcher is closing")
