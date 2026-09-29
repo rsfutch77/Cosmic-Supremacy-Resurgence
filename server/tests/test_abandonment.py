@@ -38,7 +38,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
 for d in (os.path.join(ROOT, 'server'),
           os.path.join(ROOT, 'server', 'dev_tools'),
-          os.path.join(ROOT, 'client', 'dev_tools')):
+          os.path.join(ROOT, 'client', 'dev_tools'),
+          os.path.join(ROOT, 'release')):
     if d not in sys.path:
         sys.path.insert(0, d)
 
@@ -351,6 +352,98 @@ def test_closed_galaxy_reclaims_nobody(tmp):
     check('and the blob is handed back', out is blob)
 
 
+def set_turn(blob, turn):
+    tree = sp.parse_blob(blob)
+    glob = next(tree[0].find('GLOB'))
+    out = bytearray(blob)
+    struct.pack_into('<I', out, glob.payload, turn)
+    return bytes(out)
+
+
+def close_turn(store):
+    """`referee.resolve_turn` with the engine stubbed to advance the turn."""
+    import referee
+    import player_turn
+
+    def fake_tick(blob, turns=1, secs=10, save_dir=None, log=print, **kw):
+        return set_turn(blob, turn_store.turn_of(blob) + 1)
+
+    real_tick, real_ready = referee.tick, player_turn.save_path_ready
+    referee.tick = fake_tick
+    player_turn.save_path_ready = lambda: (True, '')
+    try:
+        return referee.resolve_turn(store, log=lambda *a: None)
+    finally:
+        referee.tick, player_turn.save_path_ready = real_tick, real_ready
+
+
+def test_silent_player_run(tmp):
+    """K3's done-when, through the referee rather than around it.
+
+    One player submits every turn and the other never does, and the turns are
+    closed by `resolve_turn`, so the count, the notes and the reclaim are the
+    ones a live referee produces. What the silent player's launcher would read
+    is read the way it reads it: the note of the turn it is served, and the
+    refusal `launcher.roster_problem` builds from the state.
+    """
+    print('\na galaxy run with one player silent')
+    import launcher
+    root = os.path.join(tmp, 'silent_run')
+    store = TurnStore(root)
+    store.start(set_turn(sp.load_any(GALAXY), 1), civs=ROSTER,
+                turn_seconds=14400)
+    abandonment.set_thresholds(store, warn=2, reclaim=4)
+
+    notes = {}
+    while VICTIM in store.civs() and store.current()[0] < 12:
+        turn = store.current()[0]
+        store.submit('DemoPlayer', turn, store.turn_blob(turn))
+        new = close_turn(store)
+        notes[new] = list(store.note(VICTIM, new))
+        if new == 4:
+            # A referee rerun over turn 3, which it has already closed once.
+            abandonment.enforce(store, 3, store.turn_blob(4), new_turn=4,
+                                log=lambda *a: None)
+            rerun = list(store.note(VICTIM, 4))
+    last = store.current()[0]
+
+    check('the turns closed were the ones played', last, 5)
+    check('no warning on the turn opened after one miss', notes.get(2), [])
+    check('the turn opened after two misses carries the warning',
+          any('missed 2 turns' in line for line in notes.get(3) or []))
+    check('and it says how many turns are left',
+          any('2 more turn' in line for line in notes.get(3) or []))
+    check('the next turn carries the next count, once',
+          [line for line in notes.get(4) or []
+           if line.startswith('You have missed')],
+          ['You have missed 3 turns in a row.'])
+    check('the turn missed when the count reached the threshold carries no '
+          'copy, since nobody plays it', store.note(VICTIM, 2), [])
+    check('nobody else is warned',
+          [store.note('DemoPlayer', t) for t in range(1, last + 1)],
+          [[]] * last)
+
+    check('the fourth miss takes the seat', store.civs(), ['DemoPlayer'])
+    rec = store.reclaimed(VICTIM) or {}
+    check('and the state records when and after how many',
+          (rec.get('turn'), rec.get('missed')), (4, 4))
+    check('the archive of the turn that took it names the silent player '
+          'missing', VICTIM in (store.archive_record(4) or {}).get('missing',
+                                                             []))
+    problem = launcher.roster_problem(
+        VICTIM, store.civs(), launcher.reclaimed_seat(store.state(), VICTIM))
+    check('the launcher\'s refusal says the seat was taken back',
+          'took the seat' in (problem or ''))
+    check('at the turn and after the count that took it',
+          'at turn 4 after 4 missed turns' in (problem or ''))
+    check('CONTROL: a seat that was never reclaimed is refused as missing',
+          'has no seat' in (launcher.roster_problem(
+              'Stranger', store.civs(),
+              launcher.reclaimed_seat(store.state(), 'Stranger')) or ''))
+    check('a rerun of a turn already closed does not warn twice in one note',
+          rerun, notes.get(4))
+
+
 def main():
     if not os.path.exists(GALAXY):
         print(f'no fixture at {GALAXY}')
@@ -364,6 +457,7 @@ def main():
         test_reclaim(tmp)
         test_reclaim_in_a_full_galaxy(tmp)
         test_closed_galaxy_reclaims_nobody(tmp)
+        test_silent_player_run(tmp)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     print(f'\n{len(PASS)} passed, {len(FAIL)} failed')

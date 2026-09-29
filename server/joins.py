@@ -69,7 +69,30 @@ adding the name.
 
 So `apply` only changes bytes, `commit` runs after `publish` and does every
 durable write, and a referee killed between them leaves the recoverable half of
-that pair. It is not self-repairing and is deliberately not: the next boundary
+that pair.
+
+The seat, and why it is written with the roster
+------------------------------------------------
+A galaxy served through the relay also holds `seats`, `{uid: civ}`, which is
+what the relay checks before it lets a sign-in act as a civ (J4). A granted
+join binds the new civ to the uid that asked, so a joiner can play without the
+operator's `seat_tool.py bind` and nobody can claim the civ first under
+`seat_claim: first-use`.
+
+The seat goes into the same `update_state` merge as the roster, which on a
+Firebase galaxy is one document write. There is no moment at which the roster
+names the civ and no seat holds it, which is the window a first-use claim by a
+stranger would use, and no moment at which a seat names a civ the roster does
+not. A referee killed before that write leaves the case above, an empire on the
+board with no roster entry and no seat, and the operator's answer is the same
+two steps: add the name, and bind the uid from the request with `seat_tool.py
+bind`.
+
+Only a store that carries a seat map is given one. The directory store and the
+LAN service have no seat map because nothing on those transports checks a uid;
+writing one into their state would serve every player the uid of every other,
+which is what the relay keeps `seats` out of `/state` to prevent. `joined`
+records the uid on all three. It is not self-repairing and is deliberately not: the next boundary
 refuses the still-waiting request rather than seating whoever asked, because a
 rule that seats a name already in the galaxy hands an empire to anybody who
 types it in a galaxy whose roster was ever edited by hand.
@@ -147,6 +170,15 @@ VACATED = 'Vacated {oid}'
 UNNAMED = 'Unnamed'
 
 GRANTED, REFUSED = 'granted', 'refused'
+
+# The relay's seat map on a Firebase galaxy document, `{uid: civ}`. Not a state
+# field: `FirebaseTurnStore.state` leaves it out and the relay never serves it.
+SEATS_KEY = 'seats'
+
+# What a Firebase uid looks like, the same test `seat_tool.UID_RE` makes. A uid
+# is a map key under `seats`, so anything else could write outside the map.
+UID_CHARS = frozenset('ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz'
+                      '0123456789')
 
 
 # ── reading what is waiting ──────────────────────────────────────────────────
@@ -463,6 +495,92 @@ def apply(store, turn: int, new_turn: int, blob: bytes, log=print):
     return blob, outcomes
 
 
+# ── the seat ─────────────────────────────────────────────────────────────────
+def is_uid(uid) -> bool:
+    return isinstance(uid, str) and 0 < len(uid) <= 128 and \
+        set(uid) <= UID_CHARS
+
+
+def seat_map(store):
+    """`{uid: civ}` for a store that carries seats, or None for one that does
+    not.
+
+    Only a `FirebaseTurnStore` does. The class is looked up in `sys.modules`
+    rather than imported, because a store of that class can only exist once
+    `firebase_store` has been imported, and importing it here would pull the
+    Google client libraries into every referee that runs a folder galaxy.
+    """
+    fb = sys.modules.get('firebase_store')
+    if fb is None or not isinstance(store, fb.FirebaseTurnStore):
+        return None
+    snap = store.doc.get()
+    return dict(((snap.to_dict() or {}) if snap.exists else {})
+                .get(SEATS_KEY) or {})
+
+
+def seat_changes(seats: dict, roster, seated, log=print):
+    """(bind, drop) for the joins being committed. Pure.
+
+    `seats` is the seat map as it stands, `roster` the roster before this
+    commit, and `seated` the granted outcomes. `bind` is `{uid: civ}` to write
+    and `drop` the uids whose entry is removed.
+
+    Three rules, each about a seat somebody else could otherwise use:
+
+      * a uid that already holds a civ still on the roster keeps it and the new
+        civ is left unseated. The relay refuses a join from a seated sign-in,
+        so this is a first-use claim that landed between the request and the
+        boundary, and moving the uid would take a live empire off the player
+        playing it. The log says so and `seat_tool.py bind` finishes it.
+      * a uid holding a civ no longer on the roster, a reclaimed seat, is moved
+        to the new civ. That is a reclaimed player coming back.
+      * any other uid still holding the new civ's name loses that entry. The
+        name was free to take, so the entry is left over from a reclaim, and
+        left in place it would let the reclaimed sign-in play the newcomer's
+        empire.
+
+    An outcome with no uid, or one that is not a Firebase uid, is a request
+    lodged in a folder by name, and has no seat to bind.
+    """
+    live = set(roster)
+    bind, drop = {}, set()
+    for out in seated:
+        uid, civ = out.get('uid'), out['name']
+        if not is_uid(uid):
+            continue
+        if uid in bind:
+            log(f'  joins: {uid} was granted {bind[uid]} and {civ} at one '
+                f'boundary; {civ} is left unseated for the operator')
+            continue
+        held = seats.get(uid)
+        if held == civ:
+            continue
+        if held is not None and held in live:
+            log(f'  joins: {civ} is left unseated: the sign-in that asked for '
+                f'it already plays {held}, and a seat is not moved off a civ '
+                f'on the roster. `seat_tool.py bind` seats it')
+            continue
+        bind[uid] = civ
+        for other, name in seats.items():
+            if name == civ and other != uid:
+                drop.add(other)
+        live.add(civ)
+    return bind, sorted(drop - set(bind))
+
+
+def seat_fields(bind: dict, drop) -> dict:
+    """The `seats` merge for `update_state`, with each dropped uid deleted.
+
+    A nested map rather than dotted paths, because `set(..., merge=True)`
+    merges a nested map entry by entry and does not read dots as paths.
+    """
+    from google.cloud import firestore
+    fields = dict(bind)
+    for uid in drop:
+        fields[uid] = firestore.DELETE_FIELD
+    return {SEATS_KEY: fields}
+
+
 # ── committing ───────────────────────────────────────────────────────────────
 def append_note(store, civ: str, turn: int, lines, log=print) -> None:
     """Add to whatever note that civ already has for that turn.
@@ -549,8 +667,20 @@ def commit(store, turn: int, new_turn: int, outcomes, log=print) -> list:
         fields = {'civs': roster, JOINED_KEY: record}
         if taken != (store.reclaimed() or {}):
             fields[turn_store.RECLAIMED_KEY] = taken
+        # In the same write as the roster, so no reader sees one without the
+        # other. See the module docstring.
+        seats = seat_map(store)
+        bind, drop = ({}, []) if seats is None else seat_changes(
+            seats, state.get('civs', []), seated, log=log)
+        if bind or drop:
+            fields.update(seat_fields(bind, drop))
         store.update_state(fields)
         log(f'  joins: roster is now {roster}')
+        for uid, civ in bind.items():
+            log(f'  joins: seated {civ} on sign-in {uid}')
+        for uid in drop:
+            log(f'  joins: sign-in {uid} no longer holds {seats.get(uid)}, a '
+                f'seat left from before that name was reclaimed')
 
     for out in outcomes:
         if out['outcome'] == GRANTED:

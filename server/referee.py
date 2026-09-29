@@ -370,9 +370,11 @@ def resolve_turn(store: TurnStore, save_dir=None, log=print) -> int:
     # rewrites that blob: publishing first and correcting afterwards would
     # restart the clock on a turn players already hold. `turn` is the turn just
     # closed, not the new one, because that is the turn the miss is counted
-    # against. It never raises for an abandonment-shaped problem; a wipe it
-    # cannot do leaves the seat and is counted again next turn.
-    nxt = abandonment.enforce(store, turn, nxt, log=log)
+    # against. A warning is left on `new_turn`, since that is the turn the
+    # silent player is served next and the note a launcher reads. It
+    # never raises for an abandonment-shaped problem; a wipe it cannot do
+    # leaves the seat and is counted again next turn.
+    nxt = abandonment.enforce(store, turn, nxt, log=log, new_turn=new_turn)
 
     # Then seat whoever asked to join during the turn that just closed, on the
     # same blob and for the same reason: a join applied anywhere but here is

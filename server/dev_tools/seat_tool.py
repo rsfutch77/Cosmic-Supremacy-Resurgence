@@ -3,6 +3,7 @@ seat_tool.py , the operator's hand on a galaxy's seat map
 =========================================================
     python seat_tool.py firebase://cs-resurgence/sandbox list
     python seat_tool.py firebase://cs-resurgence/sandbox candidates
+    python seat_tool.py firebase://cs-resurgence/sandbox candidates --code Ab3dE9xQ
     python seat_tool.py firebase://cs-resurgence/sandbox rebind DemoPlayer <uid>
     python seat_tool.py firebase://cs-resurgence/sandbox rebind DemoPlayer <uid> --dry-run
     python seat_tool.py firebase://cs-resurgence/sandbox bind Newcomer <uid>
@@ -29,6 +30,13 @@ been refused on a fresh install is the unseated sign-in created and refreshed
 a few minutes ago. Sign-ins seated in another galaxy are marked, because a
 player who plays two galaxies is not the stranger being looked for.
 
+The launcher also shows a support code, the first eight characters of its uid,
+under its title and in the refusal a player meets when their seat is held by
+another sign-in. `candidates --code` narrows the listing to the uids starting
+with it, case-sensitive as a uid is, and says so when none match or several
+do. The code is not a credential: it names a sign-in, and a rebind still needs
+the operator's administrator credentials.
+
 Why rebind and not release
 --------------------------
 A release, deleting the seat and letting the next first-use claim take it, was
@@ -51,9 +59,11 @@ What it refuses
 A target that already holds this very civ changes nothing and says so.
 
 `bind` is the same write for a civ that no uid holds, and refuses a held one.
-A join granted at a boundary records the uid that asked under `joined` and
-does not write `seats`, so on a galaxy with first-use off a joiner is on the
-roster and cannot play until the operator binds them; `joined` names the uid.
+A join granted at a boundary binds its own seat (`joins.commit`), so `bind` is
+for the cases that leaves unseated: a referee killed between publishing the
+new civ and committing it, a civ seeded into the roster by hand, and a joiner
+whose sign-in was already playing another civ. `joined` names the uid that
+asked, and a request still waiting names it too.
 
 The last move of each seat is kept on the document under `seats_rebound`, which
 is not in the store's state allowlist and so is never served to a player.
@@ -330,20 +340,70 @@ def cmd_list(store, out) -> int:
     return 0
 
 
-def cmd_candidates(store, out, limit: int) -> int:
+def by_code(rows: list, code: str) -> list:
+    """The rows whose uid starts with a support code. Case-sensitive, as a
+    uid is."""
+    return [r for r in rows if r['uid'].startswith(code)]
+
+
+def cmd_candidates(store, out, limit: int, code: str = None) -> int:
+    if code is not None and not UID_RE.match(code):
+        raise SeatRefused(f'{code!r} is not a support code; a code is the '
+                          f'first characters of a uid, letters and digits')
     rows = candidates(store)
+    if code is not None:
+        return _by_code(store, out, rows, code)
     print(f'sign-ins holding no seat in {store.galaxy}, most recently active '
           f'first:', file=out)
     if not rows:
         print('  none', file=out)
     for r in rows[:limit]:
-        also = ', '.join(f'{c} in {g}' for g, c in r['elsewhere'])
-        print(f'  {r["uid"]}  created {_when(r["created"])}  last active '
-              f'{_when(r["last_active"])}' + (f'  plays {also}' if also
-                                               else ''), file=out)
+        print(_row_line(r), file=out)
     if len(rows) > limit:
         print(f'  ... and {len(rows) - limit} more', file=out)
     return 0
+
+
+def _row_line(r) -> str:
+    also = ', '.join(f'{c} in {g}' for g, c in r['elsewhere'])
+    return (f'  {r["uid"]}  created {_when(r["created"])}  last active '
+            f'{_when(r["last_active"])}' + (f'  plays {also}' if also else ''))
+
+
+def _by_code(store, out, rows, code) -> int:
+    """`candidates --code`: the sign-in a player's support code names.
+
+    The launcher shows the first characters of its uid as a support code, so a
+    player can read it out and the operator need not pick the stranger out by
+    timing. Exactly one match is the answer. None and several are each said
+    plainly, because a rebind to the wrong one of two locks a player out.
+    Exit status 0 for exactly one match and 1 otherwise, so a script can tell.
+    """
+    found = by_code(rows, code)
+    if len(found) == 1:
+        print(f'the sign-in with support code {code}, holding no seat in '
+              f'{store.galaxy}:', file=out)
+        print(_row_line(found[0]), file=out)
+        return 0
+    if not found:
+        held = [(u, c) for u, c in seats(galaxy_doc(store)).items()
+                if u.startswith(code)]
+        if held:
+            print(f'no unseated sign-in has support code {code}; the '
+                  f'sign-in with that code already holds '
+                  f'{", ".join(c for _u, c in held)} in {store.galaxy}',
+                  file=out)
+        else:
+            print(f'no sign-in has support code {code}. Codes are '
+                  f'case-sensitive; check it with the player, and that their '
+                  f'launcher has been started since it was shown.', file=out)
+        return 1
+    print(f'{len(found)} unseated sign-ins have a uid starting {code}, so '
+          f'the code does not say which; ask the player for more of it, or '
+          f'match by when they were last active:', file=out)
+    for r in found:
+        print(_row_line(r), file=out)
+    return 1
 
 
 def cmd_rebind(store, out, civ, uid, dry_run, auth_check,
@@ -378,6 +438,9 @@ def main(argv=None, out=None) -> int:
     c = sub.add_parser('candidates',
                        help='sign-ins with no seat here, newest activity first')
     c.add_argument('--limit', type=int, default=20)
+    c.add_argument('--code', help='only the sign-in whose uid starts with '
+                                  'this support code, as the launcher shows '
+                                  'it')
     for name, what in (('rebind', 'move a held seat to another uid'),
                        ('bind', 'seat a civ nobody holds on a uid')):
         r = sub.add_parser(name, help=what)
@@ -392,7 +455,7 @@ def main(argv=None, out=None) -> int:
         if args.cmd == 'list':
             return cmd_list(store, out)
         if args.cmd == 'candidates':
-            return cmd_candidates(store, out, args.limit)
+            return cmd_candidates(store, out, args.limit, code=args.code)
         return cmd_rebind(store, out, args.civ, args.uid, args.dry_run,
                           not args.no_auth_check, bind=args.cmd == 'bind')
     except (SeatRefused, ValueError) as exc:
