@@ -67,6 +67,10 @@ from turn_store import TurnStore, open_store
 # sees it.
 MAX_SUBMISSION_BYTES = 8 * 1024 * 1024
 
+# The referee runs unattended behind a scheduled task, and a console child
+# started without this is a window on the desktop at every tick.
+_NO_WINDOW = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
+
 
 def turn_of(blob: bytes) -> int:
     """The turn a blob is at, so the referee reports the engine's number
@@ -268,7 +272,8 @@ def tick(blob: bytes, turns: int = 1, secs: int = 10, work_dir=None,
     # a checkout job.
     r = subprocess.run([sys.executable, os.path.join(DEV, "advance_turns.py"),
                         str(turns), "--secs", str(secs)],
-                       capture_output=True, text=True, cwd=DEV)
+                       capture_output=True, text=True, cwd=DEV,
+                       creationflags=_NO_WINDOW)
     if r.returncode != 0:
         log(r.stdout + r.stderr)
         raise SystemExit("advance_turns failed")
