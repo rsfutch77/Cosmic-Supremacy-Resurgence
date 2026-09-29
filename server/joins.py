@@ -39,8 +39,9 @@ talking to, which is the same seam every other galaxy state crosses. J3 read
 the folder itself, so the beta galaxy, which is Firebase, could not take a join
 at all.
 
-The answer, which the launcher does not read yet, holds the request it answers,
-the outcome, and for a granted one the planet and system the player landed in.
+The answer, which the launcher reads to tell a refused player why, holds the
+request it answers, the outcome, and for a granted one the planet and system
+the player landed in.
 It is read back by key, never listed: a list of who is trying to join a galaxy
 is the enumeration F4 and J4 both refuse to hand a launcher.
 

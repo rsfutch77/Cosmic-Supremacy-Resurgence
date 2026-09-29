@@ -950,11 +950,11 @@ is out of scope here.
   Their Games row says "you have asked to join" forever, which is where this
   item started.
 
-  **And only a folder store can take a join at all.** `HttpTurnStore` and
-  `FirebaseTurnStore` have no join route, so the launcher raises
-  `JoinNotAccepted` against them. **The beta galaxy is Firebase.** The seam is
-  there, `joins.pending` asks a store for `join_requests()` when it has one, and
-  it is unexercised.
+  **All three stores take a join now.** The relay lodges a request in
+  Firestore (`POST /<galaxy>/join`) and serves the caller its own answer by
+  key, and `HttpTurnStore` and `FirebaseTurnStore` both carry `request_join`
+  and `join_answer`, so the launcher no longer raises `JoinNotAccepted` against
+  a Firebase galaxy. What had never reached a player, the refusal, is below.
 
   **The balance question is settled and mostly built.** The description above was
   wrong and is kept because a decision was taken on it: a joiner was not starting
