@@ -84,6 +84,12 @@ class Galaxy(typing.NamedTuple):
     needs the length to judge the lateness by. It comes out of the same state
     document the rest of the row does and costs no read of its own, which is
     the reason it is here rather than asked for separately.
+
+    `closed_reason` is the operator's sentence for a closed galaxy, and None
+    for any other, so a launcher can say why a galaxy ended from the listing it
+    already holds. It is dropped from a galaxy that is not closed, because a
+    store that reopens without clearing it would otherwise show a reopened
+    galaxy's old reason.
     """
     id: str
     name: str
@@ -94,6 +100,7 @@ class Galaxy(typing.NamedTuple):
     joined: bool
     store: str
     turn_seconds: int = None
+    closed_reason: str = None
 
     def as_dict(self) -> dict:
         return dict(self._asdict())
@@ -115,9 +122,11 @@ def _row(gid, name, status, state, player, spec):
         return Galaxy(gid, name, FORMING, None, None, 0, False, spec)
     civs = list(state.get('civs', []))
     status = state.get(turn_store.STATUS_KEY) or status
+    reason = (state.get(turn_store.CLOSED_REASON_KEY) if status == CLOSED
+              else None)
     return Galaxy(gid, name, status, state.get('turn'), state.get('deadline'),
                   len(civs), bool(player) and player in civs, spec,
-                  state.get('turn_seconds'))
+                  state.get('turn_seconds'), reason)
 
 
 class LocalGalaxyDirectory:

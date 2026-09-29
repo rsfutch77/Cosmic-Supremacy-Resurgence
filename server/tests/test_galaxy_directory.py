@@ -113,14 +113,23 @@ def run_sequence(d, label, started_id, forming_id):
           turn_store.open_store(d.galaxy(started_id).store).current()[0], 12)
 
     print(f'{label}: closing one')
-    d.set_status(started_id, CLOSED)
+    check(f'{label}: an open galaxy carries no closing reason',
+          d.galaxy(started_id).closed_reason, None)
+    d.set_status(started_id, CLOSED, reason='Season one is over.')
     check(f'{label}: a closed galaxy says so', d.galaxy(started_id).status,
           CLOSED)
+    check(f'{label}: and the row carries the operator\'s reason',
+          d.galaxy(started_id).closed_reason, 'Season one is over.')
+    check(f'{label}: in the listing too',
+          [g.closed_reason for g in d.galaxies() if g.id == started_id],
+          ['Season one is over.'])
     check(f'{label}: and is still listed, with its turn readable',
           d.galaxy(started_id).turn, 12)
     check(f'{label}: and its store still opens',
           d.store(started_id).current()[0], 12)
     d.set_status(started_id, OPEN)
+    check(f'{label}: reopening takes the reason off the row',
+          d.galaxy(started_id).closed_reason, None)
 
     rows = d.galaxies(player='Neighbor')
     return {g.id: g._replace(store=None) for g in rows}
@@ -148,6 +157,15 @@ def run_local(tmp, http_base=None):
     check('and it opens', bare.store('handmade').current()[0], 12)
 
     summary = run_sequence(d, 'local', 'sandbox', 'forming')
+
+    # A store that reopens without clearing the reason, as the HTTP store's
+    # `reopen` does, leaves it in the state. Fails if the row read it anyway.
+    import galaxy_directory
+    left = galaxy_directory._row('g', 'G', OPEN, {
+        'turn': 3, 'civs': [], turn_store.STATUS_KEY: OPEN,
+        turn_store.CLOSED_REASON_KEY: 'an old reason'}, None, 'spec')
+    check('local: a reason left in an open galaxy\'s state is not shown',
+          left.closed_reason, None)
 
     if http_base:
         print('local: a galaxy served over HTTP')
