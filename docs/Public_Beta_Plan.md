@@ -45,12 +45,21 @@ deleted, because the galaxy is in Firebase and the machine holds nothing that
 matters.
 
 **What the machine is doing right now.** A scheduled task, `CosmicSupremacy
-Referee`, is refereeing `firebase://cs-resurgence/h3check` at four-hour turns
-and has been since 01:46 on 28 September. `h3check` was made for the H3 reboot
-test and then became the rehearsal galaxy because it was the only Firebase
-galaxy and stopping it would have left nothing live to test against. It is
-still disposable: nothing depends on it, and the next real decision is what the
+Referee`, is refereeing `firebase://cs-resurgence/h3check`, listed as "Beta
+rehearsal", at four-hour turns and has been since 01:46 on 28 September. It was
+at turn 18 with no failures when this was written, one seat bound to the second
+test machine's anonymous uid. `h3check` was made for the H3 reboot test and
+then became the rehearsal galaxy because it was the only Firebase galaxy and
+stopping it would have left nothing live to test against. It is still
+disposable: nothing depends on it, and the next real decision is what the
 actual beta galaxy should be and whether it starts fresh.
+
+**Do not be alarmed by the task's Last Result**, which reads `-2147020576`
+while Status reads Running and the worker is healthy. That is left over from
+the task being deleted and re-registered on 28 September while an instance of
+it was running. The galaxy advancing and `worker_failures` being 0 are the
+facts; the task's result column is about a run that was interrupted
+administratively and says nothing about the referee.
 
 To point the referee somewhere else, write the task again with a different
 `-Store` and re-register it; `run_worker.ps1 -WriteTaskXml` prints the two
