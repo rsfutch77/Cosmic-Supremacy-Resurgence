@@ -680,7 +680,7 @@ is out of scope here.
 
 ## J. The lobby
 
-- [ ]~ **J1. A galaxy directory above the store.** `server/galaxy_directory.py`
+- [x] **J1. A galaxy directory above the store.** `server/galaxy_directory.py`
   holds `LocalGalaxyDirectory` and `FirebaseGalaxyDirectory` behind
   `open_directory(spec)`, mirroring `open_store`. 59 checks pass against both.
 
@@ -699,6 +699,17 @@ is out of scope here.
   **Still open:** the launcher half. Nothing in the UI reads this yet and
   `multiplayer.json` still names a store, which is J2's work.
 
+  **Done, 28 September 2026**, and by the hardest available route: a second
+  machine with no checkout listed `h3check` through the relay's directory,
+  opened its store from the row the listing gave it, and played a turn. No
+  config file on that machine named a galaxy; the launcher fell back to
+  `BETA_DIRECTORY`, which is the relay, exactly as a beta player's would.
+
+  A third implementation landed with it. `HttpGalaxyDirectory` sits behind the
+  same `open_directory(spec)` as the folder and Firebase ones, because
+  `FirebaseGalaxyDirectory` authenticates as the project and a player is not
+  the project. See H8.
+
   **Done when:** the launcher lists the sandbox from the directory and opens its
   store from what the directory gave it, with no galaxy path in any config file.
 
@@ -710,6 +721,18 @@ is out of scope here.
 
   `multiplayer.json` stops naming a galaxy. What the player has joined is written
   by the launcher, beside `identity.json`, rather than hand-edited.
+
+  **Most of it is done and the remaining word is "joins".** On 28 September a
+  second machine with no checkout listed galaxies in the launcher rather than
+  on a website, picked one, and played a turn with no downloaded galaxy file
+  and no config file naming a galaxy. That is the flow this item exists to
+  replace, gone.
+
+  What it did was take a seat in an existing roster under `seat_claim:
+  first-use`, which is not the same act as joining: a join is a request the
+  referee resolves at a turn boundary, and that path, J3, has never been
+  exercised from a machine that was not this one. Until it is, this reads
+  "a player played" rather than "a player joined and played".
 
   **Done when:** a player who has never opened a config file joins the sandbox
   and plays a turn.
