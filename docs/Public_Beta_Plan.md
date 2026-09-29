@@ -468,6 +468,40 @@ is out of scope here.
   refusals, the filtered fields, the row a directory builds from them, and a
   store opened from that row reading the same turn the row showed.
 
+- [ ] **H9. `has_submitted` is a bucket listing per poll, and it is the item
+  that caps how many players the beta can have.** The Games page asks it every
+  120 seconds for each joined galaxy. Over HTTP that is a Class A listing
+  operation each time: roughly **21,900 Class A operations a month from one
+  player with a launcher open**, against the **5,000 a month** H0 bought by
+  creating the bucket after February 2026. One player exceeds the whole
+  allowance more than four times over.
+
+  A `submitted` array on the galaxy document, written where the relay already
+  commits a submission, would ride the `/state` read the launcher already makes
+  and cost nothing extra. That is the operator's own steer, to prefer a cheap
+  Firestore field over a repeated bucket question, and this is the largest
+  instance of it left.
+
+  `abandonment.find_template` is the same shape and smaller: it downloads up to
+  ten whole turn blobs to find one with a free planet.
+
+  **Done when:** a launcher left open on a joined galaxy costs no Class A
+  operations beyond the reads it was already making, measured rather than
+  reasoned about.
+
+- [ ] **H10. The relay and the store keep separate copies of the submission
+  listing.** `functions/relay.py` has its own `_submitted_civs` and
+  `turn_store` has `submitted_civs`. They agree by inspection, not by a shared
+  call or a test, so the two can drift and the first sign would be a galaxy
+  disagreeing with itself about who has played.
+
+  `operator_view`'s allowlist does not carry `submitted_civs` either, which is
+  exactly the cheap accessor it wants and would want more once H9 makes it a
+  field rather than a listing.
+
+  **Done when:** one implementation answers both, or a test fails when they
+  disagree.
+
 - [x] **H6. A store fetches one submission, not all of them.** `player_turn.py`
   reached its own submission through `store.submissions(turn).get(civ)`, which
   lists and downloads every player's submission and throws all but one away. Free
@@ -1244,6 +1278,36 @@ is out of scope here.
   be found: the referee's machine name in a UNC store path, and bare occurrences
   of the account name outside a path.
 
+- [ ]~ **M3. Antivirus and the save path, which is real remote code injection.**
+  `trigger_save.py` uses `OpenProcess`, `VirtualAllocEx`, `WriteProcessMemory`
+  and `CreateRemoteThread` to make the client save on demand. That is textbook
+  injection and it is the only mechanism this path has, so a scanner objecting
+  is describing what the file does rather than making a mistake.
+
+  **Both halves measured, 28 September 2026, and both came back clean.**
+  Defender twice quarantined the **compiled bytecode** in a checkout
+  `__pycache__`, never the `.py` beside it; a frozen build carries no
+  `__pycache__` and no `.pyc` at all, checked directly against v0.1.3. And the
+  behavioural half, which an on-disk scan cannot answer: a packaged build took
+  a real multiplayer turn, the capture fired, the turn sent, and there was no
+  dialog, no quarantine and no interference. `trigger_save` is reached only
+  from the multiplayer turn loop, so a single-player save would have tested the
+  wrong path and come back clean for the wrong reason.
+
+  **What is still open is other people's machines.** That is one Defender
+  install with one configuration and no third-party AV in the way. A beta
+  report of "it will not save" belongs near the top of the list of things to
+  suspect.
+
+  **A dev-side fix that needs no exclusion, and is not done:** stop writing
+  bytecode for these tools, with `PYTHONDONTWRITEBYTECODE` or
+  `sys.dont_write_bytecode`, so the file a scanner objects to never exists. An
+  exclusion would also work and is worse, since it trains the habit and hides
+  the next thing.
+
+  **Done when:** the checkout stops producing the file that gets quarantined,
+  and a beta tester on a machine nobody here configured takes a turn.
+
 ---
 
 ## N. Operating it
@@ -1348,6 +1412,42 @@ is out of scope here.
   time. Capacity is not a constraint at one galaxy, and this is the number the
   second galaxy and the cloud offload get planned against. A 108-system galaxy
   has not been timed.
+
+- [ ] **N6. A launcher on the referee's own machine has to be told about the
+  port.** The worker keeps a `cs_server` on 8888 so captures have somewhere to
+  land. A launcher on the same machine finds the port held and refuses it,
+  correctly: nothing in the protocol can ask a running server where it writes,
+  and reusing one silently sent every turn to a folder the launcher never read.
+
+  The operator's way out is `adopt_server` in `multiplayer.json`, naming that
+  server's save directory. It works and is verified here. It is also a
+  hand-edited JSON key that a player has no reason to know exists, and every
+  beta player who referees and plays on one PC meets the refusal.
+
+  **A second shape of the same problem has no answer at all.** When a worker is
+  killed rather than stopped, its `cs_server` outlives it and goes on holding
+  the port. The worker recovers from that now, ending a leftover it recorded
+  the pid of once it has checked the pid was not reused. The launcher has no
+  equivalent and says only "port 8888 is held", which is where the operator got
+  stuck on 28 September after closing a console window. The launcher's version
+  is harder, since it has no status file naming a pid it started, but it can
+  read the holder's command line the way `is_our_cs_server` does and at least
+  say that the port belongs to a referee from this install.
+
+  **Done when:** a player who referees and plays on one machine never edits a
+  config file to do it, and a launcher meeting an abandoned `cs_server` says
+  what it is.
+
+- [ ] **N7. The referee flashes a console window on every tick.**
+  `server/referee.py:269` spawns `advance_turns.py` without `CREATE_NO_WINDOW`.
+  The client-side tools were fixed; this one is the referee's own. Checked
+  across the tree in September 2026: every other console-spawning site is
+  either a dev tool run by hand or the game's own window, which has to be
+  visible. On an unattended machine closing six turns a day it is six windows
+  appearing and vanishing, which is cosmetic until somebody clicks one.
+
+  **Done when:** a turn closes with nothing appearing on the desktop but the
+  game client.
 
 ---
 
