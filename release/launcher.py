@@ -2129,23 +2129,46 @@ HELD = "held"               # captured here, not in the store yet
 SENT = "sent"               # the store holds everything captured
 CAPTURE_FAILED = "failed"   # the last capture did not come back
 
+# How long the indicator stays up after the game closes and the last send
+# finishes. Without it the answer a player closed the game to get was never
+# drawn at all: the send completing is the same event as the indicator being
+# hidden, so the amber "sending your turn" was replaced by nothing and the
+# green "turn sent" existed only between two frames. Ten seconds is long
+# enough to read on the way past and short enough that it is gone before the
+# next turn arrives.
+CAPTURE_HOLD = 10.0
 
-def capture_readout(state, age: float):
+
+def capture_readout(state, age: float, client_open: bool = True):
     """(text, colour) for the capture indicator, or ("", colour) to hide it.
 
     `age` is how long ago the state was recorded. It is in the text for the two
     states where staleness is the thing worth knowing: "sent 4m ago" on a turn
     the player is still playing says the cadence is working, and the same line
     frozen at "sent 40m ago" says it is not.
+
+    **The colour answers "is my work safe", and what that means moves when the
+    client closes.** While the game is open, work held here is safe: it is on
+    disk, the player is still playing, and the upload is not due yet, so green.
+    Once the game is gone there is nothing left to do but send, so held stops
+    being good news and only sent is green. Colouring a held capture amber
+    during play was the launcher warning a player about a cadence working
+    exactly as designed, on a 4-hour turn, for two hours.
     """
-    if state == CAPTURING:
-        return "saving your turn…", WARN
-    if state == HELD:
-        return f"saved here {fmt_ago(age)}, not sent yet", WARN
-    if state == SENT:
-        return f"turn sent {fmt_ago(age)}", OK
     if state == CAPTURE_FAILED:
         return "could not save your turn", BAD
+    if client_open:
+        if state == CAPTURING:
+            return "saving your turn…", WARN
+        if state == HELD:
+            return f"saved {fmt_ago(age)}", OK
+        if state == SENT:
+            return f"turn sent {fmt_ago(age)}", OK
+    else:
+        if state == SENT:
+            return f"turn sent {fmt_ago(age)}", OK
+        if state in (HELD, CAPTURING):
+            return "sending your turn…", WARN
     return "", FAINT
 
 
@@ -2920,6 +2943,21 @@ class Launcher:
                              self.sort_desc, view)
         self._show_sort()
         self._show_source(rows)
+        # An empty table while the listing is in flight reads as a galaxy list
+        # with nothing in it, and the line above the table is not where
+        # somebody waiting for rows is looking. Said in the table, where the
+        # rows will be. `games_rows` is None only before the first listing
+        # lands, which is the one moment this is true.
+        if self.games_rows is None:
+            waiting = tk.Label(self.games_table,
+                               text="Please wait, loading galaxies…",
+                               bg=PANEL, fg=DIM, anchor="w",
+                               font=("Segoe UI", 9))
+            waiting.grid(row=1, column=0, columnspan=len(GALAXY_COLUMNS) + 1,
+                         sticky="w", pady=6)
+            self._cells.append(waiting)
+            self._show_hint(rows, view)
+            return
         for r, g in enumerate(rows, start=1):
             action = row_action(g, view.recs, view.own)
             # The rows lit are the ones that are this player's business: the
@@ -2963,7 +3001,11 @@ class Launcher:
             self.games_status.configure(
                 text="No galaxies are listed here yet.", fg=DIM)
         elif self.games_dir:
-            self.games_status.configure(text=str(self.games_dir), fg=FAINT)
+            # Labelled, because the beta's directory is a Cloud Run hostname
+            # with a project hash in it and a bare URL above a table reads as
+            # something gone wrong rather than as where the list came from.
+            self.games_status.configure(
+                text=f"Connected to: {self.games_dir}", fg=FAINT)
         else:
             self.games_status.configure(
                 text=f"{MP_CONFIG} names this galaxy, so no directory is "
@@ -3943,9 +3985,14 @@ class Launcher:
             # store and returns without emitting anything. Nothing superseded
             # it. While the final submission is still in flight there is
             # something worth saying, so that case keeps the indicator.
+            age = time.time() - when
             if self.mp_client_gone and not self.mp_sending:
-                state = None
-            self._show_capture(state, time.time() - when)
+                # Held, not hidden. The send finishing and the indicator
+                # disappearing used to be the same moment, so the one thing a
+                # player closes the game to find out was never on screen.
+                if age > CAPTURE_HOLD:
+                    state = None
+            self._show_capture(state, age, client_open=not self.mp_client_gone)
             if self.mp_client_gone:
                 # The turn number and the countdown are facts about a client
                 # that has gone. Holding them on screen until the next poll
@@ -4053,14 +4100,14 @@ class Launcher:
         if btn is not None and btn.cget("text") != text:
             btn.configure(text=text)
 
-    def _show_capture(self, state, age: float):
+    def _show_capture(self, state, age: float, client_open: bool = True):
         """Paint the capture indicator, or take it away when there is none.
 
         Packed and unpacked rather than blanked, so that a launcher with no
         turn loop running shows one dot and one status, which is what it had
         before any of this.
         """
-        text, colour = capture_readout(state, age)
+        text, colour = capture_readout(state, age, client_open)
         if not text:
             if self.cap_dot.winfo_ismapped():
                 self.cap_status.pack_forget()
@@ -4093,13 +4140,22 @@ class Launcher:
             self.log_btn.configure(text="show log")
 
     def on_close(self):
+        """Ask before quitting out from under a running game.
+
+        The warning is about the player's turn rather than about the local
+        server. It used to name the server and TestBed, which is the reason
+        this matters and not the thing a player can act on, and it only
+        described single player: in multiplayer the launcher is also the turn
+        loop, so quitting it with the game open abandons whatever has not been
+        sent. One sentence covers both, because in both the answer is the same
+        and it is the only one the player has.
+        """
         from tkinter import messagebox
         if running_clients(self.client_exes):
             if not messagebox.askokcancel(
                     "Quit launcher?",
-                    "A game is still running.\n\nClosing the launcher stops the "
-                    "local server, and TestBed needs it. Saving and loading "
-                    "will fail from that point on.\n\nClose anyway?"):
+                    "A game is still running.\n\nClose your client first to "
+                    "make sure your turn is saved.\n\nClose anyway?"):
                 return
         self.stop_multiplayer("the launcher is closing")
         self.stop_ai("the launcher is closing")

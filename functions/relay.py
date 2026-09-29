@@ -775,6 +775,17 @@ def _route(method: str, path: str, headers: dict, body: bytes):
             return _json(_submitted_civs(store, _turn_number(parts[1])))
         if len(parts) == 3 and parts[0] == 'submission':
             turn, civ = _turn_number(parts[1]), parts[2]
+            # A caller holding no seat at all has no submission, because the
+            # only way an object gets written is the ticket and commit pair and
+            # both of those need a seat. So 404 is the true answer and 403 was
+            # a wrong one, in the way that mattered most: under `first-use` a
+            # seat binds when a player submits, so before their first
+            # submission every player is seatless, and the turn loop asks this
+            # route whether they have already played before it serves them.
+            # Refusing it made a player's first turn on a galaxy impossible,
+            # which is the whole of the beta path.
+            if seat_of(doc, uid) is None:
+                raise Refused(404, f'no submission of yours for {turn}')
             seat_or_refuse(store, doc, uid, civ)
             name = store.submission_object(civ, turn)
             if not store.bucket.blob(name).exists():
@@ -790,6 +801,12 @@ def _route(method: str, path: str, headers: dict, body: bytes):
             return _json(record)
         if len(parts) == 3 and parts[0] == 'note':
             turn, civ = _turn_number(parts[1]), parts[2]
+            # Seatless is no note, for the reason the submission route gives.
+            # The turn loop survives a refusal here because it catches one, so
+            # this was not what broke a first turn; it is the same untruth and
+            # it is fixed the same way.
+            if seat_of(doc, uid) is None:
+                raise Refused(404, f'no note for you on turn {turn}')
             seat_or_refuse(store, doc, uid, civ)
             lines = store.note(civ, turn)
             if not lines:

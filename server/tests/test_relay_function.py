@@ -347,6 +347,28 @@ def run(referee, galaxy, base, player_a, player_b, player_c, anonymous, ids):
     check('nothing of theirs reached the store',
           referee.submission('DemoPlayer', 7), None)
 
+    # A player's first turn on a galaxy, which was impossible until 28
+    # September. The turn loop asks whether this civ has already played before
+    # it serves them, and under `first-use` a seat binds when a player submits,
+    # so at that moment every player is seatless. Refusing the question made
+    # the answer unreachable: to play you had to read your submission, to read
+    # it you needed a seat, and to get a seat you had to submit.
+    #
+    # Seatless is no submission rather than no entry, which is true and not a
+    # convenience: a submission object is only ever written by the ticket and
+    # commit pair, and both of those need a seat.
+    check('an unseated caller asking for its own submission is told there '
+          'is none, rather than refused',
+          player_c.submission('DemoPlayer', 7), None)
+    check('and the same for a note', player_c.note('DemoPlayer', 7), [])
+    # Fails if the fix had been "let anyone read anything": a caller that does
+    # hold a seat must still not read another civ's.
+    denied = refusal(player_a.submission, 'Neighbor', 7)
+    check('while a seated caller reading another civ is still refused',
+          status_of(denied), 403)
+    check('and told which civ it actually plays',
+          'DemoPlayer' in body_of(denied), True)
+
     print('a seated player submits')
     where = player_a.submit('DemoPlayer', 7, MINE)
     check('submit names where it landed',
@@ -480,9 +502,11 @@ def run(referee, galaxy, base, player_a, player_b, player_c, anonymous, ids):
     referee.doc.set({'seat_claim': 'first-use'}, merge=True)
     # Reading is not joining. Fails if a read could claim a seat, which under
     # first-use would hand the seat to whoever browsed the galaxy first rather
-    # than to whoever played it.
-    check('a read does not take a seat even when first use is allowed',
-          status_of(refusal(player_c.note, 'Third', 8)), 403)
+    # than to whoever played it. The read answers "nothing here" rather than
+    # refusing, because a seatless caller genuinely has no note; what this is
+    # about is the line below, that looking bound nothing.
+    check('a read answers empty rather than claiming',
+          player_c.note('Third', 8), [])
     check('and no seat was bound by the attempt',
           (referee.doc.get().to_dict().get('seats') or {}).get(uid_c), None)
     player_c.submit('Third', 8, MINE8)
