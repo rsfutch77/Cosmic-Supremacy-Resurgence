@@ -104,6 +104,22 @@ STARTING_PROGRESS = 0
 STARTING_FOOD_STORE = 0
 STARTING_FOOD_CAP = 600
 
+# The homeworld's facilities and the rest of its settled block, as a generation
+# writes them. Counted across 32 homeworlds at age 0.0 in the local blobs: every
+# one carries these three facilities, and all but two carry the two undecoded
+# values below, those two being earlier joiner outputs of this tool. See
+# `merge_orders.SETTLED_LEN` for the layout and what each field is.
+STARTING_FACILITIES = ((2, 1), (6, 1), (9, 1))
+STARTING_SETTLED_COUNTER = 1
+STARTING_SETTLED_LAST = 10
+
+# A homeworld's founding turn. Every homeworld read carries 0 and an age equal
+# to the turn, and every colony its real founding turn, so a joiner's capital
+# is written as a homeworld rather than as a colony founded today: whether the
+# engine reads founded-at-0 as "capital" is not known, and matching every
+# incumbent's capital is the reading that cannot be wrong about it.
+HOMEWORLD_FOUNDED = 0
+
 # Both research fields read this at generation, and picking a field overwrites
 # it, so it is the marker for "nothing chosen" rather than a field id.
 RESEARCH_UNSET = b"\xff\xff\xff\xff"
@@ -227,6 +243,12 @@ def planet_records(blob):
             "plpr_payload": plpr + 8, "plpr_end": plpr + 8 + pln,
         })
     return out
+
+
+def turn_of(blob):
+    """The turn number a blob carries, from GLOB payload +0."""
+    glob = next(sp.parse_blob(blob)[0].find("GLOB"))
+    return struct.unpack_from("<I", blob, glob.payload)[0]
 
 
 def civ_count_at(blob):
@@ -557,21 +579,22 @@ def starting_kit(blob, name, home_id, design_id, ships=STARTING_SHIPS,
     research topic, and the hulls. The design book is trimmed earlier, inside
     the clone, because that is where the new design ids are handed out.
 
-    **What it cannot put back, and what a joiner therefore still inherits.** A
-    homeworld `PLPR` is 240 bytes at generation and the arrays above account
-    for about a hundred of them; the rest carries the planet's stores, food and
-    facilities. A transplanted homeworld differs from a generated one at 17
-    offsets, so a homeworld taken out of a developed capital keeps that
-    capital's buildings and stockpiles.
+    **The homeworld `PLPR` is put back field by field, not replaced.** A
+    transplant once differed from a generated homeworld at 17 fixed offsets.
+    Read as fields they are the food pair, the facility list and the settled
+    block after `PROD`, and the offsets only looked scattered because the
+    facility list is variable length: a donor that has built one more facility
+    shifts everything after it by eight bytes. All three are reset here. The
+    founding turn and age are written as every incumbent homeworld reads, not
+    as a colony founded today; see `HOMEWORLD_FOUNDED`.
 
-    **Three of those seventeen are now put back**, the food pair at `+15` and
-    `+19`. They were found by an operator reading 104/1280 off a joined
-    galaxy's homeworld, which was its donor's eleven-citizen capital on a
-    seven-citizen world; a generated homeworld reads 0/600. The other fourteen
-    are `+177`, `+179` to `+188`, `+193`, `+207` and `+208`, and they are still
-    undecoded. A joiner does not match a generated civ there and does not match
-    its donor either, so something besides the clone is writing them and that
-    is worth knowing before they are reset to anything.
+    A whole generated `PLPR` is not copied in instead, because a planet record
+    carries fields that are uniform within a galaxy and differ between
+    galaxies, which `wipe_civ.pristine_planet` measured, so a template from
+    another galaxy would bring that galaxy's values with it.
+
+    What a joiner keeps from its donor on purpose is the rate pair at `+4` and
+    `+11`, which `make_multiplayer_galaxy.RATE_OFFSETS` names.
 
     Inside `OWNR`, `OWPR` grows from 138 bytes to 178 on a civ that has
     researched, and `CVTR`, `SERV`, `GOVS`, `ADMS`, `SPQS` and `USSE` are
@@ -622,6 +645,35 @@ def starting_kit(blob, name, home_id, design_id, ships=STARTING_SHIPS,
         log(f"  food {before[0]}/{before[1]} -> {want[0]}/{want[1]}")
         return mo.set_food(b, home_id, *want)
 
+    def facilities(b):
+        want = [tuple(p) for p in STARTING_FACILITIES]
+        before = mo.facilities_of(planet_plpr(b, home_id))
+        if before is None or before == want:
+            return b
+        log(f"  facilities {before} -> {want}")
+        return mo.set_facilities(b, home_id, want)
+
+    def settled(b):
+        now = mo.settled_of(b, home_id)
+        if now is None:
+            log("  settled block left alone: this homeworld has none")
+            return b
+        turn = turn_of(b)
+        want = {'pop': len(STARTING_JOBS),
+                'history': [0] * mo.SETTLED_HISTORY_LEN,
+                'counter': STARTING_SETTLED_COUNTER,
+                'age': float(turn - HOMEWORLD_FOUNDED),
+                'founded': HOMEWORLD_FOUNDED,
+                'last': STARTING_SETTLED_LAST}
+        changed = {k: (now[k], v) for k, v in want.items() if now[k] != v}
+        if now['founded_head'] != HOMEWORLD_FOUNDED:
+            changed['founded_head'] = (now['founded_head'], HOMEWORLD_FOUNDED)
+        if not changed:
+            return b
+        log("  settled block " + ", ".join(
+            f"{k} {a} -> {v}" for k, (a, v) in changed.items()))
+        return mo.set_settled(b, home_id, **want)
+
     def queue(b):
         fresh = empty_prod(b)
         if fresh is None:
@@ -655,6 +707,8 @@ def starting_kit(blob, name, home_id, design_id, ships=STARTING_SHIPS,
                        ("the recruitment rate", recruit),
                        ("the production points", progress),
                        ("the homeworld food", food),
+                       ("the homeworld facilities", facilities),
+                       ("the settled block", settled),
                        ("the production queue", queue),
                        ("the credit balance", money),
                        ("the research topic", research)):

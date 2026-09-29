@@ -330,6 +330,49 @@ PROGRESS_OFF = 23
 # value below is measured rather than computed.
 FOOD_STORE_OFF = 15
 FOOD_CAP_OFF = 19
+
+# A planet's facilities, as (type, count) pairs. They follow the military array
+# after one byte: a u32 count, that many pairs of u32, then four zero bytes.
+#
+# What supports the reading, across 627 owned planets in 94 local blobs: a
+# colony nobody has built on carries none; every homeworld at generation carries
+# types 2, 6 and 9 once each; and type 0 appears on played planets with counts
+# of 1, 2, 4, 5, 6, 7 and 8, which is something built more than once. The
+# h3check capital went from the three to four pairs between turns 11 and 18,
+# gaining (0, 1). What each type is called is not established.
+FACILITY_AFTER_MILITARY = 1
+FACILITY_RECORD = 8
+
+# The block between a colonised planet's `PROD` and its `ENLI`: 51 bytes, laid
+# out below as offsets from the end of `PROD`. Measured across the same 627
+# planets; a planet assigned an owner without being colonised, which only
+# synthetic test galaxies contain, carries a 35-byte block instead and none of
+# these fields.
+#
+# The colony's age is a float counting turns since it was founded, and the
+# founding turn is a u32 here and again at `PLPR+0`: h3check's colony #136
+# founded at turn 6 reads 6 in both places and an age of 5.0 at turn 11 and
+# 12.0 at turn 18, and every homeworld reads founded 0 and an age equal to the
+# turn. The population field equals the citizen count on every planet read, and
+# the seven u16 after it are earlier turns' populations, some carrying 0x1000,
+# all zero at generation. The counter at +16 and the value at +47 are not
+# decoded; a generated homeworld reads 1 and 10, and played planets drift from
+# both.
+#
+# Watched through three engine ticks on a joiner by `join_kit_acceptance`: the
+# age rose by one a turn, the history took the current population in at the
+# front each turn, the counter rose by one a turn while the population held and
+# fell back when the donor's grew, and the value at +47 was left alone.
+SETTLED_LEN = 51
+SETTLED_POP_OFF = 0             # u16
+SETTLED_HISTORY_OFF = 2         # SETTLED_HISTORY_LEN u16s
+SETTLED_HISTORY_LEN = 7
+SETTLED_COUNTER_OFF = 16        # u32, undecoded
+SETTLED_OWNER_OFF = 24          # u32, the owning civ's object id
+SETTLED_AGE_OFF = 28            # f32, turns since founded
+SETTLED_FOUNDED_OFF = 32        # u32, the turn it was founded
+SETTLED_LAST_OFF = 47           # u32, undecoded
+FOUNDED_OFF = 0                 # u32 at PLPR+0, the founding turn again
 PROD_HURRIED_OFF = 8            # PROD's own payload begins after its header
 CREDITS_AFTER_ID = 20           # past the object id, which is itself past
                                 # OWNR's length-prefixed name
@@ -1021,6 +1064,125 @@ def set_food(blob, planet_oid, store, capacity):
                              int(capacity) & 0xFFFF)
             return bytes(out)
     raise SystemExit(f'planet {planet_oid} not found')
+
+
+def _planet_plpr(blob, planet_oid):
+    """(tree, PLPR section) for one planet, or raise naming what is missing."""
+    tree = sp.parse_blob(blob)
+    glxy = next(tree[0].find('GLXY'))
+    for sola in (c for c in glxy.children if c.tag == b'SOLA'):
+        for sec in sola.find('PLNT'):
+            if struct.unpack_from('<I', blob, sec.payload)[0] != planet_oid:
+                continue
+            plpr = next(sec.find('PLPR'), None)
+            if plpr is None:
+                raise SystemExit(f'planet {planet_oid} has no PLPR')
+            return tree, plpr
+    raise SystemExit(f'planet {planet_oid} not found')
+
+
+def _facility_at(plpr):
+    """Offset of the facility count within a PLPR payload, or None."""
+    at, mil = military_of(plpr)
+    if at is None:
+        return None
+    c = at + 4 + len(mil) * POP_RECORD + FACILITY_AFTER_MILITARY
+    if c + 4 > len(plpr):
+        return None
+    n = struct.unpack_from('<I', plpr, c)[0]
+    if c + 4 + n * FACILITY_RECORD > len(plpr):
+        return None
+    return c
+
+
+def facilities_of(plpr):
+    """A planet's facilities as [(type, count)], or None."""
+    if plpr is None:
+        return None
+    c = _facility_at(plpr)
+    if c is None:
+        return None
+    n = struct.unpack_from('<I', plpr, c)[0]
+    return [struct.unpack_from('<II', plpr, c + 4 + i * FACILITY_RECORD)
+            for i in range(n)]
+
+
+def set_facilities(blob, planet_oid, pairs):
+    """Write a planet's facility list. Size changes with the pair count."""
+    tree, plpr = _planet_plpr(blob, planet_oid)
+    raw = bytes(blob[plpr.payload:plpr.end])
+    c = _facility_at(raw)
+    if c is None:
+        raise SystemExit(f'planet {planet_oid} has no readable facility list')
+    n = struct.unpack_from('<I', raw, c)[0]
+    body = (raw[:c] + struct.pack('<I', len(pairs))
+            + b''.join(struct.pack('<II', t, k) for t, k in pairs)
+            + raw[c + 4 + n * FACILITY_RECORD:])
+    return sp.replace_payload(blob, tree, plpr, body)
+
+
+def _settled_at(blob, plpr):
+    """Blob offset of a planet's settled block, or None when it has none."""
+    prod = next(plpr.find('PROD'), None)
+    enli = next(plpr.find('ENLI'), None)
+    if prod is None or enli is None or enli.start - prod.end != SETTLED_LEN:
+        return None
+    return prod.end
+
+
+def settled_of(blob, planet_oid):
+    """The settled block's fields for one planet, or None when it has none."""
+    _tree, plpr = _planet_plpr(blob, planet_oid)
+    at = _settled_at(blob, plpr)
+    if at is None:
+        return None
+    u16 = lambda off: struct.unpack_from('<H', blob, at + off)[0]
+    u32 = lambda off: struct.unpack_from('<I', blob, at + off)[0]
+    return {
+        'pop': u16(SETTLED_POP_OFF),
+        'history': [u16(SETTLED_HISTORY_OFF + 2 * i)
+                    for i in range(SETTLED_HISTORY_LEN)],
+        'counter': u32(SETTLED_COUNTER_OFF),
+        'owner': u32(SETTLED_OWNER_OFF),
+        'age': struct.unpack_from('<f', blob, at + SETTLED_AGE_OFF)[0],
+        'founded': u32(SETTLED_FOUNDED_OFF),
+        'founded_head': struct.unpack_from('<I', blob,
+                                           plpr.payload + FOUNDED_OFF)[0],
+        'last': u32(SETTLED_LAST_OFF),
+    }
+
+
+def set_settled(blob, planet_oid, pop=None, history=None, counter=None,
+                age=None, founded=None, last=None):
+    """Write the named settled-block fields. Size does not change.
+
+    `founded` is written in both places a planet carries it. The owner field
+    is not writable here: it is the civ's object id and `add_civ` sets it with
+    every other owner reference.
+    """
+    _tree, plpr = _planet_plpr(blob, planet_oid)
+    at = _settled_at(blob, plpr)
+    if at is None:
+        raise SystemExit(f'planet {planet_oid} has no settled block')
+    out = bytearray(blob)
+    if pop is not None:
+        struct.pack_into('<H', out, at + SETTLED_POP_OFF, int(pop) & 0xFFFF)
+    if history is not None:
+        if len(history) != SETTLED_HISTORY_LEN:
+            raise ValueError(f'history holds {SETTLED_HISTORY_LEN} turns')
+        for i, v in enumerate(history):
+            struct.pack_into('<H', out, at + SETTLED_HISTORY_OFF + 2 * i,
+                             int(v) & 0xFFFF)
+    if counter is not None:
+        struct.pack_into('<I', out, at + SETTLED_COUNTER_OFF, int(counter))
+    if age is not None:
+        struct.pack_into('<f', out, at + SETTLED_AGE_OFF, float(age))
+    if founded is not None:
+        struct.pack_into('<I', out, at + SETTLED_FOUNDED_OFF, int(founded))
+        struct.pack_into('<I', out, plpr.payload + FOUNDED_OFF, int(founded))
+    if last is not None:
+        struct.pack_into('<I', out, at + SETTLED_LAST_OFF, int(last))
+    return bytes(out)
 
 
 def set_recruit(blob, planet_oid, value):

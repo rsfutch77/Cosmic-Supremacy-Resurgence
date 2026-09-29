@@ -74,9 +74,8 @@ rather than the order they were found:
    four times the entire monthly Class A allowance. This caps the beta at
    roughly nobody and is the only item that does. **Done 28 September**,
    measured live: eleven polls, no bucket listings.
-2. **J5**, the fourteen remaining transplanted bytes. Three of seventeen are
-   fixed. A joiner still lands on the leader's buildings, which the operator has
-   already ruled against.
+2. **J5**, the fourteen remaining transplanted bytes. **Done 29 September**:
+   a facility list and a settled block, all reset, checked in the real client.
 3. **J3's refused half**, which is the one a tester meets. A refused player's
    row says "you have asked to join" forever; the relay serves the answer and
    nothing reads it.
@@ -981,7 +980,7 @@ is out of scope here.
   and a player whose request is refused is told so and why, from a machine that
   is not the referee's.
 
-- [ ] **J5. A joiner still inherits seat one's buildings and stockpiles.** The
+- [x] **J5. A joiner still inherits seat one's buildings and stockpiles.** The
   unfinished half of the balance ruling, here rather than in the reconstruction
   report because it has to be settled **before the beta opens** and not merely
   recorded as a fact about the format.
@@ -1046,6 +1045,50 @@ is out of scope here.
   `+179` to `+188` as `10, 16, 10, 16, 10, 16, 9, 16, 7, 16`. That matches
   neither the generated civ nor the donor, so something other than the clone is
   writing them and what it is should be known before they are reset to anything.
+
+  **Done, 29 September 2026. The fourteen were not fourteen bytes.** Read as a
+  section tree rather than at fixed offsets, the rest of `PLPR` is a facility
+  list and a 51-byte settled block after `PROD`, and the offsets only looked
+  scattered because the facility list is variable length: a donor that has
+  built one more facility shifts everything after it by eight bytes. The
+  "10, 16, 10, 16" above is a u16 population history, `0x100A`, read a byte at
+  a time. Decoded across 627 owned planets in 94 local blobs and 18 turns of
+  h3check, with the layout in `merge_orders.SETTLED_LEN`:
+
+  | field | generated homeworld | what a joiner carried |
+  |---|---|---|
+  | facilities, `(type, count)` | `(2,1) (6,1) (9,1)` | the donor's, plus `(0,1)` it built |
+  | population mirror | 7 | the donor's 14 |
+  | population history, 7 turns | zeros | the donor's |
+  | counter at +16, undecoded | 1 | the donor's |
+  | colony age, f32 turns | 0.0 at turn 0 | the donor's, equal to the turn |
+  | founding turn, twice | 0 | the donor's 0 |
+  | value at +47, undecoded | 10 | the donor's 7 |
+
+  **The facilities are the leader's buildings the ruling was about.** Every
+  generated homeworld has types 2, 6 and 9 once each, colonies have none, and
+  type 0 appears on played planets with counts up to 8. The h3check capital
+  built its first between turns 11 and 18.
+
+  `starting_kit` resets each to the generation value, field by field. A whole
+  generated `PLPR` is not copied in, because `wipe_civ` measured fields that
+  are uniform within a galaxy and differ between galaxies.
+
+  **One deliberate difference, and it is a judgment.** The founding turn stays
+  0 and the age equals the turn, which is how every incumbent homeworld reads,
+  rather than a colony founded today. Whether the engine treats founded-at-0 as
+  the capital is not known, and matching every capital in the galaxy is the
+  reading that cannot be wrong about it.
+
+  **Measured.** A joiner on h3check's turn 18 now differs from a generated
+  homeworld at twelve offsets and every one is named: the rate pair at `+4` and
+  `+11`, the owner id in the seven citizens and the settled block, and the age.
+  `test_starting_kit.py` goes from 61 to 66, including a whole-record byte
+  comparison, and removing any one of the resets fails it. The real client
+  closed the join turn and two more in `join_kit_acceptance.py`, 57 passed, 0
+  failed, and through those ticks the engine ran the reset fields as decoded:
+  age 12.0, 13.0, 14.0; the history filling from the front; the counter rising
+  from 1.
 
   **Done when:** a joiner's homeworld is byte-identical to a generated one except
   for the object id and seat one's rate pair, or each surviving difference is
