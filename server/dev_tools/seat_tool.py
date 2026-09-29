@@ -5,6 +5,7 @@ seat_tool.py , the operator's hand on a galaxy's seat map
     python seat_tool.py firebase://cs-resurgence/sandbox candidates
     python seat_tool.py firebase://cs-resurgence/sandbox rebind DemoPlayer <uid>
     python seat_tool.py firebase://cs-resurgence/sandbox rebind DemoPlayer <uid> --dry-run
+    python seat_tool.py firebase://cs-resurgence/sandbox bind Newcomer <uid>
 
 A seat is a `seats` entry on the galaxy document, `{uid: civ}`, and the relay
 lets a Firebase uid act as a civ only when that entry says so (J4). The uid is
@@ -48,6 +49,11 @@ What it refuses
     player out a second time (`--no-auth-check` skips this)
 
 A target that already holds this very civ changes nothing and says so.
+
+`bind` is the same write for a civ that no uid holds, and refuses a held one.
+A join granted at a boundary records the uid that asked under `joined` and
+does not write `seats`, so on a galaxy with first-use off a joiner is on the
+roster and cannot play until the operator binds them; `joined` names the uid.
 
 The last move of each seat is kept on the document under `seats_rebound`, which
 is not in the store's state allowlist and so is never served to a player.
@@ -118,9 +124,13 @@ def holder_of(doc: dict, civ: str):
     return None
 
 
-def check_rebind(doc: dict, galaxy: str, civ: str, new_uid: str):
+def check_rebind(doc: dict, galaxy: str, civ: str, new_uid: str,
+                 bind: bool = False):
     """The uid the seat moves from, or SeatRefused. Pure, so the transaction
-    and a dry run apply exactly the same rules."""
+    and a dry run apply exactly the same rules.
+
+    With `bind`, the civ must be one nobody holds and the answer is None.
+    """
     if not UID_RE.match(new_uid or ''):
         raise SeatRefused(f'{new_uid!r} is not a Firebase uid')
     roster = [str(c) for c in (doc.get('civs') or [])]
@@ -129,9 +139,12 @@ def check_rebind(doc: dict, galaxy: str, civ: str, new_uid: str):
         hint = f'; the roster has {near}' if near else ''
         raise SeatRefused(f'{civ} is not a civ in {galaxy}{hint}')
     old = holder_of(doc, civ)
-    if old is None:
+    if old is None and not bind:
         raise SeatRefused(f'no sign-in holds {civ} in {galaxy}, so there is '
-                          f'no seat to move')
+                          f'no seat to move; `bind` seats a civ nobody holds')
+    if old is not None and bind and old != new_uid:
+        raise SeatRefused(f'{civ} in {galaxy} is held by {old}; `rebind` '
+                          f'moves a held seat')
     other = seats(doc).get(new_uid)
     if other is not None and other != civ:
         raise SeatRefused(f'{new_uid} already plays {other} in {galaxy}; a '
@@ -139,17 +152,21 @@ def check_rebind(doc: dict, galaxy: str, civ: str, new_uid: str):
     return old
 
 
-def rebind(store, civ: str, new_uid: str, dry_run: bool = False) -> dict:
-    """Move `civ`'s seat to `new_uid`. Returns what was done.
+def rebind(store, civ: str, new_uid: str, dry_run: bool = False,
+           bind: bool = False) -> dict:
+    """Move `civ`'s seat to `new_uid`, or with `bind` seat a civ nobody holds.
+    Returns what was done.
 
     In a transaction, so a first-use claim landing in the same second cannot
     leave the civ held twice or the target holding two seats.
     """
+    def done(old, dry):
+        return {'civ': civ, 'from': old, 'to': new_uid,
+                'changed': old != new_uid, 'dry_run': dry}
+
     if dry_run:
         doc = galaxy_doc(store)
-        old = check_rebind(doc, store.galaxy, civ, new_uid)
-        return {'civ': civ, 'from': old, 'to': new_uid,
-                'changed': old != new_uid, 'dry_run': True}
+        return done(check_rebind(doc, store.galaxy, civ, new_uid, bind), True)
 
     from google.cloud import firestore
     from google.cloud.firestore_v1.field_path import FieldPath
@@ -160,22 +177,21 @@ def rebind(store, civ: str, new_uid: str, dry_run: bool = False) -> dict:
         if not snap.exists:
             raise SeatRefused(f'there is no galaxy {store.galaxy} in '
                               f'{store.project}')
-        old = check_rebind(snap.to_dict() or {}, store.galaxy, civ, new_uid)
+        old = check_rebind(snap.to_dict() or {}, store.galaxy, civ, new_uid,
+                           bind)
         if old == new_uid:
             return old
         # A civ name is whatever a player typed and may hold a dot, so its
         # path is quoted rather than joined. A uid was checked to be plain.
-        moved = FieldPath(REBOUND_KEY, civ).to_api_repr()
-        tx.update(ref, {
-            f'seats.{old}': firestore.DELETE_FIELD,
-            f'seats.{new_uid}': civ,
-            moved: {'from': old, 'to': new_uid, 'at': time.time()},
-        })
+        fields = {f'seats.{new_uid}': civ,
+                  FieldPath(REBOUND_KEY, civ).to_api_repr():
+                      {'from': old, 'to': new_uid, 'at': time.time()}}
+        if old is not None:
+            fields[f'seats.{old}'] = firestore.DELETE_FIELD
+        tx.update(ref, fields)
         return old
 
-    old = _move(store.fs.transaction(), store.doc)
-    return {'civ': civ, 'from': old, 'to': new_uid,
-            'changed': old != new_uid, 'dry_run': False}
+    return done(_move(store.fs.transaction(), store.doc), False)
 
 
 # ── Firebase Auth, read as an administrator ──────────────────────────────────
@@ -330,21 +346,26 @@ def cmd_candidates(store, out, limit: int) -> int:
     return 0
 
 
-def cmd_rebind(store, out, civ, uid, dry_run, auth_check) -> int:
+def cmd_rebind(store, out, civ, uid, dry_run, auth_check,
+               bind=False) -> int:
     if auth_check and UID_RE.match(uid or ''):
         if auth_user(store.project, uid) is None:
             raise SeatRefused(f'Firebase Auth in {store.project} has no user '
                               f'{uid}; check the uid, or pass --no-auth-check')
-    done = rebind(store, civ, uid, dry_run=dry_run)
+    done = rebind(store, civ, uid, dry_run=dry_run, bind=bind)
+    was = done['from'] or 'nobody'
     if not done['changed']:
         print(f'{uid} already holds {civ} in {store.galaxy}; nothing changed',
               file=out)
     elif dry_run:
-        print(f'would move {civ} in {store.galaxy} from {done["from"]} to '
-              f'{uid}; nothing written', file=out)
+        print(f'would move {civ} in {store.galaxy} from {was} to {uid}; '
+              f'nothing written', file=out)
+    elif done['from'] is None:
+        print(f'seated {civ} in {store.galaxy} on {uid}, which held no seat '
+              f'here before.', file=out)
     else:
-        print(f'moved {civ} in {store.galaxy} from {done["from"]} to {uid}. '
-              f'{done["from"]} now holds no seat here.', file=out)
+        print(f'moved {civ} in {store.galaxy} from {was} to {uid}. '
+              f'{was} now holds no seat here.', file=out)
     return 0
 
 
@@ -357,12 +378,14 @@ def main(argv=None, out=None) -> int:
     c = sub.add_parser('candidates',
                        help='sign-ins with no seat here, newest activity first')
     c.add_argument('--limit', type=int, default=20)
-    r = sub.add_parser('rebind', help='move a seat to another uid')
-    r.add_argument('civ')
-    r.add_argument('uid')
-    r.add_argument('--dry-run', action='store_true')
-    r.add_argument('--no-auth-check', action='store_true',
-                   help='skip checking the uid exists in Firebase Auth')
+    for name, what in (('rebind', 'move a held seat to another uid'),
+                       ('bind', 'seat a civ nobody holds on a uid')):
+        r = sub.add_parser(name, help=what)
+        r.add_argument('civ')
+        r.add_argument('uid')
+        r.add_argument('--dry-run', action='store_true')
+        r.add_argument('--no-auth-check', action='store_true',
+                       help='skip checking the uid exists in Firebase Auth')
     args = ap.parse_args(argv)
     try:
         store = open_galaxy(args.galaxy)
@@ -371,7 +394,7 @@ def main(argv=None, out=None) -> int:
         if args.cmd == 'candidates':
             return cmd_candidates(store, out, args.limit)
         return cmd_rebind(store, out, args.civ, args.uid, args.dry_run,
-                          not args.no_auth_check)
+                          not args.no_auth_check, bind=args.cmd == 'bind')
     except (SeatRefused, ValueError) as exc:
         print(f'refused: {exc}', file=out)
         return 2

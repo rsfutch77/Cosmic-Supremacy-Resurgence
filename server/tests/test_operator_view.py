@@ -20,9 +20,12 @@ case that must come out the other way.
 
 The HTTP half runs `turn_server.py` on the loopback address, which is what shows
 that the view reads a store through `open_store` without caring which kind it
-got. Firebase is not exercised here: it needs the emulator, `test_store_equivalence`
-already covers the store interface against it, and the only thing this module
-adds above that interface is arithmetic.
+got. A real Firebase store is not opened here: it needs the emulator, and
+`test_store_equivalence` already covers the store interface against it. The one
+thing the view does to Firebase outside that interface, a `get` of the galaxy
+document for its seats and heartbeat, is checked against a stand-in document
+that records what was done to it, and against a real document on the emulator
+by `test_seat_rebind.py`.
 """
 import argparse
 import hashlib
@@ -320,6 +323,173 @@ def check_closed_and_reclaimed(root: str, tmp: str):
           'seat taken back' in ov.render_text([clean]), False)
 
 
+def check_worker(root: str, tmp: str):
+    """The heartbeat `referee_worker` writes, read back as health.
+
+    A failing worker and a stopped one look the same from a deadline alone,
+    which is the reason the heartbeat exists, so each is checked against the
+    other as its control.
+    """
+    print('worker: a failing referee and a stopped one are told apart')
+    import referee_worker
+    check('worker: the view reads the names the worker writes',
+          (ov.WORKER_SEEN_KEY, ov.WORKER_FAILURES_KEY),
+          (referee_worker.WORKER_SEEN_KEY,
+           referee_worker.WORKER_FAILURES_KEY))
+
+    failing = os.path.join(tmp, 'failing')
+    shutil.copytree(root, failing)
+    set_deadline(failing, time.time() - 900)
+    store = turn_store.TurnStore(failing)
+    store.update_state({ov.WORKER_SEEN_KEY: time.time() - 30,
+                        ov.WORKER_FAILURES_KEY: 3})
+    r = ov.galaxy_report(store)
+    check('worker: three failures are a problem that says so',
+          any('failed 3 time(s) in a row' in p for p in r['problems']))
+    check('worker: and a failing worker is not called stopped',
+          any('stopped' in p for p in r['problems']), False)
+    text = ov.render_text([r])
+    check('worker: the text carries the heartbeat',
+          '3 failure(s) in a row' in text and 'last heard from' in text)
+    check('worker: and so does the page',
+          '3 failure(s) in a row' in ov.render_html([r]))
+
+    stopped = os.path.join(tmp, 'stopped')
+    shutil.copytree(root, stopped)
+    deadline = time.time() - 900
+    set_deadline(stopped, deadline)
+    store = turn_store.TurnStore(stopped)
+    store.update_state({ov.WORKER_SEEN_KEY: deadline - 3600,
+                        ov.WORKER_FAILURES_KEY: 0})
+    r = ov.galaxy_report(store)
+    check('worker: silence since before the deadline is a stopped worker',
+          any('stopped rather than retrying' in p for p in r['problems']))
+    check('worker: and is not reported as failures',
+          any('failed' in p for p in r['problems']), False)
+    store.update_state({ov.WORKER_SEEN_KEY: deadline + 60})
+    r = ov.galaxy_report(store)
+    check('worker CONTROL: a worker heard from after the deadline is not '
+          'called stopped',
+          any('stopped' in p for p in r['problems']), False)
+
+    healthy = os.path.join(tmp, 'healthy')
+    shutil.copytree(root, healthy)
+    set_deadline(healthy, time.time() + 3600)
+    store = turn_store.TurnStore(healthy)
+    store.update_state({ov.WORKER_SEEN_KEY: time.time() - 600,
+                        ov.WORKER_FAILURES_KEY: 0})
+    r = ov.galaxy_report(store)
+    check('worker CONTROL: a healthy worker with time left is no problem',
+          any('worker' in p for p in r['problems']), False)
+    check('worker CONTROL: an untouched galaxy says it has no heartbeat',
+          'no heartbeat recorded' in ov.render_text(
+              [ov.galaxy_report(turn_store.TurnStore(root))]))
+
+
+def check_seats(root: str, tmp: str):
+    """Who holds which seat, and a civ nobody can play."""
+    print('seats: the seat map, and a civ nobody holds')
+    seated = os.path.join(tmp, 'seated')
+    shutil.copytree(root, seated)
+    store = turn_store.TurnStore(seated)
+    civs = store.civs()
+    first, second = civs[0], civs[1]
+    store.update_state({
+        ov.SEATS_KEY: {'AAAAaaaa1111bbbb2222cccc3333': first},
+        ov.REBOUND_KEY: {first: {'from': 'OLDuid', 'to': 'AAAA',
+                                 'at': time.time() - 60}},
+        turn_store.JOINED_KEY: {second: {'uid': 'JOINERuid00000000000000000000',
+                                         'turn': 9}}})
+    r = ov.galaxy_report(store)
+    rows = {row['civ']: row for row in r['seats'] or []}
+    check('seats: every civ on the roster has a row', sorted(rows),
+          sorted(civs))
+    check('seats: the held one names its uid',
+          rows[first]['uid'], 'AAAAaaaa1111bbbb2222cccc3333')
+    check('seats: an unheld civ with first-use off is a problem',
+          any(p.startswith(f'{second} is on the roster and no sign-in holds')
+              for p in r['problems']))
+    check('seats: and the problem names the uid it joined as',
+          any('joined as JOINERui' in p for p in r['problems']))
+    check('seats: and a held one is not',
+          any(p.startswith(f'{first} is on the roster') for p in
+              r['problems']), False)
+    text = ov.render_text([r])
+    check('seats: the text shows a uid by its first eight characters only',
+          'AAAAaaaa' in text and 'AAAAaaaa1' not in text)
+    check('seats: and when the seat last moved', 'moved ' in text)
+    check('seats: and the page shows the same map',
+          'AAAAaaaa' in ov.render_html([r])
+          and 'AAAAaaaa1' not in ov.render_html([r]))
+
+    store.update_state({ov.SEAT_CLAIM_KEY: 'first-use'})
+    r = ov.galaxy_report(store)
+    check('seats CONTROL: with first-use on, an unheld civ is claimable and '
+          'not a problem',
+          any('no sign-in holds' in p for p in r['problems']), False)
+    clean = ov.galaxy_report(turn_store.TurnStore(root))
+    check('seats CONTROL: a folder galaxy with no seat map shows none',
+          (clean['seats'], 'seats' in ov.render_text([clean])), (None, False))
+
+
+def check_firebase_document(tmp: str):
+    """The one extra read a Firebase galaxy costs, and that it is only a read.
+
+    A `FirebaseTurnStore` whose document reference records what is done to it
+    and whose clients cannot be built, so the view can reach Firebase for
+    nothing but what this hands it. The live store is not touched and no
+    emulator is needed; `test_seat_rebind.py` reads a real document.
+    """
+    print('firebase: the galaxy document is read once, and only read')
+    import firebase_store
+
+    class Snap:
+        exists = True
+
+        def __init__(self, data):
+            self._data = data
+
+        def to_dict(self):
+            return dict(self._data)
+
+    class Ref:
+        def __init__(self, data):
+            self.data, self.calls = data, []
+
+        def get(self, *a, **kw):
+            self.calls.append('get')
+            return Snap(self.data)
+
+        def __getattr__(self, name):
+            self.calls.append(name)
+            raise AssertionError(f'the view reached for {name} on the document')
+
+    class Fake(firebase_store.FirebaseTurnStore):
+        ref = None
+
+        @property
+        def doc(self):
+            return Fake.ref
+
+        @property
+        def fs(self):
+            raise AssertionError('the view built a Firestore client')
+
+    data = {'turn': 4, 'deadline': time.time() + 600, 'turn_seconds': 1800,
+            'civs': ['Alpha', 'Beta'],
+            ov.WORKER_SEEN_KEY: time.time() - 5, ov.WORKER_FAILURES_KEY: 1,
+            ov.SEATS_KEY: {'UIDalpha0000000000000000000': 'Alpha'},
+            'unrelated_private_field': 'x'}
+    Fake.ref = Ref(data)
+    got = ov._document_fields(ov.read_only(Fake('demo-x', 'g')))
+    check('firebase: the document was read with one get and nothing else',
+          Fake.ref.calls, ['get'])
+    check('firebase: and only the fields the view names came back',
+          sorted(got), sorted(k for k in ov.DOCUMENT_FIELDS if k in data))
+    check('firebase CONTROL: a folder store costs no document read',
+          ov._document_fields(ov.read_only(turn_store.TurnStore(tmp))), {})
+
+
 def check_unreadable(tmp: str):
     print('failure: a store that cannot be read is a row, not a crash')
     empty = os.path.join(tmp, 'empty')
@@ -504,6 +674,9 @@ def main():
         check_overdue(root, tmp)
         check_refusals(root, tmp)
         check_closed_and_reclaimed(root, tmp)
+        check_worker(root, tmp)
+        check_seats(root, tmp)
+        check_firebase_document(tmp)
         check_unreadable(tmp)
         check_never_ticked(tmp)
         check_html(root)
