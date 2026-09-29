@@ -2465,14 +2465,15 @@ def galaxy_rows(data_dir: str, spec, player: "str | None" = None):
 # A rule with a blank where the number should be reads as no rule at all, and a
 # missing notice reads as there being nothing to agree to.
 
-# What can honestly be said about the log copy today. M1 built the redaction
-# and nothing uploads: write_redacted_log writes the copy beside launcher.log
-# and the upload itself waits on the relay. This is the clause to change when
-# that lands, and it is deliberately the narrower of the two claims the notice
-# offers, because the notice is read once and believed afterwards.
+# What can honestly be said about the log copy today. write_redacted_log
+# writes the copy beside launcher.log, and the launcher uploads it only when
+# the player presses Send: on the "send log" link, or in the box offered when
+# a turn goes wrong (M1). The notice is read once and believed afterwards, so
+# this is the clause that has to change if anything is ever sent without that.
 LOG_UPLOAD_CLAUSE = ("Nothing is sent by itself. The launcher writes that "
                      "copy to a file on your own machine, and it reaches us "
-                     "only if you send it to us yourself.")
+                     "only when you press Send, on the launcher's send log "
+                     "link or when it offers after a turn goes wrong.")
 
 
 def beta_notice_module():
@@ -2686,14 +2687,125 @@ def write_redacted_log(data_dir: str, out_path: "str | None" = None,
                        cap: int = LOG_UPLOAD_CAP) -> str:
     """Write the uploadable copy beside the log and return where it went.
 
-    Nothing sends it. The file is the deliverable: a player can be pointed at
-    it and asked to attach it, and whatever uploads it later reads this file
-    rather than redacting a second time in its own way.
+    The file is what a player reads before sending, what they attach to a
+    bug report when there is nowhere to send it, and what Send uploads, so
+    the copy sent is the copy they could read.
     """
     out_path = out_path or os.path.join(data_dir, REDACTED_LOG_NAME)
     with open(out_path, "w", encoding="utf-8", newline="\n") as fh:
         fh.write(redacted_log(data_dir, cap))
     return out_path
+
+
+# ── Sending the log ───────────────────────────────────────────────────────────
+# The redacted copy goes to the relay's `POST /_logs`, which stores it where
+# the operator reads it with server\dev_tools\log_tool.py and serves it to no
+# player (plan item M1). It is sent only when the player presses Send: from
+# the "send log" link beside "show log", or from the box offered once when a
+# followed turn could not be sent or the turn loop stopped with an error. The
+# box says what the copy holds before anything goes.
+#
+# The relay takes the text zlib-compressed and in base64 inside a small JSON
+# object. A measured 103,780-byte redacted copy is 10,094 bytes compressed.
+# It counts uploads per sign-in and per day and refuses past either with a
+# sentence, which is shown as it is.
+LOG_ROUTE = "_logs"
+LOG_WHY_TURN = "turn_failed"
+LOG_WHY_PLAYER = "player"
+
+# The loop kinds after which the box is offered. A closed galaxy is not among
+# them in effect: `mp_closed` is set first and the box is not offered for it.
+LOG_OFFER_KINDS = ("lost", "failed", "serve_failed")
+
+LOG_SEND_TITLE = "Send your log"
+LOG_TURN_LEAD = ("Something went wrong with your turn. The launcher's log is "
+                 "what the galaxy's operator needs to see what happened.\n\n")
+LOG_SEND_TEXT = (
+    "Send the launcher's log to the galaxy's operator?\n\n"
+    "It is the launcher's record of what it did: your player name, the "
+    "galaxy, turn numbers, which parts of the game started and stopped, and "
+    "any errors. Your Windows account name is taken out of it first, and the "
+    "saved-game data in it is removed. Nothing else on this computer is "
+    "sent.\n\n"
+    "Nothing is sent unless you press Send.")
+
+
+def log_upload_base(data_dir: str, store_spec, directory) -> "str | None":
+    """The relay a log goes to, or None when this install reaches none.
+
+    The followed galaxy's relay first, then the directory's. A spec counts
+    when it is http(s) and wants this install's identity by the rule a store
+    follows (`store_wants_token`), so a folder or a LAN referee is never sent
+    a log and an emulator relay named with `auth` is.
+    """
+    want = dict(multiplayer_file(data_dir) or {})
+    for spec, is_store in ((store_spec, True), (directory, False)):
+        if not isinstance(spec, str):
+            continue
+        spec = spec.strip().rstrip("/")
+        if not spec.startswith(("http://", "https://")):
+            continue
+        want["store"] = spec
+        if not store_wants_token(want):
+            continue
+        if is_store:
+            spec = spec.rsplit("/", 1)[0]
+        return spec
+    return None
+
+
+def log_payload(text: str, build, why: str, galaxy=None, civ=None,
+                turn=None) -> bytes:
+    """The body of a log upload."""
+    import base64
+    import zlib
+    packed = base64.b64encode(zlib.compress(text.encode("utf-8"), 6))
+    return json.dumps({
+        "log": packed.decode("ascii"),
+        "build": build,
+        "why": why,
+        "galaxy": galaxy,
+        "civ": civ,
+        "turn": turn if _whole(turn) else None,
+    }).encode("utf-8")
+
+
+def send_log(base: str, token, payload: bytes, timeout: float = 30.0) -> dict:
+    """Upload one log. The relay's reply, or the HTTPError it refused with.
+
+    `token` is a callable answering an ID token, or a token, or None.
+    """
+    import urllib.request
+    req = urllib.request.Request(f"{base.rstrip('/')}/{LOG_ROUTE}",
+                                 data=payload, method="POST",
+                                 headers={"Content-Type": "application/json"})
+    said = token() if callable(token) else token
+    if said:
+        req.add_header("Authorization", f"Bearer {said}")
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return json.loads(resp.read() or b"{}")
+
+
+def log_sent_text(reply) -> str:
+    """What a player reads once their log is sent."""
+    ref = (reply or {}).get("id")
+    said = "Your log was sent to the galaxy's operator."
+    if ref:
+        said += (f"\n\nIf you write to them about it, quote this reference:"
+                 f"\n\n    {ref}")
+    return said
+
+
+def log_not_sent_text(why, path) -> str:
+    """What a player reads when their log could not be sent, or had nowhere
+    to go. `why` is None for a launcher that reaches no relay."""
+    if why is None:
+        said = ("This launcher is not connected to the beta, so there is "
+                "nowhere to send the log.")
+    else:
+        said = f"Your log could not be sent: {why}"
+    return (f"{said}\n\nThe same copy is saved at\n\n{path}\n\nand you can "
+            "attach it to a bug report instead.")
 
 
 # ── UI ────────────────────────────────────────────────────────────────────────
@@ -2867,6 +2979,10 @@ class Launcher:
         # deadline a stall last sent a probe for. See `_mp_probe_closed`.
         self.mp_closed = False
         self.mp_probed = None
+        # Whether this galaxy's player has been offered to send their log
+        # after a turn went wrong, and whether a log is on its way.
+        self.mp_log_offered = False
+        self.log_sending = False
         # Whether the game client was up when the watcher last looked, so that
         # it closing clears the turn readout at once rather than at the next
         # poll, and whether the turn it was playing is still on its way to the
@@ -3068,6 +3184,11 @@ class Launcher:
                                 font=("Segoe UI", 8, "underline"), cursor="hand2")
         self.log_btn.pack(side="right")
         self.log_btn.bind("<Button-1>", lambda e: self.toggle_log())
+        self.send_log_btn = tk.Label(status, text="send log", bg=BG, fg=FAINT,
+                                     font=("Segoe UI", 8, "underline"),
+                                     cursor="hand2")
+        self.send_log_btn.pack(side="right", padx=(0, 10))
+        self.send_log_btn.bind("<Button-1>", lambda e: self.offer_log())
 
         self.log_frame = tk.Frame(self.root, bg=BG)
         self.log = tk.Text(self.log_frame, height=11, bg="#02060f", fg=DIM,
@@ -4425,6 +4546,7 @@ class Launcher:
         self.mp_civ = civ
         self.mp_closed = False
         self.mp_probed = None
+        self.mp_log_offered = False
         self.mp_playing = {"id": g.id if g is not None else cfg["store"],
                            "name": (g.name or g.id) if g is not None
                            else store_label(cfg["store"]),
@@ -4547,6 +4669,15 @@ class Launcher:
             # followed loop first shows: every store refuses the submission.
             # One read of the state says whether that is what happened.
             self._mp_probe_closed(self.mp_store)
+        if (kind in LOG_OFFER_KINDS
+                and not getattr(self, "mp_log_offered", False)
+                and SEAT_HELD not in str(facts.get("error") or "")):
+            # Once per followed galaxy, however many turns go wrong. Queued
+            # behind anything the probe above posted, so a galaxy found closed
+            # is marked closed before this is handled, and is not offered. A
+            # seat held by another sign-in has its own box saying what to do.
+            self.mp_log_offered = True
+            self.msgs.put(("__log_offer__", self.mp_store))
         if kind == "submitted":
             self.mp_capture = (SENT, time.time())
             if facts.get("final"):
@@ -4622,6 +4753,7 @@ class Launcher:
         self.mp_reopening = False
         self.mp_closed = False
         self.mp_probed = None
+        self.mp_log_offered = False
         self._show_capture(None, 0.0)
 
     def _warning_note(self, store, civ, current):
@@ -4683,6 +4815,104 @@ class Launcher:
         self.say(f"multiplayer: the referee has warned {self.mp_civ} about "
                  f"missed turns")
         self.warn(warning_text(name, lines))
+
+    # ── sending the log ──
+    def _on_log_offer(self, store):
+        """A followed turn went wrong: offer to send the log. Tk thread.
+
+        Not for a store that is no longer the one followed, nor for a galaxy
+        found closed, which is a decision rather than a fault; and not where
+        there is no relay to send to, since a box saying so after every
+        failed turn would be noise. The link beside "show log" still says it.
+        """
+        if store is not self.mp_store or getattr(self, "mp_closed", False):
+            return
+        self.offer_log(LOG_WHY_TURN, quiet_if_nowhere=True)
+
+    def offer_log(self, why: str = LOG_WHY_PLAYER,
+                  quiet_if_nowhere: bool = False):
+        """Write the redacted copy, say what it holds, and send it on Send.
+
+        Tk thread. The copy is written first and is what is sent, so "Read it
+        first" opens exactly the bytes that would go.
+        """
+        if getattr(self, "log_sending", False):
+            self.say("log: one is already on its way")
+            return
+        playing = getattr(self, "mp_playing", None) or {}
+        multiplayer_modules()           # puts fb_auth on sys.path in a checkout
+        base = log_upload_base(self.data_dir, playing.get("store"),
+                               getattr(self, "games_dir", None))
+        try:
+            path = write_redacted_log(self.data_dir)
+        except OSError as exc:
+            self.say(f"log: could not write the copy to send ({exc})")
+            if not quiet_if_nowhere:
+                self.warn(f"Could not write a copy of the log to send:\n\n"
+                          f"{exc}")
+            return
+        if base is None:
+            self.say(f"log: no relay to send to; the copy is at {path}")
+            if not quiet_if_nowhere:
+                self.warn(log_not_sent_text(None, path))
+            return
+        lead = LOG_TURN_LEAD if why == LOG_WHY_TURN else ""
+        while True:
+            what = self._choice_dialog(
+                LOG_SEND_TITLE, lead + LOG_SEND_TEXT,
+                (("Send", "send", True), ("Read it first", "read", False),
+                 ("Not now", None, False)))
+            if what != "read":
+                break
+            self._open_file(path)
+        if what != "send":
+            self.say("log: not sent")
+            return
+        try:
+            with open(path, encoding="utf-8", errors="replace") as fh:
+                text = fh.read()
+        except OSError as exc:
+            self.warn(log_not_sent_text(str(exc), path))
+            return
+        payload = log_payload(
+            text, build_info().get("build"), why,
+            galaxy=playing.get("id"),
+            civ=getattr(self, "mp_civ", None) if playing else None,
+            turn=getattr(self, "mp_turn", None) if playing else None)
+        token = player_token(self.data_dir)
+        self.log_sending = True
+        self.say(f"log: sending {len(text.encode('utf-8')):,} bytes "
+                 f"({len(payload):,} on the wire)")
+
+        def work():
+            try:
+                reply = send_log(base, token, payload)
+                self.msgs.put(("__log_sent__", reply, None, path))
+            except Exception as exc:        # said to the player either way
+                said = relay_refusal(exc)
+                self.msgs.put(("__log_sent__", None,
+                               said[1] if said else str(exc), path))
+
+        threading.Thread(target=work, daemon=True, name="send-log").start()
+
+    def _on_log_sent(self, reply, err, path):
+        """Say whether the log went. Tk thread."""
+        self.log_sending = False
+        if err is None:
+            self.say(f"log: sent as {(reply or {}).get('id')}")
+            self._choice_dialog("Log sent", log_sent_text(reply),
+                                (("Close", None, True),))
+        else:
+            self.say(f"log: not sent ({err})")
+            self.warn(log_not_sent_text(err, path))
+
+    def _open_file(self, path: str):
+        """Open a file in the program Windows has for it, which for a .log is
+        a text editor."""
+        try:
+            os.startfile(path)              # noqa: S606, Windows only
+        except (OSError, AttributeError) as exc:
+            self.say(f"log: could not open {path} ({exc})")
 
     def start_ai(self, mode):
         """Start the opponent, and say clearly if there is not one to start."""
@@ -5314,6 +5544,11 @@ class Launcher:
                     self._on_mp_warning(store, lines)
                 elif isinstance(msg, tuple) and msg and msg[0] == "__mp_refused__":
                     self.warn(msg[1])
+                elif isinstance(msg, tuple) and msg and msg[0] == "__log_offer__":
+                    self._on_log_offer(msg[1])
+                elif isinstance(msg, tuple) and msg and msg[0] == "__log_sent__":
+                    _tag, reply, err, path = msg
+                    self._on_log_sent(reply, err, path)
                 else:
                     self.say(msg)
         except queue.Empty:
