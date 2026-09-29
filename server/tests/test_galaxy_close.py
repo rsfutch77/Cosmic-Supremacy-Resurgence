@@ -180,7 +180,10 @@ def run_local(tmp, base_url, served_root):
     closing_a_store(store, 'a directory', furnish(store))
 
     print('\nthe store, over HTTP, which is what a player holds')
-    served = turn_store.HttpTurnStore(base_url)
+    # `state_seconds=0` because the close is written through the directory and
+    # read back over HTTP at once, which a held `/state` would answer from the
+    # moment before the close.
+    served = turn_store.HttpTurnStore(base_url, state_seconds=0)
     closing_a_store(served, 'an HTTP store', 12,
                     closer=turn_store.TurnStore(served_root))
 
