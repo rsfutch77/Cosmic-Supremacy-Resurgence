@@ -18,32 +18,45 @@ Two services, because they fail in different directions
 -------------------------------------------------------
 A Firestore document is capped at 1 MiB and a galaxy blob has no ceiling worth
 betting on: today's is a few tens of kilobytes and the format carries no rule
-that keeps it there. So blobs and submissions are Cloud Storage objects, and
-the clock, the roster and the archive are Firestore documents, which is what
-Firestore is good at: one small document, read often, replaced atomically.
+that keeps it there. So turn blobs are Cloud Storage objects, and the clock,
+the roster and the archive are Firestore documents, which is what Firestore is
+good at: one small document, read often, replaced atomically.
+
+**A submission is a Firestore document**, since H13. It is a player's upload,
+the relay caps it well under the document ceiling before it is stored, and it
+is written every time a player's state changes during a turn. As a Cloud
+Storage object each of those writes was a Class A operation against 5,000 a
+month for the whole project, which capped the beta at about 27 players; as a
+document it is one write against 20,000 a day. The document holds the
+compressed bytes rather than the base64 wire form, because base64 would spend a
+third of the document on nothing.
 
     Firestore
       beta/<galaxy>                     the clock, the roster, the hash, and
                                         the directory's row for this galaxy
       beta/<galaxy>/archive/<turn>      what the referee recorded for a turn
+      beta/<galaxy>/submissions/0007~X  what civ X handed back for turn 7
+      beta/<galaxy>/notes/0007~X        what the referee refused from X
       beta/<galaxy>/joins/<key>         a seat a stranger has asked for
       beta/<galaxy>/joins_done/<key>    what the worker decided about it
 
     Cloud Storage
       beta/<galaxy>/turns/0007.b64            the state for turn 7
-      beta/<galaxy>/submissions/0007/X.b64    what civ X handed back
-      beta/<galaxy>/notes/0007/X.txt          what the referee refused from X
+      beta/<galaxy>/submissions/0007/X.b64    a submission made before H13
+      beta/<galaxy>/notes/0007/X.txt          a note left before H13
 
 Everything sits under one prefix so it cannot collide with the website the same
 Firebase project hosts.
 
-**Anything keyed by a civ name is a Storage object and not a Firestore field.**
-A civ name is a username a player typed. Firestore restricts what a document id
-and a field name may contain, and an archive record keyed by civ name would
-need escaping that nothing else in the tree does. A Cloud Storage object name
-takes arbitrary UTF-8, so submissions and notes keep the directory store's own
-layout, and the archive record is stored as one JSON string rather than as a
-map, which also keeps it identical to what `referee` wrote.
+**A civ name is never a Firestore field name.** A civ name is a username a
+player typed. Firestore restricts what a document id and a field name may
+contain, so an archive record keyed by civ name is stored as one JSON string
+rather than as a map, which also keeps it identical to what `referee` wrote. A
+submission or note document's id carries the civ name escaped by
+`join_doc_id`, one to one, and the name itself is a field of the document,
+which is what every reader takes it from. Notes moved with submissions because
+every launcher asks for its note once a turn, and as an object that ask was a
+Class B operation whether or not there was a note.
 
 Objects hold the same base64 wire bytes the directory store writes to disk, so
 an object downloaded here and a file copied out of a directory store decode
@@ -88,6 +101,7 @@ holds a key. Against the Firebase local emulator suite, the two client
 libraries read `FIRESTORE_EMULATOR_HOST` and `STORAGE_EMULATOR_HOST`
 themselves, so this module needs no emulator branch.
 """
+import base64
 import json
 import os
 import string
@@ -137,11 +151,13 @@ STATE_FIELDS = ('turn', 'deadline', 'turn_seconds', 'civs', 'hash',
                 turn_store.MIN_BUILD_KEY)
 
 # Who has handed the current turn back, as `{"<turn>": [civ, ...]}` on the
-# galaxy document. A launcher asks this every poll, and the only other place
-# the answer lives is a Cloud Storage listing, which is a Class A operation: at
-# the Games page's 120-second poll that was about 21,900 a month from one open
-# launcher, against the 5,000 a month the bucket's allowance carries. Read from
-# here it rides the document read the relay makes for every request anyway.
+# galaxy document. A launcher asks this every poll. When submissions were
+# Cloud Storage objects the only other place the answer lived was a bucket
+# listing, a Class A operation: at the Games page's 120-second poll that was
+# about 21,900 a month from one open launcher, against the 5,000 a month the
+# bucket's allowance carries. Now it would be a query, one read per player who
+# has submitted. Read from here it rides the document read the relay makes for
+# every request anyway.
 #
 # Keyed by turn so that a commit racing a publish lands under the turn it was
 # for and cannot be read as a submission for the next one. `publish` replaces
@@ -152,6 +168,39 @@ STATE_FIELDS = ('turn', 'deadline', 'turn_seconds', 'civs', 'hash',
 # Not in `STATE_FIELDS`: it is answered through `submitted_civs`, which all
 # three stores already have, and the directory store has no such field.
 SUBMITTED_KEY = 'submitted'
+
+# Where submissions live, one document per turn and civ. See the module
+# docstring and the plan's H13.
+SUBMISSION_COLLECTION = 'submissions'
+
+# The referee's notes, the same way and kept for the same number of turns.
+NOTE_COLLECTION = 'notes'
+
+# The first turn whose submissions are documents only, on the galaxy document.
+# `start` writes it, and `publish` writes it once on a galaxy that lacks it,
+# which is a galaxy started before H13. A turn before it, or any turn of a
+# galaxy without it, was played while submissions were Cloud Storage objects,
+# so a submission not found as a document is looked for as an object. That is
+# what lets the relay and the worker change over in the middle of a turn
+# without losing a submission already uploaded for it.
+SUBMISSIONS_FROM_KEY = 'submissions_from'
+
+# How many turns of submissions are kept as documents, the turn being played
+# included. `publish` deletes the ones older than that. Firestore's free
+# allowance stores 1 GiB, and a submission is about 10 KB compressed, so every
+# submission kept for the life of a galaxy fills it within months at a hundred
+# players. 18 turns is three days at four-hour turns, long enough for
+# `referee --verify` to recompute any recent turn.
+SUBMISSION_TURNS_KEPT = 18
+
+# The largest compressed submission this store will write. A Firestore
+# document is capped at 1 MiB, id and fields included; this leaves room for
+# both. The relay's own cap on the body is lower, so nothing it accepts
+# reaches this; `submit` is the path that can.
+MAX_SUBMISSION_DATA = 900 * 1024
+
+# The longest document id Firestore accepts, in bytes.
+MAX_DOC_ID = 1500
 
 # The two subcollections a join lives in: waiting, and answered. Two rather
 # than one document with a flag on it, because "what is waiting" is then a
@@ -355,6 +404,32 @@ class FirebaseTurnStore:
         return self.doc.collection(JOIN_DONE_COLLECTION).document(
             join_doc_id(key))
 
+    @property
+    def submission_collection(self):
+        return self.doc.collection(SUBMISSION_COLLECTION)
+
+    def submission_doc(self, civ: str, turn: int):
+        """The document one civ's submission for one turn lives in.
+
+        The turn leads the id so the console lists a turn's submissions
+        together. `~` cannot appear in the turn half, so the id splits one way.
+        """
+        return self.submission_collection.document(self._civ_turn_id(civ,
+                                                                     turn))
+
+    def note_doc(self, civ: str, turn: int):
+        """The document the referee's note to one civ for one turn lives in."""
+        return self.doc.collection(NOTE_COLLECTION).document(
+            self._civ_turn_id(civ, turn))
+
+    @staticmethod
+    def _civ_turn_id(civ: str, turn: int) -> str:
+        name = f'{int(turn):04d}~{join_doc_id(civ)}'
+        if len(name.encode('utf-8')) > MAX_DOC_ID:
+            raise ValueError(f'a civ name this long cannot name a document '
+                             f'({len(civ)} characters)')
+        return name
+
     def _object(self, *parts) -> str:
         return '/'.join((self.prefix, self.galaxy) + parts)
 
@@ -485,6 +560,7 @@ class FirebaseTurnStore:
             'hash': canonical.canonical_hash(blob),
             'created': time.time(),
             SUBMITTED_KEY: {str(int(turn)): []},
+            SUBMISSIONS_FROM_KEY: int(turn),
         }, merge=True)
         return turn
 
@@ -509,9 +585,15 @@ class FirebaseTurnStore:
         The merge names its fields rather than merging everything, because
         `SUBMITTED_KEY` has to be replaced whole: merged, the map would keep
         every past turn's list and grow for the life of the galaxy.
+
+        A galaxy started before H13 is given `SUBMISSIONS_FROM_KEY` here, at
+        the first turn this code publishes, and submissions older than
+        `SUBMISSION_TURNS_KEPT` turns are deleted once the new turn is out.
         """
         import canonical
-        seconds = turn_seconds or self.state()['turn_seconds']
+        snap = self.doc.get()
+        doc = (snap.to_dict() or {}) if snap.exists else {}
+        seconds = turn_seconds or doc['turn_seconds']
         self._put(self.turn_object(turn), sp.encode_save(blob), 'text/plain')
         fields = {
             'turn': int(turn),
@@ -520,7 +602,10 @@ class FirebaseTurnStore:
             'hash': canonical.canonical_hash(blob),
             SUBMITTED_KEY: {str(int(turn)): []},
         }
+        if doc.get(SUBMISSIONS_FROM_KEY) is None:
+            fields[SUBMISSIONS_FROM_KEY] = int(turn)
         self.doc.set(fields, merge=list(fields))
+        self.prune_submissions(int(turn) - SUBMISSION_TURNS_KEPT + 1)
 
     # ── submissions ──────────────────────────────────────────────────────────
     def submit(self, civ: str, turn: int, blob: bytes) -> str:
@@ -528,64 +613,124 @@ class FirebaseTurnStore:
         a player may save several times in a turn and the last one is their
         intent.
 
-        A closed galaxy refuses, at the cost of one document read per
-        submission, which is once per player per turn. The relay writes through
-        Cloud Storage rather than through this method, so closing a galaxy in
-        the beta deployment needs the relay to make the same check; see the
-        store's `GalaxyClosed`.
+        A closed galaxy refuses, from the one document read that also tells
+        `write_submission` whether the civ is already recorded. The relay does
+        not call this: it makes its own checks on the document it has read and
+        calls `write_submission`, and it refuses a closed galaxy itself.
         """
-        if self.is_closed():
+        snap = self.doc.get()
+        doc = (snap.to_dict() or {}) if snap.exists else {}
+        if turn_store.status_of(doc) == turn_store.CLOSED:
             raise turn_store.GalaxyClosed(
                 f'this galaxy is closed and is not taking submissions '
                 f'({self.project}/{self.galaxy})')
-        name = self.submission_object(civ, turn)
-        self._put(name, sp.encode_save(blob), 'text/plain')
-        self.record_submitted(civ, turn)
-        return f'gs://{self.bucket.name}/{name}'
+        self.write_submission(civ, turn, blob, doc=doc)
+        ref = self.submission_doc(civ, turn)
+        return f'firestore://{self.project}/{ref.path}'
+
+    def write_submission(self, civ: str, turn: int, blob: bytes,
+                         doc: dict = None) -> str:
+        """Store one civ's submission as a document, and say its tag.
+
+        No check on what the bytes are; the relay has made them before it gets
+        here. One write for the document, and a second in the same batch to
+        record the civ on the galaxy document only when `doc`, the galaxy
+        document as the caller read it, does not already record them. So a
+        player's second and later uploads in a turn are one write each.
+
+        Raises `SubmissionTooLarge` for a submission that would not fit in a
+        document, which the relay's own cap makes unreachable through it.
+        """
+        data = base64.b64decode(sp.encode_save(blob))
+        if len(data) > MAX_SUBMISSION_DATA:
+            raise turn_store.SubmissionTooLarge(
+                f'this submission is {len(data):,} bytes compressed and a '
+                f'stored one may be {MAX_SUBMISSION_DATA:,}')
+        tag = turn_store.submission_tag(blob)
+        batch = self.fs.batch()
+        batch.set(self.submission_doc(civ, turn), {
+            'turn': int(turn),
+            'civ': civ,
+            'data': data,
+            'tag': tag,
+            'bytes': len(blob),
+            'at': time.time(),
+        })
+        if doc is None or civ not in (submitted_of(doc, turn) or []):
+            from google.cloud import firestore
+            batch.set(self.doc, {SUBMITTED_KEY: {
+                str(int(turn)): firestore.ArrayUnion([civ])}}, merge=True)
+        batch.commit()
+        return tag
+
+    def submission_record(self, civ: str, turn: int):
+        """The stored document for one civ and turn, or None.
+
+        `data` is the compressed blob and `tag` its `submission_tag`. The relay
+        serves this without inflating it, and answers a caller that already
+        holds the tag without sending it at all.
+        """
+        snap = self.submission_doc(civ, turn).get()
+        return (snap.to_dict() or {}) if snap.exists else None
+
+    def before_documents(self, turn: int, doc: dict = None) -> bool:
+        """Whether `turn` may have submissions stored as Storage objects.
+
+        True for a turn before `SUBMISSIONS_FROM_KEY` and for every turn of a
+        galaxy that does not carry it. `doc` is the galaxy document when the
+        caller has it, and it is read here when not, which is only on a path
+        that has already missed a document.
+        """
+        if doc is None:
+            snap = self.doc.get()
+            doc = (snap.to_dict() or {}) if snap.exists else {}
+        since = doc.get(SUBMISSIONS_FROM_KEY)
+        return since is None or int(turn) < int(since)
 
     def record_submitted(self, civ: str, turn: int) -> None:
         """Note on the galaxy document that `civ` has submitted for `turn`.
 
-        Called once the object is in place: by `submit`, and by the relay once
-        a commit has read the upload back and found it a save. An array union,
-        so two players committing at the same moment cannot drop each other.
-        A turn the document no longer records gets a key of its own, which
-        `submitted_of` never reads and the next `publish` removes.
+        `write_submission` does this in its own batch. This is the same write
+        on its own, for a submission that became a document some other way.
+        An array union, so two players committing at the same moment cannot
+        drop each other. A turn the document no longer records gets a key of
+        its own, which `submitted_of` never reads and the next `publish`
+        removes.
         """
         from google.cloud import firestore
         self.doc.set({SUBMITTED_KEY: {
             str(int(turn)): firestore.ArrayUnion([civ])}}, merge=True)
 
     def forget_submitted(self, civ: str, turn: int) -> None:
-        """Undo `record_submitted`, for an object that has been deleted.
-
-        The relay deletes an upload it refuses at commit, and that upload may
-        have replaced a submission recorded earlier in the turn. Without this
-        the document would go on naming a civ whose object is gone.
-        """
+        """Undo `record_submitted`, for a submission that has been removed."""
         from google.cloud import firestore
         self.doc.set({SUBMITTED_KEY: {
             str(int(turn)): firestore.ArrayRemove([civ])}}, merge=True)
 
     def has_submitted(self, civ: str, turn: int) -> bool:
-        """Whether the object exists, asked of the bucket and not the document.
+        """Whether the submission exists, asked of where it is stored.
 
-        One Class B operation. The referee asks this of past turns, which the
-        document does not record, and `abandonment` wants the bucket's answer
-        in any case because the bucket is what the referee merges.
+        One Firestore read. The referee asks this of the turn it is closing,
+        and `abandonment` wants the answer the referee merges from rather than
+        the galaxy document's record of it.
         """
-        return self._has(self.submission_object(civ, turn))
+        if self.submission_doc(civ, turn).get().exists:
+            return True
+        return (self.before_documents(turn)
+                and self._has(self.submission_object(civ, turn)))
 
     def submission(self, civ: str, turn: int):
         """What one civ handed back for this turn, or None when they have not.
 
-        One object named outright, so this is one Class B operation and it
-        touches nothing but that civ's own object. That is what makes it
-        survivable on the path a launcher polls, and it is also what lets the
-        storage rule scope a read to the player it belongs to: a listing under
-        the turn's prefix could not be granted without granting every player's
-        orders with it.
+        One document named outright, so one Firestore read that touches
+        nothing but that civ's own submission, which is what makes it
+        survivable on the path a launcher polls.
         """
+        rec = self.submission_record(civ, turn)
+        if rec is not None:
+            return turn_store.inflate_capped(bytes(rec['data']))
+        if not self.before_documents(turn):
+            return None
         data = self._get(self.submission_object(civ, turn))
         if data is None:
             return None
@@ -600,9 +745,9 @@ class FirebaseTurnStore:
         it, which the relay has, so its `/submissions` route costs nothing
         beyond the read it makes for every request.
 
-        Any other turn is a bucket listing, one Class A operation. That is a
-        past turn, asked by an operator rather than a poll, or a galaxy last
-        published before the document carried the field.
+        Any other turn is `listed_civs`: a past turn, asked by an operator
+        rather than a poll, or a galaxy last published before the document
+        carried the field.
         """
         if doc is None:
             snap = self.doc.get()
@@ -610,41 +755,87 @@ class FirebaseTurnStore:
         known = submitted_of(doc, turn)
         if known is not None:
             return known
-        return self.listed_civs(turn)
+        return self.listed_civs(turn, doc=doc)
 
-    def listed_civs(self, turn: int) -> list:
-        """Who has an object under this turn's prefix, from a bucket listing.
+    def _documents(self, turn: int, fields=None):
+        """The stored submission documents for one turn, as snapshots."""
+        from google.cloud.firestore_v1.base_query import FieldFilter
+        q = self.submission_collection.where(
+            filter=FieldFilter('turn', '==', int(turn)))
+        if fields is not None:
+            q = q.select(fields)
+        return list(q.stream())
 
-        The ground truth `submitted_civs` stands in for, and one Class A
-        operation each time it is asked.
-        """
+    def _objects(self, turn: int):
+        """(civ, Blob) for each pre-H13 Storage object under this turn."""
         start = self.submission_prefix(turn)
         out = []
         for blob in self.gcs.list_blobs(self.bucket, prefix=start):
             name = blob.name[len(start):]
             if name.endswith('.b64') and '/' not in name:
-                out.append(name[:-4])
+                out.append((name[:-4], blob))
+        return out
+
+    def listed_civs(self, turn: int, doc: dict = None) -> list:
+        """Who has a stored submission for this turn, from the submissions.
+
+        The ground truth `submitted_civs` stands in for. A query that reads
+        only the `civ` field, one Firestore read per civ found, and for a turn
+        from before the submissions were documents a bucket listing as well,
+        one Class A operation.
+        """
+        out = {str((s.to_dict() or {}).get('civ'))
+               for s in self._documents(turn, fields=['civ'])}
+        if self.before_documents(turn, doc):
+            out.update(civ for civ, _blob in self._objects(turn))
         return sorted(out)
 
     def submissions(self, turn: int) -> dict:
         """{civ: blob} for everyone who handed something back for this turn.
 
-        Listed from Storage rather than from `SUBMITTED_KEY`, because the
-        objects are what gets merged and an object uploaded without a commit
-        is still one the referee reads. This is not on the path that gets
-        polled: the referee reads it once a turn, while a launcher asks
-        `has_submitted`, `submission` or `submitted_civs`, none of which
-        downloads anybody else's orders.
+        Read from the submission documents rather than from `SUBMITTED_KEY`,
+        because the documents are what gets merged. The referee reads this
+        once a turn: one Firestore read per player. A launcher asks
+        `has_submitted`, `submission` or `submitted_civs`, none of which reads
+        anybody else's orders.
+
+        A turn from before the submissions were documents is read from the
+        bucket as well, and a document wins over an object for the same civ,
+        because the document can only be the newer of the two.
         """
         out = {}
-        start = self.submission_prefix(turn)
-        for blob in self.gcs.list_blobs(self.bucket, prefix=start):
-            name = blob.name[len(start):]
-            if not name.endswith('.b64') or '/' in name:
-                continue
-            out[name[:-4]] = turn_store.decode_capped(
-                blob.download_as_bytes())
+        for snap in self._documents(turn):
+            rec = snap.to_dict() or {}
+            out[str(rec.get('civ'))] = turn_store.inflate_capped(
+                bytes(rec['data']))
+        if self.before_documents(turn):
+            for civ, blob in self._objects(turn):
+                if civ not in out:
+                    out[civ] = turn_store.decode_capped(
+                        blob.download_as_bytes())
         return dict(sorted(out.items()))
+
+    def prune_submissions(self, before: int) -> int:
+        """Delete every submission and note document for a turn before
+        `before`, and say how many went.
+
+        Called by `publish`. One read per document found and one delete each,
+        in batches under Firestore's 500 writes a batch. The objects of a turn
+        before the submissions were documents are left where they are.
+        """
+        from google.cloud.firestore_v1.base_query import FieldFilter
+        snaps = []
+        for coll in (self.submission_collection,
+                     self.doc.collection(NOTE_COLLECTION)):
+            snaps += list(coll.where(
+                filter=FieldFilter('turn', '<', int(before))).select(
+                    ['turn']).stream())
+        for i in range(0, len(snaps), 400):
+            batch = self.fs.batch()
+            for snap in snaps[i:i + 400]:
+                batch.delete(snap.reference)
+            batch.commit()
+        return len(snaps)
 
     # ── archive ──────────────────────────────────────────────────────────────
     def archive(self, turn: int, record: dict) -> None:
@@ -670,13 +861,29 @@ class FirebaseTurnStore:
     # ── notes ────────────────────────────────────────────────────────────────
     def put_note(self, civ: str, turn: int, lines) -> None:
         """Leave one player the referee's reasons for refusing part of a turn.
+
+        A document, for the reason a submission is one: every player's
+        launcher asks for its note once a turn, and as an object that ask was
+        a Class B operation whether or not a note existed.
         """
-        self._put(self.note_object(civ, turn),
-                  '\n'.join(lines).encode('utf-8'),
-                  'text/plain; charset=utf-8')
+        self.note_doc(civ, turn).set({
+            'turn': int(turn),
+            'civ': civ,
+            'lines': [str(line) for line in lines],
+        })
 
     def note(self, civ: str, turn: int) -> list:
-        """Those reasons, or [] when the turn was taken whole."""
+        """Those reasons, or [] when the turn was taken whole.
+
+        One Firestore read. A turn from before notes were documents is looked
+        for as an object when there is no document.
+        """
+        snap = self.note_doc(civ, turn).get()
+        if snap.exists:
+            return [line for line in (snap.to_dict() or {}).get('lines') or []
+                    if line]
+        if not self.before_documents(turn):
+            return []
         data = self._get(self.note_object(civ, turn))
         if not data:
             return []
@@ -789,7 +996,9 @@ class FirebaseTurnStore:
                                         prefix=self._object() + '/'):
             blob.delete()
             n += 1
-        for name in ('archive', JOIN_COLLECTION, JOIN_DONE_COLLECTION):
+        for name in ('archive', SUBMISSION_COLLECTION, NOTE_COLLECTION,
+                     JOIN_COLLECTION,
+                     JOIN_DONE_COLLECTION):
             for snap in self.doc.collection(name).stream():
                 snap.reference.delete()
                 n += 1

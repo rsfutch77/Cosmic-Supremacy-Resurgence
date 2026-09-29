@@ -45,10 +45,9 @@ Two things the emulator cannot prove, said here rather than implied
 -------------------------------------------------------------------
 **Signed URLs are not signed on the emulator.** There is no key to sign with
 and nothing checks a signature, so `relay.signed_url` hands out the emulator's
-own open endpoint and the `x-goog-content-length-range` header that caps an
-upload at the edge on a real bucket is ignored here. The size cap is still
-tested, because the relay checks it again at commit for exactly this reason,
-and the commit check is the one that runs in both places.
+own open endpoint. Only turns and pre-H13 submissions are served that way; a
+submission is carried by the relay itself, so its size cap and its check that
+the bytes are a save run here exactly as they run deployed.
 
 **Token signatures are not checked on the emulator.** The emulator mints
 unsigned tokens by design and `relay.verify` reads the claims itself rather than
@@ -81,9 +80,9 @@ BUCKET = os.environ.get('CS_RELAY_BUCKET') or f'{PROJECT}.firebasestorage.app'
 AUTH_HOST = os.environ.get('FIREBASE_AUTH_EMULATOR_HOST') or '127.0.0.1:9099'
 
 # Set before `relay` is imported, because it reads both at import. The cap is
-# two kilobytes rather than the two megabytes a deployment uses, so that an
-# oversized submission is a small object: what is under test is the refusal,
-# not the emulator's throughput.
+# two kilobytes rather than the megabyte a deployment uses, so that an
+# oversized submission is a small body: what is under test is the refusal, not
+# the emulator's throughput.
 os.environ['CS_RELAY_PROJECT'] = PROJECT
 os.environ['CS_RELAY_BUCKET'] = BUCKET
 os.environ['CS_RELAY_MAX_BYTES'] = '2048'
@@ -136,6 +135,7 @@ BLOB8 = make_blob(TURN + 1)
 MINE = make_blob(TURN, b'o')
 THEIRS = make_blob(TURN, b'n')
 MINE8 = make_blob(TURN + 1, b'q')
+MINE8_B = make_blob(TURN + 1, b'r')
 # Incompressible filler, so that the encoded form is genuinely over the cap
 # rather than zlib turning a large blob into a small object.
 HUGE = make_blob(TURN + 1, os.urandom(8192), size=8192)
@@ -362,8 +362,8 @@ def run(referee, galaxy, base, player_a, player_b, player_c, anonymous, ids):
     # it you needed a seat, and to get a seat you had to submit.
     #
     # Seatless is no submission rather than no entry, which is true and not a
-    # convenience: a submission object is only ever written by the ticket and
-    # commit pair, and both of those need a seat.
+    # convenience: a submission is only ever written by the submission route,
+    # and that needs a seat.
     check('an unseated caller asking for its own submission is told there '
           'is none, rather than refused',
           player_c.submission('DemoPlayer', 7), None)
@@ -426,8 +426,20 @@ def run(referee, galaxy, base, player_a, player_b, player_c, anonymous, ids):
     # still the turn, and turn 8 does not exist.
     check('the clock did not move', referee.current()[0], 7)
     check('and no turn 8 was written', referee.has_turn(8), False)
-    check('the legacy inline submission route is refused with the way in',
-          call('POST', '/submission/7/DemoPlayer', token_a, MINE)[0], 405)
+    # H13. The ticket names the relay's own route, so a body posted there is a
+    # submission. Fails if the route still refused it, which is what every
+    # launcher following the ticket would then be told.
+    ticket = json.loads(call('GET', '/upload/submission/7/DemoPlayer',
+                             token_a)[2])
+    check('the upload ticket names the relay route, a POST, and no commit',
+          (ticket['url'], ticket['method'], ticket['encoding'],
+           ticket['commit']),
+          ('/submission/7/DemoPlayer', 'POST', 'b64', None))
+    check('a body posted straight to the submission route is taken',
+          call('POST', '/submission/7/DemoPlayer', token_a,
+               sp.encode_save(MINE))[0], 200)
+    check('and is what the referee reads',
+          referee.submission('DemoPlayer', 7), MINE)
     # A query is not a way past the routing. Fails if the path were split
     # before the query was cut off, which is how `/start?civ=A` became a route
     # nothing matched and a 404 where a 403 belonged.
@@ -452,42 +464,36 @@ def run(referee, galaxy, base, player_a, player_b, player_c, anonymous, ids):
 
     print('a submission is capped and has to be a save')
     refused = refusal(player_a.submit, 'DemoPlayer', 8, HUGE)
-    # On a real bucket Cloud Storage refuses this at the edge, because the cap
-    # is signed into the URL. The emulator does not check signed headers, so
-    # what runs here is the commit-time check, which is the one that runs in
-    # both places. Fails if neither were there.
+    # Fails if the cap were not checked before the body was stored.
     check('an oversized submission is refused', status_of(refused), 413)
-    check('and it is not left where the referee would read it',
-          referee.submission('DemoPlayer', 8), None)
-    # Fails if the commit deleted the object and left the document naming the
-    # civ, which is the one way the two can disagree: this upload replaced a
-    # submission recorded a moment ago, and that object is gone.
-    check('and the galaxy document no longer says they have submitted',
-          firebase_store.submitted_of(referee.doc.get().to_dict(), 8), [])
+    # Every refusal comes before the write, so the submission this one was
+    # sent over is still the player's turn. Fails if the relay stored first
+    # and checked after, which is what the Storage ticket had to do.
+    check('and the submission it was sent over still stands',
+          referee.submission('DemoPlayer', 8), MINE8)
+    check('and the galaxy document still says they have submitted',
+          firebase_store.submitted_of(referee.doc.get().to_dict(), 8),
+          ['DemoPlayer'])
 
-    ticket = json.loads(call('GET', '/upload/submission/8/DemoPlayer',
-                             token_a)[2])
-    put(ticket, b'this is not a save at all')
-    code, _h, body = call('POST', ticket['commit'], token_a)
-    # Fails if the relay trusted the upload. It never sees the bytes, so the
-    # only place left to ask whether they were a save is afterwards.
+    code, _h, body = call('POST', ticket_url(call, token_a, 8, 'DemoPlayer'),
+                          token_a, b'this is not a save at all')
     check('a submission that is not a save is refused', code, 400)
     check('and says so rather than raising',
           'not a save' in json.loads(body)['error'], True)
-    check('and is deleted rather than left for the referee',
-          referee.submission('DemoPlayer', 8), None)
+    check('and does not replace the one before it',
+          referee.submission('DemoPlayer', 8), MINE8)
 
-    ticket = json.loads(call('GET', '/upload/submission/8/DemoPlayer',
-                             token_a)[2])
-    put(ticket, sp.encode_save(make_blob(3)))
-    code, _h, body = call('POST', ticket['commit'], token_a)
+    code, _h, body = call('POST', ticket_url(call, token_a, 8, 'DemoPlayer'),
+                          token_a, sp.encode_save(make_blob(3)))
     # A real save, of the wrong turn. Fails if the check stopped at "does this
     # parse", which is the check that is easy to write and easy to pass.
     check('a save of another turn is refused', code, 400)
-    check('and is deleted too', referee.submission('DemoPlayer', 8), None)
-    player_a.submit('DemoPlayer', 8, MINE8)
-    check('and a good one still goes through afterwards',
+    check('and does not replace it either',
           referee.submission('DemoPlayer', 8), MINE8)
+    player_a.submit('DemoPlayer', 8, MINE8_B)
+    check('and a good one still goes through afterwards',
+          referee.submission('DemoPlayer', 8), MINE8_B)
+    player_a.submit('DemoPlayer', 8, MINE8)
 
     print('who has submitted is answered without listing the bucket')
     # H9. A launcher asks this every poll, and a bucket listing is a Class A
@@ -512,27 +518,31 @@ def run(referee, galaxy, base, player_a, player_b, player_c, anonymous, ids):
         check('and False for a player who has not',
               player_b.has_submitted('Neighbor', 8), False)
         check('and none of those three polls listed the bucket', listed, [])
-        # The control. Fails if the counter could not see a listing at all, in
-        # which case the line above would pass whatever the route did.
-        check('CONTROL: a past turn is listed, and the counter sees it',
+        # H13. A past turn is answered from the submission documents, so it
+        # does not list the bucket either on a galaxy started with them.
+        check('a past turn is answered from the stored submissions',
               json.loads(call('GET', '/submissions/7', token_a)[2]),
               ['DemoPlayer', 'Neighbor'])
-        check('CONTROL: exactly one listing, for turn 7', len(listed), 1)
+        check('and that did not list the bucket either', listed, [])
+        # The control. Fails if the counter could not see a listing at all, in
+        # which case the lines above would pass whatever the route did.
+        under._objects(7)
+        check('CONTROL: a listing made on purpose is counted', len(listed), 1)
     finally:
         client.list_blobs = real_list
     # H10. The relay used to carry its own copy of the listing, which agreed
     # with the store's by inspection only.
     check('the relay has no listing of its own',
           hasattr(relay, '_submitted_civs'), False)
-    check('the document agrees with the bucket for the current turn',
-          referee.submitted_civs(8), referee.listed_civs(8))
+    check('the document agrees with the stored submissions for the current '
+          'turn', referee.submitted_civs(8), referee.listed_civs(8))
     # A commit that read turn 7 and landed after the publish of turn 8. Fails
     # if it read as a turn-8 submission, or if the partial turn-7 key it leaves
     # hid the real turn-7 submissions from a later reader.
     referee.record_submitted('Third', 7)
     check('a commit landing after the publish is not read as this turn',
           'Third' in referee.submitted_civs(8), False)
-    check('and a past turn is still answered from the bucket',
+    check('and a past turn is still answered from the stored submissions',
           referee.submitted_civs(7), ['DemoPlayer', 'Neighbor'])
 
     print('notes go to the player they were left for')
@@ -623,9 +633,31 @@ def run(referee, galaxy, base, player_a, player_b, player_c, anonymous, ids):
     check('and a token callable that answers None is the same thing',
           status_of(refusal(empty.state)), 401)
 
-    print('what the relay never sees')
-    # The design property: the function is the control plane. Fails if a blob
-    # route were ever answered with a body rather than a redirect to Storage.
+    print('what the relay carries and what it does not')
+    # H13. A submission is served from its document, and a caller that sends
+    # back the tag it was given is told 304 with no body. Fails if the tag were
+    # not the blob's, or if a matching one still sent the bytes, which is the
+    # egress this exists to save.
+    code, headers, body = call('GET', '/submission/8/DemoPlayer', token_a)
+    check('a submission is served as its wire form, with its tag',
+          (code, sp.decode_save(body), headers.get('ETag')),
+          (200, MINE8, f'"{turn_store.submission_tag(MINE8)}"'))
+    code, _h, body = relay.handle(
+        'GET', f'/{galaxy}/submission/8/DemoPlayer',
+        {'Authorization': f'Bearer {token_a}',
+         'If-None-Match': headers['ETag']}, b'')
+    check('asked with that tag, it is 304 and sends nothing', (code, body),
+          (304, b''))
+    code, _h, body = relay.handle(
+        'GET', f'/{galaxy}/submission/8/DemoPlayer',
+        {'Authorization': f'Bearer {token_a}',
+         'If-None-Match': f'"{turn_store.submission_tag(MINE8_B)}"'}, b'')
+    check('asked with another tag, it sends the bytes',
+          (code, sp.decode_save(body) if code == 200 else None),
+          (200, MINE8))
+    # The turn blob is the one every launcher downloads and it grows with the
+    # galaxy, so it stays on Storage. Fails if the route answered with a body
+    # rather than a redirect.
     code, headers, body = call('GET', '/turn/8', token_a)
     check('a turn download is a redirect, not a body', code, 302)
     check('and carries no bytes of the blob', body, b'')
@@ -904,14 +936,12 @@ def run_joins(referee, galaxy, call, ids):
     referee.reopen()
 
 
-def put(ticket, data: bytes):
-    """Upload straight to the ticket's URL, the way the launcher does."""
-    req = urllib.request.Request(ticket['url'], data=data,
-                                 method=ticket.get('method', 'PUT'))
-    for key, value in (ticket.get('headers') or {}).items():
-        req.add_header(key, value)
-    with urllib.request.urlopen(req, timeout=30) as r:
-        return r.read()
+def ticket_url(call, token, turn, civ) -> str:
+    """Where the upload ticket says a submission goes, as a launcher reads it.
+    """
+    ticket = json.loads(call('GET', f'/upload/submission/{turn}/{civ}',
+                             token)[2])
+    return ticket['url']
 
 
 if __name__ == '__main__':
