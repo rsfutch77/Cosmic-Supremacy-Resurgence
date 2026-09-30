@@ -129,7 +129,9 @@ def main():
           [f['lines'] for k, f in events if k == 'refused_orders'],
           [reasons[:1]])
 
-    s.put_note('Laptop', 8, warning)
+    # The referee writes the warning on the turn the player opens next, so the
+    # loop closing turn 8 finds it on turn 9's note.
+    s.put_note('Laptop', 9, warning)
     said, events = [], []
     n = player_turn.report_refusals(
         s, 'Laptop', 8, log=said.append,
@@ -142,6 +144,14 @@ def main():
     check('with every line printed', all(any(w in x for x in said)
                                          for w in warning), True)
     check('and only warned is emitted', [k for k, _f in events], ['warned'])
+    check('for the turn it was left on', [f['turn'] for _k, f in events], [9])
+    # Fails if the loop showed again a warning already shown when turn 9
+    # opened: closing turn 9 reads turn 10's note, and turn 9's own is spent.
+    said, events = [], []
+    player_turn.report_refusals(
+        s, 'Laptop', 9, log=said.append,
+        emit=lambda kind, **f: events.append((kind, f)))
+    check('the same warning is not shown twice', events, [])
 
     print('it does not take the turn loop down with it')
 

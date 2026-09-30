@@ -447,16 +447,24 @@ path = make_galaxy(os.path.join(root, "quiet"), ["Ada", "Bob"], turn=4,
 quiet = turn_store.open_store(path)
 quiet.archive(3, {"submitted": ["Bob"], "missing": ["Ada"]})
 quiet.submit("Bob", 4, b"orders")
-# Closing turn 4 with Ada silent for a second turn in a row.
-abandonment.enforce(quiet, 4, b"", log=lambda *_a: None)
-check("the referee left Ada a note on turn 4", bool(quiet.note("Ada", 4)),
-      True)
+# Closing turn 4 with Ada silent for a second turn in a row, called the way
+# `referee.resolve_turn` calls it, naming the turn it is about to publish.
+abandonment.enforce(quiet, 4, b"", log=lambda *_a: None, new_turn=5)
+check("the referee left Ada a note on turn 5, the turn she opens next",
+      bool(quiet.note("Ada", 5)), True)
+check("and none on turn 4", quiet.note("Ada", 4), [])
 app = App(quiet)
 got = L.Launcher._warning_note(app, quiet, "Ada", 5)
-# Fails if Play read the wrong turn's note: the warning is on the turn that
-# was missed, which is the one before the turn now open.
+# Fails if Play read only the turn before the open one, which is where an
+# older referee wrote the warning and where nobody reads it now.
 check("Play at turn 5 reads it", got, lambda g: bool(g) and
       g[0].startswith("You have missed 2 turns"))
+older = turn_store.open_store(make_galaxy(os.path.join(root, "older"),
+                                          ["Ada", "Bob"], turn=5))
+older.put_note("Ada", 4, abandonment.warning_note("Ada", 2, 5))
+check("a warning an older referee left on the turn missed is still found",
+      L.Launcher._warning_note(App(older), older, "Ada", 5),
+      lambda g: bool(g) and g[0].startswith("You have missed 2 turns"))
 check("and it says how many turns are left", " 3 more turn" in " ".join(got),
       True)
 check("Bob, who played, has none", L.Launcher._warning_note(app, quiet,

@@ -4761,20 +4761,26 @@ class Launcher:
         self._show_capture(None, 0.0)
 
     def _warning_note(self, store, civ, current):
-        """The referee's missed-turns warning for `civ` on the turn before
-        `current`, or None.
+        """The referee's missed-turns warning for `civ`, or None.
 
-        One read of that turn's note. A turn with no note, a store that cannot
-        be read, and a galaxy with no turn yet all answer None: a warning is
-        worth one read and not worth a failed Play.
+        The referee writes the warning on the turn the silent player is served
+        next, which is `current` (`abandonment.enforce`'s `new_turn`). The turn
+        before is read as well when that one has none, for a galaxy refereed by
+        a build that wrote it on the turn missed. At most two note reads, once
+        per Play. A turn with no note, a store that cannot be read, and a
+        galaxy with no turn yet all answer None: a warning is worth a read and
+        not worth a failed Play.
         """
         if not civ or not _whole(current) or current < 1:
             return None
-        try:
-            lines = store.note(civ, current - 1)
-        except Exception:                   # a readout is not worth an error path
-            return None
-        return abandonment_warning(lines)
+        for turn in (current, current - 1):
+            try:
+                found = abandonment_warning(store.note(civ, turn))
+            except Exception:               # a readout is not worth an error path
+                continue
+            if found:
+                return found
+        return None
 
     def _mp_probe_closed(self, store):
         """Read the followed galaxy's state once, and say so if it has closed.
