@@ -2296,6 +2296,21 @@ is out of scope here.
   and two requests per multiplayer turn. Still worth removing, since it is over
   half the log and grows monotonically, but not for the reason first given.
 
+  **Verified live, 30 September 2026.** The second test machine sent its log
+  from a v0.1.7 build with the send log link. `log_tool show` read back all
+  1,729 lines under the reference the launcher gave, with the Windows account
+  name replaced by `<user>` throughout.
+
+  [ ] **To do: the reference cannot be copied or found again.** The box after
+  Send shows the reference as plain text, so a player cannot select or copy it,
+  and nothing in the launcher shows it again once the box is closed. Found by
+  the operator during that check. It wants a Copy button on the box, and the
+  last few references kept somewhere the player can reach them, for example
+  under the send log link. The operator does not need the reference to find a
+  log, since `log_tool list --code <support code>` finds a player's logs, so
+  a player who lost it can read out their support code instead, and the box
+  should say so.
+
   **Done when:** a turn's log uploads under the cap, and a failure the operator
   did not witness is diagnosed from the uploaded copy alone.
 
