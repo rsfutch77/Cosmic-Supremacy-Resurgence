@@ -4053,7 +4053,7 @@ class Launcher:
         self.show_home()
         self.start_multiplayer(mode, g)
 
-    def show_beta_notice(self, body: str, g) -> bool:
+    def show_beta_notice(self, body: str, g, civ: str = None) -> bool:
         """Show the notice and answer whether the player joined from it.
 
         Modal, and the only way past it is the Join button under the text. The
@@ -4065,6 +4065,9 @@ class Launcher:
         The text is scrolled rather than shortened. It is the whole of what a
         player is agreeing to, and a summary with a Join button under it is the
         thing this exists instead of.
+
+        The line above the text also says when the empire arrives, so no box
+        follows the Join: the row reads "joining next turn" from then on.
         """
         tk = self.tk
         win = tk.Toplevel(self.root)
@@ -4077,9 +4080,14 @@ class Launcher:
         tk.Label(win, text=heading, bg=BG, fg=ACCENT,
                  font=("Segoe UI", 14, "bold")).pack(anchor="w", padx=20,
                                                      pady=(18, 0))
-        tk.Label(win, text=f"You are about to join {g.name or g.id}.",
-                 bg=BG, fg=DIM, font=("Segoe UI", 9)).pack(anchor="w", padx=20,
-                                                           pady=(2, 10))
+        when = f"turn {g.turn + 1}" if g.turn is not None else "its first turn"
+        who = f" as {civ}" if civ else ""
+        tk.Label(win, text=(f"You are about to join {g.name or g.id}{who}. New "
+                            "players arrive at a turn boundary, so your empire "
+                            f"appears at {when}, and its row here gets a Play "
+                            "button then."),
+                 bg=BG, fg=DIM, font=("Segoe UI", 9), justify="left",
+                 wraplength=560).pack(anchor="w", padx=20, pady=(2, 10))
 
         frame = tk.Frame(win, bg=BG)
         frame.pack(fill="both", expand=True, padx=20)
@@ -4209,7 +4217,7 @@ class Launcher:
                       "without it, because what would be missing is the rules "
                       "of the beta rather than a detail of them.")
             return
-        if not self.show_beta_notice(notice, g):
+        if not self.show_beta_notice(notice, g, civ):
             self.say(f"join: the notice was closed without joining {g.id}")
             return
 
@@ -4230,13 +4238,6 @@ class Launcher:
         save_joined(self.data_dir, joined_record(g, civ, uid, self.games_dir,
                                                  turn=now_turn))
         self.say(f"join: asked {g.id} for a seat as {civ} ({where})")
-        when = f"turn {g.turn + 1}" if g.turn is not None else "the first turn"
-        messagebox.showinfo(
-            self.cfg["product"],
-            f"You have asked to join {g.name or g.id} as {civ}.\n\nA galaxy "
-            "takes new players at a turn boundary, so your empire appears at "
-            f"{when}.\n\nIts row here grows a Play button once it does, and "
-            "the launcher plays every turn from there.")
         self.refresh_games()
 
     # ── Multiplayer session ──────────────────────────────────────────────────
