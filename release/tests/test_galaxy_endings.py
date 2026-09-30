@@ -183,9 +183,9 @@ check("and still as one the player is in", rows["season1"].joined, True)
 check("the You column says it has ended",
       you.text(rows["season1"], view), "galaxy ended")
 # Fails with the old rule, which offered a closed galaxy nothing at all.
-check("the row offers Reason", L.row_action(rows["season1"], view.recs),
+check("the row offers Review", L.row_action(rows["season1"], view.recs),
       L.ENDED)
-check("labelled Reason", L.ACTION_TEXT[L.ENDED], "Reason")
+check("labelled Review", L.ACTION_TEXT[L.ENDED], "Review")
 check("never Play", L.row_action(rows["season1"], view.recs) == L.PLAY,
       False)
 check("a closed galaxy the player is not in still offers nothing",
@@ -196,14 +196,14 @@ check("the fresh galaxy is offered View",
 # galaxy they were playing is over before they are told where else to go.
 check("the line under the table says it ended and what to do",
       page.hint(rows.values()),
-      lambda t: "season1 has ended" in t and "Reason" in t
+      lambda t: "season1 has ended" in t and "Review" in t
       and "another galaxy" in t)
 # Fails if the submitted poll still asked a closed galaxy every refresh.
 check("the refresh did not ask the closed galaxy whether a turn was played",
       extra.get("submitted", {}).get("season1"), None)
 check("nor open its store at all", old in asked, False)
 
-print("\n2. Reason shows the operator's own words, from the row")
+print("\n2. Review shows the operator's own words, from the row")
 check("the listing's row carries the reason", rows["season1"].closed_reason,
       REASON_TEXT)
 asked.clear()
@@ -212,8 +212,8 @@ try:
     L.Launcher.show_ended(page, rows["season1"])
 finally:
     L.open_player_store = real_open
-# Fails if Reason went back to reading the galaxy's state.
-check("pressing Reason reads no store", asked, [])
+# Fails if Review went back to reading the galaxy's state.
+check("pressing Review reads no store", asked, [])
 title, body, _choices = page.dialogs[-1]
 check("the box is titled for an ended galaxy", title, "Galaxy ended")
 check("it says the galaxy has been closed", "has been closed" in body, True)
@@ -249,7 +249,7 @@ view = page.view()
 # no more requests, so that is a wait with no end.
 check("the row says the galaxy ended rather than joining next turn",
       you.text(rows["ended"], view), "galaxy ended")
-check("and offers Reason", L.row_action(rows["ended"], view.recs), L.ENDED)
+check("and offers Review", L.row_action(rows["ended"], view.recs), L.ENDED)
 # Fails if awaiting_answer still polled a closed galaxy.
 check("no answer is asked for from a closed galaxy",
       L.awaiting_answer(rows["ended"], view.recs), False)
@@ -259,7 +259,7 @@ print("\n4. the galaxy multiplayer.json names, closed")
 page.own_store = ended
 view = page.view()
 g = rows["ended"]._replace(joined=False)
-check("offers Reason rather than Play",
+check("offers Review rather than Play",
       L.row_action(g, {}, own=ended), L.ENDED)
 
 print("\n5. a followed galaxy that closes stops the loop and says why")
@@ -559,14 +559,14 @@ check("and kept it in the joined record",
       12)
 check("the row says the seat was reclaimed",
       you.text(rows["sandbox"], view), "seat reclaimed")
-check("and offers Reason", L.row_action(rows["sandbox"], view.recs),
+check("and offers Review", L.row_action(rows["sandbox"], view.recs),
       L.RECLAIMED)
 check("the line under the table says so",
       page.hint(rows.values()),
-      lambda t: "taken back" in t and "Reason" in t)
+      lambda t: "taken back" in t and "Review" in t)
 told = L.reclaimed_text(rows["sandbox"], L.load_joined(data)["sandbox"])
 # Fails if the message said no seat exists, which is what K3 asks it not to.
-check("Reason says the seat was taken back after the missed turns",
+check("Review says the seat was taken back after the missed turns",
       "took the seat 'Ada' back at turn 20 after 12 missed turns" in told,
       True)
 check("and not that there is no seat", "no seat for" in told, False)

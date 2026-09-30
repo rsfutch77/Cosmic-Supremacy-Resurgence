@@ -216,14 +216,14 @@ check("a forming galaxy is offered neither",
       L.row_action(ROWS[3], JOINING), None)
 check("a closed galaxy is offered neither",
       L.row_action(ROWS[1], JOINING), None)
-# A closed galaxy you are in offers Reason, which reads why it ended, and
+# A closed galaxy you are in offers Review, which reads why it ended, and
 # never Play: see test_galaxy_endings.py.
 check("nor Play on a closed galaxy you are in",
       L.row_action(gx("x", "X", status="closed", joined=True)), L.ENDED)
-# Reason is the third label. A refused join, an ended galaxy and a seat taken
+# Review is the third label. A refused join, an ended galaxy and a seat taken
 # back all offer it: see test_join_answers.py and test_galaxy_endings.py.
-check("View, Play and Reason are the only labels",
-      sorted(set(L.ACTION_TEXT.values())), ["Play", "Reason", "View"])
+check("View, Play and Review are the only labels",
+      sorted(set(L.ACTION_TEXT.values())), ["Play", "Review", "View"])
 
 own = ROWS[3].store
 check("the galaxy multiplayer.json names is played whatever its state says",

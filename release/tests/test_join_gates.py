@@ -223,7 +223,7 @@ check("a closed galaxy's countdown is absent rather than zero",
 check("an open galaxy is offered a View", L.row_action(row()), L.VIEW)
 check("and a closed one is offered nothing",
       L.row_action(row(status="closed")), None)
-check("and a closed one this player is in offers only its Reason",
+check("and a closed one this player is in offers only its Review",
       L.row_action(row(status="closed", joined=True)), L.ENDED)
 
 print("\n6. the notice a player reads before joining")

@@ -1916,7 +1916,7 @@ def record_reclaims(data_dir: str, reclaims) -> None:
 
 
 def reclaimed_text(g, rec) -> str:
-    """What a player whose seat was taken back reads from the row's Reason."""
+    """What a player whose seat was taken back reads from the row's Review."""
     name = (rec or {}).get("name") or "you"
     said = roster_problem(name, (), (rec or {}).get(RECLAIMED_REC_KEY))
     return (f"{said}\n\nPress Clear to forget this seat and put View back "
@@ -1933,12 +1933,12 @@ def in_galaxy(g, recs=None, own=None) -> bool:
 def ended_hint(ended) -> str:
     """The line under the table when a galaxy this player is in has ended."""
     names = ", ".join(g.name or g.id for g in ended)
-    return (f"{names} has ended. Press Reason on its row to read why, and "
+    return (f"{names} has ended. Press Review on its row to read why, and "
             "pick another galaxy to keep playing.")
 
 
 def ended_text(g) -> str:
-    """What the Reason button on an ended galaxy shows.
+    """What the Review button on an ended galaxy shows.
 
     The operator's words come from the row's `closed_reason`, which the
     directory carries for a closed galaxy, so pressing the button reads
@@ -2061,12 +2061,12 @@ PLAY = "play"
 VIEW = "view"
 REASON = "reason"
 # Two more rows that only explain: a galaxy this player is in that the operator
-# has ended, and a seat the galaxy took back. Both read "Reason" on the button,
+# has ended, and a seat the galaxy took back. Both read "Review" on the button,
 # because that is what pressing it gives.
 ENDED = "ended"
 RECLAIMED = "reclaimed"
-ACTION_TEXT = {PLAY: "Play", VIEW: "View", REASON: "Reason",
-               ENDED: "Reason", RECLAIMED: "Reason"}
+ACTION_TEXT = {PLAY: "Play", VIEW: "View", REASON: "Review",
+               ENDED: "Review", RECLAIMED: "Review"}
 
 # How far along a galaxy is, which is what the status column orders by. Not the
 # spelling of the word: alphabetically the closed galaxies come first, which is
@@ -2297,13 +2297,13 @@ def row_action(g, recs=None, own=None):
 
     A closed galaxy offers neither, because a turn played into one is refused
     at the submission. One this player is in, has asked for, or named in
-    multiplayer.json offers Reason instead, which reads the operator's reason
+    multiplayer.json offers Review instead, which reads the operator's reason
     for ending it: a row that went quiet with no control on it reads as the
     launcher failing. Nor does a galaxy this launcher has already asked for a
     seat in offer anything: the request is with the worker and there is
     nothing for a second click to do.
 
-    A seat the galaxy took back offers Reason, which says so and lets the
+    A seat the galaxy took back offers Review, which says so and lets the
     player clear the record, since it holds a join the galaxy has undone.
 
     `own` is the store multiplayer.json names, and it is offered Play whatever
@@ -2311,7 +2311,7 @@ def row_action(g, recs=None, own=None):
     state may not even be readable from here, and the checks in
     start_multiplayer are what answer whether a turn can be taken in it.
 
-    A request the galaxy refused offers Reason, closed or not, because that
+    A request the galaxy refused offers Review, closed or not, because that
     button is the only way to read why and to clear the request or ask again.
     """
     if join_refusal(g, recs):
@@ -3875,12 +3875,12 @@ class Launcher:
             text = stall_hint(stalled)
         elif refused:
             names = ", ".join(g.name or g.id for g in refused)
-            text = (f"Your request to join {names} was refused. Press Reason "
+            text = (f"Your request to join {names} was refused. Press Review "
                     "on its row to read why, then ask again or clear it.")
         elif reclaimed:
             names = ", ".join(g.name or g.id for g in reclaimed)
             text = (f"Your seat in {names} was taken back after missed turns. "
-                    "Press Reason on its row to read more.")
+                    "Press Review on its row to read more.")
         elif ended:
             text = ended_hint(ended)
         elif rows and PLAY not in actions:
@@ -3929,7 +3929,7 @@ class Launcher:
                                       self.sort_desc, view), view)
 
     def on_row(self, g, action: str):
-        """What a row's one button does. View reads, Play plays, Reason
+        """What a row's one button does. View reads, Play plays, Review
         explains a refusal, an ended galaxy or a seat taken back."""
         if action == PLAY:
             self.play_galaxy(g)
