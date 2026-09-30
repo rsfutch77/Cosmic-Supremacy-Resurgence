@@ -273,5 +273,8 @@ the `inject_*.py` family for planting civs, designs, ships and orders.
 - [CosmicSupremacy_Memory_Reconstruction_Report.md](CosmicSupremacy_Memory_Reconstruction_Report.md), memory layout and structures
 - [CosmicSupremacy_Stat_Tables.md](CosmicSupremacy_Stat_Tables.md), component, facility and
   formula stats from the manual, joined to the object ids the client uses
-- [Singleplayer_UI_Checklist.md](Singleplayer_UI_Checklist.md), the human-eyes test pass for a
-  release build
+- [verification/](verification/), the verification checklists run when a change touches their
+  area, and [Checklist_Sources.md](verification/Checklist_Sources.md), the published standards
+  they are built from
+- [Singleplayer_UI_Checklist.md](verification/Singleplayer_UI_Checklist.md), the human-eyes test
+  pass for a release build

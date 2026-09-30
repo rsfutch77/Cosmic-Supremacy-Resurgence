@@ -78,3 +78,7 @@ server/join_turn_work/
 server/uidemo/
 # A scheduled task written for one machine and one galaxy path.
 referee_task.xml
+
+# Tailored verification checklists that are not published: security lists that
+# map the attack surface, and adaptations of no-derivatives sources.
+docs/verification/private/
