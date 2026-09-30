@@ -394,6 +394,13 @@ def handle_action(action: str, params: dict, raw_body: str = '') -> tuple[int, s
         return 200, 'text/plain', 'DONE#VER#000000#DATA#'
 
     # ── Governor settings ─────────────────────────────────────────────────────
+    # A governor id is part of a file name, so it is digits and nothing else;
+    # anything else could name a path outside DATA_DIR.
+    govid = params.get('govid', ['0'])[0]
+    if action in ('savegov', 'loadgov') and not (govid.isascii() and govid.isdigit()):
+        log(f'  !! {action}: govid {govid!r} is not a number, refused')
+        return 400, 'text/plain', 'ERROR'
+
     if action == 'savegov':
         govid    = params.get('govid',   ['0'])[0]
         govname  = params.get('govname', [''])[0].strip("'")
@@ -526,6 +533,46 @@ def log(msg: str):
     _log_fh.write(line + '\n')
 
 
+# ── Who may talk to the server ────────────────────────────────────────────────
+# The client and every tool reach this server by a loopback name. A web page the
+# player has open can also reach a loopback port, so a request is refused when it
+# carries a browser's marks of a foreign page: a Host that is not a loopback name
+# (a page that rebinds its own domain to 127.0.0.1 sends that domain), an Origin
+# that is not this server, or a Sec-Fetch-Site other than same-origin or none.
+# WinINet and urllib send no Origin and no Sec-Fetch-Site, and a request with no
+# Host is not from a browser, so none of these refuse the client or the tools.
+LOOPBACK_NAMES = frozenset({'localhost', '127.0.0.1', '[::1]'})
+
+# CSHOST set to a non-loopback address is the LAN setup, where clients on other
+# machines name this one by its address. The Host check is off there and the
+# Origin and Sec-Fetch-Site checks still apply.
+_LAN = os.environ.get('CSHOST', '127.0.0.1') not in ('127.0.0.1', 'localhost', '::1')
+
+
+def _host_name(value: str) -> str:
+    """The name part of a Host header or an Origin's authority, lower-cased."""
+    value = value.strip().lower()
+    if value.startswith('['):
+        return value[:value.find(']') + 1]
+    return value.split(':', 1)[0]
+
+
+def foreign_reason(headers) -> 'str | None':
+    """Why a request comes from a foreign page, or None when it may be served."""
+    host = headers.get('Host')
+    if host is not None and not _LAN and _host_name(host) not in LOOPBACK_NAMES:
+        return f'Host {host!r} is not a loopback name'
+    origin = headers.get('Origin')
+    if origin is not None:
+        authority = urllib.parse.urlsplit(origin).netloc
+        if _host_name(authority) not in LOOPBACK_NAMES:
+            return f'Origin {origin!r} is not this server'
+    site = headers.get('Sec-Fetch-Site')
+    if site is not None and site.lower() not in ('same-origin', 'none'):
+        return f'Sec-Fetch-Site {site!r}'
+    return None
+
+
 # ── HTTP handler ──────────────────────────────────────────────────────────────
 class CSHandler(http.server.BaseHTTPRequestHandler):
     server_version = 'CosmicSupremacy/1.0'
@@ -534,7 +581,18 @@ class CSHandler(http.server.BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):
         pass  # suppress default logging; we do our own
 
+    def _refused(self) -> bool:
+        """Answer 403 to a request from a foreign page. True when it was refused."""
+        reason = foreign_reason(self.headers)
+        if reason is None:
+            return False
+        log(f'{self.command} {self.path} refused: {reason}')
+        self._send(403, 'text/plain', b'FORBIDDEN')
+        return True
+
     def do_POST(self):
+        if self._refused():
+            return
         length = int(self.headers.get('Content-Length', 0))
         body   = self.rfile.read(length).decode('latin-1') if length else ''
         params = urllib.parse.parse_qs(body, keep_blank_values=True)
@@ -577,6 +635,8 @@ class CSHandler(http.server.BaseHTTPRequestHandler):
         self._send(status, ctype, resp_bytes)
 
     def do_GET(self):
+        if self._refused():
+            return
         log(f'GET {self.path}')
 
         # ── Web UI routes (browser opened by the game on first run) ──────────

@@ -256,16 +256,16 @@ view = page.view()
 # Fails without the refused half: the row said "joining next turn" forever.
 check("the row says the join was refused", you.text(rows["sandbox"], view),
       "join refused")
-check("and offers Reason", L.row_action(rows["sandbox"], view.recs), L.REASON)
-check("which the button is labelled with", L.ACTION_TEXT[L.REASON], "Reason")
+check("and offers Review", L.row_action(rows["sandbox"], view.recs), L.REASON)
+check("which the button is labelled with", L.ACTION_TEXT[L.REASON], "Review")
 told = L.refusal_text(rows["sandbox"], L.load_joined(data)["sandbox"])
-check("Reason tells them they were refused",
+check("Review tells them they were refused",
       "was refused" in told, True)
 check("and why, in the worker's own words", reason in told, True)
 check("and what they can do about it",
       "Ask again" in told and "Clear" in told, True)
 check("the line under the table says it as well",
-      page.hint(rows.values()), lambda t: "refused" in t and "Reason" in t)
+      page.hint(rows.values()), lambda t: "refused" in t and "Review" in t)
 check("and it is still a row that is this player's business",
       L.pending_join(rows["sandbox"], view.recs), True)
 
@@ -437,7 +437,7 @@ def run_emulator():
         check("relay: and the row says refused",
               L.galaxy_column("you").text(row, L.View(recs=recs)),
               "join refused")
-        check("relay: with the reason under Reason",
+        check("relay: with the reason under Review",
               outcomes[0]["reason"] in L.refusal_text(row, recs[galaxy]),
               True)
     finally:

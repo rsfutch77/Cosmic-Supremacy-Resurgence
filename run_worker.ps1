@@ -51,15 +51,25 @@
     The account the task runs as, DOMAIN\user. Defaults to the current user.
     With -WriteTaskXml only.
 
+.PARAMETER OperatorPage
+    Where the worker writes the operator page, if not
+    server\worker_work\operator.html. The worker rewrites it at startup, after
+    every tick and after a failure.
+
+.PARAMETER WriteShortcut
+    Create a Windows shortcut (.lnk) at this path that opens the operator page
+    in the default browser, with no console window, and exit. Needs no -Store.
+    It creates nothing else and starts nothing.
+
 .EXAMPLE
     .\run_worker.ps1 -Store C:\galaxies\sandbox
     .\run_worker.ps1 -Store C:\galaxies\sandbox -Once
     .\run_worker.ps1 -Store C:\galaxies\sandbox -Status
     .\run_worker.ps1 -Store C:\galaxies\sandbox -WriteTaskXml .\referee_task.xml
+    .\run_worker.ps1 -WriteShortcut "$env:USERPROFILE\Desktop\Galaxy operator page.lnk"
 #>
 [CmdletBinding()]
 param(
-    [Parameter(Mandatory = $true)]
     [string]$Store,
     [string]$DataDir,
     [string]$SaveDir,
@@ -68,7 +78,9 @@ param(
     [switch]$Once,
     [switch]$Status,
     [string]$WriteTaskXml,
-    [string]$TaskUser
+    [string]$TaskUser,
+    [string]$OperatorPage,
+    [string]$WriteShortcut
 )
 
 $ErrorActionPreference = 'Stop'
@@ -79,6 +91,43 @@ $VenvPython = Join-Path $ServerDir '.venv\Scripts\python.exe'
 $Entry      = Join-Path $ServerDir 'referee_worker.py'
 $Template   = Join-Path $RepoRoot 'referee_worker_task.xml'
 $ThisScript = $MyInvocation.MyCommand.Definition
+
+# The worker's default, <work-dir>\operator.html with the default work dir.
+$DefaultPage = Join-Path $ServerDir 'worker_work\operator.html'
+
+if ($WriteShortcut) {
+    # A shortcut straight to the .html file. Windows opens it with the default
+    # browser, so the operator reads the galaxy with no console window at all.
+    # The page need not exist yet; the worker writes it when it next starts.
+    $Page = $DefaultPage
+    if ($OperatorPage) {
+        $Page = [System.IO.Path]::GetFullPath(
+            [System.IO.Path]::Combine((Get-Location).Path, $OperatorPage))
+    }
+    $Lnk = [System.IO.Path]::GetFullPath(
+        [System.IO.Path]::Combine((Get-Location).Path, $WriteShortcut))
+    if (-not $Lnk.EndsWith('.lnk', [System.StringComparison]::OrdinalIgnoreCase)) {
+        $Lnk += '.lnk'
+    }
+    $Shell = New-Object -ComObject WScript.Shell
+    $Link = $Shell.CreateShortcut($Lnk)
+    $Link.TargetPath = $Page
+    $Link.WorkingDirectory = Split-Path -Parent $Page
+    $Link.Description = 'Cosmic Supremacy operator page, written by the referee worker'
+    $Link.Save()
+    Write-Host "Wrote $Lnk" -ForegroundColor Cyan
+    Write-Host "It opens $Page"
+    if (-not (Test-Path $Page)) {
+        Write-Host "That page does not exist yet. The worker writes it at startup," -ForegroundColor Yellow
+        Write-Host "after every tick and after a failure." -ForegroundColor Yellow
+    }
+    exit 0
+}
+
+if (-not $Store) {
+    Write-Host "-Store is required, except with -WriteShortcut." -ForegroundColor Red
+    exit 1
+}
 
 if (-not (Test-Path $VenvPython)) {
     Write-Host "No virtualenv found at server\.venv - run .\setup.ps1 first." -ForegroundColor Red
@@ -94,6 +143,7 @@ if ($SaveDir)     { $WorkerArgs += @('--save-dir', $SaveDir) }
 if ($NoCsServer)  { $WorkerArgs += '--no-cs-server' }
 if ($AdoptServer) { $WorkerArgs += '--adopt-server' }
 if ($Once)        { $WorkerArgs += '--once' }
+if ($OperatorPage) { $WorkerArgs += @('--operator-page', $OperatorPage) }
 
 if ($WriteTaskXml) {
     if (-not (Test-Path $Template)) {
@@ -123,6 +173,7 @@ if ($WriteTaskXml) {
     if ($SaveDir)     { $Pass += @('-SaveDir', ('"{0}"' -f $SaveDir)) }
     if ($NoCsServer)  { $Pass += '-NoCsServer' }
     if ($AdoptServer) { $Pass += '-AdoptServer' }
+    if ($OperatorPage) { $Pass += @('-OperatorPage', ('"{0}"' -f $OperatorPage)) }
 
     # Escaped as XML text rather than pasted in. A store path holding an
     # ampersand would otherwise produce a file Task Scheduler refuses, and the

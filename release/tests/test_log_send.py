@@ -12,6 +12,7 @@ they read.
 """
 import base64
 import http.server
+import inspect
 import json
 import os
 import queue
@@ -107,9 +108,17 @@ def make_app(data_dir, store_spec=None, choose=("send",)):
         app.dialogs.append((title, body, [c[0] for c in choices]))
         return app.choose.pop(0) if app.choose else None
     app._choice_dialog = dialog
+
+    def refs_dialog(title, body, refs):
+        app.dialogs.append((title, body, [r["id"] for r in refs]))
+    app._log_refs_dialog = refs_dialog
+    app.links = []
+    app._show_log_refs_link = lambda: app.links.append(
+        [r["id"] for r in L.load_log_refs(app.data_dir)])
     app._open_file = app.opened.append
     app._mp_probe_closed = lambda store: None
-    for name in ("_mp_state", "_on_log_offer", "offer_log", "_on_log_sent"):
+    for name in ("_mp_state", "_on_log_offer", "offer_log", "_on_log_sent",
+                 "show_log_refs"):
         setattr(app, name, getattr(L.Launcher, name).__get__(app))
 
     def drain(wait=10.0):
@@ -148,6 +157,8 @@ def galaxy_dir(auth=True):
 
 real_token = L.player_token
 L.player_token = lambda d: (lambda: "tok-123")
+real_uid = L.install_uid
+L.install_uid = lambda d, mint=False: "abcd1234efgh5678"
 
 try:
     print("1. where a log goes")
@@ -214,10 +225,20 @@ try:
     check("naming the galaxy, civ and the latest turn the loop reported",
           (posted["why"], posted["galaxy"], posted["civ"], posted["turn"]),
           ("turn_failed", "sandbox", "Ada", 13))
-    check("and the player is told it went, with a reference",
-          app.dialogs[-1][:2],
+    check("and the player is told it went, with the reference in a row",
+          app.dialogs[-1],
           lambda t: t[0] == "Log sent"
-          and "20260929T040000Z-abcdefgh-0a0b0c" in t[1])
+          and t[2] == ["20260929T040000Z-abcdefgh-0a0b0c"])
+    # Fails if the box stopped offering the support code for a lost reference.
+    check("and told the support code finds the log if the reference is lost",
+          app.dialogs[-1][1], lambda b: "If you lose the reference" in b
+          and "support code" in b and "abcd1234" in b)
+    check("the reference is kept beside the launcher's other records",
+          L.load_log_refs(d), lambda r: [x["id"] for x in r]
+          == ["20260929T040000Z-abcdefgh-0a0b0c"]
+          and os.path.dirname(L.log_refs_path(d)) == d)
+    check("and the past references link is refreshed", app.links,
+          [["20260929T040000Z-abcdefgh-0a0b0c"]])
 
     print("\n4. nothing leaves without Send")
     d = galaxy_dir()
@@ -287,8 +308,128 @@ try:
     check("says nothing goes by itself",
           L.LOG_UPLOAD_CLAUSE.startswith("Nothing is sent by itself"), True)
     check("and when it does go", "press Send" in L.LOG_UPLOAD_CLAUSE, True)
+    print("\n8. copying a reference")
+
+    class Clip:
+        """Records what Tk's clipboard calls would do."""
+
+        def __init__(self):
+            self.board, self.calls, self.later = None, [], []
+
+        def clipboard_clear(self):
+            self.calls.append("clear")
+            self.board = ""
+
+        def clipboard_append(self, text):
+            self.calls.append("append")
+            self.board += text
+
+        def update(self):
+            self.calls.append("update")
+
+        def after(self, ms, fn):
+            self.later.append((ms, fn))
+
+    class Button:
+        def __init__(self):
+            self.text = L.LOG_COPY
+
+        def configure(self, text):
+            self.text = text
+
+    root, btn = Clip(), Button()
+    root.board = "something else"
+    L.copy_pressed(root, btn, "20260929T040000Z-abcdefgh-0a0b0c")
+    # Fails if the clipboard were appended to without clearing it first.
+    check("Copy puts the reference, and only it, on the clipboard",
+          (root.board, root.calls),
+          ("20260929T040000Z-abcdefgh-0a0b0c", ["clear", "append", "update"]))
+    check("the button reads Copied", btn.text, "Copied")
+    check("and goes back to Copy a moment later",
+          (len(root.later), root.later[0][0] > 0), (1, True))
+    root.later[0][1]()
+    check("after it", btn.text, "Copy")
+    src = inspect.getsource(L.Launcher._log_refs_dialog)
+    check("each row's button copies its own reference and the entry is "
+          "read-only", ("copy_pressed(self.root, b, r)" in src,
+                        'state="readonly"' in src), (True, True))
+
+    print("\n9. the references kept")
+    d = fresh_dir()
+    check("none before the first send", L.load_log_refs(d), [])
+    for i in range(7):
+        L.record_log_ref(d, f"ref-{i}", when=1790000000 + i)
+    kept = L.load_log_refs(d)
+    # Fails if the cap were dropped or the list kept oldest first.
+    check(f"the last {L.LOG_REFS_KEEP}, newest first",
+          [r["id"] for r in kept], ["ref-6", "ref-5", "ref-4", "ref-3",
+                                    "ref-2"])
+    check("and the file holds no more than that",
+          len(json.load(open(L.log_refs_path(d), encoding="utf-8"))["sent"]),
+          L.LOG_REFS_KEEP)
+    check("with the send time in UTC", kept[0]["sent"],
+          time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(1790000006)))
+    check("shown as a local date and time",
+          L.log_ref_when(kept[0]["sent"]),
+          time.strftime("%d %b %Y %H:%M", time.localtime(1790000006)))
+    L.record_log_ref(d, "ref-3", when=1790000100)
+    check("one sent again moves to the front, once",
+          [r["id"] for r in L.load_log_refs(d)],
+          ["ref-3", "ref-6", "ref-5", "ref-4", "ref-2"])
+    with open(L.log_refs_path(d), "w", encoding="utf-8") as f:
+        f.write("{not json")
+    check("a corrupt file reads as none", L.load_log_refs(d), [])
+    L.record_log_ref(d, "ref-new", when=1790000200)
+    check("and the next send writes it whole again",
+          [r["id"] for r in L.load_log_refs(d)], ["ref-new"])
+    with open(L.log_refs_path(d), "w", encoding="utf-8") as f:
+        json.dump({"sent": [{"id": "good", "sent": 5}, {"id": ""}, "x",
+                            {"sent": "2026-09-30T00:00:00Z"},
+                            {"id": "also", "sent": "2026-09-30T00:00:00Z"}]},
+                  f)
+    check("records of the wrong shape are skipped, a bad time is blank",
+          L.load_log_refs(d), [{"id": "good", "sent": ""},
+                               {"id": "also",
+                                "sent": "2026-09-30T00:00:00Z"}])
+    check("and a blank time shows as nothing", L.log_ref_when(""), "")
+    with open(L.log_refs_path(d), "w", encoding="utf-8") as f:
+        json.dump(["not", "an", "object"], f)
+    check("a file holding a list reads as none", L.load_log_refs(d), [])
+
+    print("\n10. finding a reference again")
+    d = fresh_dir()
+    L.record_log_ref(d, "older", when=1790000000)
+    L.record_log_ref(d, "newer", when=1790000060)
+    app = make_app(d)
+    app.show_log_refs()
+    title, body, refs = app.dialogs[-1]
+    check("past references lists the kept ones, newest first",
+          (title, refs), (L.LOG_REFS_TITLE, ["newer", "older"]))
+    check("and names the support code for one not there",
+          ("support code" in body, "abcd1234" in body), (True, True))
+    check("the sent box says where the kept ones are",
+          L.log_sent_text({"id": "r"}, "abcd1234"),
+          lambda t: "kept under the past references link" in t)
+    check("with no code yet it points at the launcher's title",
+          L.log_sent_text({"id": "r"}, None),
+          lambda t: "support code shown under the launcher's title" in t)
+    real_record = L.record_log_ref
+
+    def cannot(*a, **k):
+        raise OSError("read-only")
+    L.record_log_ref = cannot
+    try:
+        app = make_app(fresh_dir())
+        app._on_log_sent({"id": "unkept"}, None, "p")
+    finally:
+        L.record_log_ref = real_record
+    check("a reference that cannot be kept is still shown to copy",
+          app.dialogs[-1][2], ["unkept"])
+    check("and the log says why", any("could not keep" in s
+                                      for s in app.said), True)
 finally:
     L.player_token = real_token
+    L.install_uid = real_uid
     httpd.shutdown()
     for d in dirs:
         shutil.rmtree(d, ignore_errors=True)

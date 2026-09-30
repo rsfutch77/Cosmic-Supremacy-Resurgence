@@ -203,6 +203,8 @@ def stub_server_answers(host: str, port: int, timeout: float = 1.5) -> bool:
 # apart the way server\referee_worker.py `is_our_cs_server` does it, by the
 # process's command line, plus one step it does not need: whether a
 # referee_worker.py is still among its parents. Nothing here ends a process.
+# The referee case alone is shared rather than refused, by `referee_share`,
+# once the worker's saves folder is known and there.
 HOLDER_REFEREE = "referee"          # this install's cs_server, its worker alive
 HOLDER_LEFT_OVER = "left_over"      # this install's cs_server, no worker
 HOLDER_OTHER_COPY = "other_copy"    # a cs_server from some other folder
@@ -431,6 +433,46 @@ def port_held_message(port: int, holder: dict, speaks_protocol: bool,
                "and TestBed will not work until it is free. Tutorial and "
                "Demo are unaffected.\n\n")
             + retry)
+
+
+def referee_share(holder: dict, speaks_protocol: bool, configured=None):
+    """The saves folder of this PC's referee server to share, or None.
+
+    Only for a holder `port_holder` found to be this install's cs_server with
+    a live referee_worker.py among its parents, that answers the protocol, and
+    only when `multiplayer.json` names no `adopt_server` of its own: an entry
+    there is the operator's word and is used or refused as written, never
+    replaced by what was detected.
+
+    The folder is the one `referee_saves` read off the worker's command line.
+    It has to be an absolute path, since a relative one resolves against the
+    worker's working directory, which the process table does not give, and it
+    has to exist and be listable, since a folder that is not there fails the
+    same way reusing an unknown server did. Anything short of that is None,
+    and the port is refused with the words `port_held_message` gives it.
+
+    The worker's status file in server\\worker_work is not read. It records
+    the worker's pid and its cs_server's pid, not where captures land, and it
+    can outlive the worker that wrote it; the process table is live.
+
+    Sharing never touches the holder: it is not ended, rebound or restarted.
+    """
+    if configured:
+        return None
+    if not speaks_protocol or holder.get("kind") != HOLDER_REFEREE:
+        return None
+    if not _whole(holder.get("worker")) or not _whole(holder.get("pid")):
+        return None
+    saves = holder.get("saves")
+    if not saves or not isinstance(saves, str) or not os.path.isabs(saves):
+        return None
+    try:
+        if not os.path.isdir(saves):
+            return None
+        os.listdir(saves)
+    except OSError:
+        return None
+    return os.path.normpath(saves)
 
 
 def start_server(host: str, port: int, data_dir: str, galaxy_dir: str, sink):
@@ -1031,8 +1073,7 @@ def abandonment_warning(lines):
 def warning_text(galaxy: str, lines) -> str:
     """The box a warned player reads: the referee's own lines, whole."""
     where = f" in {galaxy}" if galaxy else ""
-    return (f"A warning from the referee{where}:\n\n" + "\n".join(lines)
-            + "\n\nThis turn is open now, and playing it counts.")
+    return (f"A warning from the referee{where}:\n\n" + "\n".join(lines))
 
 
 # ── A refusal from the relay ──────────────────────────────────────────────────
@@ -1138,7 +1179,9 @@ def adopted_server(data_dir: str):
 
     `multiplayer.json`'s `adopt_server`: the saves directory of a server this
     launcher did not start and is allowed to share. Absent, which is the usual
-    case, the launcher refuses a held port rather than reusing one blindly.
+    case, the launcher refuses a held port rather than reusing one blindly,
+    except for this install's own referee, whose folder `referee_share` reads
+    off the worker's command line.
 
     That refusal is right and stays: a capture lands in whatever directory the
     server that took it was started with, there is no message in the protocol
@@ -1916,11 +1959,11 @@ def record_reclaims(data_dir: str, reclaims) -> None:
 
 
 def reclaimed_text(g, rec) -> str:
-    """What a player whose seat was taken back reads from the row's Reason."""
+    """What a player whose seat was taken back reads from the row's Review."""
     name = (rec or {}).get("name") or "you"
     said = roster_problem(name, (), (rec or {}).get(RECLAIMED_REC_KEY))
-    return (f"{said}\n\nPress Clear to forget this seat and put View back "
-            f"on the {g.name or g.id} row.")
+    return (f"{said}\n\nPress Confirm to continue. You can join again as a "
+            "new player.")
 
 
 # ── A galaxy the operator has ended ───────────────────────────────────────────
@@ -1933,12 +1976,12 @@ def in_galaxy(g, recs=None, own=None) -> bool:
 def ended_hint(ended) -> str:
     """The line under the table when a galaxy this player is in has ended."""
     names = ", ".join(g.name or g.id for g in ended)
-    return (f"{names} has ended. Press Reason on its row to read why, and "
+    return (f"{names} has ended. Press Review on its row to read why, and "
             "pick another galaxy to keep playing.")
 
 
 def ended_text(g) -> str:
-    """What the Reason button on an ended galaxy shows.
+    """What the Review button on an ended galaxy shows.
 
     The operator's words come from the row's `closed_reason`, which the
     directory carries for a closed galaxy, so pressing the button reads
@@ -2061,12 +2104,12 @@ PLAY = "play"
 VIEW = "view"
 REASON = "reason"
 # Two more rows that only explain: a galaxy this player is in that the operator
-# has ended, and a seat the galaxy took back. Both read "Reason" on the button,
+# has ended, and a seat the galaxy took back. Both read "Review" on the button,
 # because that is what pressing it gives.
 ENDED = "ended"
 RECLAIMED = "reclaimed"
-ACTION_TEXT = {PLAY: "Play", VIEW: "View", REASON: "Reason",
-               ENDED: "Reason", RECLAIMED: "Reason"}
+ACTION_TEXT = {PLAY: "Play", VIEW: "View", REASON: "Review",
+               ENDED: "Review", RECLAIMED: "Review"}
 
 # How far along a galaxy is, which is what the status column orders by. Not the
 # spelling of the word: alphabetically the closed galaxies come first, which is
@@ -2297,13 +2340,13 @@ def row_action(g, recs=None, own=None):
 
     A closed galaxy offers neither, because a turn played into one is refused
     at the submission. One this player is in, has asked for, or named in
-    multiplayer.json offers Reason instead, which reads the operator's reason
+    multiplayer.json offers Review instead, which reads the operator's reason
     for ending it: a row that went quiet with no control on it reads as the
     launcher failing. Nor does a galaxy this launcher has already asked for a
     seat in offer anything: the request is with the worker and there is
     nothing for a second click to do.
 
-    A seat the galaxy took back offers Reason, which says so and lets the
+    A seat the galaxy took back offers Review, which says so and lets the
     player clear the record, since it holds a join the galaxy has undone.
 
     `own` is the store multiplayer.json names, and it is offered Play whatever
@@ -2311,7 +2354,7 @@ def row_action(g, recs=None, own=None):
     state may not even be readable from here, and the checks in
     start_multiplayer are what answer whether a turn can be taken in it.
 
-    A request the galaxy refused offers Reason, closed or not, because that
+    A request the galaxy refused offers Review, closed or not, because that
     button is the only way to read why and to clear the request or ask again.
     """
     if join_refusal(g, recs):
@@ -2789,14 +2832,132 @@ def send_log(base: str, token, payload: bytes, timeout: float = 30.0) -> dict:
         return json.loads(resp.read() or b"{}")
 
 
-def log_sent_text(reply) -> str:
-    """What a player reads once their log is sent."""
+def log_sent_text(reply, code=None) -> str:
+    """What a player reads once their log is sent.
+
+    The reference itself is shown in a copyable row under this text rather
+    than in it. `code` is this install's support code, which the operator
+    finds a player's logs by (`log_tool list --code`), so a lost reference
+    costs the player nothing.
+    """
     ref = (reply or {}).get("id")
     said = "Your log was sent to the galaxy's operator."
     if ref:
-        said += (f"\n\nIf you write to them about it, quote this reference:"
-                 f"\n\n    {ref}")
+        said += ("\n\nIf you write to them about it, quote this reference. "
+                 f"The last {LOG_REFS_KEEP} are kept under the past "
+                 "references link, beside send log.")
+    if code:
+        said += ("\n\nIf you lose the reference, send them your support code "
+                 f"instead and they can find your logs by it:\n\n    {code}"
+                 "\n\nThe same code is shown under the launcher's title.")
+    else:
+        said += ("\n\nIf you lose the reference, send them the support code "
+                 "shown under the launcher's title instead and they can find "
+                 "your logs by it.")
     return said
+
+
+# ── The references of logs sent ───────────────────────────────────────────────
+# The relay answers each upload with a reference. The last few are kept so a
+# player who closed the box can find one again, from the past references link
+# beside send log. This is the launcher's record of something the player did,
+# so it lives beside identity.json and joined.json. Newest first; a missing or
+# unreadable file is an empty list and is rewritten whole by the next send.
+LOG_REFS_FILE = "log_refs.json"
+LOG_REFS_KEY = "sent"
+LOG_REFS_KEEP = 5
+LOG_REFS_TITLE = "Logs you sent"
+LOG_COPY = "Copy"
+LOG_COPIED = "Copied"
+LOG_COPIED_MS = 1500
+
+
+def log_refs_path(data_dir: str) -> str:
+    return os.path.join(data_dir, LOG_REFS_FILE)
+
+
+def load_log_refs(data_dir: str) -> list:
+    """The references kept, newest first, as {"id", "sent"} records.
+
+    A record without a string id is skipped; one without a string send time
+    keeps its id with an empty time.
+    """
+    raw = _read_json(log_refs_path(data_dir)) or {}
+    found = raw.get(LOG_REFS_KEY)
+    if not isinstance(found, list):
+        return []
+    out = []
+    for rec in found:
+        if not isinstance(rec, dict):
+            continue
+        ref = rec.get("id")
+        if not isinstance(ref, str) or not ref.strip():
+            continue
+        sent = rec.get("sent")
+        out.append({"id": ref.strip(),
+                    "sent": sent if isinstance(sent, str) else ""})
+    return out[:LOG_REFS_KEEP]
+
+
+def record_log_ref(data_dir: str, ref: str, when: float = None) -> list:
+    """Keep one reference at the front of the list and answer the list.
+
+    A reference already kept moves to the front rather than appearing twice.
+    `when` is a Unix time, now if not given, written as UTC.
+    """
+    stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ",
+                          time.gmtime(time.time() if when is None else when))
+    refs = [r for r in load_log_refs(data_dir) if r["id"] != ref]
+    refs = ([{"id": ref, "sent": stamp}] + refs)[:LOG_REFS_KEEP]
+    with open(log_refs_path(data_dir), "w", encoding="utf-8") as fh:
+        json.dump({LOG_REFS_KEY: refs}, fh, indent=2)
+    return refs
+
+
+def log_ref_when(sent: str) -> str:
+    """A kept send time as the player's local date and time, or ""."""
+    try:
+        import calendar
+        secs = calendar.timegm(time.strptime(sent, "%Y-%m-%dT%H:%M:%SZ"))
+    except (TypeError, ValueError, OverflowError):
+        return ""
+    return time.strftime("%d %b %Y %H:%M", time.localtime(secs))
+
+
+def log_refs_text(code=None) -> str:
+    """The body of the box the past references link opens."""
+    said = (f"The references of the last {LOG_REFS_KEEP} logs this launcher "
+            "sent, newest first. Quote one when you write to the galaxy's "
+            "operator about it.")
+    if code:
+        said += (f"\n\nIf the one you want is not here, send them your "
+                 f"support code instead and they can find your logs by it:"
+                 f"\n\n    {code}")
+    return said
+
+
+def copy_to_clipboard(root, text: str) -> None:
+    """Put `text` on the clipboard through Tk.
+
+    The update keeps the text on the clipboard when the box it was copied
+    from closes, since Tk owns the selection until another program takes it.
+    """
+    root.clipboard_clear()
+    root.clipboard_append(text)
+    root.update()
+
+
+def copy_pressed(root, button, text: str) -> None:
+    """Copy `text` and have `button` read Copied for a moment."""
+    copy_to_clipboard(root, text)
+    button.configure(text=LOG_COPIED)
+
+    def back():
+        try:
+            button.configure(text=LOG_COPY)
+        except Exception:               # the box closed first
+            pass
+    root.after(LOG_COPIED_MS, back)
 
 
 def log_not_sent_text(why, path) -> str:
@@ -3192,6 +3353,11 @@ class Launcher:
                                      cursor="hand2")
         self.send_log_btn.pack(side="right", padx=(0, 10))
         self.send_log_btn.bind("<Button-1>", lambda e: self.offer_log())
+        # Packed once this install has sent a log: see `_show_log_refs_link`.
+        self.log_refs_btn = tk.Label(status, text="past references", bg=BG,
+                                     fg=FAINT, font=("Segoe UI", 8, "underline"),
+                                     cursor="hand2")
+        self.log_refs_btn.bind("<Button-1>", lambda e: self.show_log_refs())
 
         self.log_frame = tk.Frame(self.root, bg=BG)
         self.log = tk.Text(self.log_frame, height=11, bg="#02060f", fg=DIM,
@@ -3220,6 +3386,7 @@ class Launcher:
 
         self.player = player_name(self.data_dir)
         self._show_identity()
+        self._show_log_refs_link()
         self.say(f"player  {self.player or 'not set yet'}")
 
         # What the Galaxies page will list, before the game files are looked
@@ -3314,6 +3481,22 @@ class Launcher:
             # program that is not the game at all. Read, never ended.
             holder = port_holder(port_holder_chain(port),
                                  install_server_scripts())
+            shared = referee_share(holder, ours, configured=adopt)
+            if shared:
+                # This install's referee holds the port and its worker's
+                # command line says where it writes, so that folder is the
+                # one fact adopt_server would have supplied. The referee's
+                # server is used as it is and left running.
+                self.save_dir = shared
+                self.server_ok = True
+                self.set_ready_status(
+                    "sharing the referee's server on this PC; do not close "
+                    "the referee", OK)
+                self.say(f"port {port} is held by pid {holder.get('pid')}, "
+                         f"the cs_server of this install's referee worker "
+                         f"(pid {holder.get('worker')}); sharing it")
+                self.say(f"captures are collected from {shared}")
+                return
             status, line, box = port_held_message(port, holder, ours,
                                                   self.data_dir)
             self.set_ready_status(status, BAD)
@@ -3875,12 +4058,12 @@ class Launcher:
             text = stall_hint(stalled)
         elif refused:
             names = ", ".join(g.name or g.id for g in refused)
-            text = (f"Your request to join {names} was refused. Press Reason "
+            text = (f"Your request to join {names} was refused. Press Review "
                     "on its row to read why, then ask again or clear it.")
         elif reclaimed:
             names = ", ".join(g.name or g.id for g in reclaimed)
             text = (f"Your seat in {names} was taken back after missed turns. "
-                    "Press Reason on its row to read more.")
+                    "Press Review on its row to read more.")
         elif ended:
             text = ended_hint(ended)
         elif rows and PLAY not in actions:
@@ -3929,7 +4112,7 @@ class Launcher:
                                       self.sort_desc, view), view)
 
     def on_row(self, g, action: str):
-        """What a row's one button does. View reads, Play plays, Reason
+        """What a row's one button does. View reads, Play plays, Review
         explains a refusal, an ended galaxy or a seat taken back."""
         if action == PLAY:
             self.play_galaxy(g)
@@ -3977,7 +4160,7 @@ class Launcher:
             self._draw_galaxies()
             return
         what = self._choice_dialog("Seat reclaimed", reclaimed_text(g, rec),
-                                   (("Clear", "clear", True),
+                                   (("Confirm", "clear", True),
                                     ("Close", None, False)))
         if what == "clear":
             clear_joined(self.data_dir, g.id)
@@ -4053,7 +4236,7 @@ class Launcher:
         self.show_home()
         self.start_multiplayer(mode, g)
 
-    def show_beta_notice(self, body: str, g) -> bool:
+    def show_beta_notice(self, body: str, g, civ: str = None) -> bool:
         """Show the notice and answer whether the player joined from it.
 
         Modal, and the only way past it is the Join button under the text. The
@@ -4065,6 +4248,9 @@ class Launcher:
         The text is scrolled rather than shortened. It is the whole of what a
         player is agreeing to, and a summary with a Join button under it is the
         thing this exists instead of.
+
+        The line above the text also says when the empire arrives, so no box
+        follows the Join: the row reads "joining next turn" from then on.
         """
         tk = self.tk
         win = tk.Toplevel(self.root)
@@ -4077,9 +4263,14 @@ class Launcher:
         tk.Label(win, text=heading, bg=BG, fg=ACCENT,
                  font=("Segoe UI", 14, "bold")).pack(anchor="w", padx=20,
                                                      pady=(18, 0))
-        tk.Label(win, text=f"You are about to join {g.name or g.id}.",
-                 bg=BG, fg=DIM, font=("Segoe UI", 9)).pack(anchor="w", padx=20,
-                                                           pady=(2, 10))
+        when = f"turn {g.turn + 1}" if g.turn is not None else "its first turn"
+        who = f" as {civ}" if civ else ""
+        tk.Label(win, text=(f"You are about to join {g.name or g.id}{who}. New "
+                            "players arrive at a turn boundary, so your empire "
+                            f"appears at {when}, and its row here gets a Play "
+                            "button then."),
+                 bg=BG, fg=DIM, font=("Segoe UI", 9), justify="left",
+                 wraplength=560).pack(anchor="w", padx=20, pady=(2, 10))
 
         frame = tk.Frame(win, bg=BG)
         frame.pack(fill="both", expand=True, padx=20)
@@ -4209,7 +4400,7 @@ class Launcher:
                       "without it, because what would be missing is the rules "
                       "of the beta rather than a detail of them.")
             return
-        if not self.show_beta_notice(notice, g):
+        if not self.show_beta_notice(notice, g, civ):
             self.say(f"join: the notice was closed without joining {g.id}")
             return
 
@@ -4230,13 +4421,6 @@ class Launcher:
         save_joined(self.data_dir, joined_record(g, civ, uid, self.games_dir,
                                                  turn=now_turn))
         self.say(f"join: asked {g.id} for a seat as {civ} ({where})")
-        when = f"turn {g.turn + 1}" if g.turn is not None else "the first turn"
-        messagebox.showinfo(
-            self.cfg["product"],
-            f"You have asked to join {g.name or g.id} as {civ}.\n\nA galaxy "
-            "takes new players at a turn boundary, so your empire appears at "
-            f"{when}.\n\nIts row here grows a Play button once it does, and "
-            "the launcher plays every turn from there.")
         self.refresh_games()
 
     # ── Multiplayer session ──────────────────────────────────────────────────
@@ -4760,20 +4944,26 @@ class Launcher:
         self._show_capture(None, 0.0)
 
     def _warning_note(self, store, civ, current):
-        """The referee's missed-turns warning for `civ` on the turn before
-        `current`, or None.
+        """The referee's missed-turns warning for `civ`, or None.
 
-        One read of that turn's note. A turn with no note, a store that cannot
-        be read, and a galaxy with no turn yet all answer None: a warning is
-        worth one read and not worth a failed Play.
+        The referee writes the warning on the turn the silent player is served
+        next, which is `current` (`abandonment.enforce`'s `new_turn`). The turn
+        before is read as well when that one has none, for a galaxy refereed by
+        a build that wrote it on the turn missed. At most two note reads, once
+        per Play. A turn with no note, a store that cannot be read, and a
+        galaxy with no turn yet all answer None: a warning is worth a read and
+        not worth a failed Play.
         """
         if not civ or not _whole(current) or current < 1:
             return None
-        try:
-            lines = store.note(civ, current - 1)
-        except Exception:                   # a readout is not worth an error path
-            return None
-        return abandonment_warning(lines)
+        for turn in (current, current - 1):
+            try:
+                found = abandonment_warning(store.note(civ, turn))
+            except Exception:               # a readout is not worth an error path
+                continue
+            if found:
+                return found
+        return None
 
     def _mp_probe_closed(self, store):
         """Read the followed galaxy's state once, and say so if it has closed.
@@ -4902,12 +5092,90 @@ class Launcher:
         """Say whether the log went. Tk thread."""
         self.log_sending = False
         if err is None:
-            self.say(f"log: sent as {(reply or {}).get('id')}")
-            self._choice_dialog("Log sent", log_sent_text(reply),
-                                (("Close", None, True),))
+            ref = (reply or {}).get("id")
+            self.say(f"log: sent as {ref}")
+            shown = []
+            if isinstance(ref, str) and ref.strip():
+                try:
+                    shown = record_log_ref(self.data_dir, ref.strip())[:1]
+                except OSError as exc:
+                    self.say(f"log: could not keep the reference ({exc})")
+                    shown = [{"id": ref.strip(), "sent": ""}]
+                self._show_log_refs_link()
+            code = support_code(install_uid(self.data_dir))
+            self._log_refs_dialog("Log sent", log_sent_text(reply, code),
+                                  shown)
         else:
             self.say(f"log: not sent ({err})")
             self.warn(log_not_sent_text(err, path))
+
+    def _show_log_refs_link(self):
+        """Pack the past references link once a reference is kept. Tk thread."""
+        if (self.data_dir is None or self.log_refs_btn.winfo_manager()
+                or not load_log_refs(self.data_dir)):
+            return
+        self.log_refs_btn.pack(side="right", padx=(0, 10),
+                               before=self.send_log_btn)
+
+    def show_log_refs(self):
+        """The box listing the references kept, each with a Copy button."""
+        refs = load_log_refs(self.data_dir)
+        code = support_code(install_uid(self.data_dir))
+        self._log_refs_dialog(LOG_REFS_TITLE, log_refs_text(code), refs)
+
+    def _log_refs_dialog(self, title: str, body: str, refs):
+        """A modal box like `_choice_dialog` with one row per reference.
+
+        Each reference is in a read-only entry, so it can also be selected by
+        hand, with its send time and a Copy button beside it. Close, Escape and
+        the window's own close dismiss it.
+        """
+        tk = self.tk
+        win = tk.Toplevel(self.root)
+        win.title(self.cfg["product"])
+        win.configure(bg=BG)
+        win.transient(self.root)
+        tk.Label(win, text=title, bg=BG, fg=WARN,
+                 font=("Segoe UI", 14, "bold")).pack(anchor="w", padx=20,
+                                                     pady=(18, 6))
+        tk.Label(win, text=body, bg=BG, fg=TEXT,
+                 justify="left", anchor="w", wraplength=460,
+                 font=("Segoe UI", 9)).pack(anchor="w", fill="x", padx=20)
+        if refs:
+            table = tk.Frame(win, bg=BG)
+            table.pack(anchor="w", fill="x", padx=20, pady=(12, 0))
+        for i, rec in enumerate(refs):
+            ref = tk.StringVar(win, value=rec["id"])
+            tk.Entry(table, textvariable=ref, state="readonly", width=34,
+                     readonlybackground=PANEL, fg=TEXT, relief="flat",
+                     highlightbackground=EDGE, highlightthickness=1,
+                     font=("Consolas", 9)).grid(row=i, column=0, sticky="w",
+                                                pady=2, ipady=3)
+            tk.Label(table, text=log_ref_when(rec.get("sent", "")), bg=BG,
+                     fg=DIM, font=("Segoe UI", 8)).grid(row=i, column=1,
+                                                        sticky="w", padx=8)
+            btn = tk.Button(table, text=LOG_COPY, bg=PANEL, fg=TEXT,
+                            activebackground=EDGE, activeforeground="#ffffff",
+                            relief="flat", bd=0, cursor="hand2", width=8,
+                            font=("Segoe UI", 9, "bold"))
+            btn.configure(command=lambda b=btn, r=rec["id"]:
+                          copy_pressed(self.root, b, r))
+            btn.grid(row=i, column=2, sticky="w")
+
+        row = tk.Frame(win, bg=BG)
+        row.pack(fill="x", padx=20, pady=(14, 18))
+        tk.Button(row, text="Close", bg=BTN, fg="#ffffff",
+                  activebackground=BTN_HI, activeforeground="#ffffff",
+                  relief="flat", bd=0, cursor="hand2", width=12,
+                  font=("Segoe UI", 9, "bold"),
+                  command=win.destroy).pack(side="left")
+        win.bind("<Escape>", lambda e: win.destroy())
+        win.update_idletasks()
+        try:
+            win.grab_set()
+        except tk.TclError:
+            pass
+        self.root.wait_window(win)
 
     def _open_file(self, path: str):
         """Open a file in the program Windows has for it, which for a .log is

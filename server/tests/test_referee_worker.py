@@ -675,6 +675,191 @@ def test_log():
           text.count('\n'), 3)
 
 
+# ── the operator page ────────────────────────────────────────────────────────
+def test_operator_page():
+    """The page the worker writes so the galaxy is read without a terminal."""
+    print('the operator page')
+    import operator_view
+
+    def read(path):
+        with open(path, encoding='utf-8') as f:
+            return f.read()
+
+    quiet = lambda *a: None                                 # noqa: E731
+
+    # After a tick.
+    page = os.path.join(tmpdir('page'), 'operator.html')
+    s = fresh_store(seconds_left=-60)
+    calls = Calls()
+    undo = stub_referee(calls)
+    try:
+        check('a tick with a page path still closes the turn',
+              rw.run(s, once=True, log=quiet, sleeper=quiet, page=page,
+                     gid='sandbox'), rw.EXIT_OK)
+        check('the page is written after a tick', os.path.isfile(page), True)
+        text = read(page)
+        check('and says which tick wrote it',
+              'after closing turn 12' in text, True)
+        check('and shows the galaxy as it now is, on turn 13',
+              '<td class="">13</td>' in text, True)
+        check('and the roster', 'DemoPlayer' in text and 'Neighbor' in text,
+              True)
+
+        # The control: an idle pass writes nothing.
+        idle = os.path.join(tmpdir('page'), 'operator.html')
+        s = fresh_store(seconds_left=3600)
+        undo(); undo = stub_referee(Calls())
+        rw.run(s, once=True, log=quiet, sleeper=quiet, page=idle)
+        check('an idle pass writes no page', os.path.exists(idle), False)
+
+        # After a failure, where the heartbeat has already counted it.
+        failed = os.path.join(tmpdir('page'), 'operator.html')
+        s = fresh_store(seconds_left=-60)
+        undo(); undo = stub_referee(Calls(raises=OSError('the share went '
+                                                         'away')))
+        check('a failing tick with a page path is still a failure',
+              rw.run(s, once=True, log=quiet, sleeper=quiet, page=failed), 1)
+        check('the page is written after a failure', os.path.isfile(failed),
+              True)
+        text = read(failed)
+        check('and says what failed',
+              'after failure 1 on turn 12' in text
+              and 'the share went away' in text, True)
+        check('and shows the failure count the heartbeat recorded',
+              '1 failure(s) in a row' in text, True)
+
+        # Failures after the first rewrite the page at most every
+        # FAILURE_PAGE_EVERY seconds, so a retry loop does not multiply reads.
+        s = fresh_store(seconds_left=-60)
+        undo(); undo = stub_referee(Calls(raises=OSError('still gone')))
+        written, orig = [], rw.write_operator_page
+        rw.write_operator_page = lambda *a, **k: written.append(a[2])
+        clock, passes = [1000.0], []
+
+        def sleeper(*_):
+            passes.append(1)
+            clock[0] += rw.BACKOFF_MAX
+        try:
+            rw.run(s, log=quiet, sleeper=sleeper, page='unused',
+                   clock=lambda: clock[0], stop=lambda: len(passes) >= 5)
+        finally:
+            rw.write_operator_page = orig
+        want = 1 + int(4 * rw.BACKOFF_MAX // rw.FAILURE_PAGE_EVERY)
+        check('five failures in a row write the page on the first and then '
+              'on the interval', len(written), want)
+
+        # A page that cannot be rendered does not cost the tick.
+        for exc in (RuntimeError('render broke'), SystemExit('store said no')):
+            s = fresh_store(seconds_left=-60)
+            calls = Calls()
+            undo(); undo = stub_referee(calls)
+            orig = operator_view.write_page
+
+            def boom(*a, **k):
+                raise exc
+            operator_view.write_page = boom
+            said, log = lines()
+            try:
+                got = rw.run(s, once=True, log=log, sleeper=quiet,
+                             page=os.path.join(tmpdir('page'), 'x.html'))
+            finally:
+                operator_view.write_page = orig
+            name = type(exc).__name__
+            check(f'a {name} while rendering: the tick still succeeds', got,
+                  rw.EXIT_OK)
+            check(f'a {name} while rendering: the turn still advanced',
+                  s.current()[0], 13)
+            check(f'a {name} while rendering: it is logged',
+                  any('could not write the operator page' in x for x in said),
+                  True)
+    finally:
+        undo()
+
+    # Atomic: written to a temporary file beside the page and moved over it,
+    # and a failed move leaves the previous page whole and no temporary file.
+    folder = tmpdir('atomic')
+    path = os.path.join(folder, 'operator.html')
+    s = fresh_store(seconds_left=3600)
+    moves, real_replace = [], os.replace
+
+    def spy(src, dst):
+        moves.append((src, dst))
+        real_replace(src, dst)
+    os.replace = spy
+    try:
+        operator_view.write_page(s, path, event='at startup')
+    finally:
+        os.replace = real_replace
+    check('the page is moved into place with one replace', len(moves), 1)
+    check('from a temporary file in the same folder',
+          moves and os.path.dirname(moves[0][0]) == folder
+          and moves[0][0] != moves[0][1], True)
+    before = read(path)
+
+    def refuse(src, dst):
+        raise PermissionError('the file is held')
+    os.replace = refuse
+    try:
+        try:
+            operator_view.write_page(s, path, event='later')
+            raised = False
+        except PermissionError:
+            raised = True
+    finally:
+        os.replace = real_replace
+    check('a failed move is raised to the worker, which swallows it', raised,
+          True)
+    check('and the previous page is left whole', read(path), before)
+    check('and no temporary file is left behind', os.listdir(folder),
+          ['operator.html'])
+
+    # The reads stay inside the allowlist.
+    touched = []
+
+    class Watch:
+        def __init__(self, inner):
+            self._inner = inner
+
+        def __getattr__(self, name):
+            touched.append(name)
+            return getattr(self._inner, name)
+    operator_view.write_page(Watch(s), os.path.join(folder, 'w.html'))
+    check('every store read the page makes is on STORE_READS',
+          sorted(set(touched) - operator_view.STORE_READS), [])
+    check('and it never downloads submissions', 'submissions' in touched,
+          False)
+
+    # When it was generated, and the script that marks it stale.
+    now = 1_900_000_000
+    operator_view.write_page(s, path, event='at startup', now=now)
+    text = read(path)
+    check('the page says when it was generated',
+          'generated at ' + operator_view.fmt_when(now) in text, True)
+    check('the staleness script is present', 'id="stale"' in text
+          and 'Date.now()' in text, True)
+    check('and compares against the time the page was generated',
+          f'var generated = {now} * 1000' in text, True)
+    check('with the turn length plus the margin as the limit',
+          f'limit = {3600 + operator_view.STALE_MARGIN} * 1000' in text, True)
+    check('the page reloads itself from disk',
+          f'content="{operator_view.PAGE_REFRESH_SECONDS}"' in text, True)
+    for forbidden in ('src=', 'http://', 'https://', '@import'):
+        check(f'and it references nothing external, no {forbidden}',
+              forbidden in text, False)
+
+    # The command-line default, and the shortcut the operator opens it with.
+    src = inspect.getsource(rw.main)
+    check('the worker writes the page at startup', "'at startup'" in src, True)
+    check('into the work directory by default',
+          'os.path.join(a.work_dir, OPERATOR_PAGE)' in src, True)
+    script = open(os.path.join(ROOT, 'run_worker.ps1'),
+                  encoding='utf-8').read()
+    check('run_worker.ps1 can write a shortcut to the page',
+          '$WriteShortcut' in script and 'CreateShortcut' in script, True)
+    check('and the shortcut opens the same default path',
+          "'worker_work\\operator.html'" in script, True)
+
+
 if __name__ == '__main__':
     test_overdue()
     test_loop()
@@ -684,6 +869,7 @@ if __name__ == '__main__':
     test_task_definition()
     test_heartbeat()
     test_log()
+    test_operator_page()
     print(f'\n{len(PASS)} passed, {len(FAIL)} failed')
     if FAIL:
         for n in FAIL:

@@ -359,15 +359,27 @@ def report_refusals(store: TurnStore, civ: str, turn: int, log=print,
     Reading the note can fail , it lives on a share another machine writes ,
     and a turn that has already been played is not worth unwinding the loop
     for, so a failure here says so and the loop goes on.
+
+    **The warning is read from the next turn's note, not this one's.** The
+    referee writes a missed-turns warning on the turn the silent player is
+    served next (`abandonment.enforce`'s `new_turn`), which is `turn + 1` here,
+    the turn this call comes just before. A warning on `turn`'s own note was
+    already shown when `turn` opened, by this call one turn earlier or by the
+    launcher at Play, so it is not shown twice.
     """
     try:
         lines = store.note(civ, turn)
     except Exception as exc:                                # noqa: BLE001
         log(f"[{civ}] turn {turn}: could not read the referee's notes ({exc})")
         return 0
-    if not lines:
+    try:
+        ahead = warning_lines(store.note(civ, turn + 1) or [])
+    except Exception:                                       # noqa: BLE001
+        ahead = []
+    if not lines and not ahead:
         return 0
-    welcome, refused, told = note_parts(lines)
+    welcome, refused, told = note_parts(lines or [])
+    told = [line for line in told if line not in warning_lines(lines or [])]
     if refused:
         log(f"[{civ}] turn {turn}: the referee refused {len(refused)} of your "
             f"change(s):")
@@ -377,13 +389,16 @@ def report_refusals(store: TurnStore, civ: str, turn: int, log=print,
         log(f"[{civ}] turn {turn}: the referee left you a note:")
         for line in welcome + told:
             log(f"[{civ}]     {line}")
+    if ahead:
+        log(f"[{civ}] turn {turn + 1}: the referee left you a note:")
+        for line in ahead:
+            log(f"[{civ}]     {line}")
     if emit:
         if refused:
             emit("refused_orders", turn=turn, civ=civ, count=len(refused),
                  lines=refused)
-        warning = warning_lines(lines)
-        if warning:
-            emit("warned", turn=turn, civ=civ, lines=warning)
+        if ahead:
+            emit("warned", turn=turn + 1, civ=civ, lines=ahead)
     return len(refused)
 
 

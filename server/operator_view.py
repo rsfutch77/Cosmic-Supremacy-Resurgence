@@ -64,6 +64,18 @@ Serving it
 binds `127.0.0.1` only and refreshes itself, which is a page on the operator's
 own screen rather than anything deployed. Neither belongs under `site\\`: that
 project is a live public website and a galaxy's roster is not public.
+
+The page the worker writes
+--------------------------
+`write_page` is what `referee_worker` calls after every tick, at startup and
+after a failure, so the page exists without anybody starting this from a
+terminal. It renders one galaxy through `galaxy_report` and `render_html`, the
+same as `--html`, and replaces the file atomically, so a browser that opens it
+mid-write sees the previous page and never half of one. The page says when it
+was generated, and a short inline script compares that with the browser's clock
+and marks the page stale once it is older than the turn length plus
+`STALE_MARGIN`. A worker that is not running writes nothing, and a page that
+cannot tell it is old would go on saying the galaxy is healthy.
 """
 import argparse
 import html
@@ -135,6 +147,19 @@ HISTORY = 5
 # How often a served page reloads itself. A 4-hour turn does not need faster,
 # and this is a page the operator leaves open.
 REFRESH_SECONDS = 60
+
+# How often the worker's page reloads itself from disk. A reload reads the file
+# and nothing else, so this costs no store reads.
+PAGE_REFRESH_SECONDS = 300
+
+# How far past one turn length the worker's page may age before it is marked
+# stale. The worker writes it after every tick, so a healthy galaxy's page is
+# never older than a turn plus the grace, the polls and the tick itself.
+STALE_MARGIN = 1800
+
+# The turn length assumed for the staleness check when the galaxy's state does
+# not carry one, which is the beta's cadence.
+DEFAULT_TURN_SECONDS = 4 * 3600
 
 
 class ReadOnlyError(RuntimeError):
@@ -735,23 +760,94 @@ def _row_html(r: dict) -> str:
     return ''.join(body)
 
 
-def render_html(rows: list, refresh: int = 0) -> str:
+# Marks the page stale by the browser's clock. Inline because the page has no
+# external references, and it reads only the two numbers written into it.
+STALE_SCRIPT = """<script>
+(function () {
+  var generated = %(generated)d * 1000, limit = %(limit)d * 1000;
+  function check() {
+    var age = Date.now() - generated;
+    var box = document.getElementById('stale');
+    if (age > limit) {
+      box.style.display = 'block';
+      box.textContent = 'STALE: this page was generated ' +
+        Math.round(age / 60000) + ' minutes ago, more than the turn length ' +
+        'plus the margin, so the referee worker is not running or cannot ' +
+        'write it. Nothing below can be trusted as current.';
+      document.title = 'STALE, ' + document.title.replace(/^STALE, /, '');
+    }
+  }
+  check();
+  setInterval(check, 60000);
+})();
+</script>"""
+
+
+def _generated_html(generated_at: float, event, stale_after) -> str:
+    """The line saying when the page was written, and the staleness check."""
+    line = f'generated at {fmt_when(generated_at)}'
+    if event:
+        line += f' by the referee worker, {event}'
+    line += (f'. If this is older than {fmt_span(stale_after)}, the turn '
+             f'length plus a margin, the worker is not running.')
+    return (f'<p class="muted" id="generated">{html.escape(line)}</p>'
+            '<div class="g err" id="stale" style="display:none"></div>'
+            + STALE_SCRIPT % {'generated': int(generated_at),
+                              'limit': int(stale_after)})
+
+
+def render_html(rows: list, refresh: int = 0, generated_at: float = None,
+                event: str = None, stale_after: float = None) -> str:
     """One self-contained page. No external references of any kind.
 
     Nothing is fetched, so this opens from a file over `file:` and shows the
     same thing it shows when served. The reason is not tidiness: a page about a
     private galaxy that fetched a font would say when the operator looked at it
     and from where.
+
+    With `stale_after`, the page says when it was generated and marks itself
+    stale in the browser once it is older than that many seconds.
     """
     meta = (f'<meta http-equiv="refresh" content="{int(refresh)}">'
             if refresh else '')
+    now = time.time() if generated_at is None else generated_at
     cards = ''.join(_row_html(r) for r in rows) or \
         '<div class="g"><h2>no galaxies listed</h2></div>'
+    generated = (_generated_html(now, event, stale_after)
+                 if stale_after else '')
     return ('<!doctype html><html><head><meta charset="utf-8">'
             '<title>Resurgence, galaxies</title>' + meta +
             f'<style>{CSS}</style></head><body>'
-            f'<h1>galaxies at {html.escape(fmt_when(time.time()))}</h1>'
-            f'{cards}</body></html>')
+            f'<h1>galaxies at {html.escape(fmt_when(now))}</h1>'
+            f'{generated}{cards}</body></html>')
+
+
+def write_page(store, path: str, event: str = None, gid: str = None,
+               name: str = None, now: float = None) -> str:
+    """Render one galaxy to `path`, replacing it atomically. Returns the path.
+
+    The reads are `galaxy_report`'s: the store behind the `STORE_READS`
+    allowlist and, on Firebase, the one `get` of the galaxy document. The page
+    is written to a temporary file beside `path` and moved over it with
+    `os.replace`, so a reader sees the old page or the new one and never a
+    partial file. Raises on failure; the worker swallows it.
+    """
+    now = time.time() if now is None else now
+    rows = [galaxy_report(store, gid=gid, name=name)]
+    turn_seconds = rows[0].get('turn_seconds') or DEFAULT_TURN_SECONDS
+    body = render_html(rows, refresh=PAGE_REFRESH_SECONDS, generated_at=now,
+                       event=event, stale_after=turn_seconds + STALE_MARGIN)
+    path = os.path.abspath(path)
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = f'{path}.{os.getpid()}.tmp'
+    try:
+        with open(tmp, 'w', encoding='utf-8', newline='\n') as fh:
+            fh.write(body)
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            os.remove(tmp)
+    return path
 
 
 # ── serving ──────────────────────────────────────────────────────────────────

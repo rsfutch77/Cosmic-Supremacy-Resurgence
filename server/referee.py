@@ -222,6 +222,31 @@ def read_submissions(store: TurnStore, turn: int, roster, log=print,
     return out
 
 
+def stamp_for_a_holder(blob: bytes, log=print) -> bytes:
+    """The blob with its local player set to a civ that holds a planet.
+
+    The client will not open a galaxy whose local player owns no planet: it
+    starts and exits about four seconds into the load. The local player of a
+    capture is the civ the referee's client last played as, and an abandonment
+    wipe can leave that civ holding nothing. A blob whose local player still
+    holds a planet is returned unchanged; otherwise the first civ in `OWNR`
+    order that holds one is stamped, so two referees choose the same civ.
+    """
+    import set_blob_player
+    held = {p["owner"] for p in icv.planet_records(blob)}
+    now = set_blob_player.get_player(blob)
+    if now in held:
+        return blob
+    holder = next((o for o in icv.owner_records(blob) if o["oid"] in held), None)
+    if holder is None:
+        raise SystemExit("refusing to tick: no civ in this galaxy holds a "
+                         "planet, and the client opens a galaxy only for a "
+                         "civ that does")
+    log(f"  referee: local player {now} holds no planet; stamping the tick "
+        f"for {holder['name']!r}")
+    return set_blob_player.set_player(blob, holder["name"], log=log)
+
+
 def tick(blob: bytes, turns: int = 1, secs: int = 10, work_dir=None,
          save_dir=None, log=print, check_save_path=True) -> bytes:
     """Advance the galaxy by `turns` turns and return the resulting blob.
@@ -249,6 +274,7 @@ def tick(blob: bytes, turns: int = 1, secs: int = 10, work_dir=None,
         if not ok:
             raise SystemExit(f'refusing to tick: {why}')
 
+    blob = stamp_for_a_holder(blob, log=log)
     work_dir = work_dir or os.path.join(HERE, "referee_work")
     os.makedirs(work_dir, exist_ok=True)
     dat = os.path.join(work_dir, f"tick_{int(time.time())}.dat")

@@ -377,20 +377,21 @@ taken = boot[boot.index("if not port_is_free("):
              boot.index("self.servers, logfile = start_server")]
 check("nothing reuses a server this launcher did not start",
       "already serving our protocol" in boot, False)
-# These three used to assert a taken port had exactly one way out and never
-# reported a healthy server. It now has two, and the second reports one on
-# purpose: an operator who has said in multiplayer.json where the holding
-# server writes is supplying the one fact the protocol cannot, and on a machine
-# that is both the referee and a player that is every time. What has to stay
+# A taken port has three ways out. Two report a healthy server on purpose: an
+# operator who has said in multiplayer.json where the holding server writes is
+# supplying the one fact the protocol cannot, and this install's own referee
+# has that fact on its worker's command line. What has to stay
 # true is the half that was actually protecting anything: a taken port that
 # nobody has said anything about is still refused.
 check("a taken port with nothing said about it is still refused",
       "not reusing it" in inspect.getsource(L.port_held_message)
       and "self.warn(box)" in taken, True)
-check("sharing is the only other way out",
-      taken.count("return"), 2)
+check("sharing is the only other way out, named or detected",
+      taken.count("return"), 3)
 check("and it is gated on the operator having named the directory",
       "if ours and adopt and os.path.isdir(adopt)" in taken, True)
+check("or on referee_share finding this PC's referee and its folder",
+      "shared = referee_share(holder, ours, configured=adopt)" in taken, True)
 check("the refusal really is the branch that was read",
       len(taken), lambda n: 400 < n < 4000)
 # The words are in `port_held_message`, which `_boot` hands what holds the
@@ -408,9 +409,9 @@ check("and the protocol probe only runs once the port is known to be taken",
       boot.index("port_is_free(") < boot.index("stub_server_answers("), True)
 check("the ordinary case, a free port, still starts a server",
       boot.index("stub_server_answers(") < boot.index("start_server("), True)
-check("a server is healthy either because we started it or because we were "
-      "told where it writes",
-      boot.count("self.server_ok = True"), 2)
+check("a server is healthy because we started it, because we were told "
+      "where it writes, or because it is this PC's referee",
+      boot.count("self.server_ok = True"), 3)
 mp = inspect.getsource(L.Launcher.start_multiplayer)
 check("and a turn will not start without one",
       "if not self.server_ok:" in mp, True)

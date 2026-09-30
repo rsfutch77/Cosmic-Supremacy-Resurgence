@@ -12,7 +12,8 @@ hours a turn over a permanent galaxy the machine's uptime is the galaxy's
 uptime, so a window closed by a reboot for Windows Update costs every player
 every turn until somebody notices.
 
-This wraps the loop in the five things that unattended means, and it calls
+This wraps the loop in the five things that unattended means, plus a page that
+lets it be read without a terminal, and it calls
 `referee` rather than changing it: a turn is still closed by `resolve_turn`.
 
 1.  **An overdue turn closes at startup.** A machine that was off across a
@@ -50,6 +51,11 @@ This wraps the loop in the five things that unattended means, and it calls
     rotating file as well as the console, so a failure at 3am is readable at
     9am from a terminal that is gone, and a status file beside it says what the
     worker was doing when it stopped.
+
+6.  **A page instead of a terminal.** `operator_view`'s page for this galaxy
+    is written to `<work-dir>\\operator.html` at startup, after every tick and
+    after a failure, so the operator reads the galaxy by opening a file.
+    `run_worker.ps1 -WriteShortcut` makes a shortcut to it.
 
 What this cannot do, and why
 ----------------------------
@@ -136,6 +142,17 @@ EXIT_SERVER = 3
 EXIT_NO_GALAXY = 4
 
 STUB_PORT = 8888
+
+# The operator page: `operator_view`'s page for this galaxy, written into the
+# work directory after every tick, at startup and after a failure, so the state
+# of the galaxy is read by opening a file. With the default work directory it
+# is server\worker_work\operator.html in the checkout the worker runs from.
+OPERATOR_PAGE = 'operator.html'
+
+# The shortest gap between two pages written after failures. A worker stuck in
+# a retry loop fails every `BACKOFF_MAX` seconds, and a page costs a handful of
+# store reads, so failures after the first rewrite it at most this often.
+FAILURE_PAGE_EVERY = 900.0
 
 
 # ── one worker per galaxy ────────────────────────────────────────────────────
@@ -852,9 +869,39 @@ def heartbeat(store, fails: int, log=print) -> None:
             f'{exc}); the turn is unaffected')
 
 
+def write_operator_page(store, path, event: str, gid: str = None,
+                        log=print) -> bool:
+    """Write the operator page for this galaxy, and say whether it was written.
+
+    Never raises. The page is written after the tick it describes, so it cannot
+    delay one, and anything that goes wrong while reading or rendering it is
+    logged and dropped: a page that could end a turn would be worse than no
+    page. `BaseException` short of `KeyboardInterrupt` is caught as well, since
+    a `SystemExit` out of a store is as foreign to the tick as any other fault.
+    """
+    if not path:
+        return False
+    try:
+        import operator_view
+        operator_view.write_page(store, path, event=event, gid=gid)
+        return True
+    except KeyboardInterrupt:
+        raise
+    except BaseException as exc:                            # noqa: BLE001
+        log(f'  worker: could not write the operator page {path} '
+            f'({type(exc).__name__}: {exc}); the turn is unaffected')
+        return False
+
+
+def galaxy_name(spec: str) -> str:
+    """The last segment of a store spec, which is what the page is titled."""
+    return os.path.basename((spec or '').rstrip('\\/')) or spec
+
+
 def run(store, save_dir=None, grace: float = GRACE, poll: float = POLL,
         once: bool = False, stop=None, guard=None, log=print,
-        server=None, sleeper=time.sleep) -> int:
+        server=None, sleeper=time.sleep, page=None, gid=None,
+        clock=time.time) -> int:
     """Close each turn as its deadline passes, for as long as the machine is up.
 
     The shape is `referee.loop`'s and the difference is what happens when a
@@ -868,9 +915,15 @@ def run(store, save_dir=None, grace: float = GRACE, poll: float = POLL,
     for a refusal rather than a fault, the save path not being ready and the
     client being held by somebody else, and both of those are conditions that
     clear on their own.
+
+    `page` is the operator page's path. It is rewritten after each turn closes
+    and after a failure, the first failure at once and later ones at most every
+    `FAILURE_PAGE_EVERY` seconds, and never on an idle pass.
     """
     fails = 0
     said_closed = False
+    turn = None
+    failure_page_at = None
     while True:
         if stop is not None and stop():
             log('  worker: asked to stop')
@@ -917,7 +970,10 @@ def run(store, save_dir=None, grace: float = GRACE, poll: float = POLL,
             referee.wait_for_client_free(log=log)
             referee.resolve_turn(store, save_dir=save_dir, log=log)
             fails = 0
+            failure_page_at = None
             heartbeat(store, fails, log=log)
+            write_operator_page(store, page, f'after closing turn {turn}',
+                                gid=gid, log=log)
             if once:
                 return EXIT_OK
         except (Exception, SystemExit) as exc:              # noqa: BLE001
@@ -930,6 +986,13 @@ def run(store, save_dir=None, grace: float = GRACE, poll: float = POLL,
                 guard.write(failures=fails, last_error=f'{type(exc).__name__}: {exc}',
                             last_error_at=time.time())
             heartbeat(store, fails, log=log)
+            now = clock()
+            if (failure_page_at is None
+                    or now - failure_page_at >= FAILURE_PAGE_EVERY):
+                failure_page_at = now
+                write_operator_page(
+                    store, page, f'after failure {fails} on turn {turn} '
+                    f'({type(exc).__name__}: {exc})', gid=gid, log=log)
             if once:
                 return 1
             sleeper(wait)
@@ -975,6 +1038,11 @@ def main(argv=None) -> int:
                     help='the log file, if not <work-dir>\\' + LOG_NAME +
                          '. A worker on a second galaxy wants one of its own, '
                          'since two processes rotating one file is a race')
+    ap.add_argument('--operator-page',
+                    help='where the operator page is written, if not '
+                         '<work-dir>\\' + OPERATOR_PAGE + '. An empty value '
+                         'writes none. A worker on a second galaxy wants one '
+                         'of its own')
     ap.add_argument('--grace', type=float, default=GRACE,
                     help='seconds past the deadline to keep taking submissions')
     ap.add_argument('--poll', type=float, default=POLL,
@@ -1033,6 +1101,12 @@ def main(argv=None) -> int:
                 f'referee.py --store <spec> --start <blob>')
             return EXIT_NO_GALAXY
         describe(store, a.store, log=log)
+        page = (os.path.join(a.work_dir, OPERATOR_PAGE)
+                if a.operator_page is None else a.operator_page)
+        gid = galaxy_name(a.store)
+        if page:
+            log(f'  worker: the operator page is {os.path.abspath(page)}')
+        write_operator_page(store, page, 'at startup', gid=gid, log=log)
 
         save_dir = a.save_dir or os.path.join(os.path.abspath(a.data_dir),
                                               'saves')
@@ -1055,8 +1129,15 @@ def main(argv=None) -> int:
 
         if not a.no_catch_up:
             try:
-                close_overdue(store, save_dir=save_dir, grace=a.grace, log=log)
+                if close_overdue(store, save_dir=save_dir, grace=a.grace,
+                                 log=log):
+                    write_operator_page(store, page,
+                                        'after closing the overdue turn',
+                                        gid=gid, log=log)
             except (Exception, SystemExit) as exc:          # noqa: BLE001
+                write_operator_page(
+                    store, page, f'after the overdue turn failed to close '
+                    f'({type(exc).__name__}: {exc})', gid=gid, log=log)
                 # An overdue turn that will not close is not a reason to refuse
                 # to run: the loop retries it in a few seconds and reports it
                 # the same way as any other turn that failed.
@@ -1065,7 +1146,8 @@ def main(argv=None) -> int:
                 log(traceback.format_exc())
 
         return run(store, save_dir=save_dir, grace=a.grace, poll=a.poll,
-                   once=a.once, guard=guard, log=log, server=server)
+                   once=a.once, guard=guard, log=log, server=server,
+                   page=page, gid=gid)
     except KeyboardInterrupt:
         log('  worker: stopped from the console')
         return EXIT_OK

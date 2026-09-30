@@ -158,6 +158,63 @@ check("with nothing read, the old refusal stands",
       "Another server already holds port 8888" in box
       and "not reusing it" in line, True)
 
+print("\n   the referee's server is shared rather than refused")
+saves = os.path.join(fresh_dir(), "saves")
+os.makedirs(saves)
+worker_at = [proc(28420, 27412, f"{PY}  {OURS}"),
+             proc(27412, 7416, f"{VENV} {OURS}"),
+             proc(7416, 28016, f"{PY}  {HERE}\\server\\referee_worker.py "
+                               f'--store x --save-dir "{saves}"')]
+held = L.port_holder(worker_at, [OURS])
+check("a referee whose saves folder is there is shared, from that folder",
+      L.referee_share(held, True), os.path.normpath(saves))
+# Fails if an adopt_server entry could be overridden by what was detected.
+check("an adopt_server entry wins over what was detected",
+      L.referee_share(held, True, configured=r"D:\named\saves"), None)
+# Fails if a folder that is not there were believed: that is how every turn
+# went to a folder nobody read.
+gone = L.port_holder(worker_at[:2] + [proc(
+    7416, 28016, f"{PY}  {HERE}\\server\\referee_worker.py --store x "
+                 f'--save-dir "{saves}_not_there"')], [OURS])
+check("a saves folder that is not there is not shared",
+      L.referee_share(gone, True), None)
+check("and the refusal it falls back to is the referee's, with the entry",
+      L.port_held_message(8888, gone, True, data)[2],
+      lambda b: "referee running on this PC" in b and "adopt_server" in b)
+not_a_dir = os.path.join(os.path.dirname(saves), "x.txt")
+open(not_a_dir, "w").close()
+check("a file where the folder should be is not shared",
+      L.referee_share(dict(held, saves=not_a_dir), True), None)
+# Fails if a relative path were resolved against this launcher's folder: it
+# is relative to the worker's, which the process table does not give.
+was = os.getcwd()
+os.chdir(os.path.dirname(saves))
+try:
+    check("a relative saves folder is not shared, even one that is here",
+          L.referee_share(dict(held, saves="saves"), True), None)
+finally:
+    os.chdir(was)
+check("nor one that does not answer the protocol",
+      L.referee_share(held, False), None)
+check("the default folder is the server directory's own",
+      L.port_holder(REFEREE, [OURS])["saves"], HERE + r"\server\saves")
+# The worker and saves are filled in so that only the kind refuses them.
+for name, holder in (("a leftover", dict(left, worker=7416, saves=saves)),
+                     ("another copy's", dict(other, worker=7416,
+                                             saves=saves)),
+                     ("another launcher", L.port_holder(
+                         [proc(9, 1, f"{PY} {HERE}\\release\\launcher.py")],
+                         [OURS])),
+                     ("another program", L.port_holder(
+                         [proc(5, 1, "proxy.exe", "proxy.exe")], [OURS])),
+                     ("an unread holder", L.port_holder([], [OURS]))):
+    check(f"{name} is never shared", L.referee_share(holder, True), None)
+check("a leftover is still told what it is",
+      "left running when it stopped" in L.port_held_message(
+          8888, left, True, data)[2], True)
+check("a referee with no worker pid is not shared",
+      L.referee_share(dict(held, worker=None), True), None)
+
 print("\n   and nothing is ended to get there")
 boot = inspect.getsource(L.Launcher._boot)
 taken = boot[boot.index("if not port_is_free("):
@@ -166,7 +223,12 @@ check("the holder is read only once the port is known to be taken",
       "port_holder_chain(port)" in taken
       and "port_holder_chain" not in boot.replace(taken, ""), True)
 reads = inspect.getsource(L.port_holder_chain) + inspect.getsource(
-    L.port_held_message) + taken
+    L.port_held_message) + inspect.getsource(L.referee_share) + taken
+check("the referee is shared only after adopt_server has had its say",
+      taken.index("adopted_server(") < taken.index("referee_share(")
+      and "referee_share(holder, ours, configured=adopt)" in taken, True)
+check("and sharing it says so in one line and keeps it running",
+      "do not close" in taken and "the referee" in taken, True)
 check("nothing on this path kills a process",
       any(w in reads for w in ("taskkill", "Stop-Process", "terminate(",
                                ".kill(")), False)
@@ -193,6 +255,16 @@ else:
               lambda k: k in (L.HOLDER_REFEREE, L.HOLDER_LEFT_OVER))
         print(f"  classified {live['kind']}, worker {live.get('worker')}, "
               f"saves {live.get('saves')}")
+        # The protocol answer is taken as given: asking would open a socket
+        # to the holder, and this section only reads.
+        decided = L.referee_share(live, True)
+        print(f"  a launcher here with no adopt_server would "
+              + (f"share it, collecting from {decided}" if decided
+                 else "refuse it"))
+        if live["kind"] == L.HOLDER_REFEREE:
+            check("a live referee with its saves folder there is shared",
+                  decided, lambda d: d is not None
+                  and os.path.isdir(d))
         check("and it is still the listener afterwards",
               (L.port_holder_chain(8888) or [{}])[0].get("pid"), top["pid"])
 
