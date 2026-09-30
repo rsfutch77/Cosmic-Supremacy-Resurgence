@@ -579,7 +579,7 @@ check("Review says the seat was taken back after the missed turns",
       True)
 check("and not that there is no seat", "no seat for" in told, False)
 check("it names nobody else who was reclaimed", "Erin" in told, False)
-check("and says what to do", "Clear" in told and "new seat" in told, True)
+check("and says what to do", "Confirm" in told and "join again" in told, True)
 rows, extra = counted_refresh(page)
 check("a known reclaim is not read again", path in asked, False)
 

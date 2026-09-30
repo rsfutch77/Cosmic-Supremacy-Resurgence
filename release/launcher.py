@@ -1918,8 +1918,8 @@ def reclaimed_text(g, rec) -> str:
     """What a player whose seat was taken back reads from the row's Review."""
     name = (rec or {}).get("name") or "you"
     said = roster_problem(name, (), (rec or {}).get(RECLAIMED_REC_KEY))
-    return (f"{said}\n\nPress Clear to forget this seat and put View back "
-            f"on the {g.name or g.id} row.")
+    return (f"{said}\n\nPress Confirm to continue. You can join again as a "
+            "new player.")
 
 
 # ── A galaxy the operator has ended ───────────────────────────────────────────
@@ -3976,7 +3976,7 @@ class Launcher:
             self._draw_galaxies()
             return
         what = self._choice_dialog("Seat reclaimed", reclaimed_text(g, rec),
-                                   (("Clear", "clear", True),
+                                   (("Confirm", "clear", True),
                                     ("Close", None, False)))
         if what == "clear":
             clear_joined(self.data_dir, g.id)
