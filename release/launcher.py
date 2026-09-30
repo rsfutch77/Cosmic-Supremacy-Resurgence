@@ -1031,8 +1031,7 @@ def abandonment_warning(lines):
 def warning_text(galaxy: str, lines) -> str:
     """The box a warned player reads: the referee's own lines, whole."""
     where = f" in {galaxy}" if galaxy else ""
-    return (f"A warning from the referee{where}:\n\n" + "\n".join(lines)
-            + "\n\nThis turn is open now, and playing it counts.")
+    return (f"A warning from the referee{where}:\n\n" + "\n".join(lines))
 
 
 # ── A refusal from the relay ──────────────────────────────────────────────────
