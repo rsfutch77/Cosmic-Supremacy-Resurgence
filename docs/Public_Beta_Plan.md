@@ -2711,5 +2711,9 @@ is out of scope here.
   verify and start a new release itself; for the beta, L3's notification does
   the job. The metadata a later version needs is already on the galaxy
   (`min_build`), so adding it is a launcher change, not a server one.
+- **An end-of-galaxy screen.** Backlog. The Review box on an ended galaxy's
+  row is where final scores and the operator's closing announcement for that
+  galaxy could go. Today it shows only the `closed_reason` from the directory
+  row (K5). Suggested by the operator on 30 September 2026.
 - **Governors and admirals.** The original's answer to an absent player. Their
   absence is why K3 and K4 exist at all.
