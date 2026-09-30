@@ -1333,8 +1333,8 @@ is out of scope here.
   record, so a refusal left on screen costs no further read.
 
   A refused row reads **join refused** in the You column and offers a
-  **Reason** button, and the line under the table says a request was refused
-  and to press Reason. Reason shows the worker's own reason string with **Ask
+  **Review** button, and the line under the table says a request was refused
+  and to press Review. Review shows the worker's own reason string with **Ask
   again**, which goes through the ordinary Join path with every check and the
   notice, and **Clear**, which forgets that galaxy's record and puts View back
   on the row. A granted answer changes nothing on screen: the civ is in the
@@ -1866,7 +1866,7 @@ is out of scope here.
   the row read "joining next turn" with no button for as long as the galaxy
   ran. A granted record on a row the player is not in now gets one state
   read, and a `reclaimed` entry for that name is kept in the record. The row
-  reads **seat reclaimed**, and Reason says the seat was taken back at turn N
+  reads **seat reclaimed**, and Review says the seat was taken back at turn N
   after M missed turns, names nobody else, and offers Clear, which puts View
   back.
 
@@ -2072,11 +2072,11 @@ is out of scope here.
 
   | where | before | now |
   |---|---|---|
-  | Galaxies row of a closed galaxy the player is in, asked to join, or named in `multiplayer.json` | "your turn" or "joining next turn", no button | **galaxy ended** and a **Reason** button showing the operator's reason, with a line under the table |
+  | Galaxies row of a closed galaxy the player is in, asked to join, or named in `multiplayer.json` | "your turn" or "joining next turn", no button | **galaxy ended** and a **Review** button showing the operator's reason, with a line under the table |
   | a turn loop following the galaxy when it closes | the submission failed as a lost turn, then "waiting for the next turn" forever, later "turns have stopped" | the loop stops, the readout says **this galaxy has ended**, and the reason is shown |
   | the Games refresh | still polled `/submissions` and join answers on the closed galaxy | asks it nothing |
 
-  Reason shows the row's own `closed_reason` and reads nothing when pressed;
+  Review shows the row's own `closed_reason` and reads nothing when pressed;
   a row for the galaxy `multiplayer.json` names carries it the same way. The
   followed loop is checked with one state read
   when a turn could not be sent and once per deadline when the wait passes the
