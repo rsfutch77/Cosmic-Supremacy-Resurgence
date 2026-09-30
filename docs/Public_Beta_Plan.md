@@ -31,61 +31,57 @@ be tracking it. Do not tidy the tilde back inside.
 
 ---
 
-## Where this stands, 28 September 2026
+## Where this stands, 30 September 2026
 
-Written as a handover. `docs/Overnight_Push_Findings.md` was deleted on this
-date and everything in it that was still open is an item here, so this file is
-the only list.
+Written as a handover. This file is the only list of open work.
 
-**The beta path works end to end.** A Windows machine with no checkout, no
-virtualenv and no Google credential ran the packaged build, listed a galaxy
-through the relay, signed in anonymously, claimed a seat, played a turn, and
-had the referee merge it. The referee survives a reboot with its local files
-deleted, because the galaxy is in Firebase and the machine holds nothing that
-matters.
+**The beta path works end to end, and it has been checked on screen.** A
+machine with no checkout runs the packaged build, lists galaxies through the
+relay, signs in anonymously, joins or takes a seat, plays, and has the referee
+merge the turn. On 30 September the operator went through J3, J4's support
+code, J6, K3, K5, M1, N6 and N7 on screen across two machines, and each item
+records what was seen.
 
-**What the machine is doing right now.** A scheduled task, `CosmicSupremacy
-Referee`, is refereeing `firebase://cs-resurgence/h3check`, listed as "Beta
-rehearsal", at four-hour turns and has been since 01:46 on 28 September. It was
-at turn 18 with no failures when this was written, one seat bound to the second
-test machine's anonymous uid. `h3check` was made for the H3 reboot test and
-then became the rehearsal galaxy because it was the only Firebase galaxy and
-stopping it would have left nothing live to test against. It is still
-disposable: nothing depends on it, and the next real decision is what the
-actual beta galaxy should be and whether it starts fresh.
+**What the machine is doing right now.** The scheduled task `CosmicSupremacy
+Referee` referees `firebase://cs-resurgence/h3check` ("Beta rehearsal") at
+four-hour turns, with no failures. The worker was last restarted on
+29 September at 02:23, on code that has not changed since. `h3check` is still
+disposable. A second live galaxy, `verify` ("Verification galaxy"), was made
+for the 30 September checks and is closed. It is listed as closed and nothing
+referees it.
 
-**Do not be alarmed by the task's Last Result**, which reads `-2147020576`
-while Status reads Running and the worker is healthy. That is left over from
-the task being deleted and re-registered on 28 September while an instance of
-it was running. The galaxy advancing and `worker_failures` being 0 are the
-facts; the task's result column is about a run that was interrupted
-administratively and says nothing about the referee.
+The task's Last Result column can read `-2147020576` while Status reads
+Running. That is left over from the task being re-registered while an
+instance was running, and says nothing about the referee: the galaxy advancing
+and `worker_failures` reading 0 are what count.
 
-To point the referee somewhere else, write the task again with a different
-`-Store` and re-register it; `run_worker.ps1 -WriteTaskXml` prints the two
-`schtasks` commands. Every command in this file is relative to the repository
-root, and a fresh PowerShell opens in `C:\WINDOWS\system32`, which has produced
-two wasted attempts: `cd` first or give full paths.
+To point the referee elsewhere, run `run_worker.ps1 -WriteTaskXml` for the two
+`schtasks` commands, or `galaxy_tool.py start` for a new galaxy, which prints
+the worker command for it. Every command in this file is relative to the
+repository root, and a fresh PowerShell opens in `C:\WINDOWS\system32`: `cd`
+first. Agents share the client and the live systems through
+`server/dev_tools/lease.py`.
 
-**The three things most worth doing next**, in the order they block a beta
-rather than the order they were found:
+**Open, and what each needs:**
 
-1. **H9**, the polling cost. One player with a launcher open spends more than
-   four times the entire monthly Class A allowance. This caps the beta at
-   roughly nobody and is the only item that does. **Done 28 September**,
-   measured live: eleven polls, no bucket listings.
-2. **J5**, the fourteen remaining transplanted bytes. **Done 29 September**:
-   a facility list and a settled block, all reset, checked in the real client.
-3. **J3's refused half**, which is the one a tester meets. A refused player's
-   row says "you have asked to join" forever; the relay serves the answer and
-   nothing reads it.
-
-**What needs the operator and cannot be done from here:** a seat rebind path
-exists nowhere, so a player who reinstalls Windows is locked out of their own
-empire (J4); and no machine but this one and the second test PC has ever run
-the build, so the antivirus question is answered for one configuration (M3).
-
----
+1. **H12 and H13, a measured day.** The poll budget and the submission path
+   are deployed and verified once each. Their done-whens ask for a day of
+   Cloud Monitoring against the estimates. H12 also says when to revisit the
+   polling windows and the billing tier.
+2. **M3, three operator decisions:** code signing (a personal certificate is
+   acceptable, and signing the patched game binaries is the open question),
+   the save path (keep the injection and tell players, script the game's own
+   Save dialog, or patch the player client), and the sentence players are told.
+3. **J4, a live rebind**, when a real player needs one. `seat_tool.py` is
+   built and its read-only commands are verified live.
+4. **N6, automatic adoption** of the referee's server by a launcher on the
+   same machine. The message half is done.
+5. **H4, the rules themselves**, which stay deny-all and undeployed by design
+   (see the item).
+6. **J2**, whose done-when asks for a player who never opened a config file to
+   join the sandbox and play. The parts are verified separately, but not as
+   one run on `h3check`.
+7. **M1's to-do**: the log reference cannot be copied or found again.
 
 ## What this phase inherits
 
@@ -1239,7 +1235,7 @@ is out of scope here.
   **Done when:** a player who has never opened a config file joins the sandbox
   and plays a turn.
 
-- [ ]~ **J3. Joining is a request resolved at a turn boundary.** The launcher
+- [x] **J3. Joining is a request resolved at a turn boundary.** The launcher
   writes a join request; the worker applies it during the next tick, on the
   authoritative blob, never on a copy a player holds. A player who clicks Join
   during turn N is playing at turn N+1.
@@ -1353,6 +1349,15 @@ is out of scope here.
   `joins.apply` and `joins.commit` for an overlong name, and read back by the
   launcher's own method with the worker's sentence intact. Each of nine
   mutations to the launcher change fails a named check.
+
+  **Verified on screen, 30 September 2026**, from the second machine on a
+  v0.1.7 build against a live galaxy made for the checks. A join lodged
+  through the relay was answered with a refusal, and the row read "join
+  refused" with a Review button showing the reason, Ask again and Clear. Clear
+  put View back. A second join was granted, and the row offered Play and
+  opened the game. Both answers were filed by the operator in the worker's
+  shape, since the worker referees only h3check. The worker's own grant path
+  is the one `join_kit_acceptance` runs with the real client.
 
   **Done when:** a player who clicks Join during turn N is playing at turn N+1,
   and a player whose request is refused is told so and why, from a machine that
@@ -1600,10 +1605,15 @@ is out of scope here.
   fixed stand-in token, so the first live `candidates` is also the first test
   of that credential path.
 
+  **Support code verified on screen, 30 September 2026.** v0.1.7 and v0.1.8
+  show `support code 1zCFtuTC` under the title on the second machine, the
+  prefix of the uid its Neighbor seat is bound to. A live rebind still waits
+  for a real case.
+
   **Done when:** a name in the roster is refused from a second install, allowed
   from the install that claimed it, and rebindable by the operator.
 
-- [ ]~ **J6. A player seated without clicking Join has no joined record, so the
+- [x] **J6. A player seated without clicking Join has no joined record, so the
   Galaxies page never says whether they have played.** Found on 28 September
   while measuring H9 on the second machine. `joined.json` is written in one
   place, the Join path (`launcher.py`, `save_joined` after
@@ -1647,6 +1657,11 @@ is out of scope here.
   already paid. `release/tests/test_join_answers.py` section 1 seats a player by
   roster alone and reads "turn played" and "your turn" off the row; restoring
   either half of the old condition fails it.
+
+  **Verified on screen, 30 September 2026.** With `joined.json` deleted on the
+  second machine, the h3check row read "your turn" within one refresh, the
+  relay log showed `/h3check/submissions/23` from that machine, and no
+  `joined.json` was written.
 
   **Done when:** a player seated by first-use sees their submitted state on the
   Galaxies page without having clicked Join.
@@ -1793,7 +1808,7 @@ is out of scope here.
   them loads, plays and ticks, with the civ count and high-water id correct at
   the end.
 
-- [ ]~ **K3. Detect abandonment.** Countable out of the store already: the archive
+- [x] **K3. Detect abandonment.** Countable out of the store already: the archive
   records which civs submitted for each turn, so consecutive misses need no new
   bookkeeping. Two stages, a warning and a reclaim, with the thresholds
   configurable per galaxy. At 4-hour turns, 12 missed turns is two days.
@@ -1802,6 +1817,16 @@ is out of scope here.
   launcher. A reclaimed player's launcher will then fail `roster_problem`, which
   is the right behaviour, but the message has to say the seat was reclaimed after
   so many missed turns rather than that no seat exists for that name.
+
+  **Verified on screen, 30 September 2026**, on the check galaxy from the
+  second machine. A warning left on the open turn's note, where the referee
+  writes it, was shown in a box at Play before the game opened, once the
+  launcher was fixed to read that turn (it had read the turn before). A
+  reclaim recorded as `abandonment` records it turned the row into "seat
+  reclaimed", and Review named the turn and the miss count and nobody else.
+  The reclaim at a configured threshold is proved through `resolve_turn` in
+  `test_abandonment.py`, and the relay's refusal of a reclaimed seat's upload
+  in `test_relay_function.py`.
 
   **Done when:** a galaxy run with one player silent produces a warning note the
   launcher displays, a reclaim at the configured threshold, and a refusal message
@@ -2013,7 +2038,7 @@ is out of scope here.
   carrying the original across would preserve a homeworld's customisation boost,
   but `+5`, `+6`, `+12`, `+120` and `+121` still have no established meaning.
 
-- [ ]~ **K5. Ending a galaxy is an operator action.** No season timer. The
+- [x] **K5. Ending a galaxy is an operator action.** No season timer. The
   operator calls a galaxy over and starts a fresh one, so there has to be a way
   to close one that stops accepting submissions, keeps the archive readable, and
   tells every launcher why.
@@ -2061,6 +2086,13 @@ is out of scope here.
   its `--store` names, so a fresh galaxy is not ticked until the scheduled task
   is pointed at it; the tool prints the command. Nothing has been closed or
   started on `cs-resurgence`.
+
+  **Verified on screen, 30 September 2026.** `galaxy_tool.py start` registered
+  and published a live galaxy for the checks, and `close` ended it with a
+  reason. On the second machine the row of a galaxy the player had asked to
+  join read "galaxy ended", and Review showed the operator's reason. A closed
+  galaxy the player has no record in shows as closed with no button, which is
+  as designed.
 
   **Done when:** a galaxy is closed and a fresh one started, and a launcher
   pointed at the closed one says so rather than failing.
@@ -2179,7 +2211,7 @@ is out of scope here.
 
 ## M. Diagnostics
 
-- [ ]~ **M1. The launcher uploads its own log.** Every finding in the blob push
+- [x] **M1. The launcher uploads its own log.** Every finding in the blob push
   plan came from watching a screen, and that stops being available the moment
   players are elsewhere. Without this, every beta report is a slow conversation.
 
@@ -2622,7 +2654,7 @@ is out of scope here.
   second galaxy and the cloud offload get planned against. A 108-system galaxy
   has not been timed.
 
-- [ ] **N6. A launcher on the referee's own machine has to be told about the
+- [ ]~ **N6. A launcher on the referee's own machine has to be told about the
   port.** The worker keeps a `cs_server` on 8888 so captures have somewhere to
   land. A launcher on the same machine finds the port held and refuses it,
   correctly: nothing in the protocol can ask a running server where it writes,
@@ -2642,6 +2674,11 @@ is out of scope here.
   is harder, since it has no status file naming a pid it started, but it can
   read the holder's command line the way `is_our_cs_server` does and at least
   say that the port belongs to a referee from this install.
+
+  **The message half verified on screen, 30 September 2026.** A v0.1.8
+  launcher started on the referee machine said the referee on this PC holds
+  port 8888, gave its pid, and gave the exact `adopt_server` entry naming
+  `server\saves` and the file to put it in. Automatic adoption is not built.
 
   **Done when:** a player who referees and plays on one machine never edits a
   config file to do it, and a launcher meeting an abandoned `cs_server` says
@@ -2671,13 +2708,18 @@ is out of scope here.
   **Still open:** the done-when's first half. A player on the referee's PC is
   now told exactly which line to add, and still has to add it.
 
-- [ ]~ **N7. The referee flashes a console window on every tick.**
+- [x] **N7. The referee flashes a console window on every tick.**
   `server/referee.py:269` spawns `advance_turns.py` without `CREATE_NO_WINDOW`.
   The client-side tools were fixed; this one is the referee's own. Checked
   across the tree in September 2026: every other console-spawning site is
   either a dev tool run by hand or the game's own window, which has to be
   visible. On an unattended machine closing six turns a day it is six windows
   appearing and vanishing, which is cosmetic until somebody clicks one.
+
+  **Verified on screen, 30 September 2026.** The operator watched the referee
+  machine through a real referee cycle (`join_kit_acceptance.py run`: a
+  control turn, a join turn, two more turns and a client load, 57 passed). The
+  game client appeared, and no console window did.
 
   **Done when:** a turn closes with nothing appearing on the desktop but the
   game client.
