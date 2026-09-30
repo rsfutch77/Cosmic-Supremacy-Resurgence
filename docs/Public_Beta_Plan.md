@@ -860,10 +860,23 @@ is out of scope here.
   set the windows, and 0 turns either off. `test_relay_function.py` runs with
   both at 0, because it writes through the referee and reads straight back.
 
+  **Decided 29 September 2026: both stay as they are for the beta.** The held
+  copy keeps its 60-second ceiling, and the Games page keeps polling every 2
+  minutes. Moving it to 10 minutes would fit about twice as many always-open
+  launchers inside the request allowance, but players would see rows up to 10
+  minutes stale, and at beta scale that is not worth it.
+
+  **Revisit at thousands of players.** When the live player count reaches the
+  low thousands, or a month's bill leaves the free tier, re-measure a day of
+  requests, Firestore reads and CPU seconds. Then decide three things: the
+  held-copy windows, the Games page poll interval, and whether a paid tier or
+  committed-use pricing costs less than stretching the polls. That check
+  belongs in the release verification for any build that raises the player
+  cap.
+
   **Done when:** the relay is redeployed and a measured day of the live
   function's request count, Firestore reads and CPU seconds is written here
-  against the estimates above, and the Games page poll is set from that
-  measurement.
+  against the estimates above.
 
 - [ ] **H13. Submissions at hundreds of players.** H12 found Storage Class A
   capping the beta at about 27 players, and every one of those operations was
@@ -2142,70 +2155,25 @@ is out of scope here.
   taken from the README's download button. It needs changing if the beta gets its
   own landing page.
 
-- [ ] **L3. One-click update now, silent auto-update later.** The gate's message
-  becomes a button that downloads and runs the installer. Replacing a running
-  executable in place is a separate problem and is deferred; the metadata is the
-  same either way, so the later version is a change to the launcher's UI and not
-  to anything on the server.
+- [x] **L3. An old build is told to update, and how, by a notification.**
+  The beta blocks a bad client with a message, not a mechanism. L2's gate
+  refuses a build below the galaxy's `min_build` and says so, naming both
+  builds and the release page. Beta players are expected to download the new
+  release themselves.
 
-  **Built, 29 September 2026, headless and offline; not run on a packaged
-  build.** Both version gates, Play and Join, now answer a low build with an
-  **Update** button beside the refusal. Update reads GitHub's
-  `releases/latest` (one unauthenticated GET), downloads the first `.zip`
-  asset into `data\updates\`, and refuses it if it is over 200 MB, if its size
-  is not the one the release lists, or if its SHA-256 is not the one the
-  release notes publish (`build.ps1` prints it and the v0.1.0 notes carry it;
-  notes with no digest are not checked). It unpacks the zip's one folder
-  beside the current install under a temporary name and renames it into
-  place, and refuses a zip naming a path outside that folder, one with no
-  `CosmicSupremacyLauncher.exe`, and a target folder that already exists.
-  The box that follows says where the new build is, with **Start**, **Show
-  the folder** and **Later**.
+  **The one step a manual update gets wrong is now in the message.** `data\`
+  sits inside the install and holds `fb_identity.json`, the sign-in every seat
+  is bound to, so a new release unpacked into a fresh folder signs in as
+  someone new and is refused its own seat (J4). The refusal now ends by saying
+  to copy the `data` folder into the new one before starting it.
 
-  **The data directory goes with it, and this was the part a download by
-  hand gets wrong.** `data\` is inside the install and holds
-  `fb_identity.json`, the sign-in every seat is bound to. A player who
-  unpacks a new release into a new folder starts it with an empty `data\`,
-  signs in as someone new, and is refused their own seat as held by another
-  sign-in (J4). So `identity.json`, `fb_identity.json`, `joined.json` and
-  `multiplayer.json` are copied into the new folder before it is offered,
-  and nothing else: logs and captured saves stay where they were. This also
-  means the "nearest safe equivalent" of opening the download page in the
-  browser and explaining the steps was not taken: those steps are the ones
-  that lose the seat.
+  Decided 29 September 2026. A one-click update was built overnight and then
+  taken out: a launcher that downloads and starts an executable is a pattern
+  antivirus heuristics can flag (M3), and a notification is enough for a beta.
+  Automatic update is in the out-of-scope list below.
 
-  **Starting a downloaded executable, and why it is done.** Start is the
-  player's click. The launcher stops its turn loop and its server first,
-  because the new one needs port 8888, then starts the new launcher through
-  ShellExecute (`os.startfile`), as a double-click would, and closes. A
-  running game refuses Start with a sentence. Every `.exe` unpacked is given
-  the `Zone.Identifier` mark a browser download carries (zone 3, with the
-  download URL), so SmartScreen and the antivirus see the files as the
-  download they are rather than as files this launcher wrote, which would
-  have skipped the check a player downloading by hand gets. The download is
-  over HTTPS from the same GitHub release a player would use, checked
-  against that release's published digest, so it is the same trust as the
-  manual path and no weaker. What it does not settle is M3's question from
-  the other side: a program that downloads and starts an executable is a
-  pattern some antivirus heuristics flag, and that is unmeasured. A
-  checkout, which is updated with git, gets the refusal alone.
-
-  A launcher cannot replace its own running executable, so the old folder
-  is left in place and the ready box says it can be deleted once the new one
-  works. Silent update is still deferred.
-
-  `release/tests/test_update.py`, 46 checks, serves a release listing and a
-  zip in `build.ps1`'s layout from a local server, and runs the refusal at
-  `min_build` 0.2.0 through Update and Start: the new launcher is started
-  after the loop and the server stop, and its `data\` holds this install's
-  sign-in. Each of 14 mutations fails a named check.
-
-  Left: a real release to update to. That needs a release published with a
-  `.zip` asset and its digest in the notes, and one packaged build below it
-  pointed at a galaxy with a `min_build` above it.
-
-  **Done when:** a player below the minimum build reaches a current one without
-  being told where to click by a human.
+  **Done when:** a player below the minimum build is told they must update,
+  where to get the new build, and how to keep their seat.
 
 ---
 
@@ -2483,6 +2451,38 @@ is out of scope here.
   It does not change what `trigger_save` does, and behaviour monitoring judges
   the calls rather than the signature.
 
+  **Decided 29 September 2026: a personal certificate in the operator's own
+  name is acceptable**, since that name is already on the repository. Step 1
+  is settled, and steps 2 and 3 wait until signing is wanted.
+
+  **The unsigned game binaries are not a dead end, but they are the open
+  part.** Five executables ship. Two are ours: the launcher and the AI
+  opponent. Two are the original client patched by this project
+  (`CosmicSupremacy_Resurgence.exe`, `CosmicSupremacy_Player.exe`). The last
+  is the original client, `CosmicSupremacy.exe`, and it carries no signature
+  at all (`Get-AuthenticodeSignature` reads NotSigned, measured on the v0.1.6
+  build). So there is no publisher certificate on the game to lose or
+  preserve. The game executables are unsigned today and stay unsigned unless
+  the operator signs them. What that costs, as best
+  understood here, all needing verification:
+  - A player double-clicks only the launcher, and the launcher starts the game
+    executables itself. SmartScreen's "unknown app" prompt comes from Explorer
+    launching a downloaded file, so a signed launcher covers the prompt a
+    player meets.
+  - Smart App Control, on Windows 11 machines where it is on (clean installs,
+    evaluation mode), checks every executable as it loads and can block an
+    unsigned one with no reputation whatever started it. This is the real
+    risk, and signing only our two executables does not remove it.
+  - Defender's cloud has already analysed seven of the game binaries (event
+    2050, above) without a detection, so reputation for the unsigned ones can
+    build without a signature.
+  Two ways on: sign only our two executables and accept the Smart App Control
+  risk for the beta, or also sign the patched pair. Signing them is
+  technically the same `signtool` step. It puts the operator's name on a
+  modified build of someone else's program, which is the same rights
+  question as distributing that build at all, and should be settled together
+  with it.
+
   **Done when:** the checkout stops producing the file that gets quarantined,
   and a beta tester on a machine nobody here configured takes a turn. The
   first half is met on this branch; the second is still open.
@@ -2692,5 +2692,9 @@ is out of scope here.
   string, so the change is where the name comes from and nothing else.
 - **Per-player projection and real fog.** Blocked in D1 and not blocked on this
   phase.
+- **Automatic or one-click update.** Backlog. The launcher could download,
+  verify and start a new release itself; for the beta, L3's notification does
+  the job. The metadata a later version needs is already on the galaxy
+  (`min_build`), so adding it is a launcher change, not a server one.
 - **Governors and admirals.** The original's answer to an absent player. Their
   absence is why K3 and K4 exist at all.
