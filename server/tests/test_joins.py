@@ -692,14 +692,18 @@ def test_order_against_abandonment(blob):
     # What would have failed: the same galaxy with joins first. The order is
     # read out of the source rather than re-run, because running it the other
     # way means editing the referee.
+    # The last call of each is the one on the path a ticked turn takes. An
+    # earlier `joins.apply` seats a join before the tick in a galaxy nobody
+    # holds a planet in, and an earlier `joins.commit` answers refusals for a
+    # turn that is held; neither has an abandonment pass to order against.
     src = open(os.path.join(ROOT, 'server', 'referee.py'),
                encoding='utf-8').read()
     check('and the referee calls them in that order',
-          src.index('abandonment.enforce(store') < src.index('joins.apply('))
+          src.index('abandonment.enforce(store') < src.rindex('joins.apply('))
     check('with both of them before the publish',
-          src.index('joins.apply(') < src.index('store.publish(new_turn'))
+          src.rindex('joins.apply(') < src.index('store.publish(new_turn'))
     check('and the join commit after it',
-          src.index('store.publish(new_turn') < src.index('joins.commit('))
+          src.index('store.publish(new_turn') < src.rindex('joins.commit('))
 
 
 def test_welcome_note_survives_the_next_turn(blob):

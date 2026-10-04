@@ -380,7 +380,45 @@ def refusal_note(name: str, reason: str) -> list:
 
 
 # ── applying ─────────────────────────────────────────────────────────────────
-def _grant(store, blob, req: dict, roster, turn: int, log=print):
+def donor_template(store, blob, before: int, log=print):
+    """An earlier turn of this galaxy to clone a newcomer from, or None.
+
+    Needed only when seat one of `blob` holds no planet or no ship is left to
+    clone a starting hull from, both of which abandonment wipes cause; see
+    `inject_civ.pick_donor` and `inject_ship.add_ship`. The earliest turn the
+    store holds is tried first, because seat one held its homeworld there and
+    its record is closest to a generated start. A turn that cannot be read is
+    skipped.
+    """
+    import abandonment
+    import inject_ship as ish
+    owners = icv.owner_records(blob)
+    if not owners:
+        return None
+    one = icv.seat_one(owners)['oid']
+    if (any(p['owner'] == one for p in icv.planet_records(blob))
+            and ish.ship_records(blob)):
+        return None
+    for turn in reversed(abandonment.candidate_turns(before)):
+        try:
+            if not store.has_turn(turn):
+                continue
+            old = store.turn_blob(turn)
+        except (OSError, ValueError):
+            continue
+        then = icv.seat_one(icv.owner_records(old))['oid']
+        if (any(p['owner'] == then for p in icv.planet_records(old))
+                and ish.ship_records(old)):
+            log(f'  joins: seat one holds no planet or no ship is left; '
+                f'newcomers are cloned from turn {turn}')
+            return old
+    log('  joins: seat one holds no planet or no ship is left, and no '
+        'earlier turn has both')
+    return None
+
+
+def _grant(store, blob, req: dict, roster, turn: int, log=print,
+           template=None):
     """One request against one blob. Returns (blob, outcome).
 
     Nothing raises out of here. Every way the injection can refuse is a
@@ -431,7 +469,8 @@ def _grant(store, blob, req: dict, roster, turn: int, log=print):
             return blob, out
 
     try:
-        joined, planet = icv.add_civ(blob, name, log=lambda *a: None)
+        joined, planet = icv.add_civ(blob, name, template=template,
+                                     log=lambda *a: None)
     except (SystemExit, Exception) as exc:                  # noqa: BLE001
         out.update(outcome=REFUSED,
                    reason=(f'This galaxy had no room to put a new empire in: '
@@ -483,9 +522,11 @@ def apply(store, turn: int, new_turn: int, blob: bytes, log=print):
 
     roster = list(store.civs())
     log(f'  joins: {len(waiting)} request(s) waiting on turn {turn}')
+    template = donor_template(store, blob, turn, log=log)
     outcomes = []
     for req in waiting:
-        blob, out = _grant(store, blob, req, roster, new_turn, log=log)
+        blob, out = _grant(store, blob, req, roster, new_turn, log=log,
+                           template=template)
         if out['outcome'] == GRANTED:
             # Added to the roster this pass and not only in `commit`, so a
             # second request for the same name inside one turn is refused by

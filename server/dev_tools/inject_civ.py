@@ -569,7 +569,7 @@ def keep_starting_design(rec, log=print):
 
 
 def starting_kit(blob, name, home_id, design_id, ships=STARTING_SHIPS,
-                 credits=STARTING_CREDITS, log=print):
+                 credits=STARTING_CREDITS, template=None, log=print):
     """Level a civ this tool has just cloned to what a generation hands one.
 
     The donor is a live empire, so a clone of it is a live empire minus its
@@ -723,9 +723,9 @@ def starting_kit(blob, name, home_id, design_id, ships=STARTING_SHIPS,
         try:
             blob = ish.add_ship(blob, name, design_id=design_id,
                                 home_id=home_id, allow_ordered=True,
-                                log=lambda *a: None)
+                                template=template, log=lambda *a: None)
             made += 1
-        except Exception as exc:                            # noqa: BLE001
+        except (Exception, SystemExit) as exc:              # noqa: BLE001
             log(f"  starting kit: {made} hull(s) of {ships}, "
                 f"{type(exc).__name__}: {exc}")
             break
@@ -736,8 +736,34 @@ def starting_kit(blob, name, home_id, design_id, ships=STARTING_SHIPS,
 
 
 # ── the injection ─────────────────────────────────────────────────────────────
+def pick_donor(blob, template=None):
+    """(source blob, donor OWNR record, how) for a clone that names no donor.
+
+    Seat one of `blob` when it still holds a planet. An abandonment wipe can
+    leave seat one holding nothing, and can leave every civ holding nothing,
+    so the next choice is seat one of `template`, an earlier turn of the same
+    galaxy, which keeps the customised homeworld `seat_one` is chosen for.
+    Without a template, any civ in `blob` that holds a planet is used.
+    """
+    owners = owner_records(blob)
+    held = {p["owner"] for p in planet_records(blob) if p["owner"]}
+    donor = seat_one(owners)
+    if donor["oid"] in held:
+        return blob, donor, "lowest object id, seat one"
+    if template is not None:
+        then = seat_one(owner_records(template))
+        if any(p["owner"] == then["oid"] for p in planet_records(template)):
+            return template, then, "seat one, from an earlier turn"
+    donor = next((o for o in owners if o["oid"] in held), None)
+    if donor is None:
+        raise SystemExit("no civ in this galaxy holds a planet to copy, and "
+                         "no earlier turn of it was given to copy one from")
+    return blob, donor, "first civ holding a planet, seat one holds none"
+
+
 def add_civ(blob, new_name, donor_name=None, home_id=None, taken=(),
-            user_id=None, margin=None, kit=True, ships=None, log=print):
+            user_id=None, margin=None, kit=True, ships=None, template=None,
+            log=print):
     """Clone a civ into the blob and level it to a generated civ's start.
 
     `kit` is on by default because the referee's join path calls this with a
@@ -745,7 +771,9 @@ def add_civ(blob, new_name, donor_name=None, home_id=None, taken=(),
     whatever the donor holds today, which in a played galaxy is that player's
     capital, design book and bank. `ships` overrides the hull count for a
     caller that has measured the galaxy's own, which is what
-    `make_multiplayer_galaxy` does at generation.
+    `make_multiplayer_galaxy` does at generation. `template` is an earlier
+    turn of this galaxy, used by `pick_donor` when no named donor is given and
+    seat one holds no planet, and by the starting kit when no ship is left.
     """
     owners = owner_records(blob)
     if not owners:
@@ -758,14 +786,18 @@ def add_civ(blob, new_name, donor_name=None, home_id=None, taken=(),
     if len(new_name) > 15:
         raise SystemExit(f"{new_name!r} is longer than the 15-char name buffer")
 
-    donor = (next((o for o in owners if o["name"] == donor_name), None)
-             if donor_name else seat_one(owners))
-    if donor is None:
-        raise SystemExit(f"no civ named {donor_name!r}; saw {sorted(names)}")
-    how = "named" if donor_name else "lowest object id, seat one"
+    if donor_name:
+        source = blob
+        donor = next((o for o in owners if o["name"] == donor_name), None)
+        if donor is None:
+            raise SystemExit(f"no civ named {donor_name!r}; saw {sorted(names)}")
+        how = "named"
+    else:
+        source, donor, how = pick_donor(blob, template)
 
     planets = planet_records(blob)
-    donor_home = max((p for p in planets if p["owner"] == donor["oid"]),
+    donor_home = max((p for p in planet_records(source)
+                      if p["owner"] == donor["oid"]),
                      key=lambda p: p["plpr_ln"], default=None)
     if donor_home is None:
         raise SystemExit(f"{donor['name']!r} owns no planet to copy")
@@ -807,16 +839,19 @@ def add_civ(blob, new_name, donor_name=None, home_id=None, taken=(),
     new_id = idg.max_object_id(blob) + 1
     log(f"\n=== {new_name!r}: cloning {donor['name']!r} (id {donor['oid']}, "
         f"{how}) as object id {new_id}")
+    nearest = min((dist(target['pos'], p['pos']) for p in planets
+                   if p['owner']), default=None)
     log(f"  homeworld: planet #{target['id']} at "
         f"({target['pos'][0]:.0f}, {target['pos'][1]:.0f}, {target['pos'][2]:.0f})"
-        f", {min(dist(target['pos'], p['pos']) for p in planets if p['owner']):.0f} "
-        f"from the nearest owned planet"
-        f"{'' if not margin else f', margin {margin:.0f}'}")
+        + (", no planet is owned" if nearest is None
+           else f", {nearest:.0f} from the nearest owned planet")
+        + f"{'' if not margin else f', margin {margin:.0f}'}")
     log(f"  donor homeworld: planet #{donor_home['id']} {donor_home['name']!r} "
         f"(PLPR {donor_home['plpr_ln']} bytes)")
 
     # -- 1. the homeworld, before anything shifts the planet offsets ----------
-    donor_plpr = bytearray(blob[donor_home["plpr_payload"]:donor_home["plpr_end"]])
+    donor_plpr = bytearray(
+        source[donor_home["plpr_payload"]:donor_home["plpr_end"]])
     n = replace_u32(donor_plpr, donor["oid"], new_id, 0, len(donor_plpr))
     log(f"  PLPR transplant: {len(donor_plpr)} bytes, {n} owner reference(s) "
         f"repointed to {new_id}")
@@ -838,8 +873,13 @@ def add_civ(blob, new_name, donor_name=None, home_id=None, taken=(),
 
     # -- 2. the OWNR clone ---------------------------------------------------
     owners = owner_records(blob)
-    donor = next(o for o in owners if o["name"] == donor["name"])
-    rec = bytearray(blob[donor["off"]:donor["end"]])
+    if source is not blob:
+        donor = next(o for o in owner_records(source)
+                     if o["name"] == donor["name"])
+        rec = bytearray(source[donor["off"]:donor["end"]])
+    else:
+        donor = next(o for o in owners if o["name"] == donor["name"])
+        rec = bytearray(blob[donor["off"]:donor["end"]])
 
     # Ownership by id, everywhere inside the clone: design owners, citizens,
     # and the prologue's own object id.
@@ -888,7 +928,7 @@ def add_civ(blob, new_name, donor_name=None, home_id=None, taken=(),
     # clone would otherwise duplicate: the blanket replace_u32 above rewrites the
     # donor's OBJECT id, and this is a different number entirely. Two generated
     # civs read 20 and 21, so max+1 continues the sequence.
-    donor_uid = struct.unpack_from("<I", blob, donor["end"] - 4)[0]
+    donor_uid = struct.unpack_from("<I", source, donor["end"] - 4)[0]
     uid = (max(struct.unpack_from("<I", blob, o["end"] - 4)[0]
                for o in owners) + 1) if user_id is None else user_id
     struct.pack_into("<I", rec, len(rec) - 4, uid)
@@ -918,7 +958,8 @@ def add_civ(blob, new_name, donor_name=None, home_id=None, taken=(),
     if kit:
         blob = starting_kit(
             blob, new_name, target["id"], kit_design,
-            ships=STARTING_SHIPS if ships is None else ships, log=log)
+            ships=STARTING_SHIPS if ships is None else ships,
+            template=template, log=log)
     return blob, target["id"]
 
 

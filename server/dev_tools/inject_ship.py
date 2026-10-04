@@ -74,7 +74,7 @@ def crew_count(blob, ship):
         return 0
 
 
-def pick_donor(blob, ships, design_id):
+def pick_donor(blob, ships, design_id, want=None):
     """The ship to clone, preferring one already of the design being built.
 
     An unordered donor comes first, because cloning an ordered one means
@@ -91,7 +91,8 @@ def pick_donor(blob, ships, design_id):
     that no existing ship can be flying.
     """
     names = {oid: nm for _off, oid, nm in idg.design_records(blob)}
-    want = names.get(design_id)
+    if want is None:
+        want = names.get(design_id)
     return min(ships, key=lambda s: (s["ordered"],
                                      names.get(s["design"]) != want,
                                      -crew_count(blob, s), s["ln"]))
@@ -165,8 +166,26 @@ def clear_order(blob, ship_oid, log=print):
     return blob
 
 
+def ships_at(blob):
+    """Where a SHIP goes in a galaxy that holds none: after the last SOLA.
+
+    Inside GLXY the sections run OWNR, SOLA, SHIP, NEBU, and nothing counts the
+    ships, so a galaxy whose last ship was deleted takes a new one at the
+    position the first one held.
+    """
+    at = max(o["end"] for o in icv.owner_records(blob))
+    while blob[at:at + 4] == b"SOLA":
+        at = idg.sec_end(blob, at)
+    return at
+
+
 def add_ship(blob, civ_name, design_id=None, home_id=None, allow_ordered=False,
-             log=print):
+             template=None, log=print):
+    """Clone a ship over `civ_name`'s homeworld.
+
+    `template` is an earlier turn of this galaxy, used only when `blob` holds
+    no ship to clone, which abandonment wipes can leave.
+    """
     owners = icv.owner_records(blob)
     civ = next((o for o in owners if o["name"] == civ_name), None)
     if civ is None:
@@ -186,9 +205,14 @@ def add_ship(blob, civ_name, design_id=None, home_id=None, allow_ordered=False,
         design_id = ds[0]
 
     ships = ship_records(blob)
-    if not ships:
+    source, pool, want = blob, ships, None
+    if not ships and template is not None:
+        source, pool = template, ship_records(template)
+        want = dict((oid, nm) for _o, oid, nm
+                    in idg.design_records(blob)).get(design_id)
+    if not pool:
         raise SystemExit("no SHIP records to clone")
-    donor = pick_donor(blob, ships, design_id)
+    donor = pick_donor(source, pool, design_id, want=want)
     if donor["ordered"] and not allow_ordered:
         raise SystemExit("every ship in this blob carries an order; cloning one "
                          "means stripping its ROUT, and this call did not ask "
@@ -199,9 +223,9 @@ def add_ship(blob, civ_name, design_id=None, home_id=None, allow_ordered=False,
         f"design {design_id}")
     log(f"  donor SHIP #{donor['id']} @{donor['off']} ({donor['ln']}B, "
         f"DYNO {donor['dyno_len']}B, unordered, "
-        f"{crew_count(blob, donor)} crew)")
+        f"{crew_count(source, donor)} crew)")
 
-    rec = bytearray(blob[donor["off"]:donor["end"]])
+    rec = bytearray(source[donor["off"]:donor["end"]])
     base = 8                                   # payload start within rec
     donor_owner = struct.unpack_from("<I", rec, base + 16)[0]
     struct.pack_into("<I", rec, base, new_id)
@@ -251,7 +275,7 @@ def add_ship(blob, civ_name, design_id=None, home_id=None, allow_ordered=False,
 
     clear_admiral(rec, donor["dyno"] - donor["off"], log=log)
 
-    at = max(s["end"] for s in ships)
+    at = max(s["end"] for s in ships) if ships else ships_at(blob)
     log(f"  inserting {len(rec)} bytes at {at}:")
     blob = icv.splice(blob, at, at, bytes(rec), log=log, what="ship")
 

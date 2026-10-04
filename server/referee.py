@@ -222,6 +222,29 @@ def read_submissions(store: TurnStore, turn: int, roster, log=print,
     return out
 
 
+def holds_a_planet(blob: bytes) -> bool:
+    """Whether any civ in the blob owns a planet, which a tick needs."""
+    civs = {o["oid"] for o in icv.owner_records(blob)}
+    return any(p["owner"] in civs for p in icv.planet_records(blob))
+
+
+def hold_empty(store: TurnStore, turn: int, outcomes, log=print) -> int:
+    """Hold a galaxy nobody holds a planet in for one more turn. Returns `turn`.
+
+    Nothing is ticked or published. The deadline moves one turn length on, so
+    the worker waits for the next boundary instead of retrying a tick that
+    cannot run, and a player's launcher shows an ordinary countdown. A join
+    requested meanwhile is seated at that boundary. Refused joins in
+    `outcomes` are answered now, so the player is told.
+    """
+    joins.commit(store, turn, turn, outcomes or [], log=log)
+    seconds = int(store.state().get("turn_seconds") or 3600)
+    store.update_state({"deadline": time.time() + seconds})
+    log(f"  referee: no civ in this galaxy holds a planet and nobody is "
+        f"waiting to join; turn {turn} is held for {seconds}s")
+    return turn
+
+
 def stamp_for_a_holder(blob: bytes, log=print) -> bytes:
     """The blob with its local player set to a civ that holds a planet.
 
@@ -383,6 +406,18 @@ def resolve_turn(store: TurnStore, save_dir=None, log=print) -> int:
             log(f"  referee: could not leave {civ} a note about turn {turn}, "
                 f"{exc}")
 
+    # A galaxy in which no civ holds a planet cannot be ticked, because the
+    # client opens a galaxy only for a civ that does. Abandonment wipes reach
+    # that state when every player stops. A join is then the only way forward,
+    # so it is applied before the tick rather than after, and the newcomer is
+    # the civ the tick runs as. With nobody waiting the turn is held rather
+    # than failed: see `hold_empty`.
+    early = None
+    if not holds_a_planet(merged):
+        merged, early = joins.apply(store, turn, turn + 1, merged, log=log)
+        if not holds_a_planet(merged):
+            return hold_empty(store, turn, early, log=log)
+
     nxt = tick(merged, turns=1, save_dir=save_dir, log=log)
     new_turn = turn_of(nxt)
     if new_turn <= turn:
@@ -415,7 +450,10 @@ def resolve_turn(store: TurnStore, save_dir=None, log=print) -> int:
     # answer by adding the name, rather than a roster naming a civ the galaxy
     # does not hold, which every submission from that player then fails the
     # screen for, turn after turn, with nothing to fix.
-    nxt, joined = joins.apply(store, turn, new_turn, nxt, log=log)
+    if early is None:
+        nxt, joined = joins.apply(store, turn, new_turn, nxt, log=log)
+    else:
+        joined = early
 
     store.publish(new_turn, nxt)
     joins.commit(store, turn, new_turn, joined, log=log)

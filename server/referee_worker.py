@@ -968,12 +968,14 @@ def run(store, save_dir=None, grace: float = GRACE, poll: float = POLL,
                 continue
 
             referee.wait_for_client_free(log=log)
-            referee.resolve_turn(store, save_dir=save_dir, log=log)
+            published = referee.resolve_turn(store, save_dir=save_dir, log=log)
             fails = 0
             failure_page_at = None
             heartbeat(store, fails, log=log)
-            write_operator_page(store, page, f'after closing turn {turn}',
-                                gid=gid, log=log)
+            event = (f'after closing turn {turn}' if published != turn else
+                     f'after holding turn {turn}: no civ holds a planet and '
+                     f'nobody is waiting to join')
+            write_operator_page(store, page, event, gid=gid, log=log)
             if once:
                 return EXIT_OK
         except (Exception, SystemExit) as exc:              # noqa: BLE001
