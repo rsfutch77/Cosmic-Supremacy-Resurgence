@@ -355,8 +355,12 @@ class FirebaseTurnStore:
         throughout, because gcloud does not use ADC.
 
         Pinning it here means the store bills the project it is reading and
-        writing, whoever is logged in. A service account key carries no quota
-        project and is unaffected either way.
+        writing, whoever is logged in. A service account's credential is pinned
+        the same way, and naming a quota project needs
+        `serviceusage.services.use`, so a service account the referee runs as
+        holds `roles/serviceusage.serviceUsageConsumer` besides its data roles.
+        Without it every Storage download is refused with a 403 naming that
+        permission.
         """
         if self._creds is None:
             import google.auth

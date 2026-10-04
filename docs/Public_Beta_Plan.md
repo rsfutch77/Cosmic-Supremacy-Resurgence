@@ -42,24 +42,28 @@ merge the turn. On 30 September the operator went through J3, J4's support
 code, J6, K3, K5, M1, N6 and N7 on screen across two machines, and each item
 records what was seen.
 
-**What the machine is doing right now.** The scheduled task `CosmicSupremacy
-Referee` referees `firebase://cs-resurgence/h3check` ("Beta rehearsal") at
-four-hour turns, with no failures. The worker was last restarted on
-29 September at 02:23, on code that has not changed since. `h3check` is still
-disposable. A second live galaxy, `verify` ("Verification galaxy"), was made
-for the 30 September checks and is closed. It is listed as closed and nothing
-referees it.
+**What the machine is doing right now.** The referee for
+`firebase://cs-resurgence/h3check` ("Beta rehearsal") runs inside Windows
+Sandbox, at four-hour turns, since 4 October. The logon task `CosmicSupremacy
+Referee Sandbox` opens it, so after a reboot the referee waits for the operator
+to log in. Inside, it signs in as the service account
+`cs-referee@cs-resurgence.iam.gserviceaccount.com`, which holds
+`roles/datastore.user` on the project and `roles/storage.objectAdmin` on the
+galaxy bucket and nothing else. Its log, status file and operator page are in
+`C:\CSReferee\out`. `h3check` is still disposable. A second live galaxy,
+`verify` ("Verification galaxy"), was made for the 30 September checks and is
+closed. It is listed as closed and nothing referees it.
 
-The task's Last Result column can read `-2147020576` while Status reads
-Running. That is left over from the task being re-registered while an
-instance was running, and says nothing about the referee: the galaxy advancing
-and `worker_failures` reading 0 are what count.
+The sandbox runs a snapshot of the checkout taken by
+`server\sandbox\stage.ps1`, so a change to the referee reaches it only when that
+script is run again and the sandbox reopened. The previous host task,
+`CosmicSupremacy Referee`, is disabled and kept: re-enabling it and closing the
+sandbox is the way back, and it runs as the operator's own Google login.
 
-To point the referee elsewhere, run `run_worker.ps1 -WriteTaskXml` for the two
-`schtasks` commands, or `galaxy_tool.py start` for a new galaxy, which prints
-the worker command for it. Every command in this file is relative to the
-repository root, and a fresh PowerShell opens in `C:\WINDOWS\system32`: `cd`
-first. Agents share the client and the live systems through
+To point the referee elsewhere, run `stage.ps1` with another `-Store` and reopen
+the sandbox, or `galaxy_tool.py start` for a new galaxy. Every command in this
+file is relative to the repository root, and a fresh PowerShell opens in
+`C:\WINDOWS\system32`: `cd` first. Agents share the client and the live systems through
 `server/dev_tools/lease.py`.
 
 **Open, and what each needs:**
