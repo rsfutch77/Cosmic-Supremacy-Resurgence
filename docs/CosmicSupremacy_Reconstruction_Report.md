@@ -1173,6 +1173,24 @@ Two things cost time here and are worth passing on:
 
 [ ] The same function also carries an **upper** bound, `cmp ebx, 0xA8C0` (43,200 = 12 hours) at `0x0052D34F`. Untouched, and presumably the longest turn the original game offered.
 
+### Patches 28–30, Setup messages point at the launcher (1,024 bytes, October 2026)
+
+**Release only.** `client/dev_tools/patch_launch_messages.py --source <exe> --out <path>` writes a patched copy, and `release/build.ps1` uses it in place of copying each client into a release's `game\` folder. No tracked binary carries these bytes, and the script refuses an `--out` that git tracks.
+
+A client started without a galaxy pass, which is what double-clicking one in `game\` does, tries to register the `.csgalaxy` file association and then shows one of two message boxes. Both describe the original site's flow: visit the portal, sign up, download a Galaxy Pass, drag it onto the exe. The portal they name is the patch 2 host string, so a checkout client reads `Visit 127.0.0.1:8888`.
+
+**The patch 2 host string is display text only.** A static initializer copies it into the global string at `0x0086F104`, and every read of that global is one of three `sprintf` calls, all of them message text. The connection host is the patch 3 string, held in the global at `0x0086F124` and read by different code. So the messages can change without moving either host.
+
+| # | file | VA | slot | original | replacement |
+|---|---|---|---|---|---|
+| 28 | `0x378490` | `0x00779C90` | 586 bytes | `%s setup partly failed! ...` | `%s is started from the launcher, not from this file.` followed by the steps to open `CosmicSupremacyLauncher.exe` one folder up |
+| 29 | `0x3786E0` | `0x00779EE0` | 444 bytes | `%s setup completed successfully. ...` | the same text as 28 |
+| 30 | `0x378C60` | `0x0077A460` | 40 bytes | `Please login via the %s portal.\nVisit %s` | `Restart %s from the launcher.` |
+
+Each original is a format string whose first argument is the product name, `Cosmic Supremacy`, followed by the host, the extension and the exe name in an order that differs per message. Each replacement keeps only that leading `%s`. The callers remove their own arguments from the stack, so the trailing arguments `sprintf` leaves unread are harmless. Each replacement is written into its original's slot and the remainder is NUL-filled, so no string moves and no length grows. The strings sit at the same addresses in all four clients, and a whole-file comparison of each patched copy against its source finds every changed byte between `0x378493` and `0x378C87`.
+
+**CONFIRMED:** a patched `CosmicSupremacy_TestBed.exe` started with no arguments from a non-administrator account shows the new text in the setup failed dialog.
+
 ### Summary
 
 Patches 1–4 (54 bytes) redirect all network traffic from the dead production servers (`www.cosmicsupremacy.com`, `cosmicsupremacy.com`, and a hardcoded IP) to `127.0.0.1:8888`, where the local stub server (`cs_server.py`) listens. Patch 1 converts a conditional branch (JZ) to an unconditional jump (JMP), forcing the client to always take the "success" path past a connection-validation check.
@@ -1180,6 +1198,8 @@ Patches 1–4 (54 bytes) redirect all network traffic from the dead production s
 Patches 5–11 (13 bytes) bypass save/load validation checks in the game’s persistence code, which are needed for testbed galaxy saves to function against the local stub server.
 
 Patches 12–17 (22 bytes, T1–T5) bypass turn-pipeline sync checks, enabling external turn control. Applied only to the Resurgence EXE.
+
+Patches 28–30 (1,024 bytes) rewrite the setup and login messages to send a player to the launcher. Applied only to the clients a release ships.
 
 ### EXE Variants
 
@@ -1190,6 +1210,8 @@ Patches 12–17 (22 bytes, T1–T5) bypass turn-pipeline sync checks, enabling e
 | `CosmicSupremacy_Resurgence.exe` | 1–17 (incl. T1–T5) | No | `SandboxGalaxy_local.csgalaxy` | Production multiplayer, turns controlled by `fast_turns.py` |
 | `CosmicSupremacy_Resurgence.exe` | + 18–27 (optional) | No | any | AI development, sub-60s turns. **Do not ship**: it changes a game rule, not plumbing, and a galaxy built on it runs faster than the original ever allowed |
 | `CosmicSupremacy_Player.exe` | 1–11, plus the one byte for prompt 225 | Never created | a pushed `.dat` | Multiplayer player build. TestBed without T1–T5, so it cannot compute a turn and the setup prompts stay gated |
+
+Every client in a release's `game\` folder also carries patches 28–30, the unmodified original included.
 
 ---
 

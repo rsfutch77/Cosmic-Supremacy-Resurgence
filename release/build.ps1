@@ -398,11 +398,22 @@ if (Test-Path $License) {
     Write-Warn2 'no LICENSE at the repo root - shipping without one'
 }
 
+# A client double-clicked in game\ shows a setup message that walks the player
+# through the original site's sign-up flow. patch_launch_messages.py writes each
+# client into the stage with that text pointing at the launcher instead, so the
+# copy is the patch and the tracked binary is only read.
+$PatchMessages = Join-Path $ClientDir 'dev_tools\patch_launch_messages.py'
+function Copy-Client {
+    param($src, $dst)
+    & $VenvPy $PatchMessages --source $src --out $dst | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "patch_launch_messages failed for $(Split-Path -Leaf $src)" }
+}
+
 # Several modes share one EXE, so copy the distinct set rather than per mode.
 $copied = @{}
 foreach ($m in $playable) {
     if (-not $copied.ContainsKey($m.exe)) {
-        Copy-Item (Join-Path $ClientDir $m.exe) (Join-Path $GameDir $m.exe)
+        Copy-Client (Join-Path $ClientDir $m.exe) (Join-Path $GameDir $m.exe)
         $copied[$m.exe] = $true
         Write-Ok "game\$($m.exe)"
     }
@@ -433,7 +444,7 @@ if ($mpModes.Count -gt 0) {
         if (Test-Path $cand) { $mpExe = $cand; break }
     }
     if ($mpExe) {
-        Copy-Item $mpExe (Join-Path $GameDir (Split-Path -Leaf $mpExe))
+        Copy-Client $mpExe (Join-Path $GameDir (Split-Path -Leaf $mpExe))
         Write-Ok "game\$(Split-Path -Leaf $mpExe)"
         if ((Split-Path -Leaf $mpExe) -ne 'CosmicSupremacy_Player.exe') {
             Write-Warn2 ('shipping TestBed: players will see the coat-of-arms ' +
