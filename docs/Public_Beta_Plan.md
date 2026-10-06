@@ -91,9 +91,6 @@ file is relative to the repository root, and a fresh PowerShell opens in
 7. **M1's to-do, an on-screen check.** The Copy button and the past
    references link were built on 30 September and want looking at in a
    packaged build.
-8. **N4, the operator's call on the notice's wording.** The notice shown at
-   Join does not mention that every client holds the whole galaxy, and says
-   "kicked" where the code wipes the empire.
 
 ## What this phase inherits
 
@@ -2705,9 +2702,11 @@ is out of scope here.
     anything leaves the machine, in `LOG_SEND_TEXT`, and nothing is sent until
     the player presses Send.
 
-  **Open for the operator:** whether the maphack point and "wiped" rather than
-  "kicked" belong in the notice, which is the operator's text to change, and a
-  sign-up page if the beta gets one.
+  **Decided by the operator, 6 October 2026.** The abandonment line now reads
+  "If you miss a bunch of days, your empire may be removed", which matches the
+  wipe. The maphack point stays out of the notice by choice. The launcher's
+  Join box is where players sign up, so there is no second place for the text.
+  The new line reaches players with the next build.
 
 - [x] **N5. Record a measured tick duration.** Three real resolutions of the
   32-system, 3-civ demo galaxy at about 39,100 bytes, each closing a turn and

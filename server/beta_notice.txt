@@ -2,7 +2,7 @@ Before you join the beta
 ========================
 
 - Please don't cheat on purpose
-- If you miss a bunch of days, you may be kicked
+- If you miss a bunch of days, your empire may be removed
 - The galaxy may be restarted at any time while we fix bugs
 - There may be game breaking bugs, submit them here:
 https://github.com/rsfutch77/Cosmic-Supremacy-Resurgence
