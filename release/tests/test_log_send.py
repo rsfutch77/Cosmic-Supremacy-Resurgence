@@ -237,7 +237,7 @@ try:
           L.load_log_refs(d), lambda r: [x["id"] for x in r]
           == ["20260929T040000Z-abcdefgh-0a0b0c"]
           and os.path.dirname(L.log_refs_path(d)) == d)
-    check("and the past references link is refreshed", app.links,
+    check("and the log history link is refreshed", app.links,
           [["20260929T040000Z-abcdefgh-0a0b0c"]])
 
     print("\n4. nothing leaves without Send")
@@ -403,13 +403,13 @@ try:
     app = make_app(d)
     app.show_log_refs()
     title, body, refs = app.dialogs[-1]
-    check("past references lists the kept ones, newest first",
+    check("log history lists the kept ones, newest first",
           (title, refs), (L.LOG_REFS_TITLE, ["newer", "older"]))
     check("and names the support code for one not there",
           ("support code" in body, "abcd1234" in body), (True, True))
     check("the sent box says where the kept ones are",
           L.log_sent_text({"id": "r"}, "abcd1234"),
-          lambda t: "kept under the past references link" in t)
+          lambda t: "kept under the log history link" in t)
     check("with no code yet it points at the launcher's title",
           L.log_sent_text({"id": "r"}, None),
           lambda t: "support code shown under the launcher's title" in t)

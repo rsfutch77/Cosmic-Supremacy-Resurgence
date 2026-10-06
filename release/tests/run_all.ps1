@@ -15,10 +15,21 @@
                            in the player's path re-runs sys.executable, and the
                            turn machinery can be pointed at a release layout.
                            No game and no window.
+      test_signing         The signing step in build.ps1: unsigned when no
+                           certificate is configured, exactly the launcher and
+                           the AI signed when one is, and a failed signature
+                           failing the build. Signs a copy of a small
+                           executable with a throwaway self-signed certificate
+                           in the current user's store when signtool is
+                           installed. No game and no window.
       test_save_protocol   Speaks the wire protocol to cs_server directly. No
                            game needed, ~2 seconds. Covers slot allocation from
                            the gameid=-1 sentinel, the savegamelist format, and
                            the blob round-trip.
+      test_save_message_path
+                           The opt-in message save path names none of the
+                           injection primitives and the switch is off by
+                           default. Source and environment only, no game.
       test_status_cycle    Drives the real launcher window and the real client
                            for each playable mode: click, confirm it reports the
                            game running, kill it, confirm the status recovers.
@@ -65,8 +76,10 @@ function Invoke-Test {
 
 Invoke-Test 'test_identity.py'
 Invoke-Test 'test_packaging.py'
+Invoke-Test 'test_signing.py'
 Invoke-Test 'test_build_and_log.py'
 Invoke-Test 'test_save_protocol.py'
+Invoke-Test 'test_save_message_path.py'
 foreach ($mode in @('tutorial', 'demo', 'testbed')) {
     Invoke-Test 'test_status_cycle.py' @($mode)
 }

@@ -69,28 +69,31 @@ file is relative to the repository root, and a fresh PowerShell opens in
 
 **Open, and what each needs:**
 
-1. **H12 and H13, a measured day.** The poll budget and the submission path
-   are deployed and verified once each. Their done-whens ask for a day of
-   Cloud Monitoring against the estimates. H12 also says when to revisit the
-   polling windows and the billing tier.
-2. **M3, three operator decisions:** code signing (a personal certificate is
-   acceptable, and signing the patched game binaries is the open question),
-   the save path (keep the injection and tell players, script the game's own
-   Save dialog, or patch the player client), and the sentence players are told.
-3. **J4, a live rebind**, when a real player needs one. `seat_tool.py` is
-   built and its read-only commands are verified live.
-4. **N6, an on-screen check of automatic adoption.** Built on 30 September:
-   a launcher on the referee's PC shares the referee's server with no config
-   edit. It wants the packaged launcher started on that PC and one turn
-   played.
-5. **H4, the rules themselves**, which stay deny-all and undeployed by design
-   (see the item).
-6. **J2**, whose done-when asks for a player who never opened a config file to
+1. **H12, a whole launcher day.** H13 is done. H12 has fifteen hours of one
+   launcher on 6 October: 2,456 requests a day against 2,390 estimated, and
+   458 vCPU-seconds, so CPU is as near to binding as requests. Left is one
+   whole UTC day with the launcher open, which 7 October gives if it stays
+   open to 23:59 UTC. Decided 7 October: the referee's 5-second poll, about
+   16,800 Firestore reads a day per galaxy, stays for the beta and is
+   follow-up H12a; the billing account's other projects are taken to use no
+   Cloud Run.
+2. **M3, three operator decisions:** the certificate route (a personal
+   certificate, or Azure Artifact Signing; `build.ps1` signs when one is
+   configured), whether to sign the patched game binaries, the save path
+   (keep the injection, or build the resident message handler in the player
+   client; scripting the Save dialog is ruled out), and which of the three
+   proposed notice wordings players are told.
+3. **J4, a live rebind.** `seat_tool.py` is built and its read-only commands
+   are verified live.
+4. **H4 is done.** The relay's refusals were already measured, and on 6
+   October `server/dev_tools/bypass_check.py` went around the relay to
+   Firestore, Firebase Storage and the GCS JSON API, with an anonymous token
+   and with none: 48 refused, 0 allowed, both live rulesets read back
+   deny-all, and nothing was left on the project. Rerun it under the
+   `firebase-live` lease whenever the rules are touched.
+5. **J2**, whose done-when asks for a player who never opened a config file to
    join the sandbox and play. The parts are verified separately, but not as
    one run on `h3check`.
-7. **M1's to-do, an on-screen check.** The Copy button and the past
-   references link were built on 30 September and want looking at in a
-   packaged build.
 
 ## What this phase inherits
 
@@ -334,7 +337,7 @@ is out of scope here.
   run in the project until now was against a folder. The first one, an hour
   earlier, closed turn 11 and published turn 12 in fifteen seconds.
 
-- [ ]~ **H4. Anonymous auth and security rules.** Firebase Anonymous Auth gives
+- [x] **H4. Anonymous auth and security rules.** Firebase Anonymous Auth gives
   each install a stable UID with no login screen, no password and no account.
   The username stays exactly what it is today, a claim typed into the launcher.
 
@@ -406,6 +409,33 @@ is out of scope here.
   have left to say is "nothing gets in except through the relay". Reading the
   live rules back on 27 September showed both Firestore and Storage deny-all,
   which is the whole of their job now.
+
+  **The bypass half is measured, on the night of 6 October local time, with
+  `server/dev_tools/bypass_check.py`.** The harness reads the live releases
+  back first: `cloud.firestore` is ruleset `34bb48e1`, deployed 21 September,
+  `match /{document=**} { allow read, write: if false; }`, and
+  `firebase.storage/cs-resurgence.firebasestorage.app` is ruleset `523e5b72`,
+  deployed the same day, `match /{allPaths=**} { allow read, write: if false; }`.
+  Neither has changed since the 27 September reading. It then signs in
+  anonymously the way a launcher does, in a scratch directory, and goes around
+  the relay: Firestore REST (list and query `beta`, get `beta/h3check` and its
+  `archive/0011`, create, patch, commit and delete under a throwaway prefix),
+  Firebase Storage REST (list `beta/h3check/turns/`, download and stat
+  `0011.b64`, upload, delete) and the GCS JSON API with the Firebase ID token
+  as bearer (the same four), each with the token and each again with no token.
+  Because a delete aimed at nothing proves nothing, the harness plants one
+  document and one object under the prefix with the operator's credentials,
+  aims update and delete probes at those too, and reads back that both
+  survived. **48 refused, 0 allowed.** Firestore answers 403 to everything,
+  Firebase Storage 403 to everything, and GCS 401 to the Firebase token
+  ("Invalid Credentials": a Firebase ID token is not a Google Cloud credential
+  at all) and 401 to no token. The one status that is not a refusal, 404 on an
+  anonymous GCS delete of a missing object, is why the planted pair exists:
+  the same delete aimed at the planted object is 401. The run left nothing:
+  the prefix reads back empty, and the anonymous user is deleted through the
+  Identity Toolkit admin endpoint and looked up gone. Exit status is the
+  number of probes allowed, so the harness reruns under the `firebase-live`
+  lease whenever the rules are touched.
 
   **Done when:** a client authenticated as one player is refused writing another
   player's submission, refused publishing a turn, and refused deleting
@@ -829,11 +859,11 @@ is out of scope here.
 
   | allowance | per launcher per month | launchers inside it |
   |---|---|---|
-  | Cloud Run requests, 2 million | about 71,700 | about 28 |
+  | Cloud Run requests, 2 million | about 71,700; 74,700 measured on 6 October | about 28; 26 measured |
   | Storage Class A, 5,000 | at least 180, one upload a turn; 0 after H13 | about 27; not a launcher term after H13 |
   | Storage Class B, 50,000 | 1,440 before, about 1,080 after; about 182 after H13 | 34 before, about 46 after; about 270 after H13 |
   | Firestore reads, 50,000 a day | see above, and H13 adds about 30 a day | inside at 1 galaxy |
-  | Cloud Run CPU, 180,000 vCPU-seconds | not measured | not known |
+  | Cloud Run CPU, 180,000 vCPU-seconds | about 13,900 measured on 6 October, for one launcher alone | 13 if it scaled by launchers; more, by an amount not measured, since requests share an instance |
 
   Requests are the binding poll cost now, and nothing in the relay reduces
   them: only asking less often does. The Games page is 60% of a launcher's
@@ -879,11 +909,170 @@ is out of scope here.
   belongs in the release verification for any build that raises the player
   cap.
 
+  **Measured live, 29 September to 6 October 2026.** The deployed relay is
+  this item's code: H13's measured section has the revision and how it was
+  matched to git. Read from the live service, its settings answer two things
+  this item left open. Concurrency is 80 requests an instance, and billing
+  is request-based, with no CPU outside a request and startup CPU boost on.
+  Read from Cloud Monitoring and the relay's request log, every figure below
+  is a UTC day; Firestore's own daily quota resets at midnight Pacific, which
+  moves no figure here by more than an hour of the referee's poll.
+
+  | UTC day | what ran | relay requests | relay vCPU-seconds | Firestore reads | writes | deletes | Storage writes and listings | Storage reads |
+  |---|---|---|---|---|---|---|---|---|
+  | 30 Sep | `h3check` ticking, `verify` started and closed, two machines on screen for three hours | 158 | 61.7 | 15,181 | 73 | 2 | 9 | 71 |
+  | 1 Oct | `h3check` ticking until turn 31, then stuck | 0 | 0 | 11,610 | 122 | 0 | 3 | 112 |
+  | 2 Oct | stuck: the worker retrying every 5 minutes | 0 | 0 | 2,375 | 285 | 0 | 0 | 285 |
+  | 5 Oct | idle: turn 31 held, one referee polling | 0 | 0 | 16,763 | 12 | 0 | 0 | 6 |
+
+  Storage reads are `ReadObject`, `GetObjectMetadata` and
+  `GetBucketMetadata`. On 30 September the relay's 158 requests were 58
+  listings and 58 `/submissions` from a Games page on screen for about two
+  hours, and 42 to `verify`. Billable instance time that day was 38.3
+  seconds, and memory 19.2 GiB-seconds; vCPU-seconds run above billable
+  seconds because of the startup boost.
+
+  **No launcher was open from 07:00 UTC on 30 September to 04:37 UTC on 6
+  October.** The relay answered no request at all for five days, so no whole
+  day of the per-launcher table above has been measured live. What those days
+  do measure is everything that is not a launcher.
+
+  **One launcher, 6 October.** The operator's v0.1.9 launcher, `QCplayer1`
+  on `h3check` with the Games page on screen, opened at 08:57:30 UTC and was
+  still polling at 03:20 UTC on 7 October, with no gap between requests
+  longer than the 120-second timer. It was the relay's only client that day:
+  of 1,566 requests, 1,557 are its own, all to `h3check` or the listing, and
+  the other 9 are the join at 04:37 that seated it, from another address. No
+  other galaxy was asked about. So 6 October is 15 hours of one launcher,
+  not a whole day of one.
+
+  Those 15 hours repeat with the turn: the hourly counts run 160, 72, 78 and
+  96 from each publish, within 4 of that every time. The figures below are
+  the three whole turns from 09:10:43 to 21:12:33, doubled to a day.
+  Firestore reads are the project's for the same 12 hours less the
+  referee's measured 700 an hour, so they carry the referee's three ticks
+  as well.
+
+  | per launcher per day | estimated above | measured |
+  |---|---|---|
+  | relay requests | about 2,390 | **2,456** |
+  | of which the Games page | 1,440 | 1,444, listings and `/submissions` alike |
+  | of which the follow loop and uploads | 941 to 960 | 1,012, `/state` 964 |
+  | uploads | 1 a turn when idle (H13) | 1 a turn, two hours in |
+  | relay Firestore reads | about 3,070, from 1,506, 1,501, 36 to 55 and H13's 30 | about 2,540 |
+  | vCPU-seconds | not estimated | 458, and 228 GiB-seconds |
+  | response bytes | not estimated | about 1.3 MB |
+
+  Requests land 3% above the estimate, so 26 always-open launchers fit the
+  2 million rather than 28. Reads land under it, because the held-copy
+  figures were stepped through demand that never stops and one launcher asks
+  once every 2 minutes at most mid-turn. Each upload was its own document
+  and the day's 5 `WriteObject` operations are the 5 turns published, which
+  is H13's check again over a whole day with a submission every turn.
+
+  **CPU, measured for the first time, is as close to binding as requests.**
+  458 vCPU-seconds a day is about 13,900 a month, 7.7% of 180,000, for one
+  launcher alone, so 13 launchers if it scaled by launchers. It does not
+  scale that way exactly: request-based billing charges an instance while
+  at least one request is in flight, at 100-millisecond granularity, and up
+  to 80 requests share an instance, so launchers whose requests overlap cost
+  less than the sum of each alone. How much less is the thing one launcher
+  cannot show; the measured day says CPU is a term to watch from the first
+  few dozen launchers, not that it binds at 13. Memory is 228 GiB-seconds a
+  day, about 52 launchers by the same arithmetic.
+
+  **Egress, by the same day.** The request log's response sizes sum to
+  831 KB for the 15 hours, and Monitoring counts 636 KB of the container's
+  output as internet, so a launcher is about 1.0 to 1.3 MB a day, 31 to 40
+  MB a month. Against the 1 GiB North America allowance that is about 26 to
+  34 launchers, if that allowance is the one that applies and these bytes are
+  what it counts, neither of which was confirmed.
+
+  **The largest Firestore term is the referee, and the estimates above leave
+  it out.** On 5 October nothing reached the relay and Firestore still served
+  16,763 reads, about 700 every hour of the day, which is 34% of the
+  50,000. That is `referee_worker.py` reading the galaxy document once a pass
+  at `POLL = 5.0` seconds, 17,280 a day by the code; the measured figure is
+  97% of that, the rest being the time each pass takes. It is the same on
+  every day the worker waits on a deadline, whichever machine runs it: the
+  host worker from 10:34 UTC on 4 October, the sandboxed one from 21:44, and
+  the host again from 05:08 UTC on 6 October each read about 700 an hour. It
+  also settles what H5 left unmeasured, that one `state()` is one billed
+  document read. A worker stuck retrying reads less, about 8 reads a retry
+  at one retry every 5 minutes.
+
+  The poll is a term per galaxy, since a worker referees one. So the project
+  reads above become:
+
+  | Firestore reads a day | 100 launchers | 500 launchers |
+  |---|---|---|
+  | 1 galaxy, the estimate above, with H13's 30 a launcher | 11,500, 23% | 45,500, 91% |
+  | the same, with the referee's measured poll, 16,800 | 28,300, 57% | 62,300, 125% |
+  | 5 galaxies, 3 instances, with H13, without the poll | 57,600, 115% | 91,600, 183% |
+  | the same, with five referees polling | 141,600, 283% | 175,600, 351% |
+
+  Five galaxies spend 84,000 reads a day on polling before any launcher asks
+  anything. The worker already holds the deadline it just read, so a gap
+  that shrinks toward the deadline, as `poll_gap` does for launchers, is the
+  obvious lever: H5's figure for that rule at four-hour turns is 888 reads a
+  day. What it would trade is how soon the worker notices a change made to
+  the document by someone else, an operator moving a deadline or reopening a
+  galaxy.
+
+  **Decided 7 October 2026: the referee's poll stays at 5 seconds for the
+  beta.** The beta runs one galaxy, where the poll is 34% of the allowance
+  and one launcher, measured, is about 5% more. Named as
+  follow-up **H12a**, so it is not lost: before a second live galaxy is
+  started, or after the beta, whichever comes first, make the worker's gap
+  shrink toward the deadline it already holds, and measure a day of its
+  reads.
+
+  **Which free allowance the relay draws on, settled.** Read 6 October 2026.
+  Google's Cloud Run pricing page (`cloud.google.com/run/pricing`) says that
+  source deployments and functions run as Cloud Run services and are billed
+  as such, and that 1st gen functions are priced separately; the Cloud Run
+  functions pricing page (`cloud.google.com/functions/pricing`) sends
+  everything but 1st gen to Cloud Run pricing. Firebase's version comparison
+  (`firebase.google.com/docs/functions/version-comparison`) says a 2nd gen
+  function is deployed as a Cloud Run service. So the relay draws on Cloud
+  Run's request-based free tier: 180,000 vCPU-seconds, 360,000
+  GiB-seconds and 2 million requests a month, with `us-west1` in Tier 1.
+  The same page says that free tier is aggregated across projects by
+  **billing account**, and `cs-resurgence`'s billing account carries three
+  other projects of the operator's, `chainofcommand-cba65`,
+  `framework-exchange` and `rulette-5bb3a`. **Decided 7 October 2026:** the
+  operator states they use little to no Cloud Run, so the shared free tier is
+  treated as this project's; their usage was not read from here. Firebase's own pricing page (`firebase.google.com/pricing`) still
+  lists a Cloud Functions allowance of 2 million invocations, 400,000
+  GB-seconds and 200,000 CPU-seconds without naming a generation; by the
+  Google pages that is the 1st gen allowance, but no bill or SKU report was
+  read, so that reading is not confirmed against an invoice.
+
+  **Ingress and egress.** Google's network pricing page
+  (`cloud.google.com/vpc/network-pricing`, read the same day) says inbound
+  data transfer is not charged and that responses to requests count as
+  outbound. The Cloud Run pricing page gives outbound internet data a free
+  allowance of 1 GiB a month within North America, and says data sent to
+  Google Cloud resources in the same region is not charged, which covers the
+  relay's traffic to Firestore and Storage. Whether that 1 GiB is per project
+  or per billing account was not stated where it was read. On 30 September
+  the relay's container sent 343 KB in all, 47 KB of it counted by
+  Monitoring as internet, and received 326 KB; which of Monitoring's kinds
+  the bill counts as egress was not confirmed.
+
+  **Still open: one whole UTC day of a launcher.** 6 October does not
+  qualify, since the launcher opened at 08:57 UTC. 7 October does if the
+  same launcher is still polling at 23:59 UTC; read it the same way, from
+  the relay's request log by galaxy and Monitoring by hour, after 00:00 UTC
+  on 8 October. The per-launcher figures above are not expected to move,
+  since three whole turns already repeat to within a few requests, so what
+  that day adds is the literal done-when. H12a is the other follow-up.
+
   **Done when:** the relay is redeployed and a measured day of the live
   function's request count, Firestore reads and CPU seconds is written here
   against the estimates above.
 
-- [ ] **H13. Submissions at hundreds of players.** H12 found Storage Class A
+- [x] **H13. Submissions at hundreds of players.** H12 found Storage Class A
   capping the beta at about 27 players, and every one of those operations was
   a submission upload: a PUT to the signed URL the relay handed out. The
   target is hundreds of players who leave the launcher open all month, and
@@ -962,9 +1151,9 @@ is out of scope here.
     holds as `If-None-Match` and the relay answers 304 with no body when they
     match; measured, a read after an upload is a 304 of 0 bytes. Builds from
     before this item do not send the tag and get the body, about 26 KB an
-    upload. **Whether Cloud Run ingress and egress at these sizes are inside
-    a free allowance needs verifying against current Google billing
-    documentation**; no figure for them is given here.
+    upload. Inbound data is not charged, and outbound internet data has a
+    free allowance of 1 GiB a month within North America; H12's measured
+    section has the pages and what a launcher sends.
 
   **What it keeps.** The seat is checked in code on a fresh read of the
   galaxy document, never a held copy; a closed galaxy is refused; the turn
@@ -1022,6 +1211,62 @@ is out of scope here.
   Tests: `test_submission_path.py`, 46 checks, new. `test_relay_costs.py`
   32 to 49, `test_relay_function.py` 155 to 161, `test_store_equivalence.py`
   306 to 309. 25 changes mutation-confirmed, each caught by a named check.
+
+  **Measured live, 29 September to 6 October 2026.** The relay has served
+  revision `relay-00007-wik` since 09:55 UTC on 29 September. Its source in
+  the deploy bucket is `functions/` at `af52130`, the last commit to touch
+  that directory: `relay.py` and `main.py` match byte for byte, and the
+  bundled store differs from `server/firebase_store.py` only in a docstring.
+  The worker was restarted at 09:23 UTC the same day (pid 19564) and turn 19
+  was due at 11:55, so both changes fell inside turn 19, worker first. Its
+  first publish, turn 20 at 11:56 UTC, wrote `submissions_from: 20` on
+  `h3check` and that turn's notes as documents, which is the new code
+  running and not just deployed.
+
+  **A live turn closed from documents.** `QCplayer1`, seated on turn 32,
+  uploaded once at 08:58 UTC on 6 October through the deployed relay: a
+  ticket, a `POST` answered 200, and a read back answered 304. The document
+  `0032~QCplayer1` holds 9,385 bytes compressed, 39,330 decoded, and was
+  written once. The referee closed turn 32 at 09:10 UTC with 1 submission and
+  took its one order, a farmer moved to mining. With `submissions_from` at
+  20, the store never looked in Storage for it. That is the only submission
+  the deployed relay accepted in the week; the only other upload, on `verify`
+  on 30 September, was a reclaimed seat refused with 403 before anything was
+  written.
+
+  **Every Storage write since the deploy, attributed.** Cloud Monitoring's
+  `storage.googleapis.com/api/request_count` for the galaxy bucket, by
+  method, read at one-minute resolution from the deploy to 09:30 UTC on 6
+  October. Monitoring names no object and Cloud Logging holds no data access
+  entry for the bucket, so each write is matched to the referee log, the
+  relay's request log or a document timestamp, within two minutes.
+
+  | UTC | `WriteObject` | what wrote it |
+  |---|---|---|
+  | 29 Sep, 11:57 to 23:59 | 4 | `h3check` turns 20 to 23 published |
+  | 30 Sep, 04:54 | 1 | `verify` started |
+  | 30 Sep, 05:04, 05:26, 06:08 | 3 | `verify` turns 1 to 3 published |
+  | 30 Sep, 07:03 to 23:06 | 5 | `h3check` turns 24 to 28 published |
+  | 1 Oct, 03:06 to 11:08 | 3 | `h3check` turns 29 to 31 published |
+  | 2 and 3 Oct | 0 | turn 31 could not be ticked: no civ held a planet |
+  | 4 Oct, 21:36 | 1, and 1 `DeleteObject` | made and removed during the sandboxed referee's service account setup, with no relay request that day; not named |
+  | 5 Oct | 0 | turn 31 held every 4 hours |
+  | 6 Oct, 05:11 and 09:12 | 2 | `h3check` turns 32 and 33 published |
+  | the submission, 6 Oct 08:58 | **0** | |
+
+  So in the 24 hours from 09:30 UTC on 5 October, which hold the
+  submission, the bucket took two writes, and both are turns. `ListObjects`
+  has not run since 11:57 UTC on 29 September, turn 19's close, the last turn
+  before the marker. The `ReadObject` and `GetBucketMetadata` counted
+  between 08:57 and 08:58 are the launcher downloading turn 32, before it
+  uploaded.
+
+  **What one submission cannot tell.** It shows the path, not its cost at
+  hundreds: one player made one upload, so the Firestore write and delete
+  estimates above are still estimates, and so is the 1 MiB headroom, since
+  the one live body was 13 KB like the measured one. Nobody held a ticket
+  from before the deploy, so the Storage-ticket commit path ran only on the
+  emulator.
 
   **Done when:** the relay is redeployed and the worker restarted within one
   turn, a live turn closes with submissions read from documents, and Cloud
@@ -2348,7 +2593,7 @@ is out of scope here.
   the clipboard through Tk and reads Copied for a moment. Each reference the
   relay answers is kept in `log_refs.json` beside `identity.json` and
   `joined.json`, newest first, the last five, with the send time in UTC. A
-  "past references" link appears beside send log once one is kept and opens
+  "log history" link appears beside send log once one is kept and opens
   a box listing them with their local send times, each with its own Copy
   button. Both boxes say that a player who lost the reference can send their
   support code instead, and show the code. A corrupt or wrongly shaped file
@@ -2362,6 +2607,12 @@ is out of scope here.
   send, and a write failure hiding the reference. Left for a person: how the
   two boxes and the new link look in the packaged build, and that a pasted
   reference arrives intact after the box is closed.
+
+  **Verified on screen, 6 October 2026**, from a v0.1.9 build on the referee
+  machine. The operator sent a log, copied the reference with the Copy button,
+  pasted it intact after closing the box, and found it again under the new
+  link. At the operator's request the link is named "log history" and its box
+  is titled "Log history".
 
   **Done when:** a turn's log uploads under the cap, and a failure the operator
   did not witness is diagnosed from the uploaded copy alone.
@@ -2483,6 +2734,62 @@ is out of scope here.
     the player client is already a patched binary, so it would ride the same
     build step.
 
+  **The two non-injection routes, measured on the binary, September to October
+  2026.** Static analysis of `client\CosmicSupremacy.exe`, read-only, with
+  capstone against the PE. The addresses are the same in all four clients, which
+  share this code.
+
+  - `SaveGame` at `0x0048B350` has exactly one call site in the whole binary,
+    `0x0048BE23`, and that site is inside the Save/Load dialog's command handler
+    `0x0048B950`. There is no other way to reach `SaveGame` than that handler or
+    an injected thread.
+  - `0x0048B950` is wired into an MFC message map as a `WM_COMMAND` handler for
+    control id `0x0483`, alongside the Next Turn and Load buttons (`0x0425`,
+    `0x0426`). The map entry is at `0x0075F39C`. The handler is a `__thiscall`
+    member that reads the dialog's own slot list and name control to build the
+    `gameid` and `std::string` arguments it passes to `SaveGame` (`mov ecx, esi`
+    at the call, `esi` the dialog `this`). It cannot run without that dialog
+    existing, so its wiring cannot be reused with any other window as `this`.
+
+  **The Save-dialog route, scripting the dialog with window messages, does not
+  work on the player build.** The player build (TestBed, and Player on top of
+  it) never creates dialog 222, so there is no window to post `WM_COMMAND
+  0x0483` to and nothing in normal play opens it. Making it appear would itself
+  be a patch, which removes the only thing this route had going for it, that it
+  needs no binary change. Even on the referee's Resurgence build, where the
+  dialog can appear, driving it means a visible modal window that flashes,
+  steals focus and collides with a player mid-click, which rules it out for a
+  capture taken every few seconds through a turn. This route is not pursued.
+
+  **The message-patch route is feasible, and its size is now bounded.** It is in
+  two halves. The launcher half is built and tested: `trigger_save_message.py`
+  finds the client's main window and posts a registered window message to it
+  with `PostMessageW`, and performs no `OpenProcess` for write, no
+  `VirtualAllocEx`, no `WriteProcessMemory` and no `CreateRemoteThread`.
+  `game_cycle.trigger_save` calls it when `CS_SAVE_VIA_MESSAGE` is set and
+  injects otherwise, so the launcher and `player_turn` both honour the switch
+  with injection as the default. The window-finding half was run against the
+  live client with no injection and located its main window.
+  `release/tests/test_save_message_path.py` checks the tool names none of the
+  injection primitives and that the switch stays off by default. The open half
+  is the resident handler in the player client: a posted message reaches
+  `SaveGame` only if the client carries code that calls it, and the stock client
+  does not, for the reason above. That handler is a small resident call stub, of
+  the same three facts the injected stub relies on (`SaveGame` is `ret 8`,
+  ignores `this`, and is synchronous), plus a hook that lets a posted message
+  reach it. `.text` has a 3,948-byte run of padding at `0x006D2094` for the
+  stub. It rides the existing patch and build step, the same one
+  `patch_hide_setup_prompts.py` uses, and would be signed with the rest. Its
+  cost against keeping the injection: a resident call stub and a window-procedure
+  hook are themselves a shape some antivirus heuristics watch for, so the route
+  may move the sensitive act rather than remove it. The difference that makes it
+  worth considering is that a signed static binary builds cloud and SmartScreen
+  reputation over downloads, while a remote thread is judged by behaviour
+  monitoring on every turn. No real save has been captured through this route,
+  because the resident handler is the part not built, and writing executable
+  code into the game binary is the operator's decision rather than a step taken
+  here.
+
   **What a player is told, for the operator.** Nothing tells a player today
   that the launcher writes into the game process. Recommended: one plain
   sentence in `PLAYER_README.txt` and the beta notice saying that the launcher
@@ -2492,35 +2799,362 @@ is out of scope here.
   an exclusion, which trains the habit and hides the next thing. The wording is
   an operator decision because it is a public statement about the product.
 
+  **Proposed wording, awaiting the operator.** Three candidates, none of them
+  in `PLAYER_README.txt`, the beta notice or any other player-facing file.
+  Pick one, change it, or reject all three. Each makes one claim that is
+  measured only on this machine: that an antivirus product may report the
+  save. Defender flagged the loose `.pyc` of a checkout and nothing in a
+  frozen build (above), and no other product was tried, so "some antivirus
+  products" is a statement about products nobody here has run. Each also
+  refers to the launcher's log, which depends on the log send box (M1) being
+  what ships.
+
+  - A, shortest, for the README: "The launcher saves your game by running the
+    game's own save routine inside the game. Some antivirus products report
+    that. If a save is blocked, tell us rather than turning your antivirus
+    off."
+  - B, plain, explains why: "To save, the launcher runs the game's own save
+    routine from inside the game's process. Some malware works the same way,
+    so an antivirus program may warn about it or block it. If saving stops
+    working, send us the launcher's log and we will look into it. Please do
+    not switch off your protection or add an exclusion to get around it."
+  - C, for the beta notice, reads as a term of the beta: "The launcher makes
+    the game save by running the game's save routine inside the game process,
+    and some antivirus products report this as suspicious behaviour. A blocked
+    or failed save is a bug to report with your launcher log, not something to
+    work around."
+
   **Code signing, for the operator, not doable from here.** It needs a legal
   identity, which this checkout cannot supply. In steps:
 
   1. Decide whose name goes on the certificate. An organisation needs to exist
      and be verifiable by the certificate authority through public records; an
      individual certificate would show a personal name to every player.
-     Whether individual certificates are still offered, and by which
-     authorities, needs verification.
+     Individual certificates are still offered: SSL.com sells an Individual
+     Validation code signing certificate that shows the verified personal name
+     as the publisher, at $129 a year, with the key on a hardware token, in
+     its cloud signing service or in the buyer's own cloud HSM (its product
+     page, ssl.com/products/software-integrity/code-signing/iv, read 6 October
+     2026; the page carries no date). That is one seller confirmed, not a
+     survey. Microsoft's comparison of signing options (below) describes OV
+     certificates from DigiCert and Sectigo in terms of an organisation's
+     legal identity and does not mention individual certificates, so whether
+     those two sell one was not established.
   2. Obtain a certificate from an authority, or use Microsoft's cloud signing
-     service (Trusted Signing). Its eligibility rules for individuals and for
-     young organisations need verification.
-  3. Hold the key on a hardware token or in a cloud HSM. Industry rules since
-     2023 require that for code signing keys, as best understood here; needs
-     verification. Either way the key never enters this repository.
+     service, which was named Trusted Signing and is now Azure Artifact
+     Signing (Microsoft Learn, "Code signing options for Windows app
+     developers", page date 29 August 2026, read 6 October 2026). Individuals
+     are eligible only if located in the United States or Canada. Public Trust
+     identity validation for an individual takes its details from the Azure
+     billing account, whose account type must be Individual and whose legal
+     name and sold-to address must match the government ID used for the check;
+     the check itself is a verified ID credential issued by a third party ID
+     verifier and presented through Microsoft Authenticator. The certificate
+     shows the name with the city, state and country, not the street address
+     (Microsoft Learn, "Quickstart: Set up Artifact Signing", page date
+     21 May 2026, updated 29 September 2026, read 6 October 2026). The same
+     comparison page gives about $9.99 a month and no hardware token. A forum
+     answer says the earlier three year history requirement for new
+     organisations no longer applies; the quickstart lists no such
+     requirement, but an absence there is not a statement, so that is
+     unconfirmed. signtool does drive this service, through Microsoft's
+     `Azure.CodeSigning.Dlib.dll` and a metadata JSON file (Microsoft Learn,
+     "Set up signing integrations to use Artifact Signing", page date
+     14 May 2026, read 6 October 2026), which is what `build.ps1` now does
+     (step 4 below). Its certificates are valid for three days, so the
+     timestamp is what keeps a signature valid afterwards (same page).
+  3. Hold the key on a hardware token or in a cloud HSM. Confirmed for
+     certificates issued after 1 June 2023: private keys must be on hardware
+     certified FIPS 140 Level 2, Common Criteria EAL 4+ or equivalent
+     (DigiCert's notice, knowledge.digicert.com, "New private key storage
+     requirement for standard code signing certificates", read 6 October
+     2026; Microsoft's comparison page says the same for OV certificates).
+     The DigiCert notice does not say whether individual certificates are
+     treated differently, and SSL.com's individual product lists only
+     hardware backed options. The CA/Browser Forum text itself was not read.
+     Either way the key never enters this repository.
   4. Add a `signtool` step to `build.ps1` after each freeze, signing
      `CosmicSupremacyLauncher.exe` and `CosmicSupremacyAI.exe` with a
      timestamp. The original game binaries are not ours and should not carry
-     our signature.
+     our signature. **Done on this branch.** `build.ps1` signs those two with
+     SHA-256 and an RFC 3161 timestamp (DigiCert's server by default) right
+     after each is frozen, before anything is archived, when a certificate is
+     named by `-SignCertThumbprint` or the `CS_SIGN_CERT_THUMBPRINT`
+     environment variable. The thumbprint is looked up in
+     `Cert:\CurrentUser\My`, which is where a plugged-in hardware token's
+     certificate also appears, as best understood here; no token was
+     available to test that. With nothing configured the build prints one line
+     saying it is unsigned and carries on. With a certificate configured, a
+     missing or expired certificate, a missing private key, a missing
+     `signtool`, a failed signing run (retried three times) or a signature
+     that does not read back with the right signer and a timestamp fails the
+     build. `signtool` is found by `-SignToolPath` or `CS_SIGNTOOL`, then
+     `PATH`, then the Windows SDK or the Microsoft.Windows.SDK.BuildTools
+     NuGet cache. No Windows SDK is installed on this machine, so the tests
+     ran against that NuGet package unpacked in a scratch folder. The patched
+     game clients (`CosmicSupremacy_Resurgence.exe`,
+     `CosmicSupremacy_Player.exe`) are signed only with `-SignGameExecutables`,
+     off by default; `CosmicSupremacy.exe` is never signed. The one place
+     that turns the configuration into a `signtool` command line is
+     `Get-SignToolArguments`. A key held on a token asks for its PIN at
+     signing time, so a build with a token is attended. The CAs' own cloud
+     signers are not built. Azure Artifact Signing is the second kind, below.
+     Measured: with a throwaway self-signed certificate in
+     `Cert:\CurrentUser\My`, a full worktree build signed both executables
+     and, with `-SignGameExecutables`, the patched client, left
+     `CosmicSupremacy.exe` and the TestBed client unsigned, and a frozen
+     onefile executable still ran after being signed.
   5. Expect SmartScreen reputation to build per certificate over downloads
-     rather than arrive with it. Whether any certificate type still skips that
-     wait needs verification.
+     rather than arrive with it. Confirmed that no certificate type skips the
+     wait now: Microsoft's comparison page says EV certificates lost their
+     instant SmartScreen bypass in 2024 and are treated like OV, and that
+     Azure Artifact Signing also does not give instant trust. It adds that
+     signing consecutive releases with one publisher identity lets reputation
+     carry to later releases. Paying for EV to avoid the warning is
+     therefore not justified (same page, read 6 October 2026).
 
   Signing helps reputation-based checks such as SmartScreen and cloud lookups.
   It does not change what `trigger_save` does, and behaviour monitoring judges
   the calls rather than the signature.
 
+  **Smart App Control and a certificate outside Microsoft's program.**
+  Microsoft's documentation says Smart App Control lets an app run if its
+  cloud service predicts it safe, or if it is signed with a certificate from a
+  CA in the Microsoft Trusted Root Program (Microsoft Learn, "Smart App
+  Control", page date 18 November 2025, read 6 October 2026), and tells
+  developers to sign all binaries from such a CA (Windows 11 Security Book,
+  "Application and driver control", page date 9 February 2026). Neither page
+  says what happens with a signature from outside the program. A post on the
+  text/plain blog (textslashplain.com, 28 April 2026, read 6 October 2026)
+  says signatures chaining to a root outside Microsoft's program, including
+  one the user or an administrator trusted through `certmgr.msc` or Group
+  Policy, are not considered valid, and that Smart App Control checks the
+  signature on every code module and not only on downloaded files. That is a
+  blog post and not Microsoft documentation, so it is the best evidence found
+  and is unconfirmed by Microsoft. If it holds, a self-signed certificate does
+  not clear WinError 4551 for the sandboxed referee, and a certificate from a
+  program CA or from Azure Artifact Signing is the route that could. Not
+  tested here, since no such certificate exists. Two further points are
+  unmeasured: whether the unsigned extension modules a onefile executable
+  unpacks at start are judged one by one, and the security book's statement
+  that Smart App Control is disabled on devices enrolled in enterprise
+  management, which is relevant if the referee host is such a device.
+
+  **Is an Artifact Signing signature expected to satisfy Smart App Control?
+  Expected yes by Microsoft's own statements, unconfirmed for the sandboxed
+  referee until it is run.** Microsoft's Artifact Signing trust models page
+  (page date 6 January 2026, read 6 October 2026) says Public Trust
+  certificates are issued from the Microsoft Identity Verification Root
+  Certificate Authority 2020, which is in the Microsoft Root Certificate
+  Program, and lists "Smart App Control in Windows 11" among the scenarios
+  Public Trust resources are designed to support. "Sign your app for Smart App
+  Control compliance" (page date 25 September 2026) says Smart App Control
+  only considers certificates from trusted providers and calls Artifact
+  Signing the preferred way to sign. That is Microsoft saying it is designed
+  for this, not a measurement that the referee's WinError 4551 clears. Not
+  tested, since there is no account yet. Three things keep it unconfirmed:
+  Smart App Control checks every code module (the SmartScreen reputation
+  page, page date 4 May 2026, says its signature checks apply to all
+  executable files), and the unsigned modules a onefile launcher
+  unpacks may still be judged; a profile of type Public Trust Test is not
+  publicly trusted, so a test profile proves nothing here; and WinError 4551
+  has not itself been tied to Smart App Control by anything read for this
+  item beyond the plan's earlier diagnosis. Separately, the SmartScreen page
+  says not to sign a file that exhibits malicious or potentially unwanted
+  behaviour or "the certificate may develop negative reputation", and the
+  Artifact Signing FAQ says Microsoft may revoke certificates and suspend an
+  account on confirmed misuse. A launcher whose save path is remote thread
+  injection (the top of this item) is signed under the operator's validated
+  name, so a detection by a scanner would attach to that identity. Whether
+  Microsoft would treat it so is not stated anywhere read, and is a risk to
+  weigh, not a finding.
+
   **Decided 29 September 2026: a personal certificate in the operator's own
   name is acceptable**, since that name is already on the repository. Step 1
-  is settled, and steps 2 and 3 wait until signing is wanted.
+  is settled. This was narrowed on 7 October, below.
+
+  **Decided 7 October 2026: Azure Artifact Signing**, replacing the open
+  question of which certificate route to take. The signer is an individual
+  identity in the operator's own name. The reasons on the record: about $9.99 a
+  month (Microsoft Learn, "Code signing options for Windows app developers",
+  page date 29 August 2026) against about $129 a year for an individual CA
+  certificate; no token and no key to hold, since the certificate never leaves
+  the service (Artifact Signing FAQ: "The Authenticode certificate that's used
+  for signing with the profile is never given to you", page date 14 May 2026,
+  updated 6 October 2026); and Microsoft's statements about Smart App Control
+  above. The costs on the record: the operator must be located in the United
+  States or Canada, signing needs an Azure login and the network at every
+  build, the identity validation has to be renewed or signing stops (the FAQ
+  says reminders start 60 days before expiry), and the certificate subject is
+  the legal name with city, state and country and cannot be customised.
+
+  **Azure Artifact Signing in `build.ps1`.** Configured by three settings, all
+  required together, which select the signer. Parameter, then environment
+  variable: `-SignArtifactEndpoint` / `CS_SIGN_AS_ENDPOINT` (the regional
+  endpoint of the account, for example `https://eus.codesigning.azure.net`),
+  `-SignArtifactAccount` / `CS_SIGN_AS_ACCOUNT`, `-SignArtifactProfile` /
+  `CS_SIGN_AS_PROFILE`. Optional: `-SignArtifactDlib` / `CS_SIGN_AS_DLIB`
+  (full path to `Azure.CodeSigning.Dlib.dll`; otherwise the newest
+  Microsoft.ArtifactSigning.Client package in the NuGet cache for signtool's
+  architecture), `-SignToolPath` / `CS_SIGNTOOL`, `-SignTimestampUrl` /
+  `CS_SIGN_TIMESTAMP_URL` (default `http://timestamp.acs.microsoft.com`, the
+  server Microsoft recommends), and `-SignArtifactAuthExclude` /
+  `CS_SIGN_AS_EXCLUDE_CREDENTIALS` (comma separated credential types written
+  to the metadata file; default `InteractiveBrowserCredential`, so an
+  unattended build fails instead of opening a browser; that default is this
+  project's choice, not Microsoft's). Setting these together with a
+  certificate thumbprint fails the build. Each file is signed with
+  `signtool sign /fd SHA256 /tr <timestamp url> /td SHA256 /dlib <dlib path>
+  /dmdf <metadata path> <file>`, and the metadata file, written to
+  `release\build\artifact-signing-metadata.json`, holds `Endpoint`,
+  `CodeSigningAccountName`, `CertificateProfileName` and, when set,
+  `ExcludeCredentials`. Those flags, file names and keys are from Microsoft
+  Learn, "Set up signing integrations to use Artifact Signing" (page date
+  14 May 2026, read 6 October 2026) and the `metadata.sample.json` and
+  `bin\x64\Azure.CodeSigning.Dlib.dll` inside the Microsoft.ArtifactSigning.Client
+  1.0.128 package, which was downloaded and unpacked in a scratch folder to
+  check them. The metadata file holds no secret, and no credential is read or
+  stored by the build: the dlib authenticates as the signed-in Azure identity
+  (`DefaultAzureCredential`: Azure CLI login, or the `AZURE_TENANT_ID`,
+  `AZURE_CLIENT_ID` and `AZURE_CLIENT_SECRET` environment variables of a
+  service principal that has the signer role, per the Artifact Signing FAQ).
+  The check at the start of the build covers: all three settings present;
+  endpoint of the form `https://<region>.codesigning.azure.net`; account name
+  of 3 to 24 letters, digits and single hyphens and profile name of 5 to 100,
+  each starting with a letter and ending with a letter or digit (the
+  quickstart's constraints); signtool found and, when its version can be read,
+  at least 10.0.2261.755 and not from the 20348 SDK (the integrations page's
+  minimum, whose number may be a typo for 10.0.22621.755, so the check
+  follows it literally); the dlib present, named `Azure.CodeSigning.Dlib.dll`
+  and of the same architecture folder as signtool; and a warning when `dotnet`
+  lists no .NET 8 runtime, which the page says makes signtool fail silently.
+  After each file the signature is read back with `Get-AuthenticodeSignature`
+  and must carry a timestamp and read Valid. Tested with a stub signtool and a
+  stand-in dlib (`release/tests/test_signing.py`); the resolver also accepted
+  the real NuGet signtool 10.0.28000.2705 and the real dlib folder. A real
+  signing run is not possible until the operator has an account, so the
+  service's own response, authentication and the read-back on a real
+  Artifact Signing signature have not been exercised.
+
+  **Operator checklist for tonight, in order.** Each step cites where
+  Microsoft states it. Anything not confirmed is marked.
+  1. Azure subscription. Needs a paid subscription: free, trial and sponsored
+     subscriptions are not supported (Artifact Signing FAQ). Pay-as-you-go
+     works. The billing account on it must have Account Type Individual,
+     and its legal name and sold-to address must match the government ID you
+     will use (Quickstart, page date 21 May 2026, updated 29 September 2026).
+     Check this before anything else; Microsoft points at "Manage billing
+     accounts" for changing it. Not confirmed: whether a fresh pay-as-you-go
+     signup as an individual gets Account Type Individual by itself. If the
+     address format cannot be fixed in the portal, the FAQ gives
+     `az billing account update --name <billing-account-name> --sold-to
+     first-name=... last-name=... address-line1=... city=... region=...
+     country=... postal-code=...`.
+  2. Register the resource provider `Microsoft.CodeSigning` on the
+     subscription: portal, Subscriptions, the subscription, Resource
+     providers, `Microsoft.CodeSigning`, Register; or `az provider register
+     --namespace "Microsoft.CodeSigning"` (Quickstart).
+  3. Create the Artifact Signing account (portal, Artifact Signing Accounts,
+     Create; needs at least the Contributor role). Pick a region from the Quickstart's list and note its
+     endpoint: Central US `https://cus.codesigning.azure.net`, East US
+     `eus`, North Central US `ncus`, South Central US `scus`, West Central
+     US `wcus`, West US `wus`, West US 2 `wus2`, West US 3 `wus3` (all
+     `<code>.codesigning.azure.net`). The endpoint must match the region of
+     the account and profile or signing fails with a 403 (integrations page).
+     The list names no Canadian region; a Canadian operator's choice among
+     these is not addressed in anything read. Account name: 3 to 24
+     letters, digits and hyphens, unique, not starting with "one". Pricing
+     tier: Basic allows 5,000 signatures a month and one certificate profile
+     of each type, Premium 100,000 and ten (Azure pricing page, read
+     6 October 2026, which showed no price). Basic is enough: a build signs two
+     files. The month's full price is charged whenever you start. About
+     $9.99 a month is Microsoft's figure for the entry price; the pricing
+     page itself did not display it, so confirm on the portal's tier screen.
+  4. Give your login the two roles it needs on the account (Access control
+     (IAM), Add, Add role assignment; Tutorial: Assign roles in Artifact
+     Signing, page date 29 December 2025). Artifact Signing Identity Verifier,
+     to run identity validation, which needs at least Reader on the
+     subscription as well. Artifact Signing Certificate Profile Signer, to
+     sign. Being Owner of the subscription does not include signing rights;
+     the table lists Owner as managing the account, profiles and role
+     assignments only. If the "New identity" button is greyed out in step 5,
+     the Verifier role is the cause (FAQ).
+  5. Identity validation for an individual (account, Identity validations,
+     the Organization dropdown set to Individual, New identity, Public).
+     Choose the billing account; the name and address fill in read-only. The
+     certificate will show your name with city, state and country, not the
+     street address. After Create the status goes to In Progress, then Action
+     Required; open it and follow the link, signing in with the same email
+     address you entered, or you get "You don't have permission to access
+     this page" (FAQ). You then create a Verified ID through a third party
+     ID verifier (the Quickstart's example is AU10TIX): confirm the email by
+     PIN, give a phone number, scan a QR code with your phone, and photograph
+     a government-issued ID (passport, driving licence or ID card; a US
+     Social Security card is listed as an accepted photo ID), then add the
+     credential to Microsoft Authenticator (use the latest version, avoid a
+     VPN) and share it with Artifact Signing. The ID needs an address on it
+     if you have no recent utility bill or bank statement, which are the
+     supplemental documents (within about three months, showing name and
+     address). A face check is part of it. The status reads Completed a couple
+     of minutes after you finish (Quickstart). How long Microsoft's own review
+     takes for an individual is not stated on the pages read: the Quickstart
+     gives 1 to 20 business days for organisations, and the comparison page
+     says to plan for a few business days. Requests cannot be expedited (FAQ).
+     So the signing steps below may have to wait on this one. A wrong detail
+     means deleting the request and starting again.
+  6. Create the certificate profile (account, Certificate profiles, Create).
+     Type Public Trust, not Public Trust Test, which is not publicly trusted.
+     Name of 5 to 100 letters, digits and hyphens. Under Verified CN and O
+     select the completed identity validation (the dropdown is empty until
+     one is Completed). Leave "Include street address" and postal code
+     unticked unless wanted on the certificate. The certificate itself is
+     never given to you; it is issued and kept in the service.
+  7. Install the signing tools on this machine. Either install the Artifact
+     Signing Client Tools with `winget install -e --id
+     Microsoft.Azure.ArtifactSigningClientTools` (the id was checked with
+     `winget show`; it installs signtool, the .NET 8 runtime, the Visual C++
+     redistributable and the dlib, per the integrations page; where it puts
+     them is not documented on the pages read, so find
+     `Azure.CodeSigning.Dlib.dll` and `signtool.exe` afterwards and set
+     `CS_SIGN_AS_DLIB` and `CS_SIGNTOOL` to those paths, with the same
+     architecture folder for both). Or use the NuGet route the page
+     describes: `nuget.exe install Microsoft.Windows.SDK.BuildTools -x` and
+     `nuget.exe install Microsoft.ArtifactSigning.Client -x`, then point
+     `CS_SIGNTOOL` at `bin\<version>\x64\signtool.exe` and `CS_SIGN_AS_DLIB` at
+     `bin\x64\Azure.CodeSigning.Dlib.dll`. Measured on this machine: the
+     NuGet BuildTools signtool 10.0.28000.2705 passes the version check, the
+     .NET 8.0.31 runtime is present, Azure CLI is not installed, and winget
+     is.
+  8. Sign in to Azure the way the dlib can use without a prompt: install the
+     Azure CLI (`winget install -e --id Microsoft.AzureCLI`, id checked with
+     `winget show`) and run `az login` as the identity that holds the Signer
+     role. The dlib tries `AzureCliCredential` among its methods. For a
+     login-free build, a service principal with the Signer role plus
+     `AZURE_TENANT_ID`, `AZURE_CLIENT_ID` and `AZURE_CLIENT_SECRET` in the
+     environment of the build, never in the repository, is the other route the
+     FAQ describes. Not confirmed: how long an `az login` session lasts
+     before a build needs a new one.
+  9. Set the build's environment, in the shell that runs the build:
+     `CS_SIGN_AS_ENDPOINT` (step 3's endpoint), `CS_SIGN_AS_ACCOUNT`
+     (step 3's account name), `CS_SIGN_AS_PROFILE` (step 6's profile name),
+     and `CS_SIGN_AS_DLIB` and `CS_SIGNTOOL` if step 7 did not leave them
+     where `build.ps1` looks. The same are `-SignArtifactEndpoint`,
+     `-SignArtifactAccount`, `-SignArtifactProfile`, `-SignArtifactDlib` and
+     `-SignToolPath` on the command line. Then run `release\build.ps1`. The
+     build prints the account, profile, signtool and dlib it will use before
+     it freezes anything, and `signed CosmicSupremacyLauncher.exe (Valid,
+     timestamped)` after the freeze.
+  10. Check one signed file yourself: `Get-AuthenticodeSignature` should read
+      Valid with your name as the signer subject, and the Artifact Signing FAQ
+      gives `signtool verify /v /debug /pa <file>` for a file that looks
+      unsigned. If signing fails, the FAQ's error table is the first place to
+      look: 403 means check the Signer role, the account and profile names
+      in the metadata, the identity validation status (Completed) and the
+      certificate profile status; 400 or an authentication error means add
+      credential types to `-SignArtifactAuthExclude`.
+  11. Then run the sandboxed referee from a signed build on a machine with
+      Smart App Control on, which is the only thing that answers the question
+      above. Not done, and not possible before step 5 completes.
 
   **The unsigned game binaries are not a dead end, but they are the open
   part.** Five executables ship. Two are ours: the launcher and the AI
@@ -2723,7 +3357,7 @@ is out of scope here.
   second galaxy and the cloud offload get planned against. A 108-system galaxy
   has not been timed.
 
-- [ ]~ **N6. A launcher on the referee's own machine has to be told about the
+- [x] **N6. A launcher on the referee's own machine has to be told about the
   port.** The worker keeps a `cs_server` on 8888 so captures have somewhere to
   land. A launcher on the same machine finds the port held and refuses it,
   correctly: nothing in the protocol can ask a running server where it writes,
@@ -2804,9 +3438,11 @@ is out of scope here.
   accepted) fails a named check. `test_capture_indicator.py` counts the third
   way out of a held port.
 
-  **Still open:** the on-screen check. Start the packaged launcher on the
-  referee PC with no `adopt_server` in `multiplayer.json`, see the one-line
-  notice, and play a turn to see its capture collected from `server\saves`.
+  **Verified on screen, 6 October 2026.** A v0.1.9 build with no
+  `multiplayer.json` was started on the referee machine while the scheduled
+  referee held port 8888. It said it was sharing the referee's server, and the
+  operator played and submitted a turn on `h3check` with the referee left
+  running.
 
 - [x] **N7. The referee flashes a console window on every tick.**
   `server/referee.py:269` spawns `advance_turns.py` without `CREATE_NO_WINDOW`.

@@ -2844,8 +2844,8 @@ def log_sent_text(reply, code=None) -> str:
     said = "Your log was sent to the galaxy's operator."
     if ref:
         said += ("\n\nIf you write to them about it, quote this reference. "
-                 f"The last {LOG_REFS_KEEP} are kept under the past "
-                 "references link, beside send log.")
+                 f"The last {LOG_REFS_KEEP} are kept under the log history "
+                 "link, beside send log.")
     if code:
         said += ("\n\nIf you lose the reference, send them your support code "
                  f"instead and they can find your logs by it:\n\n    {code}"
@@ -2859,14 +2859,14 @@ def log_sent_text(reply, code=None) -> str:
 
 # ── The references of logs sent ───────────────────────────────────────────────
 # The relay answers each upload with a reference. The last few are kept so a
-# player who closed the box can find one again, from the past references link
+# player who closed the box can find one again, from the log history link
 # beside send log. This is the launcher's record of something the player did,
 # so it lives beside identity.json and joined.json. Newest first; a missing or
 # unreadable file is an empty list and is rewritten whole by the next send.
 LOG_REFS_FILE = "log_refs.json"
 LOG_REFS_KEY = "sent"
 LOG_REFS_KEEP = 5
-LOG_REFS_TITLE = "Logs you sent"
+LOG_REFS_TITLE = "Log history"
 LOG_COPY = "Copy"
 LOG_COPIED = "Copied"
 LOG_COPIED_MS = 1500
@@ -2925,7 +2925,7 @@ def log_ref_when(sent: str) -> str:
 
 
 def log_refs_text(code=None) -> str:
-    """The body of the box the past references link opens."""
+    """The body of the box the log history link opens."""
     said = (f"The references of the last {LOG_REFS_KEEP} logs this launcher "
             "sent, newest first. Quote one when you write to the galaxy's "
             "operator about it.")
@@ -3354,7 +3354,7 @@ class Launcher:
         self.send_log_btn.pack(side="right", padx=(0, 10))
         self.send_log_btn.bind("<Button-1>", lambda e: self.offer_log())
         # Packed once this install has sent a log: see `_show_log_refs_link`.
-        self.log_refs_btn = tk.Label(status, text="past references", bg=BG,
+        self.log_refs_btn = tk.Label(status, text="log history", bg=BG,
                                      fg=FAINT, font=("Segoe UI", 8, "underline"),
                                      cursor="hand2")
         self.log_refs_btn.bind("<Button-1>", lambda e: self.show_log_refs())
@@ -5110,7 +5110,7 @@ class Launcher:
             self.warn(log_not_sent_text(err, path))
 
     def _show_log_refs_link(self):
-        """Pack the past references link once a reference is kept. Tk thread."""
+        """Pack the log history link once a reference is kept. Tk thread."""
         if (self.data_dir is None or self.log_refs_btn.winfo_manager()
                 or not load_log_refs(self.data_dir)):
             return

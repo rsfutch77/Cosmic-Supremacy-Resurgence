@@ -350,8 +350,27 @@ def import_without_bytecode(name):
         sys.dont_write_bytecode = previous
 
 
+def save_via_message() -> bool:
+    """Whether the save path posts a window message instead of injecting.
+
+    Off by default: the remote-thread path in trigger_save is what a packaged
+    build has taken a real multiplayer turn with, and the message path saves
+    only on a player client carrying a resident handler that calls SaveGame on
+    the posted message (plan M3). The environment variable turns it on for a
+    client with that handler, and the save then makes no WriteProcessMemory or
+    CreateRemoteThread call.
+    """
+    return os.environ.get("CS_SAVE_VIA_MESSAGE", "").strip().lower() in (
+        "1", "true", "yes", "on")
+
+
 def trigger_save(name, gameid=0, timeout=30):
     """Make the running client save. Returns (exit code, the tool's output).
+
+    Two paths. The default calls SaveGame in a remote thread inside the client.
+    With CS_SAVE_VIA_MESSAGE set it posts a window message to the client instead
+    and performs no process injection; see trigger_save_message for what that
+    costs and what the client needs for it to land.
 
     In process rather than `sys.executable trigger_save.py`. In the frozen
     launcher sys.executable is the launcher itself, so that command line starts
@@ -364,6 +383,11 @@ def trigger_save(name, gameid=0, timeout=30):
     it is given. The machine's one client is held by whoever is calling this,
     which is what keeps two of these from overlapping.
     """
+    if save_via_message():
+        import trigger_save_message as tsm
+        ok, detail = tsm.post_save(gameid)
+        return (0 if ok else 1), detail + "\n"
+
     import contextlib
     import io
     ts = import_without_bytecode("trigger_save")
