@@ -104,16 +104,17 @@ check("everything is signed before the archive step",
 
 listed = re.search(r"\$PatchedGameExecutables\s*=\s*@\(([^)]*)\)", BUILD_TEXT)
 patched = re.findall(r"'([^']+)'", listed.group(1)) if listed else None
-check("the opt-in set is the patched pair and nothing else", patched,
+check("the signed game set is the patched pair and nothing else", patched,
       ["CosmicSupremacy_Resurgence.exe", "CosmicSupremacy_Player.exe"])
 check("the original client is not in it", "CosmicSupremacy.exe" in (patched or []),
       False)
-check("the game executables are signed only behind the switch",
-      "if ($SignGameExecutables) {" in region("# ── 7d.", "# ── 8. Zip")
-      and "Invoke-ReleaseSigning" in region("if ($SignGameExecutables) {",
+check("the game executables are signed whenever a signer is configured",
+      "if ($Signing -and -not $SkipGameExecutables) {" in region("# ── 7d.", "# ── 8. Zip")
+      and "Invoke-ReleaseSigning" in region("if ($Signing -and -not $SkipGameExecutables) {",
                                             "# ── 8. Zip"), True)
-check("-SignGameExecutables is a switch, off unless given",
-      "[switch]$SignGameExecutables" in BUILD_TEXT, True)
+check("-SkipGameExecutables is a switch that leaves them unsigned",
+      "[switch]$SkipGameExecutables" in BUILD_TEXT
+      and "$SignGameExecutables" not in BUILD_TEXT, True)
 signing_code = region("# ── Code signing", "Write-Host \"Cosmic Supremacy - Resurgence")
 signing_code = "\n".join(l for l in signing_code.splitlines()
                          if not l.lstrip().startswith("#"))
@@ -144,7 +145,7 @@ check("and leaves the file as it was", open(fake, "rb").read() == before, True)
 rc, out = run_ps("Resolve-SigningConfig -Thumbprint '' "
                  "-TimestampUrl 'http://t.example' -GameExecutables")
 check("asking for the game executables with no certificate fails",
-      rc != 0 and "SignGameExecutables" in out, True)
+      rc != 0 and "game executables needs a signer" in out, True)
 
 # ── A configuration that cannot work fails at the start ───────────────────────
 rc, out = run_ps("Resolve-SigningConfig -Thumbprint 'ABCD' "

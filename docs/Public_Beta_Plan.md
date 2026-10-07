@@ -2790,6 +2790,13 @@ is out of scope here.
   code into the game binary is the operator's decision rather than a step taken
   here.
 
+  **Decided 7 October 2026: the beta keeps the injection.** The resident
+  handler is not built for the beta. It is recorded as a follow-up in
+  `docs/CosmicSupremacy_Reconstruction_Report.md`, section 12, "A save
+  without a remote thread", with the facts above that bound it.
+  `CS_SAVE_VIA_MESSAGE` stays off in every build until that handler exists,
+  because with the switch on and a stock client a save never lands.
+
   **What a player is told, for the operator.** Nothing tells a player today
   that the launcher writes into the game process. Recommended: one plain
   sentence in `PLAYER_README.txt` and the beta notice saying that the launcher
@@ -2893,15 +2900,19 @@ is out of scope here.
      NuGet cache. No Windows SDK is installed on this machine, so the tests
      ran against that NuGet package unpacked in a scratch folder. The patched
      game clients (`CosmicSupremacy_Resurgence.exe`,
-     `CosmicSupremacy_Player.exe`) are signed only with `-SignGameExecutables`,
-     off by default; `CosmicSupremacy.exe` is never signed. The one place
+     `CosmicSupremacy_Player.exe`) are signed whenever a signer is configured,
+     and `-SkipGameExecutables` leaves them unsigned; `CosmicSupremacy.exe` is
+     never signed. **Decided 7 October 2026: the patched pair is signed**,
+     with the operator's Artifact Signing identity, so Smart App Control can
+     judge the clients the launcher starts and the sandboxed referee has a
+     signed client to run. The one place
      that turns the configuration into a `signtool` command line is
      `Get-SignToolArguments`. A key held on a token asks for its PIN at
      signing time, so a build with a token is attended. The CAs' own cloud
      signers are not built. Azure Artifact Signing is the second kind, below.
      Measured: with a throwaway self-signed certificate in
      `Cert:\CurrentUser\My`, a full worktree build signed both executables
-     and, with `-SignGameExecutables`, the patched client, left
+     and, with the switch then named `-SignGameExecutables`, the patched client, left
      `CosmicSupremacy.exe` and the TestBed client unsigned, and a frozen
      onefile executable still ran after being signed.
   5. Expect SmartScreen reputation to build per certificate over downloads

@@ -66,9 +66,10 @@
     (comma separated), then to InteractiveBrowserCredential, so an unattended
     build fails rather than opening a browser.
 
-.PARAMETER SignGameExecutables
-    Also sign the patched game clients named in $PatchedGameExecutables. Off by
-    default. CosmicSupremacy.exe, the original client, is never signed.
+.PARAMETER SkipGameExecutables
+    Leave the patched game clients named in $PatchedGameExecutables unsigned.
+    When a signer is configured they are signed with it by default.
+    CosmicSupremacy.exe, the original client, is never signed.
 
 .PARAMETER SignAllowUntrusted
     Accept a signature whose chain does not end in a trusted root. For trying
@@ -97,7 +98,7 @@ param(
                                                @($env:CS_SIGN_AS_EXCLUDE_CREDENTIALS -split ',' |
                                                  ForEach-Object { $_.Trim() } | Where-Object { $_ })
                                            } else { @('InteractiveBrowserCredential') }),
-    [switch]$SignGameExecutables,
+    [switch]$SkipGameExecutables,
     [switch]$SignAllowUntrusted
 )
 
@@ -223,8 +224,8 @@ function Wait-FilesReleased {
 # Get-SignToolArguments is the one place that turns a configuration into a
 # signtool command line, so a further kind is one more case there.
 
-# The game executables carry a signature only when -SignGameExecutables is
-# given, and only these two. CosmicSupremacy.exe is the original client and is
+# When a signer is configured these two are signed with the rest unless
+# -SkipGameExecutables is given. CosmicSupremacy.exe is the original client and is
 # never signed with this project's certificate.
 $PatchedGameExecutables = @('CosmicSupremacy_Resurgence.exe', 'CosmicSupremacy_Player.exe')
 
@@ -476,7 +477,7 @@ function Resolve-SigningConfig {
     $artifact = @($ArtifactEndpoint, $ArtifactAccount, $ArtifactProfile) | Where-Object { $_ }
     if (-not $Thumbprint -and @($artifact).Count -eq 0) {
         if ($GameExecutables) {
-            throw '-SignGameExecutables needs a signer: set -SignCertThumbprint (CS_SIGN_CERT_THUMBPRINT) or the Artifact Signing settings'
+            throw 'signing the game executables needs a signer: set -SignCertThumbprint (CS_SIGN_CERT_THUMBPRINT) or the Artifact Signing settings'
         }
         Write-Warn2 'no signing certificate configured - this build is unsigned'
         return $null
@@ -610,7 +611,7 @@ $Signing = Resolve-SigningConfig -Thumbprint $SignCertThumbprint `
     -ArtifactProfile $SignArtifactProfile -ArtifactDlib $SignArtifactDlib `
     -ArtifactAuthExclude $SignArtifactAuthExclude `
     -MetadataPath (Join-Path $BuildDir 'artifact-signing-metadata.json') `
-    -AllowUntrusted:$SignAllowUntrusted -GameExecutables:$SignGameExecutables
+    -AllowUntrusted:$SignAllowUntrusted
 
 # ── 1. Clean ──────────────────────────────────────────────────────────────────
 if ($Clean) {
@@ -915,11 +916,11 @@ Write-Step "Checking for loose bytecode"
 Assert-NoLooseBytecode $Stage
 Write-Ok "no .pyc and no __pycache__ in $StageName"
 
-# ── 7d. The patched game executables, when asked ──────────────────────────────
-# Off unless -SignGameExecutables is given. Whether the patched clients carry
-# the project's signature is a rights question as well as a build one, so it is
-# a switch and not a default.
-if ($SignGameExecutables) {
+# ── 7d. The patched game executables ──────────────────────────────────────────
+# Signed whenever a signer is configured, so Smart App Control can judge the
+# clients the launcher starts as well as the launcher. -SkipGameExecutables
+# leaves them unsigned.
+if ($Signing -and -not $SkipGameExecutables) {
     Write-Step "Signing the patched game executables"
     $gameSign = @($PatchedGameExecutables | ForEach-Object { Join-Path $GameDir $_ } |
                   Where-Object { Test-Path -LiteralPath $_ })

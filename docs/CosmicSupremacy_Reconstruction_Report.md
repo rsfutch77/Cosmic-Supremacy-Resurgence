@@ -1434,6 +1434,31 @@ Corrected:
 - The **`savegamelist` turn-bump** idea (advertise a higher turn to trip the client's out-of-sync
   check) was never confirmed on the client and is now unnecessary.
 
+### A save without a remote thread (follow-up, October 2026)
+
+The launcher makes the client save by injecting a call to `SaveGame` in a remote thread
+(`client/dev_tools/trigger_save.py`). That is the shipping path for the public beta. The route
+that removes the remote thread is a resident handler in the player client, and it is not built.
+
+What bounds it:
+
+- `SaveGame` (`0x0048B350`) has one call site, the Save/Load dialog's `WM_COMMAND` handler
+  (`0x0048B950`, control `0x0483`, map entry `0x0075F39C`), which reads its arguments from the
+  dialog. The player build never creates that dialog, so scripting it with window messages
+  cannot work.
+- `SaveGame` is `ret 8`, ignores `this`, and is synchronous: the same three facts the injected
+  stub relies on.
+- `.text` has a 3,948-byte run of padding at `0x006D2094` that can hold the stub.
+- The launcher half exists: `client/dev_tools/trigger_save_message.py` posts a registered window
+  message with `PostMessageW`, and `game_cycle.trigger_save` uses it when `CS_SAVE_VIA_MESSAGE`
+  is set. With a stock client the message reaches nothing.
+
+The work left is the stub plus a window-procedure hook that routes the registered message to it,
+written as a `patch_*.py` in the existing client patch step and signed with the rest. A resident
+stub and a window-procedure hook are themselves a pattern antivirus heuristics watch for, so this
+moves the sensitive act into a signed static binary rather than removing it. See plan item M3 in
+`docs/Public_Beta_Plan.md`.
+
 ### One game process per machine, and what the lock does not know
 
 A machine has one game process, and the tools that drive it are not naturally exclusive. A host that
