@@ -3146,6 +3146,7 @@ class Launcher:
         # Whether this galaxy's player has been offered to send their log
         # after a turn went wrong, and whether a log is on its way.
         self.mp_log_offered = False
+        self.mp_seat_refused = False
         self.log_sending = False
         # Whether the game client was up when the watcher last looked, so that
         # it closing clears the turn readout at once rather than at the next
@@ -4734,6 +4735,7 @@ class Launcher:
         self.mp_closed = False
         self.mp_probed = None
         self.mp_log_offered = False
+        self.mp_seat_refused = False
         self.mp_playing = {"id": g.id if g is not None else cfg["store"],
                            "name": (g.name or g.id) if g is not None
                            else store_label(cfg["store"]),
@@ -4792,7 +4794,9 @@ class Launcher:
                 why = said[1] if said else str(exc)
                 self.say_threadsafe(f"multiplayer stopped: {why}")
                 self._mp_state("failed", error=why)
-                if said and SEAT_HELD in said[1]:
+                if (said and SEAT_HELD in said[1]
+                        and not getattr(self, "mp_seat_refused", False)):
+                    self.mp_seat_refused = True
                     self.msgs.put(("__mp_refused__", seat_held_text(
                         civ, support_code(install_uid(self.data_dir)))))
 
@@ -4817,6 +4821,18 @@ class Launcher:
             # it would say the game was opening for the rest of the gap
             # between turns.
             self.mp_reopening = False
+
+        # A seat held by another sign-in refuses every upload while the loop
+        # carries on, so a rebind by the operator takes effect without a
+        # restart. The box saying what to do is shown once per followed galaxy.
+        if (kind in ("send_failed", "lost")
+                and SEAT_HELD in str(facts.get("error") or "")
+                and not getattr(self, "mp_seat_refused", False)):
+            self.mp_seat_refused = True
+            self.msgs.put(("__mp_refused__", seat_held_text(
+                civ, support_code(install_uid(self.data_dir)))))
+        if kind == "send_failed":
+            return
 
         # The capture half of the readout. These arrive several times a turn
         # and say nothing about which step of the turn is running, so they are
@@ -4941,6 +4957,7 @@ class Launcher:
         self.mp_closed = False
         self.mp_probed = None
         self.mp_log_offered = False
+        self.mp_seat_refused = False
         self._show_capture(None, 0.0)
 
     def _warning_note(self, store, civ, current):

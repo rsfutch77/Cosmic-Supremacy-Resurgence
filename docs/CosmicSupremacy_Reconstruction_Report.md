@@ -1453,6 +1453,10 @@ What bounds it:
   message with `PostMessageW`, and `game_cycle.trigger_save` uses it when `CS_SAVE_VIA_MESSAGE`
   is set. With a stock client the message reaches nothing.
 
+- [ ] **A player build saves on a posted message.** The beta keeps the injected save. Done when a
+  player build saves on the posted message, a real capture lands through it, and
+  `CS_SAVE_VIA_MESSAGE` is made the default.
+
 The work left is the stub plus a window-procedure hook that routes the registered message to it,
 written as a `patch_*.py` in the existing client patch step and signed with the rest. A resident
 stub and a window-procedure hook are themselves a pattern antivirus heuristics watch for, so this
@@ -1546,3 +1550,19 @@ Anything calling it must expect the citizen vector to shift underneath a stale i
 which is why `actions.conscript` re-reads the list live rather than trusting the
 snapshot.
 
+---
+
+## 14. Operating the multiplayer backend (October 2026)
+
+The relay, the referee worker and their costs are planned and measured in
+`docs/Public_Beta_Plan.md`, items H5, H12 and H13. What is left for after the beta is kept here.
+
+- [ ] **The referee polls toward the deadline.** `referee_worker.py` reads the galaxy every 5
+  seconds (`POLL`) for the whole turn, about 16,800 Firestore reads a day per galaxy, measured on
+  `h3check` on 5 October 2026 with no launcher open. That is 34% of the 50,000 free daily reads for
+  one galaxy, so five galaxies spend 84,000 a day before any player asks anything. A gap that
+  shrinks toward the deadline, the way the launchers' `player_turn.poll_gap` does, would bring it
+  near the 888 a day a launcher spends. The cost is that an operator's change to the deadline, or a
+  reopen, is noticed later. Kept at 5 seconds for the beta, decided 7 October 2026; due before a
+  second live galaxy is started or after the beta, whichever comes first. Done when the worker's
+  poll follows the deadline and a measured day of one idle galaxy reads under 2,000 documents.

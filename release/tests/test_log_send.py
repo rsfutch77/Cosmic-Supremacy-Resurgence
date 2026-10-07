@@ -427,6 +427,39 @@ try:
           app.dialogs[-1][2], ["unkept"])
     check("and the log says why", any("could not keep" in s
                                       for s in app.said), True)
+
+    print("\n11. a seat held by another sign-in is said during the turn")
+    held = "HTTP Error 403: Forbidden: QCplayer1 is " + L.SEAT_HELD
+    app = make_app(fresh_dir())
+    app._mp_state("send_failed", turn=38, civ="QCplayer1", error=held)
+    seen = []
+    while not app.msgs.empty():
+        seen.append(app.msgs.get())
+    # Fails if a refused upload in the middle of a turn is only logged, which
+    # is how a refused player saw the status flicker and nothing else.
+    check("a refused upload mid-turn puts up the held-seat box",
+          [m[0] for m in seen], ["__mp_refused__"])
+    check("which names the seat and this copy's support code",
+          seen[0][1] if seen else "",
+          lambda t: "'QCplayer1'" in t and "abcd1234" in t)
+    check("and leaves the turn readout alone", app.mp_capture, None)
+    app._mp_state("send_failed", turn=38, civ="QCplayer1", error=held)
+    app._mp_state("lost", turn=38, civ="QCplayer1", error=held)
+    check("once per followed galaxy, however many uploads are refused",
+          app.msgs.empty(), True)
+    app = make_app(fresh_dir())
+    app._mp_state("send_failed", turn=38, civ="Ada",
+                  error="HTTP Error 503: Service Unavailable")
+    check("an upload that failed for another reason puts up nothing",
+          app.msgs.empty(), True)
+    import inspect
+    src = inspect.getsource(L.Launcher.start_multiplayer)
+    check("a new galaxy followed can say it again",
+          "self.mp_seat_refused = False" in src, True)
+    import player_turn
+    src = inspect.getsource(player_turn.follow)
+    check("the turn loop reports a refused interim upload to the launcher",
+          'emit("send_failed"' in src, True)
 finally:
     L.player_token = real_token
     L.install_uid = real_uid

@@ -72,28 +72,31 @@ file is relative to the repository root, and a fresh PowerShell opens in
 1. **H12, a whole launcher day.** H13 is done. H12 has fifteen hours of one
    launcher on 6 October: 2,456 requests a day against 2,390 estimated, and
    458 vCPU-seconds, so CPU is as near to binding as requests. Left is one
-   whole UTC day with the launcher open, which 7 October gives if it stays
-   open to 23:59 UTC. Decided 7 October: the referee's 5-second poll, about
-   16,800 Firestore reads a day per galaxy, stays for the beta and is
-   follow-up H12a; the billing account's other projects are taken to use no
-   Cloud Run.
-2. **M3, three operator decisions:** the certificate route (a personal
-   certificate, or Azure Artifact Signing; `build.ps1` signs when one is
-   configured), whether to sign the patched game binaries, the save path
-   (keep the injection, or build the resident message handler in the player
-   client; scripting the Save dialog is ruled out), and which of the three
-   proposed notice wordings players are told.
-3. **J4, a live rebind.** `seat_tool.py` is built and its read-only commands
-   are verified live.
+   whole UTC day with a launcher open on a joined galaxy, following it with
+   Play. The referee machine's launcher has been closed and reopened
+   several times on 7 October, so the first whole UTC day it stays open
+   is the one to read. Decided 7 October: the referee's 5-second poll, about 16,800
+   Firestore reads a day per galaxy, stays for the beta, with the change
+   recorded in the reconstruction report, section 14; the billing account's
+   other projects are taken to use no Cloud Run.
+2. **M3, the signing account and a tester.** Decided 7 October: Azure
+   Artifact Signing, the patched game clients signed with the rest, and the
+   injected save kept for the beta, with the resident handler recorded as a
+   follow-up in the reconstruction report, section 12. Left: the operator sets up the
+   Artifact Signing account by M3's checklist, and a beta tester on a
+   machine nobody here configured takes a turn. The operator covers what
+   players are told about the save path outside this plan.
+3. **J4 is done**, by a live rebind between two machines on 7 October, and
+   J7 saw the held-seat box on screen in v0.1.10.
 4. **H4 is done.** The relay's refusals were already measured, and on 6
    October `server/dev_tools/bypass_check.py` went around the relay to
    Firestore, Firebase Storage and the GCS JSON API, with an anonymous token
    and with none: 48 refused, 0 allowed, both live rulesets read back
    deny-all, and nothing was left on the project. Rerun it under the
    `firebase-live` lease whenever the rules are touched.
-5. **J2**, whose done-when asks for a player who never opened a config file to
-   join the sandbox and play. The parts are verified separately, but not as
-   one run on `h3check`.
+5. **J2 is done**, live on 7 October: the second machine joined as
+   `Wanderer` and sent turn 39. J7 and J8, the night's follow-ups, closed on
+   screen.
 
 ## What this phase inherits
 
@@ -1021,11 +1024,10 @@ is out of scope here.
 
   **Decided 7 October 2026: the referee's poll stays at 5 seconds for the
   beta.** The beta runs one galaxy, where the poll is 34% of the allowance
-  and one launcher, measured, is about 5% more. Named as
-  follow-up **H12a**, so it is not lost: before a second live galaxy is
-  started, or after the beta, whichever comes first, make the worker's gap
-  shrink toward the deadline it already holds, and measure a day of its
-  reads.
+  and one launcher, measured, is about 5% more. Making the worker's gap
+  shrink toward the deadline it already holds is recorded as a follow-up in
+  `docs/CosmicSupremacy_Reconstruction_Report.md`, section 14, for before a
+  second live galaxy is started or after the beta.
 
   **Which free allowance the relay draws on, settled.** Read 6 October 2026.
   Google's Cloud Run pricing page (`cloud.google.com/run/pricing`) says that
@@ -1066,7 +1068,9 @@ is out of scope here.
   the relay's request log by galaxy and Monitoring by hour, after 00:00 UTC
   on 8 October. The per-launcher figures above are not expected to move,
   since three whole turns already repeat to within a few requests, so what
-  that day adds is the literal done-when. H12a is the other follow-up.
+  that day adds is the literal done-when. The launcher was closed for a
+  build at about 07:30 UTC on 7 October, so the first whole UTC day it stays
+  open after that is the one to read.
 
   **Done when:** the relay is redeployed and a measured day of the live
   function's request count, Firestore reads and CPU seconds is written here
@@ -1465,7 +1469,7 @@ is out of scope here.
   **Done when:** the launcher lists the sandbox from the directory and opens its
   store from what the directory gave it, with no galaxy path in any config file.
 
-- [ ]~ **J2. A Games tab in the launcher.** Replaces the old flow, where the
+- [x] **J2. A Games tab in the launcher.** Replaces the old flow, where the
   website listed active galaxies and a downloaded file was both the galaxy and
   the key. The tab shows the sandbox, its turn, its deadline, how many players
   are in it, and a Join button, and after joining it shows whether this player
@@ -1485,6 +1489,15 @@ is out of scope here.
   referee resolves at a turn boundary, and that path, J3, has never been
   exercised from a machine that was not this one. Until it is, this reads
   "a player played" rather than "a player joined and played".
+
+  **Done, 7 October 2026, live on `h3check`.** The second machine's existing
+  install, which has never opened a config file, asked to join as `Wanderer`
+  from the Games page at 23:32 on 6 October, during turn 38. The referee
+  closed turn 38 at 00:08 on 7 October, after the operator moved its deadline
+  forward, seated Wanderer on planet #171 on that install's sign-in, and
+  published turn 39 with the roster `QCplayer1, Wanderer`. Wanderer then
+  played and sent turn 39 from the same install: two uploads, both 200, at
+  00:09:33 and 00:11:17.
 
   **Done when:** a player who has never opened a config file joins the sandbox
   and plays a turn.
@@ -1735,7 +1748,7 @@ is out of scope here.
   turn, and the player is told which system they landed in by a note rather than
   having to find it.
 
-- [ ]~ **J4. A seat is bound to the anonymous UID that claimed it.** A second
+- [x] **J4. A seat is bound to the anonymous UID that claimed it.** A second
   install claiming a name already in the roster is refused. Because the UID is
   per-install, a player who reinstalls Windows would otherwise be locked out of
   their own empire, so the operator can rebind a seat to a new UID.
@@ -1864,6 +1877,31 @@ is out of scope here.
   prefix of the uid its Neighbor seat is bound to. A live rebind still waits
   for a real case.
 
+  **The refusal box was never reached during a turn, found 7 October 2026.**
+  On the second machine a fresh v0.1.9 install named `QCplayer1` opened the
+  game, and both of its Send Turn presses were refused by the relay (403 at
+  23:42:12 and 23:42:47 local, in the relay's request log and the launcher's
+  log). The launcher showed only a status line flickering back to its
+  capture readout. `player_turn.follow` logs a failed interim upload and
+  carries on, and the box was raised only when the whole loop died, which a
+  refused upload never causes. The loop now emits `send_failed` with the
+  relay's sentence, and the launcher raises the held-seat box on `send_failed`
+  or `lost` carrying it, once per followed galaxy.
+  `release/tests/test_log_send.py` section 11 covers it. Seeing the box on
+  screen needs a build after v0.1.9.
+
+  **Done, 7 October 2026, live on `h3check` with two machines.** The seat
+  `QCplayer1` was held by the referee machine's install, which had played it
+  since 5 October. A fresh v0.1.9 install on the second machine, whose
+  sign-in `MZL3Z4ZQ` was minutes old, was refused it on every upload: nine
+  403s for turn 38 between 23:42 and 23:47 local. `candidates` named that
+  sign-in first among the unseated ones, which is also the first live run of
+  the Identity Toolkit lookup. `rebind --dry-run`, then `rebind`, moved the
+  seat at 00:02:01; the second machine's next two uploads answered 200, at
+  00:03:28 and 00:04:15, and its launcher showed the turn sent. A second
+  `rebind` returned the seat to the referee machine's install at 00:04:53,
+  and `seats_rebound` records the last move.
+
   **Done when:** a name in the roster is refused from a second install, allowed
   from the install that claimed it, and rebindable by the operator.
 
@@ -1919,6 +1957,34 @@ is out of scope here.
 
   **Done when:** a player seated by first-use sees their submitted state on the
   Galaxies page without having clicked Join.
+
+- [x] **J7. See the held-seat box on screen.** The launcher raised it only
+  when the turn loop died, so a refused player saw a status line flicker;
+  fixed on 7 October (J4) and covered headless by
+  `release/tests/test_log_send.py` section 11.
+
+  **Done when:** a build after v0.1.9, run as a fresh install under a name
+  another sign-in holds, shows the box with its support code after Send Turn.
+
+  **Done, 7 October 2026, on screen.** v0.1.10, unpacked fresh on the second
+  machine and named `QCplayer1`, showed the held-seat box with its support
+  code after Send Turn.
+
+- [x] **J8. A joiner cloned when seat one has no ship.** Granting Wanderer on
+  `h3check` at turn 38, `joins.donor_template` logged that seat one holds no
+  planet or no ship is left, and that no earlier turn has both, so the
+  newcomer was cloned from the current blob as it stood. What Wanderer
+  started with, a hull in particular, has not been looked at.
+
+  **Done when:** Wanderer's starting kit is read from turn 39 and either
+  matches a generated start or the gap is named and fixed.
+
+  **Done, 7 October 2026, on screen.** The operator opened turn 39 as
+  Wanderer on the second machine and found two colony ships, which is a
+  generated start's count (`colonyships` is 2 in `GSET`, and J5 records two
+  Colony Ship hulls). The log line means `donor_template` found no earlier
+  turn to prefer and the current blob served, which held a hull to clone.
+  Their crew was not read.
 
 ---
 
@@ -2806,7 +2872,11 @@ is out of scope here.
   an exclusion, which trains the habit and hides the next thing. The wording is
   an operator decision because it is a public statement about the product.
 
-  **Proposed wording, awaiting the operator.** Three candidates, none of them
+  **Decided 7 October 2026: the operator covers the player-facing wording
+  outside this plan**, so none of the three below is added to
+  `PLAYER_README.txt` or the beta notice from here.
+
+  **Proposed wording, as drafted.** Three candidates, none of them
   in `PLAYER_README.txt`, the beta notice or any other player-facing file.
   Pick one, change it, or reject all three. Each makes one claim that is
   measured only on this machine: that an antivirus product may report the

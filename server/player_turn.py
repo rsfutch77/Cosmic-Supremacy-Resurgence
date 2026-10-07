@@ -912,8 +912,9 @@ def follow(store: TurnStore, civ: str, poll: float = 5.0, rounds: int = 0,
                     # A failed interim write is worth saying and not worth
                     # stopping for: the next one is a cadence away, and the one
                     # at the deadline still has to succeed or raise.
-                    log(f"[{civ}] turn {turn}: interim submit failed, "
-                        f"{failure_text(exc)}")
+                    why = failure_text(exc)
+                    log(f"[{civ}] turn {turn}: interim submit failed, {why}")
+                    emit("send_failed", turn=turn, civ=civ, error=why)
 
             emit("playing", turn=turn, civ=civ, seconds_left=left)
             # Wake for whichever comes first: the next capture, the next store
