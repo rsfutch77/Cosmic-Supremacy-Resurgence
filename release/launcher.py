@@ -703,14 +703,16 @@ def validate_player_name(raw):
     if len(name) > NAME_LIMIT:
         return None, (f"That is {len(name)} characters. The game's civilisation "
                       f"name holds {NAME_LIMIT}.")
-    if any(not (" " <= c <= "~") for c in name):
-        return None, ("Letters, digits and ordinary punctuation only. The "
-                      "game's name field is ASCII.")
-    bad = sorted({c for c in name if c in NAME_FORBIDDEN})
+    # The engine's name field is ASCII, and a civ name is also a file name, so
+    # both rules refuse characters. The player is told which ones, not why.
+    bad = sorted({c for c in name if c in NAME_FORBIDDEN or not " " <= c <= "~"})
     if bad:
-        return None, ("A name cannot contain " + " ".join(bad) + ", because it "
-                      "is also the name of the file a galaxy keeps your orders "
-                      "in.")
+        shown = [c for c in bad if c.isprintable() and not c.isspace()]
+        if not shown:
+            return None, "We can't accept that character in a name."
+        listed = shown[0] if len(shown) == 1 else (
+            ", ".join(shown[:-1]) + " or " + shown[-1])
+        return None, f"We can't accept {listed} in a name."
     if name.endswith("."):
         return None, "A name cannot end in a full stop."
     return name, None
