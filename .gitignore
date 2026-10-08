@@ -52,6 +52,8 @@ release/build/
 release/.venv-build/
 # written by launcher.py when it is run from a checkout rather than a release
 release/data/
+# the game's own UI art, extracted from the client EXE by release/extract_ui_art.py
+release/webui/art/
 
 # ── Claude Code local config ──────────────────────────────────────────────────
 # per-developer tool permissions and agent settings; not project source

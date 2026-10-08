@@ -673,6 +673,24 @@ if ($LASTEXITCODE -ne 0 -or -not (Test-Path $IconOut)) {
     Write-Ok "icon written to $IconOut"
 }
 
+# ── 4b. WebView2 Runtime bootstrapper ─────────────────────────────────────────
+# The launcher's window needs Microsoft Edge WebView2 Runtime, which a few
+# Windows 10 machines lack. Microsoft's bootstrapper rides inside the launcher
+# so webview_runtime.ensure() can install it. It is fetched once into the build
+# folder and must carry Microsoft's valid signature, cached or not.
+Write-Step "WebView2 Runtime bootstrapper"
+$WebView2Setup = Join-Path $BuildDir 'MicrosoftEdgeWebview2Setup.exe'
+if (-not (Test-Path $WebView2Setup)) {
+    Invoke-WebRequest -Uri 'https://go.microsoft.com/fwlink/p/?LinkId=2124703' `
+        -OutFile $WebView2Setup -UseBasicParsing
+}
+$wvSig = Get-AuthenticodeSignature $WebView2Setup
+if ($wvSig.Status -ne 'Valid' -or $wvSig.SignerCertificate.Subject -notmatch '^CN=Microsoft Corporation,') {
+    Remove-Item -Force $WebView2Setup
+    throw "the WebView2 bootstrapper is not signed by Microsoft ($($wvSig.Status)) - re-run to fetch it again"
+}
+Write-Ok "bootstrapper $((Get-Item $WebView2Setup).VersionInfo.FileVersion), signed by Microsoft"
+
 # ── 5. Create the release folder ──────────────────────────────────────────────
 
 Write-Step "Preparing $StageName"
@@ -718,6 +736,8 @@ $piArgs = @(
     # data file, so the import graph never sees it and a frozen build
     # would raise FileNotFoundError where the notice should be.
     '--add-data', "$ServerDir\beta_notice.txt;.",
+    # The WebView2 Runtime installer, fetched and checked in step 4b.
+    '--add-data', "$WebView2Setup;.",
     # cs_server is imported inside a function after its environment is set, so
     # name it explicitly rather than relying on the import graph walker.
     '--paths', $ServerDir,

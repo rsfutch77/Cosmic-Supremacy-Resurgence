@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Cosmic Supremacy: Resurgence</title>
+<link rel="stylesheet" href="app.css">
+</head>
+<body>
+<div class="win">
+  <div class="top pywebview-drag-region">
+    <img src="art/MAINWINDOWBORDERUPPERLEFT.png" width="64" height="80" alt="">
+    <div class="ttl"><div class="ttl-text" id="product">Cosmic Supremacy: Resurgence</div></div>
+    <img src="art/MAINWINDOWBORDERUPPERSTRETCHL.png" width="100" height="80" alt="">
+    <div class="tstretch"></div>
+    <div class="tright"></div>
+  </div>
+  <button class="tb tb-min" aria-label="Minimize" data-act="minimize"></button>
+  <button class="tb tb-close" aria-label="Close" data-act="close"></button>
+  <nav class="tabs" aria-label="Pages">
+    <button class="gbtn sel" data-page="play">Play</button>
+    <button class="gbtn" data-page="galaxies">Galaxies</button>
+    <button class="gbtn" data-page="log">Log</button>
+    <div style="flex: 1"></div>
+    <button class="gbtn" id="name-btn" data-act="change_name">set name</button>
+  </nav>
+
+  <div class="mid">
+    <div class="side">
+      <img src="art/MAINWINDOWBORDERLEFTUPPER.png" width="12" height="20" alt="">
+      <div class="lm"></div>
+      <img src="art/MAINWINDOWBORDERLEFTLOWER.png" width="12" height="60" alt="">
+    </div>
+    <main>
+      <section class="page on" id="page-play">
+        <div>
+          <div class="hdr">Play</div>
+          <div id="modes"></div>
+        </div>
+        <div class="hint">Keep this window open while you play. It is the game server.</div>
+      </section>
+
+      <section class="page" id="page-galaxies">
+        <div class="hdr">Galaxies</div>
+        <div style="display: flex; align-items: center; gap: 10px">
+          <div style="color: #b9c6d2; font-size: 11px">Spike: the galaxy table is not wired yet.</div>
+          <div style="flex: 1"></div>
+          <button class="gbtn small" disabled>Refresh</button>
+        </div>
+        <div style="flex: 1; min-height: 0; overflow-y: scroll; background: #222c36">
+          <div class="grid colhead"><div>Galaxy ▲</div><div>Status</div><div>Turn</div><div>Next turn</div><div>Players</div><div>You</div><div style="border-right: 0"></div></div>
+        </div>
+      </section>
+
+      <section class="page" id="page-log">
+        <div class="hdr">Log</div>
+        <pre class="logbox" id="log"></pre>
+      </section>
+    </main>
+    <div class="side">
+      <img src="art/MAINWINDOWBORDERRIGHTUPPER.png" width="12" height="20" alt="">
+      <div class="rm"></div>
+      <img src="art/MAINWINDOWBORDERRIGHTLOWER.png" width="12" height="60" alt="">
+    </div>
+  </div>
+
+  <div class="bottom">
+    <img src="art/MAINWINDOWBORDERLOWERLEFT.png" width="194" height="41" alt="">
+    <div class="bm"></div>
+    <img src="art/MAINWINDOWBORDERLOWERRIGHT.png" width="194" height="41" alt="">
+    <div class="status">
+      <span id="st-name"></span>
+      <span id="st-build"></span>
+      <span><span class="dot" id="st-dot"></span><span id="st-text">starting…</span></span>
+    </div>
+  </div>
+
+  <div class="scrim" id="scrim">
+    <div class="dlg" role="dialog" aria-modal="true" aria-labelledby="dlg-title">
+      <div class="dlg-top">
+        <img src="art/WINDOWBORDERUPPERLEFT.png" width="35" height="39" alt="">
+        <div class="dlg-title"><div id="dlg-title"></div></div>
+        <div class="dlg-sock">
+          <img src="art/WINDOWBORDERUPPERTITLER.png" width="39" height="39" alt="">
+          <img src="art/WINDOWBORDERUPPERRIGHT.png" width="36" height="39" alt="">
+          <button class="tb tb-close" aria-label="Close" id="dlg-x"></button>
+        </div>
+      </div>
+      <div class="dlg-mid">
+        <div class="dlg-side">
+          <img src="art/WINDOWBORDERLEFTUPPER.png" width="12" height="42" alt="">
+          <div class="lm"></div>
+          <img src="art/WINDOWBORDERLEFTLOWER.png" width="12" height="48" alt="">
+        </div>
+        <div class="dlg-body">
+          <div class="dlg-text" id="dlg-text"></div>
+          <label class="dlg-field" id="dlg-field"><span id="dlg-label"></span><input id="dlg-input" type="text" spellcheck="false"></label>
+          <div class="dlg-error" id="dlg-error" role="alert"></div>
+          <div class="dlg-note" id="dlg-note"></div>
+          <div class="dlg-btns" id="dlg-btns"></div>
+        </div>
+        <div class="dlg-side">
+          <img src="art/WINDOWBORDERRIGHTUPPER.png" width="12" height="42" alt="">
+          <div class="rm"></div>
+          <img src="art/WINDOWBORDERRIGHTLOWER.png" width="12" height="48" alt="">
+        </div>
+      </div>
+      <div class="dlg-bot">
+        <img src="art/WINDOWBORDERLOWERLEFT.png" width="60" height="12" alt="">
+        <div class="bm"></div>
+        <img src="art/WINDOWBORDERLOWERRIGHT.png" width="60" height="12" alt="">
+      </div>
+    </div>
+  </div>
+</div>
+<script src="app.js"></script>
+</body>
+</html>
