@@ -1,5 +1,6 @@
-// The launcher page. Python owns every decision; this file draws what it is told
-// (ui.set, ui.log) and hands back what the player does (window.pywebview.api).
+// The launcher page. Python owns every decision (launcher.Launcher, through
+// web_view.WebView); this file draws what it is told through window.ui and
+// hands back what the player presses through window.pywebview.api.
 "use strict";
 
 const $ = (id) => document.getElementById(id);
@@ -51,21 +52,82 @@ async function buildSkin() {
 
 // ── calls to Python ──
 
-function api() {
-  return (window.pywebview && window.pywebview.api) || null;
-}
-
 function call(name, ...args) {
-  const a = api();
-  if (a && a[name]) return a[name](...args);
+  const api = window.pywebview && window.pywebview.api;
+  if (api && api[name]) return api[name](...args);
   return Promise.resolve(null);
 }
 
-// ── pages ──
+function el(tag, cls, text) {
+  const e = document.createElement(tag);
+  if (cls) e.className = cls;
+  if (text !== undefined) e.textContent = text;
+  return e;
+}
+
+function gbtn(label, onClick, extra) {
+  const b = el("button", "gbtn" + (extra ? " " + extra : ""), label);
+  b.addEventListener("click", onClick);
+  return b;
+}
+
+// ── state the page keeps between pushes ──
+
+let columns = [];
+let sort = { key: null, desc: false };
+let modesDisabled = false;
+const controlBtns = {};
 
 function showPage(name) {
   for (const b of document.querySelectorAll("[data-page]")) b.classList.toggle("sel", b.dataset.page === name);
   for (const p of document.querySelectorAll(".page")) p.classList.toggle("on", p.id === "page-" + name);
+}
+
+function drawModes(modes) {
+  const box = $("modes");
+  box.replaceChildren();
+  for (const m of modes) {
+    const row = el("div", "row");
+    const b = gbtn(m.title, () => call("play", m.id), "wide");
+    b.disabled = !m.ready || modesDisabled;
+    b.dataset.ready = m.ready ? "1" : "";
+    row.append(b, el("div", "blurb", m.blurb));
+    box.appendChild(row);
+  }
+}
+
+function drawHeadings() {
+  const head = $("colhead");
+  head.replaceChildren();
+  for (const c of columns) {
+    const here = c.key === sort.key;
+    const cell = el("div", here ? "sorted" : "", c.heading + (here ? (sort.desc ? " ▾" : " ▴") : ""));
+    cell.addEventListener("click", () => call("sort", c.key));
+    head.appendChild(cell);
+  }
+  head.appendChild(el("div"));
+}
+
+function drawRows(galaxies) {
+  const box = $("grows");
+  box.replaceChildren();
+  if (!galaxies.rows) {
+    box.appendChild(el("div", "note", galaxies.note || ""));
+    return;
+  }
+  galaxies.rows.forEach((row, r) => {
+    const line = el("div", "grid grow");
+    row.cells.forEach(([text, colour], i) => {
+      const cell = el("div", "", text);
+      cell.style.color = colour;
+      cell.id = `cell-${r}-${i}`;
+      line.appendChild(cell);
+    });
+    const act = el("div");
+    if (row.action) act.appendChild(gbtn(row.action, () => call("row", r), "small"));
+    line.appendChild(act);
+    box.appendChild(line);
+  });
 }
 
 // ── prompts: one on screen, the rest wait their turn ──
@@ -73,50 +135,69 @@ function showPage(name) {
 const prompts = [];
 let current = null;
 
+function show(id, on) { $(id).hidden = !on; }
+
 function nextPrompt() {
   current = prompts.shift() || null;
   $("scrim").classList.toggle("on", !!current);
   if (!current) return;
   const p = current;
+  $("dlg").classList.toggle("wide", p.kind === "notice");
   $("dlg-title").textContent = p.title || "";
   $("dlg-text").textContent = p.text || "";
+  show("dlg-text", !!p.text);
+  $("dlg-scroll").textContent = p.body || "";
+  $("dlg-scroll").scrollTop = 0;
+  show("dlg-scroll", !!p.body);
   $("dlg-error").textContent = p.error || "";
-  $("dlg-error").style.display = p.error ? "" : "none";
+  show("dlg-error", !!p.error);
   $("dlg-note").textContent = p.note || "";
-  $("dlg-note").style.display = p.note ? "" : "none";
-  const field = $("dlg-field");
-  field.style.display = p.input ? "" : "none";
+  show("dlg-note", !!p.note);
+
+  show("dlg-field", !!p.input);
   if (p.input) {
     $("dlg-label").textContent = p.input.label || "";
-    const inp = $("dlg-input");
-    inp.value = p.input.value || "";
-    inp.maxLength = p.input.maxlength || 200;
+    $("dlg-input").value = p.input.value || "";
+    $("dlg-input").maxLength = p.input.maxlength || 200;
   }
+
+  const refs = $("dlg-refs");
+  refs.replaceChildren();
+  show("dlg-refs", !!(p.refs && p.refs.length));
+  for (const ref of p.refs || []) {
+    const box = el("input");
+    box.readOnly = true;
+    box.value = ref.id;
+    const copy = gbtn(p.copy || "Copy", () => {
+      navigator.clipboard.writeText(ref.id).then(() => {
+        copy.textContent = p.copied || "Copied";
+        setTimeout(() => { copy.textContent = p.copy || "Copy"; }, 1500);
+      });
+    }, "small");
+    refs.append(box, el("span", "", ref.when || ""), copy);
+  }
+
   const btns = $("dlg-btns");
   btns.replaceChildren();
-  for (const b of p.buttons) {
-    const el = document.createElement("button");
-    el.className = "gbtn";
-    el.textContent = b.label;
-    el.addEventListener("click", () => answer(b.value));
-    btns.appendChild(el);
-  }
-  if (p.input) $("dlg-input").focus();
-  else btns.lastChild && btns.lastChild.focus();
+  for (const b of p.buttons) btns.appendChild(gbtn(b.label, () => answer(b.value)));
+  if (p.input) { $("dlg-input").focus(); $("dlg-input").select(); }
+  else if (btns.lastChild) btns.lastChild.focus();
 }
 
 function answer(value) {
   if (!current) return;
   const p = current;
-  const text = p.input ? $("dlg-input").value : null;
-  call("resolve", p.id, value, text);
+  call("resolve", p.id, value === undefined ? null : value, p.input ? $("dlg-input").value : null);
   nextPrompt();
 }
 
 document.addEventListener("keydown", (e) => {
   if (!current) return;
   if (e.key === "Escape") { e.preventDefault(); answer(current.cancel); }
-  if (e.key === "Enter" && current.default !== undefined) { e.preventDefault(); answer(current.default); }
+  if (e.key === "Enter" && current.default !== undefined && current.default !== null) {
+    e.preventDefault();
+    answer(current.default);
+  }
 });
 $("dlg-x").addEventListener("click", () => answer(current && current.cancel));
 
@@ -125,34 +206,51 @@ $("dlg-x").addEventListener("click", () => answer(current && current.cancel));
 window.ui = {
   set(s) {
     if (s.product !== undefined) { $("product").textContent = s.product; document.title = s.product; }
-    if (s.name !== undefined) {
-      $("st-name").textContent = s.name || "";
-      $("name-btn").textContent = s.name || "set name";
+    if (s.modesDisabled) modesDisabled = true;
+    if (s.modes) drawModes(s.modes);
+    if (s.modesDisabled) for (const b of $("modes").querySelectorAll("button")) b.disabled = true;
+    if (s.columns) { columns = s.columns; drawHeadings(); }
+    if (s.controls) {
+      const box = $("control-btns");
+      box.replaceChildren();
+      for (const c of s.controls) {
+        controlBtns[c.key] = gbtn(c.label, () => call("control", c.key));
+        box.appendChild(controlBtns[c.key]);
+      }
     }
+    if (s.page) showPage(s.page);
+    if (s.name !== undefined) $("name-btn").textContent = s.name || "set name";
     if (s.build !== undefined) $("st-build").textContent = s.build;
     if (s.status) {
       $("st-text").textContent = s.status.text;
       $("st-dot").style.background = s.status.colour;
     }
-    if (s.modes) {
-      const box = $("modes");
-      box.replaceChildren();
-      for (const m of s.modes) {
-        const row = document.createElement("div");
-        row.className = "row";
-        const b = document.createElement("button");
-        b.className = "gbtn wide";
-        b.textContent = m.title;
-        b.disabled = !m.ready;
-        b.addEventListener("click", () => call("play", m.id));
-        const t = document.createElement("div");
-        t.className = "blurb";
-        t.textContent = m.blurb;
-        row.append(b, t);
-        box.appendChild(row);
+    if (s.capture) {
+      $("cap-text").textContent = s.capture.text;
+      $("cap-dot").style.background = s.capture.colour;
+      show("cap", !!s.capture.text);
+    }
+    if (s.controlsShown !== undefined) show("controls", s.controlsShown);
+    if (s.control) {
+      const b = controlBtns[s.control.key];
+      if (b) {
+        if (s.control.enabled !== undefined) b.disabled = !s.control.enabled;
+        if (s.control.text !== undefined) b.textContent = s.control.text;
       }
     }
-    if (s.page) showPage(s.page);
+    if (s.turnLabel !== undefined) $("turn-label").textContent = s.turnLabel;
+    if (s.sort) { sort = s.sort; drawHeadings(); }
+    if (s.gamesStatus) {
+      $("games-status").textContent = s.gamesStatus.text;
+      $("games-status").style.color = s.gamesStatus.colour;
+    }
+    if (s.galaxies) drawRows(s.galaxies);
+    if (s.cell) {
+      const c = $(`cell-${s.cell.row}-${s.cell.column}`);
+      if (c) { c.textContent = s.cell.text; c.style.color = s.cell.colour; }
+    }
+    if (s.hint !== undefined) { $("games-hint").textContent = s.hint; show("games-hint", !!s.hint); }
+    if (s.logRefs) show("log-refs-btn", true);
   },
   log(lines) {
     const box = $("log");
@@ -168,7 +266,7 @@ window.ui = {
 
 // ── wiring ──
 
-for (const b of document.querySelectorAll("[data-page]")) b.addEventListener("click", () => showPage(b.dataset.page));
+for (const b of document.querySelectorAll("[data-page]")) b.addEventListener("click", () => call("page", b.dataset.page));
 for (const b of document.querySelectorAll("[data-act]")) b.addEventListener("click", () => call(b.dataset.act));
 
 const skinReady = buildSkin().catch((e) => console.error(e));

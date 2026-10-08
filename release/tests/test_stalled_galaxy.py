@@ -23,8 +23,8 @@ Headless and offline. The table is checked against rows built by hand and
 against copies of the operator's own `server\\uidemo` galaxies, with their
 deadlines rewritten in the copy; the originals are fingerprinted before and
 after and checked untouched. The readout and the status line are checked
-against a Launcher built without `__init__`, so no window opens, no game
-starts and no port is taken. Nothing reads a store more than the code under
+against a Launcher built without `__init__` whose view is a FakeView, so no
+window opens, no game starts and no port is taken. Nothing reads a store more than the code under
 test already does, which is itself one of the checks: H5's binding quota is
 Firestore reads and this runs once a second.
 
@@ -49,6 +49,7 @@ sys.path.insert(0, os.path.join(REPO, "server"))
 
 import galaxy_directory                                         # noqa: E402
 import launcher as L                                            # noqa: E402
+from fake_view import FakeView                                  # noqa: E402
 
 # `referee_worker.py` is read rather than imported. Importing it reaches
 # `referee` and the whole of `server\\dev_tools`, which is a referee's worth of
@@ -235,22 +236,6 @@ check("so sorting by status does not move a stopped galaxy to the end",
 print("\n   and draws it differently")
 
 
-class Cell:
-    """A Tk label as far as the table uses one."""
-
-    def __init__(self, **kw):
-        self.kw = dict(kw)
-
-    def cget(self, key):
-        return self.kw.get(key, "")
-
-    def configure(self, **kw):
-        self.kw.update(kw)
-
-    def winfo_exists(self):
-        return True
-
-
 app = object.__new__(L.Launcher)
 by_id = {g.id: g for g in ROWS}
 check("a stopped galaxy takes the warning colour in the status cell",
@@ -289,28 +274,6 @@ check("and however long they have been stopped",
       L.stall_hint([(by_id["outpost"], 60.0)]), hint)
 
 
-class Hint:
-    """The hint label, which is packed only when there is something in it."""
-
-    def __init__(self):
-        self.kw, self.mapped = {"text": ""}, False
-
-    def cget(self, key):
-        return self.kw.get(key, "")
-
-    def configure(self, **kw):
-        self.kw.update(kw)
-
-    def pack(self, **kw):
-        self.mapped = True
-
-    def pack_forget(self):
-        self.mapped = False
-
-    def winfo_ismapped(self):
-        return self.mapped
-
-
 def hint_for(rows, recs=None, now=NOW):
     """The line under the table, or "" when the table has nothing to say.
 
@@ -318,9 +281,9 @@ def hint_for(rows, recs=None, now=NOW):
     below sit around NOW and the ones read off disk carry real epoch deadlines.
     """
     app = object.__new__(L.Launcher)
-    app.games_hint = Hint()
+    app.view = FakeView()
     app._show_hint(rows, L.View(now=now, recs=recs))
-    return app.games_hint.cget("text") if app.games_hint.mapped else ""
+    return app.view.hint
 
 
 healthy = [g for g in ROWS if not L.row_stalled_for(g, VIEW)]
@@ -417,26 +380,6 @@ check("originals untouched", fingerprint(SRC), before)
 print("\n6. the readout a player waiting for a turn is looking at")
 
 
-class Widget:
-    def __init__(self, **kw):
-        self.kw = dict(kw)
-
-    def cget(self, key):
-        return self.kw.get(key, "")
-
-    def configure(self, **kw):
-        self.kw.update(kw)
-
-    def pack(self, **kw):
-        pass
-
-    def pack_forget(self):
-        pass
-
-    def winfo_ismapped(self):
-        return False
-
-
 class Store:
     """A galaxy clock, counting every read as a Firestore document read."""
 
@@ -480,12 +423,7 @@ def bare(**over):
     app.mp_reopening = False
     app.mp_stop = False
     app.data_dir = data_dir
-    app.turn_label = Widget(text="turn ,")
-    app.cap_dot = Widget(fg=L.FAINT, text="\u25cf")
-    app.cap_status = Widget(text="")
-    app.ctl_buttons = {k: Widget(text=t, state="normal")
-                       for k, t in (("load", "Load"), ("save", "Save"),
-                                    ("turn", "Next Turn"))}
+    app.view = FakeView()
     app._ctl_client = None
     app._ctl_busy = False
     app._last_seen_turn = None
@@ -508,7 +446,7 @@ def waiting_label(overdue, turn_seconds=FOUR_HOURS):
     app._mp_state("waiting", turn=12, civ="DemoPlayer")
     app.mp_client_gone = True
     app._refresh_turn()
-    return app.turn_label.cget("text")
+    return app.view.turn_label
 
 
 check("a turn two hours overdue says the turns have stopped",
@@ -528,33 +466,33 @@ app.mp_client_gone = True
 app.mp_sending = True
 app._refresh_turn()
 check("a turn still on its way is said instead",
-      app.turn_label.cget("text"), "sending your turn")
+      app.view.turn_label, "sending your turn")
 app.mp_sending, app.mp_reopening = False, True
 app._refresh_turn()
 check("and so is a game being opened again",
-      app.turn_label.cget("text"), "opening the game again")
+      app.view.turn_label, "opening the game again")
 app.mp_reopening = False
 app._refresh_turn()
 check("with the stopped line underneath both",
-      app.turn_label.cget("text"), lambda t: "stopped" in t)
+      app.view.turn_label, lambda t: "stopped" in t)
 
 print("\n   the turn a player is still in is never called stopped")
 app = bare(mp_store=Store(turn=12, left=900.0), mp_thread=Thread())
 app._mp_state("playing", turn=12, civ="DemoPlayer", seconds_left=900.0)
 app._refresh_turn()
 check("a turn with time left counts down as before",
-      app.turn_label.cget("text"), lambda t: t.endswith("left"))
+      app.view.turn_label, lambda t: t.endswith("left"))
 app._mp_state("playing", turn=12, civ="DemoPlayer", seconds_left=-30.0)
 app._refresh_turn()
 check("one thirty seconds over does not say stopped",
-      app.turn_label.cget("text"), lambda t: "stopped" not in t)
+      app.view.turn_label, lambda t: "stopped" not in t)
 app._mp_state("playing", turn=12, civ="DemoPlayer", seconds_left=-7200.0)
 app._refresh_turn()
 check("a player who reopened into a turn nothing will close is told",
-      app.turn_label.cget("text"),
+      app.view.turn_label,
       lambda t: t.startswith("turn 12") and "stopped" in t)
 check("rather than being shown a countdown that reads 0:00 forever",
-      app.turn_label.cget("text"), lambda t: "0:00 left" not in t)
+      app.view.turn_label, lambda t: "0:00 left" not in t)
 
 print("\n   and none of it reads the store")
 store = Store(turn=12, left=-7200.0)
@@ -569,7 +507,7 @@ for _ in range(600):
 check("ten minutes of ticks over a stopped galaxy ask it nothing more",
       store.reads, 1)
 check("while going on saying it has stopped",
-      app.turn_label.cget("text"), lambda t: "stopped" in t)
+      app.view.turn_label, lambda t: "stopped" in t)
 
 
 print("\n7. the status line, which says what is running and nothing more")

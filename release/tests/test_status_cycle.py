@@ -19,12 +19,13 @@ sys.path.insert(0, os.path.join(REPO, "release"))
 os.chdir(REPO)
 
 import launcher as L
+from tk_view import TkView
 
 cfg = json.load(open(os.path.join(REPO, "release", "manifest.json"), encoding="utf-8"))
 mode = next(m for m in cfg["modes"] if m["id"] == (sys.argv[1] if len(sys.argv) > 1 else "tutorial"))
 
 root = tk.Tk()
-app = L.Launcher(root, cfg)
+app = L.Launcher(TkView(root), cfg)
 
 
 def pump(seconds):
@@ -35,7 +36,8 @@ def pump(seconds):
 
 
 def status():
-    return app.status.cget("text")
+    """What the window's status line reads, not what the Launcher meant."""
+    return app.view.status.cget("text")
 
 
 failures = []

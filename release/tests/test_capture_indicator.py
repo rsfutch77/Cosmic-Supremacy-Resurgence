@@ -19,11 +19,13 @@ they read before it starts:
                          refused rather than reused: it keeps its captures in
                          its own folder and there is no way to ask it which.
 
-Headless. No window is opened and no game is started: the widgets are stubs
-that record what was configured on them, and the launcher object is built
-without running __init__ so that nothing reaches Tk, a data directory or a
-port. What is under test is the launcher's own logic, which is where all four
-of these live.
+Headless. No window is opened and no game is started: the launcher's view is
+a FakeView that records what it was told to show, and the launcher object is
+built without running __init__ so that nothing reaches Tk, a data directory or
+a port. What is under test is the launcher's own logic, which is where all four
+of these live. The one widget detail that matters here, the indicator being
+packed only while it has something to say, is checked against TkView itself
+with stub widgets.
 """
 import os
 import queue
@@ -37,6 +39,8 @@ sys.path.insert(0, os.path.join(REPO, "release"))
 sys.path.insert(0, os.path.join(REPO, "server"))
 
 import launcher as L                                            # noqa: E402
+import tk_view as TV                                            # noqa: E402
+from fake_view import FakeView                                  # noqa: E402
 
 fails = []
 
@@ -50,7 +54,7 @@ def check(label, got, want):
 
 # ── stubs ────────────────────────────────────────────────────────────────────
 class Widget:
-    """A Tk widget as far as the launcher uses one: options and packing."""
+    """A Tk widget as far as TkView uses one: options and packing."""
 
     def __init__(self, **kw):
         self.kw = dict(kw)
@@ -106,7 +110,7 @@ def bare(**over):
 
     __init__ builds widgets, opens a log and starts a server, none of which
     this can have. The attributes the methods under test read are set here
-    instead, so what runs is the real method against stub widgets.
+    instead, so what runs is the real method against a FakeView.
     """
     app = object.__new__(L.Launcher)
     app.mp_store = None
@@ -134,12 +138,7 @@ def bare(**over):
     app.mp_reopening = False
     app.mp_stop = False
     app.data_dir = os.path.join(REPO, "release", "data")
-    app.turn_label = Widget(text="turn ,")
-    app.cap_dot = Widget(fg=L.FAINT, text="●")
-    app.cap_status = Widget(text="")
-    app.ctl_buttons = {k: Widget(text=t, state="normal")
-                       for k, t in (("load", "Load"), ("save", "Save"),
-                                    ("turn", "Next Turn"))}
+    app.view = FakeView()
     app._ctl_client = None
     app._ctl_busy = False
     app._last_seen_turn = None
@@ -199,18 +198,38 @@ check("the two states worth ageing carry the age",
 check("and a fresh one does not count seconds at the player",
       L.capture_readout(L.SENT, 1.0)[0], lambda t: "just now" in t)
 
+def shown(app):
+    """Whether the indicator is up. The view hides it for empty text."""
+    return app.view.capture[0] != ""
+
+
 print("\n2. the indicator is packed only while there is something to say")
 app = bare()
 app._show_capture(None, 0.0)
-check("nothing to say leaves the status row as it was",
-      app.cap_dot.mapped, False)
+check("nothing to say leaves the status row as it was", shown(app), False)
 app._show_capture(L.CAPTURING, 0.0)
-check("a capture starting puts the dot up", app.cap_dot.mapped, True)
-check("with its own colour", app.cap_dot.cget("fg"), L.WARN)
+check("a capture starting puts the dot up", shown(app), True)
+check("with its own colour", app.view.capture[1], L.WARN)
 app._show_capture(L.SENT, 2.0)
-check("and sending repaints it green", app.cap_dot.cget("fg"), L.OK)
+check("and sending repaints it green", app.view.capture[1], L.OK)
 app._show_capture(None, 0.0)
-check("and it goes again when the loop stops", app.cap_status.mapped, False)
+check("and it goes again when the loop stops", shown(app), False)
+
+# The window's half: empty text unpacks the dot and its status rather than
+# blanking them, so a launcher with no turn loop shows one dot and one status.
+tv = object.__new__(TV.TkView)
+tv.cap_dot = Widget(fg=L.FAINT, text="\u25cf")
+tv.cap_status = Widget(text="")
+TV.TkView.show_capture(tv, "", "")
+check("the window packs nothing for empty text",
+      (tv.cap_dot.mapped, tv.cap_status.mapped), (False, False))
+TV.TkView.show_capture(tv, *L.capture_readout(L.CAPTURING, 0.0))
+check("packs the dot and its status for a state",
+      (tv.cap_dot.mapped, tv.cap_status.mapped), (True, True))
+check("in the state's colour", tv.cap_dot.cget("fg"), L.WARN)
+TV.TkView.show_capture(tv, "", "")
+check("and unpacks both again for empty text",
+      (tv.cap_dot.mapped, tv.cap_status.mapped), (False, False))
 
 print("\n3. the states the turn loop emits reach the indicator")
 app = bare()
@@ -262,65 +281,63 @@ print("\n5. the button names what it will do")
 app = bare(mp_store=Store(), mp_thread=Thread(alive=True))
 app._refresh_turn()
 check("in multiplayer the button says it sends the turn",
-      app.ctl_buttons["save"].cget("text"), "Send Turn")
+      app.view.controls["save"]["text"], "Send Turn")
 check("and Next Turn is not offered, the referee owns the clock",
-      app.ctl_buttons["turn"].cget("state"), "disabled")
-check("while Save stays live", app.ctl_buttons["save"].cget("state"), "normal")
+      app.view.controls["turn"]["enabled"], False)
+check("while Save stays live", app.view.controls["save"]["enabled"], True)
 
 app = bare(mp_store=None)
 app._refresh_turn()
 check("outside multiplayer it is Save again",
-      app.ctl_buttons["save"].cget("text"), "Save")
+      app.view.controls["save"]["text"], "Save")
 
 print("\n6. closing the game clears the readout at once")
 app = bare(mp_store=Store(turn=14, left=930.0), mp_thread=Thread(alive=True))
 app._watch_mp_client(True)
 app._refresh_turn()
 check("while the client is up the readout is the galaxy's clock",
-      app.turn_label.cget("text"), lambda t: t.startswith("turn 14"))
+      app.view.turn_label, lambda t: t.startswith("turn 14"))
 app._watch_mp_client(False)
 check("the client going is noticed on the tick it happens",
       app.mp_client_gone, True)
 app._refresh_turn()
 check("and the turn readout stops claiming a turn is open",
-      app.turn_label.cget("text"), lambda t: "turn 14" not in t)
+      app.view.turn_label, lambda t: "turn 14" not in t)
 check("saying instead that the turn is still being sent",
-      app.turn_label.cget("text"), lambda t: "sending" in t.lower())
+      app.view.turn_label, lambda t: "sending" in t.lower())
 check("the log says it too",
       app.said, lambda lines: any("closed" in l for l in lines))
 check("and the status says the sending is still happening",
       app.mp_sending, True)
 check("Save has nothing left to ask for and goes grey",
-      app.ctl_buttons["save"].cget("state"), "disabled")
+      app.view.controls["save"]["enabled"], False)
 app.mp_capture = (L.HELD, time.time())
 app._refresh_turn()
 check("while the indicator keeps reporting the send",
-      app.cap_status.cget("text"), lambda t: "sending" in t.lower())
+      app.view.capture[0], lambda t: "sending" in t.lower())
 
 app._mp_state("submitted", turn=14, civ="DemoPlayer", final=True)
 check("the final submission ends the sending", app.mp_sending, False)
 app._refresh_turn()
 check("and the readout stops saying it",
-      app.turn_label.cget("text"), lambda t: "sending" not in t)
+      app.view.turn_label, lambda t: "sending" not in t)
 check("without putting the closed turn's countdown back",
-      app.turn_label.cget("text"), lambda t: "turn 14" not in t)
+      app.view.turn_label, lambda t: "turn 14" not in t)
 
 # The answer the player closed the game to get. Until 28 September it was
 # never drawn: the send finishing and the indicator being hidden were the same
 # event, so the amber "sending your turn" was replaced by nothing at all and
 # the operator reported never having seen a confirmation.
 check("the confirmation is on screen after the send, not skipped",
-      app.cap_status.cget("text"), lambda t: "sent" in t.lower())
+      app.view.capture[0], lambda t: "sent" in t.lower())
 check("and it is green, because the turn is safe",
-      app.cap_dot.cget("fg"), L.OK)
-check("and the indicator is still packed to be read",
-      app.cap_status.winfo_ismapped(), True)
+      app.view.capture[1], L.OK)
+check("and the indicator is still up to be read", shown(app), True)
 # Held, not kept. Fails if the confirmation became permanent, which would
 # outlast the turn it is about and greet the next one.
 app.mp_capture = (L.SENT, time.time() - L.CAPTURE_HOLD - 1)
 app._refresh_turn()
-check("and it goes once it has been up long enough",
-      app.cap_status.winfo_ismapped(), False)
+check("and it goes once it has been up long enough", shown(app), False)
 
 # Play, on the galaxy this loop is following with its window closed, asks the
 # loop to open the game again. Between the press and the client coming up the
@@ -329,7 +346,7 @@ check("and it goes once it has been up long enough",
 app.mp_reopening = True
 app._refresh_turn()
 check("a game being opened again says so rather than saying it is waiting",
-      app.turn_label.cget("text"), lambda t: "opening" in t.lower())
+      app.view.turn_label, lambda t: "opening" in t.lower())
 app._mp_state("playing", turn=14, civ="DemoPlayer", seconds_left=900)
 check("and stops saying it once the turn is running", app.mp_reopening, False)
 app.mp_reopening = True
@@ -340,8 +357,8 @@ check("a client coming back puts the readout back",
 check("and answers whatever asked for it", app.mp_reopening, False)
 app._refresh_turn()
 check("with the galaxy's clock on it",
-      app.turn_label.cget("text"), lambda t: t.startswith("turn 14"))
-check("and Save live again", app.ctl_buttons["save"].cget("state"), "normal")
+      app.view.turn_label, lambda t: t.startswith("turn 14"))
+check("and Save live again", app.view.controls["save"]["enabled"], True)
 
 print("\n7. the countdown subtracts, it does not poll the store")
 # This runs once a second for as long as a game window is open. Asking the
@@ -355,21 +372,21 @@ app = bare(mp_store=store, mp_thread=Thread(alive=True))
 app._refresh_turn()
 check("the first tick asks the store, because nothing has been heard yet",
       store.reads, 1)
-check("and it says the turn", app.turn_label.cget("text"),
+check("and it says the turn", app.view.turn_label,
       lambda t: t.startswith("turn 14"))
 for _ in range(600):
     app._refresh_turn()
 check("ten minutes of ticks after it ask the store nothing more",
       store.reads, 1)
 check("while the readout goes on saying the turn",
-      app.turn_label.cget("text"), lambda t: t.startswith("turn 14"))
+      app.view.turn_label, lambda t: t.startswith("turn 14"))
 app._mp_state("playing", turn=15, civ="DemoPlayer", seconds_left=14400.0)
 app._refresh_turn()
 check("a new turn reaches it from the loop rather than from a read",
-      (app.turn_label.cget("text").startswith("turn 15"), store.reads),
+      (app.view.turn_label.startswith("turn 15"), store.reads),
       (True, 1))
 check("with the loop's own clock on it",
-      app.turn_label.cget("text"), lambda t: t.endswith("left"))
+      app.view.turn_label, lambda t: t.endswith("left"))
 
 print("\n8. a foreign server on the port is refused, not reused")
 boot = inspect.getsource(L.Launcher._boot)

@@ -3013,6 +3013,24 @@ PAGE_PACK = {"fill": "both", "expand": True, "padx": PAD_X,
 PAGE_WIDTH = (sum(c.width for c in GALAXY_COLUMNS) + ACTION_WIDTH
               + 2 * PANEL_PAD + 2)
 
+# The game controls under a running game, by key and label, in reading order.
+CONTROLS = (("load", "Load"), ("save", "Save"), ("turn", "Next Turn"))
+
+# What the table says while the first listing is in flight.
+GALAXIES_WAITING = "Please wait, loading galaxies…"
+
+
+class GalaxyRow(typing.NamedTuple):
+    """One row of the galaxy table as the window draws it.
+
+    `cells` is (text, colour) per column of GALAXY_COLUMNS. `action` is the
+    label of the row's one button, or None for a row without one, and
+    `on_action` is what pressing it does.
+    """
+    cells: list
+    action: "str | None" = None
+    on_action: "typing.Callable | None" = None
+
 # ── The capture indicator ─────────────────────────────────────────────────────
 # What the turn loop last did with the player's work, beside the dot that says
 # the server is up. The question it answers is the one a player cannot answer
@@ -3072,10 +3090,16 @@ def capture_readout(state, age: float, client_open: bool = True):
 
 
 class Launcher:
-    def __init__(self, root, cfg):
-        import tkinter as tk
-        self.tk = tk
-        self.root = root
+    """Everything the launcher decides, drawn by a view.
+
+    `view` is the window (tk_view.TkView). The Launcher calls its methods to
+    show things and to ask the player things, and the view calls the
+    Launcher's methods when the player presses something. Nothing here touches
+    a widget, so every decision can be exercised without a window.
+    """
+
+    def __init__(self, view, cfg):
+        self.view = view
         self.cfg = cfg
         self.modes = [m for m in cfg["modes"] if m.get("show", True)]
         self.msgs: "queue.Queue[str]" = queue.Queue()
@@ -3176,11 +3200,10 @@ class Launcher:
         self.games_recs = {}
         self.sort_key = DEFAULT_SORT
         self.sort_desc = False
-        # Which page the window is showing, and the widgets the table owns:
-        # the cells, thrown away on every repaint, and the countdown cells,
-        # which are rewritten once a second without disturbing the order.
+        # Which page the window is showing, and the table's countdown cells,
+        # which are rewritten once a second without disturbing the order, as
+        # (row, column, Column, galaxy, near).
         self.page = "home"
-        self._cells: "list" = []
         self._clocks: "list" = []
         # This player's name, read from the data directory at boot. None until
         # they have entered one, which is a state the launcher runs in happily:
@@ -3191,14 +3214,14 @@ class Launcher:
         # then , "server running", "port taken", "reusing the existing server" ,
         # rather than a guess.
         self._ready: "tuple[str, str]" = ("starting…", WARN)
+        # What the status line says now, which is what the window starts with.
+        self._status: "tuple[str, str]" = self._ready
         # Whether THIS launcher's server is the one on the port. False while a
         # foreign server holds it, which is a state multiplayer cannot run in:
         # the turn would be captured into that server's data directory.
         self.server_ok = False
         # Set when a server this launcher did not start is being shared.
         self.save_dir = None
-        self.log_visible = False
-        self.buttons: "list" = []
         self.game_root = self.galaxy_root = self.data_dir = None
         # Every client the manifest knows about, including modes not shown: a
         # hidden mode's client is still a running game that a second launch
@@ -3215,164 +3238,10 @@ class Launcher:
         self._logfh = None
         self._pending: "list[str]" = []
 
-        root.title(cfg["product"])
-        root.configure(bg=BG)
-        root.resizable(False, False)
-        root.protocol("WM_DELETE_WINDOW", self.on_close)
-
-        self._build()
+        view.build(self)
         self._boot()
-        self.root.after(120, self._drain)
-        self.root.after(1000, self._watch_game)
-
-    # ── construction ──
-    def _build(self):
-        tk = self.tk
-        pad = {"padx": PAD_X}
-
-        # One line, from the manifest, so the header, the title bar and every
-        # dialog title are the same string rather than three things to keep in
-        # step. 20pt rather than 22: the full name is 28 characters and the
-        # window sizes itself to its widest child.
-        tk.Label(self.root, text=self.cfg["product"], bg=BG, fg=ACCENT,
-                 font=("Segoe UI", 20, "bold")).pack(anchor="w", pady=(22, 0), **pad)
-        # The build, not the manifest's version: a build made with build.ps1's
-        # -Version switch carries a name the manifest does not hold, and this
-        # line is where a player reads back what a galaxy is about to refuse.
-        #
-        # The player code goes on the same line once this install has a
-        # Firebase sign-in, because this is the line a player is already
-        # asked to read back: see `player_code`.
-        self.build_label = tk.Label(self.root, text=f"v{build_id()}",
-                                    bg=BG, fg=DIM, font=("Segoe UI", 10))
-        self.build_label.pack(anchor="w", **pad)
-
-        # The window's body, which is one page at a time. The home page holds
-        # the mode cards; Multiplayer swaps in the Galaxies page and Back swaps
-        # it out again.
-        self.pages = tk.Frame(self.root, bg=BG)
-        self.pages.pack(**PAGE_PACK)
-        # One width for both pages, so that navigating does not resize a window
-        # that cannot be resized by hand. Without it the window would widen
-        # when the table appears and narrow again on the way back.
-        tk.Frame(self.pages, bg=BG, width=PAGE_WIDTH, height=1).pack()
-        self.home_page = tk.Frame(self.pages, bg=BG)
-        self.galaxies_page = tk.Frame(self.pages, bg=BG)
-        self.home_page.pack(fill="both", expand=True)
-
-        for mode in self.modes:
-            card = tk.Frame(self.home_page, bg=PANEL, highlightbackground=EDGE,
-                            highlightthickness=1)
-            card.pack(fill="x", pady=5)
-            ready = is_playable(mode)
-            btn = tk.Button(card, text=mode["title"], width=18,
-                            bg=BTN if ready else PANEL,
-                            fg="#ffffff" if ready else FAINT,
-                            activebackground=BTN_HI, activeforeground="#ffffff",
-                            relief="flat", bd=0,
-                            font=("Segoe UI", 10, "bold"),
-                            cursor="hand2" if ready else "",
-                            state="normal" if ready else "disabled",
-                            disabledforeground=FAINT,
-                            command=lambda m=mode: self.on_play(m))
-            btn.pack(side="left", padx=14, pady=14)
-            if ready:
-                btn.bind("<Enter>", lambda e, b=btn: b.configure(bg=BTN_HI))
-                btn.bind("<Leave>", lambda e, b=btn: b.configure(bg=BTN))
-                # Only playable buttons go in the list fail() disables , a
-                # coming-soon button is already disabled and must stay that way.
-                self.buttons.append(btn)
-            else:
-                # Packed before the blurb so the right-hand side claims its
-                # width first and the blurb wraps around it.
-                tk.Label(card, text=" COMING SOON ", bg=EDGE, fg=TEXT,
-                         font=("Segoe UI", 7, "bold")).pack(side="right",
-                                                            padx=(0, 14))
-            tk.Label(card, text=mode["blurb"], bg=PANEL,
-                     fg=DIM if ready else FAINT, justify="left",
-                     wraplength=340, font=("Segoe UI", 9)).pack(
-                         side="left", padx=(0, 14))
-
-        self._build_galaxies(self.galaxies_page)
-
-        self.ctl_frame = tk.Frame(self.root, bg=PANEL,
-                                  highlightbackground=EDGE, highlightthickness=1)
-        inner = tk.Frame(self.ctl_frame, bg=PANEL)
-        inner.pack(fill="x", padx=12, pady=10)
-        self.ctl_buttons = {}
-        for key, text, cmd in (("load", "Load", self.on_load),
-                               ("save", "Save", self.on_save),
-                               ("turn", "Next Turn", self.on_next_turn)):
-            # Packed right-to-left, so they READ "Next Turn  Save  Load".
-            b = tk.Button(inner, text=text, bg=BTN, fg="#ffffff",
-                          activebackground=BTN_HI, activeforeground="#ffffff",
-                          relief="flat", bd=0, cursor="hand2", width=10,
-                          font=("Segoe UI", 9, "bold"), command=cmd)
-            b.pack(side="right", padx=(6, 0))
-            self.ctl_buttons[key] = b
-        self.turn_label = tk.Label(inner, text="turn ,", bg=PANEL, fg=TEXT,
-                                   font=("Segoe UI", 9, "bold"), width=34,
-                                   anchor="w")
-        self.turn_label.pack(side="left", fill="x")
-
-        tk.Label(self.root,
-                 text="Keep this window open while you play , it is the game server.",
-                 bg=BG, fg=FAINT, font=("Segoe UI", 8)).pack(anchor="w",
-                                                             pady=(6, 0), **pad)
-
-        ident = tk.Frame(self.root, bg=BG)
-        ident.pack(fill="x", pady=(10, 0), **pad)
-        tk.Label(ident, text="Playing as", bg=BG, fg=FAINT,
-                 font=("Segoe UI", 8)).pack(side="left")
-        self.name_label = tk.Label(ident, text="", bg=BG, fg=TEXT,
-                                   font=("Segoe UI", 9, "bold"))
-        self.name_label.pack(side="left", padx=(6, 0))
-        self.name_btn = tk.Label(ident, text="set name", bg=BG, fg=FAINT,
-                                 font=("Segoe UI", 8, "underline"),
-                                 cursor="hand2")
-        self.name_btn.pack(side="left", padx=(8, 0))
-        self.name_btn.bind("<Button-1>", lambda e: self.on_change_name())
-
-        status = tk.Frame(self.root, bg=BG)
-        status.pack(fill="x", pady=(12, 0), **pad)
-        self.dot = tk.Label(status, text="●", bg=BG, fg=WARN,
-                            font=("Segoe UI", 11))
-        self.dot.pack(side="left")
-        self.status = tk.Label(status, text="starting…", bg=BG, fg=DIM,
-                               font=("Segoe UI", 9))
-        self.status.pack(side="left", padx=(6, 0))
-        # The capture indicator, beside the server's dot and built the same
-        # way. Packed only while a turn loop is running: outside multiplayer
-        # there is nothing being captured and an idle second dot reads as a
-        # second thing that could be wrong.
-        self.cap_dot = tk.Label(status, text="●", bg=BG, fg=FAINT,
-                                font=("Segoe UI", 11))
-        self.cap_status = tk.Label(status, text="", bg=BG, fg=DIM,
-                                   font=("Segoe UI", 9))
-        self.log_btn = tk.Label(status, text="show log", bg=BG, fg=FAINT,
-                                font=("Segoe UI", 8, "underline"), cursor="hand2")
-        self.log_btn.pack(side="right")
-        self.log_btn.bind("<Button-1>", lambda e: self.toggle_log())
-        self.send_log_btn = tk.Label(status, text="send log", bg=BG, fg=FAINT,
-                                     font=("Segoe UI", 8, "underline"),
-                                     cursor="hand2")
-        self.send_log_btn.pack(side="right", padx=(0, 10))
-        self.send_log_btn.bind("<Button-1>", lambda e: self.offer_log())
-        # Packed once this install has sent a log: see `_show_log_refs_link`.
-        self.log_refs_btn = tk.Label(status, text="log history", bg=BG,
-                                     fg=FAINT, font=("Segoe UI", 8, "underline"),
-                                     cursor="hand2")
-        self.log_refs_btn.bind("<Button-1>", lambda e: self.show_log_refs())
-
-        self.log_frame = tk.Frame(self.root, bg=BG)
-        self.log = tk.Text(self.log_frame, height=11, bg="#02060f", fg=DIM,
-                           insertbackground=TEXT, relief="flat",
-                           font=("Consolas", 8), wrap="none",
-                           highlightbackground=EDGE, highlightthickness=1)
-        self.log.pack(fill="both", expand=True)
-        self.log.configure(state="disabled")
-
-        tk.Frame(self.root, bg=BG, height=PAD_Y).pack()
+        view.after(120, self._drain)
+        view.after(1000, self._watch_game)
 
     # ── startup ──
     def _boot(self):
@@ -3408,9 +3277,7 @@ class Launcher:
         icon = find_icon(self.data_dir)
         if icon:
             try:
-                # default= applies to this window and every dialog it spawns,
-                # so the message boxes carry the icon too.
-                self.root.iconbitmap(default=icon)
+                self.view.set_icon(icon)
                 self.say(f"icon    {icon}")
             except Exception as exc:
                 self.say(f"icon    not applied ({exc})")
@@ -3560,9 +3427,7 @@ class Launcher:
 
     # ── Who you are ───────────────────────────────────────────────────────────
     def _show_identity(self):
-        self.name_label.configure(text=self.player or "nobody yet",
-                                  fg=TEXT if self.player else FAINT)
-        self.name_btn.configure(text="change" if self.player else "set name")
+        self.view.show_identity(self.player)
         self._show_player_code()
 
     def _show_player_code(self):
@@ -3573,9 +3438,8 @@ class Launcher:
         again after every listing and every Play, which is when a first
         sign-in happens.
         """
-        text = build_line(build_id(), player_code(install_uid(self.data_dir)))
-        if self.build_label.cget("text") != text:
-            self.build_label.configure(text=text)
+        self.view.show_build(
+            build_line(build_id(), player_code(install_uid(self.data_dir))))
 
     def ask_player_name(self, reason: str = ""):
         """Ask for the player's name, store it, and return it. None if cancelled.
@@ -3585,64 +3449,12 @@ class Launcher:
         this dialog existing rather than a JSON file they edit, where the same
         mistake surfaces as a turn that quietly went nowhere.
         """
-        tk = self.tk
-        win = tk.Toplevel(self.root)
-        win.title("Your name")
-        win.configure(bg=BG)
-        win.resizable(False, False)
-        win.transient(self.root)
-
         text = ("This is the name other players see, and the name of your "
                 "civilisation in a galaxy. You enter it once.")
         if reason:
             text = reason + "\n\n" + text
-        tk.Label(win, text=text, bg=BG, fg=DIM, justify="left", wraplength=360,
-                 font=("Segoe UI", 9)).pack(anchor="w", padx=20, pady=(18, 10))
-
-        var = tk.StringVar(value=self.player or "")
-        entry = tk.Entry(win, textvariable=var, bg=PANEL, fg=TEXT, width=22,
-                         insertbackground=TEXT, relief="flat",
-                         highlightbackground=EDGE, highlightthickness=1,
-                         font=("Segoe UI", 12))
-        entry.pack(anchor="w", padx=20, ipady=3)
-        tk.Label(win, text=NAME_RULES, bg=BG, fg=FAINT, justify="left",
-                 wraplength=360, font=("Segoe UI", 8)).pack(anchor="w", padx=20,
-                                                            pady=(6, 0))
-        why = tk.Label(win, text="", bg=BG, fg=BAD, justify="left",
-                       wraplength=360, font=("Segoe UI", 8))
-        why.pack(anchor="w", padx=20, pady=(4, 0))
-
-        picked = {}
-
-        def accept(_evt=None):
-            name, problem = validate_player_name(var.get())
-            if problem:
-                why.configure(text=problem)
-                return
-            picked["name"] = name
-            win.destroy()
-
-        row = tk.Frame(win, bg=BG)
-        row.pack(fill="x", padx=20, pady=(14, 18))
-        for label, cmd in (("Cancel", win.destroy), ("Save", accept)):
-            tk.Button(row, text=label, bg=BTN, fg="#ffffff",
-                      activebackground=BTN_HI, activeforeground="#ffffff",
-                      relief="flat", bd=0, cursor="hand2", width=9,
-                      font=("Segoe UI", 9, "bold"), command=cmd).pack(
-                          side="right", padx=(6, 0))
-        entry.bind("<Return>", accept)
-        win.bind("<Escape>", lambda e: win.destroy())
-        entry.focus_set()
-        # grab_set after the window is mapped: grabbing a window that is not yet
-        # on screen fails on Windows and leaves the dialog non-modal.
-        win.update_idletasks()
-        try:
-            win.grab_set()
-        except tk.TclError:
-            pass
-        self.root.wait_window(win)
-
-        name = picked.get("name")
+        name = self.view.ask_name(text, self.player or "", NAME_RULES,
+                                  validate_player_name)
         if not name:
             return None
         try:
@@ -3678,73 +3490,12 @@ class Launcher:
         self.ask_player_name()
 
     # ── The Galaxies page ────────────────────────────────────────────────────
-    def _build_galaxies(self, parent):
-        """The page the Multiplayer button opens: a sortable table of galaxies.
-
-        The header, the status line and the column headings are built once and
-        never thrown away, so Back is on screen while a listing is in flight
-        and after one has failed. A repaint replaces the cells under the
-        headings and touches nothing else.
-        """
-        tk = self.tk
-        head = tk.Frame(parent, bg=BG)
-        head.pack(fill="x")
-        back = tk.Button(head, text="‹ Back", bg=BTN, fg="#ffffff",
-                         activebackground=BTN_HI, activeforeground="#ffffff",
-                         relief="flat", bd=0, cursor="hand2", width=8,
-                         font=("Segoe UI", 9, "bold"), command=self.show_home)
-        back.pack(side="left")
-        back.bind("<Enter>", lambda e: back.configure(bg=BTN_HI))
-        back.bind("<Leave>", lambda e: back.configure(bg=BTN))
-        tk.Label(head, text="Galaxies", bg=BG, fg=ACCENT,
-                 font=("Segoe UI", 13, "bold")).pack(side="left", padx=(12, 0))
-        self.games_refresh = tk.Label(head, text="refresh", bg=BG, fg=FAINT,
-                                      font=("Segoe UI", 8, "underline"),
-                                      cursor="hand2")
-        self.games_refresh.pack(side="right")
-        self.games_refresh.bind("<Button-1>", lambda e: self.refresh_games())
-
-        self.games_status = tk.Label(parent, text="", bg=BG, fg=DIM,
-                                     anchor="w", justify="left",
-                                     wraplength=PAGE_WIDTH,
-                                     font=("Segoe UI", 8))
-        self.games_status.pack(fill="x", pady=(8, 0))
-
-        panel = tk.Frame(parent, bg=PANEL, highlightbackground=EDGE,
-                         highlightthickness=1)
-        panel.pack(fill="both", expand=True, pady=(6, 0))
-        self.games_table = tk.Frame(panel, bg=PANEL)
-        self.games_table.pack(fill="both", expand=True, padx=PANEL_PAD,
-                              pady=PANEL_PAD)
-        for i, col in enumerate(GALAXY_COLUMNS):
-            # Only the name stretches. The rest are as wide as their heading
-            # needs, so the numbers stay in a column the eye can run down.
-            self.games_table.grid_columnconfigure(
-                i, minsize=col.width, weight=1 if col.key == "name" else 0)
-        self.games_table.grid_columnconfigure(len(GALAXY_COLUMNS),
-                                              minsize=ACTION_WIDTH)
-        self.games_heads = {}
-        for i, col in enumerate(GALAXY_COLUMNS):
-            lab = tk.Label(self.games_table, bg=PANEL, fg=DIM, anchor="w",
-                           cursor="hand2", font=("Segoe UI", 8, "bold"))
-            lab.grid(row=0, column=i, sticky="w", padx=(0, 8), pady=(0, 6))
-            lab.bind("<Button-1>", lambda e, k=col.key: self.sort_by(k))
-            self.games_heads[col.key] = lab
-        self._show_sort()
-
-        self.games_hint = tk.Label(parent, bg=BG, fg=WARN, anchor="w",
-                                   justify="left", wraplength=PAGE_WIDTH,
-                                   font=("Segoe UI", 8))
-
     def show_page(self, name: str):
         """Swap the window's body between the launcher's two pages."""
         if self.page == name:
             return
         self.page = name
-        showing = self.home_page if name == "home" else self.galaxies_page
-        hidden = self.galaxies_page if name == "home" else self.home_page
-        hidden.pack_forget()
-        showing.pack(fill="both", expand=True)
+        self.view.show_page(name)
 
     def show_home(self):
         self.show_page("home")
@@ -3770,13 +3521,7 @@ class Launcher:
 
     def _show_sort(self):
         """Mark the column being sorted on, and which way round it is."""
-        for col in GALAXY_COLUMNS:
-            lab = self.games_heads.get(col.key)
-            if lab is None:
-                continue
-            here = col.key == self.sort_key
-            mark = (" ▾" if self.sort_desc else " ▴") if here else ""
-            lab.configure(text=col.heading + mark, fg=ACCENT if here else DIM)
+        self.view.show_sort(self.sort_key, self.sort_desc)
 
     def _games_tick(self):
         """Re-list on a slow timer, and keep the timer whatever a listing did.
@@ -3786,7 +3531,7 @@ class Launcher:
         """
         if self.page == "galaxies":
             self.refresh_games()
-        self.root.after(GAMES_POLL_MS, self._games_tick)
+        self.view.after(GAMES_POLL_MS, self._games_tick)
 
     def refresh_games(self):
         """List off the Tk thread and repaint when it answers.
@@ -3799,7 +3544,7 @@ class Launcher:
         if self.games_busy or not (self.games_dir or self.own_store):
             return
         self.games_busy = True
-        self.games_status.configure(text="listing galaxies…", fg=DIM)
+        self.view.set_games_status("listing galaxies…", DIM)
         spec, player, data_dir = self.games_dir, self.player, self.data_dir
         recs = load_joined(data_dir)
 
@@ -3959,10 +3704,7 @@ class Launcher:
 
     def _draw_galaxies(self):
         """Paint the table from the last listing, in the order asked for."""
-        tk = self.tk
-        for widget in self._cells:
-            widget.destroy()
-        self._cells, self._clocks = [], []
+        self._clocks = []
         self.games_recs = load_joined(self.data_dir)
         view = self._galaxy_view()
         rows = sort_galaxies(self.games_rows or [], self.sort_key,
@@ -3975,41 +3717,28 @@ class Launcher:
         # rows will be. `games_rows` is None only before the first listing
         # lands, which is the one moment this is true.
         if self.games_rows is None:
-            waiting = tk.Label(self.games_table,
-                               text="Please wait, loading galaxies…",
-                               bg=PANEL, fg=DIM, anchor="w",
-                               font=("Segoe UI", 9))
-            waiting.grid(row=1, column=0, columnspan=len(GALAXY_COLUMNS) + 1,
-                         sticky="w", pady=6)
-            self._cells.append(waiting)
+            self.view.draw_galaxies(None, GALAXIES_WAITING)
             self._show_hint(rows, view)
             return
-        for r, g in enumerate(rows, start=1):
+        drawn = []
+        for r, g in enumerate(rows):
             action = row_action(g, view.recs, view.own)
             # The rows lit are the ones that are this player's business: the
             # galaxy they are in, the one they have asked to join, and the one
             # they named themselves.
             near = bool(g.joined or action in (PLAY, ENDED, RECLAIMED)
                         or pending_join(g, view.recs))
+            cells = []
             for i, col in enumerate(GALAXY_COLUMNS):
-                cell = tk.Label(self.games_table, text=col.text(g, view),
-                                bg=PANEL, fg=self._cell_colour(col, g, view,
-                                                               near),
-                                anchor="w", font=("Segoe UI", 9))
-                cell.grid(row=r, column=i, sticky="w", padx=(0, 8), pady=3)
-                self._cells.append(cell)
+                cells.append((col.text(g, view),
+                              self._cell_colour(col, g, view, near)))
                 if col in LIVE_COLUMNS:
-                    self._clocks.append((cell, col, g, near))
-            if action is None:
-                continue
-            btn = tk.Button(self.games_table, text=ACTION_TEXT[action], bg=BTN,
-                            fg="#ffffff", activebackground=BTN_HI,
-                            activeforeground="#ffffff", relief="flat", bd=0,
-                            cursor="hand2", width=6,
-                            font=("Segoe UI", 9, "bold"),
-                            command=lambda gg=g, a=action: self.on_row(gg, a))
-            btn.grid(row=r, column=len(GALAXY_COLUMNS), sticky="e", pady=3)
-            self._cells.append(btn)
+                    self._clocks.append((r, i, col, g, near))
+            drawn.append(GalaxyRow(
+                cells, ACTION_TEXT[action] if action is not None else None,
+                (lambda gg=g, a=action: self.on_row(gg, a))
+                if action is not None else None))
+        self.view.draw_galaxies(drawn)
         self._show_hint(rows, view)
 
     def _show_source(self, rows):
@@ -4020,22 +3749,20 @@ class Launcher:
         the table whatever the directory did and is still playable.
         """
         if self.games_err:
-            self.games_status.configure(text=self.games_err, fg=WARN)
+            self.view.set_games_status(self.games_err, WARN)
         elif self.games_rows is None:
-            self.games_status.configure(text="listing galaxies…", fg=DIM)
+            self.view.set_games_status("listing galaxies…", DIM)
         elif not rows:
-            self.games_status.configure(
-                text="No galaxies are listed here yet.", fg=DIM)
+            self.view.set_games_status("No galaxies are listed here yet.", DIM)
         elif self.games_dir:
             # Labelled, because the beta's directory is a Cloud Run hostname
             # with a project hash in it and a bare URL above a table reads as
             # something gone wrong rather than as where the list came from.
-            self.games_status.configure(
-                text=f"Connected to: {self.games_dir}", fg=FAINT)
+            self.view.set_games_status(f"Connected to: {self.games_dir}", FAINT)
         else:
-            self.games_status.configure(
-                text=f"{MP_CONFIG} names this galaxy, so no directory is "
-                     "listed.", fg=FAINT)
+            self.view.set_games_status(
+                f"{MP_CONFIG} names this galaxy, so no directory is listed.",
+                FAINT)
 
     def _show_hint(self, rows, view):
         """One line saying what to press when there is nothing to play yet.
@@ -4079,16 +3806,9 @@ class Launcher:
             elif any(awaiting_answer(g, view.recs) for g in rows):
                 text = ("Your join is with the galaxy. A seat appears at the "
                         "next turn boundary, and Play appears with it.")
-        if text:
-            # Only on a change. This is called once a second now, and the
-            # stopped line's own clock rounds to minutes, so repainting a
-            # label that has not moved is a redraw a second for nothing.
-            if self.games_hint.cget("text") != text:
-                self.games_hint.configure(text=text)
-            if not self.games_hint.winfo_ismapped():
-                self.games_hint.pack(fill="x", pady=(8, 0))
-        elif self.games_hint.winfo_ismapped():
-            self.games_hint.pack_forget()
+        # Called once a second, and the stopped line's own clock rounds to
+        # minutes, so the view repaints only on a change.
+        self.view.set_hint(text)
 
     def _tick_clocks(self):
         """Keep the countdowns and the stopped galaxies honest between
@@ -4104,15 +3824,9 @@ class Launcher:
         after the row it explains.
         """
         view = self._galaxy_view()
-        for cell, col, g, near in self._clocks:
-            if not cell.winfo_exists():
-                continue
-            text = col.text(g, view)
-            if cell.cget("text") != text:
-                cell.configure(text=text)
-            colour = self._cell_colour(col, g, view, near)
-            if cell.cget("fg") != colour:
-                cell.configure(fg=colour)
+        for r, i, col, g, near in self._clocks:
+            self.view.set_cell(r, i, col.text(g, view),
+                               self._cell_colour(col, g, view, near))
         self._show_hint(sort_galaxies(self.games_rows or [], self.sort_key,
                                       self.sort_desc, view), view)
 
@@ -4189,42 +3903,7 @@ class Launcher:
         the value of the one pressed comes back. Escape and the window's own
         close answer None.
         """
-        tk = self.tk
-        win = tk.Toplevel(self.root)
-        win.title(self.cfg["product"])
-        win.configure(bg=BG)
-        win.transient(self.root)
-        tk.Label(win, text=title, bg=BG, fg=WARN,
-                 font=("Segoe UI", 14, "bold")).pack(anchor="w", padx=20,
-                                                     pady=(18, 6))
-        tk.Label(win, text=body, bg=BG, fg=TEXT,
-                 justify="left", anchor="w", wraplength=460,
-                 font=("Segoe UI", 9)).pack(anchor="w", fill="x", padx=20)
-
-        chosen = {}
-
-        def choose(what):
-            chosen["what"] = what
-            win.destroy()
-
-        row = tk.Frame(win, bg=BG)
-        row.pack(fill="x", padx=20, pady=(14, 18))
-        for label, what, primary in choices:
-            bg, hi = (BTN, BTN_HI) if primary else (PANEL, EDGE)
-            tk.Button(row, text=label, bg=bg, fg="#ffffff" if primary
-                      else TEXT, activebackground=hi,
-                      activeforeground="#ffffff", relief="flat", bd=0,
-                      cursor="hand2", width=12, font=("Segoe UI", 9, "bold"),
-                      command=lambda w=what: choose(w)).pack(side="left",
-                                                             padx=(0, 6))
-        win.bind("<Escape>", lambda e: win.destroy())
-        win.update_idletasks()
-        try:
-            win.grab_set()
-        except tk.TclError:
-            pass
-        self.root.wait_window(win)
-        return chosen.get("what")
+        return self.view.choose(title, body, choices)
 
     def play_galaxy(self, g):
         """Take turns in one row's galaxy, which is what Multiplayer did.
@@ -4257,68 +3936,14 @@ class Launcher:
         The line above the text also says when the empire arrives, so no box
         follows the Join: the row reads "joining next turn" from then on.
         """
-        tk = self.tk
-        win = tk.Toplevel(self.root)
-        win.title(self.cfg["product"])
-        win.configure(bg=BG)
-        win.transient(self.root)
-
         notice = beta_notice_module()
         heading = notice.title(body) if notice else "Before you join the beta"
-        tk.Label(win, text=heading, bg=BG, fg=ACCENT,
-                 font=("Segoe UI", 14, "bold")).pack(anchor="w", padx=20,
-                                                     pady=(18, 0))
         when = f"turn {g.turn + 1}" if g.turn is not None else "its first turn"
         who = f" as {civ}" if civ else ""
-        tk.Label(win, text=(f"You are about to join {g.name or g.id}{who}. New "
-                            "players arrive at a turn boundary, so your empire "
-                            f"appears at {when}, and its row here gets a Play "
-                            "button then."),
-                 bg=BG, fg=DIM, font=("Segoe UI", 9), justify="left",
-                 wraplength=560).pack(anchor="w", padx=20, pady=(2, 10))
-
-        frame = tk.Frame(win, bg=BG)
-        frame.pack(fill="both", expand=True, padx=20)
-        bar = tk.Scrollbar(frame, orient="vertical")
-        text = tk.Text(frame, width=78, height=22, bg=PANEL, fg=TEXT,
-                       relief="flat", wrap="word", padx=10, pady=8,
-                       highlightbackground=EDGE, highlightthickness=1,
-                       font=("Consolas", 9), yscrollcommand=bar.set)
-        bar.configure(command=text.yview)
-        bar.pack(side="right", fill="y")
-        text.pack(side="left", fill="both", expand=True)
-        text.insert("1.0", body)
-        # After the insert, or the player can edit the rules they are agreeing
-        # to before agreeing to them.
-        text.configure(state="disabled")
-
-        joined = {}
-
-        def accept():
-            joined["yes"] = True
-            win.destroy()
-
-        row = tk.Frame(win, bg=BG)
-        row.pack(fill="x", padx=20, pady=(14, 18))
-        tk.Button(row, text="Join", bg=BTN, fg="#ffffff",
-                  activebackground=BTN_HI, activeforeground="#ffffff",
-                  relief="flat", bd=0, cursor="hand2", width=12,
-                  font=("Segoe UI", 9, "bold"), command=accept).pack(
-                      side="right", padx=(6, 0))
-        tk.Button(row, text="Not yet", bg=PANEL, fg=TEXT,
-                  activebackground=EDGE, activeforeground="#ffffff",
-                  relief="flat", bd=0, cursor="hand2", width=12,
-                  font=("Segoe UI", 9, "bold"), command=win.destroy).pack(
-                      side="right", padx=(6, 0))
-
-        win.bind("<Escape>", lambda e: win.destroy())
-        win.update_idletasks()
-        try:
-            win.grab_set()
-        except tk.TclError:
-            pass
-        self.root.wait_window(win)
-        return bool(joined.get("yes"))
+        lead = (f"You are about to join {g.name or g.id}{who}. New players "
+                "arrive at a turn boundary, so your empire appears at "
+                f"{when}, and its row here gets a Play button then.")
+        return self.view.beta_notice(heading, lead, body)
 
     def on_join(self, g):
         """Ask a galaxy for a seat. The worker seats the player at the next turn.
@@ -4330,7 +3955,6 @@ class Launcher:
         between a player and a seat. The request itself is the step after that,
         so a refusal and a change of mind alike leave nothing behind.
         """
-        from tkinter import messagebox
         civ = self.player or self.ask_player_name(
             "Before you can join a galaxy, this launcher needs to know who you "
             "are.")
@@ -4388,8 +4012,7 @@ class Launcher:
             # The count, not the names, in the window and in the log alike.
             self.say(f"join: {civ!r} cannot claim a seat in {g.id}, which has "
                      f"{len(seats)} seat(s)")
-            if messagebox.askyesno(self.cfg["product"],
-                                   problem + "\n\nChange your name now?"):
+            if self.view.ask_yes_no(problem + "\n\nChange your name now?"):
                 self.on_change_name()
             return
 
@@ -4533,9 +4156,7 @@ class Launcher:
         # interrupt: the loop is only waiting for the referee. Asking then
         # made switching feel like it needed permission it did not need.
         if not self.mp_client_gone:
-            from tkinter import messagebox
-            if not messagebox.askyesno(
-                    self.cfg["product"],
+            if not self.view.ask_yes_no(
                     f"This launcher is playing {here} right now.\n\nYou can be in "
                     "as many galaxies as you like, but a turn starts the game "
                     "itself and this machine runs one game, so one galaxy is "
@@ -4715,10 +4336,7 @@ class Launcher:
                         self.refresh_games()
                     self.warn(problem)
                     return
-                from tkinter import messagebox
-                if messagebox.askyesno(
-                        self.cfg["product"],
-                        problem + "\n\nChange your name now?"):
+                if self.view.ask_yes_no(problem + "\n\nChange your name now?"):
                     self.on_change_name()
                 return
 
@@ -5131,12 +4749,10 @@ class Launcher:
             self.warn(log_not_sent_text(err, path))
 
     def _show_log_refs_link(self):
-        """Pack the log history link once a reference is kept. Tk thread."""
-        if (self.data_dir is None or self.log_refs_btn.winfo_manager()
-                or not load_log_refs(self.data_dir)):
+        """Show the log history link once a reference is kept. Tk thread."""
+        if self.data_dir is None or not load_log_refs(self.data_dir):
             return
-        self.log_refs_btn.pack(side="right", padx=(0, 10),
-                               before=self.send_log_btn)
+        self.view.show_log_refs_link()
 
     def show_log_refs(self):
         """The box listing the references kept, each with a Copy button."""
@@ -5151,52 +4767,8 @@ class Launcher:
         hand, with its send time and a Copy button beside it. Close, Escape and
         the window's own close dismiss it.
         """
-        tk = self.tk
-        win = tk.Toplevel(self.root)
-        win.title(self.cfg["product"])
-        win.configure(bg=BG)
-        win.transient(self.root)
-        tk.Label(win, text=title, bg=BG, fg=WARN,
-                 font=("Segoe UI", 14, "bold")).pack(anchor="w", padx=20,
-                                                     pady=(18, 6))
-        tk.Label(win, text=body, bg=BG, fg=TEXT,
-                 justify="left", anchor="w", wraplength=460,
-                 font=("Segoe UI", 9)).pack(anchor="w", fill="x", padx=20)
-        if refs:
-            table = tk.Frame(win, bg=BG)
-            table.pack(anchor="w", fill="x", padx=20, pady=(12, 0))
-        for i, rec in enumerate(refs):
-            ref = tk.StringVar(win, value=rec["id"])
-            tk.Entry(table, textvariable=ref, state="readonly", width=34,
-                     readonlybackground=PANEL, fg=TEXT, relief="flat",
-                     highlightbackground=EDGE, highlightthickness=1,
-                     font=("Consolas", 9)).grid(row=i, column=0, sticky="w",
-                                                pady=2, ipady=3)
-            tk.Label(table, text=log_ref_when(rec.get("sent", "")), bg=BG,
-                     fg=DIM, font=("Segoe UI", 8)).grid(row=i, column=1,
-                                                        sticky="w", padx=8)
-            btn = tk.Button(table, text=LOG_COPY, bg=PANEL, fg=TEXT,
-                            activebackground=EDGE, activeforeground="#ffffff",
-                            relief="flat", bd=0, cursor="hand2", width=8,
-                            font=("Segoe UI", 9, "bold"))
-            btn.configure(command=lambda b=btn, r=rec["id"]:
-                          copy_pressed(self.root, b, r))
-            btn.grid(row=i, column=2, sticky="w")
-
-        row = tk.Frame(win, bg=BG)
-        row.pack(fill="x", padx=20, pady=(14, 18))
-        tk.Button(row, text="Close", bg=BTN, fg="#ffffff",
-                  activebackground=BTN_HI, activeforeground="#ffffff",
-                  relief="flat", bd=0, cursor="hand2", width=12,
-                  font=("Segoe UI", 9, "bold"),
-                  command=win.destroy).pack(side="left")
-        win.bind("<Escape>", lambda e: win.destroy())
-        win.update_idletasks()
-        try:
-            win.grab_set()
-        except tk.TclError:
-            pass
-        self.root.wait_window(win)
+        self.view.log_refs(title, body, [
+            (rec["id"], log_ref_when(rec.get("sent", ""))) for rec in refs])
 
     def _open_file(self, path: str):
         """Open a file in the program Windows has for it, which for a .log is
@@ -5254,16 +4826,11 @@ class Launcher:
 
     # ── Game controls ────────────────────────────────────────────────────────
     def _show_controls(self, show: bool):
-        if show and not self.ctl_frame.winfo_ismapped():
-            self.ctl_frame.pack(fill="x", padx=PAD_X, pady=(0, PAD_Y))
-        elif not show and self.ctl_frame.winfo_ismapped():
-            self.ctl_frame.pack_forget()
+        self.view.show_controls(show)
 
     def _set_controls_enabled(self, enabled: bool):
-        for b in self.ctl_buttons.values():
-            b.configure(state="normal" if enabled else "disabled",
-                        bg=BTN if enabled else FAINT,
-                        cursor="hand2" if enabled else "")
+        for key, _label in CONTROLS:
+            self.view.set_control(key, enabled=enabled)
 
     def _in_background(self, label, work, done=None):
         """Run `work()` off the Tk thread, with the controls disabled meanwhile.
@@ -5342,15 +4909,14 @@ class Launcher:
         self._in_background("saving", work)
 
     def on_load(self):
-        from tkinter import filedialog, messagebox
         dat_dir = os.path.join(self.data_dir, "games")
         os.makedirs(dat_dir, exist_ok=True)
-        path = filedialog.askopenfilename(
-            title="Load a saved game", initialdir=dat_dir,
-            filetypes=[("Saved games", "*.dat"), ("All files", "*.*")])
+        path = self.view.ask_open_file(
+            "Load a saved game", dat_dir,
+            [("Saved games", "*.dat"), ("All files", "*.*")])
         if not path:
             return
-        if not messagebox.askokcancel(
+        if not self.view.ask_ok_cancel(
                 "Load game?",
                 "Loading restarts the game on the saved galaxy.\n\nAnything "
                 "since your last save will be lost. Continue?"):
@@ -5489,8 +5055,7 @@ class Launcher:
                          else f"turns have stopped, due {fmt_ago(stopped)}"
                          if stopped
                          else self.mp_note or "waiting for the next turn")
-                if self.turn_label.cget("text") != label:
-                    self.turn_label.configure(text=label)
+                self.view.set_turn_label(label)
             else:
                 # In multiplayer the clock belongs to the store, not to the
                 # client: the client's own countdown is held far into the
@@ -5523,11 +5088,10 @@ class Launcher:
                                  f"{fmt_ago(stopped)}")
                     if self.mp_note:
                         label = f"turn {turn} \u00b7 {self.mp_note}"
-                    if self.turn_label.cget("text") != label:
-                        self.turn_label.configure(text=label)
+                    self.view.set_turn_label(label)
                 except Exception:
                     pass
-            for key, btn in self.ctl_buttons.items():
+            for key, _label in CONTROLS:
                 # Next Turn and Load are meaningless here. The referee owns the
                 # clock, and a player who ends their own turn early would be
                 # asking for a state it has not computed. Save stays, and means
@@ -5535,11 +5099,7 @@ class Launcher:
                 # Save is the one that comes and goes: there is a turn to
                 # send only while a client is up to take it from.
                 live = key == "save" and not self.mp_client_gone
-                want = "normal" if live else "disabled"
-                if btn.cget("state") != want:
-                    btn.configure(state=want,
-                                  bg=BTN if want == "normal" else FAINT,
-                                  cursor="hand2" if want == "normal" else "")
+                self.view.set_control(key, enabled=live)
             self._set_save_text("Send Turn")
             return
         self._set_save_text("Save")
@@ -5558,45 +5118,25 @@ class Launcher:
                 self._waiting_since = time.time()
             ready, why = self._opponent_ready(t)
             label = f"turn {t}" + (f" · {why}" if why else "")
-            if self.turn_label.cget("text") != label:
-                self.turn_label.configure(text=label)
+            self.view.set_turn_label(label)
             # Only the turn button is gated. Save and Load stay live: neither
             # advances the clock, so neither can make the opponent miss a turn.
-            btn = self.ctl_buttons.get("turn")
-            if btn is not None and not self._ctl_busy:
-                want = "normal" if ready else "disabled"
-                if btn.cget("state") != want:
-                    btn.configure(state=want, bg=BTN if ready else FAINT,
-                                  cursor="hand2" if ready else "")
+            if not self._ctl_busy:
+                self.view.set_control("turn", enabled=ready)
         except Exception:
             self._close_ctl_client()    # a readout is not worth an error path
 
     def _set_save_text(self, text: str):
-        """Name what the Save button will actually do, once."""
-        btn = self.ctl_buttons.get("save")
-        if btn is not None and btn.cget("text") != text:
-            btn.configure(text=text)
+        """Name what the Save button will actually do."""
+        self.view.set_control("save", text=text)
 
     def _show_capture(self, state, age: float, client_open: bool = True):
         """Paint the capture indicator, or take it away when there is none.
 
-        Packed and unpacked rather than blanked, so that a launcher with no
-        turn loop running shows one dot and one status, which is what it had
-        before any of this.
+        Taken away rather than blanked, so that a launcher with no turn loop
+        running shows one dot and one status.
         """
-        text, colour = capture_readout(state, age, client_open)
-        if not text:
-            if self.cap_dot.winfo_ismapped():
-                self.cap_status.pack_forget()
-                self.cap_dot.pack_forget()
-            return
-        if not self.cap_dot.winfo_ismapped():
-            self.cap_dot.pack(side="left", padx=(16, 0))
-            self.cap_status.pack(side="left", padx=(6, 0))
-        if self.cap_status.cget("text") != text:
-            self.cap_status.configure(text=text)
-        if self.cap_dot.cget("fg") != colour:
-            self.cap_dot.configure(fg=colour)
+        self.view.show_capture(*capture_readout(state, age, client_open))
 
     def _close_ctl_client(self):
         if self._ctl_client is not None:
@@ -5605,16 +5145,6 @@ class Launcher:
             except Exception:
                 pass
             self._ctl_client = None
-
-    def toggle_log(self):
-        self.log_visible = not self.log_visible
-        if self.log_visible:
-            self.log_frame.pack(fill="both", expand=True, padx=PAD_X,
-                                pady=(8, 0))
-            self.log_btn.configure(text="hide log")
-        else:
-            self.log_frame.pack_forget()
-            self.log_btn.configure(text="show log")
 
     def on_close(self):
         """Ask before quitting out from under a running game.
@@ -5627,9 +5157,8 @@ class Launcher:
         sent. One sentence covers both, because in both the answer is the same
         and it is the only one the player has.
         """
-        from tkinter import messagebox
         if running_clients(self.client_exes):
-            if not messagebox.askokcancel(
+            if not self.view.ask_ok_cancel(
                     "Quit launcher?",
                     "A game is still running.\n\nClose your client first to "
                     "make sure your turn is saved.\n\nClose anyway?"):
@@ -5641,14 +5170,11 @@ class Launcher:
                 srv.shutdown()
             except Exception:
                 pass
-        self.root.destroy()
+        self.view.close()
 
     # ── output ──
     def say(self, msg: str):
-        self.log.configure(state="normal")
-        self.log.insert("end", msg + "\n")
-        self.log.see("end")
-        self.log.configure(state="disabled")
+        self.view.append_log(msg)
         self._persist(msg)
 
     def _open_log(self, data_dir: str):
@@ -5757,7 +5283,7 @@ class Launcher:
             # status line above them. They come back when the client does.
             self._show_controls(not self.mp_client_gone)
             self._refresh_turn()
-            self.root.after(1000, self._watch_game)
+            self.view.after(1000, self._watch_game)
             return
         self._show_capture(None, 0.0)
         wants = bool(self.running_mode and self.running_mode.get("controls")
@@ -5765,7 +5291,7 @@ class Launcher:
         self._show_controls(wants)
         if wants:
             self._refresh_turn()
-        self.root.after(1000, self._watch_game)
+        self.view.after(1000, self._watch_game)
 
     def _watch_mp_client(self, up: bool):
         """Notice the multiplayer client coming and going.
@@ -5809,7 +5335,7 @@ class Launcher:
 
     def _status_if_changed(self, text: str, colour: str):
         """Repaint only on a real change , this runs once a second."""
-        if self.status.cget("text") != text:
+        if self._status[0] != text:
             self.set_status(text, colour)
 
     def _drain(self):
@@ -5845,11 +5371,11 @@ class Launcher:
                     self.say(msg)
         except queue.Empty:
             pass
-        self.root.after(120, self._drain)
+        self.view.after(120, self._drain)
 
     def set_status(self, text: str, colour: str):
-        self.status.configure(text=text)
-        self.dot.configure(fg=colour)
+        self._status = (text, colour)
+        self.view.set_status(text, colour)
 
     def set_ready_status(self, text: str, colour: str):
         """Set the status *and* remember it as the no-game-running state."""
@@ -5857,27 +5383,48 @@ class Launcher:
         self.set_status(text, colour)
 
     def warn(self, msg: str):
-        from tkinter import messagebox
-        messagebox.showwarning(self.cfg["product"], msg)
+        self.view.warn(msg)
 
     def fail(self, msg: str):
-        from tkinter import messagebox
         self.set_status("cannot start", BAD)
-        for btn in self.buttons:
-            btn.configure(state="disabled", bg=FAINT, cursor="")
-            btn.unbind("<Enter>")
-            btn.unbind("<Leave>")
-        messagebox.showerror(self.cfg["product"], msg)
+        self.view.disable_modes()
+        self.view.error(msg)
+
+
+def webview2_bootstrapper() -> "str | None":
+    """Microsoft's WebView2 installer: packed into a release, or the copy
+    build.ps1 keeps in release\\build in a checkout."""
+    import webview_runtime
+    here = os.path.dirname(os.path.abspath(__file__))
+    for path in (bundled(webview_runtime.BOOTSTRAPPER),
+                 os.path.join(here, "build", webview_runtime.BOOTSTRAPPER)):
+        if os.path.exists(path):
+            return path
+    return None
 
 
 def main() -> int:
-    import tkinter as tk
+    # The views import this module by name. Run as a script it is __main__,
+    # and without this the import would load a second copy beside it.
+    sys.modules.setdefault("launcher", sys.modules[__name__])
     with open(bundled("manifest.json"), "r", encoding="utf-8") as fh:
         cfg = json.load(fh)
     set_app_user_model_id()     # must precede the first window
-    root = tk.Tk()
-    Launcher(root, cfg)
-    root.mainloop()
+    if "--tk" in sys.argv:
+        # The tkinter window, which draws the same decisions in the launcher's
+        # older look.
+        import tkinter as tk
+        from tk_view import TkView
+        root = tk.Tk()
+        Launcher(TkView(root), cfg)
+        root.mainloop()
+        return 0
+    import webview_runtime
+    from web_view import WebView
+    if not webview_runtime.ensure(cfg["product"], webview2_bootstrapper()):
+        return 1
+    view = WebView(cfg)
+    view.run(lambda: Launcher(view, cfg))
     return 0
 
 
@@ -5887,11 +5434,13 @@ if __name__ == "__main__":
     except Exception:
         # A windowed build has no console, so an unhandled exception would
         # otherwise be a window that never appears and no explanation anywhere.
+        # A plain Windows box, since the window that failed may be the reason.
         detail = traceback.format_exc()
         try:
-            import tkinter.messagebox as mb
-            mb.showerror("Cosmic Supremacy: Resurgence",
-                         "The launcher failed to start.\n\n" + detail)
+            import ctypes
+            ctypes.windll.user32.MessageBoxW(
+                None, "The launcher failed to start.\n\n" + detail,
+                "Cosmic Supremacy: Resurgence", 0x10)
         except Exception:
             pass
         sys.exit(1)

@@ -8,7 +8,8 @@ Headless. The relay is a local HTTP server on a free port that records what it
 is sent and answers the way `functions/relay.py` does, so this needs no
 emulator; `server/tests/test_log_upload.py` runs the real relay. The launcher
 object is not built: its methods run on a stand-in carrying the attributes
-they read.
+they read, with a `FakeView` for the window. The Tk rows of the reference box
+are built once on a withdrawn root and read back without being shown.
 """
 import base64
 import http.server
@@ -28,8 +29,10 @@ import pathlib
 REPO = str(pathlib.Path(__file__).resolve().parents[2])
 sys.path.insert(0, os.path.join(REPO, "release"))
 sys.path.insert(0, os.path.join(REPO, "server"))
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import launcher as L                                            # noqa: E402
+from fake_view import FakeView                                  # noqa: E402
 
 fails = []
 
@@ -98,27 +101,15 @@ def make_app(data_dir, store_spec=None, choose=("send",)):
     app.mp_log_offered = False
     app.log_sending = False
     app.msgs = queue.Queue()
-    app.said, app.warned, app.dialogs, app.opened = [], [], [], []
-    app.choose = list(choose)
+    app.view = FakeView(choose=list(choose))
+    app.said, app.opened = [], []
     app.say = app.said.append
     app.say_threadsafe = app.said.append
-    app.warn = app.warned.append
-
-    def dialog(title, body, choices):
-        app.dialogs.append((title, body, [c[0] for c in choices]))
-        return app.choose.pop(0) if app.choose else None
-    app._choice_dialog = dialog
-
-    def refs_dialog(title, body, refs):
-        app.dialogs.append((title, body, [r["id"] for r in refs]))
-    app._log_refs_dialog = refs_dialog
-    app.links = []
-    app._show_log_refs_link = lambda: app.links.append(
-        [r["id"] for r in L.load_log_refs(app.data_dir)])
     app._open_file = app.opened.append
     app._mp_probe_closed = lambda store: None
     for name in ("_mp_state", "_on_log_offer", "offer_log", "_on_log_sent",
-                 "show_log_refs"):
+                 "show_log_refs", "_show_log_refs_link", "_log_refs_dialog",
+                 "_choice_dialog", "warn"):
         setattr(app, name, getattr(L.Launcher, name).__get__(app))
 
     def drain(wait=10.0):
@@ -139,6 +130,17 @@ def make_app(data_dir, store_spec=None, choose=("send",)):
         return seen
     app.drain = drain
     return app
+
+
+def dialogs(app):
+    """The boxes the view was asked for, in order, as (title, body, labels):
+    the button labels of a choice, or the references of a reference box."""
+    out = []
+    for kind, args in app.view.prompts:
+        if kind in ("choose", "log_refs"):
+            title, body, rows = args
+            out.append((title, body, [row[0] for row in rows]))
+    return out
 
 
 def galaxy_dir(auth=True):
@@ -195,7 +197,7 @@ try:
     app._mp_state("lost", turn=13, civ="Ada", error="HTTP Error 400")
     seen = app.drain()
     check("offered once for two lost turns", seen.count("__log_offer__"), 1)
-    title, text, buttons = app.dialogs[0]
+    title, text, buttons = dialogs(app)[0]
     check("the box says why it is asking",
           text.startswith(L.LOG_TURN_LEAD.strip()[:30]), True)
     # Fails if the box stopped saying what the copy holds (M2).
@@ -226,19 +228,18 @@ try:
           (posted["why"], posted["galaxy"], posted["civ"], posted["turn"]),
           ("turn_failed", "sandbox", "Ada", 13))
     check("and the player is told it went, with the reference in a row",
-          app.dialogs[-1],
+          dialogs(app)[-1],
           lambda t: t[0] == "Log sent"
           and t[2] == ["20260929T040000Z-abcdefgh-0a0b0c"])
     # Fails if the box stopped offering the player code for a lost reference.
     check("and told the player code finds the log if the reference is lost",
-          app.dialogs[-1][1], lambda b: "If you lose the log reference" in b
+          dialogs(app)[-1][1], lambda b: "If you lose the log reference" in b
           and "player code" in b and "abcd1234" in b)
     check("the reference is kept beside the launcher's other records",
           L.load_log_refs(d), lambda r: [x["id"] for x in r]
           == ["20260929T040000Z-abcdefgh-0a0b0c"]
           and os.path.dirname(L.log_refs_path(d)) == d)
-    check("and the log history link is refreshed", app.links,
-          [["20260929T040000Z-abcdefgh-0a0b0c"]])
+    check("and the log history link is shown", app.view.log_refs_link, True)
 
     print("\n4. nothing leaves without Send")
     d = galaxy_dir()
@@ -250,11 +251,11 @@ try:
     app.drain()
     check("Read it first opens the copy that would be sent", app.opened,
           [os.path.join(d, L.REDACTED_LOG_NAME)])
-    check("and asks again", len(app.dialogs), 2)
+    check("and asks again", len(dialogs(app)), 2)
     # Fails if Not now or closing the box sent anything.
     check("Not now sends nothing", Relay.got, [])
     check("the button's box has no failed-turn lead",
-          app.dialogs[0][1].startswith("Send the launcher's log"), True)
+          dialogs(app)[0][1].startswith("Send the launcher's log"), True)
 
     print("\n5. when it is not offered")
     d = galaxy_dir()
@@ -265,7 +266,7 @@ try:
     app._mp_state("lost", turn=12, civ="Ada")
     app.mp_closed = True
     app.drain()
-    check("not for a galaxy found closed", app.dialogs, [])
+    check("not for a galaxy found closed", dialogs(app), [])
     app = make_app(d, f"{ROOT}/sandbox")
     app._mp_state("capture_failed", turn=12, civ="Ada", error="x")
     app._mp_state("overtaken", turn=12, current=13)
@@ -275,13 +276,14 @@ try:
     app._mp_state("lost", turn=12, civ="Ada")
     app.drain()
     check("after a lost turn with no relay, no box at all",
-          (app.dialogs, app.warned), ([], []))
+          (dialogs(app), app.view.warnings()), ([], []))
     check("and a line in the log", any("no relay" in s for s in app.said),
           True)
     app.offer_log()
     check("the link says there is nowhere to send, and where the copy is",
-          app.warned, lambda w: len(w) == 1 and "not connected to the beta"
-          in w[0] and L.REDACTED_LOG_NAME in w[0])
+          app.view.warnings(), lambda w: len(w) == 1
+          and "not connected to the beta" in w[0]
+          and L.REDACTED_LOG_NAME in w[0])
     # The reset is read from the source: both methods need a whole window.
     import inspect
     src = inspect.getsource(L.Launcher.stop_multiplayer)
@@ -299,8 +301,8 @@ try:
     app.offer_log()
     app.drain()
     check("the player reads the relay's sentence and where the copy is",
-          app.warned, lambda w: len(w) == 1 and "most one may send" in w[0]
-          and L.REDACTED_LOG_NAME in w[0])
+          app.view.warnings(), lambda w: len(w) == 1
+          and "most one may send" in w[0] and L.REDACTED_LOG_NAME in w[0])
     check("and may try again", app.log_sending, False)
     Relay.answer = (200, {"id": "x"})
 
@@ -349,10 +351,45 @@ try:
           (len(root.later), root.later[0][0] > 0), (1, True))
     root.later[0][1]()
     check("after it", btn.text, "Copy")
-    src = inspect.getsource(L.Launcher._log_refs_dialog)
-    check("each row's button copies its own reference and the entry is "
-          "read-only", ("copy_pressed(self.root, b, r)" in src,
-                        'state="readonly"' in src), (True, True))
+
+    # The box's rows, built by the real view on a withdrawn root. The modal
+    # wait is replaced so the box is read back without being shown, and Copy
+    # is recorded rather than run so the machine's clipboard is left alone.
+    import tkinter as tk
+    from tk_view import TkView
+    tk_root = tk.Tk()
+    tk_root.withdraw()
+    view = TkView(tk_root)
+    view.app = types.SimpleNamespace(cfg={"product": "test"})
+    boxes, copied = [], []
+    view._modal = boxes.append
+    real_copy = L.copy_pressed
+    L.copy_pressed = lambda root, button, text: copied.append(
+        (root, button, text))
+    try:
+        view.log_refs("Log sent", "body", [("ref-a", "1 Oct 2026 10:00"),
+                                           ("ref-b", "")])
+        table = [w for w in boxes[0].winfo_children()
+                 if isinstance(w, tk.Frame) and w.grid_slaves()][0]
+
+        def at(row, column):
+            return table.grid_slaves(row=row, column=column)[0]
+        entries = [at(i, 0) for i in range(2)]
+        buttons = [at(i, 2) for i in range(2)]
+        for b in reversed(buttons):
+            b.invoke()
+        check("each row's button copies its own reference",
+              [(r is tk_root, b, t) for r, b, t in copied],
+              [(True, buttons[1], "ref-b"), (True, buttons[0], "ref-a")])
+        check("and the entry holding it is read-only",
+              [(e.get(), str(e.cget("state"))) for e in entries],
+              [("ref-a", "readonly"), ("ref-b", "readonly")])
+        check("with its send time beside it",
+              [at(i, 1).cget("text") for i in range(2)],
+              ["1 Oct 2026 10:00", ""])
+    finally:
+        L.copy_pressed = real_copy
+        tk_root.destroy()
 
     print("\n9. the references kept")
     d = fresh_dir()
@@ -402,9 +439,13 @@ try:
     L.record_log_ref(d, "newer", when=1790000060)
     app = make_app(d)
     app.show_log_refs()
-    title, body, refs = app.dialogs[-1]
+    title, body, refs = dialogs(app)[-1]
     check("log history lists the kept ones, newest first",
           (title, refs), (L.LOG_REFS_TITLE, ["newer", "older"]))
+    check("each with its send time as the box shows it",
+          [when for _ref, when in app.view.prompts[-1][1][2]],
+          [time.strftime("%d %b %Y %H:%M", time.localtime(t))
+           for t in (1790000060, 1790000000)])
     check("and names the player code for one not there",
           ("player code" in body, "abcd1234" in body), (True, True))
     check("the sent box says where the kept ones are",
@@ -424,7 +465,7 @@ try:
     finally:
         L.record_log_ref = real_record
     check("a reference that cannot be kept is still shown to copy",
-          app.dialogs[-1][2], ["unkept"])
+          dialogs(app)[-1][2], ["unkept"])
     check("and the log says why", any("could not keep" in s
                                       for s in app.said), True)
 

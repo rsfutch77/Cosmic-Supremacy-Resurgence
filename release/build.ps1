@@ -655,8 +655,8 @@ if (-not (Test-Path $VenvPy)) {
     Write-Ok "release\.venv-build already exists"
 }
 
-& uv pip install --python $VenvPy --quiet pyinstaller
-if ($LASTEXITCODE -ne 0) { throw 'pyinstaller install failed' }
+& uv pip install --python $VenvPy --quiet pyinstaller pywebview
+if ($LASTEXITCODE -ne 0) { throw 'pyinstaller and pywebview install failed' }
 $piVer = & $VenvPy -c "import PyInstaller; print(PyInstaller.__version__)"
 Write-Ok "PyInstaller $piVer"
 
@@ -672,6 +672,20 @@ if ($LASTEXITCODE -ne 0 -or -not (Test-Path $IconOut)) {
 } else {
     Write-Ok "icon written to $IconOut"
 }
+
+# ── 4a. The window's skin ─────────────────────────────────────────────────────
+# The launcher's window is drawn with the game's own UI art, which belongs to
+# the game and is never committed. It is extracted fresh from the client this
+# build ships, into release\webui\art, and rides inside the launcher with the
+# rest of release\webui. Unlike the icon it is required: without it the window
+# has no frame, no buttons and no title bar.
+Write-Step "Extracting the window's skin"
+$WebUi = Join-Path $ReleaseDir 'webui'
+$ArtDir = Join-Path $WebUi 'art'
+if (Test-Path $ArtDir) { Remove-Item -Recurse -Force $ArtDir }
+& $VenvPy (Join-Path $ReleaseDir 'extract_ui_art.py') $IconSrc $ArtDir
+if ($LASTEXITCODE -ne 0) { throw 'extract_ui_art failed' }
+Write-Ok "skin written to $ArtDir"
 
 # ── 4b. WebView2 Runtime bootstrapper ─────────────────────────────────────────
 # The launcher's window needs Microsoft Edge WebView2 Runtime, which a few
@@ -738,6 +752,9 @@ $piArgs = @(
     '--add-data', "$ServerDir\beta_notice.txt;.",
     # The WebView2 Runtime installer, fetched and checked in step 4b.
     '--add-data', "$WebView2Setup;.",
+    # The window: the page, its script and style, and the skin from step 4a.
+    # web_view.webui_dir() reads it back through bundled().
+    '--add-data', "$WebUi;webui",
     # cs_server is imported inside a function after its environment is set, so
     # name it explicitly rather than relying on the import graph walker.
     '--paths', $ServerDir,

@@ -31,7 +31,9 @@ sys.path.insert(0, os.path.join(REPO, "server"))
 
 import galaxy_directory                                         # noqa: E402
 import launcher as L                                            # noqa: E402
+import tk_view                                                  # noqa: E402
 import turn_store                                               # noqa: E402
+from fake_view import FakeView                                  # noqa: E402
 
 fails = []
 
@@ -464,10 +466,10 @@ check("and its bottom edge is padded, which is the defect this replaces",
 check("by the same amount as its top", L.PAGE_PACK["pady"][0],
       L.PAGE_PACK["pady"][1])
 check("a panel is inset from its own border", L.PANEL_PAD > 0, True)
-build = inspect.getsource(L.Launcher._build)
+build = inspect.getsource(tk_view.TkView.build)
 check("both pages sit in the window on those terms",
       "self.pages.pack(**PAGE_PACK)" in build, True)
-page = inspect.getsource(L.Launcher._build_galaxies)
+page = inspect.getsource(tk_view.TkView._build_galaxies)
 check("and the table is inset from the panel edge equally all round",
       "padx=PANEL_PAD," in page and "pady=PANEL_PAD)" in page, True)
 check("no page invents a padding of its own",
@@ -510,21 +512,30 @@ check("a reclaimed seat forgets that galaxy rather than all of them",
        "clear_joined(self.data_dir)" in start), (True, False))
 
 draw = inspect.getsource(L.Launcher._draw_galaxies)
+# The Launcher decides what the table holds and the view draws it, so the
+# repaint is checked in both: the rows in `_draw_galaxies`, the widgets in
+# TkView.draw_galaxies.
+paint = inspect.getsource(tk_view.TkView.draw_galaxies)
 check("the table's buttons are the ones row_action names",
       "row_action(" in draw and "ACTION_TEXT[action]" in draw, True)
 check("and the cells are the ones the columns name",
       "col.text(g, view)" in draw, True)
+check("and the window is handed the rows rather than drawing its own",
+      "self.view.draw_galaxies(drawn)" in draw, True)
 check("a repaint destroys the cells it made and nothing else",
-      ("for widget in self._cells" in draw, draw.count("destroy()")),
+      ("for widget in self._cell_widgets" in paint, paint.count("destroy()")),
       (True, 1))
 check("and never rebuilds the header Back sits in",
-      any(w in draw for w in ("games_refresh", "show_home",
-                              "_build_galaxies")), False)
+      any(w in draw + paint for w in ("games_refresh", "show_home",
+                                      "_build_galaxies")), False)
 check("Back is built before the table it sits above",
-      page.index("command=self.show_home") < page.index("games_table"), True)
+      page.index("command=app.show_home") < page.index("games_table"), True)
 check("and neither a failed listing nor a loading one takes it off screen",
-      [fn.__name__ for fn in (L.Launcher._show_source, L.Launcher._on_games,
-                              L.Launcher.refresh_games)
+      [fn.__qualname__ for fn in (L.Launcher._show_source,
+                                  L.Launcher._on_games,
+                                  L.Launcher.refresh_games,
+                                  tk_view.TkView.set_games_status,
+                                  tk_view.TkView.draw_galaxies)
        if "pack_forget" in inspect.getsource(fn)], [])
 
 refresh = inspect.getsource(L.Launcher.refresh_games)
@@ -565,19 +576,16 @@ check("a different column starts the right way up",
 check("and every click repaints the table", s.drawn, 4)
 
 
-class Frame:
-    """Enough of a tk frame to say whether it is on screen."""
+class PageView(FakeView):
+    """A view that counts how often it is asked to swap pages."""
 
-    def __init__(self, packed=False):
-        self.packed = packed
-        self.packs = 0
+    def __init__(self, **answers):
+        super().__init__(**answers)
+        self.swaps = 0
 
-    def pack(self, **kw):
-        self.packed = True
-        self.packs += 1
-
-    def pack_forget(self):
-        self.packed = False
+    def show_page(self, name):
+        self.swaps += 1
+        super().show_page(name)
 
 
 class Nav:
@@ -585,50 +593,48 @@ class Nav:
 
     def __init__(self):
         self.page = "home"
-        self.home_page = Frame(packed=True)
-        self.galaxies_page = Frame()
+        self.view = PageView()
 
     def show_page(self, name):
         return L.Launcher.show_page(self, name)
 
     def where(self):
-        return self.page, self.home_page.packed, self.galaxies_page.packed
+        return self.page, self.view.page
 
 
 n = Nav()
 L.Launcher.show_page(n, "galaxies")
 check("opening the page puts the home page away",
-      n.where(), ("galaxies", False, True))
+      n.where(), ("galaxies", "galaxies"))
 L.Launcher.show_home(n)
-check("and Back brings it back", n.where(), ("home", True, False))
-before = n.home_page.packs
+check("and Back brings it back", n.where(), ("home", "home"))
+before = n.view.swaps
 L.Launcher.show_home(n)
 check("asking for the page you are already on changes nothing",
-      (n.where(), n.home_page.packs), (("home", True, False), before))
+      (n.where(), n.view.swaps), (("home", "home"), before))
+swap = inspect.getsource(tk_view.TkView.show_page)
+check("and the window shows one page and puts the other away",
+      ("hidden.pack_forget()" in swap, "showing.pack(" in swap),
+      (True, True))
 
 print("\n14. one galaxy is played at a time, and that is about playing")
 # The limit the page does not carry. Every joined row offers Play; the turn
 # loop is what there is one of, because it starts the game client and the
 # machine runs one of those.
 #
-# The dialog is stood in for rather than shown: tkinter is replaced in this
-# process by a module that answers the question and records what it was asked,
-# so the offer to switch is exercised with no window and no display.
-import types                                                    # noqa: E402
-
+# The dialog is stood in for rather than shown: each launcher below is given a
+# view that answers the question from `answers` and records what it was asked
+# in `asked`, so the offer to switch is exercised with no window and no
+# display.
 asked, answers = [], []
 
 
-def askyesno(title, message):
-    asked.append(message)
-    return answers.pop(0)
+class Asking(FakeView):
+    """A view whose yes-or-no questions all land in one shared list."""
 
-
-fake_tk = types.ModuleType("tkinter")
-fake_mb = types.ModuleType("tkinter.messagebox")
-fake_mb.askyesno = askyesno
-fake_tk.messagebox = fake_mb
-sys.modules["tkinter"], sys.modules["tkinter.messagebox"] = fake_tk, fake_mb
+    def ask_yes_no(self, msg):
+        asked.append(msg)
+        return super().ask_yes_no(msg)
 
 
 class Loop:
@@ -648,6 +654,7 @@ class Player:
     def __init__(self, playing=None, finishes=True, client_gone=False,
                  turn=None):
         self.cfg = {"product": "Cosmic Supremacy"}
+        self.view = Asking(yes_no=answers)
         self.mp_playing = playing
         self.mp_thread = Loop(finishes) if playing is not None else None
         # The loop outlives the game window, so Play means two things here:

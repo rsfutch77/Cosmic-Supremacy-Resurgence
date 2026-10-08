@@ -36,6 +36,7 @@ sys.path.insert(0, os.path.join(REPO, "server"))
 import galaxy_directory                                         # noqa: E402
 import launcher as L                                            # noqa: E402
 import turn_store                                               # noqa: E402
+from fake_view import FakeView                                  # noqa: E402
 
 fails = []
 
@@ -70,39 +71,14 @@ def make_galaxy(root, civs, turn=4):
     return root
 
 
-class Label:
-    """Enough of a tk label for the page's status and hint lines."""
-
-    def __init__(self):
-        self.text, self.fg, self.mapped = "", None, False
-
-    def configure(self, text=None, fg=None, **kw):
-        if text is not None:
-            self.text = text
-        if fg is not None:
-            self.fg = fg
-
-    def cget(self, key):
-        return self.text
-
-    def winfo_ismapped(self):
-        return self.mapped
-
-    def pack(self, **kw):
-        self.mapped = True
-
-    def pack_forget(self):
-        self.mapped = False
-
-
 class Page:
     """The Galaxies page's state, without the window it hangs off."""
 
     def __init__(self, data_dir, games_dir, player):
         self.data_dir, self.games_dir, self.player = data_dir, games_dir, player
+        self.view = FakeView()
         self.own_store = None
         self.games_busy = False
-        self.games_status, self.games_hint = Label(), Label()
         self.games_rows, self.games_extra, self.games_err = None, {}, None
         self.games_recs = {}
         self.msgs = queue.Queue()
@@ -132,12 +108,12 @@ class Page:
         L.Launcher._on_games(self, rows, extra, err)
         return {g.id: g for g in rows}, extra
 
-    def view(self):
+    def galaxy_view(self):
         return L.Launcher._galaxy_view(self)
 
     def hint(self, rows):
-        L.Launcher._show_hint(self, list(rows), self.view())
-        return self.games_hint.text if self.games_hint.mapped else ""
+        L.Launcher._show_hint(self, list(rows), self.galaxy_view())
+        return self.view.hint
 
 
 print("1. a player seated by first-use sees whether they have played (J6)")
@@ -156,7 +132,7 @@ check("the directory says the player is in h3check", rows["h3check"].joined,
 # is what it did before J6: this install has none.
 check("and the refresh asked it whether they have submitted",
       extra.get("submitted"), {"h3check": True})
-view = page.view()
+view = page.galaxy_view()
 you = L.galaxy_column("you")
 check("so the row says the turn is played", you.text(rows["h3check"], view),
       "turn played")
@@ -168,7 +144,7 @@ check("nothing was written into joined.json to get there",
 other = Page(fresh_dir(), root, "DemoPlayer")
 rows, extra = other.refresh()
 check("a seated player who has not played reads their turn as waiting",
-      you.text(rows["h3check"], other.view()), "your turn")
+      you.text(rows["h3check"], other.galaxy_view()), "your turn")
 
 print("\n2. a joined record still names the seat it was asked for under")
 renamed = fresh_dir()
@@ -230,10 +206,10 @@ try:
 finally:
     L.open_player_store = real_open
 check("while the request waits there is no answer", extra.get("answers"), {})
-check("and the row says so", you.text(rows["sandbox"], page.view()),
+check("and the row says so", you.text(rows["sandbox"], page.galaxy_view()),
       "joining next turn")
 check("with no button, because there is nothing to press yet",
-      L.row_action(rows["sandbox"], page.view().recs), None)
+      L.row_action(rows["sandbox"], page.galaxy_view().recs), None)
 # Fails if the refresh asked every row, or asked a galaxy the player is in.
 check("one galaxy was asked about the join, the one with the request",
       [s for s in asked if s == listed["sandbox"].store], [listed["sandbox"]
@@ -252,7 +228,7 @@ check("the refresh reads the refusal", sorted(extra.get("answers") or {}),
       ["sandbox"])
 kept = L.load_joined(data)["sandbox"].get("answer") or {}
 check("and keeps it in the joined record", kept.get("outcome"), "refused")
-view = page.view()
+view = page.galaxy_view()
 # Fails without the refused half: the row said "joining next turn" forever.
 check("the row says the join was refused", you.text(rows["sandbox"], view),
       "join refused")
@@ -279,7 +255,8 @@ finally:
 # is a read per refused player per poll for as long as they leave it.
 check("an answered request is not asked about again",
       listed["sandbox"].store in asked, False)
-check("and the refusal is still shown", you.text(rows["sandbox"], page.view()),
+check("and the refusal is still shown",
+      you.text(rows["sandbox"], page.galaxy_view()),
       "join refused")
 
 print("\n5. asking again, and clearing")
@@ -293,7 +270,8 @@ rows, extra = page.refresh()
 # is still filed under the same key.
 check("a request made again is not answered by the old refusal",
       extra.get("answers"), {})
-check("so the row is waiting again", you.text(rows["sandbox"], page.view()),
+check("so the row is waiting again",
+      you.text(rows["sandbox"], page.galaxy_view()),
       "joining next turn")
 check("with the waiting line rather than the refused one",
       page.hint(rows.values()), lambda t: "refused" not in t)
@@ -306,7 +284,7 @@ check("the second refusal is read when it comes",
       "Another reason.")
 L.clear_joined(data, "sandbox")
 page._draw_galaxies()
-view = page.view()
+view = page.galaxy_view()
 check("Clear takes the row back to View",
       L.row_action(rows["sandbox"], view.recs), L.VIEW)
 check("and the You cell empty", you.text(rows["sandbox"], view), "")

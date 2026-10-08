@@ -16,12 +16,13 @@ REPO = str(pathlib.Path(__file__).resolve().parents[2])
 sys.path.insert(0, os.path.join(REPO, "release"))
 os.chdir(REPO)
 import launcher as L
+from tk_view import TkView
 
 cfg = json.load(open(os.path.join(REPO, "release", "manifest.json"), encoding="utf-8"))
 mode = next(m for m in cfg["modes"] if m["id"] == "testbed")
 
 root = tk.Tk()
-app = L.Launcher(root, cfg)
+app = L.Launcher(TkView(root), cfg)
 
 fails = []
 
@@ -41,7 +42,7 @@ def check(label, got, want):
 
 
 pump(1.5)
-ready = app.status.cget("text")
+ready = app.view.status.cget("text")
 check("idle status", ready, lambda s: "server" in s.lower())
 
 print("\nstart the client EXTERNALLY - the launcher gets no child handle")
@@ -51,24 +52,24 @@ proc = subprocess.Popen([exe, gal], cwd=app.game_root)
 check("launcher has no child handle", app.child is None, True)
 
 pump(6.0)
-check("status names the running mode", app.status.cget("text"),
+check("status names the running mode", app.view.status.cget("text"),
       "Single Player is running")
 
 print("\nclose it - status must return to ready")
 subprocess.run(["taskkill", "/PID", str(proc.pid), "/F"], capture_output=True)
 pump(5.0)
-check("status back to ready", app.status.cget("text"), ready)
+check("status back to ready", app.view.status.cget("text"), ready)
 
 print("\nan ambiguous EXE (Tutorial and Demo share one) must not guess")
 exe2 = os.path.join(app.game_root, "CosmicSupremacy.exe")
 gal2 = os.path.join(app.galaxy_root, "DemoGalaxy_local.csgalaxy")
 p2 = subprocess.Popen([exe2, gal2], cwd=app.game_root)
 pump(6.0)
-check("generic wording, not a wrong guess", app.status.cget("text"),
+check("generic wording, not a wrong guess", app.view.status.cget("text"),
       "A game is running")
 subprocess.run(["taskkill", "/PID", str(p2.pid), "/F"], capture_output=True)
 pump(5.0)
-check("ready again", app.status.cget("text"), ready)
+check("ready again", app.view.status.cget("text"), ready)
 
 subprocess.run(["taskkill", "/IM", "CosmicSupremacy.exe", "/F"], capture_output=True)
 subprocess.run(["taskkill", "/IM", "CosmicSupremacy_TestBed.exe", "/F"],

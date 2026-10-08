@@ -31,6 +31,7 @@ sys.path.insert(0, os.path.join(REPO, "server", "dev_tools"))
 import launcher as L                                            # noqa: E402
 import turn_store                                               # noqa: E402
 import abandonment                                              # noqa: E402
+from fake_view import FakeView                                  # noqa: E402
 
 fails = []
 
@@ -66,46 +67,19 @@ def make_galaxy(root, civs, turn=4, **extra):
     return root
 
 
-class Label:
-    """Enough of a tk label for the page's status and hint lines."""
-
-    def __init__(self):
-        self.text, self.fg, self.mapped = "", None, False
-
-    def configure(self, text=None, fg=None, **kw):
-        if text is not None:
-            self.text = text
-        if fg is not None:
-            self.fg = fg
-
-    def cget(self, key):
-        return self.text
-
-    def winfo_ismapped(self):
-        return self.mapped
-
-    def pack(self, **kw):
-        self.mapped = True
-
-    def pack_forget(self):
-        self.mapped = False
-
-
 class Page:
     """The Galaxies page's state, without the window it hangs off."""
 
     def __init__(self, data_dir, games_dir, player):
         self.data_dir, self.games_dir, self.player = data_dir, games_dir, player
+        self.view = FakeView()
         self.own_store = None
         self.games_busy = False
-        self.games_status, self.games_hint = Label(), Label()
         self.games_rows, self.games_extra, self.games_err = None, {}, None
         self.games_recs = {}
         self.msgs = queue.Queue()
         self.said = []
         self.drawn = 0
-        self.dialogs = []
-        self.answer = None
 
     def say(self, line):
         self.said.append(line)
@@ -115,8 +89,12 @@ class Page:
         self.games_recs = L.load_joined(self.data_dir)
 
     def _choice_dialog(self, title, body, choices):
-        self.dialogs.append((title, body, [c[1] for c in choices]))
-        return self.answer
+        return L.Launcher._choice_dialog(self, title, body, choices)
+
+    def dialogs(self):
+        """Every choice box shown, as (title, body, values) in order."""
+        return [(a[0], a[1], [c[1] for c in a[2]])
+                for kind, a in self.view.prompts if kind == "choose"]
 
     def _submitted_state(self, rows, recs, player):
         return L.Launcher._submitted_state(self, rows, recs, player)
@@ -134,12 +112,12 @@ class Page:
         L.Launcher._on_games(self, rows, extra, err)
         return {g.id: g for g in rows}, extra
 
-    def view(self):
+    def galaxy_view(self):
         return L.Launcher._galaxy_view(self)
 
     def hint(self, rows):
-        L.Launcher._show_hint(self, list(rows), self.view())
-        return self.games_hint.text if self.games_hint.mapped else ""
+        L.Launcher._show_hint(self, list(rows), self.galaxy_view())
+        return self.view.hint
 
 
 asked = []
@@ -174,7 +152,7 @@ turn_store.open_store(os.path.join(root, "strangers")).close()
 data = fresh_dir()
 page = Page(data, root, "Ada")
 rows, extra = counted_refresh(page)
-view = page.view()
+view = page.galaxy_view()
 check("the directory lists the closed galaxy as closed",
       rows["season1"].status, L.CLOSED)
 check("and still as one the player is in", rows["season1"].joined, True)
@@ -214,7 +192,7 @@ finally:
     L.open_player_store = real_open
 # Fails if Review went back to reading the galaxy's state.
 check("pressing Review reads no store", asked, [])
-title, body, _choices = page.dialogs[-1]
+title, body, _choices = page.dialogs()[-1]
 check("the box is titled for an ended galaxy", title, "Galaxy ended")
 check("it says the galaxy has been closed", "has been closed" in body, True)
 # Fails if the row's reason were not used.
@@ -244,7 +222,7 @@ L.save_joined(data, L.joined_record(listed["ended"], "Ada", None, root,
 store.close(reason=REASON_TEXT)
 page = Page(data, root, "Ada")
 rows, extra = counted_refresh(page)
-view = page.view()
+view = page.galaxy_view()
 # Fails if the row still said "joining next turn": a closed galaxy resolves
 # no more requests, so that is a wait with no end.
 check("the row says the galaxy ended rather than joining next turn",
@@ -257,7 +235,7 @@ check("so the refresh did not open its store", ended in asked, False)
 
 print("\n4. the galaxy multiplayer.json names, closed")
 page.own_store = ended
-view = page.view()
+view = page.galaxy_view()
 g = rows["ended"]._replace(joined=False)
 check("offers Review rather than Play",
       L.row_action(g, {}, own=ended), L.ENDED)
@@ -555,7 +533,7 @@ sandbox.update_state({"civs": ["Bob"], turn_store.RECLAIMED_KEY: {
     "Erin": {"turn": 15, "missed": 12, "at": time.time()}}})
 page = Page(data, root, "Ada")
 rows, extra = counted_refresh(page)
-view = page.view()
+view = page.galaxy_view()
 check("the directory no longer has Ada in the galaxy",
       rows["sandbox"].joined, False)
 # Fails without the reclaim read: the granted record read "joining next
@@ -583,12 +561,12 @@ check("and says what to do", "Confirm" in told and "join again" in told, True)
 rows, extra = counted_refresh(page)
 check("a known reclaim is not read again", path in asked, False)
 
-page.answer = "clear"
+page.view.answers["choose"] = "clear"
 L.Launcher.show_reclaimed(page, rows["sandbox"])
 check("Clear forgets the record", "sandbox" in L.load_joined(data), False)
 rows, extra = page.refresh()
 check("which puts View back on the row",
-      L.row_action(rows["sandbox"], page.view().recs), L.VIEW)
+      L.row_action(rows["sandbox"], page.galaxy_view().recs), L.VIEW)
 
 print("\n   and a granted seat still being merged is not called reclaimed")
 root = fresh_dir()
@@ -605,7 +583,8 @@ page = Page(data, root, "Ada")
 rows, extra = page.refresh()
 check("no reclaim is recorded without one in the state",
       extra.get("reclaims"), {})
-check("and the row reads as it did", you.text(rows["merging"], page.view()),
+check("and the row reads as it did",
+      you.text(rows["merging"], page.galaxy_view()),
       "joining next turn")
 
 print("\n   Play on a reclaimed seat still explains itself")
