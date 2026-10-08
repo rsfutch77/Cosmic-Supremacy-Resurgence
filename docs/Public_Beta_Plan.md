@@ -83,7 +83,9 @@ file is relative to the repository root, and a fresh PowerShell opens in
    Artifact Signing, the patched game clients signed with the rest, and the
    injected save kept for the beta, with the resident handler recorded as a
    follow-up in the reconstruction report, section 12. Left: the operator sets up the
-   Artifact Signing account by M3's checklist, and a beta tester on a
+   Artifact Signing account by M3's checklist (the portal steps are under
+   way; "Where the setup stands" in M3 says how to finish), and a beta
+   tester on a
    machine nobody here configured takes a turn. The operator covers what
    players are told about the save path outside this plan.
 3. **J4 is done**, by a live rebind between two machines on 7 October, and
@@ -3236,6 +3238,54 @@ is out of scope here.
   11. Then run the sandboxed referee from a signed build on a machine with
       Smart App Control on, which is the only thing that answers the question
       above. Not done, and not possible before step 5 completes.
+
+  **Where the setup stands, 7 October 2026, and how to finish it.** The
+  operator is doing steps 1 to 6 in the Azure portal. Steps 7 onward run on
+  the referee machine and are for whoever picks this up next, in this order:
+
+  - **Ask the operator for four things first:** the region endpoint (for
+    example `https://wus2.codesigning.azure.net`), the Artifact Signing
+    account name, the certificate profile name, and whether identity
+    validation reads Completed. Signing cannot start before it does, and the
+    profile cannot exist before it does.
+  - **Step 7, the tools.** `winget install -e --id
+    Microsoft.Azure.ArtifactSigningClientTools`, then find
+    `Azure.CodeSigning.Dlib.dll` and `signtool.exe` on disk, since the
+    install location is not documented, and take both from the same
+    architecture folder. `release\build.ps1` also looks in the NuGet cache,
+    and a NuGet `Microsoft.Windows.SDK.BuildTools` signtool, 10.0.28000.2705,
+    has passed its version check here.
+  - **Step 8, the login.** `winget install -e --id Microsoft.AzureCLI`, then
+    the operator runs `az login` themselves as the identity holding the
+    Certificate Profile Signer role. It opens a browser, so an agent asks
+    rather than doing it.
+  - **Step 9, the build.** In the shell that builds, set
+    `CS_SIGN_AS_ENDPOINT`, `CS_SIGN_AS_ACCOUNT` and `CS_SIGN_AS_PROFILE`, and
+    `CS_SIGN_AS_DLIB` and `CS_SIGNTOOL` if step 7 left the files outside
+    where the build looks. Then run `powershell -ExecutionPolicy Bypass -File
+    .\release\build.ps1 -Version <next>`. v0.1.10 is the last build, made
+    unsigned on 7 October and not published, so the first signed build is
+    v0.1.11 unless the operator asks to rebuild v0.1.10 signed. The build
+    refuses to run while a launcher is open, and a launcher may be open for
+    a reason (H12's measured day, another session's investigation), so ask
+    before closing one. Commit nothing another session holds uncommitted in
+    the shared checkout: stage only the files this work changes.
+  - **Step 10, the check.** `Get-AuthenticodeSignature` on
+    `CosmicSupremacyLauncher.exe`, `CosmicSupremacyAI.exe`,
+    `game\CosmicSupremacy_Resurgence.exe` and `game\CosmicSupremacy_Player.exe`
+    should read Valid with the operator's name. `game\CosmicSupremacy.exe`
+    and the TestBed client stay NotSigned by design.
+  - **Step 11, Smart App Control.** Re-stage the sandboxed referee with
+    `server\sandbox\stage.ps1` from the signed build and see whether the
+    client loads past WinError 4551. The logon task `CosmicSupremacy Referee
+    Sandbox` stays disabled while the host task `CosmicSupremacy Referee`
+    referees `h3check`: two referees on one galaxy corrupt a turn. Point the
+    sandbox at a disposable galaxy, or have the operator stop the host task
+    for the test, and take the `referee-task` and `client` leases.
+  - **Then record it here:** the signed build, the signature read-back, and
+    the Smart App Control result, and say whether the release is published,
+    which is the operator's call (`gh release create`, as `build.ps1`
+    prints).
 
   **The unsigned game binaries are not a dead end, but they are the open
   part.** Five executables ship. Two are ours: the launcher and the AI
