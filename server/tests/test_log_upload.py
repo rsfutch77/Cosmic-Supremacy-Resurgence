@@ -19,7 +19,7 @@ emulators and real anonymous sign-ins:
   * one sign-in is held to its daily count, the project to its daily total,
     and the next day opens both again
   * an upload deletes a bounded batch of logs past the keep period
-  * `log_tool.py` lists, filters by support code, prints and prunes
+  * `log_tool.py` lists, filters by player code, prints and prunes
   * **the done-when**: the real `player_turn.follow` plays a turn against the
     relay with a client that ticked past its turn, every upload is refused,
     the launcher's own methods log it and offer to send, the player presses
@@ -225,7 +225,7 @@ def test_route(relay, L, root, fs, ids):
           text)
     check('its size is the text\'s', rec.get('bytes'),
           len(text.encode('utf-8')))
-    check('the id starts with when and the support code',
+    check('the id starts with when and the player code',
           reply.get('id'), lambda i: bool(i) and f'-{uid_a[:8]}-' in i)
     check('it can expire', rec.get('expire_at') is not None, True)
 
@@ -337,7 +337,7 @@ def test_tool(relay, fs, ids):
     check('list answers', code, 0)
     check('one line a log', len(lines), len(stored(fs, relay)))
     check('newest first', lines[0].split()[0] > lines[-1].split()[0], True)
-    check('each names a support code', all(' code ' in x for x in lines),
+    check('each names a player code', all(' code ' in x for x in lines),
           True)
     code, out = tool('list', '--code', uid_c[:8])
     check('--code keeps one sign-in\'s logs',
@@ -346,7 +346,7 @@ def test_tool(relay, fs, ids):
                                           for x in ls))
     code, out = tool('list', '--code', 'zzzzzzzz')
     check('a code with no logs says so', out.strip(),
-          'no logs from support code zzzzzzzz')
+          'no logs from player code zzzzzzzz')
     code, out = tool('show', 'no-such-log')
     check('show of a missing log is refused', (code, 'refused' in out),
           (2, True))
@@ -415,6 +415,11 @@ def launcher_app(L, data_dir, store, spec, galaxy, token):
         app.dialogs.append((title, body))
         return app.choose.pop(0) if app.choose else None
     app._choice_dialog = dialog
+
+    def refs_dialog(title, body, refs):
+        app.dialogs.append((title, body, [r['id'] for r in refs]))
+    app._log_refs_dialog = refs_dialog
+    app._show_log_refs_link = lambda: None
     app._open_file = app.opened.append
     for name in ('_mp_state', '_mp_probe_closed', '_on_log_offer',
                  'offer_log', '_on_log_sent', '_on_mp_closed'):
@@ -527,10 +532,9 @@ def test_done_when(relay, L, root, ids):
         kinds += app.drain(wait=30, until='__log_sent__')
         check('the player pressed Send and it went',
               '__log_sent__' in kinds and not app.warned, True)
-        box = app.dialogs[-1] if app.dialogs else ('', '')
-        ref = re.search(r'^\s+(\S+)$', box[1], re.M)
-        check('they were given a reference', box[0] == 'Log sent' and ref,
-              lambda v: bool(v))
+        box = app.dialogs[-1] if app.dialogs else ('', '', [])
+        ref = box[2][0] if box[0] == 'Log sent' and box[2:] and box[2] else ''
+        check('they were given a log reference', ref, lambda v: bool(v))
     finally:
         (player_turn.serve, player_turn.collect, player_turn.close,
          player_turn.sp, game_cycle.client_pids) = saved
@@ -540,9 +544,9 @@ def test_done_when(relay, L, root, ids):
         referee.delete_everything()
 
     # The operator, later, with only the uploaded copy.
-    log_id = ref.group(1) if ref else ''
+    log_id = ref
     code, out = tool('list', '--code', uid[:8])
-    check('the operator finds it by the player\'s support code',
+    check('the operator finds it by the player\'s player code',
           out, lambda o: log_id in o and 'turn_failed' in o
           and f'{galaxy}/DemoPlayer' in o)
     code, out = tool('show', log_id)

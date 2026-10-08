@@ -1,6 +1,6 @@
 """
 Two things a player reads out loud to somebody else: what holds port 8888 when
-the launcher cannot have it (N6), and the support code the operator matches to
+the launcher cannot have it (N6), and the player code the operator matches to
 a sign-in when a seat has to be moved to a reinstalled copy (J4).
 
     server\\.venv\\Scripts\\python.exe release\\tests\\test_port_and_support.py
@@ -268,26 +268,26 @@ else:
         check("and it is still the listener afterwards",
               (L.port_holder_chain(8888) or [{}])[0].get("pid"), top["pid"])
 
-print("\n5. the support code (J4)")
+print("\n5. the player code (J4)")
 UID = "Zq3kP9sXvT2mLw8aB1cD4eF5gH6i"
 TOKEN = "AMf-vBx-refresh-token-that-signs-in"
-check("is the first eight characters of the uid", L.support_code(UID),
+check("is the first eight characters of the uid", L.player_code(UID),
       "Zq3kP9sX")
-check("and nothing when there is no sign-in", L.support_code(None), None)
-check("or a uid too short to be one", L.support_code("abc"), None)
+check("and nothing when there is no sign-in", L.player_code(None), None)
+check("or a uid too short to be one", L.player_code("abc"), None)
 data = fresh_dir()
 check("an install that never signed in shows the build alone",
-      L.build_line("0.1.6", L.support_code(L.install_uid(data))), "v0.1.6")
+      L.build_line("0.1.6", L.player_code(L.install_uid(data))), "v0.1.6")
 with open(os.path.join(data, "fb_identity.json"), "w", encoding="utf-8") as f:
     json.dump({"uid": UID, "refresh_token": TOKEN}, f)
 import fb_auth                                                  # noqa: E402
 fb_auth._identities.clear()
-shown = L.build_line("0.1.6", L.support_code(L.install_uid(data)))
+shown = L.build_line("0.1.6", L.player_code(L.install_uid(data)))
 check("one that has shows its code beside the build", shown,
-      lambda t: t.startswith("v0.1.6") and "support code Zq3kP9sX" in t)
+      lambda t: t.startswith("v0.1.6") and "player code Zq3kP9sX" in t)
 check("never the whole uid", UID in shown, False)
 check("nor the refresh token", TOKEN[:8] in shown, False)
-told = L.seat_held_text("DemoPlayer", L.support_code(UID))
+told = L.seat_held_text("DemoPlayer", L.player_code(UID))
 check("the held-seat refusal says whose seat and why",
       "DemoPlayer" in told and "another sign-in" in told, True)
 check("and gives the code to send the operator",

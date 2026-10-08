@@ -839,6 +839,12 @@ def _lodge_join(store, doc, uid, body):
     name = name.strip() if isinstance(name, str) else ''
     if not name:
         raise Refused(400, 'a join request names the player asking')
+    # The launcher checks the name at the button, but a request does not have
+    # to come from the launcher, and a name the engine cannot hold fails at the
+    # referee on every tick rather than once here.
+    problem = turn_store.name_problem(name)
+    if problem:
+        raise Refused(400, problem)
 
     turn = _current_turn(doc)
     roster = [str(c) for c in (doc.get('civs') or [])]

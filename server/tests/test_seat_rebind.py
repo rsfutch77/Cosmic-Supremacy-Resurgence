@@ -170,7 +170,7 @@ def run(referee, galaxy, spec, player_a, player_b,
     check('and no refresh token or ID token appears in it',
           token_b in text, False)
 
-    print('by the support code the player reads out')
+    print('by the player code the player reads out')
     code = uid_b[:8]
     got, text = tool(spec, 'candidates', '--code', code)
     # Fails if the filter were dropped, since every other unseated sign-in in
@@ -179,14 +179,14 @@ def run(referee, galaxy, spec, player_a, player_b,
           (got, uid_b in text, text.count('created ')), (0, True, 1))
     got, text = tool(spec, 'candidates', '--code', code.swapcase())
     check('the same code in the other case finds nobody, as a uid is '
-          'case-sensitive', (got, 'no sign-in has support code' in text),
+          'case-sensitive', (got, 'no sign-in has player code' in text),
           (1, True))
     got, text = tool(spec, 'candidates', '--code', uid_a[:8])
     check('a seated sign-in\'s code says which seat it already holds',
           (got, 'already holds DemoPlayer' in text), (1, True))
     got, text = tool(spec, 'candidates', '--code', 'ab-c')
     check('a code that is not the start of a uid is refused',
-          (got, 'is not a support code' in text), (2, True))
+          (got, 'is not a player code' in text), (2, True))
     rows = [{'uid': 'AbcdEfgh' + 'x' * 20, 'created': None,
              'last_active': None, 'elsewhere': []},
             {'uid': 'AbcdEfgz' + 'y' * 20, 'created': None,

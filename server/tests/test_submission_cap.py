@@ -3,8 +3,8 @@ test_submission_cap.py , a submission cannot expand without limit in the store
 ==============================================================================
     server\\.venv\\Scripts\\python.exe server\\tests\\test_submission_cap.py
 
-`referee.MAX_SUBMISSION_BYTES` caps a submission at 8 MB decoded and
-`server/beta_storage.rules` caps the wire form at 2 MB, and N2 recorded that
+`referee.MAX_SUBMISSION_BYTES` caps a submission at 8 MB decoded and the
+relay caps the wire form at 1 MiB of base64 (`relay.MAX_BYTES`), and N2 recorded that
 neither of them helps: the store decompresses a submission before the referee
 is handed it, so a payload small enough to pass the wire cap inflates inside
 the store while nothing is measuring it. The bomb built here is 87 KB on the

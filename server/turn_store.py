@@ -122,7 +122,8 @@ WRITE_RETRY_SECONDS = 10.0
 STATE_SECONDS = 1.5
 
 # The largest blob a submission is allowed to decompress to. The wire form is
-# capped at 2 MB by `beta_storage.rules` and the decoded form at 8 MB by
+# capped at 1 MiB of base64 by the relay (`relay.MAX_BYTES`) and the decoded
+# form at 8 MB by
 # `referee.MAX_SUBMISSION_BYTES`, and neither of those reaches this: the store
 # decompresses a submission before the referee is given it, so a 30 KB payload
 # that inflates to a gigabyte is held in this process before anything has had a
@@ -159,6 +160,33 @@ RECLAIMED_KEY = 'reclaimed'
 # `JOIN_DIR`: the two have to agree and neither file imports the other.
 JOINED_KEY = 'joined'
 MIN_BUILD_KEY = 'min_build'
+
+# What a player name may be. The engine's civilisation name is an ASCII buffer
+# of 15 characters (`inject_civ` encodes it as ASCII), and a folder store keeps
+# a player's orders in a file named for the civ, so Windows' forbidden file name
+# characters and a trailing full stop are refused as well. The launcher checks
+# the same rules at the button (`release/launcher.py`, `validate_player_name`)
+# with wording for the player; this is the copy the relay and the referee hold,
+# because a request does not have to come from the launcher.
+NAME_LIMIT = 15
+NAME_FORBIDDEN = '\\/:*?"<>|'
+
+
+def name_problem(name) -> str:
+    """Why `name` cannot be a player name, or ''."""
+    if not isinstance(name, str) or not name.strip():
+        return 'a player name is required'
+    if name != name.strip():
+        return 'a player name has no leading or trailing spaces'
+    if len(name) > NAME_LIMIT:
+        return f'a player name is at most {NAME_LIMIT} characters'
+    if any(not (' ' <= c <= '~') for c in name):
+        return 'a player name is printable ASCII only'
+    if any(c in NAME_FORBIDDEN for c in name):
+        return f'a player name cannot contain any of {NAME_FORBIDDEN}'
+    if name.endswith('.'):
+        return 'a player name cannot end in a full stop'
+    return ''
 
 
 class GalaxyClosed(RuntimeError):
@@ -833,7 +861,27 @@ def _same_host(a: str, b: str) -> bool:
     return (pa.scheme, pa.netloc) == (pb.scheme, pb.netloc)
 
 
-def _drop_auth_on_redirect():
+# Hosts other than the store's own that a ticket or a redirect may send this
+# store to: Cloud Storage, where the relay's signed URLs point. Anything else,
+# or any of these over plain http, is refused, so a relay that has been
+# tampered with cannot have a launcher post a player's orders to another host
+# or read a turn from one.
+TRUSTED_BLOB_HOSTS = ('storage.googleapis.com',)
+
+
+class UntrustedURL(Exception):
+    """A ticket or redirect named a host this store does not talk to."""
+
+
+def _allowed_url(url: str, base: str) -> bool:
+    """Whether this store, based at `base`, may send a request to `url`."""
+    if _same_host(url, base):
+        return True
+    p = urllib.parse.urlparse(url)
+    return p.scheme == 'https' and (p.hostname or '') in TRUSTED_BLOB_HOSTS
+
+
+def _drop_auth_on_redirect(base: str = None):
     """A redirect handler that does not carry the caller's token off-site.
 
     The relay answers a blob route with a redirect to a signed Cloud Storage
@@ -846,11 +894,16 @@ def _drop_auth_on_redirect():
     So the header is dropped whenever the redirect leaves the host it was minted
     for. That is also the right thing on its own terms: a Firebase ID token is a
     bearer credential for the relay, and no other host should see one.
+
+    With `base`, a redirect to a host `_allowed_url` refuses raises
+    `UntrustedURL` instead of being followed.
     """
     import urllib.request
 
     class Handler(urllib.request.HTTPRedirectHandler):
         def redirect_request(self, req, fp, code, msg, headers, newurl):
+            if base is not None and not _allowed_url(newurl, base):
+                raise UntrustedURL(f'refused a redirect to {newurl}')
             new = super().redirect_request(req, fp, code, msg, headers, newurl)
             if new is not None and not _same_host(req.full_url, newurl):
                 new.headers = {k: v for k, v in new.headers.items()
@@ -908,8 +961,14 @@ class HttpTurnStore:
 
     # -- plumbing --
     def _url(self, path: str) -> str:
-        """A ticket may name an absolute URL or a path back on this service."""
+        """A ticket may name an absolute URL or a path back on this service.
+
+        An absolute URL must be this service or a trusted blob host over https
+        (`_allowed_url`); anything else raises `UntrustedURL`.
+        """
         if path.startswith('http://') or path.startswith('https://'):
+            if not _allowed_url(path, self.base):
+                raise UntrustedURL(f'refused a ticket for {path}')
             return path
         return self.base + path
 
@@ -929,7 +988,7 @@ class HttpTurnStore:
         import urllib.request
         if self._opener is None:
             self._opener = urllib.request.build_opener(
-                _drop_auth_on_redirect())
+                _drop_auth_on_redirect(self.base))
         return self._opener.open(req, timeout=self.timeout)
 
     def _get(self, path, want_json=True, headers=None, answer=None):

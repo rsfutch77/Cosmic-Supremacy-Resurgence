@@ -1104,28 +1104,28 @@ def relay_refusal(exc):
     return code, said.strip()
 
 
-# ── The support code ──────────────────────────────────────────────────────────
+# ── The player code ──────────────────────────────────────────────────────────
 # A player who reinstalls, moves the game, or runs a second copy signs in as a
 # new anonymous user, and the seat they held is refused to it (J4). The
 # operator rebinds the seat with server\dev_tools\seat_tool.py, whose
-# `candidates` lists every unseated sign-in by uid. The support code is the
+# `candidates` lists every unseated sign-in by uid. The player code is the
 # first characters of this install's uid, which is enough for the operator to
 # pick the right line and is not a credential: what signs in is the refresh
 # token in fb_identity.json, which is never shown. The uid itself stays out of
 # sight, as H4 has it.
-SUPPORT_CODE_LENGTH = 8
+PLAYER_CODE_LENGTH = 8
 
 
-def support_code(uid) -> "str | None":
+def player_code(uid) -> "str | None":
     """The short code a player reads out to the operator, or None."""
-    if not isinstance(uid, str) or len(uid) < SUPPORT_CODE_LENGTH:
+    if not isinstance(uid, str) or len(uid) < PLAYER_CODE_LENGTH:
         return None
-    return uid[:SUPPORT_CODE_LENGTH]
+    return uid[:PLAYER_CODE_LENGTH]
 
 
 def build_line(build: str, code) -> str:
-    """The line under the title: the build, and the support code if any."""
-    return f"v{build}" + (f"   \u00b7   support code {code}" if code else "")
+    """The line under the title: the build, and the player code if any."""
+    return f"v{build}" + (f"   \u00b7   player code {code}" if code else "")
 
 
 def seat_held_text(civ: str, code) -> str:
@@ -1135,7 +1135,7 @@ def seat_held_text(civ: str, code) -> str:
             "game, or from this one before it was reinstalled or moved.")
     if code:
         return (said + "\n\nIf the seat is yours, send the galaxy's operator "
-                f"this support code and they can move it to this copy:\n\n"
+                f"this player code and they can move it to this copy:\n\n"
                 f"    {code}\n\nThe same code is shown under the launcher's "
                 "title.")
     return (said + "\n\nIf the seat is yours, ask the galaxy's operator to "
@@ -2836,22 +2836,24 @@ def log_sent_text(reply, code=None) -> str:
     """What a player reads once their log is sent.
 
     The reference itself is shown in a copyable row under this text rather
-    than in it. `code` is this install's support code, which the operator
+    than in it. `code` is this install's player code, which the operator
     finds a player's logs by (`log_tool list --code`), so a lost reference
     costs the player nothing.
     """
     ref = (reply or {}).get("id")
     said = "Your log was sent to the galaxy's operator."
     if ref:
-        said += ("\n\nIf you write to them about it, quote this reference. "
+        said += ("\n\nIf you write to them about it, quote this log reference. "
                  f"The last {LOG_REFS_KEEP} are kept under the log history "
                  "link, beside send log.")
     if code:
-        said += ("\n\nIf you lose the reference, send them your support code "
+        said += ("\n\nIf you lose the log reference, send them your "
+                 "player code "
                  f"instead and they can find your logs by it:\n\n    {code}"
                  "\n\nThe same code is shown under the launcher's title.")
     else:
-        said += ("\n\nIf you lose the reference, send them the support code "
+        said += ("\n\nIf you lose the log reference, send them the "
+                 "player code "
                  "shown under the launcher's title instead and they can find "
                  "your logs by it.")
     return said
@@ -2926,12 +2928,12 @@ def log_ref_when(sent: str) -> str:
 
 def log_refs_text(code=None) -> str:
     """The body of the box the log history link opens."""
-    said = (f"The references of the last {LOG_REFS_KEEP} logs this launcher "
-            "sent, newest first. Quote one when you write to the galaxy's "
+    said = (f"The log references of the last {LOG_REFS_KEEP} logs this "
+            "launcher sent, newest first. Quote one when you write to the galaxy's "
             "operator about it.")
     if code:
         said += (f"\n\nIf the one you want is not here, send them your "
-                 f"support code instead and they can find your logs by it:"
+                 f"player code instead and they can find your logs by it:"
                  f"\n\n    {code}")
     return said
 
@@ -3236,9 +3238,9 @@ class Launcher:
         # -Version switch carries a name the manifest does not hold, and this
         # line is where a player reads back what a galaxy is about to refuse.
         #
-        # The support code goes on the same line once this install has a
+        # The player code goes on the same line once this install has a
         # Firebase sign-in, because this is the line a player is already
-        # asked to read back: see `support_code`.
+        # asked to read back: see `player_code`.
         self.build_label = tk.Label(self.root, text=f"v{build_id()}",
                                     bg=BG, fg=DIM, font=("Segoe UI", 10))
         self.build_label.pack(anchor="w", **pad)
@@ -3559,17 +3561,17 @@ class Launcher:
         self.name_label.configure(text=self.player or "nobody yet",
                                   fg=TEXT if self.player else FAINT)
         self.name_btn.configure(text="change" if self.player else "set name")
-        self._show_support_code()
+        self._show_player_code()
 
-    def _show_support_code(self):
-        """Put this install's support code beside the build, once it has one.
+    def _show_player_code(self):
+        """Put this install's player code beside the build, once it has one.
 
         Read from fb_identity.json and never minted here: an install that has
         only played folder galaxies has no sign-in and shows no code. Asked
         again after every listing and every Play, which is when a first
         sign-in happens.
         """
-        text = build_line(build_id(), support_code(install_uid(self.data_dir)))
+        text = build_line(build_id(), player_code(install_uid(self.data_dir)))
         if self.build_label.cget("text") != text:
             self.build_label.configure(text=text)
 
@@ -4760,7 +4762,7 @@ class Launcher:
         if joined and joined.get("name") and joined["name"] != civ:
             self.say(f"multiplayer: this galaxy was joined as "
                      f"{joined['name']!r}")
-        self._show_support_code()
+        self._show_player_code()
         self.say(f"multiplayer: following {cfg['store']} as {civ}")
         self.set_status(f"Multiplayer , {civ}", OK)
         self._show_controls(True)
@@ -4798,7 +4800,7 @@ class Launcher:
                         and not getattr(self, "mp_seat_refused", False)):
                     self.mp_seat_refused = True
                     self.msgs.put(("__mp_refused__", seat_held_text(
-                        civ, support_code(install_uid(self.data_dir)))))
+                        civ, player_code(install_uid(self.data_dir)))))
 
         self.mp_thread = threading.Thread(target=work, daemon=True,
                                           name="multiplayer")
@@ -4830,7 +4832,7 @@ class Launcher:
                 and not getattr(self, "mp_seat_refused", False)):
             self.mp_seat_refused = True
             self.msgs.put(("__mp_refused__", seat_held_text(
-                civ, support_code(install_uid(self.data_dir)))))
+                civ, player_code(install_uid(self.data_dir)))))
         if kind == "send_failed":
             return
 
@@ -5119,7 +5121,7 @@ class Launcher:
                     self.say(f"log: could not keep the reference ({exc})")
                     shown = [{"id": ref.strip(), "sent": ""}]
                 self._show_log_refs_link()
-            code = support_code(install_uid(self.data_dir))
+            code = player_code(install_uid(self.data_dir))
             self._log_refs_dialog("Log sent", log_sent_text(reply, code),
                                   shown)
         else:
@@ -5137,7 +5139,7 @@ class Launcher:
     def show_log_refs(self):
         """The box listing the references kept, each with a Copy button."""
         refs = load_log_refs(self.data_dir)
-        code = support_code(install_uid(self.data_dir))
+        code = player_code(install_uid(self.data_dir))
         self._log_refs_dialog(LOG_REFS_TITLE, log_refs_text(code), refs)
 
     def _log_refs_dialog(self, title: str, body: str, refs):
@@ -5823,7 +5825,7 @@ class Launcher:
                     self._on_games(rows, extra, err)
                     # A listing of the beta's directory is often this
                     # install's first sign-in, so its code can appear now.
-                    self._show_support_code()
+                    self._show_player_code()
                 elif isinstance(msg, tuple) and msg and msg[0] == "__mp_closed__":
                     _tag, store, problem = msg
                     self._on_mp_closed(store, problem)

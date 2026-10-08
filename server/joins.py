@@ -243,6 +243,13 @@ def refusal(name: str, roster, blob) -> str:
         return (f'The name {name!r} is longer than the {NAME_LIMIT} characters '
                 f'this game allows, so no seat was made. Join again with a '
                 f'shorter name.')
+    problem = turn_store.name_problem(name)
+    if problem:
+        # A request filed before the relay checked names, or written to a
+        # folder store by hand. Refused here so it is answered once rather than
+        # failing inside the injection on every tick.
+        return (f'The name {name!r} cannot be used: {problem}. No seat was '
+                f'made. Join again with another name.')
     if any(c == name for c in roster):
         return (f'A player called {name!r} is already in this galaxy, so no '
                 f'seat was made for you. Join again with a different name.')

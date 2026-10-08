@@ -18,6 +18,16 @@ every galaxy in the project.
 and is on the Blaze plan, where a loop can spend real money; a ceiling on
 instances is the cheapest thing standing between a misbehaving launcher and a
 bill, and H0 already asked for the budget alert that is the other one.
+
+`service_account` is the relay's own account, `cs-relay`, rather than the
+project's default compute account, which holds Editor on everything. It holds:
+
+    roles/datastore.user                    the galaxy documents
+    roles/serviceusage.serviceUsageConsumer the store bills this project
+    roles/storage.objectAdmin               on the galaxy bucket only
+    roles/storage.legacyBucketReader        on the galaxy bucket only, for
+                                            `firebase_store.default_bucket`
+    roles/iam.serviceAccountTokenCreator    on itself only, to sign URLs
 """
 from firebase_functions import https_fn, options
 
@@ -29,6 +39,7 @@ import relay as core
     memory=options.MemoryOption.MB_512,
     timeout_sec=60,
     max_instances=10,
+    service_account='cs-relay@cs-resurgence.iam.gserviceaccount.com',
 )
 def relay(req: https_fn.Request) -> https_fn.Response:
     status, headers, body = core.handle(

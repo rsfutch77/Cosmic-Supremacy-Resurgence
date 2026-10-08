@@ -30,7 +30,7 @@ been refused on a fresh install is the unseated sign-in created and refreshed
 a few minutes ago. Sign-ins seated in another galaxy are marked, because a
 player who plays two galaxies is not the stranger being looked for.
 
-The launcher also shows a support code, the first eight characters of its uid,
+The launcher also shows a player code, the first eight characters of its uid,
 under its title and in the refusal a player meets when their seat is held by
 another sign-in. `candidates --code` narrows the listing to the uids starting
 with it, case-sensitive as a uid is, and says so when none match or several
@@ -341,14 +341,14 @@ def cmd_list(store, out) -> int:
 
 
 def by_code(rows: list, code: str) -> list:
-    """The rows whose uid starts with a support code. Case-sensitive, as a
+    """The rows whose uid starts with a player code. Case-sensitive, as a
     uid is."""
     return [r for r in rows if r['uid'].startswith(code)]
 
 
 def cmd_candidates(store, out, limit: int, code: str = None) -> int:
     if code is not None and not UID_RE.match(code):
-        raise SeatRefused(f'{code!r} is not a support code; a code is the '
+        raise SeatRefused(f'{code!r} is not a player code; a code is the '
                           f'first characters of a uid, letters and digits')
     rows = candidates(store)
     if code is not None:
@@ -371,9 +371,9 @@ def _row_line(r) -> str:
 
 
 def _by_code(store, out, rows, code) -> int:
-    """`candidates --code`: the sign-in a player's support code names.
+    """`candidates --code`: the sign-in a player's player code names.
 
-    The launcher shows the first characters of its uid as a support code, so a
+    The launcher shows the first characters of its uid as a player code, so a
     player can read it out and the operator need not pick the stranger out by
     timing. Exactly one match is the answer. None and several are each said
     plainly, because a rebind to the wrong one of two locks a player out.
@@ -381,7 +381,7 @@ def _by_code(store, out, rows, code) -> int:
     """
     found = by_code(rows, code)
     if len(found) == 1:
-        print(f'the sign-in with support code {code}, holding no seat in '
+        print(f'the sign-in with player code {code}, holding no seat in '
               f'{store.galaxy}:', file=out)
         print(_row_line(found[0]), file=out)
         return 0
@@ -389,12 +389,12 @@ def _by_code(store, out, rows, code) -> int:
         held = [(u, c) for u, c in seats(galaxy_doc(store)).items()
                 if u.startswith(code)]
         if held:
-            print(f'no unseated sign-in has support code {code}; the '
+            print(f'no unseated sign-in has player code {code}; the '
                   f'sign-in with that code already holds '
                   f'{", ".join(c for _u, c in held)} in {store.galaxy}',
                   file=out)
         else:
-            print(f'no sign-in has support code {code}. Codes are '
+            print(f'no sign-in has player code {code}. Codes are '
                   f'case-sensitive; check it with the player, and that their '
                   f'launcher has been started since it was shown.', file=out)
         return 1
@@ -439,7 +439,7 @@ def main(argv=None, out=None) -> int:
                        help='sign-ins with no seat here, newest activity first')
     c.add_argument('--limit', type=int, default=20)
     c.add_argument('--code', help='only the sign-in whose uid starts with '
-                                  'this support code, as the launcher shows '
+                                  'this player code, as the launcher shows '
                                   'it')
     for name, what in (('rebind', 'move a held seat to another uid'),
                        ('bind', 'seat a civ nobody holds on a uid')):

@@ -229,10 +229,10 @@ try:
           app.dialogs[-1],
           lambda t: t[0] == "Log sent"
           and t[2] == ["20260929T040000Z-abcdefgh-0a0b0c"])
-    # Fails if the box stopped offering the support code for a lost reference.
-    check("and told the support code finds the log if the reference is lost",
-          app.dialogs[-1][1], lambda b: "If you lose the reference" in b
-          and "support code" in b and "abcd1234" in b)
+    # Fails if the box stopped offering the player code for a lost reference.
+    check("and told the player code finds the log if the reference is lost",
+          app.dialogs[-1][1], lambda b: "If you lose the log reference" in b
+          and "player code" in b and "abcd1234" in b)
     check("the reference is kept beside the launcher's other records",
           L.load_log_refs(d), lambda r: [x["id"] for x in r]
           == ["20260929T040000Z-abcdefgh-0a0b0c"]
@@ -405,14 +405,14 @@ try:
     title, body, refs = app.dialogs[-1]
     check("log history lists the kept ones, newest first",
           (title, refs), (L.LOG_REFS_TITLE, ["newer", "older"]))
-    check("and names the support code for one not there",
-          ("support code" in body, "abcd1234" in body), (True, True))
+    check("and names the player code for one not there",
+          ("player code" in body, "abcd1234" in body), (True, True))
     check("the sent box says where the kept ones are",
           L.log_sent_text({"id": "r"}, "abcd1234"),
           lambda t: "kept under the log history link" in t)
     check("with no code yet it points at the launcher's title",
           L.log_sent_text({"id": "r"}, None),
-          lambda t: "support code shown under the launcher's title" in t)
+          lambda t: "player code shown under the launcher's title" in t)
     real_record = L.record_log_ref
 
     def cannot(*a, **k):
@@ -439,7 +439,7 @@ try:
     # is how a refused player saw the status flicker and nothing else.
     check("a refused upload mid-turn puts up the held-seat box",
           [m[0] for m in seen], ["__mp_refused__"])
-    check("which names the seat and this copy's support code",
+    check("which names the seat and this copy's player code",
           seen[0][1] if seen else "",
           lambda t: "'QCplayer1'" in t and "abcd1234" in t)
     check("and leaves the turn readout alone", app.mp_capture, None)

@@ -69,16 +69,14 @@ file is relative to the repository root, and a fresh PowerShell opens in
 
 **Open, and what each needs:**
 
-1. **H12, a whole launcher day.** H13 is done. H12 has fifteen hours of one
-   launcher on 6 October: 2,456 requests a day against 2,390 estimated, and
-   458 vCPU-seconds, so CPU is as near to binding as requests. Left is one
-   whole UTC day with a launcher open on a joined galaxy, following it with
-   Play. The referee machine's launcher has been closed and reopened
-   several times on 7 October, so the first whole UTC day it stays open
-   is the one to read. Decided 7 October: the referee's 5-second poll, about 16,800
-   Firestore reads a day per galaxy, stays for the beta, with the change
-   recorded in the reconstruction report, section 14; the billing account's
-   other projects are taken to use no Cloud Run.
+1. **H12 and H13 are done.** H12 closed on fifteen measured hours of one
+   launcher on 6 October, three whole turns doubled to a day: 2,456 requests
+   against 2,390 estimated, and 458 vCPU-seconds, so CPU is as near to
+   binding as requests and is watched from the first few dozen launchers.
+   The referee's 5-second poll, about 16,800 Firestore reads a day per
+   galaxy, stays for the beta, with the change recorded in the
+   reconstruction report, section 14; the billing account's other projects
+   are taken to use no Cloud Run.
 2. **M3, the signing account and a tester.** Decided 7 October: Azure
    Artifact Signing, the patched game clients signed with the rest, and the
    injected save kept for the beta, with the resident handler recorded as a
@@ -776,7 +774,7 @@ is out of scope here.
   carries its own copy of `turn_store.py`, so builds already in players'
   hands keep making five.
 
-- [ ] **H12. A poll budget for hundreds of always-open launchers.** The target
+- [x] **H12. A poll budget for hundreds of always-open launchers.** The target
   is hundreds of players who leave the launcher open all month. Everything
   below is at 4-hour turns, one launcher following one galaxy, and the worst
   case H9 named: the Galaxies page left on screen with one joined galaxy.
@@ -1077,6 +1075,21 @@ is out of scope here.
   **Done when:** the relay is redeployed and a measured day of the live
   function's request count, Firestore reads and CPU seconds is written here
   against the estimates above.
+
+  **Done, 7 October 2026, on the fifteen hours rather than a whole UTC
+  day, by the operator's decision.** The relay is redeployed (`relay-00007-wik`,
+  29 September), and the three whole turns from 09:10:43 to 21:12:33 UTC on
+  6 October repeat to within a few requests, so doubling them is a day of
+  this launcher: 2,456 requests against 2,390 estimated, about 2,540 relay
+  Firestore reads against 3,070, and 458 vCPU-seconds, all above. A whole day
+  could not be compressed into less than a day without changing what is
+  measured: the held copy is timed against real deadlines, so a compressed
+  day reads too few documents, and billed instance time depends on how far
+  apart requests arrive. A further day of one launcher would re-measure the
+  same turns. What one launcher cannot answer, how warm instances and CPU
+  scale with many launchers, is the revisit this item already names for the
+  low thousands of players, and the first few dozen launchers are where CPU
+  is to be watched.
 
 - [x] **H13. Submissions at hundreds of players.** H12 found Storage Class A
   capping the beta at about 27 players, and every one of those operations was
@@ -1879,6 +1892,15 @@ is out of scope here.
   prefix of the uid its Neighbor seat is bound to. A live rebind still waits
   for a real case.
 
+  **Renamed to player code, 7 October 2026.** Beside the build, "support
+  code" read as part of the version, and the Log sent box offered it next to
+  the upload's own reference with nothing to tell the two apart. The launcher,
+  `seat_tool.py`, `log_tool.py` and their tests now say "player code" for the
+  uid prefix and "log reference" for the id the relay gives each upload. The
+  entries above keep the old name where they record what was on screen.
+
+  - [ ] Check the title line and both log boxes in the next packaged build.
+
   **The refusal box was never reached during a turn, found 7 October 2026.**
   On the second machine a fresh v0.1.9 install named `QCplayer1` opened the
   game, and both of its Send Turn presses were refused by the relay (403 at
@@ -2591,11 +2613,11 @@ is out of scope here.
   holds, never through the relay:
 
       python server/dev_tools/log_tool.py firebase://cs-resurgence list
-      python server/dev_tools/log_tool.py firebase://cs-resurgence list --code <support code>
+      python server/dev_tools/log_tool.py firebase://cs-resurgence list --code <player code>
       python server/dev_tools/log_tool.py firebase://cs-resurgence show <id>
       python server/dev_tools/log_tool.py firebase://cs-resurgence prune --dry-run
 
-  `list` shows each log's id, arrival time, the sender's support code (the
+  `list` shows each log's id, arrival time, the sender's player code (the
   first eight characters of the uid, which the launcher shows under its
   title), reason, build, galaxy, civ, turn and size, newest first.
 

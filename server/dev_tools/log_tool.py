@@ -18,7 +18,7 @@ operator's administrator credentials, the ones the referee holds, as
 code of the sign-in that sent it (the first eight characters of its uid, which
 is what the launcher shows a player under its title), why it was sent, the
 build, the galaxy, civ and turn it names, and its size. `--code` keeps only one
-support code's logs, which is how a player's report is matched to their log.
+player code's logs, which is how a player's report is matched to their log.
 `show` prints one log's text whole.
 
 `prune` deletes logs older than the relay's `LOG_KEEP_DAYS` and daily counts
@@ -159,7 +159,7 @@ def main(argv=None, out=None) -> int:
     ls = sub.add_parser('list', help='the logs players have sent, newest first')
     ls.add_argument('--limit', type=int, default=20)
     ls.add_argument('--code', help='only the logs from the sign-in whose uid '
-                                   'starts with this support code')
+                                   'starts with this player code')
     sh = sub.add_parser('show', help='print one log whole')
     sh.add_argument('id')
     sh.add_argument('--out', help='write the text to this file instead')
@@ -174,7 +174,7 @@ def main(argv=None, out=None) -> int:
             for log_id, rec in rows:
                 print(summary_line(log_id, rec), file=out)
             if not rows:
-                print('no logs' + (f' from support code {args.code}'
+                print('no logs' + (f' from player code {args.code}'
                                    if args.code else ''), file=out)
             return 0
         if args.cmd == 'show':
