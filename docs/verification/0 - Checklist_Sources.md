@@ -154,9 +154,6 @@ readiness page.
 specification v1.0.36 attack list for the launcher's self-update, SSDF
 spreadsheet for build and release, SLSA v1.2 build track L1 to L2.
 
-**Reference only:** Microsoft Store Policies v7.20 (binding only if listed in
-the Store), Reproducible Builds, Steamworks release process.
-
 ## 6. Privacy and legal
 
 General guidance, not legal advice. Every item here is checked against the
@@ -197,15 +194,3 @@ checklist.
 |---|---|---|
 | OWASP GSF 1.3.5 | Send clients only the data they need | Every player holds the whole galaxy; the engine's own visibility rules hide rivals from an unmodified client |
 | Firebase Security Checklist, Anonymous authentication | Anonymous auth is for warm onboarding; non-public data should require a non-anonymous provider | Identity is an anonymous uid plus a username |
-
-## Gaps no source covers
-
-These need items we write ourselves, in the same parent and sub-item format.
-
-- A home PC as the authoritative referee: power and ISP loss, the lock and lease
-  rules, and the move to a cloud VM.
-- Asynchronous seat lifecycle: joining a live galaxy mid-game, idle and
-  abandoned empires, recovering a seat after a reinstall (J4).
-- Orders as a binary blob loaded into a closed-source engine: the Deserialization
-  cheat sheet is the nearest source and assumes code we control.
-- Reviving an abandoned game's IP: no checklist exists.

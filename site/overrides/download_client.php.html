@@ -56,14 +56,14 @@ installer: unzip the archive wherever you like and run
 <table class='coloredtable' cellspacing='4' style='padding: 0 8px 0 8px; margin: 0 0 4px 20px;'>
     <tr>
         <td width='54'>
-            <a href='https://github.com/rsfutch77/Cosmic-Supremacy-Resurgence/releases/download/v0.1.0/CosmicSupremacy-Resurgence-v0.1.0.zip'><img src='/pageimages/download.png' /></a>
+            <a href='https://github.com/rsfutch77/Cosmic-Supremacy-Resurgence/releases/download/v0.1.1/CosmicSupremacy-Resurgence-v0.1.1.zip'><img src='/pageimages/download.png' /></a>
         </td>
         <td>
             <table>
-	            <tr><td width='100'><b>File Name:</b></td><td><a href='https://github.com/rsfutch77/Cosmic-Supremacy-Resurgence/releases/download/v0.1.0/CosmicSupremacy-Resurgence-v0.1.0.zip'>CosmicSupremacy-Resurgence-v0.1.0.zip</a></td></tr>
+	            <tr><td width='100'><b>File Name:</b></td><td><a href='https://github.com/rsfutch77/Cosmic-Supremacy-Resurgence/releases/download/v0.1.1/CosmicSupremacy-Resurgence-v0.1.1.zip'>CosmicSupremacy-Resurgence-v0.1.1.zip</a></td></tr>
 	            <tr><td width='100'><b>Download Size:</b></td><td>30.1 MB</td></tr>
-	            <tr><td width='100'><b>Date Published:</b></td><td>13.09.2026</td></tr>
-	            <tr><td width='100'><b>SHA-256:</b></td><td style='font-family: monospace; font-size: 10px;'>83ece812f1601a5b417b789aecf8752b92d270a843c400872d2b83ada16f6f97</td></tr>
+	            <tr><td width='100'><b>Date Published:</b></td><td>18 September 2026</td></tr>
+	            <tr><td width='100'><b>SHA-256:</b></td><td style='font-family: monospace; font-size: 10px;'>1e77d478dacfbb7a3ce6dbca2272a5d90a1a33eac2cad5cfe18b0eba7082947f</td></tr>
             </table>
         </td>
     </tr>
@@ -71,13 +71,17 @@ installer: unzip the archive wherever you like and run
 </p>
 <p>
 The download is served from the project's
-<a href='https://github.com/rsfutch77/Cosmic-Supremacy-Resurgence/releases/tag/v0.1.0' target='_blank'>GitHub release page</a>, which also carries
+<a href='https://github.com/rsfutch77/Cosmic-Supremacy-Resurgence/releases/tag/v0.1.1' target='_blank'>GitHub release page</a>, which also carries
 the release notes and every earlier build.
 </p>
 <p>
 Windows will most likely warn you about an unrecognised publisher, because the
-build is not code-signed. The SHA-256 above lets you check that the file you
-downloaded is the one that was published.
+build is not code-signed. On Windows 11, Smart App Control can block an
+unsigned program outright rather than warn; if it does, the game cannot run on
+that PC until the build is signed. The SHA-256 above lets you check that the
+file you downloaded is the one that was published: in a command prompt, run
+<code>certutil -hashfile CosmicSupremacy-Resurgence-v0.1.1.zip SHA256</code>
+and compare the result.
 </p>
 <p>
 To uninstall, delete the folder. Nothing is written outside it and nothing is
