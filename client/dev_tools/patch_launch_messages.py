@@ -28,15 +28,30 @@ and nothing here touches either of them.
 
 Each is a sprintf format whose first argument is the product name, followed by
 the host, the extension and the exe name in an order that differs per message.
-The replacements keep that leading `%s` and drop the rest. The caller removes
-its own arguments from the stack, so sprintf leaving the trailing ones unread is
-safe. Each replacement is written into the original's slot and the remainder is
-filled with NUL bytes, so no address moves and no length grows.
+The replacements keep that leading `%s` and drop the rest.
 
-The three strings sit at the same address in all four clients.
+A fourth message, shown when Direct3D fails to create a device, asks the player
+to email `problems@` at the connection host, so it reads
+`problems@127.0.0.1:8888`. Its caller at `0x0057295F` passes the host from the
+global at `0x0086F124` and then the path of the client's `log.txt`.
+
+    0x00779130  1223 bytes   "\\n\\nYou can do the following ... problems@%s ..."
+
+Its replacement names the project's issue tracker instead and consumes the host
+with `%.0s`, which prints none of it, so the log path still lands on the second
+conversion.
+
+Every replacement uses a leading run of its original's arguments, each one
+`%s` or `%.0s`. The caller removes its own arguments from the stack, so sprintf
+leaving the trailing ones unread is safe. Each replacement is written into the
+original's slot and the remainder is filled with NUL bytes, so no address moves
+and no length grows.
+
+The four strings sit at the same address in all four clients.
 """
 import argparse
 import os
+import re
 import shutil
 import struct
 import subprocess
@@ -80,6 +95,37 @@ _USE_LAUNCHER = (
     b"The launcher starts the game with the right galaxy and saves your turns. "
     b"Leave it open while you play.")
 
+_RENDERER = (
+    b"\n\nYou can do the following to determine the cause of this problem:\n"
+    b"Direct-X comes with a diagnosis tool that checks for the most obvious "
+    b"flaws.\nThis tool is called 'DXDIAG'. You can run it by clicking 'Run' in "
+    b"your 'Start' menu.\nIn the command-prompt enter the word 'DXDIAG' and "
+    b"press 'Enter'. In the upcoming\nwindow check all tabs for any error "
+    b"messages, but pay special attention to the\n'Display' tab. Check if all "
+    b"Direct-X Features are enabled, and run both the\n'Direct Draw' and "
+    b"'Direct 3D' test. Check if there are any errors reported\nduring the "
+    b"test.\n\nIf you can't find any obvious flaws click the 'Save All "
+    b"Informations...' button\nand email that file to problems@%s. In addition "
+    b"attach the latest log\nfile, which has been saved to the following "
+    b"location:\n%s\nAlso please specify if you do have similar problems with "
+    b"other 3D applications/games.\n\nThe first thing you should try to fix "
+    b"this problem is to install the latest driver\nfor your graphics chip. If "
+    b"you do not know the maker and the name of the 3D chip\ninside your "
+    b"computer, use 'DXDIAG' again: in the 'Display' tab find 'Chip-Type' "
+    b"and\n'Manufacturer'. Find the manufacturers' webpage and head for the "
+    b"'Drivers' section.\nDownload and install a suitable driver.")
+
+_RENDERER_EMAIL = (
+    b"and email that file to problems@%s. In addition attach the latest log\n"
+    b"file, which has been saved to the following location:\n%s\nAlso please "
+    b"specify if you do have similar problems with other 3D "
+    b"applications/games.")
+_RENDERER_ISSUE = (
+    b"and attach that file to an issue at%.0s\n"
+    b"https://github.com/rsfutch77/Cosmic-Supremacy-Resurgence/issues\n"
+    b"with the latest log file, saved at:\n%s\n"
+    b"Also say if other 3D applications/games have similar problems.")
+
 # (virtual address, original text, replacement text, what it is)
 SITES = [
     (0x00779C90, _FAILED, _USE_LAUNCHER,
@@ -88,7 +134,11 @@ SITES = [
      'setup completed message points at the launcher'),
     (0x0077A460, _LOGIN, b"Restart %s from the launcher.",
      'login message points at the launcher'),
+    (0x00779130, _RENDERER, _RENDERER.replace(_RENDERER_EMAIL, _RENDERER_ISSUE),
+     'renderer failure message points at the issue tracker'),
 ]
+
+_CONVERSION = re.compile(rb'%[^a-zA-Z%]*[a-zA-Z%]')
 
 
 def file_offset(data: bytes, va: int) -> int:
@@ -115,8 +165,13 @@ def slots(original: bytes, patched: bytes):
     if len(patched) + 1 > width:
         raise SystemExit(f'replacement is {len(patched)} bytes, '
                          f'slot holds {len(original)}')
-    if patched.count(b'%') != 1 or b'%s' not in patched:
-        raise SystemExit('replacement must use exactly one %s, the product name')
+    if patched == original:
+        raise SystemExit('replacement is the original text')
+    used = _CONVERSION.findall(patched)
+    if (any(c not in (b'%s', b'%.0s') for c in used)
+            or len(used) > len(_CONVERSION.findall(original))):
+        raise SystemExit("replacement must use a leading run of the "
+                         "original's arguments, each as %s or %.0s")
     return original + b'\0', patched.ljust(width, b'\0')
 
 

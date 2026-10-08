@@ -847,8 +847,10 @@ if (Test-Path $License) {
 
 # A client double-clicked in game\ shows a setup message that walks the player
 # through the original site's sign-up flow. patch_launch_messages.py writes each
-# client into the stage with that text pointing at the launcher instead, so the
-# copy is the patch and the tracked binary is only read.
+# client into the stage with that text pointing at the launcher instead, and the
+# renderer failure message pointing at the issue tracker rather than an email
+# address at the host, so the copy is the patch and the tracked binary is only
+# read.
 $PatchMessages = Join-Path $ClientDir 'dev_tools\patch_launch_messages.py'
 function Copy-Client {
     param($src, $dst)

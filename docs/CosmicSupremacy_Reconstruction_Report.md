@@ -1173,7 +1173,7 @@ Two things cost time here and are worth passing on:
 
 [ ] The same function also carries an **upper** bound, `cmp ebx, 0xA8C0` (43,200 = 12 hours) at `0x0052D34F`. Untouched, and presumably the longest turn the original game offered.
 
-### Patches 28–30, Setup messages point at the launcher (1,024 bytes, October 2026)
+### Patches 28–31, Setup and renderer messages drop the old host (1,571 bytes, October 2026)
 
 **Release only.** `client/dev_tools/patch_launch_messages.py --source <exe> --out <path>` writes a patched copy, and `release/build.ps1` uses it in place of copying each client into a release's `game\` folder. No tracked binary carries these bytes, and the script refuses an `--out` that git tracks.
 
@@ -1186,10 +1186,17 @@ A client started without a galaxy pass, which is what double-clicking one in `ga
 | 28 | `0x378490` | `0x00779C90` | 586 bytes | `%s setup partly failed! ...` | `%s is started from the launcher, not from this file.` followed by the steps to open `CosmicSupremacyLauncher.exe` one folder up |
 | 29 | `0x3786E0` | `0x00779EE0` | 444 bytes | `%s setup completed successfully. ...` | the same text as 28 |
 | 30 | `0x378C60` | `0x0077A460` | 40 bytes | `Please login via the %s portal.\nVisit %s` | `Restart %s from the launcher.` |
+| 31 | `0x377930` | `0x00779130` | 1,223 bytes | `... email that file to problems@%s. ...` | the same text with that paragraph naming the project's GitHub issue tracker |
 
-Each original is a format string whose first argument is the product name, `Cosmic Supremacy`, followed by the host, the extension and the exe name in an order that differs per message. Each replacement keeps only that leading `%s`. The callers remove their own arguments from the stack, so the trailing arguments `sprintf` leaves unread are harmless. Each replacement is written into its original's slot and the remainder is NUL-filled, so no string moves and no length grows. The strings sit at the same addresses in all four clients, and a whole-file comparison of each patched copy against its source finds every changed byte between `0x378493` and `0x378C87`.
+Each of 28–30 is a format string whose first argument is the product name, `Cosmic Supremacy`, followed by the host, the extension and the exe name in an order that differs per message. Each replacement keeps only that leading `%s`. The callers remove their own arguments from the stack, so the trailing arguments `sprintf` leaves unread are harmless.
+
+**Patch 31 is the Direct3D failure dialog**, shown after `Failed to initialize the Renderer.` when `CreateDevice` fails. It asks the player to email a DXDIAG report to `problems@` the host, so a localhost client reads `problems@127.0.0.1:8888`. Its caller at `0x0057295F` reads the **patch 3** global at `0x0086F124`, not the patch 2 global above, and passes it before the path of the client's `log.txt`. So the connection host does reach one piece of display text. The replacement rewrites only the paragraph that names the address: it points at the issue tracker, consumes the host with `%.0s` so none of it is printed, and leaves the log path on the second conversion. That paragraph is shortened to fit the URL in the original slot.
+
+Each replacement is written into its original's slot and the remainder is NUL-filled, so no string moves and no length grows. The strings sit at the same addresses in all four clients, and a whole-file comparison of each patched copy against its source finds every changed byte between `0x377BB2` and `0x377DF6` (patch 31, 547 bytes) or between `0x378493` and `0x378C87` (28–30, 1,024 bytes).
 
 **CONFIRMED:** a patched `CosmicSupremacy_TestBed.exe` started with no arguments from a non-administrator account shows the new text in the setup failed dialog.
+
+[ ] Patch 31 is verified by byte comparison and by formatting the patched string, not yet on screen. It needs a client whose `CreateDevice` fails.
 
 ### Summary
 
@@ -1199,7 +1206,7 @@ Patches 5–11 (13 bytes) bypass save/load validation checks in the game’s per
 
 Patches 12–17 (22 bytes, T1–T5) bypass turn-pipeline sync checks, enabling external turn control. Applied only to the Resurgence EXE.
 
-Patches 28–30 (1,024 bytes) rewrite the setup and login messages to send a player to the launcher. Applied only to the clients a release ships.
+Patches 28–31 (1,571 bytes) rewrite the setup and login messages to send a player to the launcher, and the renderer failure message to send a report to the issue tracker instead of an email address at the host. Applied only to the clients a release ships.
 
 ### EXE Variants
 
@@ -1211,7 +1218,7 @@ Patches 28–30 (1,024 bytes) rewrite the setup and login messages to send a pla
 | `CosmicSupremacy_Resurgence.exe` | + 18–27 (optional) | No | any | AI development, sub-60s turns. **Do not ship**: it changes a game rule, not plumbing, and a galaxy built on it runs faster than the original ever allowed |
 | `CosmicSupremacy_Player.exe` | 1–11, plus the one byte for prompt 225 | Never created | a pushed `.dat` | Multiplayer player build. TestBed without T1–T5, so it cannot compute a turn and the setup prompts stay gated |
 
-Every client in a release's `game\` folder also carries patches 28–30, the unmodified original included.
+Every client in a release's `game\` folder also carries patches 28–31, the unmodified original included.
 
 ---
 
