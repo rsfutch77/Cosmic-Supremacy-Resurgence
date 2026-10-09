@@ -3,8 +3,8 @@ The player's name: what is accepted, where it is kept, and what a galaxy that
 has no seat for it says back.
 
 Everything here is the launcher's own module-level code, so it runs headless and
-in about a second. The dialog that collects the name is not covered, because it
-is tkinter; what the dialog decides with is.
+in about a second. The dialog that collects the name is covered in
+test_web_view.py; what the dialog decides with is covered here.
 
 The roster check runs against a store built here, in a temporary directory.
 """

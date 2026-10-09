@@ -2,11 +2,43 @@
 A stand-in for the launcher's window, for tests that drive `launcher.Launcher`
 without one.
 
-It records what the Launcher last told it to show, in plain attributes a test
-can read, and answers the Launcher's prompts from scripted answers. Every
-method of tk_view.TkView that the Launcher calls is here, with the same
-arguments.
+`FakeView` records what the Launcher last told it to show, in plain attributes
+a test can read, and answers the Launcher's prompts from scripted answers.
+Every method of web_view.WebView that the Launcher calls is here, with the
+same arguments.
+
+`PageWindow` stands in for the pywebview window under a real WebView instead,
+for a test that wants the real view: it records the script the page is sent.
 """
+import json
+import re
+
+
+class PageWindow:
+    """Records what the page is sent; destroy() is the window closing."""
+
+    def __init__(self, view):
+        self.view = view
+        self.sent = []
+        self.destroyed = False
+
+    def run_js(self, script):
+        m = re.fullmatch(r"window\.ui\.(\w+)\((.*)\)", script, re.S)
+        self.sent.append((m.group(1), json.loads(m.group(2))))
+
+    def destroy(self):
+        self.destroyed = True
+        self.view._on_closed()
+
+    def prompts(self):
+        return [arg for fn, arg in self.sent if fn == "prompt"]
+
+    def last(self, key):
+        """The last value the page was sent for `key` in a window.ui.set."""
+        for fn, arg in reversed(self.sent):
+            if fn == "set" and key in arg:
+                return arg[key]
+        return None
 
 
 class FakeView:

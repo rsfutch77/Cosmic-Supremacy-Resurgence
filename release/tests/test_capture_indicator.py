@@ -21,11 +21,11 @@ they read before it starts:
 
 Headless. No window is opened and no game is started: the launcher's view is
 a FakeView that records what it was told to show, and the launcher object is
-built without running __init__ so that nothing reaches Tk, a data directory or
-a port. What is under test is the launcher's own logic, which is where all four
-of these live. The one widget detail that matters here, the indicator being
-packed only while it has something to say, is checked against TkView itself
-with stub widgets.
+built without running __init__ so that nothing reaches a window, a data
+directory or a port. What is under test is the launcher's own logic, which is
+where all four of these live. The one window detail that matters here, the
+indicator showing only while it has something to say, is checked against
+web_view.WebView with a recording stand-in for the page.
 """
 import os
 import queue
@@ -39,8 +39,8 @@ sys.path.insert(0, os.path.join(REPO, "release"))
 sys.path.insert(0, os.path.join(REPO, "server"))
 
 import launcher as L                                            # noqa: E402
-import tk_view as TV                                            # noqa: E402
-from fake_view import FakeView                                  # noqa: E402
+import web_view as WV                                           # noqa: E402
+from fake_view import FakeView, PageWindow                      # noqa: E402
 
 fails = []
 
@@ -53,29 +53,6 @@ def check(label, got, want):
 
 
 # ── stubs ────────────────────────────────────────────────────────────────────
-class Widget:
-    """A Tk widget as far as TkView uses one: options and packing."""
-
-    def __init__(self, **kw):
-        self.kw = dict(kw)
-        self.mapped = False
-
-    def cget(self, key):
-        return self.kw.get(key, "")
-
-    def configure(self, **kw):
-        self.kw.update(kw)
-
-    def pack(self, **kw):
-        self.mapped = True
-
-    def pack_forget(self):
-        self.mapped = False
-
-    def winfo_ismapped(self):
-        return self.mapped
-
-
 class Store:
     """A galaxy clock the readout can ask about, counting what it is asked.
 
@@ -215,21 +192,18 @@ check("and sending repaints it green", app.view.capture[1], L.OK)
 app._show_capture(None, 0.0)
 check("and it goes again when the loop stops", shown(app), False)
 
-# The window's half: empty text unpacks the dot and its status rather than
-# blanking them, so a launcher with no turn loop shows one dot and one status.
-tv = object.__new__(TV.TkView)
-tv.cap_dot = Widget(fg=L.FAINT, text="\u25cf")
-tv.cap_status = Widget(text="")
-TV.TkView.show_capture(tv, "", "")
-check("the window packs nothing for empty text",
-      (tv.cap_dot.mapped, tv.cap_status.mapped), (False, False))
-TV.TkView.show_capture(tv, *L.capture_readout(L.CAPTURING, 0.0))
-check("packs the dot and its status for a state",
-      (tv.cap_dot.mapped, tv.cap_status.mapped), (True, True))
-check("in the state's colour", tv.cap_dot.cget("fg"), L.WARN)
-TV.TkView.show_capture(tv, "", "")
-check("and unpacks both again for empty text",
-      (tv.cap_dot.mapped, tv.cap_status.mapped), (False, False))
+# The window's half: the page hides the dot and its status for empty text
+# (app.js), so a launcher with no turn loop shows one dot and one status, and a
+# state reaches the page in the colour that reads on the status pipe.
+wv = WV.WebView({"product": "CS"})
+wv.window = PageWindow(wv)
+wv.show_capture(*L.capture_readout(L.CAPTURING, 0.0))
+check("a state reaches the page with its text",
+      wv.window.last("capture")["text"], lambda t: bool(t))
+check("in the state's colour for the status pipe",
+      wv.window.last("capture")["colour"], WV.ON_LIGHT[L.WARN])
+wv.show_capture("", "")
+check("and empty text is what hides it", wv.window.last("capture")["text"], "")
 
 print("\n3. the states the turn loop emits reach the indicator")
 app = bare()

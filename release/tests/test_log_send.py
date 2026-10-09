@@ -311,85 +311,32 @@ try:
           L.LOG_UPLOAD_CLAUSE.startswith("Nothing is sent by itself"), True)
     check("and when it does go", "press Send" in L.LOG_UPLOAD_CLAUSE, True)
     print("\n8. copying a reference")
-
-    class Clip:
-        """Records what Tk's clipboard calls would do."""
-
-        def __init__(self):
-            self.board, self.calls, self.later = None, [], []
-
-        def clipboard_clear(self):
-            self.calls.append("clear")
-            self.board = ""
-
-        def clipboard_append(self, text):
-            self.calls.append("append")
-            self.board += text
-
-        def update(self):
-            self.calls.append("update")
-
-        def after(self, ms, fn):
-            self.later.append((ms, fn))
-
-    class Button:
-        def __init__(self):
-            self.text = L.LOG_COPY
-
-        def configure(self, text):
-            self.text = text
-
-    root, btn = Clip(), Button()
-    root.board = "something else"
-    L.copy_pressed(root, btn, "20260929T040000Z-abcdefgh-0a0b0c")
-    # Fails if the clipboard were appended to without clearing it first.
-    check("Copy puts the reference, and only it, on the clipboard",
-          (root.board, root.calls),
-          ("20260929T040000Z-abcdefgh-0a0b0c", ["clear", "append", "update"]))
-    check("the button reads Copied", btn.text, "Copied")
-    check("and goes back to Copy a moment later",
-          (len(root.later), root.later[0][0] > 0), (1, True))
-    root.later[0][1]()
-    check("after it", btn.text, "Copy")
-
-    # The box's rows, built by the real view on a withdrawn root. The modal
-    # wait is replaced so the box is read back without being shown, and Copy
-    # is recorded rather than run so the machine's clipboard is left alone.
-    import tkinter as tk
-    from tk_view import TkView
-    tk_root = tk.Tk()
-    tk_root.withdraw()
-    view = TkView(tk_root)
-    view.app = types.SimpleNamespace(cfg={"product": "test"})
-    boxes, copied = [], []
-    view._modal = boxes.append
-    real_copy = L.copy_pressed
-    L.copy_pressed = lambda root, button, text: copied.append(
-        (root, button, text))
-    try:
-        view.log_refs("Log sent", "body", [("ref-a", "1 Oct 2026 10:00"),
-                                           ("ref-b", "")])
-        table = [w for w in boxes[0].winfo_children()
-                 if isinstance(w, tk.Frame) and w.grid_slaves()][0]
-
-        def at(row, column):
-            return table.grid_slaves(row=row, column=column)[0]
-        entries = [at(i, 0) for i in range(2)]
-        buttons = [at(i, 2) for i in range(2)]
-        for b in reversed(buttons):
-            b.invoke()
-        check("each row's button copies its own reference",
-              [(r is tk_root, b, t) for r, b, t in copied],
-              [(True, buttons[1], "ref-b"), (True, buttons[0], "ref-a")])
-        check("and the entry holding it is read-only",
-              [(e.get(), str(e.cget("state"))) for e in entries],
-              [("ref-a", "readonly"), ("ref-b", "readonly")])
-        check("with its send time beside it",
-              [at(i, 1).cget("text") for i in range(2)],
-              ["1 Oct 2026 10:00", ""])
-    finally:
-        L.copy_pressed = real_copy
-        tk_root.destroy()
+    # The box's rows, sent by the real view to a recording stand-in for the
+    # page. The box is answered from a timer, as the page's Close would be.
+    from fake_view import PageWindow
+    from web_view import WebView
+    view = WebView({"product": "test"})
+    view.window = PageWindow(view)
+    view.after(50, lambda: view.resolve(view.window.prompts()[-1]["id"],
+                                        None, None))
+    view.log_refs("Log sent", "body", [("ref-a", "1 Oct 2026 10:00"),
+                                       ("ref-b", "")])
+    box = view.window.prompts()[-1]
+    check("each row carries its own reference with its send time",
+          box["refs"], [{"id": "ref-a", "when": "1 Oct 2026 10:00"},
+                        {"id": "ref-b", "when": ""}])
+    check("and the button reads Copy, then Copied",
+          (box["copy"], box["copied"]), ("Copy", "Copied"))
+    js = open(os.path.join(REPO, "release", "webui", "app.js"),
+              encoding="utf-8").read()
+    rows = js[js.index("for (const ref of p.refs"):js.index("const btns")]
+    # Fails if a row's button copied anything but its own reference.
+    check("each row's button copies its own reference",
+          "navigator.clipboard.writeText(ref.id)" in rows, True)
+    check("and the entry holding it is read-only",
+          "box.readOnly = true" in rows, True)
+    check("and the button goes back to Copy a moment later",
+          "setTimeout(" in rows, True)
 
     print("\n9. the references kept")
     d = fresh_dir()

@@ -1811,7 +1811,7 @@ def read_join_answers(rows, recs, ask):
     is none. It is called once per row that `awaiting_answer` names and for no
     other. `requested_at` goes back with the answer so the record it is
     written into can be checked to be the same request: a player can press
-    Join again while this runs off the Tk thread.
+    Join again while this runs off the UI thread.
 
     Total, for the reason `_submitted_state` is: a galaxy that cannot be read
     is left out rather than failing the listing.
@@ -2153,7 +2153,6 @@ class Column(typing.NamedTuple):
     """
     key: str
     heading: str
-    width: int
     value: typing.Callable      # (galaxy, view) -> the sort value, or None
     text: typing.Callable       # (galaxy, view) -> the cell
 
@@ -2253,19 +2252,13 @@ def _you_text(g, view):
 
 
 GALAXY_COLUMNS = (
-    Column("name", "Galaxy", 132, _name_value, _name_text),
-    Column("status", "Status", 64, _status_value, _status_text),
-    Column("turn", "Turn", 46, _turn_value, _turn_text),
-    Column("left", "Next turn", 84, _left_value, _left_text),
-    Column("players", "Players", 54, _players_value, _players_text),
-    # Wide enough for the longest thing it says, "joining next turn". A
-    # minsize narrower than the cell would let that column push the table
-    # wider than the home page and resize the window on the way in.
-    Column("you", "You", 120, _you_value, _you_text),
+    Column("name", "Galaxy", _name_value, _name_text),
+    Column("status", "Status", _status_value, _status_text),
+    Column("turn", "Turn", _turn_value, _turn_text),
+    Column("left", "Next turn", _left_value, _left_text),
+    Column("players", "Players", _players_value, _players_text),
+    Column("you", "You", _you_value, _you_text),
 )
-
-# The action column, which sorts nothing and so is not one of the above.
-ACTION_WIDTH = 66
 
 DEFAULT_SORT = "name"
 
@@ -2873,7 +2866,6 @@ LOG_REFS_KEEP = 5
 LOG_REFS_TITLE = "Log history"
 LOG_COPY = "Copy"
 LOG_COPIED = "Copied"
-LOG_COPIED_MS = 1500
 
 
 def log_refs_path(data_dir: str) -> str:
@@ -2940,30 +2932,6 @@ def log_refs_text(code=None) -> str:
     return said
 
 
-def copy_to_clipboard(root, text: str) -> None:
-    """Put `text` on the clipboard through Tk.
-
-    The update keeps the text on the clipboard when the box it was copied
-    from closes, since Tk owns the selection until another program takes it.
-    """
-    root.clipboard_clear()
-    root.clipboard_append(text)
-    root.update()
-
-
-def copy_pressed(root, button, text: str) -> None:
-    """Copy `text` and have `button` read Copied for a moment."""
-    copy_to_clipboard(root, text)
-    button.configure(text=LOG_COPIED)
-
-    def back():
-        try:
-            button.configure(text=LOG_COPY)
-        except Exception:               # the box closed first
-            pass
-    root.after(LOG_COPIED_MS, back)
-
-
 def log_not_sent_text(why, path) -> str:
     """What a player reads when their log could not be sent, or had nowhere
     to go. `why` is None for a launcher that reaches no relay."""
@@ -2977,41 +2945,16 @@ def log_not_sent_text(why, path) -> str:
 
 
 # ── UI ────────────────────────────────────────────────────────────────────────
-BG      = "#050a1a"
-PANEL   = "#080f22"
-EDGE    = "#1a3a6a"
+# What a piece of text means, as a colour: ordinary, secondary, faint, a
+# heading, good, needs attention, bad. The window maps each to the colour that
+# reads on whatever it is drawn over (web_view.ON_DARK and ON_LIGHT).
 TEXT    = "#a0c8ff"
 DIM     = "#6090b0"
 FAINT   = "#405070"
 ACCENT  = "#00aaff"
-BTN     = "#0055cc"
-BTN_HI  = "#0077ff"
 OK      = "#3ddc84"
 WARN    = "#ffb020"
 BAD     = "#ff5555"
-
-# The window's own padding, in one place. Every child of the root is inset by
-# PAD_X, and anything with a bottom edge of its own is inset from it by PAD_Y,
-# which is the number the panels already use between their border and their
-# last row. A panel that padded one edge and not the other is the defect this
-# replaces: the eye reads the missing gap before it reads anything in the box.
-PAD_X = 26
-PAD_Y = 12
-
-# Inside a bordered panel, between its edge and its contents. Equal on all four
-# sides for the same reason.
-PANEL_PAD = 12
-
-# How a page sits in the window. Both pages take it, so they line up with the
-# header above them and with each other, and both edges are padded.
-PAGE_PACK = {"fill": "both", "expand": True, "padx": PAD_X,
-             "pady": (PAD_Y, PAD_Y)}
-
-# What the galaxy table needs across, its panel and that panel's border
-# included. The home page is held to the same width, so moving between the two
-# pages does not resize a window that cannot be resized by hand.
-PAGE_WIDTH = (sum(c.width for c in GALAXY_COLUMNS) + ACTION_WIDTH
-              + 2 * PANEL_PAD + 2)
 
 # The game controls under a running game, by key and label, in reading order.
 CONTROLS = (("load", "Load"), ("save", "Save"), ("turn", "Next Turn"))
@@ -3092,7 +3035,7 @@ def capture_readout(state, age: float, client_open: bool = True):
 class Launcher:
     """Everything the launcher decides, drawn by a view.
 
-    `view` is the window (tk_view.TkView). The Launcher calls its methods to
+    `view` is the window (web_view.WebView). The Launcher calls its methods to
     show things and to ask the player things, and the view calls the
     Launcher's methods when the player presses something. Nothing here touches
     a widget, so every decision can be exercised without a window.
@@ -3151,7 +3094,7 @@ class Launcher:
         # What the loop last did with the player's state, and when: one of the
         # capture states above with a timestamp, or None before anything has
         # been captured. Recorded by _mp_state on the worker thread and painted
-        # by _refresh_turn on the Tk thread, which is the route mp_note already
+        # by _refresh_turn on the UI thread, which is the route mp_note already
         # takes.
         self.mp_capture = None
         # Set by Save during a multiplayer turn, cleared by the loop when it
@@ -3162,7 +3105,7 @@ class Launcher:
         # game window has closed, cleared by the loop when it opens the game
         # again. The loop owns the client, so Play asks it rather than
         # starting a second one, which is what the lock in game_cycle exists
-        # to prevent. `mp_reopening` is the Tk side of the same thing: what
+        # to prevent. `mp_reopening` is the UI side of the same thing: what
         # the status line and the turn readout say between the press and the
         # client coming back up.
         self.mp_reopen = threading.Event()
@@ -3534,7 +3477,7 @@ class Launcher:
         self.view.after(GAMES_POLL_MS, self._games_tick)
 
     def refresh_games(self):
-        """List off the Tk thread and repaint when it answers.
+        """List off the UI thread and repaint when it answers.
 
         Off the thread because a directory is a network service in the beta,
         and because the galaxy multiplayer.json names is opened and read here
@@ -3664,7 +3607,7 @@ class Launcher:
             return {}
 
     def _on_games(self, rows, extra, err):
-        """Take a listing in. Runs on the Tk thread, off the message queue.
+        """Take a listing in. Runs on the UI thread, off the message queue.
 
         Join answers are written into joined.json here rather than on the
         listing thread, because Join and Clear write that file from this
@@ -4611,7 +4554,7 @@ class Launcher:
         thread of its own when the wait between turns runs past the point the
         page would call the galaxy stopped: a closed galaxy's referee ticks
         nothing, so from inside the loop the two look the same. The answer
-        goes to the Tk thread through the message queue.
+        goes to the UI thread through the message queue.
         """
         if store is None:
             return
@@ -4626,7 +4569,7 @@ class Launcher:
     def _on_mp_closed(self, store, problem):
         """The followed galaxy has closed. Stop following it and say why.
 
-        Runs on the Tk thread. A report about a store that is no longer the one
+        Runs on the UI thread. A report about a store that is no longer the one
         being followed is dropped, since Play on another galaxy has moved on.
         """
         if store is not self.mp_store or self.mp_closed:
@@ -4640,7 +4583,7 @@ class Launcher:
         self.warn(problem)
 
     def _on_mp_warning(self, store, lines):
-        """Show a missed-turns warning the followed loop found. Tk thread."""
+        """Show a missed-turns warning the followed loop found. UI thread."""
         if store is not self.mp_store:
             return
         name = (self.mp_playing or {}).get("name") or ""
@@ -4650,7 +4593,7 @@ class Launcher:
 
     # ── sending the log ──
     def _on_log_offer(self, store):
-        """A followed turn went wrong: offer to send the log. Tk thread.
+        """A followed turn went wrong: offer to send the log. UI thread.
 
         Not for a store that is no longer the one followed, nor for a galaxy
         found closed, which is a decision rather than a fault; and not where
@@ -4665,7 +4608,7 @@ class Launcher:
                   quiet_if_nowhere: bool = False):
         """Write the redacted copy, say what it holds, and send it on Send.
 
-        Tk thread. The copy is written first and is what is sent, so "Read it
+        UI thread. The copy is written first and is what is sent, so "Read it
         first" opens exactly the bytes that would go.
         """
         if getattr(self, "log_sending", False):
@@ -4728,7 +4671,7 @@ class Launcher:
         threading.Thread(target=work, daemon=True, name="send-log").start()
 
     def _on_log_sent(self, reply, err, path):
-        """Say whether the log went. Tk thread."""
+        """Say whether the log went. UI thread."""
         self.log_sending = False
         if err is None:
             ref = (reply or {}).get("id")
@@ -4749,7 +4692,7 @@ class Launcher:
             self.warn(log_not_sent_text(err, path))
 
     def _show_log_refs_link(self):
-        """Show the log history link once a reference is kept. Tk thread."""
+        """Show the log history link once a reference is kept. UI thread."""
         if self.data_dir is None or not load_log_refs(self.data_dir):
             return
         self.view.show_log_refs_link()
@@ -4833,11 +4776,11 @@ class Launcher:
             self.view.set_control(key, enabled=enabled)
 
     def _in_background(self, label, work, done=None):
-        """Run `work()` off the Tk thread, with the controls disabled meanwhile.
+        """Run `work()` off the UI thread with the controls disabled meanwhile.
 
-        Ending a turn takes as long as the engine takes, and a save serialises
-        the whole object graph. Doing either on the Tk thread freezes the window
-        for the duration, which reads exactly like a crash , and this window is
+        Ending a turn takes as long as the engine takes, and a save
+        serialises the whole object graph. Doing either on the UI thread
+        freezes the window for the duration, which reads exactly like a crash , and this window is
         also the game's server, so it must keep answering while the game works.
         """
         self._ctl_busy = True
@@ -5006,7 +4949,7 @@ class Launcher:
         if stopped and getattr(self, "mp_probed", None) != self.mp_deadline:
             # A closed galaxy stops ticking by design, and from here that is
             # the same wait as a referee that is off. One state read per
-            # deadline tells them apart; it is off the Tk thread because this
+            # deadline tells them apart; it is off the UI thread because this
             # runs once a second.
             self.mp_probed = self.mp_deadline
             threading.Thread(target=self._mp_probe_closed,
@@ -5200,7 +5143,8 @@ class Launcher:
             pass
 
     def say_threadsafe(self, msg: str):
-        """Called from the server thread; tkinter is not thread-safe."""
+        """Called from any other thread. The window is drawn from one thread
+        only, so the line goes through the queue that thread drains."""
         self.msgs.put(msg)
 
     def _watch_game(self):
@@ -5343,7 +5287,7 @@ class Launcher:
             while True:
                 msg = self.msgs.get_nowait()
                 # Background game-control results arrive on the same queue as
-                # log lines, tagged, so their completion runs on the Tk thread
+                # log lines, tagged, so their completion runs on the UI thread
                 # where it is allowed to touch widgets.
                 if isinstance(msg, tuple) and msg and msg[0] == "__ctl__":
                     _tag, label, result, err, done = msg
@@ -5404,21 +5348,12 @@ def webview2_bootstrapper() -> "str | None":
 
 
 def main() -> int:
-    # The views import this module by name. Run as a script it is __main__,
+    # web_view imports this module by name. Run as a script it is __main__,
     # and without this the import would load a second copy beside it.
     sys.modules.setdefault("launcher", sys.modules[__name__])
     with open(bundled("manifest.json"), "r", encoding="utf-8") as fh:
         cfg = json.load(fh)
     set_app_user_model_id()     # must precede the first window
-    if "--tk" in sys.argv:
-        # The tkinter window, which draws the same decisions in the launcher's
-        # older look.
-        import tkinter as tk
-        from tk_view import TkView
-        root = tk.Tk()
-        Launcher(TkView(root), cfg)
-        root.mainloop()
-        return 0
     import webview_runtime
     from web_view import WebView
     if not webview_runtime.ensure(cfg["product"], webview2_bootstrapper()):

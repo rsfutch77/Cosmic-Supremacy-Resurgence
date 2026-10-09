@@ -1,18 +1,17 @@
 """
 web_view.py , the launcher's window as a web page in the game's own skin
 =========================================================================
-The same view as tk_view.TkView, drawn by pywebview over release\\webui. The
-page draws what this file tells it (window.ui.set and friends in app.js) and
-hands the player's presses back through `Bridge`, pywebview's js_api.
+The view `launcher.Launcher` draws through, by pywebview over release\\webui.
+The page draws what this file tells it (window.ui.set and friends in app.js)
+and hands the player's presses back through `Bridge`, pywebview's js_api.
 
 Threading. pywebview owns the main thread for its window and runs each js_api
-call on a thread of its own. The Launcher was written for Tk, where every
-callback and timer runs on one thread and a modal dialog keeps that thread's
-timers running while it waits. `WebView` gives it the same: one controller
-thread runs every Launcher call, every timer, and every press posted from the
-page, one at a time; and a prompt waits by running that same loop until it is
-answered, so the queue drain and the once-a-second watch carry on underneath a
-dialog exactly as they do under a Tk one.
+call on a thread of its own. The Launcher expects every call and timer on one
+thread, and a dialog that keeps that thread's timers running while it waits.
+`WebView` gives it that: one controller thread runs every Launcher call, every
+timer, and every press posted from the page, one at a time; and a prompt waits
+by running that same loop until it is answered, so the queue drain and the
+once-a-second watch carry on underneath a dialog.
 """
 from __future__ import annotations
 
@@ -31,9 +30,10 @@ import launcher as L
 
 PAGE_W, PAGE_H = 720, 540
 
-# The launcher's colours are chosen for the tkinter window's navy. The page
-# draws the table on the game's slate and the status line on the light blue of
-# its lower pipe, so each colour is mapped to one that reads on each.
+# The launcher names what a piece of text means with a colour (launcher.OK and
+# the rest). The page draws the table on the game's slate and the status line
+# on the light blue of its lower pipe, so each is mapped to one that reads on
+# each.
 ON_DARK = {L.TEXT: "#e8eef2", L.DIM: "#93a6b5", L.FAINT: "#6b7d8c",
            L.ACCENT: "#a3d8fe", L.OK: "#3ddc84", L.WARN: "#ffb020",
            L.BAD: "#ff6b5e"}
@@ -133,7 +133,7 @@ class Bridge:
 
 
 class WebView:
-    """The launcher's window. Implements every method tk_view.TkView does."""
+    """The launcher's window: every method the Launcher calls on its view."""
 
     def __init__(self, cfg):
         self.cfg = cfg
@@ -211,7 +211,7 @@ class WebView:
         try:
             fn()
         except Exception:
-            # A failed callback is reported and the loop carries on, as Tk does.
+            # A failed callback is reported and the loop carries on.
             self._report(traceback.format_exc())
 
     def _report(self, detail: str) -> None:

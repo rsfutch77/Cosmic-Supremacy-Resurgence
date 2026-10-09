@@ -807,10 +807,9 @@ $piArgs = @(
     '--specpath', $BuildDir
 )
 if ($IconOut) {
-    # --icon sets the icon Explorer draws on the EXE. The taskbar button and the
-    # window title bar come from the *window* icon instead, which tkinter
-    # defaults to its own feather - so the .ico also ships as data for the
-    # launcher to hand to iconbitmap() at runtime.
+    # --icon sets the icon Explorer draws on the EXE. The taskbar button comes
+    # from the *window* icon instead, so the .ico also ships as data for
+    # web_view to set on the window at runtime.
     $piArgs += @('--icon', $IconOut, '--add-data', "$IconOut;.")
 }
 $piArgs += (Join-Path $ReleaseDir 'launcher.py')

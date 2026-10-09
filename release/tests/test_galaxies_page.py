@@ -18,6 +18,7 @@ printed cell and underlying value disagree.
 import inspect
 import json
 import os
+import re
 import shutil
 import sys
 import tempfile
@@ -28,10 +29,10 @@ import pathlib
 REPO = str(pathlib.Path(__file__).resolve().parents[2])
 sys.path.insert(0, os.path.join(REPO, "release"))
 sys.path.insert(0, os.path.join(REPO, "server"))
+WEBUI = os.path.join(REPO, "release", "webui")
 
 import galaxy_directory                                         # noqa: E402
 import launcher as L                                            # noqa: E402
-import tk_view                                                  # noqa: E402
 import turn_store                                               # noqa: E402
 from fake_view import FakeView                                  # noqa: E402
 
@@ -117,9 +118,9 @@ def by_text(key, reverse=False, view=VIEW):
 
 
 print("1. the columns, and where their text and their value part company")
-check("every column has a key, a heading and a width",
-      [(c.key, bool(c.heading), c.width > 0) for c in L.GALAXY_COLUMNS],
-      lambda got: all(h and w for _k, h, w in got))
+check("every column has a key and a heading",
+      [(c.key, bool(c.heading)) for c in L.GALAXY_COLUMNS],
+      lambda got: all(k and h for k, h in got))
 check("the page shows name, status, turn, time left, players and your state",
       [c.key for c in L.GALAXY_COLUMNS],
       ["name", "status", "turn", "left", "players", "you"])
@@ -456,24 +457,17 @@ check("a store that is not there at all is the same",
       L.own_row(fresh_dir(), {"store": os.path.join(fresh_dir(), "nope")},
                 "Alice").status, L.FORMING)
 
-print("\n11. the window's padding, and the page's own bottom edge")
-check("the window has one horizontal inset", L.PAD_X > 0, True)
-check("and one vertical one", L.PAD_Y > 0, True)
-check("a page is inset by both", (L.PAGE_PACK["padx"], L.PAGE_PACK["pady"]),
-      (L.PAD_X, (L.PAD_Y, L.PAD_Y)))
-check("and its bottom edge is padded, which is the defect this replaces",
-      L.PAGE_PACK["pady"][1] > 0, True)
-check("by the same amount as its top", L.PAGE_PACK["pady"][0],
-      L.PAGE_PACK["pady"][1])
-check("a panel is inset from its own border", L.PANEL_PAD > 0, True)
-build = inspect.getsource(tk_view.TkView.build)
-check("both pages sit in the window on those terms",
-      "self.pages.pack(**PAGE_PACK)" in build, True)
-page = inspect.getsource(tk_view.TkView._build_galaxies)
-check("and the table is inset from the panel edge equally all round",
-      "padx=PANEL_PAD," in page and "pady=PANEL_PAD)" in page, True)
-check("no page invents a padding of its own",
-      "padx=26" in build + page, False)
+print("\n11. the page's layout in the window")
+css = open(os.path.join(WEBUI, "app.css"), encoding="utf-8").read()
+js = open(os.path.join(WEBUI, "app.js"), encoding="utf-8").read()
+tracks = re.search(r"\.grid \{[^}]*grid-template-columns:([^;]+);", css).group(1)
+check("the table has a track per column and one for the row's button",
+      len(re.findall(r"minmax\([^)]*\)|\d+px", tracks)),
+      len(L.GALAXY_COLUMNS) + 1)
+check("its headings are the columns the launcher sends",
+      "for (const c of columns)" in js and "c.heading" in js, True)
+check("every page is inset from the frame on all four sides",
+      re.search(r"main \{[^}]*padding: \d+px \d+px;", css) is not None, True)
 
 print("\n12. how the page is wired to the rest of the launcher")
 play = inspect.getsource(L.Launcher.on_play)
@@ -513,33 +507,27 @@ check("a reclaimed seat forgets that galaxy rather than all of them",
 
 draw = inspect.getsource(L.Launcher._draw_galaxies)
 # The Launcher decides what the table holds and the view draws it, so the
-# repaint is checked in both: the rows in `_draw_galaxies`, the widgets in
-# TkView.draw_galaxies.
-paint = inspect.getsource(tk_view.TkView.draw_galaxies)
+# repaint is checked in both: the rows in `_draw_galaxies`, the page's half in
+# app.js's drawRows.
+paint = js[js.index("function drawRows"):js.index("// ── prompts")]
 check("the table's buttons are the ones row_action names",
       "row_action(" in draw and "ACTION_TEXT[action]" in draw, True)
 check("and the cells are the ones the columns name",
       "col.text(g, view)" in draw, True)
 check("and the window is handed the rows rather than drawing its own",
       "self.view.draw_galaxies(drawn)" in draw, True)
-check("a repaint destroys the cells it made and nothing else",
-      ("for widget in self._cell_widgets" in paint, paint.count("destroy()")),
-      (True, 1))
-check("and never rebuilds the header Back sits in",
-      any(w in draw + paint for w in ("games_refresh", "show_home",
-                                      "_build_galaxies")), False)
-check("Back is built before the table it sits above",
-      page.index("command=app.show_home") < page.index("games_table"), True)
-check("and neither a failed listing nor a loading one takes it off screen",
+check("a repaint replaces the rows it drew and nothing else",
+      ('$("grows")' in paint, paint.count("replaceChildren")), (True, 1))
+check("and never rebuilds the headings or the toolbar above them",
+      any(w in paint for w in ("colhead", "games-status", "refresh")), False)
+check("neither a failed listing nor a loading one hides the page",
       [fn.__qualname__ for fn in (L.Launcher._show_source,
                                   L.Launcher._on_games,
-                                  L.Launcher.refresh_games,
-                                  tk_view.TkView.set_games_status,
-                                  tk_view.TkView.draw_galaxies)
-       if "pack_forget" in inspect.getsource(fn)], [])
+                                  L.Launcher.refresh_games)
+       if "show_page" in inspect.getsource(fn)], [])
 
 refresh = inspect.getsource(L.Launcher.refresh_games)
-check("a listing runs off the Tk thread",
+check("a listing runs off the UI thread",
       "threading.Thread(" in refresh, True)
 check("and comes back through the queue the launcher already drains",
       "self.msgs.put((\"__games__\"" in refresh, True)
@@ -612,10 +600,9 @@ before = n.view.swaps
 L.Launcher.show_home(n)
 check("asking for the page you are already on changes nothing",
       (n.where(), n.view.swaps), (("home", "home"), before))
-swap = inspect.getsource(tk_view.TkView.show_page)
-check("and the window shows one page and puts the other away",
-      ("hidden.pack_forget()" in swap, "showing.pack(" in swap),
-      (True, True))
+swap = js[js.index("function showPage"):js.index("function drawModes")]
+check("and the window shows one page and puts the others away",
+      'p.classList.toggle("on", p.id === "page-" + name)' in swap, True)
 
 print("\n14. one galaxy is played at a time, and that is about playing")
 # The limit the page does not carry. Every joined row offers Play; the turn
