@@ -48,9 +48,11 @@ View the Demo      The original demo galaxy. A look at the game with nothing
 Play Single Player  A full single-player galaxy against the computer. Turns
                     resolve on your own machine.
 
-Multiplayer         Coming soon. Persistent galaxies against other players,
-                    the way the original was played. The button is greyed out
-                    until it is ready.
+Multiplayer         Persistent galaxies against other players, the way the
+                    original was played. Opens the list of galaxies: press
+                    View on one to read what you would be joining, then Join.
+                    Your empire arrives at the next turn and Play appears on
+                    its row. Needs an internet connection.
 
 THE MANUAL AND THE ORIGINAL SITE
 --------------------------------
@@ -67,8 +69,8 @@ this one - it has the full game manual and wiki:
 IF SOMETHING GOES WRONG
 -----------------------
 
-Click "show log" at the bottom right of the launcher. That pane, plus these two
-files, is exactly what we need to diagnose a problem:
+Click the Log tab at the top of the launcher. That page, plus these two files,
+is exactly what we need to diagnose a problem:
 
     data\launcher.log     what the launcher found and started
     data\cs_server.log    what the game asked the server for
