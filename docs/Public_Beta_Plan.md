@@ -42,24 +42,28 @@ merge the turn. On 30 September the operator went through J3, J4's support
 code, J6, K3, K5, M1, N6 and N7 on screen across two machines, and each item
 records what was seen.
 
-**What the machine is doing right now.** The scheduled task `CosmicSupremacy
-Referee` referees `firebase://cs-resurgence/h3check` ("Beta rehearsal") on the
-host at four-hour turns, as the operator's own Google login. `h3check` is still
-disposable; its one civ is `QCplayer1`, seated on 5 October. A second live
+**What the machine is doing right now.** Since 8 October the sandboxed
+referee referees `firebase://cs-resurgence/h3check` ("Beta rehearsal") at
+four-hour turns, and cannot tick while the host is locked (N9), inside Windows Sandbox and as the service account below,
+opened by the logon task `CosmicSupremacy Referee Sandbox`. The host task
+`CosmicSupremacy Referee` is disabled; enabling both would put two referees on
+one galaxy. `h3check` is still disposable; its civs are `QCplayer1`, seated
+on 5 October, and `Wanderer`, who joined on 7 October. A second live
 galaxy, `verify` ("Verification galaxy"), was made for the 30 September checks
 and is closed. It is listed as closed and nothing referees it.
 
-**The sandboxed referee is built and parked.** `server\sandbox\stage.ps1` stages
+**The sandboxed referee is built, and since 8 October it is the referee (N8).** `server\sandbox\stage.ps1` stages
 the referee into Windows Sandbox, signed in as the service account
 `cs-referee@cs-resurgence.iam.gserviceaccount.com`, which holds
 `roles/datastore.user` and `roles/serviceusage.serviceUsageConsumer` on the
 project and `roles/storage.objectAdmin` on the galaxy bucket, and nothing else.
 Its key is in `C:\CSReferee\key`. It ran `h3check` from 4 to 5 October, reading,
 holding and seating correctly, and stopped at the first tick that needed the
-client: Smart App Control inside the sandbox refuses the unsigned client
-(WinError 4551). It waits on M3's code signing. The logon task `CosmicSupremacy
-Referee Sandbox` that opens it is disabled; enabling it while the host task
-runs would put two referees on one galaxy.
+client: Smart App Control inside the sandbox refused the unsigned client
+(WinError 4551). The stage now signs the client, and the bootstrap switches
+Smart App Control off inside the sandbox for the unsigned Python (N8). The
+logon task `CosmicSupremacy Referee Sandbox` opens it and is the one enabled;
+enabling the host task as well would put two referees on one galaxy.
 
 To point the referee elsewhere, run `run_worker.ps1 -WriteTaskXml` for the two
 `schtasks` commands, or `galaxy_tool.py start` for a new galaxy. Every command in this
@@ -77,15 +81,14 @@ file is relative to the repository root, and a fresh PowerShell opens in
    galaxy, stays for the beta, with the change recorded in the
    reconstruction report, section 14; the billing account's other projects
    are taken to use no Cloud Run.
-2. **M3, the signing account and a tester.** Decided 7 October: Azure
-   Artifact Signing, the patched game clients signed with the rest, and the
-   injected save kept for the beta, with the resident handler recorded as a
-   follow-up in the reconstruction report, section 12. Left: the operator sets up the
-   Artifact Signing account by M3's checklist (the portal steps are under
-   way; "Where the setup stands" in M3 says how to finish), and a beta
-   tester on a
-   machine nobody here configured takes a turn. The operator covers what
-   players are told about the save path outside this plan.
+2. **M3 is done.** Azure Artifact Signing signs the launcher, the AI and the
+   patched clients; a signed client clears Smart App Control where the
+   unsigned one is blocked; the injected save is kept for the beta, with the
+   resident handler a follow-up in the reconstruction report, section 12;
+   and the operator counted the laptop's turns on signed v0.1.12 as the
+   tester's. The operator covers what players are told about the save path
+   outside this plan. Publishing is the operator's call and wants release
+   notes.
 3. **J4 is done**, by a live rebind between two machines on 7 October, and
    J7 saw the held-seat box on screen in v0.1.10.
 4. **H4 is done.** The relay's refusals were already measured, and on 6
@@ -2720,7 +2723,7 @@ is out of scope here.
   be found: the referee's machine name in a UNC store path, and bare occurrences
   of the account name outside a path.
 
-- [ ]~ **M3. Antivirus and the save path, which is real remote code injection.**
+- [x] **M3. Antivirus and the save path, which is real remote code injection.**
   `trigger_save.py` uses `OpenProcess`, `VirtualAllocEx`, `WriteProcessMemory`
   and `CreateRemoteThread` to make the client save on demand. That is textbook
   injection and it is the only mechanism this path has, so a scanner objecting
@@ -3309,6 +3312,51 @@ is out of scope here.
     which is the operator's call (`gh release create`, as `build.ps1`
     prints).
 
+  **Signed, 8 October 2026.** The operator finished steps 1 to 6: account
+  `futch-signing` in West US 2 (`https://wus2.codesigning.azure.net`),
+  certificate profile `futch-public`, Public Trust, active, subject
+  `CN=Robert Futch, O=Robert Futch, L=Tucson, S=az, C=US`. The certificate
+  is short-lived, read as expiring 11 October, and the service renews it;
+  every signature carries an RFC 3161 timestamp from
+  `http://timestamp.acs.microsoft.com`, so a signed file stays valid past
+  the certificate's expiry.
+
+  - Step 7: `winget` installed the Artifact Signing Client Tools 0.1.128. The
+    dlib lands at `%LOCALAPPDATA%\Microsoft\MicrosoftArtifactSigningClientTools\Azure.CodeSigning.Dlib.dll`,
+    one file with no architecture folder, and the same install put the
+    Windows SDK signtool 10.0.26100.0 under `C:\Program Files (x86)\Windows
+    Kits\10\bin\10.0.26100.0\x64`, which `build.ps1` finds by itself. The
+    dlib is not where the build looks, so `CS_SIGN_AS_DLIB` names it.
+  - Step 8: Azure CLI 2.91.0, and the operator's `az login` as the Signer
+    on Subscription 1. A shell opened before the install needs
+    `C:\Program Files\Microsoft SDKs\Azure\CLI2\wbin` on its `PATH` for
+    the dlib's `AzureCliCredential` to find `az`.
+  - Step 9: a scratch copy of the v0.1.10 launcher signed first, in 3.5
+    seconds, Valid. Then v0.1.11 was built with `CS_SIGN_AS_ENDPOINT`,
+    `CS_SIGN_AS_ACCOUNT`, `CS_SIGN_AS_PROFILE` and `CS_SIGN_AS_DLIB` set:
+    `dist\CosmicSupremacy-Resurgence-v0.1.11.zip`, 41 MB, SHA256
+    `21a3252e2d6c9034173683659cf769e2da7e841b680b4c509cb1fb8ab4b5ced9`.
+    Not published; it has no `release\RELEASE_NOTES_v0.1.11.md` yet.
+  - Step 10, read back with `Get-AuthenticodeSignature`:
+
+    | v0.1.11 | status | signer | timestamped |
+    |---|---|---|---|
+    | `CosmicSupremacyLauncher.exe` | Valid | Robert Futch | yes |
+    | `game\CosmicSupremacyAI.exe` | Valid | Robert Futch | yes |
+    | `game\CosmicSupremacy_Resurgence.exe` | Valid | Robert Futch | yes |
+    | `game\CosmicSupremacy_Player.exe` | Valid | Robert Futch | yes |
+    | `game\CosmicSupremacy.exe` | NotSigned, by design | | |
+
+  - Step 11, Smart App Control, answered without the referee. A Windows
+    Sandbox with networking off and Smart App Control on
+    (`VerifiedAndReputablePolicyState` 1) started each client from a mapped
+    folder. Both signed v0.1.11 clients started and were still running six
+    seconds later. The unsigned v0.1.10 `CosmicSupremacy_Resurgence.exe`, as
+    a control, was refused: "An Application Control policy has blocked this
+    file", the block that stopped the sandboxed referee. So signing is what
+    clears it. A player on a Smart App Control machine is expected to start
+    the signed clients the same way, which a tester's machine confirms.
+
   **The unsigned game binaries are not a dead end, but they are the open
   part.** Five executables ship. Two are ours: the launcher and the AI
   opponent. Two are the original client patched by this project
@@ -3339,7 +3387,21 @@ is out of scope here.
 
   **Done when:** the checkout stops producing the file that gets quarantined,
   and a beta tester on a machine nobody here configured takes a turn. The
-  first half is met on this branch; the second is still open.
+  first half is met on this branch; the second is still open. v0.1.12, built
+  signed on 8 October from `1a50752` after the tkinter window was removed
+  (SHA256 `3c31abe11aa22ae217d756f94acc14237a355ecc6327c00ae830d44017a51293`,
+  every signature read back as in step 10), is the build the operator plays
+  on two machines for a few days before anything is published. v0.1.11 was
+  never handed out.
+
+  **Done, 10 October 2026, by the operator's decision to count the second
+  machine.** The laptop runs the packaged v0.1.12 with no checkout and no
+  development tools, and took turns 44 and 46 on `h3check` as `Wanderer`
+  through the injected save, each submission landing in the galaxy. It is
+  the operator's own machine rather than a stranger's, and its Defender
+  settings and exclusions were not read from here. A tester outside the
+  project, after publishing, is the stronger proof and is expected rather
+  than required.
 
 ---
 
@@ -3620,6 +3682,77 @@ is out of scope here.
   `referee_worker.py`, so a new bare spawn in either fails it. What is left is
   the done-when itself, which only a person watching the desktop through a
   real tick can confirm, and it takes effect once the worker is restarted.
+
+- [x] **N8. The sandboxed referee runs a signed client.** `stage.ps1` copies
+  the referee's client from the checkout's `client\*.exe`, which is
+  unsigned, so a staged sandbox is still refused by Smart App Control. M3
+  measured that a signed client starts there. The stage needs a signed
+  client: copied from a signed release's `game` folder, or signed as it is
+  staged with the same signing configuration `build.ps1` uses. Then the
+  sandbox can take over from the host task, with the logon task enabled
+  only once the host task is disabled, so one referee holds `h3check`.
+
+  **Staged signed, and blocked one step earlier, 8 October 2026.**
+  `stage.ps1` now signs the staged patched clients with `build.ps1`'s signer
+  (`-Unsigned` skips it), and a stage at 22:46 held all three Valid. The
+  sandbox then stopped before the client: its bootstrap's first `python.exe`
+  was refused with "An Application Control policy has blocked this file",
+  as on 5 October. The interpreter is uv's unsigned CPython 3.12, mapped
+  from the host. The host has Smart App Control off (state 0) and the
+  sandbox image has it on (state 1). Smart App Control is understood to
+  offer no per-app exception, which needs checking against Microsoft's
+  documentation, so the ways on are switching it off inside the disposable
+  sandbox at boot, or a referee whose every loaded module is signed. The
+  operator decides; the host task stays disabled meanwhile, since nothing
+  needs a referee until this is finished.
+
+  **Done when:** the sandboxed referee closes a live turn on `h3check` with a
+  signed client, and exactly one referee task is enabled afterwards.
+
+  **Done, 8 October 2026.** The operator chose to switch Smart App Control
+  off inside the sandbox rather than sign every module the referee loads.
+  A probe sandbox measured the step first: an unsigned Python was refused
+  at state 1, and started after `VerifiedAndReputablePolicyState` was set
+  to 0 and `CiTool --refresh` answered `{"OperationResult":0}`, with no
+  reboot. `bootstrap.ps1` now does that before anything runs Python, and
+  logs it. The host's own setting is not touched. The stage at `158c836`
+  was signed as above; the host task was disabled and the sandbox task
+  enabled and run at 23:01:38. The bootstrap logged Smart App Control off,
+  preflight passed at turn 43, and the worker closed turn 43 at 23:03:31,
+  launched the signed client inside the sandbox, captured 40,437 bytes and
+  published turn 44 at 23:04:01, canonical `397ffe496a9f9e48`. Afterwards
+  the sandbox task reads Ready and the host task Disabled.
+
+- [ ] **N9. The sandboxed referee cannot start the client while the host is
+  locked.** Its first unattended night, 9 October 2026: at 03:04 it merged
+  both civs' turn 44 orders, 10 taken and none dropped, then
+  `game_cycle.launch` failed with "client did not become readable within
+  180s". It retried 98 times, about every eleven minutes, the same way each
+  time, and the galaxy read as stopped on every launcher. At 21:10, minutes
+  after the operator unlocked the machine and looked at the sandbox, the next
+  attempt brought the client up in 19 seconds and published turn 45. Its
+  only earlier live tick, 23:03 on 8 October, was taken with the operator at
+  the machine. The host had stayed on and only locked. The host task ticked
+  through locked nights for weeks, so this is specific to the sandbox, whose
+  desktop is drawn through a remote session window that is understood to
+  stop rendering when the host locks; the lock times themselves are not in
+  any log here, since lock auditing is off.
+
+  **Done when:** the sandboxed referee closes a turn whose deadline falls
+  while the host is locked, or the referee for the beta is settled as the
+  host task with the reason written here.
+
+  **A short lock passes, 9 October 2026.** The remote desktop client's
+  `RemoteDesktop_SuppressWhenMinimized`, a DWORD under
+  `HKCU\Software\Microsoft\Terminal Server Client`, was set to 2, which
+  keeps a minimized session drawing, and the sandbox restarted at 21:15 so
+  its window read it. The operator moved turn 45's deadline to 21:23:16 and
+  locked the machine. The worker closed turn 45 at 21:23:40, the client was
+  up at 21:24:01 and turn 46 was published at 21:24:11, with `LogonUI.exe`
+  still running afterwards, so the session was locked throughout. Whether
+  Windows Sandbox reads that value or the lock was simply short is not
+  separated. A lock of hours, with the display powered off, is what failed;
+  the turn due at about 01:24 on 10 October is the test of that.
 
 ---
 

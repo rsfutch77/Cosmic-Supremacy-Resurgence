@@ -37,6 +37,16 @@ try {
     & robocopy C:\stage\resurgence $Code /MIR /NFL /NDL /NJH /NJS /NP | Out-Null
     if ($LASTEXITCODE -ge 8) { throw "copying the stage failed ($LASTEXITCODE)" }
 
+    # Windows Sandbox boots with Smart App Control on, which refuses the
+    # unsigned interpreter the stage runs and offers no per-program exception.
+    # This sandbox runs nothing but the referee and is discarded when it
+    # closes, and its isolation is the virtual machine, so the policy is
+    # switched off for this boot. The host's setting is not touched.
+    $Ci = 'HKLM:\SYSTEM\CurrentControlSet\Control\CI\Policy'
+    Set-ItemProperty -Path $Ci -Name VerifiedAndReputablePolicyState -Value 0 -Type DWord
+    $Refresh = (& CiTool.exe --refresh --json 2>&1 | Out-String).Trim()
+    Say "smart app control: off for this sandbox, state $((Get-ItemProperty $Ci).VerifiedAndReputablePolicyState), refresh $Refresh"
+
     $Config = Get-Content C:\stage\config.json -Raw | ConvertFrom-Json
     $Store = $Config.store
     if ($Config.seed) {

@@ -1,10 +1,12 @@
 """
-build_ops_checklist.py , write Ops_Release_Privacy_Checklist.md
-===============================================================
+build_ops_checklist.py , write the operations, release and privacy checklists
+============================================================================
     python docs/verification/build_ops_checklist.py
 
-Three parts in one checklist: running the service, releasing the launcher, and
-handling players' data. Source items come from `ops_sources.py`, every item of
+Three checklists, sections 4, 5 and 6 of `0 - Checklist_Sources.md`:
+`4 - Operations_Checklist.md` (running the service), `5 - Release_Checklist.md`
+(releasing the launcher) and `6 - Privacy_Checklist.md` (players' data). They
+share one script because their items cite each other by ID. Source items come from `ops_sources.py`, every item of
 each source in order. Each gets one disposition:
 
     apply      a checkbox, with sub-items
@@ -27,7 +29,9 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 import ops_sources as src
 
-OUT = os.path.join(HERE, '4 - Ops_Release_Privacy_Checklist.md')
+OUT_OPS = os.path.join(HERE, '4 - Operations_Checklist.md')
+OUT_REL = os.path.join(HERE, '5 - Release_Checklist.md')
+OUT_PRIV = os.path.join(HERE, '6 - Privacy_Checklist.md')
 
 AGE = ('the age-floor decision (PRIV-1)')
 UNDER13 = ('the game is judged directed to children under 13, or the operator keeps an under-13 player '
@@ -346,54 +350,25 @@ def authored(items, counts, label):
     return out
 
 
-def main():
-    counts = {}
-    ops = (section('Firebase launch checklist', src.firebase_launch(), FB, counts, 'Firebase launch checklist')
-           + ['', '### Operating the service (OPS)'] + authored(OPS, counts, 'OPS items'))
-    rel = (section('Minimising SmartScreen warnings (Microsoft)', src.smartscreen(), SS, counts, 'Microsoft SmartScreen')
-           + section('Attacks on software update (The Update Framework)', src.tuf_attacks(), TUF, counts, 'TUF attacks')
-           + ['', '### Releasing the launcher (REL)'] + authored(REL, counts, 'REL items'))
-    priv = (['', '### Decisions and records (PRIV)'] + authored(PRIV, counts, 'PRIV items')
-            + section('ICO Age appropriate design code (Children\'s code), the 15 standards', src.ico_aadc(), AADC, counts, 'ICO Children\'s code')
-            + section('ICO top tips for games designers', src.ico_games_tips(), TIP, counts, 'ICO games tips')
-            + section('ICO controllers checklist (lawful basis and transparency)',
-                      src.ico_checklist('ico_controllers_checklist.md', 'ICO-C'), ICO, counts, 'ICO controllers')
-            + section('ICO information security checklist (first section)',
-                      src.ico_checklist('ico_information_security_checklist.md', 'ICO-S'), ICO, counts, 'ICO security')
-            + section('FTC COPPA six-step compliance plan', src.ftc_coppa(), COPPA, counts, 'FTC COPPA'))
-
+def write_doc(path, title, intro, sources, body, counts):
     order = ['apply', 'done', 'cond', 'deviation', 'na', 'untailored']
     totals = ['| Source | apply | done | cond | deviation | N/A | to tailor | total |',
               '|---|---|---|---|---|---|---|---|']
     for name, c in counts.items():
         totals.append(f'| {name} | ' + ' | '.join(str(c.get(k, 0)) for k in order)
                       + f' | {sum(c.values())} |')
-
-    head = [
-        '# Operations, release and privacy checklist',
-        '',
-        'Running the service, releasing the launcher, and handling players\' '
-        'data. Rerun the items a change touches; run the release items before '
-        'every release.',
+    head = [f'# {title}', ''] + intro + [
         '',
         'Written for the published game. Unchecked items are the gap to it.',
         '',
-        '**Not legal advice.** The privacy sections quote regulators\' guidance '
-        'as published. Whether a law applies, and what it requires, is for the '
-        'controlling text or counsel (PRIV-6, PRIV-8). Points not checked against '
-        'the controlling text say "unverified".',
-        '',
         '**Sources**, each reproduced or paraphrased as its licence allows:',
         '',
-        '- Firebase launch checklist (Google, updated 24 September 2026), CC BY 4.0, items reproduced.',
-        '- Microsoft Learn, "SmartScreen reputation for Windows app developers" (2026), CC BY 4.0, items reproduced; "Code signing options for Windows app developers" (29 August 2026), cited.',
-        '- The Update Framework specification v1.0.36 (5 August 2026), Community Specification License 1.0, the attack list reproduced.',
-        '- ICO, "Age appropriate design: a code of practice for online services", the 15 standards, and "Top tips for games designers", Open Government Licence v3.0, reproduced.',
-        '- ICO controllers checklist and information security checklist, OGL v3.0, the statements reproduced. The saved copies hold the first section of each; the rest is online and still to be gone through.',
-        '- FTC, "Children\'s Online Privacy Protection Rule: A Six-Step Compliance Plan for Your Business" (May 2026), a US Government work, the steps reproduced.',
-        '- Cited and paraphrased: PagerDuty Incident Response documentation; Google Cloud Well-Architected Framework, Reliability pillar; Windows Desktop App Certification Requirements v3.3; Apache "Release Download Pages for Projects"; NIST SP 800-218; Ofcom\'s online safety guidance for games.',
+    ] + [f'- {s}' for s in sources] + [
         '',
-        'Generated by `build_ops_checklist.py` from `ops_sources.py`, beside this file.',
+        'Generated by `build_ops_checklist.py` from `ops_sources.py`, beside this '
+        'file. The same script writes `4 - Operations_Checklist.md`, '
+        '`5 - Release_Checklist.md` and `6 - Privacy_Checklist.md`, because their '
+        'items cite each other by ID.',
         '',
         '## How to read an item',
         '',
@@ -405,12 +380,61 @@ def main():
         '',
         '## Totals',
         '',
-    ] + totals + ['', '## Operations'] + ops + ['', '## Release'] + rel + ['', '## Privacy'] + priv
-    with open(OUT, 'w', encoding='utf-8', newline='\n') as f:
+    ] + totals + body
+    with open(path, 'w', encoding='utf-8', newline='\n') as f:
         f.write('\n'.join(head) + '\n')
-    print(f'wrote {OUT}')
+    print(f'wrote {os.path.basename(path)}')
     for line in totals[2:]:
-        print(line)
+        print('  ' + line)
+
+
+def main():
+    c_ops, c_rel, c_priv = {}, {}, {}
+    ops = (section('Firebase launch checklist', src.firebase_launch(), FB, c_ops, 'Firebase launch checklist')
+           + ['', '### Operating the service (OPS)'] + authored(OPS, c_ops, 'OPS items'))
+    rel = (section('Minimising SmartScreen warnings (Microsoft)', src.smartscreen(), SS, c_rel, 'Microsoft SmartScreen')
+           + section('Attacks on software update (The Update Framework)', src.tuf_attacks(), TUF, c_rel, 'TUF attacks')
+           + ['', '### Releasing the launcher (REL)'] + authored(REL, c_rel, 'REL items'))
+    priv = (['', '### Decisions and records (PRIV)'] + authored(PRIV, c_priv, 'PRIV items')
+            + section("ICO Age appropriate design code (Children's code), the 15 standards", src.ico_aadc(), AADC, c_priv, "ICO Children's code")
+            + section('ICO top tips for games designers', src.ico_games_tips(), TIP, c_priv, 'ICO games tips')
+            + section('ICO controllers checklist (lawful basis and transparency)',
+                      src.ico_checklist('ico_controllers_checklist.md', 'ICO-C'), ICO, c_priv, 'ICO controllers')
+            + section('ICO information security checklist (first section)',
+                      src.ico_checklist('ico_information_security_checklist.md', 'ICO-S'), ICO, c_priv, 'ICO security')
+            + section('FTC COPPA six-step compliance plan', src.ftc_coppa(), COPPA, c_priv, 'FTC COPPA'))
+
+    write_doc(OUT_OPS, 'Operations checklist', [
+        'Running the service: the Firebase project, cost, incidents, recovery, and '
+        'the referee machine. Section 4 of `0 - Checklist_Sources.md`. Rerun the '
+        'items a change to the project, the relay or the referee touches.'],
+        ['Firebase launch checklist (Google, updated 24 September 2026), CC BY 4.0, items reproduced.',
+         'Cited and paraphrased: PagerDuty Incident Response documentation; Google Cloud Well-Architected Framework, Reliability pillar.'],
+        ['', '## Operations'] + ops, c_ops)
+
+    write_doc(OUT_REL, 'Release checklist', [
+        'Releasing the Windows launcher: signing, SmartScreen, update integrity, '
+        'install and uninstall, and the release steps. Section 5 of '
+        '`0 - Checklist_Sources.md`. Run before every release.'],
+        ['Microsoft Learn, "SmartScreen reputation for Windows app developers" (2026), CC BY 4.0, items reproduced; "Code signing options for Windows app developers" (29 August 2026), cited.',
+         'The Update Framework specification v1.0.36 (5 August 2026), Community Specification License 1.0, the attack list reproduced.',
+         'Cited and paraphrased: Windows Desktop App Certification Requirements v3.3; Apache "Release Download Pages for Projects"; NIST SP 800-218.'],
+        ['', '## Release'] + rel, c_rel)
+
+    write_doc(OUT_PRIV, 'Privacy checklist', [
+        "Handling players' data: the age floor, what is held and for how long, "
+        "players' rights, children's privacy, and online safety duties. Section "
+        '6 of `0 - Checklist_Sources.md`.',
+        '',
+        "**Not legal advice.** This checklist quotes regulators' guidance as "
+        'published. Whether a law applies, and what it requires, is for the '
+        'controlling text or counsel (PRIV-6, PRIV-8). Points not checked against '
+        'the controlling text say "unverified".'],
+        ['ICO, "Age appropriate design: a code of practice for online services", the 15 standards, and "Top tips for games designers", Open Government Licence v3.0, reproduced.',
+         'ICO controllers checklist and information security checklist, OGL v3.0, the statements reproduced. The saved copies hold the first section of each; the rest is online and still to be gone through.',
+         'FTC, "Children\'s Online Privacy Protection Rule: A Six-Step Compliance Plan for Your Business" (May 2026), a US Government work, the steps reproduced.',
+         "Cited: Ofcom's online safety guidance for games; PEGI Online Safety Code."],
+        ['', '## Privacy'] + priv, c_priv)
 
 
 if __name__ == '__main__':

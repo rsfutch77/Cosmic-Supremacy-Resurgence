@@ -290,7 +290,7 @@ R = [
     ('R8', 'Apache Software Foundation, "Release Download Pages for Projects"',
      'The download page links the file, its checksum, and how to verify it, all over HTTPS.',
      ['[x] The download page offered v0.1.0. It now offers v0.1.1, the latest published release, with its size, date and SHA-256 (matching GitHub\'s digest); live on 8 October 2026.',
-      'Make updating the download page part of the release steps (Ops_Release_Privacy_Checklist REL-3), including when v0.1.8 or later is published.',
+      'Make updating the download page part of the release steps (`5 - Release_Checklist.md` REL-3), including when v0.1.8 or later is published.',
       '[x] The page explains how to check the SHA-256 (`certutil -hashfile <zip> SHA256`).',
       'When the launcher is code-signed (M3), say so and name the publisher.']),
     ('R9', 'Microsoft Learn, "SmartScreen reputation for Windows app developers" (2026)',

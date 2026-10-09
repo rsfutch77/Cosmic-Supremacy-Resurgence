@@ -40,6 +40,14 @@
 .PARAMETER Once
     The worker makes one pass and the sandbox stays open for inspection.
 
+.PARAMETER Unsigned
+    Stage the client as the checkout holds it. Windows Sandbox runs with Smart
+    App Control on, which refuses an unsigned client (WinError 4551), so by
+    default the staged patched clients are signed with the signer that
+    release\build.ps1 uses, configured by the same CS_SIGN_* environment
+    variables. With -Unsigned nothing is signed and a referee in a sandbox
+    with Smart App Control on cannot tick.
+
 .EXAMPLE
     .\server\sandbox\stage.ps1 -Store firebase://cs-resurgence/h3check -Bucket cs-resurgence.firebasestorage.app -KeyFile C:\keys\referee.json
     .\server\sandbox\stage.ps1 -Seed .\server\galaxy_demo -Once
@@ -50,7 +58,8 @@ param(
     [string]$KeyFile,
     [string]$Bucket,
     [string]$Root = 'C:\CSReferee',
-    [switch]$Once
+    [switch]$Once,
+    [switch]$Unsigned
 )
 
 $ErrorActionPreference = 'Stop'
@@ -92,6 +101,40 @@ Copy-Tree (Join-Path $Repo 'server') (Join-Path $Code 'server') $Skip
 Copy-Tree (Join-Path $Repo 'client\dev_tools') (Join-Path $Code 'client\dev_tools') $Skip
 Get-ChildItem (Join-Path $Repo 'client') -Filter '*.exe' |
     Copy-Item -Destination (New-Item -ItemType Directory -Force (Join-Path $Code 'client'))
+
+# The patched clients the worker can launch. CosmicSupremacy.exe is the
+# original client and is never signed with this project's certificate.
+$StagedClients = @('CosmicSupremacy_Resurgence.exe', 'CosmicSupremacy_Player.exe',
+                   'CosmicSupremacy_TestBed.exe') |
+    ForEach-Object { Join-Path $Code "client\$_" } |
+    Where-Object { Test-Path -LiteralPath $_ }
+if ($Unsigned) {
+    Write-Host 'Client staged unsigned: Smart App Control in the sandbox refuses it.' -ForegroundColor Yellow
+} else {
+    # The signing functions are release\build.ps1's own, so the stage and a
+    # release are signed by one implementation and one configuration.
+    $BuildScript = Join-Path $Repo 'release\build.ps1'
+    $BuildAst = [System.Management.Automation.Language.Parser]::ParseFile($BuildScript, [ref]$null, [ref]$null)
+    foreach ($fn in $BuildAst.FindAll({ param($a) $a -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $false)) {
+        . ([scriptblock]::Create($fn.Extent.Text))
+    }
+    $Exclude = if ($env:CS_SIGN_AS_EXCLUDE_CREDENTIALS) {
+        @($env:CS_SIGN_AS_EXCLUDE_CREDENTIALS -split ',' | ForEach-Object { $_.Trim() } | Where-Object { $_ })
+    } else { @('InteractiveBrowserCredential') }
+    $Signer = Resolve-SigningConfig -Thumbprint $env:CS_SIGN_CERT_THUMBPRINT `
+        -TimestampUrl $env:CS_SIGN_TIMESTAMP_URL -SignToolPath $env:CS_SIGNTOOL `
+        -ArtifactEndpoint $env:CS_SIGN_AS_ENDPOINT -ArtifactAccount $env:CS_SIGN_AS_ACCOUNT `
+        -ArtifactProfile $env:CS_SIGN_AS_PROFILE -ArtifactDlib $env:CS_SIGN_AS_DLIB `
+        -ArtifactAuthExclude $Exclude `
+        -MetadataPath (Join-Path $Root 'artifact-signing-metadata.json')
+    if (-not $Signer) {
+        Write-Host ('No signer is configured, and Smart App Control in the sandbox refuses an ' +
+                    'unsigned client. Set the CS_SIGN_* variables release\build.ps1 uses, ' +
+                    'or pass -Unsigned.') -ForegroundColor Red
+        exit 2
+    }
+    Invoke-ReleaseSigning -Config $Signer -Path $StagedClients
+}
 
 $SeedName = ''
 if ($Seed) {
@@ -149,4 +192,5 @@ Write-Host "Staged $Commit into $Stage" -ForegroundColor Cyan
 Write-Host "  store: $(if ($Seed) { "seed $Seed" } else { $Store })"
 Write-Host "  key:   $(if (Get-ChildItem $KeyDir -Filter '*.json') { 'present' } else { 'none' })"
 Write-Host "  out:   $Out"
+Write-Host "  client: $(if ($Unsigned) { 'unsigned' } else { 'signed' })"
 Write-Host "Start it with: WindowsSandbox.exe $WsbPath"
