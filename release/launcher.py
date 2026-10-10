@@ -3154,7 +3154,7 @@ class Launcher:
         self.player = None
         # The status to fall back to whenever no game is running. Recorded when
         # the server settles so that a game exiting restores whatever was true
-        # then , "server running", "port taken", "reusing the existing server" ,
+        # then , "ready", "port taken", "reusing the existing server" ,
         # rather than a guess.
         self._ready: "tuple[str, str]" = ("starting…", WARN)
         # What the status line says now, which is what the window starts with.
@@ -3328,7 +3328,7 @@ class Launcher:
                 traceback.format_exception_only(type(exc), exc)).strip())
             return
         self.server_ok = True
-        self.set_ready_status(f"server running on {host}:{port}", OK)
+        self.set_ready_status("ready", OK)
         listening = ", ".join(
             f"{s.server_address[0]}:{s.server_address[1]}" for s in self.servers)
         self.say(f"server listening on {listening}")

@@ -511,7 +511,7 @@ check("while going on saying it has stopped",
 
 
 print("\n7. the status line, which says what is running and nothing more")
-READY = ("server running on 127.0.0.1:8888", L.OK)
+READY = ("ready", L.OK)
 
 
 def status_for(overdue, waiting=True, turn_seconds=FOUR_HOURS):

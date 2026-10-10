@@ -49,7 +49,7 @@ def check(label, got, want):
 
 pump(1.5)
 ready = status()
-check("idle status", ready, lambda s: "server" in (s or "").lower())
+check("idle status", ready, "ready")
 
 print("\nstart the client EXTERNALLY - the launcher gets no child handle")
 exe = os.path.join(app.game_root, mode["exe"])

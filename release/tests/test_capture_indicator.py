@@ -438,7 +438,7 @@ class _St:
         self.said.append((text, colour))
 
 
-READY = ("server running on 127.0.0.1:8888", "ok")
+READY = ("ready", "ok")
 
 
 def _status_for(sending, gone):
