@@ -44,7 +44,8 @@ records what was seen.
 
 **What the machine is doing right now.** Since 8 October the sandboxed
 referee referees `firebase://cs-resurgence/h3check` ("Beta rehearsal") at
-four-hour turns, and cannot tick while the host is locked (N9), inside Windows Sandbox and as the service account below,
+four-hour turns, including through a locked night with the remote
+session kept drawing (N9), inside Windows Sandbox and as the service account below,
 opened by the logon task `CosmicSupremacy Referee Sandbox`. The host task
 `CosmicSupremacy Referee` is disabled; enabling both would put two referees on
 one galaxy. `h3check` is still disposable; its civs are `QCplayer1`, seated
@@ -1902,7 +1903,7 @@ is out of scope here.
   uid prefix and "log reference" for the id the relay gives each upload. The
   entries above keep the old name where they record what was on screen.
 
-  - [ ] Check the title line and both log boxes in the next packaged build.
+  - [x] Check the title line and both log boxes in the next packaged build.
 
   **The refusal box was never reached during a turn, found 7 October 2026.**
   On the second machine a fresh v0.1.9 install named `QCplayer1` opened the
@@ -3723,7 +3724,7 @@ is out of scope here.
   published turn 44 at 23:04:01, canonical `397ffe496a9f9e48`. Afterwards
   the sandbox task reads Ready and the host task Disabled.
 
-- [ ] **N9. The sandboxed referee cannot start the client while the host is
+- [x] **N9. The sandboxed referee cannot start the client while the host is
   locked.** Its first unattended night, 9 October 2026: at 03:04 it merged
   both civs' turn 44 orders, 10 taken and none dropped, then
   `game_cycle.launch` failed with "client did not become readable within
@@ -3753,6 +3754,44 @@ is out of scope here.
   Windows Sandbox reads that value or the lock was simply short is not
   separated. A lock of hours, with the display powered off, is what failed;
   the turn due at about 01:24 on 10 October is the test of that.
+
+  **Done, 10 October 2026.** The 01:24 tick was taken with the machine in
+  use, so it does not count. The operator then left the machine locked
+  overnight, and the sandbox closed turn 47 at 05:25:28 and turn 48 at
+  09:26:21, its client up within 21 seconds each time and turns 48 and 49
+  published, with no "client did not become readable" since the setting
+  went in.
+
+- [x] **J9. The Galaxies page polls while the launcher is minimised.** On 10
+  October the relay received 16 listing requests and 16 `/submissions`
+  requests in the hour to 02:00 and none after it, while the referee
+  machine's launcher kept following its galaxy and uploading all morning.
+  That is by design: `_games_tick` re-lists only while `self.page` is
+  `galaxies`, and both launchers had left that page to play. The turn loop
+  runs on its own thread whatever the window does, which is what carried on.
+
+  What the design misses is a launcher minimised while it is on the
+  Galaxies page: it still re-lists every two minutes, for rows nobody can
+  see. That is the Games page term in H12, 1,440 requests a day of a
+  launcher's 2,390, for a player who parks the launcher on that page. A
+  re-list when the window is restored shows the same thing.
+
+  **Done when:** a minimised launcher on the Galaxies page makes no listing
+  or `/submissions` request, restoring it re-lists at once, and a test says
+  so.
+
+  **Built, 10 October 2026, and checked headless.** `_games_tick` skips the
+  listing while `view.is_minimized()` and keeps its timer; `on_restored`
+  lists at once when the window comes back on the Galaxies page. The web
+  view asks Windows with `IsIconic` on the handle taken when the window is
+  shown, so any thread may ask, and forwards pywebview's `restored` event,
+  which its WinForms backend fires when the window returns to normal from
+  minimised. `release/tests/test_minimised_poll.py`, 13 checks, is in the
+  pre-release runner, and removing either half fails a named check. It
+  matters more once Play leaves the launcher on the page it was pressed on,
+  since a player who plays from the Galaxies page then stays on it. On
+  screen, a minimised launcher's relay traffic and a restore's immediate
+  re-list are for the next packaged build.
 
 ---
 

@@ -3469,12 +3469,20 @@ class Launcher:
     def _games_tick(self):
         """Re-list on a slow timer, and keep the timer whatever a listing did.
 
-        Only while the page is on screen. A countdown nobody is looking at is
-        worth less than the reads a poll behind a hidden page would spend.
+        Only while the page is on screen and the window is not minimised. A
+        countdown nobody is looking at is worth less than the reads a poll
+        behind a hidden page would spend. `on_restored` re-lists when the
+        window comes back, so a restored page is never a poll behind.
         """
-        if self.page == "galaxies":
+        if self.page == "galaxies" and not self.view.is_minimized():
             self.refresh_games()
         self.view.after(GAMES_POLL_MS, self._games_tick)
+
+    def on_restored(self):
+        """The window came back from the taskbar. The Galaxies page was last
+        listed before it went, so it is listed again now."""
+        if self.page == "galaxies":
+            self.refresh_games()
 
     def refresh_games(self):
         """List off the UI thread and repaint when it answers.

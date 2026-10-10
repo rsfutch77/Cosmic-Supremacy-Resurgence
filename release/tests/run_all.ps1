@@ -30,6 +30,9 @@
                            The opt-in message save path names none of the
                            injection primitives and the switch is off by
                            default. Source and environment only, no game.
+      test_minimised_poll  The Galaxies page skips its timed listing while the
+                           window is minimised and lists again on restore. No
+                           game, no network.
       test_status_cycle    Drives the real launcher window and the real client
                            for each playable mode: click, confirm it reports the
                            game running, kill it, confirm the status recovers.
@@ -80,6 +83,7 @@ Invoke-Test 'test_signing.py'
 Invoke-Test 'test_build_and_log.py'
 Invoke-Test 'test_save_protocol.py'
 Invoke-Test 'test_save_message_path.py'
+Invoke-Test 'test_minimised_poll.py'
 foreach ($mode in @('tutorial', 'demo', 'testbed')) {
     Invoke-Test 'test_status_cycle.py' @($mode)
 }

@@ -68,6 +68,8 @@ class FakeView:
         self.closed = False
         self.icon = None
         self.timers = []
+        # Whether the window reads as minimised to the taskbar.
+        self.minimized = False
         # Every prompt shown, as (kind, args), in order.
         self.prompts = []
 
@@ -89,6 +91,9 @@ class FakeView:
 
     def set_icon(self, path):
         self.icon = path
+
+    def is_minimized(self):
+        return self.minimized
 
     # identity and build
     def show_identity(self, player):

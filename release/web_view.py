@@ -147,6 +147,7 @@ class WebView:
         self._closing = False
         self._icon = None
         self._shown = False
+        self._hwnd = None
         self._prompt_ids = itertools.count(1)
         self._answers: dict = {}
         self._row_actions: list = []
@@ -168,6 +169,7 @@ class WebView:
         self.window.events.shown += self._on_shown
         self.window.events.closing += self._on_closing
         self.window.events.closed += self._on_closed
+        self.window.events.restored += self._on_restored
         # Named, so a missing runtime fails here instead of quietly drawing the
         # page in the Internet Explorer engine. webview_runtime has checked
         # for it before this runs.
@@ -235,7 +237,19 @@ class WebView:
     # ── native window ──
     def _on_shown(self) -> None:
         self._shown = True
+        self._hwnd = self.window.native.Handle.ToInt64()
         self._dress()
+
+    def _on_restored(self) -> None:
+        if self.app is not None:
+            self.post(self.app.on_restored)
+
+    def is_minimized(self) -> bool:
+        """Whether the window is minimised to the taskbar, asked of Windows
+        by the handle taken when it was shown, so any thread may ask."""
+        if self._hwnd is None or self._closed:
+            return False
+        return bool(ctypes.windll.user32.IsIconic(self._hwnd))
 
     def _dress(self) -> None:
         """Exact size, the taskbar icon, and taskbar minimize for a window with
