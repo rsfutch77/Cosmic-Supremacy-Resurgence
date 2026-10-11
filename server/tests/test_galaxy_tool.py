@@ -89,7 +89,8 @@ def run_folder(tmp):
 
     code, text = tool(root, 'start', 'one', '--name', 'Season One',
                       '--blob', GALAXY, *sum([['--player', c] for c in CIVS],
-                                             []), '--warn', 3, '--reclaim', 6)
+                                             []), '--warn', 3, '--reclaim', 6,
+                      '--min-build', ' 0.2.0 ')
     check('a start succeeds', code, 0)
     d = open_directory(root)
     g = d.galaxy('one')
@@ -101,6 +102,12 @@ def run_folder(tmp):
     check('and it carries the abandonment thresholds',
           (store.state().get('warn_after_misses'),
            store.state().get('reclaim_after_misses')), (3, 6))
+    import launcher
+    check('and the minimum build, trimmed',
+          store.state().get(turn_store.MIN_BUILD_KEY), '0.2.0')
+    check('which turns away a launcher older than it',
+          (launcher.version_problem('0.1.12', store.state()) is not None,
+           launcher.version_problem('0.2.0', store.state())), (True, None))
     check('the tool says how to point the worker at it',
           'referee_worker.py --store' in text, True)
 
@@ -127,6 +134,9 @@ def run_folder(tmp):
         ('replacing a galaxy that does not exist',
          ['two', '--blob', GALAXY, '--player', CIVS[0], '--player', CIVS[1],
           '--replaces', 'nowhere'], 'there is no galaxy nowhere'),
+        ('a minimum build the launcher cannot order',
+         ['two', '--blob', GALAXY, '--player', CIVS[0], '--player', CIVS[1],
+          '--min-build', 'v0.2.0'], 'not a dotted number'),
     ]
     for label, args, says in cases:
         code, text = tool(root, 'start', *args)

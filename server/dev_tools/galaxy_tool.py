@@ -5,7 +5,8 @@ galaxy_tool.py , the operator ends a galaxy and starts the next one (K5)
     python galaxy_tool.py firebase://cs-resurgence close sandbox --reason "Season one is over."
     python galaxy_tool.py firebase://cs-resurgence reopen sandbox
     python galaxy_tool.py firebase://cs-resurgence start season2 --name "Season Two" \\
-        --generate fresh.b64 --player Alice --player Bob --replaces sandbox
+        --generate fresh.b64 --player Alice --player Bob --replaces sandbox \\
+        --min-build 0.2.0
     python galaxy_tool.py firebase://cs-resurgence start season2 ... --dry-run
 
 A galaxy has no season timer. The operator calls one over and starts another,
@@ -44,6 +45,9 @@ It refuses an id that already has a turn, so a typo cannot publish over a
 running galaxy. `--warn` and `--reclaim` set the abandonment thresholds (K3),
 and `--seat-claim first-use` opens a Firebase galaxy's roster to first-use
 claims, which is off by default for the reason `relay.claim_seat` gives.
+`--min-build 0.2.0` writes the galaxy's `min_build`, L2's gate: a launcher
+older than it refuses to play and points at the release page. It has to be a
+dotted number, because the launcher reads anything else as no minimum.
 
 `--replaces OLD` closes OLD once the new galaxy is published, and not before,
 so a start that fails leaves the old galaxy open and players are never left
@@ -60,6 +64,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import re
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -80,6 +85,9 @@ TURN_SECONDS = 14400
 REPLACED = 'This galaxy has ended. {name} has started in its place.'
 
 SEAT_CLAIMS = ('first-use',)
+
+# A build the launcher's `build_parts` can order. Anything else gates nobody.
+MIN_BUILD = re.compile(r'\d+(?:\.\d+)*')
 
 
 class Refused(Exception):
@@ -200,7 +208,7 @@ def first_blob(players, blob_path: str = None, generate: str = None,
 
 
 def check_start(directory, gid: str, name: str, players, seat_claim=None,
-                warn=None, reclaim=None):
+                warn=None, reclaim=None, min_build=None):
     """Refused, or nothing. Changes nothing."""
     if not gid or '/' in gid or '\\' in gid or gid.startswith(('.', '_')):
         raise Refused(f'{gid!r} cannot be a galaxy id')
@@ -216,16 +224,22 @@ def check_start(directory, gid: str, name: str, players, seat_claim=None,
     for label, value in (('--warn', warn), ('--reclaim', reclaim)):
         if value is not None and value < 0:
             raise Refused(f'{label} is a count of turns; 0 turns it off')
+    if min_build is not None and not MIN_BUILD.fullmatch(min_build):
+        raise Refused(f'--min-build {min_build!r} is not a dotted number like '
+                      f'0.2.0, and a launcher reads it as no minimum at all')
 
 
 def start(directory, gid: str, name: str, players, blob_path: str = None,
           generate: str = None, turn_seconds: int = TURN_SECONDS,
           warn: int = None, reclaim: int = None, seat_claim: str = None,
-          replaces: str = None, reason: str = None, dry_run: bool = False,
-          out=None) -> dict:
+          replaces: str = None, reason: str = None, min_build: str = None,
+          dry_run: bool = False, out=None) -> dict:
     out = out or sys.stdout
     name = name or gid
-    check_start(directory, gid, name, players, seat_claim, warn, reclaim)
+    if min_build is not None:
+        min_build = min_build.strip()
+    check_start(directory, gid, name, players, seat_claim, warn, reclaim,
+                min_build)
     if replaces:
         if replaces == gid:
             raise Refused('a galaxy cannot replace itself')
@@ -243,6 +257,8 @@ def start(directory, gid: str, name: str, players, blob_path: str = None,
         what += f', warn after {warn}, reclaim after {reclaim}'
     if seat_claim:
         what += f', seat claim {seat_claim}'
+    if min_build is not None:
+        what += f', min build {min_build}'
     if dry_run:
         print(f'would start {what}', file=out)
         if replaces:
@@ -259,6 +275,8 @@ def start(directory, gid: str, name: str, players, blob_path: str = None,
         fields[abandonment.RECLAIM_KEY] = int(reclaim)
     if seat_claim:
         fields['seat_claim'] = seat_claim
+    if min_build is not None:
+        fields[turn_store.MIN_BUILD_KEY] = min_build
     if fields:
         store.update_state(fields)
     print(f'started {what}', file=out)
@@ -310,6 +328,8 @@ def main(argv=None, out=None) -> int:
     s.add_argument('--warn', type=int, help='missed turns before a warning')
     s.add_argument('--reclaim', type=int, help='missed turns before a reclaim')
     s.add_argument('--seat-claim', choices=SEAT_CLAIMS)
+    s.add_argument('--min-build', help='the oldest launcher build that may '
+                                       'play, such as 0.2.0')
     s.add_argument('--replaces', help='close this galaxy once the new one is '
                                       'published')
     s.add_argument('--reason', help='with --replaces, what its players are '
@@ -333,8 +353,8 @@ def main(argv=None, out=None) -> int:
         start(directory, a.galaxy, a.name, a.player, blob_path=a.blob,
               generate=a.generate, turn_seconds=a.turn_seconds, warn=a.warn,
               reclaim=a.reclaim, seat_claim=a.seat_claim,
-              replaces=a.replaces, reason=a.reason, dry_run=a.dry_run,
-              out=out)
+              replaces=a.replaces, reason=a.reason, min_build=a.min_build,
+              dry_run=a.dry_run, out=out)
         return 0
     except Refused as exc:
         print(f'refused: {exc}', file=out)
