@@ -238,15 +238,37 @@ The last four start and kill the real game, so leave the machine alone.
 
 ### Release checklist
 
-1. `build.ps1 -Clean` and confirm the version is right.
-2. Run `release\tests\run_all.ps1`, all green.
-3. Run the staged launcher and click through every visible mode.
-4. Confirm `data/` is created next to the launcher and both logs appear.
-5. Tag `v<version>` and attach the `.zip` to a GitHub release, with the
-   SHA256 the build printed.
+A release is cut from a version branch (`v0.1`, `v0.2`) and merged into
+`main` with `--no-ff`. `main` has to be an ancestor of the version branch
+before the merge, or fixes made on `main` for the last release are missing
+from this one: check with `git merge-base --is-ancestor main v<major.minor>`
+and merge `main` in first if it is not.
 
-The launcher is unsigned, so players will see a SmartScreen warning on first
-run. This is expected and is documented in the release's `README.txt`.
+1. Set `version` in `release/manifest.json` and write
+   `release/RELEASE_NOTES_v<version>.md`.
+2. Merge the version branch into `main` with `--no-ff` and tag the merge
+   `v<version>`. Push neither yet.
+3. Build from a clean checkout of the tag, signed: `az login`, set
+   `CS_SIGN_AS_ENDPOINT`, `CS_SIGN_AS_ACCOUNT`, `CS_SIGN_AS_PROFILE` and
+   `CS_SIGN_AS_DLIB`, then `build.ps1 -Version <version> -Clean`. The
+   launcher's title line names the commit; one ending in `+` was built from a
+   dirty tree.
+4. Read the signatures back with `Get-AuthenticodeSignature`: the launcher,
+   `CosmicSupremacyAI.exe` and the two patched clients read Valid, signed by
+   Robert Futch, timestamped. `CosmicSupremacy.exe` reads NotSigned.
+5. Run `release\tests\run_all.ps1`, all green.
+6. Run the staged launcher, click through every visible mode, and confirm
+   `data/` is created next to the launcher and both logs appear.
+7. Work through `docs/verification/5 - Release_Checklist.md`.
+8. Push `main` and the tag, then `gh release create` as `build.ps1` prints
+   it. The tag has to exist first: given a tag that does not, `gh` creates it
+   on the default branch's head.
+9. Update `site/overrides/download_client.php.html` with the file name,
+   size, date and SHA-256, then stage and deploy the site (`site/README.md`).
+
+The launcher and the patched clients are signed; the original
+`CosmicSupremacy.exe` is not. SmartScreen can still warn while a new
+signature builds reputation, which `README.txt` explains.
 
 ## Dev tools
 
