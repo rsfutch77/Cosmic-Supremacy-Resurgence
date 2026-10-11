@@ -460,6 +460,7 @@ check("a store that is not there at all is the same",
 print("\n11. the page's layout in the window")
 css = open(os.path.join(WEBUI, "app.css"), encoding="utf-8").read()
 js = open(os.path.join(WEBUI, "app.js"), encoding="utf-8").read()
+html = open(os.path.join(WEBUI, "index.html"), encoding="utf-8").read()
 tracks = re.search(r"\.grid \{[^}]*grid-template-columns:([^;]+);", css).group(1)
 check("the table has a track per column and one for the row's button",
       len(re.findall(r"minmax\([^)]*\)|\d+px", tracks)),
@@ -480,9 +481,13 @@ check("and Play runs the turn loop", "self.play_galaxy(g)" in row_src, True)
 started = inspect.getsource(L.Launcher.play_galaxy)
 check("Play hands the row to the turn loop",
       "self.start_multiplayer(mode, g)" in started, True)
-check("and goes back to the page the turn readout is on",
-      started.index("self.show_home()") < started.index("start_multiplayer"),
-      True)
+check("and leaves the player on the page they started it from",
+      "show_home" in started or "show_page" in started, False)
+check("the turn controls sit under every page, not on one of them",
+      re.search(r'<section class="page[^>]*>(?:(?!</section>).)*id="controls"',
+                html, re.S), None)
+check("and inside the window's body",
+      html.index('id="controls"') < html.index("</main>"), True)
 check("the turn loop takes a galaxy, or none, as it always did",
       list(inspect.signature(L.Launcher.start_multiplayer).parameters),
       ["self", "mode", "g"])

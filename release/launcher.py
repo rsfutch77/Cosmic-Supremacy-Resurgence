@@ -3859,16 +3859,15 @@ class Launcher:
     def play_galaxy(self, g):
         """Take turns in one row's galaxy, which is what Multiplayer did.
 
-        Home first. The turn readout, the turn controls and the status line
-        are on the home page, and a session started from a page the player
-        then has to leave is a session they cannot watch.
+        The page stays where it is. The turn readout and the turn controls sit
+        under every page and the status line is in the window's frame, so the
+        session can be watched from the page it was started on.
         """
         mode = next((m for m in self.modes if m.get("id") == "multiplayer"),
                     None)
         if mode is None or not is_playable(mode):
             self.warn("This build does not offer multiplayer.")
             return
-        self.show_home()
         self.start_multiplayer(mode, g)
 
     def show_beta_notice(self, body: str, g, civ: str = None) -> bool:
