@@ -598,6 +598,27 @@ def follow(store: TurnStore, civ: str, poll: float = 5.0, rounds: int = 0,
                 return
             sleep(min(0.5, max(0.0, end - clock())))
 
+    # Whether the last read of the store failed. A UI judges a galaxy stopped
+    # from the last deadline it heard, and a store this machine cannot reach
+    # leaves that deadline standing exactly as a referee that is off does. So
+    # losing the store and getting it back are each said once, as
+    # `unreachable` and `reachable`, and the UI can tell the two apart.
+    cut_off = [False]
+
+    def read_current():
+        """`store.current()`, saying when the store is lost and found again."""
+        try:
+            got = store.current()
+        except OSError as exc:
+            if not cut_off[0]:
+                cut_off[0] = True
+                emit("unreachable", civ=civ, error=failure_text(exc))
+            raise
+        if cut_off[0]:
+            cut_off[0] = False
+            emit("reachable", civ=civ)
+        return got
+
     played = 0
     while not halted():
         def current_or_wait():
@@ -609,7 +630,7 @@ def follow(store: TurnStore, civ: str, poll: float = 5.0, rounds: int = 0,
             """
             while not halted():
                 try:
-                    return store.current()
+                    return read_current()
                 except OSError as exc:
                     log(f"[{civ}] store unreadable ({exc.__class__.__name__}), "
                         f"retrying in {poll}s")
@@ -830,7 +851,7 @@ def follow(store: TurnStore, civ: str, poll: float = 5.0, rounds: int = 0,
                 # `FileNotFoundError` on `state.json` here killed the loop at turn
                 # 18 and the galaxy was at turn 20 before anyone noticed.
                 try:
-                    cur, deadline = store.current()
+                    cur, deadline = read_current()
                 except OSError as exc:
                     log(f"[{civ}] turn {turn}: store unreadable ({exc.__class__.__name__}), "
                         f"retrying in {poll}s")

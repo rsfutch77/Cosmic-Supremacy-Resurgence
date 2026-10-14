@@ -1044,6 +1044,12 @@ def closed_problem(state) -> "str | None":
 # What the turn readout says once the galaxy being followed has closed.
 GALAXY_ENDED_NOTE = "this galaxy has ended"
 
+# What the turn readout and the status line say while the turn loop cannot read
+# the galaxy's store. That is this machine's connection or the service in front
+# of the store, and it is not the galaxy stopping, which is what the same wait
+# would otherwise be called.
+UNREACHABLE_NOTE = "cannot reach the galaxy, retrying"
+
 
 # ── The referee's warning about missed turns ──────────────────────────────────
 # server\abandonment.py warns a player who has missed too many turns in a row
@@ -2072,6 +2078,13 @@ def row_stalled_for(g, view=None) -> float:
     a directory this launcher did not ship with would not carry one, and a
     missing length is a threshold rather than a crash.
     """
+    if view is not None and view.listed is not None:
+        # A listing is a reading of the galaxy as it was. One older than the
+        # floor, held over a sleep, a minimised window or a refresh still in
+        # flight on a dropped connection, cannot say the referee has not
+        # closed a turn since, and every row in it would read stopped.
+        if view.clock - view.listed > STALL_FLOOR:
+            return 0.0
     return stalled_for(g.deadline, getattr(g, "turn_seconds", None), g.status,
                        None if view is None else view.clock)
 
@@ -2132,11 +2145,15 @@ class View(typing.NamedTuple):
 
     `own` is the store multiplayer.json names outright, which is the one row
     that is played whatever the listing says about it.
+
+    `listed` is when the rows were read, or None where that is not known. A
+    galaxy is only called stopped from a listing recent enough to say so.
     """
     now: "float | None" = None
     recs: "dict | None" = None
     submitted: "dict | None" = None
     own: "str | None" = None
+    listed: "float | None" = None
 
     @property
     def clock(self) -> float:
@@ -3091,6 +3108,11 @@ class Launcher:
         # which it has nothing else to say and the player is watching a clock
         # that has run out.
         self.mp_waiting = False
+        # Since when the loop has been unable to read the galaxy's store, or
+        # None while it can. The deadline a stall is judged from is the last
+        # one the loop heard, and while the store cannot be read that deadline
+        # stands still exactly as it does under a referee that is off.
+        self.mp_unreachable = None
         # What the loop last did with the player's state, and when: one of the
         # capture states above with a timestamp, or None before anything has
         # been captured. Recorded by _mp_state on the worker thread and painted
@@ -3138,6 +3160,7 @@ class Launcher:
         # without going back to the directory for the same rows. None until
         # one has been asked for, which is what the page says while it waits.
         self.games_rows = None
+        self.games_listed = None
         self.games_extra = {}
         self.games_err = None
         self.games_recs = {}
@@ -3628,6 +3651,7 @@ class Launcher:
         except OSError as exc:
             self.say(f"games   could not keep a join answer ({exc})")
         self.games_rows = list(rows)
+        self.games_listed = time.time()
         self.games_extra = extra or {}
         self.games_err = err
         if err:
@@ -3650,6 +3674,7 @@ class Launcher:
     def _galaxy_view(self):
         """What a cell needs to know that its own row does not carry."""
         return View(now=time.time(), recs=self.games_recs,
+                    listed=getattr(self, "games_listed", None),
                     submitted=self.games_extra.get("submitted"),
                     own=self.own_store)
 
@@ -4405,6 +4430,16 @@ class Launcher:
                 civ, player_code(install_uid(self.data_dir)))))
         if kind == "send_failed":
             return
+        # The store going and coming back. Neither is a step of the turn, so
+        # the note beside the turn number is left alone, and the readouts ask
+        # `_mp_cut_off` before they judge the galaxy stopped.
+        if kind == "unreachable":
+            if getattr(self, "mp_unreachable", None) is None:
+                self.mp_unreachable = time.time()
+            return
+        if kind == "reachable":
+            self.mp_unreachable = None
+            return
 
         # The capture half of the readout. These arrive several times a turn
         # and say nothing about which step of the turn is running, so they are
@@ -4518,6 +4553,7 @@ class Launcher:
         self.mp_deadline = None
         self.mp_turn_seconds = None
         self.mp_waiting = False
+        self.mp_unreachable = None
         self.mp_capture = None
         self.mp_client_seen = False
         self.mp_client_gone = False
@@ -4950,6 +4986,16 @@ class Launcher:
             return True, f"{civ} not responding"
         return False, f"{civ} is thinking"
 
+    def _mp_cut_off(self) -> bool:
+        """Whether the loop's last read of the galaxy's store failed.
+
+        While it did, nothing here knows where the galaxy is: the deadline on
+        hand is the last one heard, and a referee that has closed the turn
+        since looks the same from here as one that is off. So no stall is
+        judged, and the readouts say the galaxy cannot be reached instead.
+        """
+        return getattr(self, "mp_unreachable", None) is not None
+
     def _mp_stalled(self) -> float:
         """How long the galaxy being followed has been stopped, or 0.
 
@@ -4962,7 +5008,8 @@ class Launcher:
         `playing` reports and the turn length was read once when the galaxy
         was opened, which is what keeps a once-a-second check free.
         """
-        if not self.mp_waiting or getattr(self, "mp_closed", False):
+        if (not self.mp_waiting or getattr(self, "mp_closed", False)
+                or getattr(self, "mp_unreachable", None) is not None):
             return 0.0
         stopped = stalled_for(self.mp_deadline, self.mp_turn_seconds)
         if stopped and getattr(self, "mp_probed", None) != self.mp_deadline:
@@ -5014,6 +5061,7 @@ class Launcher:
                 stopped = self._mp_stalled()
                 label = ("sending your turn" if self.mp_sending
                          else "opening the game again" if self.mp_reopening
+                         else UNREACHABLE_NOTE if self._mp_cut_off()
                          else f"turns have stopped, due {fmt_ago(stopped)}"
                          if stopped
                          else self.mp_note or "waiting for the next turn")
@@ -5045,7 +5093,9 @@ class Launcher:
                     # turn is about to close.
                     stopped = stalled_for(self.mp_deadline,
                                           self.mp_turn_seconds)
-                    if stopped:
+                    if self._mp_cut_off():
+                        label = f"turn {turn} \u00b7 {UNREACHABLE_NOTE}"
+                    elif stopped:
                         label = (f"turn {turn} \u00b7 turns have stopped, due "
                                  f"{fmt_ago(stopped)}")
                     if self.mp_note:
@@ -5218,8 +5268,14 @@ class Launcher:
                 # a loop being alive, it says the referee has not closed a
                 # turn that fell due long enough ago to be a fault, and that
                 # is a thing the player has to act on rather than watch.
+                #
+                # A store this machine cannot read is said ahead of it. From
+                # here that wait looks the same as a stopped referee, and the
+                # one who can act on it is the player rather than the operator.
                 stopped = self._mp_stalled()
-                if stopped:
+                if self._mp_cut_off():
+                    self._status_if_changed(UNREACHABLE_NOTE, WARN)
+                elif stopped:
                     self._status_if_changed(
                         f"the galaxy has stopped , its turn was due "
                         f"{fmt_ago(stopped)}", WARN)

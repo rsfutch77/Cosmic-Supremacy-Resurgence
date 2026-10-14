@@ -556,6 +556,70 @@ check("which says it in the warning colour there too",
       lambda tail: "WARN" in tail)
 
 
+print("\n8. a store this machine cannot reach is not a galaxy that has stopped")
+# The loop says `unreachable` when its read of the store fails. The deadline
+# on hand is then the last one heard, which stands still exactly as it does
+# under a referee that is off, so the readouts must not call it stopped.
+app = bare(mp_store=Store(), mp_thread=Thread())
+app.mp_turn, app.mp_deadline = 12, time.time() - 7200
+app._mp_state("waiting", turn=12, civ="DemoPlayer")
+app._mp_state("unreachable", civ="DemoPlayer", error="getaddrinfo failed")
+app.mp_client_gone = True
+app._refresh_turn()
+check("the wait says the galaxy cannot be reached",
+      app.view.turn_label, L.UNREACHABLE_NOTE)
+check("and not that it has stopped", "stopped" in app.view.turn_label, False)
+check("so no stall is judged", app._mp_stalled(), 0.0)
+check("and no closed-galaxy probe is sent over a dead connection",
+      getattr(app, "mp_probed", None), None)
+check("the note beside the turn is left as the wait set it",
+      app.mp_note, "waiting for the next turn")
+app._mp_state("reachable", civ="DemoPlayer")
+app._refresh_turn()
+check("once the store answers again a real stall is said as before",
+      app.view.turn_label, lambda t: "stopped" in t and "2h ago" in t)
+
+app = bare(mp_store=Store(turn=12, left=-7200.0), mp_thread=Thread())
+app._mp_state("playing", turn=12, civ="DemoPlayer", seconds_left=-7200.0)
+app._mp_state("unreachable", civ="DemoPlayer", error="getaddrinfo failed")
+app._refresh_turn()
+check("a reopened turn with no connection says so beside the turn number",
+      app.view.turn_label, f"turn 12 · {L.UNREACHABLE_NOTE}")
+
+app = bare()
+app.mp_deadline = time.time() - 7200
+app.mp_waiting = True
+app._mp_state("unreachable", civ="DemoPlayer", error="getaddrinfo failed")
+check("the status line's branch judges nothing stopped while cut off",
+      app._mp_stalled(), 0.0)
+check("and the status line says the galaxy cannot be reached first",
+      watch.index("self._mp_cut_off()") < watch.index('f"the galaxy has stopped'),
+      True)
+
+
+class Finished:
+    def join(self, timeout=None):
+        pass
+
+    def is_alive(self):
+        return False
+
+
+app.mp_thread = Finished()
+app.stop_multiplayer()
+check("stopping the loop clears it, so the next galaxy starts reachable",
+      app.mp_unreachable, None)
+
+print("\n   and a listing too old to say so does not either")
+over = gx("sandbox", over=7200)
+check("a fresh listing calls a two-hour-overdue galaxy stopped",
+      bool(L.row_stalled_for(over, L.View(now=NOW, listed=NOW - 60))), True)
+check("one read before a sleep or a dropped connection does not",
+      L.row_stalled_for(over, L.View(now=NOW, listed=NOW - 3 * 3600)), 0.0)
+check("and a view that does not know when it was listed judges as before",
+      bool(L.row_stalled_for(over, L.View(now=NOW))), True)
+
+
 for d in dirs:
     shutil.rmtree(d, ignore_errors=True)
 
