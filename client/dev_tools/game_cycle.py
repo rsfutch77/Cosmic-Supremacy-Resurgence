@@ -233,7 +233,8 @@ def resolve_exe(which=None):
                      f"{sorted(BUILDS)}, or a path to an exe")
 
 
-def restart(dat, purpose, wait_for_lock=0.0, timeout=180, exe=None):
+def restart(dat, purpose, wait_for_lock=0.0, timeout=180, exe=None,
+            min_suns=11):
     """Take the client, close whatever is on it, and launch on `dat`.
 
     The order is the point. Taking the lock first means a caller that cannot
@@ -245,7 +246,7 @@ def restart(dat, purpose, wait_for_lock=0.0, timeout=180, exe=None):
     try:
         close_client()
         return launch(dat, timeout=timeout, exe=exe, purpose=purpose,
-                      wait_for_lock=wait_for_lock)
+                      wait_for_lock=wait_for_lock, min_suns=min_suns)
     except BaseException:
         release_client_lock()
         raise
