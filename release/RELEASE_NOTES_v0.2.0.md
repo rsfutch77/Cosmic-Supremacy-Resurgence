@@ -44,14 +44,13 @@ when you update.
 
 ## Updating from v0.1
 
-1. Download `CosmicSupremacy-Resurgence-v0.2.0.zip` below and unzip it into a
-   new folder.
-2. To keep your saved Single Player games, copy the `data` folder from your
-   old folder into the new one before you start the new launcher.
-3. Delete the old folder.
+Saved games from v0.1 are not supported in v0.2.0. Unzip v0.2.0 into a new
+folder, start a new game, and delete the old folder when you are done with it.
 
-From v0.2.0 onwards, the same step keeps your multiplayer empire: a launcher
-started without your old `data` folder joins as a new player.
+From v0.2.0 onwards, keep your `data` folder when you update: copy it from the
+old folder into the new one before you start the new launcher. It holds the
+sign-in your multiplayer empire belongs to, and a launcher started without it
+joins as a new player.
 
 ## Install
 
