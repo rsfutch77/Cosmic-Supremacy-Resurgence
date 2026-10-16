@@ -1,5 +1,5 @@
 """
-test_abandonment.py , the seat of a player who stopped playing
+test_abandonment.py: the seat of a player who stopped playing
 ==============================================================
     server\\.venv\\Scripts\\python.exe server\\tests\\test_abandonment.py
 

@@ -1,5 +1,5 @@
 """
-duel.py , N Python controllers, one galaxy, one client
+duel.py: N Python controllers, one galaxy, one client
 ======================================================
 Runs `ai.py`'s decision pass once per turn for EACH civ in the galaxy, so the
 strategy plays against itself instead of against the engine's own AI. Two civs
@@ -60,7 +60,7 @@ class Duel:
                 return snap
             empty = [l.civ_name for l, c in zip(self.loops, civs)
                      if c is None or not snap.owned_planets(c)]
-            self.log(f"[duel] {empty} read as holding nothing , turn "
+            self.log(f"[duel] {empty} read as holding nothing; turn "
                      f"resolution may still be in flight, re-reading "
                      f"({attempt + 1}/{tries})")
             time.sleep(pause)
@@ -74,7 +74,7 @@ class Duel:
         of 25 rounds covered only 24 distinct turns: the counter can move while
         `settled_snapshot` is retrying a torn read, so the turn the caller waited
         for is not always the turn the snapshot describes. Acting twice on one
-        turn is not as harmless as it sounds , most rules re-read state and are
+        turn is not as harmless as it sounds; most rules re-read state and are
         idempotent, but a second conscript or a second queued hull is real.
 
         Taking the turn from the snapshot rather than from the caller also fixes
@@ -84,7 +84,7 @@ class Duel:
         snap = self.settled_snapshot()
         t = snap.turn if snap.turn is not None else turn
         if t == self.last_decided:
-            self.log(f"[duel] turn {t} was already decided , the counter moved "
+            self.log(f"[duel] turn {t} was already decided; the counter moved "
                      f"while the snapshot was being read; not acting twice")
             return None
         # THE SNAPSHOT CAN BE NEWER THAN THE TURN WE WAITED FOR. wait_for_turn
@@ -107,7 +107,7 @@ class Duel:
         n = len(self.loops)
         k = t % n
         order = self.loops[k:] + self.loops[:k]
-        self.log(f"\n########## turn {t} , move order: "
+        self.log(f"\n########## turn {t}, move order: "
                  f"{' then '.join(l.civ_name for l in order)} ##########")
         for loop in order:
             if loop.one_pass(snap) is None:
@@ -121,7 +121,7 @@ class Duel:
             if drive:
                 original = clock.read_turn_length()
                 if original in (None, 0xFFFFFFFF):
-                    self.log("[duel] turn length is uninitialised , load a "
+                    self.log("[duel] turn length is uninitialised; load a "
                              "galaxy first; not driving turns")
                     original = None
                 else:
@@ -163,7 +163,7 @@ class Duel:
                 # it actually decided, which may be later than the one waited
                 # for; waiting again from the older number asks for a turn that
                 # has already passed, and the next round then skips as a
-                # duplicate , which is how a decided turn and a skipped turn
+                # duplicate; which is how a decided turn and a skipped turn
                 # ended up alternating.
                 decided = self.round(nxt)
                 t = decided if decided is not None else nxt
@@ -180,7 +180,7 @@ class Duel:
                 clock.set_turn_length(original)
                 now = clock.read_turn_length()
                 self.log(f"[duel] turn length restored to {now}s" if now
-                         else "[duel] could not restore turn length , the "
+                         else "[duel] could not restore turn length; the "
                               "client is gone (it exited or crashed)")
             for loop in self.loops:
                 if loop.remote is not None:

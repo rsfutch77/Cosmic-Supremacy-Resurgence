@@ -1,5 +1,5 @@
 """
-fb_auth.py , the launcher's Firebase identity
+fb_auth.py: the launcher's Firebase identity
 ==============================================
     import fb_auth
     me = fb_auth.identity(data_dir)

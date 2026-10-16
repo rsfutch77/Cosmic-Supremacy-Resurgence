@@ -1,5 +1,5 @@
 """
-client_proc.py , find the game client's process, in one place
+client_proc.py: find the game client's process, in one place
 =============================================================
     from client_proc import find_pid, NOT_THE_CLIENT
     pid, name = find_pid()
@@ -18,7 +18,7 @@ process.
 It has cost two separate afternoons. Once in `trigger_save.py`, fixed there;
 then again in `advance_turns.py`, which is the copy `hold_clock` and the
 referee's tick both use, where it meant a client's clock was never actually
-held , the launcher had 86400 written into its own memory at the address the
+held, the launcher had 86400 written into its own memory at the address the
 client keeps its clock at, and nothing failed loudly.
 
 Fixing a defect in one copy of six does not fix the defect. This module is the

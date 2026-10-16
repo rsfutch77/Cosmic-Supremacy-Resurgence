@@ -1,5 +1,5 @@
 """
-order_diff.py , what did this player change, and was any of it theirs?
+order_diff.py: what did this player change, and was any of it theirs?
 =====================================================================
     python order_diff.py served.b64 returned.b64
     python order_diff.py served.b64 returned.b64 --civ DemoPlayer

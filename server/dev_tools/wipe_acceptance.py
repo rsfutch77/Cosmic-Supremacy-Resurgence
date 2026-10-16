@@ -1,5 +1,5 @@
 """
-wipe_acceptance.py , does a galaxy with a civ wiped out of it still play?
+wipe_acceptance.py: does a galaxy with a civ wiped out of it still play?
 =========================================================================
     python wipe_acceptance.py prepare  --civ Neighbor
     python wipe_acceptance.py load     --which wiped

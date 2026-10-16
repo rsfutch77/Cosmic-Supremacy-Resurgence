@@ -1,5 +1,5 @@
 """
-list_dialogs.py , report the Win32 dialogs a running client has open
+list_dialogs.py: report the Win32 dialogs a running client has open
 ====================================================================
     python list_dialogs.py
     python list_dialogs.py --all        # every window, not only dialogs

@@ -1,5 +1,5 @@
 """
-test_log_upload.py , a launcher's log reaches the operator and nobody else
+test_log_upload.py: a launcher's log reaches the operator and nobody else
 ==========================================================================
     python functions/emulators.py --only firestore,storage,auth
     (set the three variables it prints)

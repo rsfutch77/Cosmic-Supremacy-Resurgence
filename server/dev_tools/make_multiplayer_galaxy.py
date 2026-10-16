@@ -1,5 +1,5 @@
 """
-make_multiplayer_galaxy.py , a galaxy with one civ per player and nothing else
+make_multiplayer_galaxy.py: a galaxy with one civ per player and nothing else
 ==============================================================================
     python make_multiplayer_galaxy.py fresh.b64 --player Alice --player Bob
     python make_multiplayer_galaxy.py fresh.b64 --player Alice --player Bob \\

@@ -1,5 +1,5 @@
 """
-player_turn.py , serve one player their turn, and collect it back
+player_turn.py: serve one player their turn, and collect it back
 =================================================================
     python player_turn.py serve   turn3.b64 --civ DemoPlayer
     python player_turn.py collect --name playerA
@@ -356,7 +356,7 @@ def report_refusals(store: TurnStore, civ: str, turn: int, log=print,
 
     No new UI, which is what was asked for. `log` is the launcher's log pane.
 
-    Reading the note can fail , it lives on a share another machine writes ,
+    Reading the note can fail (it lives on a share another machine writes)
     and a turn that has already been played is not worth unwinding the loop
     for, so a failure here says so and the loop goes on.
 
@@ -843,7 +843,7 @@ def follow(store: TurnStore, civ: str, poll: float = 5.0, rounds: int = 0,
             # the two run at different rates.
             left = deadline - clock()
             if clock() >= next_read:
-                # A store read can fail transiently , the store lives on an SMB
+                # A store read can fail transiently; the store lives on an SMB
                 # share and the referee rewrites it from another machine. `state()`
                 # already retries for a couple of seconds, and when an outage
                 # outlasts that the right answer is still not to exit: this loop

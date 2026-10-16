@@ -1,5 +1,5 @@
 """
-test_store_equivalence.py , three stores, one interface, the same answers
+test_store_equivalence.py: three stores, one interface, the same answers
 =========================================================================
     server\\.venv\\Scripts\\python.exe server\\tests\\test_store_equivalence.py
     ... test_store_equivalence.py --firebase firebase://demo-cs/g1?bucket=b

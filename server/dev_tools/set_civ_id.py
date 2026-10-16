@@ -1,5 +1,5 @@
 """
-set_civ_id.py , read or rewrite a civ's Owner:4 in a galaxy blob
+set_civ_id.py: read or rewrite a civ's Owner:4 in a galaxy blob
 =================================================================
     python set_civ_id.py client/SinglePlayerGalaxy.dat
     python set_civ_id.py client/SinglePlayerGalaxy.dat --civ DemoPlayer --id 20 \
@@ -12,7 +12,7 @@ because two civs sharing one value collapse to a single row.
 Why this exists as its own tool. Every galaxy generated through the TestBed
 pass token carries `0` here for the human civ and a real id for the engine's
 rival, and those are exactly the galaxies where the human's empire-level
-fields , research `Owner:12`, `Owner:24`, score `Owner:28` , never move while
+fields (research `Owner:12`, `Owner:24`, score `Owner:28`) never move while
 the rival's do:
 
     SinglePlayerGalaxy.dat   DemoPlayer=0    BadGuy=21     <- shipped in v0.1

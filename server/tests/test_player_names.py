@@ -1,5 +1,5 @@
 """
-test_player_names.py , a player name the engine cannot hold is refused once
+test_player_names.py: a player name the engine cannot hold is refused once
 ===========================================================================
     server\\.venv\\Scripts\\python.exe server\\tests\\test_player_names.py
 

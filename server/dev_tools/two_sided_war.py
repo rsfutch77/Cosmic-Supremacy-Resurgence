@@ -1,5 +1,5 @@
 """
-two_sided_war.py , determinism across a battle both sides can fight
+two_sided_war.py: determinism across a battle both sides can fight
 ====================================================================
 A4 measured determinism across a war in which only one side was armed: an
 attacker against an unarmed defender and its planet. This arms the defender and

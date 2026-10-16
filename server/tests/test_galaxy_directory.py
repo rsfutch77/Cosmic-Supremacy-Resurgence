@@ -1,5 +1,5 @@
 """
-test_galaxy_directory.py , the list a launcher's Games tab is made of
+test_galaxy_directory.py: the list a launcher's Games tab is made of
 =====================================================================
     server\\.venv\\Scripts\\python.exe server\\tests\\test_galaxy_directory.py
     ... test_galaxy_directory.py --firebase firebase://demo-cs-resurgence

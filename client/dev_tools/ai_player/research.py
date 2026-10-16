@@ -1,5 +1,5 @@
 """
-research.py , the technology table, and what a player is allowed to select
+research.py: the technology table, and what a player is allowed to select
 ==========================================================================
 """
 
@@ -290,7 +290,7 @@ def unlocked(done, kind):
     A part can only be fitted to a design once some completed research grants
     it, so this is what decides whether an armed design is even legal. A fresh
     civ holds chassis 0, scanner 0, engine 0 and module 0 from the two granted
-    starting techs and NO weapon at all , the first weapon comes with Cold
+    starting techs and NO weapon at all; the first weapon comes with Cold
     Fusion (id 3).
     """
     return {oid for t in done for k, oid, _v in grants(t) if k == kind}
@@ -311,7 +311,7 @@ DESIGN_PART_KINDS = (
 
 
 def illegal_parts(design, done):
-    """The fitted parts this civ has not researched , empty means buildable.
+    """The fitted parts this civ has not researched: empty means buildable.
 
     Returns a list of (part list name, object id) so a caller can say WHICH part
     is missing rather than only that something is.
@@ -331,7 +331,7 @@ def design_legal(design, done):
 
 
 def explain_illegal(design, done):
-    """'weapon 10' , the missing parts, for a log line that names the blocker."""
+    """'weapon 10': the missing parts, for a log line that names the blocker."""
     kinds = dict(DESIGN_PART_KINDS)
     return ", ".join(
         f"{KIND_NAME.get(kinds[attr], attr).lower()} {oid}"
@@ -349,7 +349,7 @@ def value(tid, boost=None):
 
 
 def unlocked_by(kind, obj_id):
-    """Which research grants a given object , 'how do I get a better engine'."""
+    """Which research grants a given object: 'how do I get a better engine'."""
     return [t for t in sorted(TECHS)
             if any(k == kind and o == obj_id for k, o, _v in grants(t))]
 
@@ -370,7 +370,7 @@ def available(done, allow_doctrines=ALLOW_DOCTRINES, by_value=True,
 
 
 def explain(tid, done):
-    """Why a topic is not selectable , for logging a correction."""
+    """Why a topic is not selectable: for logging a correction."""
     if tid in STUBS:
         return f"id {tid} is an unused stub"
     if tid not in TECHS:

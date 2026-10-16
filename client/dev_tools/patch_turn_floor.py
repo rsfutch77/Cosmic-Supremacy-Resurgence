@@ -1,5 +1,5 @@
 """
-patch_turn_floor.py , lower the engine's 60-second minimum turn length
+patch_turn_floor.py: lower the engine's 60-second minimum turn length
 ======================================================================
     python patch_turn_floor.py --status
     python patch_turn_floor.py --apply         # floor becomes 1 second
@@ -23,7 +23,7 @@ BAK = EXE + ".preturnfloor.bak"
 #
 # TEN SITES, NOT TWO. The first attempt patched only the two that write the
 # immediate directly (`mov [turnlength], 60`) and the live value still came up
-# 60 on a verified-patched process , because most of the clamps load 60 into a
+# 60 on a verified-patched process, because most of the clamps load 60 into a
 # REGISTER first (`mov ecx, 60 ; mov [turnlength], ecx`), which looks nothing
 # like the pattern the first search matched. The floor is applied all over one
 # function, presumably once per way the turn length can be arrived at.
@@ -106,8 +106,8 @@ def main():
     status(read(EXE))
     if a.apply:
         print("\nThe engine still re-applies GSET.turnlength every boundary, so "
-              "set the galaxy's own turnlength to the rate you want , "
-              "server/dev_tools/set_turnlength.py , rather than driving it.")
+              "set the galaxy's own turnlength to the rate you want ("
+              "server/dev_tools/set_turnlength.py) rather than driving it.")
 
 
 if __name__ == "__main__":

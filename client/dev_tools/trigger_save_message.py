@@ -1,5 +1,5 @@
 """
-trigger_save_message.py , make the client save by posting it a window message
+trigger_save_message.py: make the client save by posting it a window message
 =============================================================================
     python trigger_save_message.py                 # post the save message
     python trigger_save_message.py --gameid 0

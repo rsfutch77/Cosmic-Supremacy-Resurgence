@@ -1,5 +1,5 @@
 """
-check_store.py , can this machine see the galaxy, and if not, why
+check_store.py: can this machine see the galaxy, and if not, why
 =================================================================
     python check_store.py                       # read the launcher's config
     python check_store.py <path-or-url>

@@ -1,5 +1,5 @@
 """
-test_join_seat.py , a granted join binds its seat (J3 and J4)
+test_join_seat.py: a granted join binds its seat (J3 and J4)
 ==============================================================
     server\\.venv\\Scripts\\python.exe server\\tests\\test_join_seat.py
 

@@ -1,5 +1,5 @@
 """
-level_store_turn.py , level homeworld rates in a galaxy that is already running
+level_store_turn.py: level homeworld rates in a galaxy that is already running
 ===============================================================================
     python level_store_turn.py <store> --list
     python level_store_turn.py <store> --from-planet 139 --planet 140 --at-next-turn

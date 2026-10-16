@@ -1,5 +1,5 @@
 """
-patch_hide_setup_prompts.py , silence the one-time setup prompts in a client
+patch_hide_setup_prompts.py: silence the one-time setup prompts in a client
 ============================================================================
     python patch_hide_setup_prompts.py --build     # make the player exe
     python patch_hide_setup_prompts.py --status

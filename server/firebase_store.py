@@ -1,5 +1,5 @@
 """
-firebase_store.py , a galaxy's turns and submissions, in Firebase
+firebase_store.py: a galaxy's turns and submissions, in Firebase
 =================================================================
     from turn_store import open_store
     store = open_store('firebase://cs-resurgence/sandbox')

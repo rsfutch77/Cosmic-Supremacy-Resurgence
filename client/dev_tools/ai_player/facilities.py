@@ -1,5 +1,5 @@
 """
-facilities.py , the facility definition table
+facilities.py: the facility definition table
 =============================================
     python facilities.py          # dump the live table
 

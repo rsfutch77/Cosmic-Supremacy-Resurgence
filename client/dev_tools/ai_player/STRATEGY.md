@@ -175,7 +175,7 @@ rather than read directly.
 | Order type | `Ship:52` | 0 none, 1 move, 2 scout, 3 colonize, 4 attack, 5 conquer, 7 move-near |
 | Pending-orders flag | `Ship:76` | 1 on local civ's ordered ships ⚠ |
 | Design | `Ship:108` | node[0] = `ShipDesign` |
-| Condition | `Ship:136` | 0.0–1.0; the only per-ship damage state |
+| Condition | `Ship:136` | 0.0-1.0; the only per-ship damage state |
 
 ### 2.4 Design-level (`ShipDesign`), used to classify ships by role
 
@@ -442,7 +442,7 @@ THEN   reassign workers/scientists to banker (6) on the highest-pop planet;
 USES   A
 ```
 [ ] Never triggered in testing because income has been strongly positive all game
-(11k–20k cash idle by turn 150), so this is untested rather than merely unwritten, the
+(11k-20k cash idle by turn 150), so this is untested rather than merely unwritten, the
 failure it guards against has not been seen. It is also the trigger for R-XPL-01's Economy
 phase, which therefore never fires either.
 
@@ -529,12 +529,12 @@ USES   E
 
 **[ ] R-EXP-02 CONSCRIPTS WARSHIPS, AND THAT LOSES THE OPENING BATTLE.**
 It selects any ship free to scout. Early on the only free ships ARE the warships,
-so the standing fleet gets dispersed across the galaxy one system at a time —
+so the standing fleet gets dispersed across the galaxy one system at a time,
 and it is dispersed precisely when exploration is most urgent, which is also
 precisely when contact is most likely.
 
 Measured, first-contact run, turn 193: the two warships R-XTM-03 committed were
-**367 and 618 units** from BadGuy's HQ — 58 and 184 turns of travel. Ship #669
+**367 and 618 units** from BadGuy's HQ; 58 and 184 turns of travel. Ship #669
 would have arrived on turn 377. There is no version of that fight we win; the
 fleet was not beaten, it was out of position before the war started.
 
@@ -543,12 +543,12 @@ Two things follow, and they are separable:
 1. **Never scout with a ship that has weapons.** A warship costs several times a
    scout and is the one asset whose position at contact decides the war. Restrict
    R-EXP-02's pool to designs with no weapons fitted, and let R-EXP-01 build more
-   scouts if the pool is empty — scouts are cheap and that is the whole point of
+   scouts if the pool is empty; scouts are cheap and that is the whole point of
    the design.
 2. **Warships need a rally point.** Even undispersed, ships park where they were
    built. A fleet spread over five home systems is nearly as slow to concentrate
    as one spread over the galaxy. R-XTM-01 should gather idle warships at a
-   single staging planet — the owned planet closest to the nearest known enemy,
+   single staging planet; the owned planet closest to the nearest known enemy,
    falling back to the highest-population planet before contact.
 
 Until both exist, R-XTM-03 is committing whatever happens to be nearest, and the
@@ -709,7 +709,7 @@ was badly miscalibrated for the real galaxy: coordinates run to ~1130, the two c
 suns are 111 apart, and a colony ship moves 13.5/turn, so the nearest neighbouring system
 is already an 8-turn trip while `space` only spans 156..450. Raw distance swamped space
 about 4:1 and the rule degenerated to "always take the closest rock". At `TURN_WEIGHT =
-10` a measured galaxy ranks home-system planets 288/260/204 at 2–3 turns while a bigger
+10` a measured galaxy ranks home-system planets 288/260/204 at 2-3 turns while a bigger
 but distant planet (space 282, 15 turns) scores 132, close enough to compete if it is
 good enough, which is the intended behaviour.
 
@@ -1053,13 +1053,13 @@ handing the AI a fresh fog of war on every restart, which it then re-explored at
 
 ### The AI was never slow, the TURNS were bursting (Aug 2026)
 
-**Read this before optimising anything here.** Decision passes were landing 2–3 turns
+**Read this before optimising anything here.** Decision passes were landing 2-3 turns
 apart and three separate explanations were proposed, asserted, and measured wrong in turn:
 engine calls, then the memory scan, then the snapshot phase. What the numbers actually say,
 all from a working build:
 
 ```
-scan     0.1–0.2s warm, 1.25s cold (126 MB, ~200 objects)
+scan     0.1-0.2s warm, 1.25s cold (126 MB, ~200 objects)
 rules    <0.05s per pass, WITH ~20 engine calls in it
 engine   ~2.5 ms per remote-thread call
 ```
@@ -1091,7 +1091,7 @@ Introduced while chasing the phantom above, and kept on its own merits: 138 of 5
 one run were the firepower getter, which spends three remote threads on a number that
 cannot change unless a design is refitted, and nothing here refits designs. Fewer remote
 threads into a live client is worth having for its own sake. Measured hit rate in ordinary
-play: **23–29%**.
+play: **23-29%**.
 
 **Two cache lifetimes, because these are two kinds of fact.** Design-level stats (speed,
 firepower, min crew) are functions of fitted parts and are read once per process.
@@ -1361,7 +1361,7 @@ games, which `--drive` now makes possible and nothing has yet used.
 
 Units: distances are in the same space as `Planet:4/8/12`; a scout's ETA is
 `ceil(distance / ShipDesign:36)`, which is how the game derives it (ETA is not stored).
-Measured galaxy scale, for calibration: coordinates 0..~1130, 108 suns, 538 planets, 4–6
+Measured galaxy scale, for calibration: coordinates 0..~1130, 108 suns, 538 planets, 4-6
 planets per system, orbit radius ≤ 39.6, minimum sun separation 111.7.
 
 **Systems are not stored.** No field links a `Planet` to its `Sun`, so membership is
@@ -1397,7 +1397,7 @@ new galaxy rather than inherited.
 
 5. ~~**Turn acceleration.**~~ **RESOLVED, `ai.py --drive N`** writes the turn length at
    `0x0080AA08`, re-asserts it whenever the engine resets it (which it does, often), and
-   restores the original on exit including on Ctrl-C. Games run at 8–15s per turn; a
+   restores the original on exit including on Ctrl-C. Games run at 8-15s per turn; a
    400-turn game takes about an hour. [ ] Nothing has yet used it for its actual purpose,
    which was tuning §5 over many games.
 
@@ -1604,7 +1604,7 @@ than an allocator, a constructor or a getter. That is the pattern worth extendin
 highest-value work in this document. The live research table would retire a data source known
 to be for the wrong content version (`research.py` carries ≥688, this client runs 565).
 `ChangeCitizenJobs` unlocks **conscription**, which is the answer to the crew bottleneck that
-gates every order rule, the civ sat on 11k–20k idle cash for a hundred turns with nothing to
+gates every order rule, the civ sat on 11k-20k idle cash for a hundred turns with nothing to
 spend it on while waiting ~10 turns per recruit.
 
 ### The crash of Aug 2026, RETRACTED DIAGNOSIS, then solved (Aug 2026)
@@ -1764,7 +1764,7 @@ against intentions.
 | X | demonstrated | how |
 |---|---|---|
 | **eXplore** | **yes** | civs build their own scouts, crew them, sweep systems, and keep a per-civ fog of war that survives restarts. A fresh galaxy went from 108 unknown systems to full contact between three civs unaided |
-| **eXpand** | **yes** | colony ships built, targets scored and taken; three civs reached 6–13 planets each from one homeworld apiece |
+| **eXpand** | **yes** | colony ships built, targets scored and taken; three civs reached 6-13 planets each from one homeworld apiece |
 | **eXploit** | **yes** | jobs, farms, shipyards, research, recruitment, crew loading and hurrying all run unattended; research picks legal topics and switches when a capability threshold is unmet |
 | **eXterminate** | **partly, see below** | war is declared, warships are built and crewed and sent, a planet has been TAKEN by troops and garrisoned, and ships have fought and been damaged |
 
@@ -1794,7 +1794,7 @@ engine owns is ever repointed (§7).
 
 ## 8. Build order
 
-Steps 1–5 are **DONE**. The AI plays all four X's unattended and has fought a battle.
+Steps 1-5 are **DONE**. The AI plays all four X's unattended and has fought a battle.
 
 1. ~~RE `ShipProduction`~~, D works.
 2. ~~Framework~~, `ai.py` loop, `sensors.History`, dry-run by default.

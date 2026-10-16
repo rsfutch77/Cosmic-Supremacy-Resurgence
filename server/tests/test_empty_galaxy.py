@@ -1,5 +1,5 @@
 """
-test_empty_galaxy.py , a galaxy that abandonment has emptied takes a join
+test_empty_galaxy.py: a galaxy that abandonment has emptied takes a join
 =========================================================================
     server\\.venv\\Scripts\\python.exe server\\tests\\test_empty_galaxy.py
 

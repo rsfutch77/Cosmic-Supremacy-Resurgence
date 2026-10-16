@@ -1,5 +1,5 @@
 """
-merge_orders.py , build the next authoritative blob from players' returned saves
+merge_orders.py: build the next authoritative blob from players' returned saves
 ================================================================================
     python merge_orders.py authoritative.b64 \
         --from DemoPlayer=playerA.b64 --from BadGuy=playerB.b64 --dat merged.dat
@@ -89,7 +89,7 @@ record may be altered, nobody changes hands, and the civ may not come back with
 fewer soldiers than it was served, which is what retiring from service looks
 like and is not carried yet.
 
-What a record CARRIES , its per-citizen value and its three opaque bytes , is
+What a record CARRIES (its per-citizen value and its three opaque bytes) is
 judged against the state served and across all three arrays at once. Both parts
 matter. Asked absolutely, the opaque check refuses a civ for bytes the referee
 itself handed out, every turn, including a turn in which the civ did nothing.

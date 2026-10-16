@@ -1,5 +1,5 @@
 """
-dump_threads.py , where every thread was when the client wrote a dump
+dump_threads.py: where every thread was when the client wrote a dump
 =====================================================================
     python dump_threads.py <file.dmp> [<file.dmp> ...]
     python dump_threads.py --common <dir>      # addresses shared by all dumps

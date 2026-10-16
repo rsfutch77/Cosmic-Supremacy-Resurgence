@@ -1,5 +1,5 @@
 """
-log_tool.py , read the launcher logs players have sent
+log_tool.py: read the launcher logs players have sent
 ======================================================
     python server/dev_tools/log_tool.py firebase://cs-resurgence list
     python server/dev_tools/log_tool.py firebase://cs-resurgence list --code 1a2b3c4d

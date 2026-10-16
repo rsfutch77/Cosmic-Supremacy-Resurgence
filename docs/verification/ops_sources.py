@@ -1,5 +1,5 @@
 """
-ops_sources.py , read the operations, release and privacy sources into items
+ops_sources.py: read the operations, release and privacy sources into items
 ============================================================================
 Used by build_ops_checklist.py. Each reader returns (id, section, text) for
 every item in one source, in source order, so the checklist can show every item

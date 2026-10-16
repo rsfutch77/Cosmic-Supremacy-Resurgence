@@ -1,5 +1,5 @@
 """
-set_demo_deadlines.py , put the UI demo galaxies back where the stall check
+set_demo_deadlines.py: put the UI demo galaxies back where the stall check
 needs them.
 
     python server\\dev_tools\\set_demo_deadlines.py

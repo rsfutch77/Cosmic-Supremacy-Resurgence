@@ -1,5 +1,5 @@
 """
-operator_view.py , is the beta healthy, without opening a log
+operator_view.py: is the beta healthy, without opening a log
 =============================================================
     python operator_view.py <path-or-url-or-firebase-spec>
     python operator_view.py --directory <folder-or-firebase://project>

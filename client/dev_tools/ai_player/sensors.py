@@ -1,5 +1,5 @@
 """
-sensors.py , turn-over-turn observation (STRATEGY.md §2.5)
+sensors.py: turn-over-turn observation (STRATEGY.md §2.5)
 ==========================================================
 
 """
@@ -19,7 +19,7 @@ def _dist(a, b):
 # CS_AI_STATE_DIR overrides it because a FROZEN build has nowhere else to go:
 # PyInstaller unpacks the module into a temp directory that Windows deletes on
 # exit, so the discovery set would be written, lost, and rebuilt from scratch
-# every launch , which is precisely the restart bug §4.4 R-XTM-01 records, only
+# every launch; which is precisely the restart bug §4.4 R-XTM-01 records, only
 # permanent. The launcher points this at its own data directory.
 STATE_DIR = (os.environ.get("CS_AI_STATE_DIR")
              or os.path.join(os.path.dirname(os.path.abspath(__file__)), "state"))
@@ -28,7 +28,7 @@ STATE_DIR = (os.environ.get("CS_AI_STATE_DIR")
 def _fingerprint(snap):
     """A stable id for THIS galaxy, so one galaxy's map is never read as another's.
 
-    Sun ids alone are not enough , two galaxies can both number their suns from
+    Sun ids alone are not enough; two galaxies can both number their suns from
     the same pool. Positions are the galaxy's identity, so this hashes the sorted
     (id, rounded position) pairs. Rounded because the coordinates are floats we
     only ever read, and an exact-bit dependency would be fragile for no gain.
@@ -44,7 +44,7 @@ class History:
 
     **Discovery is permanent in the game and must be permanent here.** It used to
     live only in this object, rebuilt each pass from where our planets and ships
-    are *now* plus scan reports , so it silently reset whenever the controller
+    are *now* plus scan reports; so it silently reset whenever the controller
     restarted. Measured: a process restart on an unchanged galaxy took the map
     from 105 explored systems down to 7, which cost ~170 turns of re-scouting and
     broke contact with the only rival, disabling every Exterminate rule. A galaxy
@@ -53,7 +53,7 @@ class History:
     So the set is written to `state/discovered_<galaxy>_<civ>.json` and reloaded
     on construction. Keyed by galaxy fingerprint AND civ, because one machine
     plays several galaxies and a map is per player. Persisting our own discoveries
-    is not omniscience , it is the opposite, and it is what stops a restart from
+    is not omniscience; it is the opposite, and it is what stops a restart from
     quietly handing the AI a fresh fog of war it then re-explores at full speed.
     """
 
@@ -73,8 +73,8 @@ class History:
         """Choose the file for this galaxy+civ and merge whatever is already in it.
 
         Bound lazily from `observe` when the caller did not pass a snapshot, so
-        every existing `History()` call site , the loop and each standalone rule
-        tool , gets a persistent map without being changed. Binding happens
+        every existing `History()` call site (the loop and each standalone rule
+        tool) gets a persistent map without being changed. Binding happens
         BEFORE `_discover`, so the loaded set and this pass's sightings union
         rather than one clobbering the other.
         """
@@ -158,7 +158,7 @@ class History:
 
         A system counts as discovered when we hold a planet in it, when one of
         our ships is inside it, or when a scan report names it. Nothing here
-        ever forgets , discovery is permanent, as it is in the game.
+        ever forgets; discovery is permanent, as it is in the game.
         """
         for p in snap.owned_planets(civ):
             s, _r = snap.nearest_sun(p)
@@ -312,7 +312,7 @@ class History:
 
         Owner:8 moves for two reasons: the empire earns, and we spend. Only the
         first is a signal. Hurrying a build is a deliberate purchase, and
-        counting it as lost income made R-XPL-08 oscillate , spend, see
+        counting it as lost income made R-XPL-08 oscillate; spend, see
         "negative income", refuse, recover, spend again.
         """
         d = self._civ_delta("cash")

@@ -1,5 +1,5 @@
 """
-join_turn_acceptance.py , a join through the referee, in a client that ran
+join_turn_acceptance.py: a join through the referee, in a client that ran
 ===========================================================================
     python join_turn_acceptance.py run
     python join_turn_acceptance.py run --name Ada --turns 2
@@ -185,8 +185,8 @@ def measure(before, after, control, name):
     """What the join did, against the turn before it and against a control.
 
     Two comparisons, because neither alone says it. `before` is the turn that
-    was closed, and a real tick moves every civ's `OWNR` legitimately , stores,
-    population, newly explored systems , so byte identity against it is not a
+    was closed, and a real tick moves every civ's `OWNR` legitimately (stores,
+    population, newly explored systems) so byte identity against it is not a
     claim anybody should make; what it can say is that nobody's planets or
     ships changed hands.
 

@@ -1,5 +1,5 @@
 """
-galaxy_tool.py , the operator ends a galaxy and starts the next one (K5)
+galaxy_tool.py: the operator ends a galaxy and starts the next one (K5)
 ========================================================================
     python galaxy_tool.py firebase://cs-resurgence list
     python galaxy_tool.py firebase://cs-resurgence close sandbox --reason "Season one is over."

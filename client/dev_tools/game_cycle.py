@@ -1,5 +1,5 @@
 """
-game_cycle.py , save, close, edit the blob, relaunch, without a human
+game_cycle.py: save, close, edit the blob, relaunch, without a human
 =====================================================================
     # add two designs to the running game and come back up on the result
     python game_cycle.py --design "f1:chassis=0,scanner=0,engine=0,weapon=0" \
@@ -11,7 +11,7 @@ game_cycle.py , save, close, edit the blob, relaunch, without a human
 Ship designs cannot be created in memory: the object gets built and fitted, but
 nothing registers it with the civ and nothing computes its stat block, so it
 never reaches the UI. The blob route works because the engine's own deserialiser
-does the registration on load , confirmed live, an injected design appears in the
+does the registration on load, confirmed live, an injected design appears in the
 design list and can be selected for building, the client has to save, exit, and be
 relaunched on the edited file. This automates that so an experiment does not need
 a human at the keyboard between each step.
@@ -62,8 +62,8 @@ def client_pids():
     # The 'CosmicSupremacy*' wildcard also matches CosmicSupremacyLauncher.exe,
     # the player-facing launcher added in release/. close_client() force-kills
     # everything this returns, so without the exclusion a harness run with the
-    # launcher open would take the launcher , and the stub server living inside
-    # it , down with the client, mid-game.
+    # launcher open would take the launcher (and the stub server living inside
+    # it) down with the client, mid-game.
     out = subprocess.run(
         ["powershell", "-NoProfile", "-Command",
          "Get-Process -Name 'CosmicSupremacy*' -ErrorAction SilentlyContinue "
@@ -271,7 +271,7 @@ def launch(dat, timeout=180, exe=None, purpose=None, wait_for_lock=0.0,
     something else.
     """
     if client_pids():
-        raise SystemExit("a client is already running; close it first , "
+        raise SystemExit("a client is already running; close it first; "
                          "launching a second silently kills the first")
     dat = os.path.abspath(dat)
     if not os.path.exists(dat):
@@ -318,7 +318,7 @@ def launch(dat, timeout=180, exe=None, purpose=None, wait_for_lock=0.0,
             # small one has to be able to lower it. Left at 10 it silently
             # rejects any filtered galaxy with ten or fewer systems, which
             # reads as "the client would not load it" and is not the same
-            # claim at all , that confusion cost a day of fog-of-war results.
+            # claim at all, that confusion cost a day of fog-of-war results.
             if (civ is not None and snap.owned_planets(civ)
                     and len(snap.suns) >= min_suns):
                 log(f"  up: turn {snap.turn}, {civ.civ_name!r}, "
@@ -420,7 +420,7 @@ def capture_save(name="cycle"):
     new = [f for f in os.listdir(SAVES) if f.endswith(".b64") and f not in before]
     if not new:
         raise SystemExit("SaveGame succeeded but no new capture appeared in "
-                         "server/saves , is cs_server.py running?")
+                         "server/saves, is cs_server.py running?")
     path = os.path.join(SAVES, sorted(new)[-1])
     log(f"  captured {os.path.basename(path)}")
     return path
@@ -508,7 +508,7 @@ def main():
                          "from the running client when omitted")
     ap.add_argument("--all-civs", action="store_true",
                     help="give every design to EVERY civ in the galaxy, not "
-                         "just the local player , an AI-vs-AI galaxy needs both "
+                         "just the local player, an AI-vs-AI galaxy needs both "
                          "sides able to build the same things")
     ap.add_argument("--name", default="cycle", help="save name (<=15 chars)")
     ap.add_argument("--dat", default=None, help="where to write the .dat")

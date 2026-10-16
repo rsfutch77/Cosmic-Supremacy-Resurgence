@@ -1,5 +1,5 @@
 """
-launcher.py , the player-facing front door for Cosmic Supremacy: Resurgence
+launcher.py: the player-facing front door for Cosmic Supremacy: Resurgence
 """
 from __future__ import annotations
 
@@ -44,7 +44,7 @@ def game_root_candidates() -> "list[str]":
              app_dir()]                         # exes beside the launcher
     # The checkout layout only applies when running from source. Frozen,
     # _repo_root() is derived from a temp extraction path and names a directory
-    # that cannot exist , listing it in the not-found message is pure confusion.
+    # that cannot exist; listing it in the not-found message is pure confusion.
     if not getattr(sys, "frozen", False):
         cands.append(os.path.join(_repo_root(), "client"))
     return cands
@@ -73,7 +73,7 @@ def is_playable(mode) -> bool:
     """
     Can this mode actually be launched today?
 
-    A placeholder , "enabled": false, or simply no EXE named , is shown as a
+    A placeholder ("enabled": false, or simply no EXE named) is shown as a
     greyed-out card advertising what is coming. It must not be counted when
     looking for the game files, or a release that ships no multiplayer client
     would decide the whole install is broken.
@@ -420,7 +420,7 @@ def port_held_message(port: int, holder: dict, speaks_protocol: bool,
             f"port {port} is in use by "
             + ("a server speaking our protocol" if speaks_protocol
                else "something that did not answer testconnection")
-            + " , not reusing it",
+            + ", not reusing it",
             f"Another server already holds port {port}.\n\n"
             + ("It speaks this game's protocol, so it is probably a second "
                "copy of this launcher or a cs_server you started yourself. "
@@ -479,8 +479,8 @@ def start_server(host: str, port: int, data_dir: str, galaxy_dir: str, sink):
     """
     Import cs_server and serve it on daemon threads. Returns (servers, logfile).
 
-    cs_server reads its environment at import time , PORT, and the DATA_DIR that
-    the log, saves\\ and governor blobs hang off , so the environment has to be
+    cs_server reads its environment at import time: PORT, and the DATA_DIR that
+    the log, saves\\ and governor blobs hang off, so the environment has to be
     set before the import, not after. Hence the import sitting inside this
     function rather than at module scope.
     """
@@ -2001,7 +2001,6 @@ def ended_text(g) -> str:
                                                       None)})
 
 
-# ── When a galaxy has stopped ────────────────────────────────────────────────
 # Turns are closed by a referee running as a scheduled task on one person's PC,
 # which starts when they log in. A machine that is off, or one that rebooted
 # and is sitting at a logon screen, leaves every galaxy it refs with a deadline
@@ -2111,7 +2110,7 @@ def stall_hint(stalled) -> str:
 # One row per galaxy, sorted by whatever column the player clicked. A column is
 # two halves that are deliberately not the same thing: the value it orders by,
 # and the text it prints. Those disagree wherever the text is written for a
-# player, which is nearly everywhere , turn 9 sorts below turn 11 but prints
+# player, which is nearly everywhere: turn 9 sorts below turn 11 but prints
 # above it, "1h 04m left" prints above "9:30" and is further away, and "you are
 # in" prints after "joining next turn" while being the row that matters more.
 # So the table sorts on the value and never on the cell.
@@ -2589,8 +2588,8 @@ def beta_notice_text(state):
 # save blob is base64 in the `data=` field and arrives in 400-character chunks
 # tagged `body+`. cs_server holds a savegame body to its first 4000 characters,
 # so it is around 4 KB per save request rather than the whole blob, and a
-# multiplayer turn makes two of those. They diagnose nothing , the same blob is
-# written to saves\ in full , and they are still most of the file: 12,744 bytes
+# multiplayer turn makes two of those. They diagnose nothing; the same blob is
+# written to saves\ in full, and they are still most of the file: 12,744 bytes
 # of the 23,310-byte log this was measured against, from three requests.
 #
 # redact_log_text() produces the copy that can be sent: body dumps replaced by
@@ -2601,25 +2600,25 @@ def beta_notice_text(state):
 # because the text a player is shown before they agree to send one has to be
 # written from this list rather than from a guess.
 #
-#   , The player's name, which is also their civilisation's name in a galaxy.
+#   - The player's name, which is also their civilisation's name in a galaxy.
 #     It is on every multiplayer line: "[Alice] turn 12: submitted".
-#   , The galaxy: the store's path or URL exactly as multiplayer.json names it.
+#   - The galaxy: the store's path or URL exactly as multiplayer.json names it.
 #     For a directory store on another machine that is a UNC path and therefore
 #     that machine's name. The scrubbing covers this player's own account name,
 #     not a referee's machine.
-#   , The game name, turn number and action of each save request, from the head
+#   - The game name, turn number and action of each save request, from the head
 #     of the body that is kept: "gamename='DemoPlayt8'&turn=8&version=1". A
 #     `passhash` sits there too and is always empty; the engine sends a
 #     credential field that the stub server does not use.
-#   , Which modes were started and which exited, with exit codes, process ids
+#   - Which modes were started and which exited, with exit codes, process ids
 #     and the names of the game executables.
-#   , The install's directory layout with the account name replaced:
+#   - The install's directory layout with the account name replaced:
 #     "C:\Users\<user>\Desktop\...". The rest of each path survives, so a folder
 #     a player named after themselves is still readable.
-#   , The whole of the AI opponent's reasoning in single player, which names
+#   - The whole of the AI opponent's reasoning in single player, which names
 #     planets, ships, research and engine addresses, and nothing about the
 #     machine it ran on.
-#   , Timestamps, to the second, of all of the above.
+#   - Timestamps, to the second, of all of the above.
 LOG_NAME = "launcher.log"
 REDACTED_LOG_NAME = "launcher-redacted.log"
 
@@ -2659,8 +2658,8 @@ def scrub_paths(text: str) -> str:
     log can carry paths from a second profile or an older install that the
     account name in force right now would not match.
 
-    A profile directory that is not under \\Users , a redirected domain profile,
-    say , is matched by its own literal path instead.
+    A profile directory that is not under \\Users (a redirected domain profile,
+    say) is matched by its own literal path instead.
     """
     text = _USER_DIR.sub(lambda m: m.group(1) + USER_MARK, text)
     home = os.path.expanduser("~")
@@ -3177,7 +3176,7 @@ class Launcher:
         self.player = None
         # The status to fall back to whenever no game is running. Recorded when
         # the server settles so that a game exiting restores whatever was true
-        # then , "ready", "port taken", "reusing the existing server" ,
+        # then ("ready", "port taken", "reusing the existing server")
         # rather than a guess.
         self._ready: "tuple[str, str]" = ("starting…", WARN)
         # What the status line says now, which is what the window starts with.
@@ -3197,9 +3196,9 @@ class Launcher:
         # therefore does not name. It still has to count as a running game, or
         # a second launch would close someone's turn from under them.
         self.client_exes |= set(MP_CLIENTS)
-        # Diagnostics start before the data directory is known , where the game
+        # Diagnostics start before the data directory is known, where the game
         # was found, and whether it was found at all, are exactly the lines a
-        # failed startup needs to leave behind , so they buffer until there is a
+        # failed startup needs to leave behind, so they buffer until there is a
         # file to put them in.
         self._logfh = None
         self._pending: "list[str]" = []
@@ -3265,7 +3264,7 @@ class Launcher:
                 f"    {needed}\n\n"
                 "Looked in:\n" + searched + "\n\n"
                 "If you are running the launcher out of a build folder, run the "
-                "one in dist\\ instead , that is the complete release. If you "
+                "one in dist\\ instead; that is the complete release. If you "
                 "unzipped only the launcher, download the full archive again and "
                 "keep the folder together.")
             return
@@ -3291,7 +3290,7 @@ class Launcher:
             # checkout cs_server writing to server\saves held the port while
             # this launcher looked in release\data\saves, and every turn died
             # two seconds after serving with "SaveGame succeeded but no capture
-            # appeared , is the launcher's server running?", which was true of
+            # appeared; is the launcher's server running?", which was true of
             # a server that was not this one. Half-working that way is worse
             # than refusing, so this refuses.
             ours = stub_server_answers(host, port)
@@ -3378,7 +3377,7 @@ class Launcher:
             self.child = launch_mode(mode, self.game_root, self.galaxy_root)
         except FileNotFoundError as exc:
             self.warn(f"Missing file:\n\n{exc}\n\nThe release folder looks "
-                      "incomplete , try downloading it again.")
+                      "incomplete; try downloading it again.")
             return
         except OSError as exc:
             self.warn(f"Could not start the game:\n\n{exc}")
@@ -4359,7 +4358,7 @@ class Launcher:
                      f"{joined['name']!r}")
         self._show_player_code()
         self.say(f"multiplayer: following {cfg['store']} as {civ}")
-        self.set_status(f"Multiplayer , {civ}", OK)
+        self.set_status(f"Multiplayer: {civ}", OK)
         self._show_controls(True)
 
         # Where this launcher's captures land, which is not its own saves
@@ -4542,7 +4541,7 @@ class Launcher:
             return
         self.mp_stop = True
         if why:
-            self.say(f"multiplayer: stopping , {why}")
+            self.say(f"multiplayer: stopping: {why}")
         self.mp_thread.join(timeout=20)
         if self.mp_thread.is_alive():
             self.say("multiplayer: the turn loop is still finishing a capture")
@@ -4784,7 +4783,7 @@ class Launcher:
             self.ai_child = None
             self.say(f"opponent failed to start: {exc}")
         if self.ai_child is None:
-            self.say(f"opponent NOT started , {AI_EXE} was not found")
+            self.say(f"opponent NOT started: {AI_EXE} was not found")
             self.warn(
                 f"The computer opponent could not be started.\n\n{AI_EXE} is "
                 "missing from the game folder, so the other empire will not "
@@ -4835,7 +4834,7 @@ class Launcher:
 
         Ending a turn takes as long as the engine takes, and a save
         serialises the whole object graph. Doing either on the UI thread
-        freezes the window for the duration, which reads exactly like a crash , and this window is
+        freezes the window for the duration, which reads exactly like a crash, and this window is
         also the game's server, so it must keep answering while the game works.
         """
         self._ctl_busy = True
@@ -4873,7 +4872,7 @@ class Launcher:
         driving this client on its own cadence, and a second SaveGame into
         data\\games would be a file nothing reads, taken from a client another
         thread is saving at the same moment. The loop is asked instead, which
-        is why the two can never run at once against one client , the loop is
+        is why the two can never run at once against one client; the loop is
         the only thing that ever calls SaveGame while it is running.
 
         That is also the answer to waiting for the upload cadence. A player who
@@ -4896,7 +4895,7 @@ class Launcher:
                 if not c.save_game("singleplayer"):
                     raise gamectl.GameError(
                         "the game refused to save. This usually means the "
-                        "launcher's server is not reachable , keep this window "
+                        "launcher's server is not reachable; keep this window "
                         "open while you play.")
             # The engine's save goes out over HTTP; give the server a moment to
             # finish writing the capture before looking for it.
@@ -5039,9 +5038,6 @@ class Launcher:
             # something worth saying, so that case keeps the indicator.
             age = time.time() - when
             if self.mp_client_gone and not self.mp_sending:
-                # Held, not hidden. The send finishing and the indicator
-                # disappearing used to be the same moment, so the one thing a
-                # player closes the game to find out was never on screen.
                 if age > CAPTURE_HOLD:
                     state = None
             self._show_capture(state, age, client_open=not self.mp_client_gone)
@@ -5234,7 +5230,7 @@ class Launcher:
         if self.ai_child is not None and self.ai_child.poll() is not None:
             code = self.ai_child.returncode
             self.ai_child = None
-            self.say(f"opponent exited (code {code}) , the other empire will "
+            self.say(f"opponent exited (code {code}), the other empire will "
                      f"not take any more turns")
 
         mp_live = self.mp_thread is not None and self.mp_thread.is_alive()
@@ -5246,10 +5242,10 @@ class Launcher:
                 self._watch_mp_client(bool(busy))
             if mp_live and self.mp_sending:
                 self._status_if_changed(
-                    "sending your turn , keep this window open", WARN)
+                    "sending your turn, keep this window open", WARN)
             elif mp_live and self.mp_reopening:
                 self._status_if_changed(
-                    "Multiplayer , opening the game again", OK)
+                    "Multiplayer: opening the game again", OK)
             elif mp_live and self.mp_client_gone:
                 # The status line is the server's. It says what is running,
                 # and between turns nothing is: the loop is waiting for the
@@ -5277,13 +5273,13 @@ class Launcher:
                     self._status_if_changed(UNREACHABLE_NOTE, WARN)
                 elif stopped:
                     self._status_if_changed(
-                        f"the galaxy has stopped , its turn was due "
+                        f"the galaxy has stopped; its turn was due "
                         f"{fmt_ago(stopped)}", WARN)
                 else:
                     self._status_if_changed(*self._ready)
             elif mp_live:
                 self._status_if_changed(
-                    f"Multiplayer , {self.mp_civ}" if self.mp_civ
+                    f"Multiplayer: {self.mp_civ}" if self.mp_civ
                     else "Multiplayer", OK)
             elif busy:
                 self._status_if_changed(f"{self._name_for(busy)} is running", OK)
@@ -5353,7 +5349,7 @@ class Launcher:
         return shorts.pop() if len(shorts) == 1 else "A game"
 
     def _status_if_changed(self, text: str, colour: str):
-        """Repaint only on a real change , this runs once a second."""
+        """Repaint only on a real change; this runs once a second."""
         if self._status[0] != text:
             self.set_status(text, colour)
 

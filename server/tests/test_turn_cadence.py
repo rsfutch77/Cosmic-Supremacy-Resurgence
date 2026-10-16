@@ -1,5 +1,5 @@
 """
-test_turn_cadence.py , captures are cheap, uploads are not, so count both
+test_turn_cadence.py: captures are cheap, uploads are not, so count both
 =========================================================================
     server\\.venv\\Scripts\\python.exe server\\tests\\test_turn_cadence.py
 

@@ -1,5 +1,5 @@
 """
-seat_tool.py , the operator's hand on a galaxy's seat map
+seat_tool.py: the operator's hand on a galaxy's seat map
 =========================================================
     python seat_tool.py firebase://cs-resurgence/sandbox list
     python seat_tool.py firebase://cs-resurgence/sandbox candidates

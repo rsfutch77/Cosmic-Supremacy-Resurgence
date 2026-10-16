@@ -1,5 +1,5 @@
 """
-new_duel_galaxy.py , turn a fresh two-civ galaxy into an N-civ AI testbed
+new_duel_galaxy.py: turn a fresh two-civ galaxy into an N-civ AI testbed
 ========================================================================
     # with a brand-new galaxy already running (drag DemoGalaxy_local.csgalaxy
     # onto the EXE, or launch it with that as the argument):
@@ -84,7 +84,7 @@ def main():
         struct.pack_into("<i", buf, hit[2], a.secs)
         blob = bytes(buf)
         if a.secs < 60:
-            print("   (below the engine's 60s floor , needs "
+            print("   (below the engine's 60s floor, needs "
                   "patch_turn_floor.py --apply, or it will be clamped)")
 
     with open(a.dat, "wb") as f:

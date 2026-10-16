@@ -1,5 +1,5 @@
 """
-preflight.py , can this machine reach the galaxy, step by step
+preflight.py: can this machine reach the galaxy, step by step
 ==============================================================
     python preflight.py firebase://cs-resurgence/h3check
 

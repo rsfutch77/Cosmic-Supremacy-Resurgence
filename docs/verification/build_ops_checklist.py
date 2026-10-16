@@ -1,5 +1,5 @@
 """
-build_ops_checklist.py , write the operations, release and privacy checklists
+build_ops_checklist.py: write the operations, release and privacy checklists
 ============================================================================
     python docs/verification/build_ops_checklist.py
 

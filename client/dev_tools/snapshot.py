@@ -1,8 +1,8 @@
 """
-snapshot.py , Save and restore full game memory state
+snapshot.py: Save and restore full game memory state
 =====================================================
 Takes a snapshot of all writable memory regions in the running game process
-and can restore them later (same session only , heap addresses are only valid
+and can restore them later (same session only, heap addresses are only valid
 while the process is still running).
 
 This captures everything: EJBO objects, .data section globals (turn counter,
@@ -129,7 +129,7 @@ def count_ejbo_objects(data_chunks):
             if idx < 0:
                 break
             count += 1
-            # Try to classify , type pointer is 8 bytes before EJBO tag
+            # Try to classify, type pointer is 8 bytes before EJBO tag
             if idx >= 8:
                 type_ptr = struct.unpack_from("<I", chunk, idx - 8)[0]
                 type_name = KNOWN_TYPES.get(type_ptr, "Unknown")
@@ -206,7 +206,7 @@ def cmd_save(name=None):
     total_bytes = 0
     skipped = 0
     for base, size in regions:
-        # Skip very large regions (>16MB) , likely video memory or mapped files
+        # Skip very large regions (>16MB), likely video memory or mapped files
         if size > 16 * 1024 * 1024:
             skipped += 1
             continue
@@ -305,7 +305,7 @@ def cmd_restore(name):
 
     if pid != header["pid"]:
         print(f"\n*** WARNING: Current PID ({pid}) differs from snapshot PID ({header['pid']}) ***")
-        print("*** Heap addresses may have changed , restore may corrupt game state! ***")
+        print("*** Heap addresses may have changed, restore may corrupt game state! ***")
         resp = input("Continue anyway? (yes/no): ").strip().lower()
         if resp != "yes":
             print("Aborted.")
@@ -339,7 +339,7 @@ def cmd_restore(name):
         if ok:
             restored += 1
         else:
-            # Try writing in smaller blocks , some regions may have
+            # Try writing in smaller blocks, some regions may have
             # changed protection since the snapshot
             block_size = 4096
             partial_ok = 0
@@ -354,7 +354,7 @@ def cmd_restore(name):
                 restored += 1
             else:
                 total_blocks = partial_ok + partial_fail
-                print(f"    PARTIAL: 0x{base:08X} ({size:,} bytes) , "
+                print(f"    PARTIAL: 0x{base:08X} ({size:,} bytes), "
                       f"{partial_ok}/{total_blocks} blocks written")
                 failed += 1
 

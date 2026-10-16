@@ -1,5 +1,5 @@
 """
-test_beta_notice.py , the player notice says what the code actually does
+test_beta_notice.py: the player notice says what the code actually does
 ========================================================================
     server\\.venv\\Scripts\\python.exe server\\tests\\test_beta_notice.py
 
@@ -210,7 +210,7 @@ def check_tone(body: str):
     for word in ('blob', 'store spec', 'referee', 'civ ', 'canonical hash',
                  'firestore', 'turn_store', 'roster'):
         check(f'tone: no codebase word "{word.strip()}"', word in low, False)
-    check('tone: no em-dashes', '—' in body, False)
+    check('tone: no em-dashes', '\u2014' in body, False)
     longest = max((len(ln) for ln in body.splitlines()), default=0)
     check('tone: no line is wider than a small window', longest <= 80)
     check('tone: short enough to be read rather than skipped',

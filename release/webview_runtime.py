@@ -1,5 +1,5 @@
 """
-webview_runtime.py , make sure Microsoft Edge WebView2 Runtime is present before a window opens
+webview_runtime.py: make sure Microsoft Edge WebView2 Runtime is present before a window opens
 ==============================================================================================
 The launcher's window is a web page drawn by WebView2. Windows 11 ships the
 runtime and most Windows 10 machines have it, but some do not, and without it

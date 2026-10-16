@@ -1,5 +1,5 @@
 """
-test_stalled_galaxy.py , telling a dead referee from a late one
+test_stalled_galaxy.py: telling a dead referee from a late one
 ================================================================
     server\\.venv\\Scripts\\python.exe release\\tests\\test_stalled_galaxy.py
 
@@ -525,7 +525,7 @@ def status_for(overdue, waiting=True, turn_seconds=FOUR_HOURS):
     stopped = app._mp_stalled()
     if stopped:
         app._status_if_changed(
-            f"the galaxy has stopped , its turn was due {L.fmt_ago(stopped)}",
+            f"the galaxy has stopped; its turn was due {L.fmt_ago(stopped)}",
             L.WARN)
     else:
         app._status_if_changed(*app._ready)
@@ -542,7 +542,7 @@ check("a galaxy merely late falls back to the ready line as before",
 check("the stopped line says nothing about a game running",
       stopped_line, lambda t: "Multiplayer" not in t and "running" not in t)
 check("which is the confusion this branch exists to avoid",
-      stopped_line != "Multiplayer , DemoPlayer", True)
+      stopped_line != "Multiplayer: DemoPlayer", True)
 check("and it is not said mid-turn, where the deadline is ahead",
       status_for(7200, waiting=False), READY)
 check("the real launcher still falls back to its ready line",

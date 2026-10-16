@@ -1,9 +1,9 @@
 """
-trigger_save.py , Make the running client POST a savegame, with no user click
+trigger_save.py: Make the running client POST a savegame, with no user click
 ============================================================================
 Calls the game's own save routine in a remote thread.  The point is to capture
 real save blobs (`server/cs_server.py` now persists them to `server/saves/`) so
-the blob format , `ROUT` in particular , can be checked against bytes the engine
+the blob format (`ROUT` in particular) can be checked against bytes the engine
 actually produced instead of against a layout read out of the disassembly.
 
     python trigger_save.py                      # save into slot 0
@@ -155,7 +155,7 @@ def main():
 
         rc = kernel32.WaitForSingleObject(th, args.timeout * 1000)
         if rc != 0:
-            print(f"  WARNING: wait returned {rc} , the thread has not finished. "
+            print(f"  WARNING: wait returned {rc}, the thread has not finished. "
                   f"Leaving its page allocated so it cannot execute freed memory.")
             kernel32.CloseHandle(th)
             kernel32.CloseHandle(h)
@@ -166,7 +166,7 @@ def main():
         kernel32.CloseHandle(th)
         ok = code.value & 0xFF
         print(f"  SaveGame returned {ok} "
-              f"({'saved' if ok else 'FAILED , client will have shown a dialog'})")
+              f"({'saved' if ok else 'FAILED, client will have shown a dialog'})")
         print("  check server/saves/ for the captured blob")
         kernel32.VirtualFreeEx(h, ctypes.c_void_p(remote), 0, MEM_RELEASE)
         return 0 if ok else 1

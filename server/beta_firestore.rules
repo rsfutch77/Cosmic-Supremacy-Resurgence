@@ -1,4 +1,4 @@
-// beta_firestore.rules , the Firestore rules for the beta
+// beta_firestore.rules: the Firestore rules for the beta
 // =======================================================
 // No client reads or writes Firestore directly. A player's launcher reaches a
 // galaxy only through the relay (functions/relay.py), which uses admin

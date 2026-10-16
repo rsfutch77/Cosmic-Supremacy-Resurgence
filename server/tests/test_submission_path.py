@@ -1,5 +1,5 @@
 """
-test_submission_path.py , a submission through the relay, since H13
+test_submission_path.py: a submission through the relay, since H13
 ====================================================================
     python functions/emulators.py --only firestore,storage,auth
     (set the three variables it prints)

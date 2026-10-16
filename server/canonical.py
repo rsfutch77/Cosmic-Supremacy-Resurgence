@@ -1,5 +1,5 @@
 """
-canonical.py , the form of a blob that two honest computations agree on
+canonical.py: the form of a blob that two honest computations agree on
 =======================================================================
     python canonical.py turn0009.b64
     python canonical.py runA.b64 runB.b64        # compare two runs

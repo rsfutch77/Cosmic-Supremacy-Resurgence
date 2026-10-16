@@ -1,5 +1,5 @@
 """
-set_population.py , Set a planet's population, growing past capacity if needed
+set_population.py: Set a planet's population, growing past capacity if needed
 ==============================================================================
 Population is a std::vector of 16-byte citizen records at Planet:144, with
 begin/end/cap at +144/+148/+152 and the current count mirrored in the low half of

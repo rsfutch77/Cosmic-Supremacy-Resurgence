@@ -1,5 +1,5 @@
 """
-fog_why.py , what the client is actually doing when a filtered blob "fails"
+fog_why.py: what the client is actually doing when a filtered blob "fails"
 ===========================================================================
     python fog_why.py                 # serve a known-failing blob and look
 

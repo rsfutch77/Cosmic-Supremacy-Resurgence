@@ -1,5 +1,5 @@
 """
-test_seat_rebind.py , the operator moves a seat to a new install (J4)
+test_seat_rebind.py: the operator moves a seat to a new install (J4)
 =====================================================================
     python functions/emulators.py --only firestore,storage,auth
 

@@ -1,5 +1,5 @@
 """
-test_joins.py , a stranger asking for a seat at a turn boundary
+test_joins.py: a stranger asking for a seat at a turn boundary
 ===============================================================
     server\\.venv\\Scripts\\python.exe server\\tests\\test_joins.py
 

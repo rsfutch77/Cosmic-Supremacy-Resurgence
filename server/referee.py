@@ -1,5 +1,5 @@
 """
-referee.py , the authoritative turn, as two calls
+referee.py: the authoritative turn, as two calls
 =================================================
     python referee.py auth.b64 --from BadGuy=sub.b64 --turns 1 -o next.b64
 

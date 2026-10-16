@@ -1366,8 +1366,8 @@ With the extent raised from 192 to 1344 the class shows 345 fields instead of 57
   which is also the only civ with user-created ship designs. Likely the design list.
 - **`Owner:1208/1212/1216`**, a float triple reading 740.47 / 337.23 / 702.13 on the AI and
   zero on the human, matching the X/Z/Y coordinate layout used elsewhere.
-- Four `std::string` members at `+368`, `+528`, `+1144`, `+1312`, **all empty on both civs**
- , the civilisation name is not among them. It is at **`Owner:-44`**, *in front* of the
+- Four `std::string` members at `+368`, `+528`, `+1144`, `+1312`, **all empty on both civs**:
+the civilisation name is not among them. It is at **`Owner:-44`**, *in front* of the
   tag; see the multiple-inheritance section below.
 
 Two existing annotations are now in doubt:
@@ -1723,8 +1723,8 @@ population and the most cash, so this is not an economy difference: cash moves
 and every empire-level field stays at its initial value. **Research is
 unreachable for the human player for the whole game.**
 
-So the July reading above , "not ticked on TestBed, ticks correctly on
-Resurgence" , attributed the split to the wrong thing. Both halves were true
+So the July reading above, "not ticked on TestBed, ticks correctly on
+Resurgence", attributed the split to the wrong thing. Both halves were true
 and the build was not the variable. Reading the last u32 of every OWNR payload
 out of every galaxy blob in `client/` splits them perfectly on the galaxy
 instead:
@@ -1742,7 +1742,7 @@ galaxy. The July measurements were taken on one of each, which is why the build
 looked like the variable. `server/dev_tools/set_civ_id.py` reads and rewrites
 this field, and `client/dev_tools/research_tick_check.py` takes the measurement.
 
-**RESOLVED , `Owner:4 == 0` is the cause, and it is a sentinel rather than a
+**RESOLVED: `Owner:4 == 0` is the cause, and it is a sentinel rather than a
 collision.** Four bytes, one control turn and one treatment turn on the live
 galaxy above, nothing else touched:
 
@@ -1755,7 +1755,7 @@ galaxy above, nothing else touched:
 The control matters: it reproduces the fault in the same session, on the same
 galaxy, immediately before the fix, so the only variable between the two turns
 is those four bytes. Note 0 was already *distinct* here (22, 0, 21 are three
-different ids), so the field is not merely a uniqueness key , **zero means "not
+different ids), so the field is not merely a uniqueness key: **zero means "not
 simulated on this client"**, which is exactly what the original architecture
 needed: the server owned the human player's empire-level results and shipped
 them down, so the client had no business recomputing them.
@@ -1765,14 +1765,14 @@ The rest of the dead block came back in the same turn:
 - `Owner:12` research and `Owner:24` are **accumulators**, so both restarted
   from 0 and have permanently lost the eight turns they sat out. `Owner:24`
   resumed at exactly +10 per owned planet per turn, matching the rule above.
-- `Owner:28` score is **computed, not accumulated** , it snapped from 0 straight
+- `Owner:28` score is **computed, not accumulated**; it snapped from 0 straight
   to 2503, a value consistent with the civ's two planets and 14 population.
 - `Owner:8` cash moved the whole time, in both states. That is what makes the
   skip easy to miss from inside the game: the treasury ticks, so the empire
   looks alive.
 
-The other candidate , the all-zero block at `Owner:1180..1216`, where both
-rivals hold `-1` sentinels and an XYZ float triple , is therefore **not** the
+The other candidate (the all-zero block at `Owner:1180..1216`, where both
+rivals hold `-1` sentinels and an XYZ float triple) is therefore **not** the
 gate. It is still unexplained and still correlates with engine-driven civs, but
 it is downstream of this, not the cause.
 
@@ -1784,8 +1784,8 @@ one byte, client restarted on it cold:
 | turn | DemoPlayer `Owner:4` | research | `Owner:24` | score | BadGuy research |
 |---|---|---|---|---|---|
 | 0 | **20** (survived the load) | 0 | 0 | 0 | 0 |
-| 1 | 20 | **40** | , | , | 40 |
-| 2 | 20 | **80** | , | , | 80 |
+| 1 | 20 | **40** | - | - | 40 |
+| 2 | 20 | **80** | - | - | 80 |
 | 3 | 20 | **120** | **30** | **1546** | 120 |
 
 At turn 3 the two civs are identical in every empire-level field, which is the

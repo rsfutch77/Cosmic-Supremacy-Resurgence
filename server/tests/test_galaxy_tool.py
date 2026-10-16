@@ -1,5 +1,5 @@
 """
-test_galaxy_tool.py , the operator ends a galaxy and starts the next (K5)
+test_galaxy_tool.py: the operator ends a galaxy and starts the next (K5)
 =========================================================================
     server\\.venv\\Scripts\\python.exe server\\tests\\test_galaxy_tool.py
 

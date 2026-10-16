@@ -1,5 +1,5 @@
 """
-rtti_static.py , the class model, read off the disk
+rtti_static.py: the class model, read off the disk
 ===================================================
     python rtti_static.py                      # the CLASS_FRONT table, derived
     python rtti_static.py --check              # compare it to ejbo_viewer's

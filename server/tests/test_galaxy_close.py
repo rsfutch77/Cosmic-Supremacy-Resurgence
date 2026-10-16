@@ -1,5 +1,5 @@
 """
-test_galaxy_close.py , a galaxy the operator has called over
+test_galaxy_close.py: a galaxy the operator has called over
 =============================================================
     server\\.venv\\Scripts\\python.exe server\\tests\\test_galaxy_close.py
     ... test_galaxy_close.py --firebase firebase://demo-cs-resurgence

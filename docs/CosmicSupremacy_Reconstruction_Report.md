@@ -38,21 +38,21 @@ The game communicates with a central server over plain **HTTP/1.0**.
 
 ### Known Server API Endpoints (`action=` parameter)
 ```
-testconnection         , ping/health check
-loadgame               , load a save game
-savegame               , save current game state
-savegamelist           , list available saves
-loadgov                , load governor settings
-savegov                , save governor settings
-govlist                , list available governors
-uploadcivname          , upload civilization name
-listcivnames           , list civ names (userid=%d)
-getcoa                 , get coat of arms image (coaid=%d)
-listcoa                , list coat of arms (userid=%d)
-uploadcoa              , upload coat of arms image
-passedtutorial         , mark tutorial as complete (userid=%d&pass=%s)
-entertestbedgalaxy     , enter test bed galaxy
-getplayerfame          , retrieve player fame points
+testconnection         : ping/health check
+loadgame               : load a save game
+savegame               : save current game state
+savegamelist           : list available saves
+loadgov                : load governor settings
+savegov                : save governor settings
+govlist                : list available governors
+uploadcivname          : upload civilization name
+listcivnames           : list civ names (userid=%d)
+getcoa                 : get coat of arms image (coaid=%d)
+listcoa                : list coat of arms (userid=%d)
+uploadcoa              : upload coat of arms image
+passedtutorial         : mark tutorial as complete (userid=%d&pass=%s)
+entertestbedgalaxy     : enter test bed galaxy
+getplayerfame          : retrieve player fame points
 ```
 
 ### Save/Sync Data Format (Historical)
@@ -1103,7 +1103,7 @@ Each is a Win32 dialog resource, not an in-engine overlay, so the main window's 
 | id | title | decision routine | gate |
 |---|---|---|---|
 | 210 | Customize Your Home World | `0x0056E0D0` | `[session+0x19B]`, and `0x00508C60(session)` |
-| 218 | Customize Your Civilization | — | — |
+| 218 | Customize Your Civilization | - | - |
 | 225 | Pick your Civilization Name and Coat of Arms | `0x0056E700` | the local civ's `Owner:384` must be non-zero |
 
 `0x0052A8D0`, the "session" those guards read, is **the local player's `Owner` object**: it loads `[0x00857904]`, dereferences it and returns the object address minus `0x2C`. Since the reference cell holds the object address minus 8, a guard reading `[session+0x1B4]` is reading `Owner:384`.

@@ -1,5 +1,5 @@
 """
-test_research_merge.py , two players may both change research in one turn
+test_research_merge.py: two players may both change research in one turn
 =========================================================================
 The rule under test refuses a submission that alters **another** civ's research
 topic. A player holds the whole galaxy, so they could edit anyone's, and this is

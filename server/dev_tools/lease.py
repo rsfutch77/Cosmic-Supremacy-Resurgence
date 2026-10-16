@@ -1,5 +1,5 @@
 """
-lease.py , one holder at a time for the machine's shared resources
+lease.py: one holder at a time for the machine's shared resources
 ==================================================================
     python lease.py take client "Lane A" "join acceptance" --minutes 20
     python lease.py release client "Lane A"

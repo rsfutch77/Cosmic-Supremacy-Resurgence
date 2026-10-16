@@ -1,5 +1,5 @@
 """
-test_relay_costs.py , what a relay request costs, counted at the client library
+test_relay_costs.py: what a relay request costs, counted at the client library
 ===============================================================================
     python functions/emulators.py --only firestore,storage,auth
     (set the three variables it prints)

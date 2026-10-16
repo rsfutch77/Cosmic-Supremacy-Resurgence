@@ -1,5 +1,5 @@
 """
-join_kit_acceptance.py , a joiner's starting kit, in a client that ran
+join_kit_acceptance.py: a joiner's starting kit, in a client that ran
 =======================================================================
     python join_kit_acceptance.py run
     python join_kit_acceptance.py run --name Ada --turns 3

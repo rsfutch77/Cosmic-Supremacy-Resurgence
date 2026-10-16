@@ -1,5 +1,5 @@
 """
-test_join_reservation.py , a join keeps off a planet a ship is flying to
+test_join_reservation.py: a join keeps off a planet a ship is flying to
 ========================================================================
     server\\.venv\\Scripts\\python.exe server\\tests\\test_join_reservation.py
 

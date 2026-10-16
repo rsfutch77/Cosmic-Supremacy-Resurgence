@@ -1,5 +1,5 @@
 """
-project_blob.py , the galaxy as one civ is entitled to see it
+project_blob.py: the galaxy as one civ is entitled to see it
 =============================================================
     python project_blob.py <blob> --civ Alice --dat alice.dat
     python project_blob.py <blob> --report
@@ -9,7 +9,7 @@ than relying on the client to decline to draw it. This builds that copy.
 
 **This is projection (1) of the two: the map is hidden, beliefs are not.**
 Systems the civ has not entered are removed outright. Systems that are kept
-show *current truth*, not what the civ last saw , so a planet they explored
+show *current truth*, not what the civ last saw, so a planet they explored
 once and never revisited still shows its real owner. Presenting stale belief
 means writing `PLNT` records from `EXSY` rows instead of deleting subtrees, and
 that is a much larger job, recorded and not attempted here. Anyone reading this
@@ -24,8 +24,8 @@ What is kept, per civ:
 `EXSY` is the input rather than a guess, which is the point: the engine already
 maintains per-civ knowledge, so "what has this civ entered" is a question the
 blob already answers. **Rows appear as a hull flies near a system, not when an
-order completes** , machine A measured a scout registering a system it passed
-at 58 units and never stopped at , so this is knowledge by proximity, which is
+order completes**: machine A measured a scout registering a system it passed
+at 58 units and never stopped at, so this is knowledge by proximity, which is
 what a player would expect to see on their map.
 
 Ships are safe by construction: `SHIP` sections are children of `GLXY`, not of

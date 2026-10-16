@@ -1,5 +1,5 @@
 """
-test_no_console_windows.py , the dev tools stop flashing cmd windows
+test_no_console_windows.py: the dev tools stop flashing cmd windows
 =====================================================================
     server\\.venv\\Scripts\\python.exe server\\tests\\test_no_console_windows.py
 

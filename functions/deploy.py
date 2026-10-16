@@ -1,5 +1,5 @@
 """
-deploy.py , the only deploy this directory is allowed to do
+deploy.py: the only deploy this directory is allowed to do
 ============================================================
     python functions/deploy.py --check          say what would run
     python functions/deploy.py                  run it

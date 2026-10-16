@@ -1,5 +1,5 @@
 """
-explore.py , the Explore rules (STRATEGY.md §4.1)
+explore.py: the Explore rules (STRATEGY.md §4.1)
 =================================================
 R-EXP-02  send a ship to an undiscovered star so its system is revealed
 
@@ -33,7 +33,7 @@ def scoutable(snap, civ, hist, act):
     """Ships we may send scouting.
 
     A ship busy with a purposeful order is left alone. A COLONIZE order whose
-    target we cannot legitimately see is not purposeful , it is a leftover from
+    target we cannot legitimately see is not purposeful; it is a leftover from
     before fog of war was enforced, and repurposing it is a correction, not an
     interruption.
     """
@@ -43,7 +43,7 @@ def scoutable(snap, civ, hist, act):
             continue
         # A TROOP hull never scouts. It is the most expensive ship in the empire
         # and the ONLY thing that can take a planet, and this rule took a freshly
-        # crewed one and sent it to a sun 409 units away , because nothing in
+        # crewed one and sent it to a sun 409 units away; because nothing in
         # Exterminate claimed it and "idle" was the only test. Colony ships are
         # held back conditionally below; a troop transport is held back always.
         if s.role == "TROOP":
@@ -156,7 +156,7 @@ def scout_designs(snap, civ):
     """Our own PURPOSE-BUILT scouts: a chassis, engines, and nothing else.
 
     Deliberately stricter than the SCOUT role, which is defined by absence and so
-    quietly includes any unarmed hull , a colony ship with its module stripped, a
+    quietly includes any unarmed hull; a colony ship with its module stripped, a
     half-finished experiment. Those are slow and expensive. A scout is a hull
     spending its whole cost on engines, which makes it both the cheapest ship in
     the empire and the fastest.
@@ -185,8 +185,8 @@ def scout_designs(snap, civ):
 def run_exp01(snap, civ, act, hist, log=print):
     """R-EXP-01: keep dedicated scouts in the field.
 
-    Exploration is the gate on everything under fog of war , expansion needs
-    targets and Exterminate needs an enemy , and doing the looking with colony
+    Exploration is the gate on everything under fog of war: expansion needs
+    targets and Exterminate needs an enemy, and doing the looking with colony
     ships is why a galaxy took hundreds of turns to survey. A scout is cheap
     enough to build several and fast enough that each one covers far more ground.
     """
@@ -215,7 +215,7 @@ def run_exp01(snap, civ, act, hist, log=print):
     # the tiebreak that still ranks sensibly on a cold cache.
     best = max(designs, key=lambda d: (d.speed or 0, len(d.engines)))
     planet = max(yards, key=lambda p: len(p.population))
-    log(f"R-EXP-01: {len(have)}/{SCOUT_TARGET} scout(s) , queueing "
+    log(f"R-EXP-01: {len(have)}/{SCOUT_TARGET} scout(s); queueing "
         f"{best.design_name!r} (speed {best.speed}, {len(best.engines)} engine(s)) "
         f"at {planet}")
     try:
@@ -236,7 +236,7 @@ def main():
     civ = gs.resolve_civ(snap, cli.opt(args, "--civ"))
     if civ is None:
         return
-    print(f"\n=== Explore , turn {snap.turn} , {civ.civ_name!r} , "
+    print(f"\n=== Explore, turn {snap.turn}, {civ.civ_name!r}, "
           f"{'DRY RUN' if dry_run else 'APPLYING'} ===")
     hist = sensors.History().observe(snap, civ)
     print(f"  {len(hist.discovered)} system(s) discovered of {len(snap.suns)}")

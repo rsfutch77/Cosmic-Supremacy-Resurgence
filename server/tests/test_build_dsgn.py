@@ -1,5 +1,5 @@
 """
-test_build_dsgn.py , a synthesised design has to have the shape a client writes
+test_build_dsgn.py: a synthesised design has to have the shape a client writes
 ==============================================================================
     server\\.venv\\Scripts\\python.exe server\\tests\\test_build_dsgn.py
 

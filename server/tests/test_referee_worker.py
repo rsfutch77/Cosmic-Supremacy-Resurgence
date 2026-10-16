@@ -1,5 +1,5 @@
 """
-test_referee_worker.py , the five things unattended has to mean
+test_referee_worker.py: the five things unattended has to mean
 ===============================================================
     server\\.venv\\Scripts\\python.exe server\\tests\\test_referee_worker.py
 

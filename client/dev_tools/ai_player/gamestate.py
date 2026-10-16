@@ -1,5 +1,5 @@
 """
-gamestate.py , Read-only snapshot of the running game for the AI player
+gamestate.py: Read-only snapshot of the running game for the AI player
 =======================================================================
 Wraps ejbo_viewer's raw EJBO scan in the entity model the strategy rules are
 written against (see STRATEGY.md §2). Everything here is a READ; no method in
@@ -19,7 +19,7 @@ TURN_COUNTER     = 0x008578E8
 LOCAL_PLAYER     = 0x00857904   # ref node -> the human civ's Owner
 
 # PlanetProperties is embedded in the Planet allocation at +0x60, which is
-# planet_tag + 88 , the same frame the annotations call Planet:88. Every
+# planet_tag + 88; the same frame the annotations call Planet:88. Every
 # __thiscall on a PlanetProperties takes ECX = planet_tag + this.
 PLANET_PROPERTIES = 88
 
@@ -163,7 +163,7 @@ class Civ(Obj):
 
     @property
     def completed(self):
-        """[(techId, cost)] , technologies and doctrines share this vector."""
+        """[(techId, cost)]: technologies and doctrines share this vector."""
         return [struct.unpack("<Ii", r) for r in self.vec(108, 8)]
 
     @property
@@ -173,7 +173,7 @@ class Civ(Obj):
 
     @property
     def stocks(self):
-        """{resourceId: amount} , 0 metal, 1 deuterium, 2 radioactives,
+        """{resourceId: amount}: 0 metal, 1 deuterium, 2 radioactives,
         3 crystal, 4 exotics."""
         return {struct.unpack_from("<I", r, 0)[0]: struct.unpack_from("<i", r, 4)[0]
                 for r in self.vec(1128, 8)}
@@ -220,7 +220,7 @@ class Design(Obj):
 
     @property
     def firepower(self):
-        """(light, heavy, third) , the UI's #/#/# display. An uncomputed design
+        """(light, heavy, third): the UI's #/#/# display. An uncomputed design
         reads (-1,-1,-1), which must not be mistaken for an unarmed hull."""
         return tuple(self._n(self.i32(o)) or 0 for o in (60, 64, 68))
 
@@ -241,7 +241,7 @@ class Design(Obj):
     # -- role taxonomy (ours, derived; see STRATEGY.md §2.4) ----------------
     @property
     def owner(self):
-        """The civ this design belongs to , ShipDesign:260, a reference node.
+        """The civ this design belongs to: ShipDesign:260, a reference node.
 
         Designs are PER CIV and every civ's are visible in memory, so anything
         choosing a design to build must filter on this. Without it a rule will
@@ -292,7 +292,7 @@ class Ship(Obj):
 
     @property
     def crew(self):
-        """Crew aboard , 16-byte records at Ship:124, the same shape as the
+        """Crew aboard: 16-byte records at Ship:124, the same shape as the
         Planet:144 citizens, each carrying job id 3.
 
         """
@@ -341,7 +341,7 @@ class Planet(Obj):
 
     @property
     def population(self):
-        """[jobId] per citizen , 16-byte records, job at +0."""
+        """[jobId] per citizen: 16-byte records, job at +0."""
         return [struct.unpack_from("<I", r, 0)[0] for r in self.vec(144, 16)]
 
     @property
@@ -350,7 +350,7 @@ class Planet(Obj):
 
     @property
     def military(self):
-        """Stationed military unit count , 16-byte records at Planet:168."""
+        """Stationed military unit count: 16-byte records at Planet:168."""
         return len(self.vec(168, 16))
 
     @property
@@ -377,7 +377,7 @@ class Planet(Obj):
 
     @property
     def production(self):
-        """Name of the class at Planet:296 , the current production mode."""
+        """Name of the class at Planet:296: the current production mode."""
         p = self.u32(296)
         if p == PILING_UP_WEALTH:
             return "PilingUpWealth"
@@ -529,7 +529,7 @@ class Snapshot:
         return s, dist(planet.pos, s.pos)
 
     def systems(self):
-        """{Sun: [Planet]} by nearest-sun. A heuristic , see the module docstring
+        """{Sun: [Planet]} by nearest-sun. A heuristic: see the module docstring
         and system_report()."""
         groups = collections.defaultdict(list)
         for p in self.planets:

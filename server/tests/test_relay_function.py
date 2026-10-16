@@ -1,5 +1,5 @@
 """
-test_relay_function.py , what the relay lets a player do, and what it does not
+test_relay_function.py: what the relay lets a player do, and what it does not
 ==============================================================================
     python functions/emulators.py --only firestore,storage,auth
 

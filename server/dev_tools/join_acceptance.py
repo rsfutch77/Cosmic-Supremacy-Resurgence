@@ -1,5 +1,5 @@
 """
-join_acceptance.py , does a galaxy still play after civs join it?
+join_acceptance.py: does a galaxy still play after civs join it?
 =================================================================
     python join_acceptance.py prepare
     python join_acceptance.py k1 --turns 60

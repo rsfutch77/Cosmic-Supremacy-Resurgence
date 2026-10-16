@@ -1,5 +1,5 @@
 """
-set_local_player.py , tell a running client which civ the player controls
+set_local_player.py: tell a running client which civ the player controls
 =========================================================================
     python set_local_player.py --list
     python set_local_player.py --civ BadGuy

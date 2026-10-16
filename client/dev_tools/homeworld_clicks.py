@@ -1,5 +1,5 @@
 """
-homeworld_clicks.py , read, save and restore the homeworld customisation record
+homeworld_clicks.py: read, save and restore the homeworld customisation record
 ================================================================================
 The start-of-game popup distributes an allowance (GSET `homeworld_changes`,
 default 30) across four options. What the engine stores is the click counts,

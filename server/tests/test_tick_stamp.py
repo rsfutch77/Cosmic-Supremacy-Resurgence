@@ -1,5 +1,5 @@
 """
-test_tick_stamp.py , the referee ticks a galaxy as a civ that holds a planet
+test_tick_stamp.py: the referee ticks a galaxy as a civ that holds a planet
 ============================================================================
     server\\.venv\\Scripts\\python.exe server\\tests\\test_tick_stamp.py
 

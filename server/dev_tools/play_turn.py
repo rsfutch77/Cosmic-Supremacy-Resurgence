@@ -1,5 +1,5 @@
 """
-play_turn.py , take one civ's turn, driven by the launcher's own config
+play_turn.py: take one civ's turn, driven by the launcher's own config
 =======================================================================
     python server/dev_tools/play_turn.py            # one round
     python server/dev_tools/play_turn.py --rounds 0 # keep following
@@ -7,7 +7,7 @@ play_turn.py , take one civ's turn, driven by the launcher's own config
 This is the launcher's multiplayer worker with no Tk around it: same
 `multiplayer.json`, same `open_store`, same `player_turn.follow`. It exists
 because the store string is a UNC path, and a UNC path cannot survive being
-typed on a command line , every shell between here and `argparse` takes a bite
+typed on a command line; every shell between here and `argparse` takes a bite
 out of the leading backslashes, and `\\\\host\\share` arrives as `\\host\\share`,
 which fails as "no galaxy there" and looks exactly like a share that is down.
 
@@ -52,7 +52,7 @@ def main():
         raise SystemExit(f"no galaxy at {cfg['store']}")
 
     # The client saves by POSTing to the stub server, so a missing cs_server
-    # does not fail until `collect` at the deadline , by which time the turn
+    # does not fail until `collect` at the deadline, by which time the turn
     # has been played and is lost. Checked here, before anything is served.
     with socket.socket() as s:
         s.settimeout(2.0)

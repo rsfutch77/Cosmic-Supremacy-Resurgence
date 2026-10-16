@@ -1,5 +1,5 @@
 """
-test_refusal_notes.py , a dropped order has to reach the player who made it
+test_refusal_notes.py: a dropped order has to reach the player who made it
 ===========================================================================
     server\\.venv\\Scripts\\python.exe server\\tests\\test_refusal_notes.py
 

@@ -1,5 +1,5 @@
 """
-test_starting_kit.py , a joiner starts with what everybody else started with
+test_starting_kit.py: a joiner starts with what everybody else started with
 ============================================================================
     server\\.venv\\Scripts\\python.exe server\\tests\\test_starting_kit.py
 

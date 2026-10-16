@@ -1,5 +1,5 @@
 """
-build_website_checklist.py , write Website_Checklist.md from the standards
+build_website_checklist.py: write Website_Checklist.md from the standards
 ==========================================================================
     python docs/verification/build_website_checklist.py
 

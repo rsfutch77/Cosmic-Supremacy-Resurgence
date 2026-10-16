@@ -1,5 +1,5 @@
 """
-test_store_unreachable.py , the turn loop says when it loses the store
+test_store_unreachable.py: the turn loop says when it loses the store
 =======================================================================
     server\\.venv\\Scripts\\python.exe server\\tests\\test_store_unreachable.py
 

@@ -1,5 +1,5 @@
 """
-turn_store.py , where a galaxy's turns and submissions live
+turn_store.py: where a galaxy's turns and submissions live
 ===========================================================
     from turn_store import TurnStore
     store = TurnStore(root)
@@ -492,7 +492,7 @@ class TurnStore:
         `os.replace` is atomic on a local volume and **is not over SMB**: the
         redirector can implement replace-over-existing as a delete followed by
         a rename, and a reader on another machine sees `state.json` briefly
-        absent. Measured live , machine B's player loop died with
+        absent. Measured live: machine B's player loop died with
         `FileNotFoundError` on `state.json` at the moment machine A's referee
         republished it, in a galaxy that was healthy before and after.
 

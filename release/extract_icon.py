@@ -1,5 +1,5 @@
 """
-extract_icon.py , lift the application icon out of a Win32 PE into a .ico file
+extract_icon.py: lift the application icon out of a Win32 PE into a .ico file
 ==============================================================================
     python extract_icon.py client\\CosmicSupremacy.exe release\\build\\cosmic.ico
 """

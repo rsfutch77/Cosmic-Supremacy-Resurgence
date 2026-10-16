@@ -1,4 +1,4 @@
-// beta_storage.rules , the Cloud Storage rules for the beta
+// beta_storage.rules: the Cloud Storage rules for the beta
 // =========================================================
 // No client reads or writes the bucket through the Firebase SDK. A launcher
 // downloads a turn through a signed URL the relay hands it, and a launcher

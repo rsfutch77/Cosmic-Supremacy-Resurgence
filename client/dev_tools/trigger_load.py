@@ -1,9 +1,9 @@
 """
-trigger_load.py , Make the running client load a save, with no user click
+trigger_load.py: Make the running client load a save, with no user click
 ========================================================================
 Companion to trigger_save.py.  Calls the game's own load routine in a remote
 thread so a server-authored blob can be pushed into a client that nobody is
-sitting at , which is the whole point of the exercise: the server decides the
+sitting at, which is the whole point of the exercise: the server decides the
 galaxy state, including ship orders, and the client adopts it.
 
     python trigger_load.py                # load slot 0
@@ -83,7 +83,7 @@ def main():
 
         rc = kernel32.WaitForSingleObject(th, args.timeout * 1000)
         if rc != 0:
-            print(f"  WARNING: wait returned {rc} , thread unfinished. Leaving its "
+            print(f"  WARNING: wait returned {rc}, thread unfinished. Leaving its "
                   f"page allocated so it cannot execute freed memory.")
             kernel32.CloseHandle(th)
             return 1
@@ -99,14 +99,14 @@ def main():
         still_there, _ = find_pid()
         if not still_there:
             print(f"  thread exit code was {code.value & 0xFF}, but THE PROCESS IS "
-                  f"GONE , the load crashed it.")
+                  f"GONE, the load crashed it.")
             print( "  look for CosmicSupremacy_Resurgence_<timestamp>.dmp next to "
                    "the exe; the exception record names the faulting address.")
             return 2
 
         ok = code.value & 0xFF
         print(f"  LoadGame returned {ok} "
-              f"({'loaded' if ok else 'FAILED , client will have shown a dialog'})")
+              f"({'loaded' if ok else 'FAILED, client will have shown a dialog'})")
         kernel32.VirtualFreeEx(h, ctypes.c_void_p(remote), 0, MEM_RELEASE)
         return 0 if ok else 1
     finally:

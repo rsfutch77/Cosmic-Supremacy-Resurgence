@@ -1,5 +1,5 @@
 """
-bundle.py , the store's modules, copied where a deploy can carry them
+bundle.py: the store's modules, copied where a deploy can carry them
 =====================================================================
     python bundle.py                    refresh functions/cs_store/
 

@@ -1,5 +1,5 @@
 """
-fog_acceptance.py , does an order from a FILTERED client still merge?
+fog_acceptance.py: does an order from a FILTERED client still merge?
 =====================================================================
     python fog_acceptance.py --drop 3
 
@@ -9,8 +9,8 @@ it back in a form the referee can apply against the unfiltered galaxy**. A
 filter that quietly changes what comes back would not fail loudly. It would
 produce a subtly wrong galaxy.
 
-Under B2 a filtered blob never has to tick , a player's client runs the build
-without T1-T5 and its clock is held , so this deliberately does not test that.
+Under B2 a filtered blob never has to tick: a player's client runs the build
+without T1-T5 and its clock is held, so this deliberately does not test that.
 
 Two runs, and the control is the point:
 
@@ -137,8 +137,8 @@ def main():
     same = control['merged'] == test['merged']
     print(f'  merged results identical: {same}')
     if not same:
-        print('  NOT identical. That is not automatically a failure , the AI '
-              'may legitimately choose differently when it can see less , but '
+        print('  NOT identical. That is not automatically a failure (the AI '
+              'may legitimately choose differently when it can see less) but '
               'it does mean this run cannot show the filter is transparent.')
     print(f'  filtered run leaked other civs\' changes: '
           f'{bool(test["theirs"] or test["galaxy"])}')

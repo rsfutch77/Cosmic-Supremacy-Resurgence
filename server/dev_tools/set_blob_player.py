@@ -1,5 +1,5 @@
 """
-set_blob_player.py , stamp a save blob with the civ its recipient plays
+set_blob_player.py: stamp a save blob with the civ its recipient plays
 =======================================================================
     python set_blob_player.py turn3.b64 --show
     python set_blob_player.py turn3.b64 --civ DemoPlayer --dat playerA.dat

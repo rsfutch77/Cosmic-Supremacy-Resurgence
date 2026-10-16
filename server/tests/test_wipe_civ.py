@@ -1,5 +1,5 @@
 """
-test_wipe_civ.py , what a wipe removes, and what it must leave alone
+test_wipe_civ.py: what a wipe removes, and what it must leave alone
 ====================================================================
     server\\.venv\\Scripts\\python.exe server\\tests\\test_wipe_civ.py
 

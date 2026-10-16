@@ -1,5 +1,5 @@
 """
-bypass_check.py , does a client that goes around the relay reach anything?
+bypass_check.py: does a client that goes around the relay reach anything?
 ==========================================================================
     python bypass_check.py                         # cs-resurgence, h3check
     python bypass_check.py --galaxy verify

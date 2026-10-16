@@ -1,5 +1,5 @@
 """
-joins.py , the seat a stranger asked for
+joins.py: the seat a stranger asked for
 =========================================
     import joins
 
@@ -159,8 +159,8 @@ JOINED_KEY = turn_store.JOINED_KEY
 NAME_LIMIT = 15
 
 # What a wiped civ's shell is renamed to when the player who lost it rejoins
-# under the same name. A reclaim keeps the `OWNR` , that is K4's shell, and it
-# is kept because deleting it creates a dangling reference , so the name is
+# under the same name. A reclaim keeps the `OWNR` (that is K4's shell, and it
+# is kept because deleting it creates a dangling reference) so the name is
 # still in the galaxy and `add_civ` would refuse it. The shell is not the
 # player's empire any more and the name is theirs, so the shell gives it up.
 VACATED = 'Vacated {oid}'
@@ -429,8 +429,8 @@ def _grant(store, blob, req: dict, roster, turn: int, log=print,
     """One request against one blob. Returns (blob, outcome).
 
     Nothing raises out of here. Every way the injection can refuse is a
-    `SystemExit` , no free planet, nothing outside the crowding margin, a name
-    the blob already holds , and a `SystemExit` inside a tick ends the turn for
+    `SystemExit` (no free planet, nothing outside the crowding margin, a name
+    the blob already holds) and a `SystemExit` inside a tick ends the turn for
     every player in the galaxy, which is exactly what N2 was written to stop.
     """
     name = req['name'].strip()
@@ -657,8 +657,8 @@ def _file_answer(store, out: dict, log=print) -> None:
     """Consume the request this outcome answers, and record the answer.
 
     Consuming it is what stops one request being granted twice. It is not the
-    only thing that stops it , the roster check and `add_civ`'s own name check
-    both do , and that is the point: this one can fail, on a file another
+    only thing that stops it (the roster check and `add_civ`'s own name check
+    both do) and that is the point: this one can fail, on a file another
     process has open or on a network that is down, and the other two still
     hold.
 

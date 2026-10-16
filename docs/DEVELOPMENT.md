@@ -145,7 +145,7 @@ is really the choice of whether a client may compute a turn:
 | build | ticks without a server | setup prompts | role |
 |-------|------------------------|---------------|------|
 | Resurgence | yes | always offered | the referee, the AI harness |
-| TestBed | no | gated as shipped | , |
+| TestBed | no | gated as shipped | - |
 | Player | no | none | a player's served turn |
 
 `client/dev_tools/game_cycle.py` takes the build as a parameter

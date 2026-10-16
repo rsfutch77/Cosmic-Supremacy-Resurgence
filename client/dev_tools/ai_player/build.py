@@ -1,5 +1,5 @@
 """
-build.py , Ship designs and ship production (actuators D, D′ and I)
+build.py: Ship designs and ship production (actuators D, D′ and I)
 ===================================================================
 The production half of the AI: what a civ can build, and telling a planet to
 build it. Rules R-EXP-01, R-XPN-01 and R-XTM-01 all end up here.
@@ -46,7 +46,7 @@ def main():
     civ = gs.resolve_civ(snap, civ_name)
     if civ is None:
         sys.exit(f"no civ {civ_name!r}")
-    print(f"=== build , turn {snap.turn} , civ {civ.civ_name!r} , "
+    print(f"=== build, turn {snap.turn}, civ {civ.civ_name!r}, "
           f"{'DRY RUN' if dry_run else 'APPLYING'} ===")
 
     new_name = opt("--new-design")
@@ -89,7 +89,7 @@ def main():
         if new_name:
             print(f"\ndefault-constructing a ShipDesign named {new_name!r}")
             print("  NOTE: the result will have NO parts and is very likely "
-                  "unbuildable , see the module docstring")
+                  "unbuildable; see the module docstring")
             block = act.create_design(new_name, civ)
             if block is not None:
                 snap.refresh()
@@ -98,7 +98,7 @@ def main():
                 print(f"\n  the new design is "
                       f"{'VISIBLE' if found else 'NOT VISIBLE'} to an EJBO scan"
                       + (f": {found}" if found else
-                         " , it has no EJBO tag, so it exists but the object "
+                         "; it has no EJBO tag, so it exists but the object "
                          "scanner cannot enumerate it"))
                 if found:
                     print(f"    name={found.design_name!r} role={found.role} "
@@ -120,7 +120,7 @@ def main():
             snap.refresh()
             if dry_run and design_name == new_name:
                 # The design does not exist yet in a dry run, so there is
-                # nothing to look up , say what would happen and move on.
+                # nothing to look up; say what would happen and move on.
                 print(f"\n  [WOULD FIT] {cat}={ids} to the design that "
                       f"--new-design would have created")
                 d = None
@@ -139,7 +139,7 @@ def main():
                           f"engines={d2.engines} weapons={d2.weapons} "
                           f"modules={d2.modules}")
                     print("    if speed/cost are still -1, the engine has not "
-                          "recomputed them yet , advance a turn and re-check")
+                          "recomputed them yet; advance a turn and re-check")
 
         if queue:
             if not planet_id:

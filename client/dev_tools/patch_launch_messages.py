@@ -1,5 +1,5 @@
 """
-patch_launch_messages.py , point a shipped client's setup messages at the launcher
+patch_launch_messages.py: point a shipped client's setup messages at the launcher
 =================================================================================
     python patch_launch_messages.py --source CosmicSupremacy.exe --out <stage>\\game\\CosmicSupremacy.exe
     python patch_launch_messages.py --status <exe> [<exe> ...]

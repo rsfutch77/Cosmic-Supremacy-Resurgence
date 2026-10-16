@@ -1,5 +1,5 @@
 """
-test_submission_cap.py , a submission cannot expand without limit in the store
+test_submission_cap.py: a submission cannot expand without limit in the store
 ==============================================================================
     server\\.venv\\Scripts\\python.exe server\\tests\\test_submission_cap.py
 

@@ -1,5 +1,5 @@
 """
-test_http_store_hosts.py , the HTTP store talks only to its own host and Storage
+test_http_store_hosts.py: the HTTP store talks only to its own host and Storage
 ================================================================================
     server\\.venv\\Scripts\\python.exe server\\tests\\test_http_store_hosts.py
 

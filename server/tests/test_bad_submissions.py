@@ -1,5 +1,5 @@
 """
-test_bad_submissions.py , one bad submission cannot stall the galaxy
+test_bad_submissions.py: one bad submission cannot stall the galaxy
 ====================================================================
     server\\.venv\\Scripts\\python.exe server\\tests\\test_bad_submissions.py
 

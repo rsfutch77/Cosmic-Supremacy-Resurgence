@@ -1,5 +1,5 @@
 """
-filter_blob.py , remove galaxy content from a save blob, for fog-of-war tests
+filter_blob.py: remove galaxy content from a save blob, for fog-of-war tests
 ==============================================================================
     python filter_blob.py <capture.b64|.dat> --drop-systems 3 --dat out.dat
     python filter_blob.py <capture.b64|.dat> --list
@@ -78,7 +78,7 @@ def drop_systems(blob: bytes, count: int, log=lambda *a: None) -> bytes:
     the systems it has entered and names them by id from outside `GLXY`. Left
     alone, every dropped system leaves a row pointing at nothing.
 
-    `EXSY` rows are a cache of observations, not a record of decisions , the
+    `EXSY` rows are a cache of observations, not a record of decisions; the
     same planet reads different values in different civs' tables, and renames
     live on the object at `PLNT`/`SUN ` +24. So a pruned row loses a stale
     observation and no player's choice, which is what makes this safe.

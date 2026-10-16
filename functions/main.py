@@ -1,5 +1,5 @@
 """
-main.py , the Cloud Functions entry point for the relay
+main.py: the Cloud Functions entry point for the relay
 ========================================================
 The adapter and nothing else. Everything the relay decides is in `relay.py`,
 which is framework free so that its tests can call it without the functions

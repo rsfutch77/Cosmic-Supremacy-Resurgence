@@ -1,5 +1,5 @@
 """
-research_tick_check.py , does a turn add research points, and to whom?
+research_tick_check.py: does a turn add research points, and to whom?
 =======================================================================
     python research_tick_check.py                  # read only, no turns fired
     python research_tick_check.py --drive launcher # one turn the launcher's way

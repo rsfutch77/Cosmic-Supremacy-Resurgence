@@ -1,5 +1,5 @@
 """
-agent_msg.py , a message channel between agents working on different machines
+agent_msg.py: a message channel between agents working on different machines
 =============================================================================
     python agent_msg.py read  --as a
     python agent_msg.py send  --to b "pulled 9b76e45, starting turn 12 here"

@@ -1,5 +1,5 @@
 """
-galaxy_directory.py , the list of galaxies above the store
+galaxy_directory.py: the list of galaxies above the store
 ==========================================================
     from galaxy_directory import open_directory
     d = open_directory('firebase://cs-resurgence')

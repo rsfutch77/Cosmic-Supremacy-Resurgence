@@ -1,5 +1,5 @@
 """
-fog_bisect.py , how much galaxy can be removed before a client stops loading
+fog_bisect.py: how much galaxy can be removed before a client stops loading
 ============================================================================
     python fog_bisect.py server/fog_work/fix80.dat --civ Alice
 

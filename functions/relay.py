@@ -1,5 +1,5 @@
 """
-relay.py , the player's door to a Firebase galaxy
+relay.py: the player's door to a Firebase galaxy
 ==================================================
     status, headers, body = relay.handle('GET', '/sandbox/state',
                                          {'Authorization': 'Bearer ...'}, b'')

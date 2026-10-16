@@ -1,5 +1,5 @@
 """
-stamp_build.py , record which build the packaging step is producing.
+stamp_build.py: record which build the packaging step is producing.
 
 The launcher's build name is decided at package time, not in the source: it is
 build.ps1's -Version switch, or manifest.json's "version" when the switch is not
@@ -13,7 +13,7 @@ launcher.build_info() reads it back through bundled().
 
 Run by hand as:
 
-    python release/stamp_build.py                    , version from manifest.json
+    python release/stamp_build.py                    : version from manifest.json
     python release/stamp_build.py 0.1.2 release/build
 
 A checkout is not stamped and is not meant to be: build.json is written into the

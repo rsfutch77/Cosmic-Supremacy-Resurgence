@@ -1,5 +1,5 @@
 """
-fog_tables.py , what the per-civ tables reference, and what filtering breaks
+fog_tables.py: what the per-civ tables reference, and what filtering breaks
 ============================================================================
     python fog_tables.py <blob>
 
@@ -39,7 +39,7 @@ KNPL_RECORD = 36
 
 
 def read_knpl(blob, sec):
-    """[civ id] , the first word of each fixed-size record.
+    """[civ id]: the first word of each fixed-size record.
 
     The trailing `u32` of a `KNPL` payload is the one field in the format that
     is not deterministic, which `canonical.py` masks, so this reads the key and

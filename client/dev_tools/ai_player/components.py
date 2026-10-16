@@ -1,5 +1,5 @@
 """
-components.py , the ship-component definition tables
+components.py: the ship-component definition tables
 ====================================================
     python components.py          # dump every category from the live client
 
@@ -35,7 +35,7 @@ order metal, deuterium, radioactives, crystal, exotics.
         +0x18  firepower vs heavy  +0x1C  firepower vs planets
         +0x20  resources           +0x38  name
     chassis (stride 0x94)
-        +0x14  space PROVIDED, not used , a chassis is the hull
+        +0x14  space PROVIDED, not used; a chassis is the hull
         +0x18  crew minimum        +0x1C  crew maximum
         +0x20  resources           +0x38  name
     modules (stride 0xA8)

@@ -1,5 +1,5 @@
 """
-web_view.py , the launcher's window as a web page in the game's own skin
+web_view.py: the launcher's window as a web page in the game's own skin
 =========================================================================
 The view `launcher.Launcher` draws through, by pywebview over release\\webui.
 The page draws what this file tells it (window.ui.set and friends in app.js)

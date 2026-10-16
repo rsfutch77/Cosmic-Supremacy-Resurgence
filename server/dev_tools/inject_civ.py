@@ -1,5 +1,5 @@
 """
-inject_civ.py , Add a whole PLAYER to a save blob
+inject_civ.py: Add a whole PLAYER to a save blob
 =================================================
 Clones an existing civ's `OWNR` block under a new name and object id, and hands
 the new civ a homeworld by giving an uncolonised planet the donor homeworld's
@@ -28,21 +28,21 @@ donor holds now.** Cloning is how a civ gets built, and a donor in a played
 galaxy is a developed empire: its homeworld carries eleven turns of population
 and stores, its `OWNR` carries every design it has researched and its bank.
 `starting_kit` puts the clone back to the generation state on every field this
-project has decoded , the citizen array, the stationed military, the
+project has decoded (the citizen array, the stationed military, the
 recruitment rate, the production queue and its progress, the design book, the
-credit balance and the research topic , and gives it the hulls a generated civ
+credit balance and the research topic) and gives it the hulls a generated civ
 starts with. What it cannot put back is named in `starting_kit`'s docstring.
 Pass `kit=False` for the old behaviour, which is a clone of the donor as it
 stands.
 
 [ ] **A CLONED CIV INHERITS THE DONOR'S EXPLORED MAP, AND THAT IS A CHEAT.**
 `EXSY` is copied verbatim, so injecting a civ off a developed donor hands the
-newcomer everything that donor had found , including, once anyone has met
+newcomer everything that donor had found, including, once anyone has met
 anyone, where the home planets are. Nobody should start a game knowing that.
 
 [ ] **Homeworld placement is one hardcoded policy, and it should be a choice.**
 `pick_homeworld` spreads civs as far apart as it can, which is the right default
-for testing the strategy , contact is then a thing the AI has to earn rather than
+for testing the strategy; contact is then a thing the AI has to earn rather than
 a thing the setup hands it. It is not the only placement anyone will want:
 RANDOM placement is the obvious second (it is what a real galaxy generator does,
 and it is the only way to test how the rules cope with a hostile neighbour two
@@ -897,8 +897,8 @@ def add_civ(blob, new_name, donor_name=None, home_id=None, taken=(),
     if kit:
         rec = bytearray(keep_starting_design(rec, log=log))
 
-    # Fresh ids for the cloned designs. Two civs may share a design NAME , both
-    # start with a 'Colony Ship' , but an object id is galaxy-wide.
+    # Fresh ids for the cloned designs. Two civs may share a design NAME (both
+    # start with a 'Colony Ship') but an object id is galaxy-wide.
     next_id = new_id
     kit_design = None
     for off in idg.find_all(bytes(rec), DSGN):
@@ -932,7 +932,7 @@ def add_civ(blob, new_name, donor_name=None, home_id=None, taken=(),
     uid = (max(struct.unpack_from("<I", blob, o["end"] - 4)[0]
                for o in owners) + 1) if user_id is None else user_id
     struct.pack_into("<I", rec, len(rec) - 4, uid)
-    forced = "" if user_id is None else ("  (FORCED , a value already in use "
+    forced = "" if user_id is None else ("  (FORCED: a value already in use "
                                          "hides the civ from the highscore list)")
     log(f"  Owner:4 {donor_uid} -> {uid}{forced}")
 

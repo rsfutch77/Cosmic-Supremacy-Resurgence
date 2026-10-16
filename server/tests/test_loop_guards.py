@@ -1,5 +1,5 @@
 """
-test_loop_guards.py , the two guards that stop a restart eating a played turn
+test_loop_guards.py: the two guards that stop a restart eating a played turn
 =============================================================================
     server\\.venv\\Scripts\\python.exe server\\tests\\test_loop_guards.py
 
@@ -107,7 +107,7 @@ def test_push_guard():
           verdict, 'submitted')
 
     # Empty over empty. The store is unchanged either way, so this must not be
-    # reported as a refusal , it fired on the first live turn after the guard
+    # reported as a refusal, it fired on the first live turn after the guard
     # went in, and a warning that cries wolf on a no-op stops being read.
     s = fresh_store()
     s.submit('Neighbor', 12, EMPTY)
@@ -123,7 +123,7 @@ def what_follow_loads(prior, orders):
 
     `serve`, `collect` and `close` are all replaced: `close` matters, because
     leaving the real one in place ends the pass by closing whatever client is
-    running on this machine. That is not hypothetical , the first version of
+    running on this machine. That is not hypothetical, the first version of
     this control killed the live player's client mid-turn.
     """
     s = fresh_store()

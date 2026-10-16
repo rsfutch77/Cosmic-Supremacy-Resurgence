@@ -1,5 +1,5 @@
 """
-test_operator_view.py , the operator page says what is true and writes nothing
+test_operator_view.py: the operator page says what is true and writes nothing
 ==============================================================================
     server\\.venv\\Scripts\\python.exe server\\tests\\test_operator_view.py
     ... test_operator_view.py --demo server\\galaxy_demo

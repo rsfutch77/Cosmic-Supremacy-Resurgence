@@ -1,5 +1,5 @@
 """
-test_ship_designs.py , a design a player makes has to survive the merge
+test_ship_designs.py: a design a player makes has to survive the merge
 =======================================================================
     server\\.venv\\Scripts\\python.exe server\\tests\\test_ship_designs.py
 

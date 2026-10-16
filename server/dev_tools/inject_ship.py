@@ -1,5 +1,5 @@
 """
-inject_ship.py , give a civ a ship in a save blob
+inject_ship.py: give a civ a ship in a save blob
 ==========================================================
     python inject_ship.py ../saves/<capture>.b64 --civ Ceti --count 2 \
         -o ../loadgame_blob.b64 --dat ../../client/three_civ.dat
@@ -262,8 +262,8 @@ def add_ship(blob, civ_name, design_id=None, home_id=None, allow_ordered=False,
     # was leaving the donor's there. Every ship the engine wrote reads its own
     # id in both places: 553 of the 685 ships across 151 blobs agree, and all
     # 132 that do not are ships this tool cloned, in galaxies it built. The
-    # engine tolerates the stale value , galaxy_demo carried one through five
-    # ticks , but a clone that names another ship is a dangling reference of
+    # engine tolerates the stale value (galaxy_demo carried one through five
+    # ticks) but a clone that names another ship is a dangling reference of
     # exactly the kind the wipe work went out of its way not to create.
     tail = struct.unpack_from("<I", rec, len(rec) - 4)[0]
     if tail == donor["id"]:

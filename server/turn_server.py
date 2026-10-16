@@ -1,5 +1,5 @@
 """
-turn_server.py , serve a turn store over HTTP
+turn_server.py: serve a turn store over HTTP
 ==============================================
     python turn_server.py server/galaxy_demo --port 8899
     python turn_server.py server/galaxy_demo --port 8899 --host 0.0.0.0

@@ -1,5 +1,5 @@
 """
-exsy.py , read and rewrite a civ's explored-systems table
+exsy.py: read and rewrite a civ's explored-systems table
 =========================================================
     from exsy import parse, build, systems_known
 
@@ -18,9 +18,9 @@ over, and this one lands exactly on the end three times out of three.
     u32   system count
     per system:
         u32   system id
-        u32   sun id          , equal to the system id in every row seen
-        str   sun name        , u32 length then unpadded bytes
-        u32   undecoded       , 13, 3 and 2 observed
+        u32   sun id          (equal to the system id in every row seen)
+        str   sun name        (u32 length then unpadded bytes)
+        u32   undecoded       (13, 3 and 2 observed)
         u32   planet count
         per planet:
             u32   last known owner civ id, 0 for never seen
@@ -39,7 +39,7 @@ lose anything a player would miss.
 - The same planet carries different values in different civs' tables. Planet
   `DemoPlayer's HQ` reads `(198, 11)` in one and `(198, 7)` in another.
 - One civ records `BadGuy's HQ` as owned by 206 while another has the correct
-  202. That is a civ remembering what was true when it last looked , the
+  202. That is a civ remembering what was true when it last looked; the
   engine is already keeping per-player knowledge, and it is already stale in
   the way fog of war is supposed to be.
 - A rename is authored on the object itself, `PLNT`/`SUN ` payload +24, so a

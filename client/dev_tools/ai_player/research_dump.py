@@ -1,5 +1,5 @@
 """
-research_dump.py , read the technology table out of the running client
+research_dump.py: read the technology table out of the running client
 ======================================================================
     python research_dump.py              # human-readable dump of all 80
     python research_dump.py --emit       # Python literals for research.py

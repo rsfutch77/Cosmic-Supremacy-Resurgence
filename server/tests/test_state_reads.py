@@ -1,5 +1,5 @@
 """
-test_state_reads.py , one galaxy state read per poll, counted at the service
+test_state_reads.py: one galaxy state read per poll, counted at the service
 ============================================================================
     server\\.venv\\Scripts\\python.exe server\\tests\\test_state_reads.py
 

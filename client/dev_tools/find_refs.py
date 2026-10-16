@@ -1,5 +1,5 @@
 """
-find_refs.py , who points at this object?
+find_refs.py: who points at this object?
 =========================================
     python find_refs.py --designs           # every ShipDesign, and its referrers
     python find_refs.py --addr 0x071AD690
@@ -33,7 +33,7 @@ REF_FORMS = {
 
 
 def scan_regions(handle):
-    """Committed, writable, non-guard regions , where object data lives."""
+    """Committed, writable, non-guard regions, where object data lives."""
     return ev.enum_writable_regions(handle)
 
 
@@ -60,7 +60,7 @@ def find_dwords(handle, regions, values):
 # Measured extents, from the memory report's stride analysis. Attribution has to
 # use the REAL size of each class: a single generous window applied to all of
 # them turns every nearby heap block into a confident false claim, and "Sun#145
-# at tag+724" reads exactly like a finding while being noise , a Sun is 92 bytes.
+# at tag+724" reads exactly like a finding while being noise, a Sun is 92 bytes.
 CLASS_EXTENT = {
     "Owner": 1344,
     "Planet": 596,
@@ -154,7 +154,7 @@ def main():
     if a.designs and not targets:
         # Distinguish "you passed no flag" from "the galaxy is not up yet",
         # which is the same empty list and a completely different problem.
-        sys.exit("--designs found no ShipDesign objects , the galaxy is "
+        sys.exit("--designs found no ShipDesign objects, the galaxy is "
                  "probably still loading; wait and re-run")
     if a.addr:
         targets.append((f"0x{a.addr:08X}", a.addr))

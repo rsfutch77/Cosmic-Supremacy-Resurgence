@@ -1,5 +1,5 @@
 """
-referee_worker.py , the referee as something that survives a reboot
+referee_worker.py: the referee as something that survives a reboot
 ====================================================================
     python referee_worker.py --store ..\\galaxies\\sandbox
     python referee_worker.py --store ..\\galaxies\\sandbox --once

@@ -1,5 +1,5 @@
 """
-test_rename_materialisation.py , a default name is not a rename
+test_rename_materialisation.py: a default name is not a rename
 ===============================================================
     server\\.venv\\Scripts\\python.exe server\\tests\\test_rename_materialisation.py
 
@@ -8,7 +8,7 @@ test_rename_materialisation.py , a default name is not a rename
 when they are done, and so the bug cannot quietly persist behind a green suite.
 
 A client that has been running materialises the default star name `Unnamed`
-wherever the blob holds an empty string , the same effect as A4's 756 bytes
+wherever the blob holds an empty string, the same effect as A4's 756 bytes
 across 108 suns, here 7 bytes across each of 32. `merge_orders` compares names
 and sees 32 attempted system renames every single turn.
 

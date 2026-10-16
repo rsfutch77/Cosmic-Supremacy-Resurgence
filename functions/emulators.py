@@ -1,8 +1,8 @@
 """
-emulators.py , start the emulator suite on ports that are actually free.
+emulators.py: start the emulator suite on ports that are actually free.
 
-    python functions/emulators.py                  , start, printing the env
-    python functions/emulators.py --print-env      , just resolve and print
+    python functions/emulators.py                  : start, printing the env
+    python functions/emulators.py --print-env      : just resolve and print
     python functions/emulators.py --only firestore,storage
     python functions/emulators.py --project demo-other
 

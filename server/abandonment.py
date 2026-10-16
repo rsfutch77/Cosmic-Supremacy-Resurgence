@@ -1,5 +1,5 @@
 """
-abandonment.py , the seat a player stopped using
+abandonment.py: the seat a player stopped using
 =================================================
     import abandonment
 

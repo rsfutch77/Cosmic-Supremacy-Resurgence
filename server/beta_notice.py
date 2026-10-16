@@ -1,5 +1,5 @@
 """
-beta_notice.py , the text every player reads before they join
+beta_notice.py: the text every player reads before they join
 =============================================================
     import beta_notice
     text = beta_notice.text()               # raises if it is not there

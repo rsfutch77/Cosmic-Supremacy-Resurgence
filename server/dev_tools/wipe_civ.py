@@ -1,5 +1,5 @@
 """
-wipe_civ.py , remove a civ's presence from a save blob
+wipe_civ.py: remove a civ's presence from a save blob
 ======================================================
 Returns every planet a civ owns to uncolonised and deletes every ship it owns.
 The civ's `OWNR` record is left in place, so no object id is freed, the `GLXY`

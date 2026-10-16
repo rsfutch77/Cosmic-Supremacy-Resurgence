@@ -1,5 +1,5 @@
 """
-build_multiplayer_checklist.py , write Multiplayer_Checklist.md
+build_multiplayer_checklist.py: write Multiplayer_Checklist.md
 ===============================================================
     python docs/verification/build_multiplayer_checklist.py
 
@@ -268,7 +268,7 @@ G = {
     'Ensure that multiple simultaneous actions (eg. click/drag or swipe) are not required, and included only as a supplementary / alternative input method': LIMIT_PLUS('The launcher needs no drag or chorded input.'),
     'Ensure that all key actions can be carried out by digital controls (pad / keys / presses), with more complex input (eg. analogue, speech, gesture) not required, and included only as supplementary / alternative input methods': ('done', 'Mouse and keyboard only; no analogue, speech or gesture input anywhere.', []),
     'Ensure that all key actions can be carried out by digital controls (pads / keys / presses), with more complex input (eg. analogue, gesture) not required, and included only as supplementary / alternative input methods': ('done', 'Mouse and keyboard only; no analogue or gesture input anywhere.', []),
-    'Do not make precise timing essential to gameplay – offer alternatives, actions that can be carried out while paused, or a skip mechanism': ('apply', 'Four-hour turns, and a turn is resolved by the referee, not in real time.', ['As M5: the deadline is shown, and the last submission before it counts.']),
+    'Do not make precise timing essential to gameplay: offer alternatives, actions that can be carried out while paused, or a skip mechanism': ('apply', 'Four-hour turns, and a turn is resolved by the referee, not in real time.', ['As M5: the deadline is shown, and the last submission before it counts.']),
     'Avoid (or provide option to disable) any difference between controller movement and camera movement, such as weapon/walk bobbing or mouse smoothing': NA('No first-person camera.'),
     'Avoid placing essential temporary information outside the player’s eye-line': LIMIT,
     'Provide separate volume controls or mutes for effects, speech and background / music': LIMIT_PLUS('Check what the client\'s options offer and state it.'),

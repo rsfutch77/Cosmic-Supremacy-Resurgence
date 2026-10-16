@@ -1,5 +1,5 @@
 """
-extract_ui_art.py , lift the game's own UI skin out of a Win32 PE into image files
+extract_ui_art.py: lift the game's own UI skin out of a Win32 PE into image files
 ==================================================================================
     python extract_ui_art.py client\\CosmicSupremacy.exe release\\webui\\art
 

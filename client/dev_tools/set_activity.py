@@ -1,5 +1,5 @@
 """
-set_activity.py , stop an offline galaxy decaying from "inactivity"
+set_activity.py: stop an offline galaxy decaying from "inactivity"
 ===================================================================
     python set_activity.py            # show every civ's state
     python set_activity.py --apply    # mark EVERY civ active
@@ -12,9 +12,9 @@ sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                 "ai_player"))
 import gamestate as gs
 
-ACTIVE_FLAG = 712      # Owner:712 , latched for this turn
-PENDING_FLAG = 720     # Owner:720 , the signal we set
-BASELINE = 716         # Owner:716 , the engine's own timer, DO NOT WRITE
+ACTIVE_FLAG = 712      # Owner:712, latched for this turn
+PENDING_FLAG = 720     # Owner:720, the signal we set
+BASELINE = 716         # Owner:716, the engine's own timer, DO NOT WRITE
 DEFAULT_OFFSET = 72    # GetGameOption(4)->[+0x30] == 0
 DEFAULT_DIVISOR = 100
 
@@ -52,7 +52,7 @@ def apply(snap):
         done.append(c)
     if len(done) != len(snap.civs):
         print("\n  [!] NOT every civ was marked. Leaving it partial would hand "
-              "whoever got the flag a compounding food advantage , fix the "
+              "whoever got the flag a compounding food advantage, fix the "
               "failures and re-run before playing on.")
     else:
         print(f"\n  all {len(done)} civ(s) marked active; the engine refreshes "

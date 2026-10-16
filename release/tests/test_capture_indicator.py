@@ -1,5 +1,5 @@
 """
-test_capture_indicator.py , what the launcher shows about a turn in flight
+test_capture_indicator.py: what the launcher shows about a turn in flight
 ==========================================================================
     server\\.venv\\Scripts\\python.exe release\\tests\\test_capture_indicator.py
 
@@ -445,11 +445,11 @@ def _status_for(sending, gone):
     """The branch as `_watch_game` runs it, with mp_live true and no client."""
     st = _St(sending, gone)
     if st.mp_sending:
-        st._status_if_changed("sending your turn , keep this window open", "warn")
+        st._status_if_changed("sending your turn, keep this window open", "warn")
     elif st.mp_client_gone:
         st._status_if_changed(*READY)
     else:
-        st._status_if_changed(f"Multiplayer , {st.mp_civ}", "ok")
+        st._status_if_changed(f"Multiplayer: {st.mp_civ}", "ok")
     return st.said[0][0]
 
 

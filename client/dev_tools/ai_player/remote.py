@@ -1,9 +1,9 @@
 """
-remote.py , Call the game's own functions in its own process
+remote.py: Call the game's own functions in its own process
 ============================================================
 
 This module runs a short x86 stub inside the game via CreateRemoteThread, which
-lets us invoke any function with any calling convention , including __thiscall,
+lets us invoke any function with any calling convention; including __thiscall,
 which needs ECX and which a bare CreateRemoteThread cannot express (it passes
 exactly one stack argument and nothing in registers).
 
@@ -23,7 +23,7 @@ ADDRESSES (CosmicSupremacy_Resurgence.exe, image base 0x00400000)
               (this, origin*, target*, Owner*, float, int, ptr)
               Origin and target are ALLOCATION STARTS (EJBO tag - 8) and the
               Owner is its tag-52 primary form, not the tag-8 reference-node
-              form , mixing these up is the easiest way to crash this.
+              form; mixing these up is the easiest way to crash this.
   vftable+0x30 on a ship returns the float for argument 4, and takes no stack
               arguments (confirmed at two independent call sites).
 """
@@ -76,7 +76,7 @@ CHANGE_CITIZEN_JOBS = 0x00574180  # __cdecl(Planet* alloc, container* indices,
 GET_DRAFT_COST      = 0x00516060  # __thiscall(int count), ret 4
 DRAFT_COST_THIS     = 728         # ECX = Owner_primary + 0x30c == civ_tag + 728
 DRAFT_JOB           = 3           # job id 3 is crew/military
-CONTAINER_VECTOR    = 12          # a container holds its vector 12 bytes in ,
+CONTAINER_VECTOR    = 12          # a container holds its vector 12 bytes in;
                                   # the same wrapper idiom as Planet:132 and the
                                   # order object's +28/+52 list heads
 DRAFT_FREE_BELOW    = 0x0080AA00  # content version; < 150 and the engine skips
@@ -132,7 +132,7 @@ class RemoteCallError(Exception):
 class RemoteThreadStuck(RemoteCallError):
     """A remote thread was created and did not finish in time.
 
-    Its stub page MUST be leaked, never freed , the thread is still inside it.
+    Its stub page MUST be leaked, never freed; the thread is still inside it.
     Subclasses RemoteCallError so existing handlers keep catching it; the
     distinction only matters to run_stub, which needs it to decide cleanup.
     """
@@ -183,7 +183,7 @@ class Remote:
             raise RemoteCallError(
                 f"remote-call self-test failed: expected 0x{probe:08X}, got "
                 f"{got!r}. Engine calls do not work in this process, so every "
-                f"rule that needs one would fail silently , refusing to start "
+                f"rule that needs one would fail silently; refusing to start "
                 f"rather than play a hollow game.")
 
     def begin_pass(self):
@@ -316,7 +316,7 @@ class Remote:
 
         Leaves the five part vectors EMPTY, so the result is a valid but
         equipment-less design that almost certainly cannot be built as-is.
-        Populating those vectors is unsolved , see the report.
+        Populating those vectors is unsolved; see the report.
         """
         code = (mov_ecx_imm(block) +
                 mov_eax_imm(DESIGN_CTOR) +
@@ -384,7 +384,7 @@ class Remote:
         return self._cached(self._pass_cache, ("hurry_cost", planet_tag), call)
 
     def production_total(self, planet_tag, vftable_slot_addr):
-        """PP vftable[0x74] , the production this build needs in total."""
+        """PP vftable[0x74]: the production this build needs in total."""
         def call():
             code = (mov_ecx_imm(planet_tag + PLANET_PROPERTIES) +
                     mov_eax_imm(vftable_slot_addr) +
@@ -406,7 +406,7 @@ class Remote:
     def make_ship_command(self, block, order_type, target_alloc):
         """Run the engine's ShipCommand constructor on a block we hand it.
 
-        __thiscall(int orderType, EJBO* target), ret 8 , callee-cleaned, so the
+        __thiscall(int orderType, EJBO* target), ret 8; callee-cleaned, so the
         stub pushes and forgets. Arguments go right to left, so the target is
         pushed first.
         """
@@ -421,7 +421,7 @@ class Remote:
                   f"-> 0x{block:08X}")
 
     def ship_set_command(self, ship_tag, cmd_block):
-        """Ship::SetCommand , writes Ship:52/56/60/61 from the ShipCommand.
+        """Ship::SetCommand: writes Ship:52/56/60/61 from the ShipCommand.
 
         __thiscall, ret 4, ECX = the ship's ALLOCATION start (tag - 8), because
         the function writes the order type at [ecx+0x3c] and Ship:52 sits at
@@ -439,7 +439,7 @@ class Remote:
         """The diplomacy relation code between two civs, via the engine.
 
         0 Neutral, 1 War, 2 Cease-Fire, 3 Peace, 4 Alliance, and 0 also when
-        there is no record at all , the engine treats "absent" and "Neutral" as
+        there is no record at all; the engine treats "absent" and "Neutral" as
         the same thing.
 
         """
@@ -508,7 +508,7 @@ class Remote:
         return self.run_stub(code, f"reputation {delta:+d} vs 0x{other_tag:08X}")
 
     def design_min_crew(self, design_tag):
-        """ShipDesign:76 , the MINIMUM CREW a design needs to function.
+        """ShipDesign:76: the MINIMUM CREW a design needs to function.
         """
         def call():
             code = (mov_ecx_imm(design_tag + DESIGN_DATA_OFFSET) +
@@ -529,7 +529,7 @@ class Remote:
 
             cost = sum over k in 0..count-1 of  5 * (T + k) + 105
 
-        where T is the civ's military across the WHOLE empire , every planet's
+        where T is the civ's military across the WHOLE empire; every planet's
         Planet:168 count plus every owned ship's crew. So the price rises by 5
         per unit already owned and conscription is cheapest early.
 
@@ -575,7 +575,7 @@ class Remote:
         """Set the job of the listed citizens, letting the ENGINE do the rest.
 
         `__cdecl(Planet* allocation, container* indices, int newJobId,
-                 bool bFromMilitaryList)` , four args, caller-cleaned, so it
+                 bool bFromMilitaryList)`; four args, caller-cleaned, so it
         needs a stub: CreateRemoteThread passes exactly one.
 
         """

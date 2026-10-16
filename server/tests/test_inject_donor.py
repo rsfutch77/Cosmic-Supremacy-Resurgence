@@ -1,5 +1,5 @@
 """
-test_inject_donor.py , which civ a join clones, and that a run cannot poison it
+test_inject_donor.py: which civ a join clones, and that a run cannot poison it
 ==============================================================================
     server\\.venv\\Scripts\\python.exe server\\tests\\test_inject_donor.py
 

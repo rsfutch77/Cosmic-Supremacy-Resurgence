@@ -1,5 +1,5 @@
 """
-test_people_and_hurry.py , the C3 immediate-effect rules, against a real galaxy
+test_people_and_hurry.py: the C3 immediate-effect rules, against a real galaxy
 ==============================================================================
     server\\.venv\\Scripts\\python.exe server\\tests\\test_people_and_hurry.py
 
