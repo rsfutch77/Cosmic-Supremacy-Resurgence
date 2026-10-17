@@ -10,6 +10,7 @@ priority order, writes, and sleeps.
     python ai.py --apply --follow --turns 20
     python ai.py --apply --follow --drive 10   # also shorten turns to 10s
     python ai.py --apply --follow --drive 10 --halt-on-contact
+    python ai.py --apply --follow --metrics run.jsonl
 
 `--halt-on-contact` stops the loop on the first turn an enemy planet is visible,
 after the rules have run (so R-XTM-03 has already committed the fleet), and
@@ -29,12 +30,30 @@ import exploit
 import exterminate
 import explore
 import gamestate as gs
+import metrics
 import remote
 import sensors
 
 TURN_COUNTER    = gs.TURN_COUNTER
 TURNLENGTH_ADDR = 0x0080AA08
 DEFAULT_LENGTH  = 3600
+
+# A snapshot taken during turn resolution can show part of an empire. A civ
+# read below this fraction of last turn's planet count is re-read.
+TORN_FRACTION = 0.5
+
+
+def looks_torn(now, before):
+    """True when `now` planets reads like a partial copy of `before`.
+
+    Zero planets is always suspect: a civ that truly holds nothing has lost.
+    """
+    return now == 0 or (bool(before) and now < before * TORN_FRACTION)
+
+
+def planet_count(hist):
+    """Planets the civ held at the last pass, or None before the first."""
+    return len(hist.prev["planets"]) if hist.prev else None
 
 # Rule order is a strategy decision. Only shipyard planets can make ships, while
 # facilities can be built anywhere, so ship builds get first claim on production.
@@ -126,6 +145,8 @@ class Loop:
         # Set by run(); one_pass uses it to notice when it is outrunning the
         # turn it is deciding for.
         self.drive = None
+        # A metrics.Recorder, or None. Set by main() from --metrics.
+        self.metrics = None
 
     def turn(self):
         b = gs.ev.read_bytes(self.state.handle, TURN_COUNTER, 4)
@@ -184,10 +205,10 @@ class Loop:
     def _snapshot_settled(self, tries=3, pause=1.5):
         """Snapshot, and retry if the galaxy looks half-rewritten.
 
-        A snapshot taken during turn resolution can show a civ owning no
-        planets. A civ cannot lose every planet between two turns, so that read
-        is treated as torn and repeated.
+        A read that `looks_torn` against last turn's planet count is repeated.
+        After `tries` reads the last one is used.
         """
+        had = planet_count(self.history)
         for attempt in range(tries):
             t0 = time.time()
             snap = gs.Snapshot(self.state)
@@ -197,13 +218,11 @@ class Loop:
             self.last_scan_tries = attempt + 1
             if civ is None:
                 return snap, None
-            if snap.owned_planets(civ):
+            now = len(snap.owned_planets(civ))
+            if not looks_torn(now, had):
                 return snap, civ
-            # Retried on the first pass too, when there is no history. A civ
-            # that truly holds nothing has already lost.
-            had = self.history.prev and self.history.prev["planets"]
-            self.log(f"[loop] read 0 planets"
-                     + (f" for a civ that had {len(had)}" if had else "")
+            self.log(f"[loop] read {now} planet(s)"
+                     + (f" for a civ that had {had}" if had else "")
                      + f"; turn resolution may still be in flight, "
                        f"re-reading ({attempt + 1}/{tries})")
             time.sleep(pause)
@@ -295,6 +314,8 @@ class Loop:
         # marker. It is written after every rule has run, atomically, so a
         # killed loop cannot leave a file that reads as a completed turn.
         self._mark_pass_done(snap.turn)
+        if self.metrics is not None:
+            self.metrics.record(snap, [self])
 
         elapsed = time.time() - pass_started
         slow = sorted(rule_times.items(), key=lambda kv: -kv[1])[:3]
@@ -436,6 +457,8 @@ def main():
                 top=opt("--top", 0, int),
                 settle=opt("--settle", 1.5, float),
                 halt_on_contact=cli.flag(args, "--halt-on-contact"))
+    if opt("--metrics"):
+        loop.metrics = metrics.Recorder(opt("--metrics"), log=loop.log)
     loop.run(follow=cli.flag(args, "--follow"),
              max_turns=opt("--turns", None, int),
              drive=opt("--drive", None, int),

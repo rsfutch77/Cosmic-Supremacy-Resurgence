@@ -30,9 +30,9 @@ built and crewed a bomber, sent it 624 units and fought at turn 114, losing both
 single turn boundary. Every X now runs unattended; none of them is finished.
 
 [ ] **Still specification, none of these has a `run_*` function:** S-04 insolvency,
-R-EXP-03 record arrivals (partly subsumed by `sensors._discover`), R-EXP-04 recall damaged
-scouts, R-XPN-04 over-expansion, R-XPL-03 wealth mode, R-XPL-07 liquidation, R-XTM-02 defend,
-R-XTM-04 conquer. Each is marked at its own rule below.
+R-EXP-04 recall damaged scouts, R-XPN-04 over-expansion, R-XPL-03 wealth mode, R-XPL-07
+liquidation, R-XTM-02 defend. Each is marked at its own rule below. R-EXP-03 is covered by
+`sensors.History._discover`.
 
 **Open questions about the game itself belong in
 `CosmicSupremacy_Reconstruction_Report.md` as [ ] items**, not here, this document
@@ -389,7 +389,7 @@ it, the write is *safe* but *inert*.
 | Scout | 2 | a **`Sun`'s** XYZ (a system, not a planet) |
 | Colonize | 3 | a planet's XYZ, **CONFIRMED**, matched a planet to 0.0000 |
 | Attack | 4 | an enemy planet's XYZ, issued live, but see §4.4: issuing it through actuator L crashes the client, and Move (1) reaches the same outcome because combat is positional. On a fleet the order lives on `Fleet:52` |
-| Conquer | 5 | an **enemy-owned** planet's XYZ, [ ] never issued; do not assume it survives a turn boundary until tested |
+| Conquer | 5 | an **enemy-owned** planet's XYZ, issued route-only through `exterminate.send_to` and survives turn boundaries, see §4.4 R-XTM-04 |
 
 ---
 
@@ -1160,10 +1160,9 @@ WHEN   an enemy ship is within THREAT_DIST of owned planet P
 THEN   order every idle WARSHIP within reach to move (1) to P's XYZ
 USES   M
 ```
-[ ] Still not built, but no longer untestable: `duel.py` (§6.6) supplies the opponent this
-rule needs. It will not attack until it has an armed design, so the order is designs for the
-second civ, then this rule. Note the rule no longer needs an "order attack (4)" step: arriving
-is the whole action.
+[ ] Still not built, but testable: `duel.py` (§6.6) supplies an AI opponent, and in the
+Single Player galaxy the human is the attacker. An AI opponent attacks only if its civ owns an
+armed design (§6.6). The rule needs no "order attack (4)" step: arriving is the whole action.
 
 **R-XTM-03, Raid**, IMPLEMENTED in `exterminate.run_xtm03`
 ```
@@ -1277,24 +1276,11 @@ THEN   Ship:52 = 5 (conquer), destination = that planet's Planet:4/8/12
 NOTE   conquer is confirmed to target an enemy-owned planet's exact XYZ
 USES   E
 ```
-[ ] Blocked on ONE thing now rather than two: a TROOP design exists and is buildable by both
-civs (`t1`, injected once Advanced Magnetism unlocked module 1), and order 5 is proven safe.
-What remains is what an invasion actually requires aboard.
+A troop hull is loaded with `ShipDesign:76 + exploit.INVASION_TROOPS` at first load, and
+`explore.scoutable` never hands a TROOP hull to R-EXP-02.
 
-[ ] **Explore steals troop hulls.** `run_exp02` took a freshly crewed `t1` and sent it to a
-sun 409 units away, because nothing in Exterminate claims a troop ship and the first rule that
-wants an idle hull gets it. The same defect the SCOUT-by-absence taxonomy has always had, now
-biting the most expensive hull in the empire.
-```
-WHEN   a TROOP ship exists and its target planet's weakness == 0
-THEN   Ship:52 = 5 (conquer), destination = that planet's Planet:4/8/12
-NOTE   conquer is confirmed to target an enemy-owned planet's exact XYZ
-USES   E
-```
-[ ] Blocked on two things, neither started: no TROOP design has ever been synthesised
-(module id 1, troop bay), and Conquer (5) is a targeted order type we have never issued, given
-what Move and Attack did through actuator L, assume nothing about whether it survives a turn
-boundary until it is tested from a restore point.
+[ ] **The Single Player galaxy seeds no troop design.** `make_single_player_galaxy.py` gives
+the AI civ `probe1`, `f1` and `b1` only, so R-XTM-07 and R-XTM-04 cannot fire against a human.
 
 **R-XTM-06, Garrison a planet just taken**, IMPLEMENTED in `exterminate.run_xtm06`
 ```
@@ -1431,11 +1417,11 @@ new galaxy rather than inherited.
    `Owner:1196` are the candidates to look at first, both read 1 on the local player and 0 on
    the engine's civ, and neither has been identified.
 
-   [ ] **`BadGuy` has no synthesised designs**, so R-EXP-01 and R-XTM-01 cannot fire for it:
-   it owns only the starting `Colony Ship`, which makes it an expander that can never scout or
-   fight. Designs come from the save blob (`game_cycle.py --design`, which needs
-   `--like-id <that civ's design>` because it otherwise resolves the local player's). Until
-   that is done a duel is expansion-only, and only one side can reach a battle.
+   [ ] **Seeded designs differ by galaxy builder.** A civ scouts and fights only with designs
+   seeded into the save blob (`game_cycle.py --design`, which needs `--like-id <that civ's
+   design>` because it otherwise resolves the local player's). `make_single_player_galaxy.py`
+   gives the AI civ `probe1`, `f1` and `b1`; `new_duel_galaxy.py` gives every civ a scout only,
+   so a duel on that galaxy has no armed side.
 
    **THE GALAXY IS NO LONGER LIMITED TO TWO CIVS.** `server/dev_tools/inject_civ.py` adds a whole
    player to a save blob, an `OWNR` clone under a new name plus a homeworld built by transplanting
@@ -1447,11 +1433,8 @@ new galaxy rather than inherited.
    `CosmicSupremacy_Reconstruction_Report.md` §2, with the save-blob work rather than the
    memory work.
 
-   [ ] **A pass costs a full memory scan, and they are serialised.** Three civs means three scans
-   per turn; twenty means twenty, which will not fit in a short driven turn. `duel.py` should share
-   ONE snapshot per turn across all controllers instead of re-scanning per civ, the fog of war is
-   already applied per civ on top of the shared scan, so nothing about §1.1 depends on scanning
-   separately.
+   **One memory scan per turn serves every civ.** `duel.settled_snapshot` takes a single
+   snapshot and each controller's pass reads it; fog of war is applied per civ on top of it.
 
    [ ] **A torn read got through with three civs.** On turn 166 `GoodGuy` read 1 planet when it
    held 7, and acted on that. `_snapshot_settled` only re-reads when a civ reads ZERO planets, so a
@@ -1769,8 +1752,7 @@ against intentions.
 | **eXterminate** | **partly, see below** | war is declared, warships are built and crewed and sent, a planet has been TAKEN by troops and garrisoned, and ships have fought and been damaged |
 
 **The one gap that matters: combat does not happen in ordinary play.** Every
-battle so far was either staged (`battle_meet.py`, two fleets pointed at each
-other) or one-sided (troops landing on an undefended planet). R-XTM-03 ranks
+battle so far was either staged (two fleets pointed at each other) or one-sided (troops landing on an undefended planet). R-XTM-03 ranks
 targets by weakness and takes the MINIMUM, so it reliably picks the planet with
 nothing on it, the fleet arrives, sits in orbit, and nothing happens. Two civs
 did exactly that to each other for fifty turns.
@@ -1806,8 +1788,8 @@ Steps 1-5 are **DONE**. The AI plays all four X's unattended and has fought a ba
 
 1. [ ] **Make the fleet survivable.** R-XTM-03's missing strength test plus real hulls
    (corvette chassis, shields, several weapons) via `game_cycle.py --design`. Everything else
-   in Exterminate is downstream of not losing every ship on arrival. Test from
-   `client/armed.dat` with `battle_harness.py`, not from a fresh game.
+   in Exterminate is downstream of not losing every ship on arrival. Test from a saved
+   armed fixture (`checkpoint.py`) with `combat_watch.py` alongside, not from a fresh game.
 2. ~~**Conscription**~~, **DONE**, actuator N and R-XPL-09. Running unattended on the fresh
    galaxy: a grounded scout was drafted for, crewed the next turn and flew, and exploration
    went from roughly one new system per ten turns to five in four. The engine call it needed

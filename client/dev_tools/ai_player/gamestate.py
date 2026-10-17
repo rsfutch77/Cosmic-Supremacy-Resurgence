@@ -475,9 +475,14 @@ class Snapshot:
         return [p for p in self.planets if p.owner is None]
 
     def nearest_sun(self, planet):
-        if not self.suns:
+        """(Sun, distance), or (None, None) when no position is readable.
+
+        An object allocated during the scan can read with blank fields.
+        """
+        suns = [x for x in self.suns if None not in x.pos]
+        if not suns or None in planet.pos:
             return None, None
-        s = min(self.suns, key=lambda x: dist(planet.pos, x.pos))
+        s = min(suns, key=lambda x: dist(planet.pos, x.pos))
         return s, dist(planet.pos, s.pos)
 
     def systems(self):

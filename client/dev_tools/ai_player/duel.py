@@ -8,6 +8,7 @@ civs.
     python duel.py                                  # dry run, one turn, every civ
     python duel.py --apply --follow --drive 15      # play it out
     python duel.py --civ GoodGuy --civ BadGuy --apply --follow --turns 40
+    python duel.py --apply --follow --drive 15 --metrics run.jsonl
 
 """
 import sys
@@ -16,6 +17,7 @@ import time
 import ai
 import cli
 import gamestate as gs
+import metrics
 
 
 class Duel:
@@ -36,6 +38,7 @@ class Duel:
         if len(civ_names) < 2:
             raise RuntimeError(f"nothing to play against: {civ_names}")
         self.last_decided = None       # the turn the last round acted on
+        self.metrics = None            # a metrics.Recorder, set from --metrics
 
         # One shared ViewerState; each pass re-scans it.
         if skip:
@@ -46,15 +49,20 @@ class Duel:
                       for n in civ_names]
 
     def settled_snapshot(self, tries=3, pause=1.5):
-        """One snapshot for the whole turn, re-read if it looks torn."""
+        """One snapshot for the whole turn, re-read if any civ looks torn."""
         for attempt in range(tries):
             snap = gs.Snapshot(self.state)
-            civs = [snap.civ(l.civ_name) for l in self.loops]
-            if all(c is not None and snap.owned_planets(c) for c in civs):
+            torn = []
+            for loop in self.loops:
+                civ = snap.civ(loop.civ_name)
+                now = len(snap.owned_planets(civ)) if civ is not None else 0
+                had = ai.planet_count(loop.history)
+                if ai.looks_torn(now, had):
+                    torn.append(f"{loop.civ_name} {now}"
+                                + (f"/{had}" if had else ""))
+            if not torn:
                 return snap
-            empty = [l.civ_name for l, c in zip(self.loops, civs)
-                     if c is None or not snap.owned_planets(c)]
-            self.log(f"[duel] {empty} read as holding nothing; turn "
+            self.log(f"[duel] planets read {torn} against last turn; turn "
                      f"resolution may still be in flight, re-reading "
                      f"({attempt + 1}/{tries})")
             time.sleep(pause)
@@ -90,6 +98,8 @@ class Duel:
         for loop in order:
             if loop.one_pass(snap) is None:
                 self.log(f"[duel] {loop.civ_name!r} could not take its pass")
+        if self.metrics is not None:
+            self.metrics.record(snap, self.loops)
         return t
 
     def run(self, follow=False, max_turns=None, drive=None, stall=300):
@@ -175,6 +185,9 @@ def main():
                 vision=cli.opt(args, "--vision", "known"),
                 settle=cli.opt(args, "--settle", 1.5, float),
                 skip=cli.opts(args, "--without"))
+    if cli.opt(args, "--metrics"):
+        duel.metrics = metrics.Recorder(cli.opt(args, "--metrics"),
+                                        log=duel.log)
     duel.run(follow=cli.flag(args, "--follow"),
              max_turns=cli.opt(args, "--turns", None, int),
              drive=cli.opt(args, "--drive", None, int),
