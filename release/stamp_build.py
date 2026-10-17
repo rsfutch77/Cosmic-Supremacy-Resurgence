@@ -1,24 +1,17 @@
 """
 stamp_build.py: record which build the packaging step is producing.
 
-The launcher's build name is decided at package time, not in the source: it is
-build.ps1's -Version switch, or manifest.json's "version" when the switch is not
-given. Nothing carried that decision into the launcher, which is how a build
-made with -Version 0.1.1 shipped a launcher that called itself 0.1.0 and a
-dist\\ folder that called it 0.1.1.
-
-This writes the decision to build.json. CosmicSupremacyLauncher.spec calls it
-and packs the result into the frozen build beside manifest.json, where
-launcher.build_info() reads it back through bundled().
+The build name is build.ps1's -Version, or manifest.json's "version" without
+it. This writes it to build.json, which CosmicSupremacyLauncher.spec packs
+beside manifest.json and launcher.build_info() reads through bundled().
 
 Run by hand as:
 
     python release/stamp_build.py                    : version from manifest.json
     python release/stamp_build.py 0.1.2 release/build
 
-A checkout is not stamped and is not meant to be: build.json is written into the
-build directory, which is not on bundled()'s search path when the launcher runs
-from source, so a clone reports itself as a development build.
+A checkout is not stamped: the build directory is not on bundled()'s search
+path from source, so a clone reports itself as a development build.
 """
 from __future__ import annotations
 
@@ -48,9 +41,7 @@ def manifest_version(release_dir: str = HERE) -> str:
 def git_commit(repo: str = REPO) -> "str | None":
     """The checkout this build came from, with a trailing + if it was dirty.
 
-    None when git is not installed or the build is not running in a checkout,
-    which is a fact about the build machine rather than a failure: the stamp is
-    still written, one field shorter.
+    None when git is not installed or the build is not running in a checkout.
     """
     def git(*args):
         return subprocess.run(("git", "-C", repo) + args, capture_output=True,
@@ -77,13 +68,11 @@ def stamp(version: "str | None", out_dir: str) -> str:
     """Write build.json into `out_dir` and return its path.
 
     `version` is what the packaging step decided. None falls back to the
-    manifest, which is the same fallback build.ps1 makes for -Version, so a
-    build run either way stamps the name it actually used.
+    manifest, as build.ps1 does for -Version.
     """
     info = {
         "build": (version or "").strip() or manifest_version(),
-        # UTC and to the second. A build is compared with a log line written on
-        # somebody else's machine, and a local timestamp cannot be.
+        # UTC, to the second, so it compares with logs from other machines.
         "stamped_at": datetime.datetime.now(datetime.timezone.utc)
                               .strftime("%Y-%m-%dT%H:%M:%SZ"),
     }

@@ -1,31 +1,20 @@
 """
-components.py: the ship-component definition tables
-====================================================
+components.py: the ship-component definition tables.
+
     python components.py          # dump every category from the live client
 
-Six categories, one table each, read out of a running client the same way
-facilities.py reads the facility table. The tables are zero in the file image and
-built at startup, so this needs a live process; it is a plain ReadProcessMemory
-and needs no engine call.
+Six categories, built at startup, so read from a running client. The engine
+picks each table by content version at [0x0080AA00]; every released mode runs
+below 639 and gets the base in CATEGORIES. Ids are the record's position, as
+stored in a ShipDesign's part vectors.
 
-Like the facility table, each category ships SEVERAL tables and the engine picks
-one by content version at [0x0080AA00]. Every released mode runs a version below
-639 (Tutorial and Demo at 171, Sandbox and Single Player at 565), and every one of
-the six pickers returns the same branch for those: the table named RELEASED below.
-See docs/CosmicSupremacy_Stat_Tables.md section 4a for the mechanism, and OLDER
-for where the superseded stat sets live if anyone ever needs one.
-
-Names live in the record, so no hand-maintained name table is needed. The ids are
-the record's position, which is what a ShipDesign's part vectors store.
-
-── Field map ──────────────────────────────────────────────────────────────────
-Shared by every category:
+Field map, shared:
     +0x00  id, the record's own index
     +0x04  units, the hitpoint contribution
     +0x0C  production cost
-    +0x10  upkeep per turn, a FLOAT where every other field is an int
-Then the category-specific block, and five int resource costs in the canonical
-order metal, deuterium, radioactives, crystal, exotics.
+    +0x10  upkeep per turn, a float (every other field is an int)
+Then the category-specific block, and five int resource costs in the order
+metal, deuterium, radioactives, crystal, exotics.
 
     engines / scanners / shields (stride 0x8C)
         +0x08  space used          +0x14  thrust / range / shield strength
@@ -35,14 +24,11 @@ order metal, deuterium, radioactives, crystal, exotics.
         +0x18  firepower vs heavy  +0x1C  firepower vs planets
         +0x20  resources           +0x38  name
     chassis (stride 0x94)
-        +0x14  space PROVIDED, not used; a chassis is the hull
+        +0x14  space provided
         +0x18  crew minimum        +0x1C  crew maximum
         +0x20  resources           +0x38  name
     modules (stride 0xA8)
         +0x08  space used          +0x14  resources          +0x4C  name
-
-Checked against the wiki manual across all 43 records. Five numbers disagree and
-the client wins on all five; see the module docstring note in main().
 """
 import struct
 import sys
@@ -64,10 +50,8 @@ CATEGORIES = {
     "weapons":  (0x00811BE8, 0x94, 15, 0x38, 0x20, "weapon"),
 }
 
-# The superseded tables, newest first, for each category. Not read by anything
-# here: they belong to content versions whose galaxies are long gone. Recorded so
-# that a stat set can be recovered without repeating the search. The picker
-# addresses are the authority on which version selects which.
+# Superseded tables per category, newest first; unused here. PICKERS decide
+# which version selects which.
 OLDER = {
     "chassis":  (0x0080B920, 0x0080BC98, 0x0080C010, 0x0080C388,
                  0x0080C700, 0x0080CA78, 0x0080CDF0),
@@ -111,7 +95,7 @@ def read_name(snap, addr):
 def read_table(snap, category, base=None):
     """Every record of one component category, keyed by the id a design stores.
 
-    Pass an explicit base only to inspect one of the OLDER tables.
+    `base` selects one of the OLDER tables.
     """
     released, stride, count, noff, roff, kind = CATEGORIES[category]
     if base is None:

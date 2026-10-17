@@ -1,26 +1,15 @@
 """
 order_diff.py: what did this player change, and was any of it theirs?
-=====================================================================
     python order_diff.py served.b64 returned.b64
     python order_diff.py served.b64 returned.b64 --civ DemoPlayer
     python order_diff.py served.b64 returned.b64 --bytes
 
-Measuring a new order type costs one click in a client and then this. Give it
-the exact bytes the player was served and the save they handed back, and it says
+Given the exact bytes a player was served and the save they returned, reports
 which objects changed, who owns each one, and which section inside it moved.
-That is the input to both the whitelist (C2) and the legality gate (C4).
 
-**Objects are matched by object id, not by position.** `diff_saves.py` pairs
-sections by their place in the tree, which is right for asking whether a save
-round trip is lossless and wrong here: the client writes the civs back in its
-own order, so a positional diff of two captures of one galaxy reports every civ
-as changed and buries the one field that actually moved. Measured on a real
-pair, positional matching reported 7 changed sections where 1 had changed.
-
-Ownership comes from the SERVED blob. A submission that rewrites an owner field
-must not thereby acquire the object, so the question asked of every change is
-"who owned this at the start of the turn", never "who does the submission say
-owns it".
+Objects are matched by object id, since the client writes civs back in its own
+order. Ownership is read from the served blob, so a submission cannot acquire
+an object by rewriting its owner field.
 
 Layouts used, from the writers:
 
@@ -28,16 +17,10 @@ Layouts used, from the writers:
     PLNT payload    u32 objectId ; f32 x, z, y ; u32 ownerObjectId ; ...
     SHIP payload    u32 objectId ; f32 x, z, y ; u32 ownerObjectId ; ...
 
-`SUN ` carries an object id but no owner, so it is indexed and reported as
-galaxy-level. That matters: a system's name lives there, and without indexing it
-a player renaming a system produced a diff that mentioned only their own `EXSY`
-cache, hiding the write that actually counted.
-
-Anything else is attributed to whatever object encloses it, so a `DYNO` under a
-`SHIP` is that ship's, and a section under `GLXY` is nobody's and shows as
-galaxy-level. Galaxy-level changes are worth seeing: a player's client has no
-business writing them, and one that does is either a bug in the pusher or a
-player editing their save.
+`SUN ` carries an object id and the system name but no owner, so it is reported
+as galaxy-level. Anything else is attributed to its enclosing object: a `DYNO`
+under a `SHIP` is that ship's, and a section directly under `GLXY` is
+galaxy-level. A player's client should never write galaxy-level sections.
 """
 import argparse
 import os
@@ -89,10 +72,8 @@ def owner_id(blob, tag, sec):
 def own_bytes(blob, sec):
     """A section's own payload, with its child sections cut out.
 
-    Delegated to the parser, which knows that children can have gaps between
-    them. Treating a section's own bytes as a prologue plus an epilogue loses
-    whatever sits in a gap, and for a `DYNO` that is the has-orders byte and the
-    admiral id, which is to say most of what an order consists of.
+    Includes bytes in gaps between children; for a `DYNO` those hold the
+    has-orders byte and the admiral id.
     """
     return sp.own_bytes(blob, sec)
 

@@ -1,31 +1,18 @@
 """
-remote.py: Call the game's own functions in its own process
-============================================================
+remote.py: Call the game's own functions in its own process.
 
-This module runs a short x86 stub inside the game via CreateRemoteThread, which
-lets us invoke any function with any calling convention; including __thiscall,
-which needs ECX and which a bare CreateRemoteThread cannot express (it passes
-exactly one stack argument and nothing in registers).
+Runs short x86 stubs in the game via CreateRemoteThread, so any calling
+convention works, including __thiscall. Argument counts come from each
+function's `ret N`. Each stub runs on a fresh page and returns EAX as the
+thread exit code. A wrong address or argument count crashes the client.
 
-SAFETY
-  Everything here executes code in a live game. A wrong address or argument
-  count corrupts the stack and takes the client down. The mitigations used are:
-    * every function's argument count is taken from its `ret N`, not guessed
-    * stubs are validated on a side-effect-free getter before anything that
-      mutates state
-    * each stub is a fresh VirtualAllocEx page, freed after the thread exits
-    * the thread's exit code carries the return value, so a call can be checked
-      without reading game memory at all
-
-ADDRESSES (CosmicSupremacy_Resurgence.exe, image base 0x00400000)
-  0x0065165A  operator new(size_t)      __cdecl, one arg, ret 0
-  0x004E8420  order-object constructor  __thiscall, SIX stack args, ret 0x18
-              (this, origin*, target*, Owner*, float, int, ptr)
-              Origin and target are ALLOCATION STARTS (EJBO tag - 8) and the
-              Owner is its tag-52 primary form, not the tag-8 reference-node
-              form; mixing these up is the easiest way to crash this.
-  vftable+0x30 on a ship returns the float for argument 4, and takes no stack
-              arguments (confirmed at two independent call sites).
+Addresses (CosmicSupremacy_Resurgence.exe, image base 0x00400000):
+  0x0065165A  operator new(size_t), __cdecl, one arg, ret 0
+  0x004E8420  order-object constructor, __thiscall, six stack args, ret 0x18
+              (this, origin*, target*, Owner*, float, int, ptr). Origin and
+              target are allocation starts (EJBO tag - 8); Owner is its tag-52
+              primary form.
+  vftable+0x30 on a ship returns the float for argument 4; no stack args.
 """
 import ctypes
 import struct
@@ -63,48 +50,32 @@ OFFLINE_FLAG = 0x0086F1A0       # the local-apply path runs only when this byte 
 ORDER_CTOR   = 0x004E8420
 ORDER_SIZE   = 0x60
 
-# ── Conscription ───────────────────────────────────────────────────────────
-# Static analysis in dev_tools/findings_production_path.md 1.0-1.6; every
-# signature below is CONFIRMED there from the callee and both call sites.
-#
-# Conscription is not an append to the military list. A citizen and a stationed
-# military unit are the SAME 16-byte record in two different vectors, and
-# drafting is a job change: set the record's job id to 3 and hand the list back,
-# and PlanetProperties::CommitPopulation migrates every job-3 record across.
+# A citizen and a stationed military unit are the same 16-byte record in two
+# vectors. Drafting sets the job id to 3; PlanetProperties::CommitPopulation
+# migrates every job-3 record across.
 CHANGE_CITIZEN_JOBS = 0x00574180  # __cdecl(Planet* alloc, container* indices,
                                   #         int newJobId, bool bFromMilitaryList)
 GET_DRAFT_COST      = 0x00516060  # __thiscall(int count), ret 4
 DRAFT_COST_THIS     = 728         # ECX = Owner_primary + 0x30c == civ_tag + 728
 DRAFT_JOB           = 3           # job id 3 is crew/military
-CONTAINER_VECTOR    = 12          # a container holds its vector 12 bytes in;
-                                  # the same wrapper idiom as Planet:132 and the
-                                  # order object's +28/+52 list heads
-DRAFT_FREE_BELOW    = 0x0080AA00  # content version; < 150 and the engine skips
-                                  # the whole cost block, i.e. drafting is FREE
-PLANET_ALLOC_FROM_TAG = -8        # Planet is single-inheritance: an 8-byte
-                                  # header, so the allocation starts at tag - 8
+CONTAINER_VECTOR    = 12          # a container holds its vector 12 bytes in
+DRAFT_FREE_BELOW    = 0x0080AA00  # content version; below 150 drafting is free
+PLANET_ALLOC_FROM_TAG = -8        # Planet allocation starts at tag - 8
 
-# ShipDesign. Size and both constructors come from the two allocation sites,
-# which each do `push 0x118 ; call operator new` and then call one of these.
 DESIGN_SIZE = 0x118           # 280 bytes
-DESIGN_CTOR = 0x00546EC0      # __thiscall, NO stack arguments. The real one.
+DESIGN_CTOR = 0x00546EC0      # __thiscall, no stack arguments
 
 DESIGN_STREAM_CTOR = 0x005470A0
 
-# ShipDesignData lives at ShipDesign allocation + 0x10, i.e. (EJBO tag) + 4.
-# Every derived stat is a lazy cache: the block is set to -1 whenever parts
-# change, and each getter is `if (cached == -1) { compute; cache; } return`.
-# Calling the getter therefore both READS the value and warms the cache.
+# ShipDesignData lives at EJBO tag + 4. Derived stats are lazy caches reset
+# to -1 when parts change; each getter computes, caches and returns.
 DESIGN_DATA_OFFSET  = 4        # from the EJBO tag
 DESIGN_SPEED_GETTER = 0x005480A0   # __thiscall, no args, returns in st(0)
 DESIGN_MINCREW_GETTER = 0x005490E0 # __thiscall, no args, returns in eax
-# The three firepower pools. Each is an independent damage class: 1 and 2 are
-# anti-ship, 3 is what planetary-defence participants are counted into.
+# Firepower pools: 1 and 2 are anti-ship, 3 counts toward planetary defence.
 DESIGN_FP_GETTERS = (0x00548CC0, 0x00548E20, 0x00548F80)
 
-# Every ShipDesign must show these at its allocation start, or construction
-# did not happen. Checking them is cheap and is the difference between a bad
-# call being caught and a bad call being written into.
+# A constructed ShipDesign shows these at its allocation start.
 DESIGN_VFTABLE_1 = 0x00771DF8   # at block + 0
 DESIGN_VFTABLE_2 = 0x00771DF0   # at block + 4
 EJBO_TAG         = 0x4F424A45   # 'EJBO' at block + 12
@@ -130,15 +101,9 @@ class RemoteCallError(Exception):
 
 
 class RemoteThreadStuck(RemoteCallError):
-    """A remote thread was created and did not finish in time.
-
-    Its stub page MUST be leaked, never freed; the thread is still inside it.
-    Subclasses RemoteCallError so existing handlers keep catching it; the
-    distinction only matters to run_stub, which needs it to decide cleanup.
-    """
+    """A remote thread did not finish in time. Its stub page must be leaked."""
 
 
-# ── x86 encoding helpers ───────────────────────────────────────────────────
 def push_imm(v):     return b"\x68" + struct.pack("<I", v & 0xFFFFFFFF)
 def mov_ecx_imm(v):  return b"\xB9" + struct.pack("<I", v & 0xFFFFFFFF)
 def mov_eax_imm(v):  return b"\xB8" + struct.pack("<I", v & 0xFFFFFFFF)
@@ -161,9 +126,7 @@ class Remote:
         self._pass_cache = {}
         self.cache_hits = 0
         self.cache_misses = 0
-        # Stub pages we deliberately did NOT free, because a remote thread may
-        # still be executing them. Leaking 4 KB is always the right trade
-        # against decommitting a page under a running thread.
+        # Stub pages left allocated because a remote thread may still run them.
         self.leaked_pages = []
         self.h = kernel32.OpenProcess(PROCESS_ALL_ACCESS, False, pid)
         if not self.h:
@@ -174,8 +137,7 @@ class Remote:
         self._selftest()
 
     def _selftest(self):
-        """Prove the remote-call machinery works, before any rule depends on it.
-        """
+        """Prove the remote-call machinery works."""
         probe = 0x5EE1F00D
         code = mov_eax_imm(probe) + RET_4
         got = self.run_stub(code, "self-test")
@@ -201,8 +163,7 @@ class Remote:
             return store[key]
         self.cache_misses += 1
         value = compute()
-        # A failed call returns None. Caching that would turn one bad read into
-        # a permanent one, so misses are not remembered.
+        # A failed call returns None and is not cached.
         if value is not None:
             store[key] = value
         return value
@@ -282,14 +243,11 @@ class Remote:
         self.free(page)
         return result
 
-    # ── the calls we actually need ─────────────────────────────────────
     def operator_new(self, size=ORDER_SIZE):
-        """Allocate from the ENGINE's heap, so the engine may legally free it.
+        """Allocate from the engine's heap, so the engine may free it.
 
-        operator new is __cdecl with a single argument, which is exactly the
-        shape CreateRemoteThread passes, so this needs no stub. The 4-byte
-        caller-cleanup that never happens lands on a thread stack that is about
-        to be discarded.
+        __cdecl with one argument, the shape CreateRemoteThread passes, so no
+        stub is needed.
         """
         p = self._run(OPERATOR_NEW, size)
         if not p:
@@ -298,11 +256,7 @@ class Remote:
         return p
 
     def ship_speed_float(self, ship_alloc):
-        """Call the ship's vftable[0x30] getter and return its float BITS.
-
-        Side-effect-free, which is why it is the first thing to run: it proves
-        the stub machinery works before any call that mutates state.
-        """
+        """Call the ship's vftable[0x30] getter and return its float bits."""
         code = (mov_ecx_imm(ship_alloc) +
                 b"\x8B\x01" +              # mov eax, [ecx]        vftable
                 b"\x8B\x40\x30" +          # mov eax, [eax+0x30]
@@ -312,12 +266,7 @@ class Remote:
         return self.run_stub(code, "ship vftable[0x30] getter")
 
     def construct_design(self, block):
-        """Default-construct a ShipDesign. Takes no arguments at all.
-
-        Leaves the five part vectors EMPTY, so the result is a valid but
-        equipment-less design that almost certainly cannot be built as-is.
-        Populating those vectors is unsolved; see the report.
-        """
+        """Default-construct a ShipDesign, leaving its five part vectors empty."""
         code = (mov_ecx_imm(block) +
                 mov_eax_imm(DESIGN_CTOR) +
                 CALL_EAX +
@@ -325,8 +274,7 @@ class Remote:
         return self.run_stub(code, f"ShipDesign default ctor -> 0x{block:08X}")
 
     def verify_design(self, block):
-        """Check that a block really is a constructed ShipDesign.
-        """
+        """Check that a block really is a constructed ShipDesign."""
         raw = self.read(block, 16)
         if not raw or len(raw) < 16:
             return False, "block is unreadable"
@@ -351,8 +299,7 @@ class Remote:
         return bytes(buf[:n.value])
 
     def design_speed(self, design_tag):
-        """Call the engine's speed getter for a design; returns the float bits.
-        """
+        """Call the engine's speed getter for a design; returns the float bits."""
         def call():
             code = (mov_ecx_imm(design_tag + DESIGN_DATA_OFFSET) +
                     mov_eax_imm(DESIGN_SPEED_GETTER) +
@@ -363,8 +310,7 @@ class Remote:
         return self._cached(self._design_cache, ("speed", design_tag), call)
 
     def hurry_production(self, planet_tag):
-        """Spend cash to finish this planet's current production immediately.
-        """
+        """Spend cash to finish this planet's current production immediately."""
         code = (mov_ecx_imm(planet_tag + PLANET_PROPERTIES) +
                 mov_eax_imm(HURRY_PRODUCTION) +
                 CALL_EAX +
@@ -404,12 +350,7 @@ class Remote:
         return self._cached(self._pass_cache, ("prod_done", planet_tag), call)
 
     def make_ship_command(self, block, order_type, target_alloc):
-        """Run the engine's ShipCommand constructor on a block we hand it.
-
-        __thiscall(int orderType, EJBO* target), ret 8; callee-cleaned, so the
-        stub pushes and forgets. Arguments go right to left, so the target is
-        pushed first.
-        """
+        """Run the engine's ShipCommand constructor on a block we hand it."""
         code = (push_imm(target_alloc) +
                 push_imm(order_type) +
                 mov_ecx_imm(block) +
@@ -423,10 +364,7 @@ class Remote:
     def ship_set_command(self, ship_tag, cmd_block):
         """Ship::SetCommand: writes Ship:52/56/60/61 from the ShipCommand.
 
-        __thiscall, ret 4, ECX = the ship's ALLOCATION start (tag - 8), because
-        the function writes the order type at [ecx+0x3c] and Ship:52 sits at
-        allocation + 60.
-
+        ECX is the ship's allocation start (tag - 8).
         """
         code = (push_imm(cmd_block) +
                 mov_ecx_imm(ship_tag + SHIP_ALLOC_FROM_TAG) +
@@ -438,10 +376,8 @@ class Remote:
     def relation_code(self, civ_tag, other_tag):
         """The diplomacy relation code between two civs, via the engine.
 
-        0 Neutral, 1 War, 2 Cease-Fire, 3 Peace, 4 Alliance, and 0 also when
-        there is no record at all; the engine treats "absent" and "Neutral" as
-        the same thing.
-
+        0 Neutral (also when there is no record), 1 War, 2 Cease-Fire, 3 Peace,
+        4 Alliance.
         """
         code = (push_imm(other_tag + OWNER_PRIMARY_FROM_TAG) +
                 mov_ecx_imm(civ_tag + OWNER_RELATIONS) +
@@ -453,10 +389,7 @@ class Remote:
     def design_firepower(self, design_tag):
         """(light, heavy, third) via the engine's getters, warming the cache.
 
-        ShipDesign:60/64/68 are lazy derived stats and read -1 until something
-        asks for them, so a design that has never been inspected reports
-        (0, 0, 0) and looks unarmed. Reading them through the getters both
-        answers the question and leaves the plain reads correct afterwards.
+        ShipDesign:60/64/68 read -1 until a getter computes them.
         """
         def call():
             out = []
@@ -468,18 +401,14 @@ class Remote:
                 out.append(0 if v is None else struct.unpack("<i",
                            struct.pack("<I", v))[0])
             return tuple(out)
-        # THREE remote threads per call, and the single biggest consumer in the
-        # whole AI: 138 of 571 stub calls in a 22-pass run, for a number that
-        # cannot change unless a design is refitted.
+        # Three remote threads per call, for a value that changes only on refit.
         return self._cached(self._design_cache, ("firepower", design_tag), call)
 
     def first_contact(self, civ_tag, other_tag):
         """Create the relation record between two civs if it does not exist.
 
-        0x00534F90 skips silently when a record is already present or when the
-        two civs are the same, so this is safe to call unconditionally. It picks
-        the INITIAL code itself -- Neutral on this galaxy, because
-        GetGameOption(2) reads 0 -- which is why declaring war is a second step.
+        Safe to call unconditionally. The engine picks the initial code
+        (Neutral when GetGameOption(2) reads 0).
         """
         code = (push_imm(other_tag + OWNER_PRIMARY_FROM_TAG) +
                 mov_ecx_imm(civ_tag + OWNER_RELATIONS) +
@@ -496,11 +425,7 @@ class Remote:
         return p if p and 0x10000 < p < 0x7FFF0000 else None
 
     def add_reputation(self, civ_tag, other_tag, delta):
-        """Add to the standing score at record +0x10, engine-clamped to 100.
-
-        The engine clamps only the HIGH side (cmp 0x64), so a large negative
-        delta is not floored here -- pass sane values.
-        """
+        """Add to the standing score at record +0x10, clamped above at 100 only."""
         code = (push_imm(delta & 0xFFFFFFFF) +
                 push_imm(other_tag + OWNER_PRIMARY_FROM_TAG) +
                 mov_ecx_imm(civ_tag + OWNER_RELATIONS) +
@@ -508,8 +433,7 @@ class Remote:
         return self.run_stub(code, f"reputation {delta:+d} vs 0x{other_tag:08X}")
 
     def design_min_crew(self, design_tag):
-        """ShipDesign:76: the MINIMUM CREW a design needs to function.
-        """
+        """ShipDesign:76: the minimum crew a design needs to function."""
         def call():
             code = (mov_ecx_imm(design_tag + DESIGN_DATA_OFFSET) +
                     mov_eax_imm(DESIGN_MINCREW_GETTER) +
@@ -518,23 +442,11 @@ class Remote:
             return self.run_stub(code, f"design min-crew on 0x{design_tag:08X}")
         return self._cached(self._design_cache, ("min_crew", design_tag), call)
 
-    # ── conscription ───────────────────────────────────────────────────
     def draft_cost(self, civ_tag, count=1):
-        """What the engine will charge to draft `count` citizens, empire-wide.
+        """What the engine will charge to draft `count` citizens (read-only).
 
-        READ-ONLY, and deliberately the first of the pair to be built: §7 of
-        STRATEGY.md says validate a new stub on a side-effect-free getter before
-        pointing it at anything that mutates state, and this one is checkable
-        against a formula derived independently from the disassembly:
-
-            cost = sum over k in 0..count-1 of  5 * (T + k) + 105
-
-        where T is the civ's military across the WHOLE empire; every planet's
-        Planet:168 count plus every owned ship's crew. So the price rises by 5
-        per unit already owned and conscription is cheapest early.
-
-        ECX is Owner_primary + 0x30c, which is the civ-trait container; the
-        function only uses it to reach the Owner behind it.
+        The price rises with the civ's military across the whole empire
+        (every planet's Planet:168 count plus every owned ship's crew).
         """
         def call():
             code = (push_imm(count) +
@@ -544,9 +456,7 @@ class Remote:
                     RET_4)
             return self.run_stub(code,
                                  f"draft cost for {count} on 0x{civ_tag:08X}")
-        # Per pass only: the price is a function of empire-wide military, so it
-        # moves the moment we draft, build or lose a ship. Every caller that
-        # changes that calls invalidate_draft_cost().
+        # Per pass only; callers that change military call invalidate_draft_cost().
         return self._cached(self._pass_cache, ("draft_cost", civ_tag, count),
                             call)
 
@@ -558,13 +468,7 @@ class Remote:
             del self._pass_cache[key]
 
     def draft_is_free(self):
-        """The engine skips the whole cost block when [0x0080AA00] < 150.
-
-        That dword is the content/data version. Worth reading rather than
-        assuming, because a controller that predicts a charge which never
-        happens will keep refusing to draft on an affordability test it did not
-        need to pass.
-        """
+        """True when drafting is free: the content version at [0x0080AA00] is below 150."""
         b = self.read(DRAFT_FREE_BELOW, 4)
         if not b or len(b) != 4:
             return None
@@ -572,13 +476,7 @@ class Remote:
 
     def change_citizen_jobs(self, planet_tag, indices, new_job=DRAFT_JOB,
                             from_military=0):
-        """Set the job of the listed citizens, letting the ENGINE do the rest.
-
-        `__cdecl(Planet* allocation, container* indices, int newJobId,
-                 bool bFromMilitaryList)`; four args, caller-cleaned, so it
-        needs a stub: CreateRemoteThread passes exactly one.
-
-        """
+        """Set the job of the listed citizens; the engine does the rest."""
         if not indices:
             raise RemoteCallError("no citizens selected to draft")
         n = len(indices)
@@ -609,11 +507,7 @@ class Remote:
 
     def construct_order(self, order, origin_alloc, target_alloc, owner_alloc,
                         f_bits, a5=1, a6=0):
-        """Run the engine's order constructor on an engine-allocated block.
-
-        Six stack arguments, callee-cleaned (`ret 0x18`), pushed right to left:
-        a6, a5, float, owner, target, origin.
-        """
+        """Run the engine's order constructor on an engine-allocated block."""
         code = (push_imm(a6) +
                 push_imm(a5) +
                 push_imm(f_bits) +          # the float, as raw bits
@@ -626,23 +520,10 @@ class Remote:
                 RET_4)
         return self.run_stub(code, f"order ctor on 0x{order:08X}")
 
-    # ── selling a facility ────────────────────────────────────────────────
-    # __thiscall bool PlanetProperties::SellFacility(int typeId, int count)
-    # at 0x004F8580, ret 8 (callee-cleaned, so the stub pushes and forgets).
-    #
-    # ecx is the PlanetProperties, i.e. planet_allocation + 0x60, which is
-    # planet_tag + 88 -- both call sites reach it with a literal `add ecx, 0x60`.
-    #
-    # It does the whole transaction itself: prices the facility, credits the
-    # owner's treasury at Owner:8, and removes the units. That is exactly why we
-    # call it instead of reproducing it. STRATEGY.md 1.1 forbids writing cash,
-    # and a sale that paid itself would be indistinguishable from inventing
-    # money -- letting the engine compute the payout keeps the rule intact.
-    #
-    #   price = round(facilityValue * 0.05) * count
-    #
-    # The 0.05 is the double at 0x753CF8. A military camp paying 75 implies a
-    # facility value of 1500, which is the number to check the call against.
+    # __thiscall bool PlanetProperties::SellFacility(int typeId, int count), ret 8.
+    # The engine prices the sale, credits Owner:8 and removes the units, so cash
+    # is never written here (STRATEGY.md 1.1). Price is
+    # round(facilityValue * 0.05) * count; the 0.05 is the double at 0x753CF8.
     def sell_facility(self, planet_tag, type_id, count=1):
         code = (push_imm(count) +
                 push_imm(type_id) +

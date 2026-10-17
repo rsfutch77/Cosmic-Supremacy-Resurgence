@@ -1,10 +1,9 @@
 """
 ops_sources.py: read the operations, release and privacy sources into items
-============================================================================
-Used by build_ops_checklist.py. Each reader returns (id, section, text) for
-every item in one source, in source order, so the checklist can show every item
-whether or not it applies. Sources are in tools/checklists/ops_release_privacy/
-(gitignored); see SOURCES.txt there for provenance and licence.
+
+Each reader returns (id, section, text) for every item in one source, in source
+order. Sources are in tools/checklists/ops_release_privacy/ (gitignored); see
+SOURCES.txt there for provenance and licence.
 """
 import os
 import re
@@ -140,7 +139,7 @@ def smartscreen():
             break
         if on and t.startswith('- '):
             text = re.sub(r'\[([^\]]+)\]\([^)]*\)', r'\1', t[2:]).replace('**', '')
-            # Microsoft's em-dashes become colons; the house style uses none.
+            # Microsoft's em-dashes become colons.
             text = text.replace(' \u2014 ', ': ')
             out.append((f'SS-{len(out) + 1}', 'Minimizing SmartScreen warnings in practice', text))
     return out

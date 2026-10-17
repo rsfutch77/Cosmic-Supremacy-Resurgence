@@ -6,24 +6,22 @@ lease.py: one holder at a time for the machine's shared resources
     python lease.py who
     python lease.py wait client "Lane A" "join acceptance" --minutes 20
 
-Several agents work on this machine at once, and some things here have exactly
-one of: the game client, the live Firebase project, the relay deploy, the
-scheduled referee task. Each is taken by creating a lease file with exclusive
-create, so two takers cannot both succeed, and released by deleting it.
+Leases the game client, the live Firebase project, the relay deploy and the
+scheduled referee task. A lease is taken by creating its file with exclusive
+create and released by deleting it.
 
     %TEMP%\\cosmic_leases\\<resource>.json   holder, purpose, started, until
 
 A lease is never broken by another taker. One past its `until` by more than
 `STALE_MINUTES` is reported as stale by `who`, and the coordinator decides.
 
-**The live referee holds the client around every tick without taking a lease.**
-It runs unattended from the scheduled task and reads its next deadline from the
-galaxy, so `take client` refuses inside `TICK_MARGIN_MINUTES` either side of the
-deadline the worker last recorded in `server\\worker_work\\worker_*.json`.
+The live referee uses the client around every tick without a lease, so
+`take client` refuses within `TICK_MARGIN_MINUTES` of the deadline the worker
+last recorded in `server\\worker_work\\worker_*.json`.
 
-**Port 8888 is the referee worker's for as long as it runs.** Its `cs_server`
-is where captures land. A client tool that needs a server there uses that one
-and never kills or rebinds it, so the port is not leased separately.
+Port 8888 belongs to the referee worker while it runs. A tool that needs a
+server there uses that one and never kills or rebinds it; the port is not
+leased.
 """
 import argparse
 import glob

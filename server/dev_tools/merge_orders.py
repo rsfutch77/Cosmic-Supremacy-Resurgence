@@ -5,202 +5,82 @@ merge_orders.py: build the next authoritative blob from players' returned saves
         --from DemoPlayer=playerA.b64 --from BadGuy=playerB.b64 --dat merged.dat
     python merge_orders.py authoritative.b64 --from BadGuy=playerB.b64 --list
 
-The design rule is merge orders, never states. A player is handed a state, plays
-offline, and hands a whole state back; only the parts of it that express that
-player's intent may be taken, and only for objects that player owns.
-
-Every submission is judged against **the state as it was served**, never against
-the blob as it accumulates other players' orders. Judging against the
-accumulating blob makes the first player's orders look like the second player's
-edits: the authoritative state moves under them, and their untouched copy of a
-ship they do not own then differs from it.
-
-Ownership is likewise decided by the served blob. A submission that rewrites an
-owner field must not thereby acquire the object. Tested by rewriting one civ's
-ship to claim another owned it, planting a real order on it and submitting: the
-change is dropped and named, and the submitter's own orders still apply.
+The rule is merge orders, never states: only the parts of a returned state that
+express the submitter's intent are taken, and only for objects that civ owns.
+Every submission is judged against the state as it was served, never against
+the blob as it accumulates other players' orders. Ownership is decided by the
+served blob, so rewriting an owner field acquires nothing; the change is
+dropped and named.
 
 What is accepted
 ----------------
-Each rule below was measured by serving a turn, having a player perform exactly
-one action, and diffing with `order_diff.py`.
+**Ship orders**, `SHIP > DYNO`. A move or a colonise is three edits inside the
+ship's `DYNO`: the `SHCO` order-type byte (1 move, 3 colonise), the has-orders
+byte, and an appended `ROUT` plus `u32`. Taking the order is copying the
+`DYNO`.
 
-**Ship orders**, `SHIP > DYNO`. A move or a colonise is three coordinated edits
-and all three live inside the ship's `DYNO`: the `SHCO` order-type byte (1 for
-move, 3 for colonise), the has-orders byte, and an appended `ROUT` plus `u32`.
-Because they are contiguous, taking the order is copying the `DYNO`.
+**Research topic**, `OWNR > DATA > OWPR` at `+32` and `+40`, the technology id
+written to both. Copied field by field: the rest of `OWPR` is the civ's
+property block (coat-of-arms count, flags).
 
-**Research topic**, `OWNR > DATA > OWPR` at `+32` and `+40`. Setting a topic
-writes the technology id to both, eight bytes apart, and nothing else outside
-this civ moves. Copied field by field rather than by section: `OWPR` is the
-civ's whole property block and also holds the coat-of-arms count and several
-flags, so taking all of it would take far more than a research decision.
+**Production queue**, `PLNT > PLPR > PROD`: the queue's own fields and a nested
+section naming what is queued (`FCLT` for a facility). Copied whole.
 
-**Production queue**, `PLNT > PLPR > PROD`. Queuing a build changes only this
-section, whose payload holds the queue's own fields and a nested section naming
-what is queued, `FCLT` for a facility. It is self-contained, so it is copied
-whole.
+**Ship designs**, `OWNR > DATA > DSGN`. A new design arrives as a second
+`DSGN`/`SDPR` pair, the civ's design count raised by one and `SAVE+0` raised to
+the new object id. The client allocates a new object id as one past the object
+count, so two players designing on the same turn claim the same id; whoever is
+merged second is renumbered, along with the id in the `DSGN` payload and in
+any production queue that names it. A queue naming a design the galaxy does
+not hold makes the engine refuse the whole galaxy, so such a queue is refused.
+Editing or deleting a design is refused and named.
 
-**Ship designs**, `OWNR > DATA > DSGN`. A player who designs a ship returns an
-`OWNR` carrying a second `DSGN`/`SDPR` pair with the existing one untouched, the
-civ's design count raised by one and `SAVE+0` raised to the new object id. The
-subtree is copied whole, because it is self-contained and everything in it is
-the design.
+`OWPR` `+49`, `+77`, `+78`, `+100` and `+110` also move in a design submission
+and are not carried: they move without a design too and differ between
+identical designs, and `+100` is a counter the engine advances by 7 every tick.
 
-The hard part is the object id, not the bytes. **The client allocates a new
-object id as one past the object count**, so two players who design a ship on
-the same turn both arrive claiming the same number, and merging both would put
-two different objects into one galaxy under one id. Whoever is merged second is
-renumbered and every reference to the id they submitted is rewritten with them,
-which today means the id inside the `DSGN` payload and the production queue that
-names it.
+**People**: the citizen array in `PLNT > PLPR`, the stationed military array
+that follows it, and a ship's crew in `SHPR`, judged as one thing because
+conscription and crewing move people between them. A submission never ticks,
+so a civ's total people cannot change within it. Also: no existing soldier
+record may be altered, nobody changes hands, and a civ may not come back with
+fewer soldiers than it was served. The per-citizen value and opaque bytes are
+judged against the state served, across all three arrays at once. Across a
+tick the total does change: the engine's recruitment makes soldiers from food.
 
-This interacts with the queue, which is why it had to be fixed rather than
-listed. A queue building a design the galaxy does not hold is a dangling
-reference and the engine refuses the **whole galaxy** rather than the order: the
-client starts, reads it and exits in about four seconds, which stalled a live
-turn for both players. The guard that refuses such a queue stays; it is the
-backstop, and carrying designs is what stops it firing.
-
-Editing a design and deleting one are refused and named. Neither has been
-measured, and a design with a ship already built from it is a reference nobody
-has followed.
-
-**Four `OWPR` bytes move in the same submission and none of them is carried.**
-`+49`, `+77`, `+78`, `+100` and `+110` were surveyed across all 18 turns of the
-rehearsal: the first three also move on turns where no design was created, and
-`+100` is a counter the engine advances by 7 every tick on its own. The
-decisive measurement is that the same player made the same design three times,
-on turns 5, 6 and 7, identical parts and only the name differing, and the
-fields disagreed across the three submissions. A value derived from the design
-would have been the same all three times. What they are is not established and
-nothing here needs it.
-
-**People**, the citizen array in `PLNT > PLPR`, the stationed military array
-that follows it, and a ship's crew in `SHPR`. Judged as one thing, because a
-player can move somebody between them: conscription turns a citizen into a
-soldier and crewing a ship moves that soldier onto it, and in the first
-two-machine rehearsal a turn that did both was refused twice over and lost, by
-two rules that were each correct about their own half.
-
-A submission never ticks, so within one turn the total number of people a civ
-holds cannot change. That is the check, along with: no soldier's existing
-record may be altered, nobody changes hands, and the civ may not come back with
-fewer soldiers than it was served, which is what retiring from service looks
-like and is not carried yet.
-
-What a record CARRIES (its per-citizen value and its three opaque bytes) is
-judged against the state served and across all three arrays at once. Both parts
-matter. Asked absolutely, the opaque check refuses a civ for bytes the referee
-itself handed out, every turn, including a turn in which the civ did nothing.
-Asked of the citizen array alone, it loses sight of a record the moment it is
-drafted, so a turn that hides such bytes in the military array is accepted
-while the turn that leaves them alone is refused.
-
-The total is a claim about a **submission**, not about the galaxy. The engine's
-own recruitment makes soldiers out of food without costing a citizen, measured
-at 60%: the population held at nine across the turn a soldier appeared. A rule
-that assumed the total was invariant across a tick would refuse every turn
-after the first.
-
-The layout, which is what the rule is written against. `PLPR+36` is a `u32`
-population count and `PLPR+40` begins that many nine-byte records:
+`PLPR+36` is a `u32` population count and `PLPR+40` begins that many
+nine-byte records, kept sorted by job:
 
     +0  u8   job id, 0 farmer, 1 worker, 2 scientist, 5 miner, 6 banker
     +3  u32  the owning civ's object id
     +7  u8   a per-citizen value, permuted by a reassignment rather than changed
 
-Confirmed by having a player move one farmer to a banker: the array went from
-seven farmers, two workers and a scientist to six farmers, two workers, a
-scientist and a banker, matching the live population vector at `Planet:144`
-exactly. The array is kept sorted by job, so a reassignment reorders it rather
-than editing one byte in place, which is why the diff looked like values
-shifting along.
+Soldiers are the same record with job id 3, in a second array that follows: a
+`u32` count at `PLPR+40+9*citizens`, then the records. A ship's crew is counted
+at `SHPR+4` with the records at `SHPR+8`. Moving somebody moves the record
+byte for byte. Only these arrays are copied, never the rest of `PLPR`. The
+per-citizen owner id equals the planet's owner on every engine-created planet;
+the checks compare per-owner job multisets.
 
-Only the two arrays are copied, never the rest of `PLPR`, which carries the
-planet's stores and derived economy.
+**Military recruitment rate**, `PLPR+27`, a percentage in one byte.
 
-**What the per-citizen owner id is for is not established.** It equals the
-planet's owner on every naturally created planet measured. One colony in the
-test galaxy held citizens carrying another civ's id, which looked like evidence
-that a population can be shared between empires; it is not. That colony was
-founded by a ship `inject_ship.py` had cloned, and the clone kept the donor
-civ's id in two places the tool did not rewrite. The planet's owner owns the
-working population. The field may exist for mid-tick bookkeeping, ownership of
-soldiers during a battle being the obvious candidate, but that is a guess and
-nothing here depends on it.
-
-The checks still compare per-owner job multisets, because whatever the field
-means, a turn in which a citizen changes hands is not a job reassignment.
-
-What is refused, and why
-------------------------
-[ ] **Citizens a player owns on someone else's planet cannot be managed.**
-Only planets the submitter owns are considered, so a player with population on a
-rival's colony cannot reassign it. Correct behaviour is probably to allow it,
-since the per-citizen owner already says whose it is, but it has not been
-measured and letting one player write into another's `PLPR` deserves more care
-than a guess.
-
-**Where the soldiers are.** They are the same nine-byte record with job id 3,
-in a second array starting where the citizen array ends: a `u32` count at
-`PLPR+40+9*citizens`, then that many records. A ship keeps its crew the same
-way, counted at `SHPR+4` with the records at `SHPR+8`.
-
-Measured by a player dismissing a colony ship's two crew: the ship's payload
-went 38 bytes to 20 and its count 2 to 0, the planet's grew by the same 18 bytes
-with its count 19 to 21, and **the two records arrived byte for byte**. Moving
-somebody does not rewrite them, which is why an existing soldier's record
-appearing changed is refused.
-
-**Military recruitment rate**, `PLPR+27`, a percentage in one byte. A setting
-rather than an immediate effect: the manual says it diverts food into military
-growth each turn. Measured by a player moving the slider from 0 to 50.
-
-**System renaming**, the `SUN ` section's name, at the same `+24` offset in its
-own payload. Measured by having a player rename the system they hold five of six
-planets in: the name appeared on the `SUN `, and the renamer's own `EXSY` cache
-picked it up while the other civ's did not. A system belongs to nobody, so the
-right to rename it is the game's own rule, **owning more than half of its
-settled planets**, read from the served state. Unowned planets do not count
-toward the denominator: one settled planet in an otherwise empty system is a
-majority of one, and the client lets its owner name the system.
+**System renaming**, the `SUN ` section's name at `+24` in its payload. Allowed
+for a civ owning more than half of the system's settled planets in the served
+state; unowned planets do not count.
 
 **Planet renaming**, `PLNT` own payload `+24`: a `u32` length then the
-characters. Measured by having a player rename a colony, which changed that
-field and nothing else on the object. The game gates it, refusing with "you
-need to own the majority of the planet to rename", so a name is authoritative
-galaxy data rather than a private label, and it is carried for planets the
-submitter owns.
+characters. Carried for planets the submitter owns. `EXSY` also holds names
+but is each civ's cache of names seen, not where a rename is authored, so it is
+excluded.
 
-`EXSY` is **not** where a rename is authored, though it holds names. Each civ's
-`EXSY` is that civ's cache of the names it has seen: one player's table gained
-`Neighbor's HQ` purely from loading a turn, with no action by that player. It
-is knowledge the referee recomputes, so it stays excluded.
-
-**Everything else**: facility selection outside the queue, governors, admirals,
-diplomacy proposals. Not measured, so not accepted. An order type nobody has
-measured is not a gap in a list, it is a change of unknown extent being copied
-between players.
-
-**Every refusal is recorded against the civ that made it**, in the optional
-`notes` argument to `merge`, as well as logged. The log reaches whoever is
-running the referee, which on a player's machine is nobody: a system rename and
-a conscription were both dropped in the first two-machine rehearsal and both
-players saw nothing but an order that had not happened. `referee.py` writes
-what lands in `notes` beside the turn and `player_turn.follow` prints it.
-
-**A submission that cannot be read is dropped whole and named.** Every rule
-here reads the submitted blob, and a blob wrecked deeper than the referee's own
-screen can see used to raise out of `merge` and take the turn down with it, for
-every player in the galaxy rather than the one who sent it. What that civ had
-taken so far is rolled back, so a submission that fails halfway leaves nothing
-behind and is exactly a player who did not submit.
-
-[ ] **Nothing here checks that an order is legal**, only that it is the
-player's own. A submission naming a technology the civ cannot research, or a
-queue entry it cannot afford, is copied as given. That is C4, the legality gate,
-and it needs the rule the UI enforces rather than an inference from the state.
+What is refused
+---------------
+Everything not listed above (facility selection outside the queue, governors,
+admirals, diplomacy) is not accepted. Every refusal is logged and recorded
+against the civ in the optional `notes` argument to `merge`; `referee.py`
+writes it beside the turn and `player_turn.follow` prints it. A submission
+that cannot be read is dropped whole and named, with anything already taken
+from it rolled back.
 """
 import argparse
 import os
@@ -219,9 +99,7 @@ RESEARCH_FIELDS = ((32, 4), (40, 4))
 PLANET_NAME_OFF = 24
 MAX_NAME = 63
 
-# What a client writes into a SUN whose stored name is empty. See A4 in the
-# plan: 108 suns times seven bytes is the whole of a 756-byte difference
-# that once looked like combat diverging.
+# What a client writes into a SUN whose stored name is empty.
 DEFAULT_SUN_NAME = b'Unnamed'
 
 # The citizen array inside a planet's PLPR.
@@ -231,38 +109,24 @@ POP_RECORD = 9
 JOB_IDS = {0: 'farmer', 1: 'worker', 2: 'scientist', 5: 'miner', 6: 'banker'}
 
 # A soldier is the same nine-byte record with this job id, kept in a second
-# array rather than among the citizens. Conscription rewrites a citizen into
-# one, which is why jobs and military cannot be judged by separate rules.
+# array after the citizens.
 MILITARY_JOB = 3
 
-# Hurrying production, measured 19 September 2026 with a player clicking it.
-# A farm 110 points into a 200-point build was offered at 360 credits; the
-# player's credits went 10065 -> 9705 and three fields moved:
+# Hurrying production moves three fields:
 #
-#     PLPR+23, u32   production points accumulated, 110 -> 200
+#     PLPR+23, u32            production points accumulated, raised to the cost
 #     PROD payload byte 0     0 -> 1
-#     OWNR, id_at+20, u32     credits, 10065 -> 9705
+#     OWNR, id_at+20, u32     credits, less 4 per point bought
 #
-# 360 = 4 * (200 - 110), which is the manual's rule verbatim: "The cost of
-# hurrying production is 4 credits per production point left", and "the current
-# production needs to be at least half finished, in order to hurry it". 110 of
-# 200 is 55%.
+# The manual's rule: 4 credits per production point left, and the item must be
+# at least half finished. The item's total cost is not in the blob; the points
+# bought are the distance the progress field moved. See hurry_acceptable.
 #
-# The total cost of the item is nowhere in the blob, so the referee cannot price
-# a hurry from the served state alone. It does not need to: the points bought
-# are the distance the submission moved the progress field, and that is a
-# difference between two states it holds. See hurry_acceptable.
-# The military recruitment rate, a percentage in one byte, measured by a player
-# moving the slider from 0 to 50 and touching nothing else: PLPR+27 read 0 and
-# came back 0x32. It is a setting rather than an immediate effect, so it is
-# copied like any other decision, and it was being dropped in silence, which for
-# this field means a player gets no army and no message saying why.
 # A ship's crew, inside SHPR: a u32 count then the same nine-byte records the
 # planet keeps its soldiers in.
 CREW_COUNT_OFF = 4
 CREW_ARRAY_OFF = 8
 
-# ── ship designs ─────────────────────────────────────────────────────────────
 # A design is a `DSGN` section inside the owning civ's `OWNR > DATA`, a sibling
 # of `OWPR` and `SERV`, carrying its own object id and one `SDPR` child:
 #
@@ -270,13 +134,7 @@ CREW_ARRAY_OFF = 8
 #     SDPR v0   u32 nameLen ; name ; six part lists ; u32 owningCivObjectId
 #
 # Immediately before a civ's first `DSGN`, in `DATA`'s own bytes, sits a `u32`
-# count of that civ's designs. `inject_design.py` measured this format and its
-# readers are used here rather than a second set being written.
-#
-# Measured against the 19 September 2026 rehearsal, whose store kept every
-# submission: a player who created a design returned an `OWNR` grown by 75
-# bytes holding a second `DSGN`/`SDPR` pair, the existing one untouched, the
-# count dword 1 -> 2 and `SAVE+0` 205 -> 206.
+# count of that civ's designs. The readers are `inject_design.py`'s.
 DESIGN_COUNT_BEFORE = 4     # the count dword, this far before the first DSGN
 MAX_DESIGN_NAME = 15        # the client's name buffer, per inject_design
 
@@ -285,84 +143,40 @@ MAX_DESIGN_NAME = 15        # the client's name buffer, per inject_design
 # header begins at +21 and whose payload is the design's object id.
 PROD_DESIGN_AT = 8 + 29
 
-# Four `OWPR` bytes move in the same submission as a new design, and none of
-# them is carried. Measured across all 18 turns of the rehearsal:
-#
-#     +49   also moves on turns 8, 9 and 13, where no design was created, and
-#           the engine rewrites it across a tick
-#     +77   Laptop's moved on turn 1, no design created
-#     +78   Powerhouse's moved on turn 1, no design created
-#     +100  a u32 the engine advances by 7 every tick on its own. It went
-#           637 -> 644 across turn 6 -> 7 while that turn's design was being
-#           dropped, so nothing about it waits on a submission
-#     +110  the only one of the four the engine never rewrote across a tick
-#
-# The decisive measurement is that the player created the SAME design three
-# times, on turns 5, 6 and 7: identical parts, only the name differing. The
-# fields did not agree across those three submissions. `+100` went 630 -> 466
-# on turn 5 and 637 -> 735 on turn 6; `+110` went 260 -> 242 and then
-# 260 -> 272. A value derived from the design would have been the same all
-# three times, so none of the four is a function of the design.
-#
-# What they are is not established, and carrying a design does not depend on
-# it. `OWPR` is the civ's whole property block and holds the research topic and
-# the coat-of-arms count, so an unexplained byte in it stays where it is.
+# `OWPR` +49, +77, +78, +100 and +110 move in the same submission as a new
+# design and are not carried: they also move without a design, and differ
+# between submissions of identical designs. +100 is a u32 the engine advances
+# by 7 every tick.
 
+# PLPR+27 is the military recruitment rate, one byte, a percentage. PLPR+23 is
+# a u32 of production points accumulated.
 RECRUIT_OFF = 27
 PROGRESS_OFF = 23
 
-# A planet's food, as the client shows it: store over capacity. Both are u16
-# and they sit next to each other, which is how they were found, an operator
-# reading 104/1280 off a joined galaxy's homeworld and those two numbers being
-# at these two offsets.
-#
-# What supports the reading, since two numbers matching once is a coincidence:
-# every unowned planet in `galaxy_demo` carries 0/40 and every owned one a
-# larger pair that rises with the planet's development, 4 citizens to 240, 5 to
-# 360, 8 to 760 and 11 to 1280; the store is never above the capacity on any
-# planet of any blob checked; and the two starting civs of a freshly generated
-# `SinglePlayerGalaxy.dat`, on separately placed homeworlds, both read exactly
-# 0/600.
-#
-# Capacity is not a plain function of population. 4, 5, 8 and 11 citizens give
-# 240, 360, 760 and 1280, which fits neither a line nor a quadratic in
-# population alone, so buildings are in it somewhere. That is why the starting
-# value below is measured rather than computed.
+# A planet's food, as the client shows it: store over capacity, two adjacent
+# u16 in PLPR. An unowned planet reads 0/40 and a generated homeworld 0/600;
+# capacity grows with development, not population alone.
 FOOD_STORE_OFF = 15
 FOOD_CAP_OFF = 19
 
 # A planet's facilities, as (type, count) pairs. They follow the military array
 # after one byte: a u32 count, that many pairs of u32, then four zero bytes.
 #
-# What supports the reading, across 627 owned planets in 94 local blobs: a
-# colony nobody has built on carries none; every homeworld at generation carries
-# types 2, 6 and 9 once each; and type 0 appears on played planets with counts
-# of 1, 2, 4, 5, 6, 7 and 8, which is something built more than once. The
-# h3check capital went from the three to four pairs between turns 11 and 18,
-# gaining (0, 1). What each type is called is not established.
+# An unbuilt colony carries none; a generated homeworld carries types 2, 6 and
+# 9 once each. Type names are not decoded.
 FACILITY_AFTER_MILITARY = 1
 FACILITY_RECORD = 8
 
 # The block between a colonised planet's `PROD` and its `ENLI`: 51 bytes, laid
-# out below as offsets from the end of `PROD`. Measured across the same 627
-# planets; a planet assigned an owner without being colonised, which only
-# synthetic test galaxies contain, carries a 35-byte block instead and none of
-# these fields.
+# out below as offsets from the end of `PROD`. A planet given an owner without
+# being colonised (only synthetic test galaxies) carries a 35-byte block
+# without these fields.
 #
-# The colony's age is a float counting turns since it was founded, and the
-# founding turn is a u32 here and again at `PLPR+0`: h3check's colony #136
-# founded at turn 6 reads 6 in both places and an age of 5.0 at turn 11 and
-# 12.0 at turn 18, and every homeworld reads founded 0 and an age equal to the
-# turn. The population field equals the citizen count on every planet read, and
-# the seven u16 after it are earlier turns' populations, some carrying 0x1000,
-# all zero at generation. The counter at +16 and the value at +47 are not
-# decoded; a generated homeworld reads 1 and 10, and played planets drift from
-# both.
-#
-# Watched through three engine ticks on a joiner by `join_kit_acceptance`: the
-# age rose by one a turn, the history took the current population in at the
-# front each turn, the counter rose by one a turn while the population held and
-# fell back when the donor's grew, and the value at +47 was left alone.
+# The founding turn is a u32 here and again at `PLPR+0`; a homeworld reads 0
+# with an age equal to the turn. The population field equals the citizen
+# count, and the seven u16 after it are earlier turns' populations (newest
+# first, some carrying 0x1000, all zero at generation). A generated homeworld
+# reads 1 at +16 and 10 at +47.
 SETTLED_LEN = 51
 SETTLED_POP_OFF = 0             # u16
 SETTLED_HISTORY_OFF = 2         # SETTLED_HISTORY_LEN u16s
@@ -379,7 +193,6 @@ CREDITS_AFTER_ID = 20           # past the object id, which is itself past
 HURRY_PER_POINT = 4
 
 
-# ── reading the blob ─────────────────────────────────────────────────────────
 def ship_index(blob):
     """{shipObjectId: (owner, dyno_bytes)} for every ship carrying a DYNO."""
     tree = sp.parse_blob(blob)
@@ -464,9 +277,7 @@ def _owner_of(record):
 def _record(raw):
     """(job, owner, extra, rest) from a raw nine-byte soldier or crew record.
 
-    The same shape `citizens_of` returns, so the checks that look at what a
-    record carries can be stated once over everybody a civ holds rather than
-    over the citizen array alone.
+    The same shape `citizens_of` returns.
     """
     return (raw[0], struct.unpack_from('<I', raw, 3)[0], raw[7],
             bytes((raw[1], raw[2], raw[8])))
@@ -485,12 +296,6 @@ def _everyone(planets, ships):
 def people_acceptable(served, submitted, civ_oid):
     """(ok, reason) for everything a civ did to its own people in one turn.
 
-    Jobs and military were separate rules and each was right about its own
-    narrow case: jobs insisted the population was unchanged, military insisted
-    the soldier records were identical. Conscription turns a citizen into a
-    soldier, which breaks both, and the client lets a player do it. Refusing it
-    twice cost a player a turn in the first two-machine rehearsal, silently.
-
     What a submission may do, given that it never ticks:
 
         move soldiers between the civ's own planets and ships
@@ -505,11 +310,8 @@ def people_acceptable(served, submitted, civ_oid):
         change who owns anybody
         invent per-citizen values
 
-    The total is deliberately a claim about a **submission**, not about the
-    galaxy. The engine's own recruitment creates soldiers out of food without
-    costing a citizen, measured at 60%: population held at nine across the turn
-    a soldier appeared. So the total is not invariant across a tick, and a rule
-    that assumed it was would refuse every turn after one.
+    The total holds within a submission only; across a tick the engine's
+    recruitment makes soldiers from food without costing a citizen.
     """
     import collections
     pa, sa = population(served, civ_oid)
@@ -540,29 +342,10 @@ def people_acceptable(served, submitted, civ_oid):
     if bad:
         return False, f'unknown job id(s) {sorted(bad)}'
 
-    # What a record carries, judged against what was served and across all
-    # three arrays at once.
-    #
-    # Both of these checks used to read the citizen array only, and the first
-    # of them asked whether the opaque bytes were zero rather than whether they
-    # matched. A galaxy in which some citizen already carries non-zero bytes
-    # there is therefore refused every turn whatever its owner does, including
-    # a turn in which they do nothing: GoodGuy in `client/twosided_staged.dat`
-    # holds two such records, `fe3b00` on planet 262 and planet 266, and
-    # submitting the served blob back unaltered came out
-    # "people DROPPED, unknown bytes in a citizen record were written".
-    #
-    # Refusing a civ for what it was handed is the whole of the error. Stated
-    # against the served state it is a rule about what a submission INVENTED,
-    # which is what was meant, and a civ may still carry whatever the engine
-    # gave it.
-    #
-    # Citizens, soldiers and crew together, because a record keeps its bytes
-    # when somebody moves between them: conscription rewrites the job and
-    # nothing else. Read over the citizen array alone, the checks lose sight of
-    # a record the moment it is drafted, so the same two records above stopped
-    # being refused once they were conscripted, which made the rule accept the
-    # turn that hid them and refuse the turn that did not.
+    # What a record carries may not be invented: judged against what was
+    # served (a civ may carry whatever the engine gave it, including non-zero
+    # opaque bytes), across citizens, soldiers and crew at once, because
+    # conscription rewrites only the job.
     all_a = [_record(r) for r in sol_a] + list(cit_a)
     all_b = [_record(r) for r in sol_b] + list(cit_b)
     if collections.Counter(c[3] for c in all_b) - collections.Counter(
@@ -687,7 +470,6 @@ def civ_by_name(blob, name):
                      f"{[o['name'] for o in icv.owner_records(blob)]}")
 
 
-# ── writing the blob ─────────────────────────────────────────────────────────
 def _replace_child(blob, parent_finder, new_bytes):
     """Swap one section for bytes of any length, fixing every enclosing size."""
     tree = sp.parse_blob(blob)
@@ -760,12 +542,8 @@ def design_index(blob):
     """{designObjectId: {civ, name, parts, claims, record}} for every design.
 
     `civ` is the civ whose `OWNR` the design sits in and `claims` is the civ its
-    own payload names. Both are reported because a submission that disagrees
-    with itself is refused rather than half believed, and because the two are
-    written in different places.
-
-    `name`, `parts` and `claims` are None when the record does not parse, which
-    is a refusal rather than a crash.
+    own payload names. `name`, `parts` and `claims` are None when the record
+    does not parse.
     """
     out = {}
     for civ_oid, _data, designs in design_sections(blob)[0]:
@@ -789,20 +567,9 @@ def designs_of(blob, civ_oid):
 def next_object_id(blob):
     """An object id nothing in this blob is using.
 
-    `SAVE+0` is the highest object id in use, not a count of objects. The two
-    readings give the same answer whenever ids are dense, which is why this was
-    open for a while; the rehearsal galaxy has two gaps, so the count and the
-    highest id differ by two, and the field tracks the id. Measured across a
-    design being carried and a hull then being built from it: 205 with 203
-    objects, 206 with 204, 207 with 205.
-
-    Raising it is not cosmetic. The engine allocates its next object at this
-    value plus one, so a carried design left uncounted is an id the engine
-    hands to the next thing it creates. The hull built from `testscout` came
-    out as object 207 precisely because the merge had moved the field to 206.
-
-    `inject_design.max_object_id` takes the larger of the field and every id a
-    scan can find, so one past it is free even if some future blob disagrees.
+    `SAVE+0` is the highest object id in use, not a count of objects, and the
+    engine allocates its next object at that value plus one. A carried design
+    must raise it (`set_high_water`).
     """
     return idg.max_object_id(blob) + 1
 
@@ -847,10 +614,8 @@ def design_name_acceptable(name):
 def add_design(blob, civ_oid, record):
     """Append a `DSGN` to a civ's `DATA` and bump its design count.
 
-    The section grows, so every enclosing size is corrected. The count dword is
-    only locatable relative to the civ's first `DSGN`, so a civ owning none is
-    refused rather than guessed at. Every civ a generated galaxy starts with
-    owns a Colony Ship.
+    Every enclosing size is corrected. The count dword is only locatable
+    relative to the civ's first `DSGN`, so a civ owning none is refused.
     """
     secs, tree = design_sections(blob)
     for oid, data, designs in secs:
@@ -880,10 +645,8 @@ def design_orders(served, submitted, civ_oid):
     """([(objectId, design)], [refusals]) for one civ's ship designs.
 
     `served` and `submitted` are `design_index` results. A design is new when
-    the submission holds one the served state does not. Everything else a
-    submission can do to the set of designs is refused and named, because
-    nothing else has been measured: editing one, deleting one, and touching
-    anybody else's.
+    the submission holds one the served state does not. Editing, deleting and
+    touching another civ's design are refused and named.
     """
     new, refused = [], []
 
@@ -931,8 +694,7 @@ def prod_builds(prod):
 
     A `PROD` payload ends with a nested section saying what is queued: `FCLT`
     with an empty payload for a facility, `WLTH` for nothing, and `SHIP` with a
-    four-byte payload holding the **design's object id**. That id is the whole
-    of the problem this exists to catch.
+    four-byte payload holding the design's object id.
     """
     if prod is None or len(prod) < 8 + 33:
         return None
@@ -950,8 +712,7 @@ def military_of(plpr):
 
     Soldiers are the same nine-byte record as citizens, in a second array that
     begins where the citizen array ends: a `u32` count, then that many records,
-    then the rest of the planet's fields. There is no fixed offset for it,
-    because the citizen array in front of it grows with the population.
+    then the rest of the planet's fields.
     """
     if plpr is None or len(plpr) < POP_ARRAY_OFF + 4:
         return None, None
@@ -970,9 +731,7 @@ def military_of(plpr):
 def crew_of(shpr):
     """[records] for a ship's crew, or None.
 
-    `SHPR+4` is the count and the records follow at `+8`. Measured by a player
-    dismissing two: the payload went 38 bytes to 20, the count 2 to 0, and the
-    two records turned up on the planet byte for byte.
+    `SHPR+4` is the count and the records follow at `+8`.
     """
     if shpr is None or len(shpr) < CREW_ARRAY_OFF:
         return None
@@ -1251,16 +1010,10 @@ def set_progress(blob, planet_oid, value):
 def hurry_acceptable(served_plpr, submitted_plpr, credits):
     """(ok, why, cost, points) for a claimed hurry.
 
-    The rule is the manual's, not one inferred from what the client did. The
-    points bought are how far the submission advanced the progress field, which
-    both sides of the diff carry, and the price is four credits each. Two things
-    make it refusable: an item less than half finished cannot be hurried, and a
-    civ cannot spend credits it was not served.
-
-    Judging "half finished" against the submitted total rather than a cost the
-    blob does not record is sound in the direction that matters: hurrying
-    completes the item, so the submitted progress *is* the total, and a client
-    that understates it buys fewer points and pays for exactly those.
+    The manual's rule: the points bought are how far the submission advanced
+    the progress field, at four credits each. Refused when the item was less
+    than half finished or the civ was not served enough credits. Hurrying
+    completes the item, so the submitted progress is the item's total.
     """
     before, after = progress_of(served_plpr), progress_of(submitted_plpr)
     if before is None or after is None:
@@ -1301,10 +1054,8 @@ def set_citizens(blob, planet_oid, new_array):
 def set_people(blob, planet_oid, citizens: bytes, military):
     """Write both of a planet's people arrays. Sizes change.
 
-    They are adjacent and each is length-prefixed, so the second cannot be
-    written without knowing the first: conscription shortens the citizens and
-    lengthens the soldiers in the same turn, and patching one in place would
-    leave the other's count pointing into the middle of a record.
+    The arrays are adjacent and each is length-prefixed, so both are written
+    together.
     """
     tree = sp.parse_blob(blob)
     glxy = next(tree[0].find('GLXY'))
@@ -1363,21 +1114,14 @@ def merge(blob, submissions, log=print, notes=None):
     """submissions: [(civ_name, submitted_blob)]. Returns the merged blob.
 
     `notes` is an optional `{civ: [reason]}` that every refusal is recorded in
-    as well as logged. The log goes to whoever is running the referee, which is
-    nobody on the player's machine: two of the rehearsal's six findings were a
-    rename and a conscription that the client accepted, the merge dropped and
-    the player never heard about. `referee.py` writes what lands here beside
-    the turn so `player_turn.follow` can print it into the launcher's log.
+    as well as logged. `referee.py` writes it beside the turn so
+    `player_turn.follow` can print it into the launcher's log.
     """
     served_ships = ship_index(blob)
     served_planets = planet_index(blob)
     served_designs = design_index(blob)
-    # Research as it was served, for the same reason the three indexes above are
-    # taken once: every player played offline against this state, so this is the
-    # only thing their submission can honestly be compared against. Reading it
-    # live instead falsely accuses the second player to merge in any turn where
-    # two of them changed topic, because by then the blob already carries the
-    # first one's new choice and the second one's copy is the old one.
+    # Research as it was served, like the three indexes above: every
+    # submission is compared against the state served, not the merged blob.
     served_research = {o['oid']: research_of(blob, o['oid'])
                        for o in icv.owner_records(blob)}
     names = {o['oid']: o['name'] for o in icv.owner_records(blob)}
@@ -1385,47 +1129,26 @@ def merge(blob, submissions, log=print, notes=None):
 
     for civ_name, sub in submissions:
         def drop(reason, _civ=civ_name):
-            """Refuse one change: say it here, and tell the player who made it.
-
-            A refusal that only reaches the referee's console is a turn the
-            player watches disappear, which is what happened to a system rename
-            and a conscription in the first two-machine rehearsal.
-            """
+            """Refuse one change: log it and record it in `notes`."""
             nonlocal dropped
             dropped += 1
             log(f"    {reason}")
             if notes is not None:
                 notes.setdefault(_civ, []).append(reason)
 
-        # One bad submission cannot be allowed to end the merge. Everything
-        # below reads the submitted blob, and a blob that parses far enough to
-        # reach here can still be wrecked deeper in: a section size that lies,
-        # a population count that runs past its array. Measured before this
-        # guard, against a submission truncated in half: `merge` raised
-        # StopIteration and took the turn down with it, for every player in the
-        # galaxy rather than the one who sent it.
-        #
-        # The blob is put back to what it was before this civ was read, so a
-        # submission that fails halfway leaves nothing of itself behind and is
-        # exactly a player who did not submit. `SystemExit` is deliberately not
-        # caught: `civ_by_name` raises it for a civ this galaxy does not hold,
-        # which is a caller naming the wrong civ rather than a client sending
-        # bad bytes. `referee.screen_submission` refuses that case with a note
-        # before the merge sees it.
+        # A submission that raises while being read is dropped whole and the
+        # blob is put back to what it was before this civ, so one bad
+        # submission cannot end the merge. `SystemExit` is not caught:
+        # `civ_by_name` raises it for a civ the galaxy does not hold, a caller
+        # error that `referee.screen_submission` refuses earlier.
         before, kept = blob, accepted
         try:
             civ = civ_by_name(blob, civ_name)
             mine = civ['oid']
             log(f"{civ_name} (object {mine}):")
 
-            # Ship designs, before the production queues, because a queue that
-            # builds a design the galaxy does not hold is a dangling reference
-            # and the engine refuses the whole file rather than the order.
-            #
-            # Judged against `served_designs`, the state as it was served, like
-            # every other rule here: applying one player's designs first would
-            # otherwise make the next player's untouched copy of the galaxy
-            # look like a submission that had deleted them.
+            # Ship designs, before the production queues that may name them.
+            # Judged against `served_designs`, the state as it was served.
             remap = {}
             new_designs, refusals = design_orders(served_designs,
                                                   design_index(sub), mine)
@@ -1434,16 +1157,9 @@ def merge(blob, submissions, log=print, notes=None):
             for was, d in new_designs:
                 oid = was
                 if oid in design_index(blob):
-                    # The client allocates a new object id as one past the
-                    # object count, so two players who design a ship on the
-                    # same turn both arrive claiming the same id, and merging
-                    # both would put two objects into one galaxy under one id.
-                    # Whoever is merged second is renumbered.
-                    #
-                    # This is the one judgement made against the accumulating
-                    # blob rather than against the state served, and it has to
-                    # be: an id is taken or free in the galaxy being built, not
-                    # in the one either player was handed.
+                    # Another player's design already took this id, so this one
+                    # is renumbered. The only check made against the merged
+                    # blob: an id is free or taken in the galaxy being built.
                     oid = next_object_id(blob)
                     remap[was] = oid
                 blob = set_high_water(blob, oid)
@@ -1481,17 +1197,12 @@ def merge(blob, submissions, log=print, notes=None):
                 owner, prod_served, plpr_served, name_served = \
                     served_planets[planet_oid]
 
-                # A queue naming a design that was renumbered has to name the
-                # number it ended up with. The client wrote the id it
-                # allocated, and that id belongs to somebody else now.
+                # A queue naming a renumbered design follows the new id.
                 if prod is not None and prod_builds(prod) in remap:
                     prod = with_prod_design(prod, remap[prod_builds(prod)])
 
                 if name is None and name_served is not None:
-                    # planet_name refuses a length it cannot trust, so a
-                    # submission with a corrupt or overlong name arrives as
-                    # None. Say that, rather than letting the next rule report
-                    # whatever it happens to notice about the same wreckage.
+                    # planet_name returns None for a corrupt or overlong name.
                     drop(f"planet {planet_oid}: rename DROPPED, the name "
                          f"field is unreadable or longer than {MAX_NAME} "
                          f"bytes")
@@ -1520,31 +1231,17 @@ def merge(blob, submissions, log=print, notes=None):
                              f"PROD section on one side")
                     elif (prod_builds(prod) is not None
                           and prod_builds(prod) not in mine_designs):
-                        # A queue that names a design the galaxy does not hold
-                        # is a dangling reference, and the engine refuses the
-                        # whole galaxy rather than the order: the client
-                        # started, read it, and exited in four seconds. Designs
-                        # are carried now, so this fires for a queue naming
-                        # something that was refused or that the submitter does
-                        # not own, and it stays because it is what keeps an
-                        # unloadable galaxy from being published.
-                        #
-                        # Asked of the merged galaxy rather than of the state
-                        # served, because the question is whether the reference
-                        # will resolve in the file the referee is about to
-                        # publish. It is asked per civ so that one player's new
-                        # design cannot become the thing another player's queue
-                        # happens to name.
+                        # A queue naming a design the galaxy does not hold makes
+                        # the engine refuse the whole galaxy. Checked against
+                        # the submitter's designs in the merged galaxy, the
+                        # file about to be published.
                         drop(f"planet {planet_oid}: production DROPPED, it "
                              f"builds design {prod_builds(prod)}, which "
                              f"{civ_name} does not own in the merged galaxy")
                     elif is_hurried(prod) and not is_hurried(prod_served):
-                        # A hurry takes effect the moment it is clicked, so the
-                        # submission carries the outcome rather than the
-                        # request: the item complete and the credits already
-                        # gone. The referee prices it from the state it served
-                        # and spends the credits itself, so a client that
-                        # edited its own balance gains nothing.
+                        # The submission carries a hurry's outcome (item
+                        # complete, credits spent). The referee prices it from
+                        # the served state and deducts the credits itself.
                         ok, why, cost, points = hurry_acceptable(
                             plpr_served, plpr, credits_of(blob, mine))
                         if not ok:
@@ -1580,9 +1277,7 @@ def merge(blob, submissions, log=print, notes=None):
                             f"{rate_served}% -> {rate}%")
                         accepted += 1
 
-            # Everybody this civ holds, judged together. Jobs and military used
-            # to be two rules and a turn that did both, conscripting a citizen
-            # and posting the new soldier to a ship, was refused twice over.
+            # Everybody this civ holds, judged together (see people_acceptable).
             ok, why = people_acceptable(blob, sub, mine)
             planets_before, ships_before = population(blob, mine)
             planets_after, ships_after = population(sub, mine)
@@ -1631,23 +1326,11 @@ def merge(blob, submissions, log=print, notes=None):
                 if name == name_served:
                     continue
                 if name_served[0] == 0 and name[1] == DEFAULT_SUN_NAME:
-                    # Not a rename. A running client materialises `Unnamed`
-                    # into every SUN the blob left empty, so a fresh galaxy
-                    # comes back from each player with a "rename" on every
-                    # system they do not own. Dropping it is correct and saying
-                    # so 32 times a turn per player buries the drops that mean
-                    # something: the first live merge of the rehearsal reported
-                    # 65 drops, 64 of them this.
+                    # Not a rename: a running client writes `Unnamed` into
+                    # every SUN the blob left empty. Skipped without a note.
                     continue
-                # The majority is of the planets that have an owner, not of
-                # every rock in the system. A player holding the only settled
-                # planet in a system of six may name it, which is what the
-                # client allows and what the first live rehearsal caught us
-                # refusing: both players named their own home system on turn 2
-                # and both were dropped, holding 1 of 6 and 1 of 4. The rule
-                # was inherited by analogy from planet renaming, where the
-                # client's own refusal names a majority, and the analogy was
-                # wrong.
+                # The majority is of the settled planets only, as the client
+                # allows: the only settled planet in a system may name it.
                 held = owners.get(mine, 0)
                 settled = sum(owners.values())
                 if held * 2 <= settled:
@@ -1674,13 +1357,7 @@ def merge(blob, submissions, log=print, notes=None):
                 log(f"    research: topic taken (id {topic})")
                 accepted += 1
 
-            # research belonging to anyone else, against the state as served
-            # rather than against the blob as it stands. Nothing here ever
-            # writes another civ's research, so the accumulating blob differs
-            # from the served one only where an earlier submission in this same
-            # turn was honestly applied, and comparing against that told the
-            # second player to merge that they had touched the first player's
-            # topic when they had not.
+            # Research belonging to anyone else, against the state as served.
             for other in (o for o in icv.owner_records(blob)
                           if o['oid'] != mine):
                 a = research_of(sub, other['oid'])

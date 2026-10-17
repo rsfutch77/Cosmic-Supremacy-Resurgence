@@ -1,13 +1,10 @@
 """
 build_ops_checklist.py: write the operations, release and privacy checklists
-============================================================================
     python docs/verification/build_ops_checklist.py
 
-Three checklists, sections 4, 5 and 6 of `0 - Checklist_Sources.md`:
-`4 - Operations_Checklist.md` (running the service), `5 - Release_Checklist.md`
-(releasing the launcher) and `6 - Privacy_Checklist.md` (players' data). They
-share one script because their items cite each other by ID. Source items come from `ops_sources.py`, every item of
-each source in order. Each gets one disposition:
+Writes `4 - Operations_Checklist.md`, `5 - Release_Checklist.md` and
+`6 - Privacy_Checklist.md`, whose items cite each other by ID. Source items
+come from `ops_sources.py`, every item in order. Each gets one disposition:
 
     apply      a checkbox, with sub-items
     done       ticked, with what verified it
@@ -15,12 +12,12 @@ each source in order. Each gets one disposition:
     deviation  the design contradicts it on purpose, with the rationale
     na         not applicable, with the reason
 
-A sub-item beginning "[x] " is ticked. Items written by this project, for what
-no source covers, are OPS, REL and PRIV items and say where they come from.
+A sub-item beginning "[x] " is ticked. OPS, REL and PRIV items are this
+project's own, for what no source covers.
 
-**Legal content.** The privacy sources are regulators' guidance, quoted as
-published. Nothing here is legal advice, and a point not checked against the
-controlling text is marked "unverified".
+The privacy sources are regulators' guidance, quoted as published. Nothing here
+is legal advice; a point not checked against the controlling text is marked
+"unverified".
 """
 import os
 import sys
@@ -48,7 +45,7 @@ def COND(when, subs=()):
 
 NO_MOBILE = NA('No mobile or Apple app; the launcher is a Windows desktop program.')
 
-# ── Firebase launch checklist ────────────────────────────────────────────────
+# Firebase launch checklist
 FB = {
     'FB-GBPF-1': ('apply', None, ['[x] The relay and the stores run against the Local Emulator Suite in their tests (`functions/emulators.py`).', 'Every relay deploy is preceded by the relay and store test suites (`functions/deploy.py` could refuse to deploy when they fail).']),
     'FB-GBPF-2': ('apply', None, ['Evaluate App Check for the relay. A desktop app has no platform attestation provider; the custom-provider route needs a secret in the launcher, which a player can extract. Record the decision either way.']),
@@ -96,7 +93,7 @@ FB.update({
     'FB-RC-2': ('done', 'The equivalent exists without Remote Config: a galaxy\'s `min_build` refuses an older launcher and says how to update (plan item L3).', []),
 })
 
-# ── The Update Framework: attacks on software update ─────────────────────────
+# The Update Framework: attacks on software update
 NO_UPDATER = 'The launcher does not update itself: the player downloads a new zip from the release page (one-click update was removed, plan item L3).'
 TUF = {
     'TUF-1': ('apply', NO_UPDATER, ['The download page publishes the SHA-256 of each zip and explains how to check it (Website_Checklist R8).', 'Signed builds (M3) make a replaced file detectable by Windows itself.']),
@@ -111,7 +108,7 @@ TUF = {
     'TUF-10': ('apply', None, ['The update notice links one hard-coded release page, never a URL taken from the relay or a galaxy.']),
 }
 
-# ── Microsoft: minimising SmartScreen warnings ───────────────────────────────
+# Microsoft: minimising SmartScreen warnings
 SS = {
     'SS-1': ('deviation', 'Not listing in the Microsoft Store (decided 8 October 2026). SmartScreen reputation comes from signing every release with one identity (SS-2, SS-5). Without a storefront there is no IARC rating, since IARC is reached only through a participating store; the age floor (PRIV-1) is stated by the project instead.', []),
     'SS-2': ('apply', None, ['Sign the launcher and the client on every release (plan item M3). Unsigned, Smart App Control can block the client outright (seen in Windows Sandbox, 5 October 2026).']),
@@ -121,7 +118,7 @@ SS = {
     'SS-6': ('apply', None, ['[x] The download page warns about the unrecognised publisher.', 'Add what Smart App Control does and what to do (Website_Checklist R9).']),
 }
 
-# ── ICO Age appropriate design code (Children's code) ────────────────────────
+# ICO Age appropriate design code (Children's code)
 UK_KIDS = 'UK children are likely to access the game, which the ICO judges by likelihood, not intent'
 TEENS = ('Applies: the game is for ages 13 and up (decided 8 October 2026), and a player aged 13 to 17 '
          'is a child under the code.')
@@ -204,7 +201,7 @@ COPPA = {
     'COPPA-6': ('apply', None, ['A written retention and deletion schedule (PRIV-5) is good practice whatever COPPA-1 finds, and required if it finds coverage.']),
 }
 
-# ── items no source covers ───────────────────────────────────────────────────
+# Items no source covers.
 OPS = [
     ('OPS-1', 'An incident process: what counts as an incident, how severe it is, who acts, how players are told, and that each serious one gets a written review.',
      'PagerDuty Incident Response documentation (severity levels, roles, external communication, postmortem template)',

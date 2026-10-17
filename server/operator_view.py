@@ -1,81 +1,34 @@
 """
 operator_view.py: is the beta healthy, without opening a log
-=============================================================
+
     python operator_view.py <path-or-url-or-firebase-spec>
     python operator_view.py --directory <folder-or-firebase://project>
     python operator_view.py <spec> --html out.html
     python operator_view.py --directory <spec> --serve 8765
 
-One page, or one screen of text, saying for every galaxy: which turn it is on,
-when that turn is due, who has handed a turn back and who has not, when the
-last tick ran and what is known about how long it took, and anything that looks
-wrong. Until this existed the only account of a running beta was `launcher.log`
-and the referee's console, both on one machine, and neither readable by anyone
-who was not sitting at it.
+For every galaxy: the turn, when it is due, who has submitted, when the last
+tick ran and how late it was, the referee worker's heartbeat, the seat map, and
+anything that looks wrong.
 
-This is a **diagnostic and it never writes**. A tool that can mutate a live
-galaxy while the referee is mid-tick is worse than no tool, so the store and
-the directory are wrapped before they are used: `read_only` forwards the
-reading half of the interface by name and raises `ReadOnlyError` for anything
-else. The allowlist is the whole of the guarantee, so a store that grows a new
-method is refused by default rather than forwarded by default.
+The view never writes. Stores and directories are wrapped by `read_only`, which
+forwards only the names in an allowlist and raises `ReadOnlyError` for anything
+else. `submissions` is left off the allowlist because it downloads every save;
+`submitted_civs` is used instead.
 
-`submissions(turn)` is deliberately **not** on that allowlist, which is the
-other half of the H6 finding. It returns `{civ: blob}`, so asking it who has
-handed a turn back downloads every player's save to read the keys and throw the
-bytes away. On a folder that is free and on Firebase it is a download per
-player per refresh. This asks `submitted_civs(turn)` once instead, which is a
-directory listing on a folder and one document read on Firebase. Leaving the
-method off the
-proxy means a later edit that reaches for it fails loudly rather than costing
-money quietly.
+The archive record carries `closed_at` and no duration, so tick timing is
+derived: how long after the turn fell due (previous `closed_at` plus the turn
+length) it closed. A duration recorded under `seconds`, `duration` or `elapsed`
+is shown as measured.
 
-Everything comes through `open_store` and `open_directory`, so a folder, a
-`turn_server.py` over HTTP and Firebase are all read the same way and this
-module never learns which it got.
+On Firebase the worker heartbeat (`worker_seen`, `worker_failures`) and `seats`
+are read with one `get` of the galaxy document. A uid is shown by its first
+eight characters.
 
-How long a tick took
---------------------
-The archive record the referee writes carries `closed_at` and no duration, so
-the honest answer to "what did it take" has two parts and they are labelled
-separately. `closed_at` is reported as it stands. Anything further is derived:
-the previous record's `closed_at` plus the galaxy's turn length is when this
-turn fell due, and the gap from there to this turn's `closed_at` is how late
-the tick was. That is the number an operator watching for a stalled worker
-wants, and it is not the tick's own duration. If a future referee records a
-duration under `seconds`, `duration` or `elapsed`, it is shown as measured.
-
-Seats and the worker
---------------------
-Two answers live on the galaxy document and nowhere in the store interface:
-whether the referee is up, which `referee_worker` records as `worker_seen` and
-`worker_failures` when it closes a turn or fails to, and who can play, which is
-the relay's `seats` map from Firebase uid to civ. A folder store's `state` is
-the whole of `state.json` and already carries them. `FirebaseTurnStore.state`
-returns only the fields the store interface names, so for Firebase the view
-makes one more read, a `get` of the galaxy document, and keeps only the fields
-in `DOCUMENT_FIELDS`. The document reference never leaves that function. A
-uid is shown by its first eight characters, which is enough to match it
-against `seat_tool.py list` and not enough to be worth copying off a screen.
-
-Serving it
-----------
-`--html` writes a self-contained file with no external references. `--serve`
-binds `127.0.0.1` only and refreshes itself, which is a page on the operator's
-own screen rather than anything deployed. Neither belongs under `site\\`: that
-project is a live public website and a galaxy's roster is not public.
-
-The page the worker writes
---------------------------
-`write_page` is what `referee_worker` calls after every tick, at startup and
-after a failure, so the page exists without anybody starting this from a
-terminal. It renders one galaxy through `galaxy_report` and `render_html`, the
-same as `--html`, and replaces the file atomically, so a browser that opens it
-mid-write sees the previous page and never half of one. The page says when it
-was generated, and a short inline script compares that with the browser's clock
-and marks the page stale once it is older than the turn length plus
-`STALE_MARGIN`. A worker that is not running writes nothing, and a page that
-cannot tell it is old would go on saying the galaxy is healthy.
+`--html` writes a self-contained page; `--serve` binds 127.0.0.1 only. The
+roster is private, so neither belongs under `site\\`. `write_page` is called by
+`referee_worker` after each tick and replaces the file atomically; the page
+marks itself stale in the browser once older than the turn length plus
+`STALE_MARGIN`.
 """
 import argparse
 import html
@@ -92,27 +45,20 @@ for _d in (HERE, os.path.join(HERE, 'dev_tools')):
 import galaxy_directory
 import turn_store
 
-# The reading half of the store interface. An allowlist rather than a list of
-# things to block, so a store that grows a method is refused until someone has
-# looked at it. `submissions` is absent on purpose; see the module header.
+# The reading half of the store interface. A new store method is refused until
+# added here. `submissions` is absent on purpose.
 STORE_READS = frozenset((
     'exists', 'state', 'current', 'seconds_left', 'civs',
     'turn_blob', 'has_turn', 'has_submitted', 'submission',
     'archive_record', 'note', 'submitted_civs',
-    # Added when a galaxy learned to be closed and a seat learned to be taken
-    # back. The view reads both out of the state it already holds rather than
-    # calling these, so they are here for a caller of this module rather than
-    # for this module, and the writes beside them, `close`, `reopen` and
-    # `update_state`, stay off the list by saying nothing about them.
+    # For callers of this module; the view itself reads these from state.
     'status', 'is_closed', 'closed_reason', 'reclaimed',
-    # Identifying attributes the text output prints. They are values rather
-    # than calls, and they say which machine or project is being read.
+    # Identifying attributes the text output prints.
     'root', 'base', 'project', 'galaxy', 'bucket', 'prefix',
 ))
 
-# What the view reads from the galaxy document beyond the store's state, for
-# the reason the module header gives. The names are the ones `referee_worker`,
-# the relay and `seat_tool.py` write.
+# Galaxy document fields beyond the store's state, as written by
+# `referee_worker`, the relay and `seat_tool.py`.
 WORKER_SEEN_KEY = 'worker_seen'
 WORKER_FAILURES_KEY = 'worker_failures'
 SEATS_KEY = 'seats'
@@ -121,45 +67,20 @@ REBOUND_KEY = 'seats_rebound'
 DOCUMENT_FIELDS = (WORKER_SEEN_KEY, WORKER_FAILURES_KEY, SEATS_KEY,
                    SEAT_CLAIM_KEY, REBOUND_KEY)
 
-# How long past its deadline a turn may be before a worker that has not
-# reported since the deadline is called stopped. The worker closes a turn
-# within its grace and a few polls of the deadline, and either outcome writes a
-# heartbeat, so silence past this is not a worker that is busy.
-STOPPED_AFTER = 120
+STOPPED_AFTER = 120   # seconds past the deadline with no heartbeat before a worker is called stopped
 
-# How much of a uid the view shows.
-UID_SHOWN = 8
+UID_SHOWN = 8   # characters of a uid the view shows
 
-# The same for the directory above it. `register` and `set_status` are writes.
+# The reading half of the directory interface.
 DIRECTORY_READS = frozenset(('galaxies', 'galaxy', 'store', 'root', 'project',
                              'prefix', 'index_path'))
 
-# How many turns back to look for the most recent archive record. A galaxy that
-# has just started has none, and one whose referee died has one a few turns
-# back. Each step is one read, so the ceiling is the cost of a refresh on a
-# galaxy that has never ticked.
-LOOK_BACK = 12
-
-# How many closed turns to show. Enough to see whether ticks are keeping their
-# cadence, and small enough that a refresh is a handful of reads.
-HISTORY = 5
-
-# How often a served page reloads itself. A 4-hour turn does not need faster,
-# and this is a page the operator leaves open.
-REFRESH_SECONDS = 60
-
-# How often the worker's page reloads itself from disk. A reload reads the file
-# and nothing else, so this costs no store reads.
-PAGE_REFRESH_SECONDS = 300
-
-# How far past one turn length the worker's page may age before it is marked
-# stale. The worker writes it after every tick, so a healthy galaxy's page is
-# never older than a turn plus the grace, the polls and the tick itself.
-STALE_MARGIN = 1800
-
-# The turn length assumed for the staleness check when the galaxy's state does
-# not carry one, which is the beta's cadence.
-DEFAULT_TURN_SECONDS = 4 * 3600
+LOOK_BACK = 12                    # turns to search back for the newest archive record
+HISTORY = 5                       # closed turns to show
+REFRESH_SECONDS = 60              # reload interval of a served page
+PAGE_REFRESH_SECONDS = 300        # reload interval of the worker's page, from disk
+STALE_MARGIN = 1800               # seconds past one turn length before the worker's page is stale
+DEFAULT_TURN_SECONDS = 4 * 3600   # turn length for the staleness check when state has none
 
 
 class ReadOnlyError(RuntimeError):
@@ -167,13 +88,7 @@ class ReadOnlyError(RuntimeError):
 
 
 class _ReadOnly:
-    """A store or directory with only its reading half reachable.
-
-    Wrapping rather than trusting the caller, because the thing being read is a
-    live galaxy that players are mid-turn in. `publish`, `submit`, `archive`
-    and `put_note` are not slips that a careful reader would catch: they are
-    ordinary method names on an object this module holds a reference to.
-    """
+    """A store or directory with only its reading half reachable."""
 
     def __init__(self, wrapped, allowed, what):
         object.__setattr__(self, '_wrapped', wrapped)
@@ -208,14 +123,8 @@ def read_only_directory(directory):
     return _ReadOnly(directory, DIRECTORY_READS, 'the directory')
 
 
-# ── reading one galaxy ───────────────────────────────────────────────────────
 def _duration_recorded(rec: dict):
-    """A tick duration the referee measured, if a referee ever records one.
-
-    The archive record does not carry one today. Reading three plausible names
-    rather than inventing a number is the point: an operator must be able to
-    tell a measured duration from this module's arithmetic.
-    """
+    """A tick duration the referee recorded, or None."""
     for key in ('seconds', 'duration', 'elapsed'):
         value = rec.get(key)
         if isinstance(value, (int, float)):
@@ -224,14 +133,11 @@ def _duration_recorded(rec: dict):
 
 
 def _tick_timing(rec: dict, previous: dict, turn_seconds):
-    """What can be said about the last tick's timing, and how it is known.
+    """(measured, late_by) for one tick.
 
-    Returns (measured, late_by). `measured` is a duration the referee recorded
-    and is normally None. `late_by` is derived: the previous turn closed at
-    `closed_at`, which is when this turn was published and its clock started,
-    so this turn fell due one turn length later and `late_by` is how long after
-    that the referee closed it. It needs the previous record, so the oldest
-    turn shown has none.
+    `measured` is a duration the referee recorded, normally None. `late_by` is
+    how long after the previous `closed_at` plus one turn length this turn
+    closed; None without a previous record.
     """
     measured = _duration_recorded(rec)
     late_by = None
@@ -243,12 +149,10 @@ def _tick_timing(rec: dict, previous: dict, turn_seconds):
 
 
 def _archive_history(store, turn: int, history: int, look_back: int):
-    """The most recent archive records, newest first, and how far back we went.
+    """The most recent archive records, newest first, as (turn, record).
 
-    The referee archives the turn it closed, so the newest record is normally
-    `turn - 1`. A galaxy whose worker has been down for a while has its newest
-    record further back, and that gap is itself the diagnosis, so the search
-    walks back rather than giving up at the first miss.
+    Walks back from `turn - 1` past missing records until the first one is
+    found, then stops at the next gap.
     """
     found, searched = [], 0
     n = turn - 1
@@ -258,21 +162,14 @@ def _archive_history(store, turn: int, history: int, look_back: int):
         if rec is not None:
             found.append((n, rec))
         elif found:
-            # A hole after the newest record means the run is not contiguous.
-            # Stop rather than trawling the whole archive for older ones.
             break
         n -= 1
     return found
 
 
 def _document_fields(store) -> dict:
-    """`DOCUMENT_FIELDS` from a Firebase galaxy's document, by one read.
-
-    Empty for any other store, whose state already carries them. Reaches past
-    the read-only wrapper to the store it holds, and does exactly one thing
-    there: a `get` of the document, whose snapshot is turned into a plain dict
-    before it is returned.
-    """
+    """`DOCUMENT_FIELDS` from a Firebase galaxy's document, by one `get`.
+    Empty for any other store, whose state already carries them."""
     inner = (object.__getattribute__(store, '_wrapped')
              if isinstance(store, _ReadOnly) else store)
     import firebase_store
@@ -301,12 +198,7 @@ def _seat_rows(fields: dict, civs: list) -> list:
 def galaxy_report(store, gid: str = None, name: str = None, status: str = None,
                   history: int = HISTORY, look_back: int = LOOK_BACK) -> dict:
     """Everything the view shows for one galaxy, read through a read-only store.
-
-    Never raises for a galaxy it cannot read. An unreachable share, a service
-    that is down and a store that holds no galaxy are three of the states this
-    exists to report, and a view that died on the first of them would report
-    none of the others.
-    """
+    Never raises for a galaxy it cannot read; the failure is in the report."""
     store = store if isinstance(store, _ReadOnly) else read_only(store)
     out = {
         'id': gid, 'name': name or gid, 'status': status,
@@ -336,12 +228,7 @@ def galaxy_report(store, gid: str = None, name: str = None, status: str = None,
         out['problems'].append(f'the store could not be read, {out["error"]}')
         return out
 
-    # The galaxy's own word about itself wins over whatever the listing said,
-    # for the reason the directory gives: a galaxy the operator closed through
-    # its store is closed whether or not an index was updated with it. Read
-    # from the state already in hand, and through the store module's own
-    # helpers when it has them, so this costs no extra read and does not
-    # break against a store written before either existed.
+    # The galaxy's own status wins over the listing's.
     status_of = getattr(turn_store, 'status_of', None)
     if status_of is not None:
         out['status'] = status_of(state)
@@ -371,9 +258,7 @@ def galaxy_report(store, gid: str = None, name: str = None, status: str = None,
                                f'{exc}')
     out['worker'] = {'seen': fields.get(WORKER_SEEN_KEY),
                      'failures': fields.get(WORKER_FAILURES_KEY)}
-    # Seats are shown wherever there is a seat map to show, and always for
-    # Firebase, where a galaxy with none is one nobody can play through the
-    # relay and that is worth seeing rather than hiding.
+    # Seats are shown wherever there is a seat map, and always for Firebase.
     if SEATS_KEY in fields or out['kind'] == 'FirebaseTurnStore':
         out['seat_claim'] = fields.get(SEAT_CLAIM_KEY) or None
         out['seats'] = _seat_rows(fields, civs)
@@ -421,12 +306,8 @@ def galaxy_report(store, gid: str = None, name: str = None, status: str = None,
 
 
 def _problems(r: dict) -> list:
-    """What is wrong, in the words an operator would use.
-
-    Only things that are actually wrong. A civ that has not submitted yet is
-    the ordinary state of a turn in progress and is reported as the roster
-    rather than as a fault.
-    """
+    """What is wrong, in the words an operator would use. A civ that has not
+    submitted yet is not a problem."""
     out = []
     turn, last = r['turn'], r['last_tick']
     worker = r.get('worker') or {}
@@ -485,15 +366,9 @@ def _problems(r: dict) -> list:
     return out
 
 
-# ── reading a whole directory ────────────────────────────────────────────────
 def _error_row(gid, name, store_spec, exc, note, **extra) -> dict:
-    """A galaxy that could not be opened, as a row rather than a traceback.
-
-    A view that raised on the first galaxy it could not open would report none
-    of the others, and an unopenable galaxy is one of the things it exists to
-    notice. The row carries every key a real report does, so the renderers do
-    not have to know which kind they were handed.
-    """
+    """A galaxy that could not be opened, as a row carrying every key a real
+    report does."""
     why = f'{type(exc).__name__}: {exc}'
     row = {'id': gid, 'name': name or gid, 'status': None,
            'store': store_spec, 'kind': None, 'error': why,
@@ -511,12 +386,8 @@ def _error_row(gid, name, store_spec, exc, note, **extra) -> dict:
 
 def directory_reports(spec: str, history: int = HISTORY,
                       look_back: int = LOOK_BACK) -> list:
-    """One report per galaxy a directory lists.
-
-    A galaxy whose store cannot be opened still gets a row. The directory's own
-    listing already survives an unreachable store, and a view that dropped the
-    galaxy would say a beta is healthy because the broken half is invisible.
-    """
+    """One report per galaxy a directory lists, including one whose store
+    cannot be opened."""
     try:
         listing = read_only_directory(
             galaxy_directory.open_directory(spec)).galaxies()
@@ -554,7 +425,6 @@ def reports(spec: str, directory: bool = False, history: int = HISTORY,
                           look_back=look_back)]
 
 
-# ── formatting ───────────────────────────────────────────────────────────────
 def fmt_span(seconds) -> str:
     """A duration a person reads at a glance."""
     if seconds is None:
@@ -572,11 +442,7 @@ def fmt_span(seconds) -> str:
 
 
 def fmt_left(seconds) -> str:
-    """How long a turn has, or how far past its deadline it is.
-
-    A negative countdown is the state this view exists to make obvious, so it
-    is said in words rather than shown as a minus sign in front of a duration.
-    """
+    """How long a turn has, or how far past its deadline it is."""
     if seconds is None:
         return 'no deadline'
     return (f'{fmt_span(seconds)} left' if seconds >= 0
@@ -584,8 +450,7 @@ def fmt_left(seconds) -> str:
 
 
 def fmt_when(epoch) -> str:
-    """An absolute local time, because a relative one alone hides a stopped
-    clock."""
+    """An absolute local time."""
     if not epoch:
         return '-'
     return time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(epoch))
@@ -760,8 +625,7 @@ def _row_html(r: dict) -> str:
     return ''.join(body)
 
 
-# Marks the page stale by the browser's clock. Inline because the page has no
-# external references, and it reads only the two numbers written into it.
+# Marks the page stale by the browser's clock.
 STALE_SCRIPT = """<script>
 (function () {
   var generated = %(generated)d * 1000, limit = %(limit)d * 1000;
@@ -798,12 +662,8 @@ def _generated_html(generated_at: float, event, stale_after) -> str:
 
 def render_html(rows: list, refresh: int = 0, generated_at: float = None,
                 event: str = None, stale_after: float = None) -> str:
-    """One self-contained page. No external references of any kind.
-
-    Nothing is fetched, so this opens from a file over `file:` and shows the
-    same thing it shows when served. The reason is not tidiness: a page about a
-    private galaxy that fetched a font would say when the operator looked at it
-    and from where.
+    """One self-contained page with no external references, so viewing it
+    fetches nothing.
 
     With `stale_after`, the page says when it was generated and marks itself
     stale in the browser once it is older than that many seconds.
@@ -825,13 +685,7 @@ def render_html(rows: list, refresh: int = 0, generated_at: float = None,
 def write_page(store, path: str, event: str = None, gid: str = None,
                name: str = None, now: float = None) -> str:
     """Render one galaxy to `path`, replacing it atomically. Returns the path.
-
-    The reads are `galaxy_report`'s: the store behind the `STORE_READS`
-    allowlist and, on Firebase, the one `get` of the galaxy document. The page
-    is written to a temporary file beside `path` and moved over it with
-    `os.replace`, so a reader sees the old page or the new one and never a
-    partial file. Raises on failure; the worker swallows it.
-    """
+    Raises on failure."""
     now = time.time() if now is None else now
     rows = [galaxy_report(store, gid=gid, name=name)]
     turn_seconds = rows[0].get('turn_seconds') or DEFAULT_TURN_SECONDS
@@ -850,18 +704,12 @@ def write_page(store, path: str, event: str = None, gid: str = None,
     return path
 
 
-# ── serving ──────────────────────────────────────────────────────────────────
 def serve(spec: str, directory: bool = False, host: str = '127.0.0.1',
           port: int = 8765, history: int = HISTORY, look_back: int = LOOK_BACK):
     """A page on the operator's own machine, rebuilt on each request.
 
-    Bound to the loopback address and not configurable from the command line.
-    This shows a galaxy's roster and its refusals, which J4 keeps out of a
-    launcher's reach on purpose, so the one place it is allowed to exist is a
-    screen the operator is sitting at.
-
-    Returns the server without starting it, so a caller can run it on its own
-    thread and shut it down; `main` calls `serve_forever`.
+    The command line always binds loopback, since the page shows the roster.
+    Returns the server without starting it.
     """
     import http.server
 
@@ -873,8 +721,6 @@ def serve(spec: str, directory: bool = False, host: str = '127.0.0.1',
                 body = render_html(rows, refresh=REFRESH_SECONDS)
                 code = 200
             except Exception as exc:                        # noqa: BLE001
-                # A view that 500s with a stack trace is still a better answer
-                # than a blank page, and the operator is the only reader.
                 body = ('<!doctype html><html><body><pre>'
                         + html.escape(f'{type(exc).__name__}: {exc}')
                         + '</pre></body></html>')
@@ -937,10 +783,8 @@ def main(argv=None) -> int:
         print(f'wrote {os.path.abspath(a.html)}')
     else:
         print(render_text(rows))
-    # Three outcomes rather than two, because a scheduled task that only knows
-    # "did it run" would treat an overdue turn and an unreachable share the
-    # same. 0 nothing to look at, 1 something is wrong in a galaxy that reads,
-    # 2 a galaxy that cannot be read at all.
+    # Exit 0: nothing to look at. 1: a problem in a galaxy that reads.
+    # 2: a galaxy that cannot be read.
     if any(r['error'] for r in rows):
         return 2
     return 1 if any(r['problems'] for r in rows) else 0

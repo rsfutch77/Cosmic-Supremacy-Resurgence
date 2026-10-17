@@ -3,23 +3,14 @@ test_state_reads.py: one galaxy state read per poll, counted at the service
 ============================================================================
     server\\.venv\\Scripts\\python.exe server\\tests\\test_state_reads.py
 
-docs\\Public_Beta_Plan.md H11. The relay's request log showed a launcher make
-five `GET /<galaxy>/state` requests inside one second each time it began
-following a galaxy. Traced to `release/launcher.py` asking `exists`, `state`
-and `civs` before it starts the loop, `_refresh_turn` asking `current` once
-the loop is running, and the loop's own first `current`: five accessors, each
-a request, each a relay invocation and a Firestore document read.
+`HttpTurnStore` answers every state accessor asked inside `state_seconds` from
+one `/state` answer. Counted at the service: a burst of accessors is one
+request, a write this store makes is read back at once, a write made elsewhere
+is seen once the window has passed, and every read the turn loop schedules
+still reaches the service.
 
-`HttpTurnStore` now answers every state accessor asked inside `state_seconds`
-from one `/state` answer. What has to be true of that is counted here at the
-service rather than reasoned about: a burst of accessors is one request, a
-write this store makes is read back at once, a write made elsewhere is seen
-once the window has passed, and every read the turn loop schedules still
-reaches the service.
-
-No client and no Firebase: `turn_server.py` in front of a temporary directory,
-a real `HttpTurnStore`, and the real `player_turn.follow` with the client
-stubbed out.
+`turn_server.py` runs in front of a temporary directory, with a real
+`HttpTurnStore` and the real `player_turn.follow` with the client stubbed out.
 """
 import collections
 import json
@@ -77,8 +68,8 @@ class Service:
                 path = self.path.split('?')[0]
                 svc.hits[('GET', path)] += 1
                 if path == '/state' and svc.hold is not None:
-                    # Read the answer first, then wait, so what comes back is
-                    # the galaxy as it was before anything done meanwhile.
+                    # Read the answer first, then wait, so it predates any
+                    # write made meanwhile.
                     body = json.dumps(turn_server.STORE.state()).encode()
                     svc.reading.set()
                     svc.hold.wait(10)
@@ -108,11 +99,8 @@ class Service:
 
 
 def test_a_burst_of_accessors_is_one_request():
-    """What `start_multiplayer` and `_refresh_turn` ask, in the order they ask.
-
-    Fails with nine requests where there should be one if the accessors each
-    fetch `/state` for themselves again.
-    """
+    """What `start_multiplayer` and `_refresh_turn` ask, in order, is one
+    request."""
     print('a burst of state accessors')
     svc = Service()
     try:
@@ -135,10 +123,7 @@ def test_a_burst_of_accessors_is_one_request():
 
 
 def test_each_caller_gets_its_own_copy():
-    """A caller that edits the dict it was handed does not edit the next one.
-
-    Fails if the window hands out the one parsed object it keeps.
-    """
+    """A caller that edits the dict it was handed does not edit the next one."""
     print('an answer is a copy')
     svc = Service()
     try:
@@ -151,11 +136,7 @@ def test_each_caller_gets_its_own_copy():
 
 
 def test_own_writes_are_read_at_once():
-    """A write through this store forgets the answer it was holding.
-
-    Fails if the window outlives a write: the publish would be read back as the
-    turn before it, which is exactly the answer a caller has just replaced.
-    """
+    """A write through this store forgets the answer it was holding."""
     print('reading your own writes')
     svc = Service()
     try:
@@ -176,13 +157,8 @@ def test_own_writes_are_read_at_once():
 
 
 def test_a_write_elsewhere_is_seen_after_the_window():
-    """The referee writes where the galaxy lives, not through this store.
-
-    The bound that the window costs, stated as a check: inside it a turn the
-    referee has published is not seen yet, and once it has passed the next
-    accessor asks the service again. Fails in the second half if an answer is
-    kept past its window, and in the first half if the window is not there.
-    """
+    """A referee write made elsewhere is unseen inside the window and read
+    once it has passed."""
     print('a write made somewhere else')
     svc = Service()
     try:
@@ -206,11 +182,10 @@ def test_a_write_elsewhere_is_seen_after_the_window():
 
 
 def test_a_read_across_a_write_is_not_kept():
-    """An answer fetched while a write was in flight may predate the write.
+    """An answer fetched while a write was in flight is not kept.
 
-    The launcher reads the state on its Tk thread while the turn loop submits
-    on its own, so this interleaving is ordinary. Fails if the window keeps the
-    older answer, which would then be served for the rest of it.
+    The launcher's UI thread reads state while the turn loop submits on its
+    own.
     """
     print('a read that overlaps a write')
     svc = Service()
@@ -235,11 +210,8 @@ def test_a_read_across_a_write_is_not_kept():
 
 
 def test_the_window_is_under_the_loop_floor():
-    """The window is only safe while it is shorter than the loop's floor.
-
-    Fails if either constant moves so that a read the loop schedules could be
-    answered from memory.
-    """
+    """The window is shorter than the loop's floor, so a scheduled read is
+    never answered from memory."""
     print('the window and the floor')
     check('STATE_SECONDS is under player_turn.POLL_FLOOR',
           turn_store.STATE_SECONDS < player_turn.POLL_FLOOR, True)
@@ -251,10 +223,9 @@ def test_the_window_is_under_the_loop_floor():
 def test_a_follow_poll_is_one_request():
     """The launcher's start, then the real loop, against the real service.
 
-    H11's done-when, measured: the reads before the turn is fetched are one
-    request rather than five, and each read the loop schedules at least a
-    floor after the one before it reaches the service. A few real seconds,
-    because the window runs on the real clock.
+    The reads before the turn is fetched are one request, and each read the
+    loop schedules a floor apart reaches the service. Takes a few real seconds,
+    since the window runs on the real clock.
     """
     print('following a galaxy')
     svc = Service(turn_seconds=4)

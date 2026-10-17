@@ -1,18 +1,12 @@
 """
 inject_design.py: Add a ship design to a save blob
-===================================================
 Duplicates an existing `DSGN` record inside a civ's `OWNR` block, renames it and
-gives it a fresh object id, so the client builds the design itself on load.
+gives it a fresh object id, so the client builds the design itself on load. A
+ShipDesign created in memory is never registered and has no stat block.
 
     python inject_design.py ../saves/<capture>.b64 --from probeA --name aiscout \
         -o ../loadgame_blob.b64
 
-Why this and not a memory write: creating a ShipDesign in memory produces a real,
-EJBO-tagged object, but nothing registers it and nothing computes its stat block,
-so it never reaches the UI and cannot be built.
-
-FORMAT, measured against a capture containing two hand-made designs
--------------------------------------------------------------------
 Every section is:
 
     tag(4)  (version << 26 | length26)(4)  payload[length]
@@ -23,8 +17,8 @@ one `SDPR` child, and ends with a single zero byte:
     DSGN  ver 4   objectId(4)  SDPR...  00
     SDPR  ver 0   nameLen(4)  name[nameLen]  ...rest...
 
-Designs are per-civ and live inside `OWNR`, and immediately BEFORE the first
-`DSGN` of each civ there is a `u32` COUNT of that civ's designs.
+Designs are per-civ and live inside `OWNR`, and immediately before the first
+`DSGN` of each civ there is a `u32` count of that civ's designs.
 """
 import argparse
 import os
@@ -74,9 +68,10 @@ KNOWN_TAGS = [
 
 
 def containing_sections(blob, at):
-    """Take the candidates widest-first and keep one only if it nests
-    inside everything already kept. A real ancestor chain is strictly nested by
-    definition, which a coincidental tag run is very unlikely to be.
+    """[(offset, tag, version, length)] of the sections enclosing `at`.
+
+    Candidates are taken widest-first and kept only if they nest inside
+    everything already kept, which filters out coincidental tag runs.
     """
     cands = []
     for tag in KNOWN_TAGS:
@@ -109,8 +104,7 @@ def design_records(blob):
     """[(dsgn_offset, object_id, name)] for every DSGN in the blob."""
     out = []
     for off in find_all(blob, DSGN):
-        # A DSGN must chain cleanly and carry an SDPR child, or it is a
-        # coincidental byte run rather than a section.
+        # A real DSGN carries an SDPR child.
         try:
             oid = struct.unpack_from("<I", blob, off + 8)[0]
             if blob[off + 12:off + 16] != SDPR:
@@ -135,12 +129,9 @@ def owner_of_design(blob, dsgn_off):
 def max_object_id(blob):
     """Upper bound on ids in use.
 
-    Every section's first payload dword is treated as a candidate id and the
-    largest plausible one wins. This deliberately over-approximates: it is far
-    better to pick an id above everything than to collide with a planet.
+    SAVE's high-water counter, raised by any larger plausible first payload
+    dword of an id-bearing section. Over-approximates on purpose.
     """
-    # The authoritative answer is SAVE's high-water counter; the scan below
-    # only cross-checks it, since a scan sees only ids it knows to look for.
     best = struct.unpack_from("<I", blob, HIGH_WATER_ID)[0]
     for tag in (b"DSGN", b"SHIP", b"PLNT", b"SUN ", b"SOLA", b"OWNR", b"GOVS",
                 b"ADMS", b"DYNO"):
@@ -162,9 +153,7 @@ def inject(blob, src_name, new_name, new_id=None, log=print):
     for off, oid, name in records:
         log(f"  @{off:<6} id={oid:<6} {name!r}")
 
-    # A name is ambiguous whenever both civs start with an identically named
-    # design, which is the normal case at game start, so allow selection by the
-    # object id instead.
+    # Civs start with identically named designs, so an object id also selects.
     if isinstance(src_name, int):
         src = [r for r in records if r[1] == src_name]
         if not src:
@@ -202,7 +191,6 @@ def inject(blob, src_name, new_name, new_id=None, log=print):
         new_id = max_object_id(blob) + 1
     log(f"  new object id {new_id} (max seen in blob: {max_object_id(blob)})")
 
-    # -- build the new record -------------------------------------------
     rec = bytearray(blob[src_off:sec_end(blob, src_off)])
     struct.pack_into("<I", rec, 8, new_id)                  # object id
 
@@ -224,12 +212,9 @@ def inject(blob, src_name, new_name, new_id=None, log=print):
     log(f"  name {old_name.decode()!r} -> {new_name!r} (length delta {delta:+d})")
     log(f"  record {len(blob[src_off:sec_end(blob, src_off)])} -> {len(rec)} bytes")
 
-    # -- splice it in after the civ's last design -----------------------
-    # Sections NEST, and the outer ones carry spanning lengths: OWNR's length
-    # ends exactly on the next OWNR, and GLXY and SAVE enclose it in turn.
-    # Growing the payload without growing every enclosing section leaves a blob
-    # that still decompresses and still looks plausible, but parses wrong from
-    # the insertion point on. Every ancestor has to be widened by the same delta.
+    # Splice in after the civ's last design. Sections nest and carry spanning
+    # lengths, so every ancestor is widened by the same delta; a missed one
+    # leaves a blob that parses wrong from the insertion point on.
     grow = len(rec)
     ancestors = containing_sections(blob, last_end)
     log(f"\n  sections enclosing offset {last_end}, all widened by {grow}:")
@@ -242,8 +227,7 @@ def inject(blob, src_name, new_name, new_id=None, log=print):
     struct.pack_into("<I", out, count_at, count + 1)
     log(f"  inserted at {last_end}; design count {count} -> {count + 1}")
 
-    # THE HIGH-WATER OBJECT ID. SAVE's first payload dword is the highest object
-    # id in use, and the engine allocates the next object at that value plus one.
+    # The high-water object id: the engine allocates the next object above it.
     hi = struct.unpack_from("<I", out, HIGH_WATER_ID)[0]
     if new_id > hi:
         struct.pack_into("<I", out, HIGH_WATER_ID, new_id)
@@ -255,7 +239,8 @@ def inject(blob, src_name, new_name, new_id=None, log=print):
 
 
 
-# ── Building a design from scratch ────────────────────────────────────────────
+# The SDPR payload of a design:
+#
 #     u32 nameLen ; char name[nameLen]
 #     6 x ( u32 count ; u32 ids[count] )      chassis, scanners, engines,
 #                                             weapons, modules, and a sixth list
@@ -266,16 +251,12 @@ def inject(blob, src_name, new_name, new_id=None, log=print):
 #
 PART_LISTS = ("chassis", "scanners", "engines", "weapons", "modules", "list6")
 
-# The byte that closes a DSGN payload, after the SDPR child. Surveyed across
-# 1015 DSGN records in 327 blobs: every turn and every submission of the
-# galaxy1 and galaxy2 rehearsal stores plus server/saves. It is exactly one
-# byte wide and zero in all 1015, designs a player made by clicking included,
-# so a synthesised record carries it and a cloned one keeps it.
+# The byte that closes a DSGN payload, after the SDPR child. Always one zero
+# byte, including on designs a player made in the UI.
 DSGN_TRAILER = b"\x00"
 
 
-# A scanner is defaulted in rather than left to the caller to remember. It can
-# still be overridden explicitly, but the default matches what the UI does.
+# The scanner a design gets when none is given, as the UI does.
 DEFAULT_SCANNERS = [0]
 
 
@@ -299,13 +280,10 @@ def build_dsgn(new_id, name, parts, owner_id, dsgn_ver=4, sdpr_ver=0):
     """A complete DSGN section: header, object id, its SDPR child, and the
     trailing byte.
 
-    Section versions are taken from real records rather than assumed: DSGN is
-    version 4 and SDPR version 0 in every capture examined, and the version
-    occupies bits 26..31 of the length word.
-
-    The DSGN payload length counts the trailer, so a record built here is
-    byte-identical to the one a client writes for the same id, name, parts and
-    owner. `test_build_dsgn.py` holds it to that against real records.
+    DSGN is version 4 and SDPR version 0; the version occupies bits 26..31 of
+    the length word. The DSGN payload length counts the trailer. The result is
+    byte-identical to the record a client writes for the same id, name, parts
+    and owner (`test_build_dsgn.py`).
     """
     payload = build_sdpr(name, parts, owner_id)
     sdpr = struct.pack("<4sI", SDPR, (sdpr_ver << 26) | len(payload)) + payload
@@ -314,8 +292,7 @@ def build_dsgn(new_id, name, parts, owner_id, dsgn_ver=4, sdpr_ver=0):
 
 
 def make(blob, like, new_name, parts, new_id=None, log=print):
-    """Add a NEW design 
-    """
+    """Add a design built from `parts` to the civ that owns design `like`."""
     records = design_records(blob)
     if not records:
         raise SystemExit("no DSGN records found; is this a real save blob?")
@@ -338,10 +315,7 @@ def make(blob, like, new_name, parts, new_id=None, log=print):
     owner = owner_of_design(blob, ref_off)
     mine = [r for r in records if owner_of_design(blob, r[0]) == owner]
 
-    # Uniqueness is PER CIV, not galaxy-wide. This used to reject any name
-    # already in the blob, which is demonstrably too strict: every galaxy starts
-    # with each civ owning a design called 'Colony Ship'. The narrow rule is what
-    # lets one design be given to every civ in a many-civ game under one name.
+    # Design names are unique per civ; every civ starts with a 'Colony Ship'.
     if any(r[2] == new_name for r in mine):
         raise SystemExit(f"that civ already owns a design named {new_name!r}; "
                          f"design names must be unique within a civ")
@@ -353,8 +327,7 @@ def make(blob, like, new_name, parts, new_id=None, log=print):
         raise SystemExit(f"design count {count} does not match the {len(mine)} "
                          f"records found; the layout is not what this expects")
 
-    # The owner's OBJECT ID is the trailing dword of any of that civ's designs,
-    # which is more reliable than trying to locate the OWNR's own id field.
+    # The owner's object id is the trailing dword of any of that civ's designs.
     ref_owner_id = read_owner_id(blob, ref_off)
 
     if new_id is None:
@@ -420,7 +393,6 @@ def main():
     ap.add_argument("-o", "--out", default=None,
                     help="output .b64 (default: server/loadgame_blob.b64)")
     ap.add_argument("--dry-run", action="store_true")
-    # --- synthesise a design rather than clone one ---
     ap.add_argument("--make", action="store_true",
                     help="build a NEW design from --chassis/--engine/etc "
                          "instead of cloning one")

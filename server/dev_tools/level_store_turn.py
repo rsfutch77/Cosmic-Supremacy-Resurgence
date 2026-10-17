@@ -5,29 +5,17 @@ level_store_turn.py: level homeworld rates in a galaxy that is already running
     python level_store_turn.py <store> --from-planet 139 --planet 140 --at-next-turn
     python level_store_turn.py <store> --from-planet 139 --planet 140 --turn 21
 
-A galaxy grown from a single-player fixture hands its second civ the engine's
-opponent homeworld rather than a player's: two `PLPR` bytes, `+4` and `+11`,
-worth 9 citizens against 7 over eight quiet turns. `make_multiplayer_galaxy.py`
-fixes that at generation. This fixes it in a galaxy people are already playing,
-which is a different problem, because a live galaxy has a turn in flight and an
-archive that says what was published.
+Copies the homeworld rate pair (`PLPR` bytes `+4` and `+11`) from one planet
+to others in a live galaxy. `make_multiplayer_galaxy.py` does the same at
+generation.
 
-Two rules it follows, both of which cost something to get wrong.
+Edit at a publish, not mid-turn: players hold the current turn's blob, and a
+submission judged against a state never served can lose orders.
+`--at-next-turn` waits for the referee to publish, then edits that turn.
 
-**At a publish, not mid-turn.** Players hold the current turn's blob. Changing
-the authoritative state underneath them means a submission is judged against a
-state that was never served, and an order can be dropped for not matching.
-`--at-next-turn` waits for the referee to publish, then edits what it published
-before anyone has played it.
-
-**The archive is corrected, not left to rot.** The record for turn N holds the
-hash of the blob published as turn N+1, so editing that blob makes `--verify`
-report the archive as corrupt. The record is updated and carries a `levelled`
-note saying what was changed and what the hash was before, which is the
-difference between an edit and a discrepancy.
-
-The clock is not restarted. `publish` sets a fresh deadline, so the original is
-written back afterwards and players keep the turn length they were given.
+The archive record for turn N holds the hash of the blob published as turn
+N+1, so it is updated to the new hash and given a `levelled` note with the old
+hash. The original deadline is written back after `publish`.
 """
 import argparse
 import os
@@ -60,12 +48,8 @@ def planets(blob):
 def copy_rates(blob, source: int, targets, log=print):
     """Copy the rate pair from one planet's PLPR to others. Nothing else moves.
 
-    Planets are named by id rather than found by rule. On a played galaxy a
-    civ's most populous planet is not necessarily the world it started on: in
-    the live galaxy at turn 20 Neighbor's colony and its homeworld both held 8
-    citizens, and picking by population chose the colony, whose `+11` reads 240
-    where the homeworld reads 44. Writing the reference into that would have
-    been a downgrade applied in the name of fairness.
+    Planets are named by id: on a played galaxy a civ's most populous planet
+    is not necessarily its homeworld.
     """
     src = mmg._plpr(blob, source)
     if src is None:
@@ -108,7 +92,7 @@ def level(store, turn: int, source: int, targets, log=print) -> bool:
     deadline, seconds = state['deadline'], state['turn_seconds']
     store.publish(turn, out)
     state = store.state()
-    state['deadline'] = deadline            # publish restarts the clock; do not
+    state['deadline'] = deadline            # publish restarts the clock
     store._put_state(state)
     log(f'  published turn {turn} again, canonical {after[:16]}, '
         f'{round(deadline - time.time())}s still on the clock')

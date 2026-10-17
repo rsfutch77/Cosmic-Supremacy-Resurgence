@@ -2,11 +2,8 @@
 The player's name: what is accepted, where it is kept, and what a galaxy that
 has no seat for it says back.
 
-Everything here is the launcher's own module-level code, so it runs headless and
-in about a second. The dialog that collects the name is covered in
-test_web_view.py; what the dialog decides with is covered here.
-
-The roster check runs against a store built here, in a temporary directory.
+Headless. The dialog itself is covered in test_web_view.py. The roster check
+runs against a store in a temporary directory.
 """
 import json
 import os
@@ -76,7 +73,6 @@ check("that is the player's name", L.player_name(d), "Alice")
 
 print("\n3. a data directory that survives an upgrade keeps the name")
 # An upgrade replaces the launcher and manifest.json, never the data directory.
-# Nothing to simulate but the file still being there, which is the point.
 check("still there", L.player_name(d), "Alice")
 
 print("\n4. unreadable or unusable stored names count as no name")
@@ -138,9 +134,8 @@ check("and how many seats there are", "3 seats" in missing, True)
 check("one seat reads as one seat",
       "one seat" in L.roster_problem("Dave", ["Alice"]), True)
 
-# The only name it will echo is the one the player just typed, spelled the way
-# the galaxy spells it. That discloses nobody new and is the mistake a player
-# makes when they were told their name out loud.
+# The only name it echoes is the one the player typed, spelled the way the
+# galaxy spells it, which discloses nobody new.
 wrong_case = L.roster_problem("alice", seats)
 check("a case mismatch is called out on its own",
       "spells your seat 'Alice'" in wrong_case, True)

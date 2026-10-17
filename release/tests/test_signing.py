@@ -1,22 +1,18 @@
 """
 The signing step in build.ps1.
 
-A build with no certificate configured must say so and carry on, a build with
-one must sign exactly the launcher and the AI opponent, and a signing failure
-must fail the build. The functions are taken out of build.ps1 by PowerShell's
-own parser and run on their own, so these checks exercise the script's code and
-not a copy of it.
+A build with no certificate says so and carries on, a build with one signs
+exactly the launcher and the AI opponent, and a signing failure fails the
+build. The functions are taken out of build.ps1 by PowerShell's own parser.
 
 Three layers:
   * the script text: which files are passed to the signing step, and in what
     order relative to the freeze and the archive;
   * the functions against a stub signtool, which records its command lines;
   * a real signtool signing a copy of a small executable with a throwaway
-    self-signed certificate. The certificate is created in
-    Cert:\\CurrentUser\\My only and deleted afterwards. Nothing is imported
-    into a Root or TrustedPublisher store and no machine setting changes. The
-    signature reads back as untrusted, which is expected for a self-signed
-    certificate. Skipped when no signtool is installed or the timestamp server
+    self-signed certificate, created in Cert:\\CurrentUser\\My only and
+    deleted afterwards. Nothing is imported into a Root or TrustedPublisher
+    store. Skipped when no signtool is installed or the timestamp server
     cannot be reached.
 
 No game and no window.
@@ -77,7 +73,7 @@ def region(start, end):
     return BUILD_TEXT[a:BUILD_TEXT.index(end, a)]
 
 
-# ── What the script passes to the signing step ────────────────────────────────
+# What the script passes to the signing step
 calls = re.findall(r"Invoke-ReleaseSigning -Config \$Signing -Path (\$\w+)",
                    BUILD_TEXT)
 check("the signing step is called for the launcher, the AI, and the opt-in set",
@@ -122,7 +118,6 @@ bare_names = re.findall(r"CosmicSupremacy(?:_\w+)?\.exe", signing_code)
 check("the signing functions name no game executable but the patched pair",
       sorted(set(bare_names)), sorted(patched or []))
 
-# ── Without a certificate ─────────────────────────────────────────────────────
 rc, out = run_ps("$c = Resolve-SigningConfig -Thumbprint '' "
                  "-TimestampUrl 'http://t.example'; "
                  "\"config-is-null=$($null -eq $c)\"")
@@ -147,7 +142,7 @@ rc, out = run_ps("Resolve-SigningConfig -Thumbprint '' "
 check("asking for the game executables with no certificate fails",
       rc != 0 and "game executables needs a signer" in out, True)
 
-# ── A configuration that cannot work fails at the start ───────────────────────
+# A configuration that cannot work fails at the start
 rc, out = run_ps("Resolve-SigningConfig -Thumbprint 'ABCD' "
                  "-TimestampUrl 'http://t.example'")
 check("a short thumbprint fails", rc != 0 and "40 hex" in out, True)
@@ -166,7 +161,6 @@ rc, out = run_ps(f"Find-SignTool {ps_quote(os.path.join(scratch, 'missing.exe'))
 check("a signtool path that does not exist fails", rc != 0 and "not found" in out,
       True)
 
-# ── Finding signtool ──────────────────────────────────────────────────────────
 home = os.path.join(scratch, "home")
 pkg = os.path.join(home, ".nuget", "packages", "microsoft.windows.sdk.buildtools",
                    "10.0.1", "bin")
@@ -189,10 +183,8 @@ rc, out = run_ps("\"found=[$(Find-SignTool)]\"", env=bare_env)
 check("and Find-SignTool returns nothing when there is none", out.strip(),
       "found=[]")
 
-# ── Azure Artifact Signing, against a stub signtool and a stand-in dlib ───────
-# No Azure account exists yet, so nothing here reaches the service. The command
-# line and the metadata file are what Microsoft's "Set up signing integrations
-# to use Artifact Signing" page describes: signtool sign /fd SHA256 /tr <url>
+# Azure Artifact Signing, against a stub signtool and a stand-in dlib. Nothing
+# reaches the service. Command line: signtool sign /fd SHA256 /tr <url>
 # /td SHA256 /dlib <Azure.CodeSigning.Dlib.dll> /dmdf <metadata.json> <file>,
 # with Endpoint, CodeSigningAccountName and CertificateProfileName in the JSON.
 import json                                                     # noqa: E402
@@ -383,9 +375,8 @@ check("nothing secret is written by the step",
       any(s in json.dumps(meta).lower() for s in secrets), False)
 shutil.rmtree(AS, ignore_errors=True)
 
-# ── The functions against a stub signtool ─────────────────────────────────────
-# A real throwaway certificate is needed for the configuration step to accept a
-# thumbprint, so the stub tests and the real signing test share one.
+# The functions against a stub signtool. The stub tests and the real signing
+# test share one throwaway certificate, which the configuration step needs.
 SUBJECT = f"CN=CS signing test {os.getpid()}"
 plain_subject = f"CN=CS signing test plain {os.getpid()}"
 thumbs = []
@@ -491,7 +482,7 @@ try:
         check("a signtool that reports success on a file it did not sign "
               "fails the build", rc != 0 and "carries no signature" in out, True)
 
-        # ── A real signtool, a throwaway certificate, a copy of a small exe ──
+        # A real signtool, a throwaway certificate, a copy of a small exe
         tool_rc, tool_out = run_ps(
             "$t = Find-SignTool $env:CS_SIGNTOOL; if ($t) { $t }")
         tool = tool_out.strip().splitlines()[-1] if tool_out.strip() else ""
@@ -509,8 +500,7 @@ try:
         elif not online:
             skip("real signing", f"{host} is not reachable")
         else:
-            # The interpreter running this test is a small executable that
-            # carries no signature of its own, so the signer read back is ours.
+            # The interpreter carries no signature of its own.
             sample = os.path.join(scratch, "sample.exe")
             shutil.copyfile(sys.executable, sample)
             real = (f"$cfg = Resolve-SigningConfig -Thumbprint {ps_quote(thumb)} "

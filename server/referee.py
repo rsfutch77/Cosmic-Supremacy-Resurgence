@@ -1,41 +1,26 @@
 """
 referee.py: the authoritative turn, as two calls
-=================================================
+
     python referee.py auth.b64 --from BadGuy=sub.b64 --turns 1 -o next.b64
 
     from referee import apply_orders, tick
     blob = apply_orders(blob, [("BadGuy", submitted_blob)])
     blob = tick(blob)
 
-The server owns one galaxy blob. It hands each player a state, takes their state
-back, keeps only the parts that express their intent, and advances the clock.
-`apply_orders` is the first half and `tick` is the second.
-
-`tick` runs the engine, because the engine is the only implementation of the
-rules that exists. It writes the blob to a file, starts a client on it, drives
-the turn clock, captures the result and closes the client. The turn is a pure
-function of state plus orders, measured over 20 turns across three separate
-process launches, so a turn computed this way is reproducible.
-
-The two calls are kept apart on purpose. A Python reimplementation of the rules
-would replace `tick` alone, and every caller keeps working.
+`apply_orders` keeps the parts of each player's returned state that express
+their intent. `tick` runs the engine: it writes the blob to a file, starts a
+client on it, drives the turn clock, captures the result and closes the client.
+A turn is a pure function of state plus orders, so it is reproducible.
 
 A submission the referee cannot use is dropped with a note and the turn closes
-without it. At four hours a turn, a submission that ends the tick costs every
-player in the galaxy their turn, which is a far worse outcome than one player
-losing the orders they sent. `screen_submission` is the cheap half of that and
-`merge_orders.merge` catches the rest. None of it is a security measure:
-cheating is accepted for this beta and said so in the player-facing text.
+without it; no submission may end the tick. `screen_submission` and
+`merge_orders.merge` do this. They are not a security measure.
 
-`loop` is the unattended form: it watches a `TurnStore`, and when a turn's
-deadline passes it takes whatever players submitted, applies it, ticks, and
-publishes the next turn. It never waits for a submission. The original advanced
-on the clock whether a player was there or not, and a turn that waits for
-everyone is a turn one absent player can stall forever.
+`loop` watches a `TurnStore` and resolves each turn when its deadline passes,
+never waiting for a submission.
 
-Requirements: `cs_server.py` on port 8888, since the capture arrives over its
-`savegame` endpoint, and the Resurgence client, which is the build patched to
-advance turns without a server.
+Requirements: `cs_server.py` on port 8888 (the capture arrives over its
+`savegame` endpoint) and the Resurgence client.
 """
 import argparse
 import os
@@ -59,22 +44,14 @@ import joins
 import turn_store
 from turn_store import TurnStore, open_store
 
-# The largest submission the referee will read, as a decompressed blob. The
-# galaxy this was written against is 39 KB served and 39 KB back, so nobody
-# plays anywhere near this; it is a ceiling on what one client can make the
-# referee hold. The wire form is capped separately and lower, at 2 MB, by the
-# storage rule, because that is where a submission lands before anything here
-# sees it.
-MAX_SUBMISSION_BYTES = 8 * 1024 * 1024
+MAX_SUBMISSION_BYTES = 8 * 1024 * 1024   # largest decompressed submission the referee reads
 
-# The referee runs unattended behind a scheduled task, and a console child
-# started without this is a window on the desktop at every tick.
+# Keeps a console child from opening a window at every tick.
 _NO_WINDOW = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
 
 
 def turn_of(blob: bytes) -> int:
-    """The turn a blob is at, so the referee reports the engine's number
-    rather than its own arithmetic."""
+    """The turn a blob is at, as the engine numbers it."""
     import turn_store
     return turn_store.turn_of(blob)
 
@@ -86,9 +63,7 @@ def apply_orders(blob: bytes, submissions, log=print, notes=None) -> bytes:
     authoritative blob says that civ owns are taken; everything else is dropped
     and named. See merge_orders.py for what "orders" currently covers.
 
-    `notes` is an optional `{civ: [reason]}` filled with every refusal, so the
-    player who made a dropped order can be told. `resolve_turn` writes what
-    lands there into the store.
+    `notes` is an optional `{civ: [reason]}` filled with every refusal.
     """
     if not submissions:
         return blob
@@ -99,21 +74,8 @@ def galaxy_id(blob: bytes):
     """What says two blobs are the same galaxy: the civs in it by object id and
     name, the systems by object id, and the planets by object id.
 
-    None of the three moves while a player is taking a turn. A turn is played
-    offline against a served state and nothing is created or destroyed until
-    the tick, so a submission carries the same civs, suns and planets it was
-    handed. Measured on the three real submissions in `galaxy_demo`, turns 7, 8
-    and 9: all three sets are identical between each served turn and the state
-    the player handed back, including the turn that queued a build and
-    reassigned a citizen.
-
-    Sun and planet object ids alone would not separate two galaxies, because
-    ids are allocated in order from 1 and two galaxies start the same way. The
-    civ names and the sizes of the three sets are what carry the answer.
-
-    Computing this walks every OWNR, SUN and PLNT in the blob, which is most of
-    what the merge will read, so a submission whose sections are internally
-    inconsistent fails here rather than several thousand lines later.
+    None of the three changes while a player takes a turn. Raises on a blob
+    whose OWNR, SUN or PLNT sections are inconsistent.
     """
     civs = sorted((o['oid'], o['name']) for o in icv.owner_records(blob))
     return (tuple(civs),
@@ -125,21 +87,12 @@ def screen_submission(blob: bytes, civ: str, sub: bytes, turn: int,
                       served_id=None):
     """(ok, reason) for one submission, before any of it is believed.
 
-    Cheap checks in the order that costs least, and nothing that needs the
-    rules. Whether an order is legal is a different question, it is C4, and it
-    is not asked here; this asks only whether these bytes can be used at all.
-    Every answer is phrased as something the player who sent it can read,
-    because it goes to them as a note.
+    Checks only whether the bytes are usable (non-empty, within size, a save of
+    this turn, a known civ, this galaxy), cheapest first; order legality is not
+    checked here. The reason is sent to the player as a note.
 
-    Each case here was measured against `merge` as it stood. A truncated blob,
-    an empty one and bytes that are not a save each raised out of the merge and
-    ended the turn for the whole galaxy. A submission from another turn and one
-    from another galaxy did something worse than raise: they merged, and one
-    order out of a state nobody is playing was written into the galaxy.
-
-    `served_id` is `galaxy_id(blob)` when the caller already has it. It is the
-    expensive part of this, a second on a 121 KB galaxy, and it is the same
-    answer for every submission in a turn.
+    `served_id` is `galaxy_id(blob)` when the caller already has it; it is the
+    expensive part and the same for every submission in a turn.
     """
     if not sub:
         return False, 'submission DROPPED, it is empty'
@@ -153,16 +106,10 @@ def screen_submission(blob: bytes, civ: str, sub: bytes, turn: int,
     try:
         merge_orders.civ_by_name(blob, civ)
     except SystemExit:
-        # merge_orders raises SystemExit for a civ the galaxy does not hold,
-        # which is right for a person running it with a typo and wrong for a
-        # turn being closed. The roster is checked before this and a civ can
-        # still be in the roster and not in the galaxy, a wiped civ being the
-        # case that will arrive.
+        # merge_orders raises SystemExit for a civ the galaxy does not hold.
         return False, f'submission DROPPED, {civ} is not a civ in this galaxy'
-    # The served blob's own identity is read outside the guard below. A galaxy
-    # the referee cannot read is the referee's problem and has to be raised as
-    # one, rather than reported to a player as something wrong with what they
-    # sent.
+    # Outside the guard: an unreadable served blob is the referee's error, not
+    # the player's.
     if served_id is None:
         served_id = galaxy_id(blob)
     try:
@@ -180,24 +127,9 @@ def read_submissions(store: TurnStore, turn: int, roster, log=print,
                      notes=None, dropped=None) -> dict:
     """{civ: blob} for a turn, with what cannot be decoded dropped and noted.
 
-    A store decodes each submission as it reads it, so one player whose bytes
-    are not a save takes the whole listing down with them and the referee never
-    reaches a check that could name whose fault it was. Measured against the
-    directory store with a submission truncated on the wire: `submissions`
-    raises `zlib.error` and the turn ends there, for everyone.
-
-    The listing is tried first because it is one operation and it is what the
-    stores are built around. Only when it fails is the roster read one civ at a
-    time, which costs a read per player and attributes the fault to the player
-    who caused it. A civ outside the roster is not looked for on that path,
-    which matches `resolve_turn` ignoring their submission anyway, and a galaxy
-    started without a roster at all has nothing to read one civ at a time by,
-    so on that path it closes the turn with no submissions rather than not at
-    all. Every galaxy the beta starts has a roster.
-
-    `notes` and `dropped` are filled the same way `screen_submission`'s
-    refusals are, so a submission refused here and one refused there read the
-    same to the player and to the archive.
+    Tries the whole listing first. If one undecodable submission makes that
+    raise, the roster is read one civ at a time so the fault is attributed to
+    its player. `notes` and `dropped` are filled as for `screen_submission`.
     """
     try:
         return store.submissions(turn)
@@ -231,11 +163,8 @@ def holds_a_planet(blob: bytes) -> bool:
 def hold_empty(store: TurnStore, turn: int, outcomes, log=print) -> int:
     """Hold a galaxy nobody holds a planet in for one more turn. Returns `turn`.
 
-    Nothing is ticked or published. The deadline moves one turn length on, so
-    the worker waits for the next boundary instead of retrying a tick that
-    cannot run, and a player's launcher shows an ordinary countdown. A join
-    requested meanwhile is seated at that boundary. Refused joins in
-    `outcomes` are answered now, so the player is told.
+    Nothing is ticked or published; the deadline moves one turn length on.
+    Refused joins in `outcomes` are answered now.
     """
     joins.commit(store, turn, turn, outcomes or [], log=log)
     seconds = int(store.state().get("turn_seconds") or 3600)
@@ -248,12 +177,9 @@ def hold_empty(store: TurnStore, turn: int, outcomes, log=print) -> int:
 def stamp_for_a_holder(blob: bytes, log=print) -> bytes:
     """The blob with its local player set to a civ that holds a planet.
 
-    The client will not open a galaxy whose local player owns no planet: it
-    starts and exits about four seconds into the load. The local player of a
-    capture is the civ the referee's client last played as, and an abandonment
-    wipe can leave that civ holding nothing. A blob whose local player still
-    holds a planet is returned unchanged; otherwise the first civ in `OWNR`
-    order that holds one is stamped, so two referees choose the same civ.
+    The client exits during load when its local player owns no planet. A blob
+    whose local player holds one is returned unchanged; otherwise the first
+    civ in `OWNR` order that holds one is stamped.
     """
     import set_blob_player
     held = {p["owner"] for p in icv.planet_records(blob)}
@@ -274,20 +200,9 @@ def tick(blob: bytes, turns: int = 1, secs: int = 10, work_dir=None,
          save_dir=None, log=print, check_save_path=True) -> bytes:
     """Advance the galaxy by `turns` turns and return the resulting blob.
 
-    `save_dir` is where the capture will land, which is wherever the stub server
-    was told to keep its data. It has to be said rather than assumed: a launcher
-    hosting the server runs it against its own data directory, and a referee
-    looking in the checkout's would wait for a file that is being written
-    somewhere else.
-
-    The save path is checked before the client is launched, for the same reason
-    `player_turn.serve` checks it before serving: the tick takes minutes, ends
-    in a `SaveGame`, and a `SaveGame` with nothing listening fails after the
-    work is done. This module's header has always named `cs_server.py` on 8888
-    as a requirement and nothing verified it, so the failure arrived as
-    `SaveGame returned 0` from inside the client rather than as a missing
-    server. Measured: with the port closed, a real turn resolution ran the whole
-    merge, launched the client, advanced the galaxy and only then lost it.
+    `save_dir` is the stub server's data directory, where the capture lands.
+    The save path is checked before the client is launched, since the tick
+    ends in a `SaveGame`.
     """
     import game_cycle as gc
     import player_turn
@@ -305,20 +220,13 @@ def tick(blob: bytes, turns: int = 1, secs: int = 10, work_dir=None,
         f.write(blob)
     log(f"  referee: {len(blob):,} bytes -> {os.path.basename(dat)}")
 
-    # The referee can afford to wait; a player mid-turn cannot afford
-    # for it not to. wait_for_client_free already watched for the client
-    # to exit, and this closes the gap between that check and the launch.
-    # `restart` takes the lock before closing anything, so a referee that
-    # cannot have the client is refused rather than ending someone's turn.
+    # `restart` takes the client lock before closing anything, so a client in
+    # use by a player is never closed.
     snap = gc.restart(dat, purpose="referee tick", wait_for_lock=240.0)
     start = snap.turn
     log(f"  referee: galaxy up at turn {start}, advancing {turns}")
 
-    # A subprocess on sys.executable is safe here and is not in the frozen
-    # build. The referee runs from a checkout, where sys.executable is a real
-    # interpreter; the release freezes release/launcher.py, which reaches
-    # player_turn and game_cycle but never this module. Computing turns stays
-    # a checkout job.
+    # The referee runs from a checkout, so sys.executable is a real interpreter.
     r = subprocess.run([sys.executable, os.path.join(DEV, "advance_turns.py"),
                         str(turns), "--secs", str(secs)],
                        capture_output=True, text=True, cwd=DEV,
@@ -337,10 +245,8 @@ def tick(blob: bytes, turns: int = 1, secs: int = 10, work_dir=None,
 def resolve_turn(store: TurnStore, save_dir=None, log=print) -> int:
     """Close the current turn and publish the next one. Returns the new turn.
 
-    The save path is checked here as well as in `tick`, because between the two
-    this writes each player's refusal notes. `tick` refusing would leave notes
-    for a turn that did not close, and the next attempt would write them again.
-    Checking first means a referee that cannot save changes nothing at all.
+    The save path is checked first so a referee that cannot save writes no
+    refusal notes.
     """
     import player_turn
     ok, why = player_turn.save_path_ready()
@@ -351,9 +257,7 @@ def resolve_turn(store: TurnStore, save_dir=None, log=print) -> int:
     blob = store.turn_blob(turn)
     roster = store.civs()
 
-    # Filled from here rather than at the merge, because a submission dropped
-    # before the merge is refused as much as an order dropped inside it, and
-    # the player is owed the same note either way.
+    # Collects refusals from reading, screening and the merge alike.
     notes, refused = {}, {}
     submitted = read_submissions(store, turn, roster, log=log, notes=notes,
                                  dropped=refused)
@@ -366,9 +270,7 @@ def resolve_turn(store: TurnStore, save_dir=None, log=print) -> int:
             continue
         ok, why = screen_submission(blob, civ, sub, turn, served_id=served_id)
         if not ok:
-            # Nothing of a dropped submission reaches the galaxy, so to every
-            # other player this civ did not submit. Only the player who sent it
-            # is told, and the reason is kept in the archive for the operator.
+            # Only the sender is told; the reason is archived for the operator.
             refused[civ] = why
             notes.setdefault(civ, []).append(why)
             log(f"  referee: {civ}: {why}")
@@ -384,19 +286,8 @@ def resolve_turn(store: TurnStore, save_dir=None, log=print) -> int:
         + (f", {len(refused)} dropped" if refused else ""))
     merged = apply_orders(blob, taken, log=log, notes=notes)
 
-    # Tell each player what was refused. Until now every refusal was logged
-    # here, on the referee's console, which on the player's machine is nowhere:
-    # a system rename and a conscription were both dropped in the first
-    # two-machine rehearsal and both players saw only their order missing the
-    # next turn. The note goes in before the tick, which takes minutes, so it
-    # is certainly there by the time a player's launcher sees the new turn and
-    # goes looking for it.
-    #
-    # It adds to whatever that turn's note already holds rather than replacing
-    # it. A player seated at the previous boundary was left a note on this
-    # turn, which is the first turn they play and so the first one
-    # `player_turn.report_refusals` reads for them, and a replace here would
-    # take it away before they ever saw it.
+    # Refusal notes are written before the tick, appended to any note the turn
+    # already holds (such as a welcome note).
     for civ, lines in sorted(notes.items()):
         try:
             joins.append_note(store, civ, turn, lines, log=log)
@@ -406,12 +297,8 @@ def resolve_turn(store: TurnStore, save_dir=None, log=print) -> int:
             log(f"  referee: could not leave {civ} a note about turn {turn}, "
                 f"{exc}")
 
-    # A galaxy in which no civ holds a planet cannot be ticked, because the
-    # client opens a galaxy only for a civ that does. Abandonment wipes reach
-    # that state when every player stops. A join is then the only way forward,
-    # so it is applied before the tick rather than after, and the newcomer is
-    # the civ the tick runs as. With nobody waiting the turn is held rather
-    # than failed: see `hold_empty`.
+    # A galaxy in which no civ holds a planet cannot be ticked. Joins are then
+    # applied before the tick; with nobody waiting the turn is held.
     early = None
     if not holds_a_planet(merged):
         merged, early = joins.apply(store, turn, turn + 1, merged, log=log)
@@ -421,35 +308,14 @@ def resolve_turn(store: TurnStore, save_dir=None, log=print) -> int:
     nxt = tick(merged, turns=1, save_dir=save_dir, log=log)
     new_turn = turn_of(nxt)
     if new_turn <= turn:
-        # The engine decides the turn number, so trust it and say so rather than
-        # inventing one: a galaxy that did not advance is a fault to surface.
         log(f"  referee: WARNING the tick produced turn {new_turn}, "
             f"not past {turn}")
 
-    # Warn, then reclaim, the seats of players who have stopped. It runs on the
-    # blob the tick produced and before it is published, because a reclaim
-    # rewrites that blob: publishing first and correcting afterwards would
-    # restart the clock on a turn players already hold. `turn` is the turn just
-    # closed, not the new one, because that is the turn the miss is counted
-    # against. A warning is left on `new_turn`, since that is the turn the
-    # silent player is served next and the note a launcher reads. It
-    # never raises for an abandonment-shaped problem; a wipe it cannot do
-    # leaves the seat and is counted again next turn.
+    # Abandonment and joins run on the tick's blob before it is published, and
+    # abandonment runs first so a join can use the planets a reclaim frees.
     nxt = abandonment.enforce(store, turn, nxt, log=log, new_turn=new_turn)
 
-    # Then seat whoever asked to join during the turn that just closed, on the
-    # same blob and for the same reason: a join applied anywhere but here is
-    # applied to a copy, and the next publish writes over it. Abandonment runs
-    # first because a reclaim frees planets and a name that a join in the same
-    # tick can then use, and because a wipe needs an uncolonised planet for its
-    # blank PLPR, which is the one thing a join consumes. See joins.py.
-    #
-    # `apply` changes bytes and nothing else. Every durable write is in
-    # `commit`, below the publish, so a referee killed between them leaves a
-    # galaxy holding an empire nobody is seated on, which an operator can
-    # answer by adding the name, rather than a roster naming a civ the galaxy
-    # does not hold, which every submission from that player then fails the
-    # screen for, turn after turn, with nothing to fix.
+    # `joins.apply` changes only bytes; `joins.commit` must follow the publish.
     if early is None:
         nxt, joined = joins.apply(store, turn, new_turn, nxt, log=log)
     else:
@@ -463,24 +329,16 @@ def resolve_turn(store: TurnStore, save_dir=None, log=print) -> int:
         "submitted": sorted(dict(taken)),
         "missing": missing,
         "ignored": ignored,
-        # A dropped submission is a missing one to the rest of the galaxy, so
-        # the civ is in `missing` above as well. The reason is here because it
-        # is the only place the operator can read why a player who says they
-        # played is recorded as absent.
+        # A dropped civ is also in `missing`.
         "dropped": refused,
-        # Who joined at this boundary and who was refused one, which is the
-        # only place an operator can read why a player who pressed Join is not
-        # in the galaxy. The blob's own civ count says a join happened and
-        # never says whose request it was.
+        # Join outcomes granted and refused at this boundary.
         "joined": [{k: v for k, v in o.items() if k != "path"}
                    for o in joined],
         "bytes_in": len(blob),
         "bytes_out": len(nxt),
         "closed_at": time.time(),
         "refused": notes,
-        # Enough to recompute this turn later and check the answer. The
-        # submissions are hashed too, so a rerun that disagrees can be told
-        # apart from a rerun given different orders.
+        # For `verify_turn` to recompute this turn and check the answer.
         "hash_in": canonical.canonical_hash(blob),
         "hash_out": canonical.canonical_hash(nxt),
         "hash_submissions": {civ: canonical.canonical_hash(s)
@@ -495,11 +353,8 @@ def verify_turn(store: TurnStore, turn: int, recompute: bool = True,
                 save_dir=None, log=print) -> bool:
     """Check a past turn against what the referee recorded for it.
 
-    Two questions, and they fail differently. Does the stored blob still match
-    the hash written when it was published, which catches an archive that has
-    been corrupted or edited; and does running the turn again produce the same
-    answer, which catches a referee that computed something different. The
-    second costs a real tick, so it can be turned off.
+    Checks that the stored blob matches its recorded hash and, with
+    `recompute`, that rerunning the turn gives the same answer (a real tick).
     """
     rec = store.archive_record(turn)
     if rec is None:
@@ -558,19 +413,8 @@ def verify_turn(store: TurnStore, turn: int, recompute: bool = True,
 
 def wait_for_client_free(timeout: float = 180.0, poll: float = 2.0,
                          log=print) -> bool:
-    """Wait until no game client is running, so ticking cannot steal one.
-
-    On one machine the referee and the players share a single game process, and
-    `tick` closes whatever is running before it starts its own. The instant a
-    deadline passes, a player's launcher is still capturing their turn, so
-    ticking immediately would close their client mid-capture and lose the orders
-    it was in the middle of writing. Waiting costs a few seconds and is the
-    difference between a turn and a lost turn.
-
-    In the deployment this is heading for the referee is on another host and this
-    returns immediately, which is the right shape for it: a check that becomes
-    free rather than a rule that has to be remembered.
-    """
+    """Wait until no game client is running, so a tick does not close a
+    player's client mid-capture. Returns False on timeout."""
     import game_cycle as gc
     end = time.time() + timeout
     said = False
@@ -590,10 +434,8 @@ def loop(store: TurnStore, poll: float = 5.0, once: bool = False,
          grace: float = 20.0, save_dir=None, log=print):
     """Resolve each turn as its deadline passes, for as long as asked.
 
-    `grace` is how long after the deadline to keep accepting submissions. A
-    player's launcher needs a few seconds to trigger a save, wait for it to
-    arrive over HTTP and write it to the store, and a turn resolved inside that
-    window drops orders the player did give.
+    `grace` is how many seconds after the deadline to keep accepting
+    submissions, for launchers still capturing and uploading.
     """
     while True:
         left = store.seconds_left()

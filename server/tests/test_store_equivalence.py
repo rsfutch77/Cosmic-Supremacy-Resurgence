@@ -5,54 +5,24 @@ test_store_equivalence.py: three stores, one interface, the same answers
     ... test_store_equivalence.py --firebase firebase://demo-cs/g1?bucket=b
     ... test_store_equivalence.py --only firebase --firebase <spec> --keep
 
-`open_store` hands a caller a directory, a service or Firebase and the caller
-never learns which. That is only true while the three behave the same, and the
-places they can quietly stop are not the obvious ones: what a missing turn
-raises, whether a second submission replaces or joins, whether publishing keeps
-the roster, what `state` holds, and what an archive record survives being
-stored as.
+The same sequence runs against the directory, HTTP and Firebase stores and the
+answers are compared: start, publish, submit, one player's own submission, the
+submission list, the archive, the notes, missing turns, joins and the factory.
 
-So the same sequence runs against each of them and the answers are compared,
-rather than each implementation being tested against its own expectations. The
-sequence is the F1 sequence: start, publish, submit, one player's own
-submission, the submission list, the archive, the notes, missing turns and the
-factory, and now the seat a stranger asked for.
+The HTTP run is also checked against the directory underneath the service, and
+runs with and without a token.
 
-Joins are here because of how J3 went wrong, which is the failure this file
-exists to catch. The launcher wrote a request into the store's directory and
-the worker read the directory back, so the feature worked, completely, against
-one of the three implementations and against nothing else. The beta galaxy is
-Firebase. A test that lodges a request and reads it back through one store
-proves nothing about the other two, so `run_joins` runs against each of them
-and the result goes into the summary the three are compared on.
-
-The HTTP run is made against a directory this test can also read, so the
-service's answers are checked against the directory underneath it as well as
-against the other implementations. Firebase has nothing underneath it to
-compare with, which is the point of comparing the three summaries.
-
-The HTTP run happens twice over, without a token and with one. A launcher that
-holds a Firebase identity has to be able to talk to a LAN service that does not
-verify one, and a launcher that holds none has to behave exactly as it did
-before identities existed. What the relay function does with a token it has
-verified is `test_relay_function.py`'s to check.
-
-The Firebase run needs somewhere to run against, and takes it either way:
+The Firebase run uses an explicit `--firebase` spec, or the emulator:
 
     firebase emulators:start --only firestore,storage
     set FIRESTORE_EMULATOR_HOST=127.0.0.1:8080
     set STORAGE_EMULATOR_HOST=http://127.0.0.1:9199
 
-With those set and no `--firebase`, the run uses a `demo-` project, which the
-emulator suite treats as offline-only, and a galaxy named for the clock so two
-runs cannot collide. Whatever it creates it deletes, unless `--keep`.
+With those set and no `--firebase`, the run uses a `demo-` project and a galaxy
+named for the clock. Whatever it creates it deletes, unless `--keep`.
 
-The blobs are built here rather than loaded, because two of the things under
-test read inside one: `start` takes the turn number from the blob when it is
-not told one, and the state carries the blob's canonical hash. Ninety-six bytes
-of real framing gives both, and a `KNPL` whose trailing dword the canonical
-form masks, so a hash that agreed for the wrong reason would show. The save
-format itself is exercised against real captures elsewhere.
+The test blobs carry a turn number and a `KNPL` whose trailing dword the
+canonical form masks.
 """
 import argparse
 import os
@@ -88,9 +58,7 @@ def section(tag, payload, version=0):
 def make_blob(turn, filler=b'.'):
     """A blob that carries a turn number and a field the canonical form masks.
 
-    `start` reads the turn out of the blob when it is not given one, which is
-    the path the referee uses and the only path the HTTP store offers, so a
-    test blob that cannot be parsed would quietly test something narrower.
+    `start` reads the turn out of the blob when it is not given one.
     """
     return section(b'SAVE',
                    section(b'GLOB', struct.pack('<I', turn) + filler * 60) +
@@ -104,21 +72,14 @@ MINE = make_blob(TURN, b'o')
 MINE2 = make_blob(TURN, b'p')
 THEIRS = make_blob(TURN, b'n')
 
-# A civ name with a dot in it, which is why the Firebase archive record is one
-# JSON string and not a Firestore map: a map key may not be any string a player
-# typed, and this is a name a player could type.
+# A civ name with a dot in it. The Firebase archive record is one JSON string
+# because a Firestore map key may not be any string a player typed.
 DOTTED = 'Player.One'
 
 # Two join requests, in the shape `release/launcher.py` writes one. Bo asked
-# first and Ada second, and they are lodged the other way round, so an order
-# that came from the listing rather than from `requested_at` shows.
-#
-# Ada has a uid and Bo has none, which is the difference between a beta galaxy
-# and a folder: a request is filed under the uid when there is one and under
-# the name when there is not. Bo's name carries a dot, which is what decides
-# whether a store can key a request by a name a player typed at all: a
-# Firestore document id may not be a dot and may not be spelled `__like_this__`,
-# so the key is escaped into an id rather than used as one.
+# first and is lodged second, so the order must come from `requested_at`.
+# A request is filed under the uid when there is one and under the name
+# otherwise. Bo's dotted name has to be escaped into a Firestore document id.
 ADA = {'name': 'Ada', 'uid': 'uid-ada', 'build': '0.1.0+dev',
        'requested_at': 200.0, 'requested_turn': TURN}
 BO = {'name': 'Bo.1', 'uid': None, 'build': '0.1.0+dev',
@@ -142,12 +103,10 @@ def raises(fn, *a):
     return None
 
 
-# ── the sequence ─────────────────────────────────────────────────────────────
 def run_sequence(store, label, turn=TURN, writer=None):
     """The same checks against whichever store this is.
 
-    Returns what the store ended up holding, so the three runs can be compared
-    against each other rather than only against their own expectations.
+    Returns what the store ended up holding, so the runs can be compared.
     """
     print(f'{label}: an empty store')
     check(f'{label}: exists() is False before a galaxy is started',
@@ -183,10 +142,7 @@ def run_sequence(store, label, turn=TURN, writer=None):
     print(f'{label}: submissions')
     check(f'{label}: nobody has submitted yet',
           store.has_submitted('DemoPlayer', turn), False)
-    # A submission that is not there is None rather than an exception, on all
-    # three. `player_turn` asks this every poll and the ordinary answer before
-    # a player has played is that there is nothing, so absence has to be an
-    # answer and not a fault, the way it is for `has_submitted`.
+    # A missing submission is None on every store, not an exception.
     check(f'{label}: a submission nobody has made is None',
           store.submission('DemoPlayer', turn), None)
     check(f'{label}: and asking for it raises nothing',
@@ -216,8 +172,6 @@ def run_sequence(store, label, turn=TURN, writer=None):
           store.submitted_civs(turn), sorted(store.submissions(turn)))
     check(f'{label}: a turn nobody submitted for names nobody',
           store.submitted_civs(turn + 1), [])
-    # The point of the accessor: each civ gets their own bytes and nobody
-    # else's, without a listing that a storage rule would have to grant.
     check(f'{label}: each civ reads their own submission',
           (store.submission('DemoPlayer', turn),
            store.submission('Neighbor', turn)), (MINE2, THEIRS))
@@ -302,21 +256,11 @@ def run_sequence(store, label, turn=TURN, writer=None):
     }
 
 
-# ── the fields a galaxy document carries ─────────────────────────────────────
 def run_state_fields(store, label, writer):
     """A field the interface names survives being written and read back.
 
-    `FirebaseTurnStore.state` returns an allowlist, so a field added to the
-    galaxy by one writer and read by another is carried by two stores and
-    dropped in silence by the third. Both fields below were in exactly that
-    state and neither failure was a missing write: `joins.commit` wrote
-    `joined` and `join_turn_acceptance.py` read nothing back from a Firebase
-    galaxy, and L2's gate read `min_build` out of a state that could not carry
-    it, so every build passed on the one deployment that has strangers in it.
-
-    Checked here rather than in either of those files because the allowlist is
-    the store's, and a test that passes against a directory says nothing about
-    it, which is how both of them got in.
+    `FirebaseTurnStore.state` returns an allowlist, so each field read from the
+    galaxy state must be on it.
     """
     print(f'{label}: the fields a galaxy carries')
     seated = {'Ada': {'turn': TURN + 1, 'uid': 'uid-ada', 'planet': 6,
@@ -332,20 +276,8 @@ def run_state_fields(store, label, writer):
           state['turn'], store.current()[0])
 
 
-# ── the seat a stranger asked for ────────────────────────────────────────────
 def run_joins(store, label):
-    """J3's half of the interface, against whichever store this is.
-
-    A join is the only thing a caller with no seat writes, and until now it was
-    the only thing only one of the three implementations could take: the
-    launcher wrote a file into the store's directory and `HttpTurnStore` and
-    `FirebaseTurnStore` had nowhere to put one. The beta galaxy is Firebase, so
-    the feature was unreachable by the beta it was built for.
-
-    Every check here is about the round trip rather than about the write
-    succeeding, because a write that succeeded and cannot be read back is
-    exactly the shape that bug had.
-    """
+    """Join requests and answers round-trip through whichever store this is."""
     print(f'{label}: joins')
     check(f'{label}: a galaxy nobody has asked to join has nothing waiting',
           store.join_requests(), [])
@@ -364,22 +296,18 @@ def run_joins(store, label):
     check(f'{label}: the uid J4 binds a seat to', waiting[0]['uid'], 'uid-ada')
     check(f'{label}: the turn they asked during',
           waiting[0]['requested_turn'], TURN)
-    # Filed under the uid and not the name. Fails if the key came from the
-    # name, which would give one player two requests after a rename and would
-    # let a second install lodge one under a name it does not hold.
+    # A key taken from the name would give one player two requests after a
+    # rename.
     check(f'{label}: and filed under the uid rather than the name',
           waiting[0]['key'], 'uid-ada')
 
     store.request_join(BO)
-    # Fails if the order came from the listing. A directory sorts by file name
-    # and Firestore streams in document-id order, and on both of those Ada
-    # comes first; only `requested_at` puts Bo there, and who asked first is
-    # what decides which of two joins gets the last free planet.
+    # Order comes from `requested_at`, which decides who gets the last free
+    # planet. Listing order would put Ada first.
     check(f'{label}: two requests come back oldest first',
           [r['name'] for r in store.join_requests()], ['Bo.1', 'Ada'])
-    # A name a player could type, as a key. Fails on Firestore if the key were
-    # used as a document id unescaped, because an id may not hold a dot on its
-    # own and may not be spelled `__like_this__`.
+    # A Firestore document id may not be a lone dot or `__like_this__`, so the
+    # key is escaped.
     check(f'{label}: a request with no uid is filed under the name',
           [r['key'] for r in store.join_requests()], ['Bo.1', 'uid-ada'])
 
@@ -388,9 +316,8 @@ def run_joins(store, label):
           len(store.join_requests()), 2)
     check(f'{label}: and the replacement is what is read back',
           store.join_request('uid-ada')['build'], '0.1.1+dev')
-    # Fails if the named read and the listing disagreed, which is the H6 shape
-    # one step along: the launcher polls the named read and the worker reads
-    # the list, and a player must not be told something the worker will not do.
+    # The launcher polls the named read and the worker reads the list, so the
+    # two must agree.
     check(f'{label}: a named read is the record the listing gives',
           store.join_request('uid-ada'),
           [r for r in store.join_requests() if r['key'] == 'uid-ada'][0])
@@ -403,10 +330,8 @@ def run_joins(store, label):
               'reason': '', 'planet': 6, 'sun': 3, 'system': 'Tau Ceti',
               'answered_at': 300.0}
     store.answer_join('uid-ada', answer)
-    # The three defences against one join being granted twice are independent
-    # and this is the first of them. Fails if consuming did not consume: the
-    # worker reads this list at every boundary, and a request still in it after
-    # it was granted is a second empire for one player.
+    # A request still waiting after it was granted would be granted again at
+    # the next boundary.
     check(f'{label}: an answered request stops waiting',
           [r['key'] for r in store.join_requests()], ['Bo.1'])
     check(f'{label}: and is not there under its own key either',
@@ -417,9 +342,7 @@ def run_joins(store, label):
           store.join_answer('Bo.1'), None)
 
     store.answer_join('uid-ada', answer)
-    # A worker killed after the write and before it knew the write landed
-    # retries. Fails if answering twice raised, which inside a tick ends the
-    # turn for everybody, or if it put the request back.
+    # A worker killed after the write retries it, so answering is idempotent.
     check(f'{label}: answering twice is not an error',
           store.join_answer('uid-ada'), answer)
     check(f'{label}: and does not put the request back',
@@ -427,19 +350,15 @@ def run_joins(store, label):
 
     check(f'{label}: a request filed under nothing is refused',
           raises(store.request_join, {'name': '  '}), 'ValueError')
-    # Refused by all three rather than escaped by the two that could, because a
-    # galaxy moves between a folder and Firebase by copying and a request only
-    # one of them can hold would not survive the move.
+    # Refused by every store, so a galaxy copied between a folder and Firebase
+    # holds the same requests.
     check(f'{label}: and one filed under a name that cannot be a file is too',
           raises(store.request_join, {'name': 'a/b'}), 'ValueError')
     check(f'{label}: neither of which is now waiting',
           [r['key'] for r in store.join_requests()], ['Bo.1'])
 
-    # `joins.pending` is the worker's read, and it is the seam J3 left
-    # unexercised: it asks a store for `join_requests` and only one of the
-    # three had one. Imported here rather than at the top of this file because
-    # `joins` pulls in the injection tools, and nothing else in this test needs
-    # a save format that can hold a civ.
+    # `joins.pending` is the worker's read. Imported here because `joins`
+    # pulls in the injection tools.
     import joins
     check(f'{label}: joins.pending reads what this store is holding',
           [r['key'] for r in joins.pending(store, log=lambda *a: None)],
@@ -448,16 +367,11 @@ def run_joins(store, label):
           joins.pending(store, log=lambda *a: None), store.join_requests())
 
 
-# ── what a names-only read is allowed to fetch ───────────────────────────────
 class CountingStore(TurnStore):
     """A directory store that records every submission blob it reads.
 
-    Counting the fetches rather than checking the answer is the whole point.
-    `sorted(store.submissions(turn))` returns the right names, and returned the
-    right names before this was fixed; what was wrong was that it downloaded
-    every player's orders to produce them. A test that compared the answer
-    would have passed against the bug, which is how the bug lived in
-    `check_store.py` and `turn_server.py` long enough to be written down as H6.
+    Names-only reads are checked by what they fetch, since fetching every blob
+    also produces the right names.
     """
 
     def __init__(self, root):
@@ -477,12 +391,9 @@ class CountingStore(TurnStore):
 
 
 def run_fetch_counts(tmp):
-    """H6, on both sides of the seam: names cost no blobs.
+    """Names-only reads fetch no blobs, in the directory store and over HTTP.
 
-    The service half is measured through the store `turn_server` is holding,
-    so what is counted is what the machine serving the route actually read off
-    disk. `HttpTurnStore` and `turn_server.py` are a matched pair and F3 is
-    what happens when one of them is fixed and the other is not.
+    The HTTP half is counted through the store `turn_server` is holding.
     """
     import turn_server
     print('names-only reads fetch no blobs')
@@ -531,9 +442,7 @@ def run_fetch_counts(tmp):
         httpd.server_close()
         turn_server.STORE, turn_server.VERBOSE = kept_store, kept_verbose
 
-    # check_store.py prints the names and nothing else, so it is held to the
-    # same count. Its own store rather than the launcher's config, because the
-    # tool reads a spec when it is given one.
+    # check_store.py prints only the names, so it is held to the same count.
     import check_store
     counted = CountingStore(root)
     counted.fetched = []
@@ -547,16 +456,13 @@ def run_fetch_counts(tmp):
 def inspect_source(module) -> str:
     """A module's own text, for asserting on what it calls.
 
-    A source-order assertion rather than a stub, because what is being held
-    still is a call this test cannot reach: `check_store.main` wants a config,
-    a path and a console, and the thing worth pinning is that the expensive
-    call is not written there any more.
+    `check_store.main` needs a config, a path and a console, so its calls are
+    checked in the source.
     """
     import inspect
     return inspect.getsource(module)
 
 
-# ── the three runs ───────────────────────────────────────────────────────────
 def run_directory(tmp):
     root = os.path.join(tmp, 'galaxy_dir')
     return run_sequence(TurnStore(root), 'directory')
@@ -573,15 +479,10 @@ def run_http(tmp):
     thread.start()
     try:
         base = f'http://127.0.0.1:{httpd.server_address[1]}'
-        # The operator's writes are refused over this interface on purpose,
-        # so the state fields are written through the directory the service is
-        # holding and read back through the service, which is the pair that
-        # matters: a launcher reads L2's gate over HTTP and an operator sets it
-        # where the galaxy lives.
-        #
-        # `state_seconds=0` because the directory's write is read back at once,
-        # and an HTTP store sees a write it did not make up to that window
-        # late. test_state_reads.py covers the window itself.
+        # The service refuses operator writes, so the state fields are written
+        # through the directory and read back through the service.
+        # `state_seconds=0` so that write is seen at once; test_state_reads.py
+        # covers the window.
         summary = run_sequence(HttpTurnStore(base, state_seconds=0), 'http',
                                writer=TurnStore(root))
         run_token_checks(base, root, summary['turn'])
@@ -603,10 +504,7 @@ def run_http(tmp):
           under.submission('DemoPlayer', 7), summary['submission'])
     check('http: the directory holds the same archive record',
           under.archive_record(7), summary['archive'])
-    # The join half, through the service and into the folder behind it. Fails
-    # if the service had answered out of something of its own rather than
-    # writing through, which is the only way a request could be readable over
-    # HTTP and invisible to the worker holding the same galaxy as a directory.
+    # Joins written through the service land in the folder behind it.
     check('http: the directory sees the request that is still waiting',
           [r['key'] for r in under.join_requests()],
           [r['key'] for r in summary['joins']])
@@ -618,18 +516,8 @@ def run_http(tmp):
 def run_token_checks(base, root, turn):
     """The same service, spoken to by a launcher that holds an identity.
 
-    The relay function verifies a Firebase ID token and this service does not,
-    which is the difference between a LAN and a beta. What must be true of both
-    is that one launcher speaks to either: a store carrying a token has to work
-    against a service that ignores one, and a store carrying none has to work
-    exactly as it did before tokens existed.
-
-    The service's own log is the witness that the header arrived. Checking that
-    a tokened call succeeds proves nothing on its own, because a call with the
-    header silently dropped would succeed too, and that is the failure this is
-    for: `HttpTurnStore` scopes the header to its own base and a mistake there
-    would leave every request unauthenticated against the relay and identical
-    against this.
+    This service ignores tokens, so a store with or without one must work
+    against it. The service's log shows whether the header arrived.
     """
     print('http: a token rides along and is not required')
     import turn_server
@@ -666,10 +554,8 @@ def run_token_checks(base, root, turn):
               any('Absent' in ln and 'identity offered' in ln
                   for ln in lines), False)
 
-        # The relay refuses a body that is not a save of the turn before it
-        # stores anything. This service checks the same thing at the same
-        # point and leaves the store in the same state, which is the only way
-        # a launcher can treat the two as one.
+        # Like the relay, the service refuses a body that is not a save of the
+        # turn before it stores anything.
         check('http: the service refuses a submission that is not a save',
               raises(post_junk, base, turn), 'HTTPError')
         check('http: and does not leave it for the referee to read',
@@ -678,9 +564,7 @@ def run_token_checks(base, root, turn):
               raises(post_stale, base, turn), 'HTTPError')
         check('http: and does not leave that either',
               TurnStore(root).submission('Stale', turn), None)
-        # The relay refuses before it stores, so a bad body leaves the
-        # submission it was sent over standing. Fails if this service stored
-        # first and removed after, which leaves the player with nothing.
+        # A refused body leaves the earlier submission standing.
         plain.submit('Standing', turn, mine)
         check('http: a refused body over a good submission raises',
               raises(plain._post, f'/submission/{turn}/Standing',
@@ -696,9 +580,7 @@ def run_token_checks(base, root, turn):
         legacy = f'http://127.0.0.1:{old_style.server_address[1]}'
         mine = make_blob(turn, b'j')
         HttpTurnStore(legacy).submit('Legacy', turn, mine)
-        # The fallback the ticket route is allowed to be absent for. Fails if
-        # `submit` required a ticket, which would break every launcher pointed
-        # at a turn_server that has not been updated.
+        # `submit` falls back when the service has no ticket route.
         check('http: a submission still lands when there is no ticket route',
               TurnStore(root).submission('Legacy', turn), mine)
     finally:
@@ -737,12 +619,10 @@ def post_stale(base, turn):
 
 
 def firebase_spec(given):
-    """Where the Firebase run goes, and whether there is anywhere for it.
+    """Where the Firebase run goes, or None when there is nowhere.
 
-    An explicit spec wins, because that is how the live smoke check is aimed.
-    Otherwise the emulator, which announces itself through the same environment
-    variables the client libraries read, and a `demo-` project, which the
-    emulator suite refuses to let reach a real one.
+    An explicit spec wins. Otherwise the emulator, if its environment variables
+    are set, with a `demo-` project.
     """
     if given:
         return given
@@ -769,12 +649,10 @@ def run_firebase(spec, keep=False):
 
 
 def run_submitted_field(spec):
-    """H9: who has submitted, carried on the galaxy document.
+    """Who has submitted, carried on the Firebase galaxy document.
 
-    Firebase only, because only Firebase charges for a listing. What is checked
-    is that the document and the bucket never disagree about the current turn,
-    and that the document says nothing about any other turn, since a turn it
-    answers wrongly is worse than one it sends to the bucket.
+    The document must agree with the stored submissions for the current turn
+    and say nothing about any other turn.
     """
     import firebase_store as fs
     path, sep, query = spec.partition('?')
@@ -803,8 +681,7 @@ def run_submitted_field(spec):
         store.record_submitted('Neighbor', TURN)
 
         store.publish(TURN + 1, BLOB2)
-        # Fails if publish merged the map rather than replacing it, which
-        # would keep every past turn and grow the document for ever.
+        # Publish replaces the map, so the document does not grow each turn.
         check('firebase: publish replaces the record with the new turn alone',
               recorded(), {str(TURN + 1): []})
         check('firebase: a past turn is answered from the stored submissions',
@@ -812,9 +689,8 @@ def run_submitted_field(spec):
         check('firebase: and the new turn from the document, as nobody',
               store.submitted_civs(TURN + 1), [])
 
-        # A galaxy last published by a store without either field, which is
-        # every galaxy live when H9 shipped, with a submission uploaded as a
-        # Storage object before H13.
+        # A galaxy without either field, with a submission stored as a Storage
+        # object.
         from google.cloud import firestore
         store.doc.update({fs.SUBMITTED_KEY: firestore.DELETE_FIELD,
                           fs.SUBMISSIONS_FROM_KEY: firestore.DELETE_FIELD})
@@ -822,8 +698,8 @@ def run_submitted_field(spec):
                    sp.encode_save(THEIRS), 'text/plain')
         check('firebase: a document without the field falls back to the '
               'bucket', store.submitted_civs(TURN + 1), ['Neighbor'])
-        # Fails if a galaxy started with submissions as documents still asked
-        # the bucket, which is a Class A listing for every past turn asked.
+        # A galaxy started with submissions as documents does not list the
+        # bucket.
         store.doc.update({fs.SUBMISSIONS_FROM_KEY: TURN})
         check('firebase: CONTROL, and one started with documents does not',
               store.submitted_civs(TURN + 1), [])
@@ -832,7 +708,6 @@ def run_submitted_field(spec):
         print(f'  removed {n} object(s) and document(s)')
 
 
-# ── the factory ──────────────────────────────────────────────────────────────
 def check_factory():
     print('the factory hands back the right one')
     import firebase_store

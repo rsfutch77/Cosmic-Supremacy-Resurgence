@@ -1,10 +1,9 @@
 """
 advance_turns.py: Advance the game N turns unattended
-======================================================
+
 Shortens the turn length, watches the turn counter until it has advanced N
-times, then restores the original turn length. Unlike fast_turns.py this reads
-the turn counter, so it reports actual progress and detects a stalled pipeline
-instead of leaving you guessing.
+times, then restores the original turn length. Reports progress and detects a
+stalled turn pipeline.
 
     python advance_turns.py 50            # 50 turns, 10s each
     python advance_turns.py 50 --secs 5   # faster, if the machine keeps up
@@ -12,16 +11,14 @@ instead of leaving you guessing.
 
 Addresses (both .data, stable across launches):
     0x0080AA08  turn length in seconds; writing it collapses the current turn
-    0x008578E8  turn counter, located by capturing every address holding the
-                UI's turn number and keeping those that incremented together
-
+    0x008578E8  turn counter
 """
 import ctypes
 from ctypes import wintypes
 import struct
 import sys
 import time
-from client_proc import find_pid, NOT_THE_CLIENT  # one copy, see client_proc.py
+from client_proc import find_pid, NOT_THE_CLIENT
 
 PROCESS_VM_READ           = 0x0010
 PROCESS_VM_WRITE          = 0x0020
@@ -90,8 +87,7 @@ def main():
 
     target = start + want
     last, stalled_since = start, time.time()
-    # generous per-turn allowance: the engine resolves a turn in well under the
-    # turn length, but a slow machine or a modal prompt can hold it up
+    # A slow machine or a modal prompt can hold a turn past its length.
     stall_limit = max(secs * 6, 60)
     try:
         while True:

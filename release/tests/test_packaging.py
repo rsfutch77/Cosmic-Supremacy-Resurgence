@@ -1,15 +1,12 @@
 """
 The multiplayer path has to survive being frozen.
 
-Every check here is something that fails silently rather than loudly. A
-misspelled `--hidden-import` still builds; PyInstaller notes it and carries on,
-and the module is simply absent at runtime. A module that works out where it is
-from `__file__` still imports; it just computes paths inside the temporary
-directory the build unpacks into. A `sys.executable` subprocess still runs; in a
-frozen build it starts a second launcher.
+Each check covers a failure that is silent in a build: a misspelled
+`--hidden-import`, a path computed from `__file__` inside the unpack directory,
+and a `sys.executable` subprocess, which in a frozen build starts a second
+launcher.
 
-No game and no window. Nothing here starts a client, because the machine has one
-and something else is usually using it.
+No game and no window.
 """
 import ast
 import os
@@ -37,8 +34,7 @@ def check(label, got, want):
 def build_flags(flag):
     """Every value build.ps1 passes to a PyInstaller flag.
 
-    Read out of the script rather than duplicated here. A list kept in both
-    places would drift, and the copy that matters is the one the build runs.
+    Read out of the script, so the list is the one the build runs.
     """
     text = open(BUILD_PS1, encoding="utf-8-sig").read()
     return re.findall(rf"'{flag}',\s*(?:'([^']+)'|\$(\w+))", text)
@@ -55,9 +51,7 @@ def ps_variable(name):
     return None if base is None else os.path.join(base, leaf.replace("\\", os.sep))
 
 
-# ── The analysis path ─────────────────────────────────────────────────────────
-# Resolved the way build.ps1 resolves it, so a renamed directory fails here
-# rather than at the first multiplayer turn of the next release.
+# The analysis path, resolved the way build.ps1 resolves it.
 paths = []
 for literal, var in build_flags("--paths"):
     p = literal or ps_variable(var)
@@ -66,9 +60,8 @@ for literal, var in build_flags("--paths"):
         check(f"--paths {os.path.relpath(p, REPO)} exists", os.path.isdir(p), True)
         paths.append(p)
 
-# ── Every hidden import is a module that actually exists ──────────────────────
-# The whole point of naming them: they are imported inside functions, so nothing
-# else in this repo would notice one going missing.
+# Every hidden import is a module that exists. They are imported inside
+# functions, so nothing else would notice one missing.
 import importlib.util                                           # noqa: E402
 
 probe = list(paths) + sys.path
@@ -84,11 +77,8 @@ for literal, var in build_flags("--hidden-import"):
         found = True
     check(f"--hidden-import {name} exists", found, True)
 
-# ── Nothing in the player's path re-runs sys.executable ───────────────────────
-# This is the bug the packaging work existed to fix, and it is invisible from a
-# checkout: sys.executable is a real interpreter there and the subprocess works.
-# referee.py is deliberately not in this list. It runs from a checkout and the
-# release does not contain it.
+# Nothing in the player's path re-runs sys.executable, which works from a
+# checkout and not from a frozen build. referee.py is not in the release.
 PLAYER_PATH = [
     os.path.join(REPO, "server", "player_turn.py"),
     os.path.join(REPO, "client", "dev_tools", "game_cycle.py"),
@@ -100,7 +90,7 @@ for src in PLAYER_PATH:
             and isinstance(n.value, ast.Name) and n.value.id == "sys"]
     check(f"{os.path.basename(src)} does not re-exec sys.executable", hits, [])
 
-# ── The turn machinery can be pointed somewhere else ──────────────────────────
+# The turn machinery can be pointed somewhere else
 mods = L.multiplayer_modules()
 check("multiplayer_modules() finds the machinery", mods is not None, True)
 
@@ -124,17 +114,15 @@ if mods:
           callable(getattr(gc, "trigger_save", None)), True)
 
     # The launcher refuses to start a turn without one of these, and build.ps1
-    # is what puts one there. Two lists, one contract.
+    # puts one there. The two lists must agree.
     shipped = set(re.findall(r"'(CosmicSupremacy_\w+\.exe)'",
                              open(BUILD_PS1, encoding="utf-8-sig").read()))
     check("build.ps1 ships a client the launcher will accept",
           shipped & set(L.MP_CLIENTS), lambda got: bool(got))
 
-# ── The checkout writes no bytecode for trigger_save ──────────────────────────
-# Defender quarantines trigger_save.cpython-312.pyc as Exploit:Python/Leivion.C,
-# measured 13 times between 20 and 27 September 2026, and never the .py. The
-# probe modules below are harmless, so this proves the mechanism without
-# writing the file that gets quarantined.
+# The checkout writes no bytecode for trigger_save. Defender quarantines
+# trigger_save's .pyc as Exploit:Python/Leivion.C, never the .py. Harmless
+# probe modules test the mechanism.
 import tempfile                                                 # noqa: E402
 
 sys.path.insert(0, os.path.join(REPO, "client", "dev_tools"))
@@ -192,14 +180,12 @@ def bytecode_off_line(tree):
 
 
 # Every file in the checkout that imports trigger_save turns bytecode off
-# first. game_cycle is the one the launcher reaches, and it goes through the
-# helper instead of an import statement.
+# first. game_cycle goes through a helper, not an import statement.
 SKIP_DIRS = {".git", ".claude", "dist", "build", "__pycache__", "wayback",
              "node_modules"}
 importers = []
 for root, dirs, files in os.walk(REPO):
-    # Dot directories hold other worktrees and tool state, which are copies of
-    # the checkout at other commits rather than part of it.
+    # Dot directories hold other worktrees and tool state.
     dirs[:] = [d for d in dirs if d not in SKIP_DIRS and not d.startswith(".")]
     for f in files:
         if not f.endswith(".py") or f == "trigger_save.py":
@@ -231,9 +217,8 @@ helper_calls = [c for c in ast.walk(ts_fn)
 check("game_cycle.trigger_save imports it through import_without_bytecode",
       len(helper_calls), 1)
 
-# ── build.ps1 keeps loose bytecode out and names what holds a file ────────────
-# The two functions are taken out of build.ps1 by PowerShell's own parser and
-# run on their own, so these checks exercise the script's code and not a copy.
+# build.ps1 keeps loose bytecode out and names what holds a file. The functions
+# are taken out of build.ps1 by PowerShell's own parser.
 import subprocess                                               # noqa: E402
 
 

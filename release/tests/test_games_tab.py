@@ -2,15 +2,9 @@
 The Games tab: what it lists, what a Join writes down, and what a seat refusal
 is allowed to say.
 
-Headless and offline. Everything here is the launcher's module-level code
-against a galaxy directory and a turn store made in a temporary folder, so it
-runs in about a second. No game, no window, no network: the one galaxy any of
-this opens is a folder on this disk, which is also the case that must never
-mint an identity or reach Firebase.
-
-The half that is not here is the worker's. A join request is written and read
-back as a file; nothing in this checkout merges it into a galaxy yet (J3), so
-no check below claims a seat was granted.
+Headless and offline: a galaxy directory and a turn store in a temporary
+folder. A folder galaxy must never mint an identity or reach Firebase. A join
+request is written and read back as a file; no check claims a seat was granted.
 """
 import json
 import os
@@ -122,10 +116,8 @@ L.clear_joined(d)
 check("clearing twice is not an error", os.path.exists(L.joined_path(d)), False)
 
 print("\n4. a second galaxy is joined, not swapped for the first")
-# The check that matters here is that the first galaxy is still named after
-# the second is joined. Counting the records would pass an implementation that
-# overwrote one and left a stale one behind, so every record is asked for by
-# name and the order they are in is asserted as well.
+# The first galaxy is still named after the second is joined. Records are
+# checked by name and order, since a count would pass an overwrite.
 two = fresh_dir()
 first = L.joined_record(row(gid="sandbox", store="C:\\g\\sandbox"), "Alice",
                         None, "D:\\galaxies", now=1000.0)
@@ -164,9 +156,7 @@ check("and the file goes with the last record",
       os.path.exists(L.joined_path(two)), False)
 
 print("\n5. a joined.json written before a player could be in two")
-# Read off disk in the shape the launcher used to write, rather than from a
-# dict built here to look like one: the thing being checked is that a file an
-# install already has still holds the seat it recorded.
+# A file in the older on-disk shape still holds the seat it recorded.
 old = fresh_dir()
 with open(L.joined_path(old), "w", encoding="utf-8") as fh:
     fh.write('{\n  "directory": "firebase://cs-resurgence",\n'
@@ -274,9 +264,7 @@ check("and nothing was written for one",
       os.path.exists(os.path.join(quiet, "fb_identity.json")), False)
 
 print("\n8. the cells a galaxy's row prints")
-# Rewritten from the one-line summary the old Games panel drew. The panel is
-# gone and the page draws a table, so each rule the sentence carried is
-# asserted against the cell that carries it now.
+# Each rule is asserted against the table cell that carries it.
 now = 1_000_000.0
 
 

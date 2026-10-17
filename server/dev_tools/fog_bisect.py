@@ -1,20 +1,11 @@
 """
 fog_bisect.py: how much galaxy can be removed before a client stops loading
-============================================================================
     python fog_bisect.py server/fog_work/fix80.dat --civ Alice
 
-`project_blob.py` produces a blob the client will not open: Alice's view, one
-system kept, never becomes readable. Dropping a single system is fine. This
-finds where between the two it stops working, because "it does not load" is not
-yet a cause and guessing at one wasted three launches already.
-
-Binary search on the number of systems dropped, always dropping from the same
-end of the same ordered list so that a failing count is reproducible rather
-than depending on which systems the search happened to pick.
-
-`launch` is given 45 seconds rather than its usual 180. A successful load here
-takes about 15, so 45 is ample, and a failure costs a quarter of what it did.
-That matters because the search spends most of its time on failures.
+Binary search on the number of systems that can be dropped before the client
+stops loading. Systems are always dropped from the same end of the same
+ordered list, so a failing count is reproducible. `launch` waits 45 seconds by
+default; a successful load takes about 15.
 """
 import argparse
 import os

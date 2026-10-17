@@ -1,45 +1,31 @@
 """
 wipe_acceptance.py: does a galaxy with a civ wiped out of it still play?
-=========================================================================
     python wipe_acceptance.py prepare  --civ Neighbor
     python wipe_acceptance.py load     --which wiped
     python wipe_acceptance.py ticks    --turns 20 --runs 2
     python wipe_acceptance.py colonise --which wiped  --planet 138
     python wipe_acceptance.py colonise --which base   --planet 138
 
-The checks K4 names, each written so that it can fail. A blob that loads once is
-not the bar: D1's failure showed up as a clean exit four seconds into a load with
-no exception stream, and an earlier round of fog results had to be withdrawn
-because the harness scored "did not become readable" for a galaxy that had loaded
-perfectly well and whose local civ simply owned nothing to read.
+`game_cycle.launch` waits for a local civ with at least one planet, so
+`prepare` stamps every blob it writes for a civ that survives the wipe.
 
-That trap is live here, because a wiped civ owns nothing by construction.
-`game_cycle.launch` waits for a civ with at least one planet, so a wiped galaxy
-stamped for the wiped civ would report a failure that is the harness's and not
-the engine's. `prepare` therefore stamps every blob it writes for a civ that
-survives, and says which.
-
-The runs, and what would have counted as a failure:
+The runs, and what counts as a failure:
 
     load      the client comes up on the wiped galaxy and its state is
               readable. Failure: the process exits during the load, or the
               state never becomes readable inside the timeout.
     ticks     the wiped galaxy ticks N turns, twice, from separate process
               launches, and the two agree on their canonical hash; the result
-              is then ticked again, which is the only thing that shows the
-              POST-tick blob loads. Failure: a tick that does not reach the
-              target turn, two runs that disagree, or a third launch that will
-              not open the result.
+              is then ticked again to show the post-tick blob loads.
+              Failure: a tick that does not reach the target turn, two runs
+              that disagree, or a third launch that will not open the result.
     colonise  a surviving civ is given a colony ship and an order to settle a
               planet the wiped civ used to own, and the galaxy is ticked until
               it arrives. Failure: the planet does not change hands.
 
-`colonise --which base` is the control and it is the half that makes the test
-mean anything. It runs the identical injection against the galaxy with the civ
-NOT wiped, where the planet is still owned, and expects the colonisation to
-fail. Without it, "the planet changed hands" does not distinguish a planet that
-genuinely returned to play from an engine that colonises whatever it is pointed
-at.
+`colonise --which base` is the control: the same injection against the galaxy
+with the civ not wiped, where the planet is still owned, expecting the
+colonisation to fail.
 
 Nothing here writes to a turn store. The galaxy under test is a copy on disk.
 """
@@ -98,7 +84,6 @@ def write(name, blob):
     log(f"  wrote {name} ({len(blob):,} bytes, turn {turn_of(blob)})")
 
 
-# ── prepare ──────────────────────────────────────────────────────────────────
 def prepare(fixture, civ, stamp=None):
     """Write base.dat and wiped.dat, both stamped for a surviving civ."""
     blob = sp.load_any(fixture)
@@ -127,7 +112,6 @@ def prepare(fixture, civ, stamp=None):
     return planets, ships
 
 
-# ── load ─────────────────────────────────────────────────────────────────────
 def load_check(which, timeout=180):
     """Launch the client on one blob and report whether it opened the galaxy."""
     import game_cycle as gc
@@ -147,7 +131,6 @@ def load_check(which, timeout=180):
     return snap.turn
 
 
-# ── ticks ────────────────────────────────────────────────────────────────────
 def tick_run(which, turns, label, secs=10):
     """One referee tick of N turns from a cold launch. Returns the result."""
     import referee
@@ -164,15 +147,12 @@ def tick_run(which, turns, label, secs=10):
     return out, got, h
 
 
-# ── colonise ─────────────────────────────────────────────────────────────────
 def order(blob, ship_id, target, order_type, log=log):
     """Attach an order to one ship, the three edits a `DYNO` needs.
 
-    The same construction `inject_order.py` performs from the command line: the
-    `SHCO` type byte, the has-orders byte, and an appended `ROUT` carrying one
-    leg from where the ship is to where it is going. `inject_order` exposes
-    only a `main`, and it is not this task's file to change, so the pieces are
-    assembled here from the helpers it does export.
+    The same construction as `inject_order.py`: the `SHCO` type byte, the
+    has-orders byte, and an appended `ROUT` carrying one leg from the ship's
+    position to the target.
     """
     tree = sp.parse_blob(blob)
     match = [t for t in ior.ship_sections(blob, tree) if t[0] == ship_id]
@@ -199,8 +179,7 @@ def order(blob, ship_id, target, order_type, log=log):
     d["tail_u32"] = d["tail_u32"] or 0
     out = sp.replace_payload(blob, tree, dyno, ior.build_dyno(d))
 
-    # Re-parse rather than trust the splice, the check inject_order makes before
-    # it is willing to write a file.
+    # Re-parse to confirm the splice, as inject_order does before writing.
     got = [t for t in ior.ship_sections(out, sp.parse_blob(out))
            if t[0] == ship_id]
     if not got:
@@ -216,10 +195,7 @@ def order(blob, ship_id, target, order_type, log=log):
 def stage_colonisation(blob, civ, planet_id, log=log):
     """Give `civ` a colony ship over its own world, ordered to settle a planet.
 
-    The ship is injected rather than built because a build takes the turns of
-    production that are not what is under test, and the order is injected
-    rather than clicked for the same reason. Both are the paths D4 and K1
-    already use.
+    The ship and order are injected, so no production turns are spent.
     """
     import inject_design as idg
     owner = next(o for o in icv.owner_records(blob) if o["name"] == civ)

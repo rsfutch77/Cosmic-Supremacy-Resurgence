@@ -1,17 +1,13 @@
 """
 dump_threads.py: where every thread was when the client wrote a dump
-=====================================================================
+
     python dump_threads.py <file.dmp> [<file.dmp> ...]
     python dump_threads.py --common <dir>      # addresses shared by all dumps
 
-`read_minidump.py` answers "what faulted" from the exception stream. The dumps
-that matter here have **no exception stream**: the client writes them
-deliberately when it decides a galaxy is unusable, so there is no faulting
-instruction to report and the useful question is instead *where was the code
-when it gave up*.
-
-Reads the thread list (stream 3) and each thread's `CONTEXT`, and reports `EIP`
-against the module it falls in. On x86 `CONTEXT.Eip` sits at `+0xB8`:
+For dumps with no exception stream, which the client writes when it decides a
+galaxy is unusable. Reads the thread list (stream 3) and each thread's
+`CONTEXT`, and reports `EIP` against the module it falls in. On x86
+`CONTEXT.Eip` sits at `+0xB8`:
 
     +0x00  ContextFlags
     +0x04  Dr0 Dr1 Dr2 Dr3 Dr6 Dr7
@@ -22,8 +18,7 @@ against the module it falls in. On x86 `CONTEXT.Eip` sits at `+0xB8`:
     +0xB8  Eip
 
 With several dumps from the same failure, `--common` prints the addresses that
-appear in all of them, which is what separates the bail path from seventeen
-threads sitting in the usual waits.
+appear in all of them.
 """
 import argparse
 import glob

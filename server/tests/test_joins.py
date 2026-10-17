@@ -3,41 +3,23 @@ test_joins.py: a stranger asking for a seat at a turn boundary
 ===============================================================
     server\\.venv\\Scripts\\python.exe server\\tests\\test_joins.py
 
-J3. The launcher writes a join request and nothing consumed it; `server/joins.py`
-is what consumes it, inside `referee.resolve_turn`, on the blob the tick
-produced. Everything here is offline: the injection is bytes in and bytes out
-and the engine tick is stubbed, exactly as `test_bad_submissions.py` stubs it.
-What is **not** tested here is that a joined galaxy loads and ticks in a real
-client, which needs the game and is `server/dev_tools/join_turn_acceptance.py`.
+`server/joins.py` consumes join requests inside `referee.resolve_turn`, on the
+blob the tick produced. Everything here is offline: the engine tick is stubbed
+as in `test_bad_submissions.py`. Loading a joined galaxy in a real client is
+`server/dev_tools/join_turn_acceptance.py`.
 
-What a check has to do to be worth having
-------------------------------------------
-"a civ appears" proves almost nothing, so no check in this file stops there.
-Every join is measured against a **before** taken from the same run:
+Every join is measured against a before taken from the same run:
 
-  * the newcomer owns **exactly one** planet, and it was free before;
-  * every incumbent owns **exactly** the planets and ships it owned before, and
-    its `OWNR` bytes are unchanged, so a join that quietly moved somebody
-    else's empire fails rather than passing for having added a civ;
-  * the `GLXY` civ count agrees with the number of `OWNR` records and the
-    high-water object id agrees with the largest id in the blob, which is what
-    K2 measured over twelve joins and is the pair that decides whether the
-    engine will read the blob at all;
+  * the newcomer owns exactly one planet, and it was free before;
+  * every incumbent owns exactly the planets and ships it owned before, and
+    its `OWNR` bytes are unchanged;
+  * the `GLXY` civ count matches the `OWNR` records and the high-water object
+    id matches the largest id in the blob, which the engine needs to read it;
   * the blob still parses as a section tree.
 
-And a galaxy where nothing changed cannot show a join worked, so the refusal
-cases are each run against a **control galaxy in the same shape that does have
-room**, and the success cases assert the roster grew rather than that it did
-not shrink.
-
-The conditions are built rather than borrowed
-----------------------------------------------
-No galaxy on disk is full, so the no-room case fills one. No galaxy on disk has
-a wiped civ in it, so the rejoin case wipes one with `wipe_civ`, which is what
-`abandonment.reclaim` calls, rather than by editing a roster to look like it.
-The margin case leaves exactly one free planet and puts it next door to a
-claimed one, because on every galaxy in this repository the margin never binds
-and a test that did not force it would be asserting nothing.
+Refusal cases each have a control galaxy of the same shape that has room. The
+no-room and margin cases fill a galaxy, and the rejoin case wipes a civ with
+`wipe_civ`, which is what `abandonment.reclaim` calls.
 """
 import json
 import os
@@ -82,7 +64,6 @@ def check(name, got, want=True):
         print(f'          wanted {want!r}, got {got!r}')
 
 
-# ── reading a galaxy ─────────────────────────────────────────────────────────
 def set_turn(blob, turn):
     """The same blob carrying a different turn number, so a stubbed tick can
     advance the clock the way a real one does."""
@@ -108,10 +89,7 @@ def largest_id(blob):
 def holdings(blob):
     """{civ name: (sorted planet ids, sorted ship ids, OWNR bytes)}.
 
-    The `OWNR` bytes are in it because ownership by planet is not the only
-    thing a join could disturb: the clone is spliced in after the last `OWNR`
-    and every enclosing section is widened, which is precisely the operation
-    that could move or truncate a neighbour.
+    The `OWNR` bytes catch a splice that moved or truncated a neighbour.
     """
     out = {}
     for o in icv.owner_records(blob):
@@ -132,10 +110,8 @@ def free_planets(blob):
 def systems_known(blob, name):
     """The systems one civ has entered, or None when it has no table.
 
-    `inject_civ` clones the donor's `OWNR` whole and `EXSY` is inside it, so
-    without `joins.forget_inherited_map` a newcomer starts holding the donor's
-    map. The donor is seat one, which in a live galaxy is a player still in the
-    game.
+    `inject_civ` clones the donor's `OWNR`, `EXSY` included, so a newcomer
+    holds the donor's map unless `joins.forget_inherited_map` clears it.
     """
     import exsy
     tree = sp.parse_blob(blob)
@@ -187,17 +163,11 @@ def joined_cleanly(label, before, after, newcomers):
               now[name][2], was[name][2])
 
 
-# ── building galaxies that hold the condition ────────────────────────────────
 def fill_every_planet(blob, owner_name, leave=0):
     """Give every uncolonised planet an owner, leaving `leave` of them free.
 
-    The late sandbox K4 names, which no archived galaxy has reached. Only the
-    owner dword is written; what matters is what `pick_homeworld` can still
-    find, and nothing here is loaded in a client.
-
-    `leave` keeps the planets **closest to something already claimed**, which
-    is what makes the margin bindable: the maximin pick then has only a planet
-    next door to an incumbent to offer, and the margin is what refuses it.
+    Only the owner dword is written. `leave` keeps the planets closest to
+    something already claimed, so the crowding margin is what refuses them.
     """
     civ = next(o for o in icv.owner_records(blob) if o['name'] == owner_name)
     claimed = [p['pos'] for p in icv.planet_records(blob) if p['owner']]
@@ -224,10 +194,7 @@ def fresh_store(blob, roster=None, turn=TURN, seconds=1800):
 def write_request(store, name, uid=None, at=None, turn=TURN):
     """A join request exactly as the launcher writes one.
 
-    `release/launcher.py` is imported rather than imitated, because the shape
-    is a contract between two files nobody owns both of, and a test that wrote
-    its own JSON would pass forever after the launcher changed. The import is
-    headless: the launcher builds no Tk until something calls for a window.
+    Imports `release/launcher.py`, which opens no window on import.
     """
     import launcher
     req = launcher.join_request(name, uid, '0.1.0+dev', turn=turn, now=at)
@@ -237,9 +204,7 @@ def write_request(store, name, uid=None, at=None, turn=TURN):
 def close_turn(store, blob_turn=None):
     """`resolve_turn` with the engine stubbed. Returns the turn it published.
 
-    The stub advances the turn number and changes nothing else, so everything
-    the published blob holds beyond that came from the merge, the abandonment
-    pass or the join pass, and the join pass is what this file is about.
+    The stub advances the turn number and changes nothing else.
     """
     def fake_tick(blob, turns=1, secs=10, save_dir=None, log=print, **kw):
         return set_turn(blob, (blob_turn or turn_store.turn_of(blob)) + 1)
@@ -263,7 +228,6 @@ def answer(store, key):
         return json.load(fh)
 
 
-# ── the tests ────────────────────────────────────────────────────────────────
 def test_shape(blob):
     print('\nthe request the launcher writes is the request that is read')
     store = fresh_store(blob)
@@ -311,10 +275,8 @@ def test_a_join_lands(blob):
     check('the seat records the uid that claimed it, which is J4\'s half',
           store.state()[joins.JOINED_KEY]['Ada']['uid'], 'uid-ada')
 
-    # The donor is seat one, which is a player still in the game, and the clone
-    # carries its explored map. The control is the donor's own table: an
-    # assertion that the newcomer knows nothing would pass on a galaxy where
-    # nobody knows anything.
+    # The donor (seat one) has an explored map, which the newcomer must not
+    # inherit.
     donor = icv.seat_one(icv.owner_records(before))['name']
     check('the donor really has a map to inherit',
           bool(systems_known(before, donor)))
@@ -371,8 +333,7 @@ def test_no_room(blob):
     check('the answer says refused',
           (answer(store, 'Ada') or {}).get('outcome'), joins.REFUSED)
 
-    # The control. Without it a `joins` that refused everything would pass
-    # every check above.
+    # Control: the same request into a galaxy with room.
     room = fresh_store(blob)
     write_request(room, 'Ada')
     joined = room.turn_blob(close_turn(room))
@@ -465,7 +426,7 @@ def test_the_launcher_asks_the_store(blob):
     import launcher
 
     class Recording(TurnStore):
-        """A store that says whether it was asked rather than written past."""
+        """A store that records every `request_join` call."""
 
         def __init__(self, root):
             TurnStore.__init__(self, root)
@@ -481,13 +442,8 @@ def test_the_launcher_asks_the_store(blob):
     where = launcher.send_join_request(
         store, launcher.join_request('Ada', 'uid-ada', '0.1.0+dev', turn=TURN))
 
-    # The whole of what `release/launcher.py` has to call, pinned from this
-    # side because that file is not this one's to change. It already prefers a
-    # store's own `request_join` and falls back to writing the file itself, and
-    # the fallback is what a Firebase galaxy fell off: the store had no such
-    # method and no `root` either, so the launcher raised `JoinNotAccepted`.
-    # Fails if the launcher wrote past the store, which is invisible against a
-    # folder and total against the other two.
+    # The launcher must go through the store's `request_join`, since HTTP and
+    # Firebase stores have no folder to write into.
     check('the launcher asked the store rather than writing the file',
           [r['name'] for r in store.asked], ['Ada'])
     check('and the store put it where the worker reads it',
@@ -503,10 +459,8 @@ def test_a_worker_killed_before_commit(blob):
     store = fresh_store(blob)
     write_request(store, 'Ada', uid='uid-ada')
 
-    # `resolve_turn` without its last line. `apply` changes bytes, `publish`
-    # makes them the galaxy, and `commit` is every durable write after it; a
-    # worker killed in that gap is what the split across `publish` exists for
-    # and nothing has ever run it.
+    # `resolve_turn` without its last line: `apply` and `publish` run, and
+    # the worker dies before `commit`.
     new_turn = TURN + 1
     grown, outcomes = joins.apply(store, TURN, new_turn,
                                   set_turn(store.turn_blob(TURN), new_turn),
@@ -517,9 +471,8 @@ def test_a_worker_killed_before_commit(blob):
 
     names = [o['name'] for o in icv.owner_records(store.turn_blob(new_turn))]
     check('the galaxy holds the newcomer', names.count('Ada'), 1)
-    # The recoverable half of the pair, and the reason the order is this way
-    # round: a roster naming a civ the galaxy does not hold fails that player's
-    # every submission forever, and this one an operator answers with a name.
+    # Publishing before the roster write is the recoverable order: a roster
+    # naming a civ the galaxy does not hold fails every submission.
     check('and the roster does not, which is what a crash here leaves',
           'Ada' in store.civs(), False)
     check('the request is still waiting, because commit never ran',
@@ -530,18 +483,15 @@ def test_a_worker_killed_before_commit(blob):
     second = close_turn(store, blob_turn=new_turn)
     after = store.turn_blob(second)
     names = [o['name'] for o in icv.owner_records(after)]
-    # The check this test exists for. Fails if the next boundary granted the
-    # still-waiting request: that is a second empire for one player, and unlike
-    # a lost join it cannot be noticed by the player it happened to.
+    # The next boundary must not grant the still-waiting request again.
     check('the next boundary does not seat a second empire',
           names.count('Ada'), 1)
     check('the counters still agree', counters_agree(after))
     filed = answer(store, 'uid-ada') or {}
     check('the request is answered as a refusal',
           filed.get('outcome'), joins.REFUSED)
-    # Refused for the right reason. `add_civ`'s own name check would refuse it
-    # too, later and with a message about bytes; this one is the roster and the
-    # galaxy disagreeing, which is what an operator has to settle.
+    # The reason is the roster and the galaxy disagreeing, which an operator
+    # has to settle.
     check('naming the galaxy and the roster disagreeing',
           'roster' in filed.get('reason', ''))
     check('and it is no longer waiting',
@@ -555,7 +505,7 @@ def test_asked_twice_across_turns(blob):
     first = store.turn_blob(close_turn(store))
     check('seated once', [o['name'] for o in icv.owner_records(first)].count('Ada'), 1)
 
-    # The launcher's Join pressed again, which writes the same file back.
+    # Join pressed again writes the same request back.
     write_request(store, 'Ada', uid='uid-ada')
     second = store.turn_blob(close_turn(store, blob_turn=TURN + 1))
     check('still exactly one civ called Ada',
@@ -608,8 +558,7 @@ def test_reclaimed_player_rejoining(blob):
     check('so the launcher lets them in',
           launcher.roster_problem('BadGuy', store.civs(),
                                   store.reclaimed('BadGuy')), None)
-    # The control: a name that really was reclaimed and has not rejoined is
-    # still refused, and still told why.
+    # Control: a reclaimed name that has not rejoined is still refused.
     problem = launcher.roster_problem('Ghost', store.civs(),
                                       {'turn': 9, 'missed': 12})
     check('while a seat that was reclaimed and not rejoined still says so',
@@ -656,18 +605,14 @@ def test_a_broken_request_is_not_a_broken_turn(blob):
 
 def test_order_against_abandonment(blob):
     print('\nabandonment runs first, so a join sees the room a reclaim made')
-    # No free planet at all, and every planet a reclaim is about to hand back
-    # belongs to the civ that is about to lose it. There is nowhere for a
-    # newcomer to go unless the reclaim goes first.
+    # No free planet: a newcomer can only land on one the reclaim frees.
     full = fill_every_planet(blob, 'BadGuy')
     check('the galaxy starts with no free planet at all',
           free_planets(full), [])
     doomed = set(holdings(full)['BadGuy'][0])
 
-    # The galaxy starts a turn earlier and fills up, which is the shape a real
-    # one reaches and the shape a reclaim needs: `wipe_civ` takes its blank
-    # PLPR from an uncolonised planet, and a galaxy with none sends
-    # `abandonment` back through earlier turns to find one.
+    # The galaxy starts a turn earlier, before it filled up: `wipe_civ` takes
+    # its blank PLPR from an uncolonised planet in an earlier turn.
     store = fresh_store(blob, turn=TURN - 1)
     store.publish(TURN, full)
     abandonment.set_thresholds(store, warn=1, reclaim=2)
@@ -689,13 +634,8 @@ def test_order_against_abandonment(blob):
     check('the counters agree', counters_agree(after))
     check('the blob parses', parses(after))
 
-    # What would have failed: the same galaxy with joins first. The order is
-    # read out of the source rather than re-run, because running it the other
-    # way means editing the referee.
-    # The last call of each is the one on the path a ticked turn takes. An
-    # earlier `joins.apply` seats a join before the tick in a galaxy nobody
-    # holds a planet in, and an earlier `joins.commit` answers refusals for a
-    # turn that is held; neither has an abandonment pass to order against.
+    # The call order is read from the referee source. The last call of each
+    # is the one on a ticked turn's path; earlier calls serve other paths.
     src = open(os.path.join(ROOT, 'server', 'referee.py'),
                encoding='utf-8').read()
     check('and the referee calls them in that order',
@@ -714,14 +654,9 @@ def test_welcome_note_survives_the_next_turn(blob):
     welcome = store.note('Ada', new_turn)
     check('the note is written for the turn they will play', bool(welcome))
 
-    # `player_turn.report_refusals` reads a turn's note only after the referee
-    # has published past it, and the referee writes that turn's refusals on the
-    # way. So the writer that decides whether the welcome survives is
-    # `resolve_turn` itself, and the only way to ask is to close that turn with
-    # something to refuse in it.
-    #
-    # Bytes that are not a save, which `read_submissions` drops with a note,
-    # because it is the refusal that needs no legal orders to produce.
+    # The referee writes a turn's refusals into the same note when it closes
+    # it, so close the turn with something to refuse: bytes that are not a
+    # save, which `read_submissions` drops with a note.
     with open(store.submission_path('Ada', new_turn), 'wb') as fh:
         fh.write(b'not a save')
     close_turn(store, blob_turn=new_turn)
@@ -731,9 +666,7 @@ def test_welcome_note_survives_the_next_turn(blob):
     check('and the welcome note is still in front of it',
           kept[:len(welcome)], welcome)
 
-    # The control: the same refusal on a turn with no welcome note on it reads
-    # exactly as it always did, so the change is an addition and not a note
-    # that now carries somebody else's lines.
+    # Control: the same refusal on a turn with no welcome note.
     plain = fresh_store(blob)
     with open(plain.submission_path('DemoPlayer', TURN), 'wb') as fh:
         fh.write(b'not a save')

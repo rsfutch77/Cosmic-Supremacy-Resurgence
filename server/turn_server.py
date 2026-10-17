@@ -1,18 +1,11 @@
 """
 turn_server.py: serve a turn store over HTTP
-==============================================
+
     python turn_server.py server/galaxy_demo --port 8899
     python turn_server.py server/galaxy_demo --port 8899 --host 0.0.0.0
 
-A `TurnStore` is a directory, which is enough for one machine and for a shared
-folder between two. It is not enough for a referee on another host, and it will
-never be enough for a hosted galaxy. This puts the same interface behind a URL,
-so `open_store("http://host:8899")` and `open_store("some/dir")` are
-interchangeable to every caller.
-
-That is the whole point of the exercise: the seam. A Firebase adapter replaces
-this service and `HttpTurnStore` keeps working, or replaces `HttpTurnStore` and
-this service is no longer needed. Nothing above the store changes either way.
+Puts a directory `TurnStore` behind a URL, so `open_store("http://host:8899")`
+and `open_store("some/dir")` are interchangeable to every caller.
 
     GET  /state                     the turn number, deadline, roster
     GET  /turn/<n>                  that turn's blob, decompressed
@@ -33,36 +26,16 @@ this service is no longer needed. Nothing above the store changes either way.
     GET  /join/<key>/answer         what was decided about it
     POST /join/<key>                file that decision and consume the request
 
-Blobs move as raw decompressed bytes rather than the base64 the directory holds,
-because the encoding is the directory's business and a caller that has to know
-it is a caller the Firebase adapter would break.
+Blobs move as raw decompressed bytes.
 
-The upload ticket and its commit exist here because the relay function in
-`functions/` has them, and a route that exists on one side of this seam and not
-the other is this project's characteristic bug: F3 shipped a launcher against a
-service that had grown a route it did not have, and the failure arrived as a 404
-in the middle of a rehearsal rather than as a mismatch anyone could see. Both
-tickets name the service's own POST route. The relay's asks for the base64
-wire form and names no commit, because it checks and stores the body in one
-call; this one asks for the raw blob and names a commit, which checks what was
-stored. `HttpTurnStore.submit` asks for a ticket and follows whichever it is
-given, so one launcher speaks to both.
+Routes must match the relay in `functions/`. The upload ticket here asks for
+the raw blob and names a commit route that checks what was stored; the relay's
+asks for base64 and names no commit. `HttpTurnStore.submit` follows either.
 
-**There is no authentication here.** Anyone who can reach the port can publish a
-turn or submit as any civ. That is deliberate for a closed beta among people who
-know each other, and it is the relay function's job rather than this one's: this
-service runs on a LAN and the relay is what a stranger reaches. An
-`Authorization` header is therefore accepted and **not verified**, which is not
-the same as ignored: a launcher configured with an identity has to be able to
-talk to a LAN service without its token being either a fault or a credential.
-What verifies one is `functions/relay.py`.
-
-That is also why `GET /joins` exists here and has no counterpart in the relay.
-Listing what is waiting is the worker's question, and on a LAN the worker is
-whoever holds the port. Through the relay the same list would tell any stranger
-who else is trying to join this galaxy, which is the enumeration J4 and F4 both
-refuse to hand out, so the relay answers a caller only about the request that
-caller lodged.
+There is no authentication: anyone who can reach the port can publish a turn or
+submit as any civ. An `Authorization` header is accepted and not verified;
+`functions/relay.py` verifies tokens. `GET /joins` has no relay counterpart,
+since the relay answers a caller only about its own request.
 """
 import argparse
 import json
@@ -81,10 +54,7 @@ from turn_store import TurnStore, check_save
 STORE = None
 VERBOSE = True
 
-# The ceiling the relay function puts on a submission body. Named here as well
-# so that the ticket this service hands out carries the same number, and a
-# launcher that checks a save before uploading it gets one answer from both.
-MAX_SUBMISSION_BYTES = 1024 * 1024
+MAX_SUBMISSION_BYTES = 1024 * 1024   # the relay's submission body ceiling, carried in the ticket
 
 
 def log(msg):
@@ -96,9 +66,8 @@ class Handler(BaseHTTPRequestHandler):
     server_version = 'CosmicTurnStore/1'
 
     def log_message(self, fmt, *args):
-        pass                                    # we log what matters ourselves
+        pass                                    # replaced by log()
 
-    # ── replies ──────────────────────────────────────────────────────────────
     def _send(self, code, ctype, body: bytes):
         self.send_response(code)
         self.send_header('Content-Type', ctype)
@@ -123,23 +92,16 @@ class Handler(BaseHTTPRequestHandler):
         return self.rfile.read(n) if n else b''
 
     def _bearer(self):
-        """The caller's ID token, unverified, or None.
-
-        Read rather than dropped, so that the two services agree about what a
-        request may carry. Verifying one needs the Firebase admin libraries and
-        a project, neither of which belongs on a LAN service, so this says only
-        whether a launcher offered an identity and the log says so once.
-        """
+        """The caller's ID token, unverified, or None."""
         head = self.headers.get('Authorization') or ''
         if head.lower().startswith('bearer '):
             return head[7:].strip() or None
         return None
 
     def _who(self) -> str:
-        """What the log may say about who asked, which is very little."""
+        """A log suffix saying whether an identity was offered."""
         return ', identity offered and not verified' if self._bearer() else ''
 
-    # ── routing ──────────────────────────────────────────────────────────────
     def _parts(self):
         url = urllib.parse.urlparse(self.path)
         parts = [p for p in url.path.split('/') if p]
@@ -158,13 +120,7 @@ class Handler(BaseHTTPRequestHandler):
                     return self._fail(404, f'no turn {n}')
                 return self._blob(STORE.turn_blob(n))
             if len(parts) == 2 and parts[0] == 'submissions':
-                # Names, from the store's names-only accessor. Building the
-                # whole dict to answer with its keys read every player's
-                # submission off disk per poll, and behind a Firebase store it
-                # would have been a download per player. `functions/relay.py`
-                # answers this route from a listing for the same reason, and a
-                # route that is cheap on one of the two services and expensive
-                # on the other is this project's characteristic bug.
+                # Names only, without reading any submission.
                 return self._json(STORE.submitted_civs(int(parts[1])))
             if len(parts) == 3 and parts[0] == 'submission':
                 n, civ = int(parts[1]), parts[2]
@@ -180,9 +136,6 @@ class Handler(BaseHTTPRequestHandler):
             if len(parts) == 4 and parts[:2] == ['upload', 'submission']:
                 return self._json(upload_ticket(int(parts[2]), parts[3]))
             if parts == ['joins']:
-                # The worker's question, answered whole. What a stranger may
-                # ask is one request: see the note in this module's docstring
-                # about why the relay has no route of this shape.
                 return self._json(STORE.join_requests(log=log))
             if len(parts) == 2 and parts[0] == 'join':
                 req = STORE.join_request(urllib.parse.unquote(parts[1]))
@@ -228,9 +181,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json({'turn': n})
             if len(parts) == 3 and parts[0] == 'submission':
                 n, civ = int(parts[1]), parts[2]
-                # Checked before it is stored, as the relay checks it, so a
-                # body that is not a save of this turn leaves the submission
-                # it was sent over standing on both services.
+                # Checked before it is stored, as the relay does, so a bad body
+                # leaves the previous submission standing.
                 check_save(body, n)
                 STORE.submit(civ, n, body)
                 log(f'  {civ} submitted for turn {n}, {len(body):,} bytes'
@@ -248,11 +200,8 @@ class Handler(BaseHTTPRequestHandler):
                 try:
                     check_save(blob, n)
                 except ValueError:
-                    # Reachable only for a file written into the directory by
-                    # something other than the POST above, which checks first.
-                    # Removed rather than left: a submission that does not
-                    # parse stops the referee at the turn boundary, where it is
-                    # one player's junk and everyone's turn.
+                    # Reachable only for a file written by something other than
+                    # the POST above. It is removed so the referee never reads it.
                     os.remove(STORE.submission_path(civ, n))
                     raise
                 log(f'  {civ} committed turn {n}, {len(blob):,} bytes'
@@ -265,22 +214,15 @@ class Handler(BaseHTTPRequestHandler):
                 log(f'  noted {len(lines)} refusal(s) for {civ} on turn {n}')
                 return self._json({'turn': n, 'civ': civ})
             if parts == ['join']:
-                # The one write here a caller with no seat may make, which is
-                # what a join is. This service takes it from anyone who can
-                # reach the port, as it takes everything else; the relay
-                # verifies a token first and stamps the uid out of it.
                 req = json.loads(body or b'{}')
                 where = STORE.request_join(req)
                 log(f'  {req.get("name")} asked to join{self._who()}')
                 return self._json({'where': where,
                                    'key': turn_store.join_key(req)})
             if len(parts) == 2 and parts[0] == 'join':
-                # The key is unquoted, because it may be a name a player typed
-                # and `HttpTurnStore` quotes it whole. The submission routes
-                # above do not, which is a difference and not an oversight to
-                # copy: they were written before a path segment here could
-                # carry anything but a civ name, and changing what they store
-                # would rename every submission object in every live galaxy.
+                # The key is unquoted, since `HttpTurnStore` quotes it whole.
+                # The submission routes must not unquote: that would rename
+                # every stored submission.
                 key = urllib.parse.unquote(parts[1])
                 STORE.answer_join(key, json.loads(body or b'{}'))
                 log(f'  answered the join request filed under {key}')
@@ -293,13 +235,10 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def upload_ticket(turn: int, civ: str) -> dict:
-    """Where this service wants a submission put, which is here.
+    """Where this service wants a submission put.
 
-    The same shape the relay function answers with, deliberately: a launcher
-    reads `url`, `method`, `encoding` and `commit`, and never learns which
-    service it is talking to. `encoding` is `raw` because this service encodes
-    to the wire form itself; the relay asks for `b64`, the smaller form, and
-    decodes it on its side.
+    The same shape as the relay's ticket: `url`, `method`, `encoding` (`raw`
+    here, `b64` on the relay), `commit` and `max_bytes`.
     """
     quoted = urllib.parse.quote(civ)
     return {

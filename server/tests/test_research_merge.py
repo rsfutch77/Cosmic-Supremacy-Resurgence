@@ -1,25 +1,10 @@
 """
 test_research_merge.py: two players may both change research in one turn
 =========================================================================
-The rule under test refuses a submission that alters **another** civ's research
-topic. A player holds the whole galaxy, so they could edit anyone's, and this is
-what stops it.
-
-It used to compare the submission against the blob as it stood rather than
-against the state that was served. Nothing in the merge ever writes another
-civ's research, so those two differ only where an earlier submission in the same
-turn was honestly applied, and the effect was that the second player to merge in
-any turn where two of them changed topic was told
-
-    research: DROPPED, belongs to <the other player>
-
-for something they had not touched. Their own orders still applied, so the harm
-was a note accusing a player of an edit they did not make, in a galaxy where
-notes are the only thing telling them what the referee refused.
-
-Every check here runs both submissions together, because the bug needs two: with
-one submission the accumulating blob and the served blob are the same thing and
-the old code passed.
+The rule under test refuses a submission that alters another civ's research
+topic. It compares against the state that was served, so when two players both
+change their own topic in one turn, neither is told the other's change was
+theirs. Every check runs both submissions together, in both orders.
 """
 import os
 import sys
@@ -65,7 +50,7 @@ def main():
         return 0
     served = sp.load_any(GALAXY)
     owners = icv.owner_records(served)
-    # Two civs that both have readable research, which is what the rule needs.
+    # Two civs that both have readable research.
     pair = [o for o in owners if mo.research_of(served, o['oid']) is not None][:2]
     if len(pair) < 2:
         print('  [SKIP] this galaxy has fewer than two civs with research')
@@ -77,7 +62,7 @@ def main():
     sub_a = bump(served, a['oid'])
     sub_b = bump(served, b['oid'])
 
-    # The precondition. Without it the rest passes for the wrong reason.
+    # Precondition.
     check('each submission really does change its own topic',
           [mo.research_of(sub_a, a['oid']) != mo.research_of(served, a['oid']),
            mo.research_of(sub_b, b['oid']) != mo.research_of(served, b['oid'])],
@@ -94,20 +79,16 @@ def main():
         notes = {}
         out = mo.merge(served, [(first['name'], fsub), (second['name'], ssub)],
                        log=quiet, notes=notes)
-        # This is the check the old code failed: the second one to merge was
-        # told it had touched the first one's research.
         for who in (first, second):
             said = [n for n in notes.get(who['name'], []) if 'research' in n]
             check(f'{who["name"]} is told nothing about research', said, [])
-        # And the orders themselves still land, so this is not a merge that
-        # passed by refusing to do anything.
+        # The orders themselves still land.
         check('both topics are in the merged blob',
               [mo.research_of(out, a['oid']) == mo.research_of(sub_a, a['oid']),
                mo.research_of(out, b['oid']) == mo.research_of(sub_b, b['oid'])],
               [True, True])
 
-    # The control. The rule still has to refuse a player who edits somebody
-    # else's topic, or the fix above would be indistinguishable from deleting it.
+    # Control: a player who edits somebody else's topic is still refused.
     print('\nthe rule still refuses a real attempt')
     meddle = bump(served, b['oid'])          # a submits b's research changed
     notes = {}

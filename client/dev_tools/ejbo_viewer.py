@@ -31,9 +31,8 @@ import threading
 from datetime import datetime
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from urllib.parse import urlparse, parse_qs
-from client_proc import find_pid, NOT_THE_CLIENT  # one copy, see client_proc.py
+from client_proc import find_pid, NOT_THE_CLIENT
 
-# ── Windows API ────────────────────────────────────────────────────────────
 PROCESS_VM_READ           = 0x0010
 PROCESS_VM_WRITE          = 0x0020
 PROCESS_VM_OPERATION      = 0x0008
@@ -59,14 +58,7 @@ class MEMORY_BASIC_INFORMATION(ctypes.Structure):
         ("Type",              wintypes.DWORD),
     ]
 
-# Processes whose names match the "CosmicSupremacy" substring but are NOT the
-# game. The launcher is the whole reason this list exists: it ships as
-# CosmicSupremacyLauncher.exe, sits beside the client in every release, and is
-# the FIRST match EnumProcesses happens to return often enough to matter. An AI
-# that attached to it would read a Python process's memory, find no civs, and
-# report "no civ named 'BadGuy'", a wrong answer that looks like a game bug.
-# game_cycle.py already carries the same exclusion for Stop-Process; this is the
-# read side of it.
+# Processes that match the "CosmicSupremacy" substring but are not the game.
 NOT_THE_GAME = ("cosmicsupremacylauncher.exe",)
 
 
@@ -108,12 +100,9 @@ def write_bytes(h, addr, data):
                                       buf, len(data), ctypes.byref(written))
     return bool(ok and written.value == len(data))
 
-# ── EJBO Scanner ───────────────────────────────────────────────────────────
 EJBO_TAG = b'EJBO'
 
-# Fallback type map, used only if RTTI resolution fails. The pointer at EJBO-8
-# is a vftable; resolve_class_name() reads the class name out of the binary's
-# RTTI instead of relying on this table.
+# Fallback vftable-to-class map, used only if RTTI resolution fails.
 KNOWN_TYPES = {
     0x00768ddc: "Planet",
     0x00784934: "Admiral",
@@ -123,11 +112,9 @@ KNOWN_TYPES = {
     0x007707E0: "Owner",       # civilization-level stats (RTTI name: Owner)
 }
 
-# ── RTTI class-name resolution ─────────────────────────────────────────────
-# MSVC emits, for every polymorphic class, a vftable whose [-4] slot points at
-# an RTTICompleteObjectLocator. Locator+12 is a TypeDescriptor whose +8 holds
-# the mangled class name (".?AVPlanet@@"). Walking that chain live means new
-# object types name themselves instead of piling into an "Unknown" bucket.
+# RTTI: a vftable's [-4] slot points at an RTTICompleteObjectLocator.
+# Locator+12 is a TypeDescriptor whose +8 holds the mangled class name
+# (".?AVPlanet@@").
 MODULE_LO = 0x00400000   # image base
 MODULE_HI = 0x00C30000   # past the end of .rsrc
 
@@ -168,13 +155,9 @@ def resolve_class_name(h, vftable_va, cache):
     cache[vftable_va] = name
     return name
 
-# ── Pointer resolution ─────────────────────────────────────────────────────
-# Most of the game is NOT EJBO-tagged (Facility, Production, Scan, Treaty...),
-# but every polymorphic class keeps its vftable at offset 0, so the class at the
-# far end of any pointer can be named through the same RTTI chain. Two shapes
-# are handled: a direct object pointer, and the reference-node idiom where the
-# field points at a small node whose first dword is the target's allocation
-# start (see Planet:40 ownership).
+# Pointer targets are named through RTTI. Two shapes: a direct object pointer,
+# and a reference node whose first dword is the target's allocation start
+# (as at Planet:40).
 PTR_LO, PTR_HI = 0x00010000, 0x7FFF0000
 
 # Sentinels whose first dword is 0, so RTTI cannot name them.
@@ -184,15 +167,11 @@ KNOWN_STATICS = {
 }
 
 # Planet:40 is the owner link. Colonised planets point at a node whose node[0]
-# is an Owner; everything else shares the static null node in .data. The viewer
-# splits the two into separate tabs; there are ~500 uncolonised planets and
-# rendering them all is what makes the tab crawl.
+# is an Owner; uncolonised ones share the static null node in .data.
 OWNER_LINK_OFFSET = 40
 
 def is_owned(owner_field):
-    """True if an owner-link field resolves to a real Owner. Prefers the
-    RTTI-resolved description and falls back to the null-node address when the
-    pointer could not be walked."""
+    """True if an owner-link field resolves to a real Owner."""
     node = owner_field["u32"]
     if node in (0, NULL_REF_NODE):
         return False
@@ -230,59 +209,41 @@ def resolve_pointer(h, value, rtti_cache, ptr_cache, ejbo_by_start):
     ptr_cache[value] = desc
     return desc
 
-# ── Object extents ─────────────────────────────────────────────────────────
 # The window read after the EJBO tag must not run past the end of the object,
-# or the viewer shows neighbouring heap allocations as if they were fields ,
-# and any annotation made on them is junk. Real sizes are derived at scan time
-# from the stride between consecutive same-class tags (see measure_extents).
+# or neighbouring heap allocations show as fields and annotations on them are
+# junk. measure_extents derives sizes per class at scan time.
 READ_BEFORE       = 32    # covers the header plus the preceding object's tail
 DEFAULT_READ_AFTER = 192  # used when a class has too few instances to measure
-MAX_READ_AFTER    = 2048  # ceiling, keeps per-refresh reads bounded. Owner alone
-                          # is ~1356 bytes, so this must stay well above 608.
+MAX_READ_AFTER    = 2048  # ceiling on per-refresh reads; must exceed Owner's size
 
-# Measured 2026-07-27 against a TestBed galaxy (201 objects). Config is a
-# starting point only; measure_extents() overrides it whenever it can measure.
+# Verified bytes after the tag per class. A smaller value here overrides a
+# measured stride.
 CLASS_EXTENTS = {
     "Planet":     600,   # stride 616/608, 8-byte header
-    "Admiral":     88,   # stride is 288 but the object ends near +88: the gap
-                         # was overwritten by the game's log buffer during a
-                         # turn, so it is a sub-allocation, not Admiral data
+    "Admiral":     88,   # stride is 288; the rest is a sub-allocation
     "Sun":         96,   # stride 104, 8-byte header
-    # Sparse classes: no dense array, so no stride. Bounded instead by where
-    # instances stop agreeing structurally, and by the NT heap block header
-    # (0x0803xxxx/0x0804xxxx with a matching low half) that follows an object.
+    # Sparse classes are bounded by where instances stop agreeing and by the
+    # NT heap block header (0x0803xxxx/0x0804xxxx) that follows an object.
     "Ship":       152,   # last agreeing dword +148; +152 is heap metadata
-    "Owner":     1344,   # agree to +1356, heap header at +1360; four
-                         # std::strings line up at +368/+528/+1144/+1312
-    # Part-category vectors sit at a 24-byte stride: +128 chassis, +152 scanner,
-    # +176 engine, +200 weapon, and there is room for more above that. 192 cut the
-    # weapon vector off entirely, so the window must reach past it.
+    "Owner":     1344,   # heap header at +1360; std::strings at
+                         # +368/+528/+1144/+1312
+    # Part-category vectors at a 24-byte stride: +128 chassis, +152 scanner,
+    # +176 engine, +200 weapon.
     "ShipDesign": 320,
 }
 
-# How many bytes BEFORE the EJBO tag belong to the object. For a single-inheritance
-# class this is just the 8-byte header, and READ_BEFORE's 32 is generous. Multiple-
-# inheritance classes are different: the allocation starts at the PRIMARY vftable,
-# which sits well before the tag, and the fields in between are real object data.
-#
-# Owner was found this way: the .data vector at 0x0082AA28 holds Owner* values
-# pointing at tag-52, which is where Owner's primary vftable lives. The 52 bytes
-# in front of the tag hold the CIV NAME, so reading only from tag-8 hid it
-# completely. Note that the reference-node idiom points at tag-8 instead: under
-# multiple inheritance both are valid pointers to the same object, so anything
-# resolving an Owner* has to accept either.
+# Bytes before the EJBO tag that belong to a multiple-inheritance object, whose
+# allocation starts at the primary vftable. An Owner* may point at tag-52 (the
+# .data vector at 0x0082AA28) or tag-8 (reference nodes); both must be accepted.
 CLASS_FRONT = {
     "Owner":      52,   # -52 vftable#1, -48 galaxy welcome text, -44 name string
                         # (_Mysize -28, _Myres -24), -8 vftable#2, -4 object id
     "ShipDesign": 12,   # second vftable at -12; measure_extents already knows
 }
 
-# Offset of the object's display-name std::string, relative to the EJBO tag. The
-# generic name sniffer looks for printable runs and mis-slices SSO buffers (it
-# read Owner 'GoodGuy' as 'Guy'), so classes whose name field is known are decoded
-# properly instead: 16-byte SSO buffer, then _Mysize, then _Myres.
-# Located by scanning each class's window for the SSO signature (_Myres == 15)
-# across every instance, rather than by guessing at printable runs.
+# Offset of the display-name std::string relative to the EJBO tag: a 16-byte
+# SSO buffer, then _Mysize, then _Myres. Classes not listed fall back to a
+# printable-run sniffer.
 CLASS_NAME_STRING = {
     "Owner":      -44,  # 'GoodGuy' / 'BadGuy'; Owner has four more strings at
                         # +368/+528/+1144/+1312, all empty in a fresh galaxy
@@ -293,9 +254,7 @@ CLASS_NAME_STRING = {
 }
 
 def read_std_string(raw, pos):
-    """Decode an MSVC std::string at raw[pos:]. Returns None if it is not one.
-    Only the SSO case is handled from the buffer; longer strings live off-heap
-    and the caller has to follow the pointer itself."""
+    """Decode an SSO MSVC std::string at raw[pos:], or None if it is not one."""
     if pos < 0 or pos + 24 > len(raw):
         return None
     size = struct.unpack_from("<I", raw, pos + 16)[0]
@@ -325,10 +284,11 @@ def scan_for_ejbo(h, regions):
     return sorted(found)
 
 def classify_object(h, ejbo_addr, rtti_cache=None):
-    """Classify an object from its vftable. EJBO-8 always holds the primary
-    vftable; EJBO-12 holds a second one only for multiple-inheritance classes
-    (ShipDesign), and is ordinary field data otherwise, so it is tried second
-    and only accepted if RTTI validates it."""
+    """Classify an object from its vftable.
+
+    EJBO-8 holds the primary vftable. EJBO-12 holds a second one only for
+    multiple-inheritance classes (ShipDesign) and is tried second.
+    """
     header = read_bytes(h, ejbo_addr - 12, 12)
     if header is None or len(header) < 12:
         return "Unknown", 0, 0
@@ -345,26 +305,17 @@ def classify_object(h, ejbo_addr, rtti_cache=None):
     return type_name, obj_id, type_ptr2
 
 def measure_extents(h, addrs, class_of, rtti_cache):
-    """Derive how many bytes after the EJBO tag actually belong to each class.
+    """Derive how many bytes after the EJBO tag belong to each class.
 
-    In a dense array the gap between consecutive same-class tags is an UPPER
-    BOUND on the object's allocation size, so `min(stride) - header` is a safe
-    read window. Header is 8 bytes (vftable + object id) unless EJBO-12 holds a
-    second vftable that RTTI resolves to the same class, in which case it is 12.
-
-    Stride is only an upper bound, not the size: a class may allocate sub-objects
-    between its instances, leaving unrelated heap inside the stride. Admiral is
-    the known case: stride 288 but the object ends near +88, and the gap was
-    later reused by the game's log buffer. Where a class has a verified smaller
-    size, CLASS_EXTENTS overrides the measurement.
+    The smallest repeated stride between same-class tags, minus the header, is
+    an upper bound on the object. The header is 8 bytes, or 12 when EJBO-12 is a
+    second vftable of the same class. A smaller CLASS_EXTENTS value overrides.
     """
     by_class = {}
     for a in addrs:
         by_class.setdefault(class_of.get(a, "Unknown"), []).append(a)
 
-    # Hard bound: an object can never extend into the next object's header,
-    # whatever its class. 12 bytes covers the widest header seen (two vftables
-    # plus the object id).
+    # No object extends into the next object's header (at most 12 bytes).
     ordered   = sorted(addrs)
     next_tag  = {a: b for a, b in zip(ordered, ordered[1:])}
 
@@ -388,9 +339,7 @@ def measure_extents(h, addrs, class_of, rtti_cache):
         hard_cap = min(gaps_any) if gaps_any else MAX_READ_AFTER
 
         strides  = [b - a for a, b in zip(lst, lst[1:])]
-        # An allocation size repeats across a dense array. A stride seen only
-        # once is just the distance to the next heap region and says nothing
-        # about the object's size, so fall back to the configured value.
+        # A stride seen only once says nothing about the object's size.
         repeated = [s for s in strides if strides.count(s) > 1]
         if repeated:
             size  = min(repeated)
@@ -419,7 +368,6 @@ def read_object_fields(h, ejbo_addr, read_after=DEFAULT_READ_AFTER,
     raw   = read_bytes(h, start, total)
     if raw is None:
         return None, ""
-    # Decode every 4-byte dword as multiple types
     fields = []
     for i in range(0, len(raw) - 3, 4):
         offset = i - read_before  # offset relative to EJBO
@@ -427,9 +375,7 @@ def read_object_fields(h, ejbo_addr, read_after=DEFAULT_READ_AFTER,
         u32 = struct.unpack("<I", b)[0]
         i32 = struct.unpack("<i", b)[0]
         f32 = struct.unpack("<f", b)[0]
-        # ASCII representation
         asc = ''.join(chr(x) if 0x20 <= x < 0x7f else '.' for x in b)
-        # Check if it looks like a reasonable float
         f_str = ""
         if b != b'\x00\x00\x00\x00' and b != b'\xff\xff\xff\xff':
             exp = (u32 >> 23) & 0xFF
@@ -444,11 +390,7 @@ def read_object_fields(h, ejbo_addr, read_after=DEFAULT_READ_AFTER,
             "ascii":  asc,
             "raw":    b.hex(),
         })
-    # Try to extract a name string: search EJBO+4 through EJBO+16 for
-    # the start of a printable ASCII run (name may be at different offsets
-    # depending on object type). Negative offsets are included for multiple-
-    # inheritance classes, whose fields start before the tag: Owner's civ name
-    # is at -44.
+    # Known name strings first, else a printable ASCII run at EJBO+4..+16.
     name = ""
     known = CLASS_NAME_STRING.get(cls)
     if known is not None:
@@ -458,7 +400,6 @@ def read_object_fields(h, ejbo_addr, read_after=DEFAULT_READ_AFTER,
         if pos + 4 > len(raw):
             continue
         name_bytes = raw[pos:pos+32]
-        # Must start with a printable char
         if not (0x20 < name_bytes[0] < 0x7f):
             continue
         null_pos = name_bytes.find(b'\x00')
@@ -473,23 +414,17 @@ def read_object_fields(h, ejbo_addr, read_after=DEFAULT_READ_AFTER,
                 continue
     return fields, name
 
-# ── Annotations persistence ────────────────────────────────────────────────
-# Resolve next to this script, not the cwd: the viewer is often launched with
-# an absolute path from the repo root, which would silently load zero annotations.
+# Resolved next to this script, independent of the working directory.
 ANNOTATIONS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)),
                                 "ejbo_annotations.json")
 
 def load_annotations():
     if os.path.exists(ANNOTATIONS_FILE):
-        # Encoding must be explicit: the file contains non-ASCII punctuation and
-        # Windows would otherwise decode it as cp1252, turning every em-dash into
-        # mojibake that the next save then escapes permanently.
+        # The file contains non-ASCII text, so the encoding must be explicit.
         with open(ANNOTATIONS_FILE, "r", encoding="utf-8") as f:
             text = f.read()
-        # Duplicate keys are legal JSON and silently resolve to the LAST value,
-        # so a hand-edited file can carry two annotations for one offset while the
-        # viewer shows only one. The first rewrite then destroys the hidden one.
-        # Planet:356/360/364 each sat duplicated for several commits this way.
+        # Duplicate keys resolve to the last value and the next save drops the
+        # rest, so they are reported.
         seen, dupes = set(), []
         def _hook(pairs):
             for k, _ in pairs:
@@ -507,7 +442,6 @@ def save_annotations(ann):
     with open(ANNOTATIONS_FILE, "w", encoding="utf-8") as f:
         json.dump(ann, f, indent=2, ensure_ascii=False)
 
-# ── Global state ───────────────────────────────────────────────────────────
 class ViewerState:
     def __init__(self):
         self.pid         = None
@@ -537,8 +471,7 @@ class ViewerState:
             kernel32.CloseHandle(self.handle)
         self.pid        = pid
         self.proc_name  = name
-        self.rtti_cache = {}   # heap addresses are per-process; vftables are not,
-                               # but a fresh cache costs one read per class
+        self.rtti_cache = {}
         self.ptr_cache  = {}
         self.handle    = kernel32.OpenProcess(
             PROCESS_VM_READ | PROCESS_VM_WRITE | PROCESS_VM_OPERATION | PROCESS_QUERY_INFORMATION,
@@ -575,20 +508,9 @@ class ViewerState:
                 self.last_update = time.time()
             return False
 
-    # A full sweep reads the whole writable address space looking for the tag.
-    # Measured: 118 MB at ~103 MB/s = 1.15s, which is 87% of a scan, while every
-    # object read that follows it costs 0.17s.
-    #
-    # It is also almost entirely wasted. All 682 objects in a live galaxy sit in
-    # TWO heap regions totalling 2.44 MB -- 2.1% of what gets swept -- and
-    # sweeping just those finds the identical set in 0.021s.
-    #
-    # So a warm scan sweeps the regions that HAVE held objects, plus any region
-    # the process has added or grown since the last look, and takes a full sweep
-    # every FULL_SWEEP_EVERY scans as a backstop. The middle clause is what makes
-    # this safe rather than merely fast: a newly built ship is allocated from the
-    # same heap as every other ship, and if the engine ever allocates somewhere
-    # new, that region is new territory and gets swept because it is new.
+    # A warm scan sweeps the regions that have held objects plus any region added
+    # or grown since the last look. Every FULL_SWEEP_EVERY scans it sweeps the
+    # whole writable address space.
     FULL_SWEEP_EVERY = 20
 
     def scan(self, full=False):
@@ -606,7 +528,6 @@ class ViewerState:
             self.scans_since_full += 1
         self.prev_regions = regions
         self.ejbo_addrs = scan_for_ejbo(self.handle, sweep)
-        # Remember where they actually were, so the next warm sweep is narrow.
         self.hot_regions = [r for r in regions
                             if any(r[0] <= a < r[0] + r[1]
                                    for a in self.ejbo_addrs)]
@@ -618,10 +539,7 @@ class ViewerState:
                     for a in self.ejbo_addrs}
         self.extents, notes = measure_extents(self.handle, self.ejbo_addrs,
                                               class_of, self.rtti_cache)
-        # Say it once, not every scan. These are derivations, not events, and
-        # they were tolerable at one scan per turn; a warm scan is cheap enough
-        # to run often, and twelve unchanged lines per scan buries the log lines
-        # that do mean something.
+        # Extent notes are printed only when they change.
         if notes != self._extent_notes:
             for n in sorted(notes):
                 print(f"[extent] {n}")
@@ -643,9 +561,8 @@ class ViewerState:
             objs.append({
                 "addr":     addr,
                 "addr_hex": f"0x{addr:08X}",
-                # Objects inside the module image are static templates / dialog
-                # working buffers, not game entities (the .data Admiral and
-                # Governor). They must be excluded from any state sync.
+                # Objects inside the module image are static templates or dialog
+                # buffers, not game entities, and must be excluded from state sync.
                 "static":   MODULE_LO <= addr < MODULE_HI,
                 "type":     type_name,
                 "id":       obj_id,
@@ -663,8 +580,7 @@ class ViewerState:
             for f in o["fields"]:
                 f["ptr"] = resolve_pointer(self.handle, f["u32"], self.rtti_cache,
                                            self.ptr_cache, by_start)
-        # Ownership, once the pointers are named. Only Planet needs it: it is
-        # the only class the viewer splits by owner.
+        # Ownership, once the pointers are named. Only Planet is split by owner.
         for o in objs:
             if o["type"] != "Planet":
                 continue
@@ -672,7 +588,6 @@ class ViewerState:
                                 if f["offset"] == OWNER_LINK_OFFSET), None)
             o["owned"] = bool(owner_field) and is_owned(owner_field)
         with self.lock:
-            # Compute changes
             new_prev = {}
             for obj in objs:
                 addr = obj["addr"]
@@ -698,14 +613,12 @@ class ViewerState:
 
     def get_data_json(self):
         with self.lock:
-            # Group by type
             groups = {}
             for obj in self.objects:
                 t = obj["type"]
                 if t not in groups:
                     groups[t] = []
                 groups[t].append(obj)
-            # Sort each group by object ID for consistent column ordering
             for t in groups:
                 groups[t].sort(key=lambda o: o["id"])
             return json.dumps({
@@ -747,7 +660,6 @@ class ViewerState:
                 return False, f"Unknown format: {fmt}"
         except (ValueError, struct.error) as e:
             return False, f"Bad value: {e}"
-        # Read the old value first for logging
         old = read_bytes(self.handle, addr, 4)
         ok  = write_bytes(self.handle, addr, raw)
         if ok:
@@ -783,7 +695,6 @@ class ViewerState:
 
 STATE = ViewerState()
 
-# ── Background refresh thread ──────────────────────────────────────────────
 def background_refresh(interval):
     while True:
         try:
@@ -793,7 +704,6 @@ def background_refresh(interval):
             print(f"[refresh] error: {e}")
         time.sleep(interval)
 
-# ── HTTP server ────────────────────────────────────────────────────────────
 class ViewerHandler(BaseHTTPRequestHandler):
 
     def log_message(self, format, *args):
@@ -849,8 +759,7 @@ class ViewerHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(HTML_PAGE.encode())
 
-# ── HTML Dashboard ─────────────────────────────────────────────────────────
-# Loaded from ejbo_viewer.html at runtime (keeps this file under 500 lines).
+# Loaded from ejbo_viewer.html at runtime.
 HTML_PAGE = ""  # populated in main()
 
 def _load_html():
@@ -858,7 +767,6 @@ def _load_html():
     with open(html_path, "r", encoding="utf-8") as f:
         return f.read()
 
-# ── Main ──────────────────────────────────────────────────────────────────────
 def main():
     parser = argparse.ArgumentParser(description="EJBO Viewer: live game object browser")
     parser.add_argument("--port", type=int, default=8080, help="HTTP port (default 8080)")
@@ -878,7 +786,6 @@ def main():
     n = STATE.scan()
     print(f"[+] Found {n} EJBO objects")
 
-    # Start background refresh
     t = threading.Thread(target=background_refresh, args=(args.refresh,), daemon=True)
     t.start()
     print(f"[+] Background refresh every {args.refresh}s")

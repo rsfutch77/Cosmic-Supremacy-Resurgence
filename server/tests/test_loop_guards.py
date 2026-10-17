@@ -3,21 +3,14 @@ test_loop_guards.py: the two guards that stop a restart eating a played turn
 =============================================================================
     server\\.venv\\Scripts\\python.exe server\\tests\\test_loop_guards.py
 
-Replays the turn-12 incident of 18 September 2026 against a temporary store.
-A player's loop was restarted 22 seconds before the deadline, on a turn they
-had already submitted for. `follow` re-served it, which closed their client and
-discarded the colonise order they had played, then submitted the orderless blob
-over their submission. `submit` is last-write-wins and said nothing.
-
-Both halves are checked, because either one alone still loses the turn:
+A loop restarted on a turn already submitted for must not lose the played
+orders. Both guards are checked, since either alone still loses the turn:
 
   1. `follow` must not re-serve a turn this civ has already submitted for.
   2. `push` must not replace a submission it did not write with one that
      carries no orders.
 
-The real blobs are not needed. `carries_orders` is stubbed per case, which is
-what lets this run without a client, and the guard logic is what is under test
-rather than the diffing.
+`carries_orders` is stubbed per case, so no client is needed.
 """
 import os
 import sys
@@ -50,13 +43,11 @@ def fresh_store(turn=12):
     return s
 
 
-# ── guard 2: push refuses to clobber a stranger's order-carrying submission ──
 def run_push(store, turn, civ, capture, sent, orders, existing_orders=True):
     """The body of follow's push, with the guard under test.
 
-    `existing_orders` says whether the submission already in the store carries
-    orders, which is what separates a refusal worth shouting about from a
-    no-op: replacing one empty submission with another is not a save.
+    `existing_orders` says whether the stored submission carries orders, which
+    decides between a refusal and a quiet no-op.
     """
     submitted = []
     if capture == sent:
@@ -74,8 +65,8 @@ def test_push_guard():
     ORDER = b'BASE' * 64 + b'COLONISE'      # what the player played
     EMPTY = b'BASE' * 64                    # a freshly served, orderless blob
 
-    # The incident: a restarted loop, sent=None, an empty capture, and a
-    # submission already in the store that carries the player's order.
+    # A restarted loop (sent=None), an empty capture, and a stored submission
+    # that carries the player's order.
     s = fresh_store()
     s.submit('Neighbor', 12, ORDER)
     verdict, _ = run_push(s, 12, 'Neighbor', EMPTY, sent=None, orders=False)
@@ -106,9 +97,8 @@ def test_push_guard():
     check('a capture WITH orders replaces a stranger submission',
           verdict, 'submitted')
 
-    # Empty over empty. The store is unchanged either way, so this must not be
-    # reported as a refusal, it fired on the first live turn after the guard
-    # went in, and a warning that cries wolf on a no-op stops being read.
+    # Empty over empty leaves the store unchanged, so it is not reported as a
+    # refusal.
     s = fresh_store()
     s.submit('Neighbor', 12, EMPTY)
     verdict, _ = run_push(s, 12, 'Neighbor', EMPTY + b'x', sent=None,
@@ -117,14 +107,11 @@ def test_push_guard():
           verdict, 'left alone')
 
 
-# ── guard 1: follow does not re-serve an already-submitted turn ──────────────
 def what_follow_loads(prior, orders):
     """What `follow` puts into the client, given a submission already stored.
 
-    `serve`, `collect` and `close` are all replaced: `close` matters, because
-    leaving the real one in place ends the pass by closing whatever client is
-    running on this machine. That is not hypothetical, the first version of
-    this control killed the live player's client mid-turn.
+    `serve`, `collect` and `close` are all replaced. The real `close` would
+    close whatever client is running on this machine.
     """
     s = fresh_store()
     if prior is not None:
@@ -159,22 +146,19 @@ def test_reserve_guard():
     BASE = b'BASE' * 64
     ORDER = BASE + b'COLONISE'
 
-    # The incident. A submission carrying orders must be resumed FROM, never
-    # thrown away by reloading the pristine turn.
+    # A submission carrying orders is resumed from, not replaced by the
+    # pristine turn.
     loaded, s = what_follow_loads(ORDER, orders=True)
     check('resumes from a submission that carries orders', loaded, ORDER)
     check('never loads the pristine turn over it', loaded == BASE, False)
     check('and leaves the submission standing',
           s.submissions(12)['Neighbor'], ORDER)
 
-    # The case the first version of this guard got wrong: it refused to serve
-    # at all, which strands a player whose client died on a turn they had not
-    # played. An orderless submission has nothing to preserve.
+    # An orderless submission has nothing to preserve, so the turn is served.
     loaded, _ = what_follow_loads(BASE, orders=False)
     check('serves the turn fresh when the submission carries nothing',
           loaded, BASE)
 
-    # No submission at all: an ordinary first serve.
     loaded, _ = what_follow_loads(None, orders=False)
     check('serves the turn when nothing has been submitted', loaded, BASE)
 

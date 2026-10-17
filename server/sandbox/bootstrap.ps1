@@ -23,11 +23,8 @@ function Say($msg) {
 try {
     Say "sandbox up, stage commit $(Get-Content C:\stage\commit.txt)"
 
-    # The sandbox reaches the internet through the host, and a host on a VPN
-    # carries less than the 1500-byte packets the sandbox sends (WireGuard is
-    # 1380 or lower). TCP connects and then every TLS handshake stalls, because
-    # the server's certificate chain is the first full-sized packet. 1280 is
-    # the IPv6 minimum and fits inside any tunnel.
+    # A host on a VPN carries less than 1500-byte packets, so TCP connects and
+    # then TLS handshakes stall. 1280 (the IPv6 minimum) fits inside any tunnel.
     Get-NetIPInterface -ConnectionState Connected |
         Where-Object { $_.InterfaceAlias -notlike 'Loopback*' } |
         ForEach-Object {
@@ -37,11 +34,8 @@ try {
     & robocopy C:\stage\resurgence $Code /MIR /NFL /NDL /NJH /NJS /NP | Out-Null
     if ($LASTEXITCODE -ge 8) { throw "copying the stage failed ($LASTEXITCODE)" }
 
-    # Windows Sandbox boots with Smart App Control on, which refuses the
-    # unsigned interpreter the stage runs and offers no per-program exception.
-    # This sandbox runs nothing but the referee and is discarded when it
-    # closes, and its isolation is the virtual machine, so the policy is
-    # switched off for this boot. The host's setting is not touched.
+    # Smart App Control refuses the unsigned interpreter, so it is switched off
+    # inside this disposable sandbox. The host's setting is not touched.
     $Ci = 'HKLM:\SYSTEM\CurrentControlSet\Control\CI\Policy'
     Set-ItemProperty -Path $Ci -Name VerifiedAndReputablePolicyState -Value 0 -Type DWord
     $Refresh = (& CiTool.exe --refresh --json 2>&1 | Out-String).Trim()

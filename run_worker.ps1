@@ -9,9 +9,7 @@
     closes an overdue turn at startup, then closes each turn as its deadline
     passes, keeps a cs_server on 8888 for the capture to arrive on, asks Windows
     not to sleep, and refuses to be a second worker on a galaxy that has one.
-
-    run_server.ps1 is the precedent for how this finds Python. Nothing here
-    needs an elevated shell.
+    Nothing here needs an elevated shell.
 
 .PARAMETER Store
     The galaxy: a directory, the base URL of a turn_server.py, or a
@@ -96,9 +94,8 @@ $ThisScript = $MyInvocation.MyCommand.Definition
 $DefaultPage = Join-Path $ServerDir 'worker_work\operator.html'
 
 if ($WriteShortcut) {
-    # A shortcut straight to the .html file. Windows opens it with the default
-    # browser, so the operator reads the galaxy with no console window at all.
-    # The page need not exist yet; the worker writes it when it next starts.
+    # A shortcut to the .html file, opened in the default browser with no
+    # console window. The worker writes the page when it next starts.
     $Page = $DefaultPage
     if ($OperatorPage) {
         $Page = [System.IO.Path]::GetFullPath(
@@ -134,9 +131,7 @@ if (-not (Test-Path $VenvPython)) {
     exit 1
 }
 
-# The arguments are built once and used for both jobs: running the worker now,
-# and writing the task that will run it later. A task whose command line has
-# drifted from the one the operator tested is a task nobody can reason about.
+# The same arguments run the worker now and go into the scheduled task.
 $WorkerArgs = @('--store', $Store)
 if ($DataDir)     { $WorkerArgs += @('--data-dir', $DataDir) }
 if ($SaveDir)     { $WorkerArgs += @('--save-dir', $SaveDir) }
@@ -152,20 +147,11 @@ if ($WriteTaskXml) {
     }
     if (-not $TaskUser) { $TaskUser = "$env:USERDOMAIN\$env:USERNAME" }
 
-    # The task runs this script rather than python directly, so that what the
-    # machine does at 3am is the same command an operator can type.
+    # The task runs this script, so it runs the same command an operator types.
     #
-    # Hidden rather than minimized. A minimized window is a button in the
-    # taskbar, and closing a console window sends CTRL_CLOSE_EVENT to
-    # everything attached to it, so one tidying-up click ends the galaxy and
-    # writes nothing to the log saying why. That happened on 27 September: the
-    # worker had closed a turn unattended two hours earlier and was still
-    # healthy, and the only trace was the task reporting 0xC000013A.
-    #
-    # This is the task's command line and not the one an operator types.
-    # Running run_worker.ps1 by hand still shows its window, which is the case
-    # where a window is wanted. What the task is doing is read with -Status or
-    # out of the log, neither of which needs a window to exist.
+    # Hidden: closing a console window sends CTRL_CLOSE_EVENT to everything
+    # attached to it, which ends the worker without a log line. Run by hand,
+    # the script still shows its window; -Status and the log report on the task.
     $Pass = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-WindowStyle',
               'Hidden', '-File', ('"{0}"' -f $ThisScript), '-Store',
               ('"{0}"' -f $Store))
@@ -175,9 +161,8 @@ if ($WriteTaskXml) {
     if ($AdoptServer) { $Pass += '-AdoptServer' }
     if ($OperatorPage) { $Pass += @('-OperatorPage', ('"{0}"' -f $OperatorPage)) }
 
-    # Escaped as XML text rather than pasted in. A store path holding an
-    # ampersand would otherwise produce a file Task Scheduler refuses, and the
-    # message it gives says nothing about which character did it.
+    # Escaped as XML text: a store path holding an ampersand would produce a
+    # file Task Scheduler refuses.
     function Esc([string]$s) {
         return [System.Security.SecurityElement]::Escape($s)
     }
@@ -190,12 +175,8 @@ if ($WriteTaskXml) {
     $out = [System.IO.Path]::GetFullPath(
         [System.IO.Path]::Combine((Get-Location).Path, $WriteTaskXml))
 
-    # Written as UTF-16, which is what Task Scheduler's own export produces and
-    # what it will accept. The template is UTF-8 so that it can be read and
-    # reviewed as text in the repository; handing those bytes to schtasks fails
-    # with "unable to switch the encoding", which names neither the file nor
-    # the cause. Measured through the Schedule.Service COM object, which
-    # refuses the same file for the same reason.
+    # Written as UTF-16, the encoding Task Scheduler accepts. The template is
+    # UTF-8; schtasks refuses it with "unable to switch the encoding".
     $xml = $xml.Replace('<?xml version="1.0" encoding="UTF-8"?>',
                         '<?xml version="1.0" encoding="UTF-16"?>')
     [System.IO.File]::WriteAllText($out, $xml,

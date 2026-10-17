@@ -1,15 +1,12 @@
 """
 find_refs.py: who points at this object?
-=========================================
+
     python find_refs.py --designs           # every ShipDesign, and its referrers
     python find_refs.py --addr 0x071AD690
     python find_refs.py --designs --near 64 # widen the attribution window
 
-This scans the client's writable memory for the object's several addresses (an
-EJBO object is referred to by more than one, see below) and then tries to say
-what each hit belongs to: which class, which instance, which field offset. A hit
-attributed to `Owner:440` is a finding; a bare address is a lead.
-
+Scans the client's writable memory for each address an object is referred to by
+(REF_FORMS) and attributes each hit to a class, instance and field offset.
 """
 import argparse
 import os
@@ -57,10 +54,8 @@ def find_dwords(handle, regions, values):
     return want
 
 
-# Measured extents, from the memory report's stride analysis. Attribution has to
-# use the REAL size of each class: a single generous window applied to all of
-# them turns every nearby heap block into a confident false claim, and "Sun#145
-# at tag+724" reads exactly like a finding while being noise, a Sun is 92 bytes.
+# Measured size of each class in bytes. Attribution must use the per-class size;
+# a shared window attributes unrelated heap blocks.
 CLASS_EXTENT = {
     "Owner": 1344,
     "Planet": 596,
@@ -68,8 +63,7 @@ CLASS_EXTENT = {
     "ShipDesign": 280,      # 0x118, the allocation size both call sites use
     "Sun": 92,
 }
-# How far BEFORE the tag an object's own data can start. Owner is the extreme
-# case at -52; ShipDesign's second vftable sits at -12.
+# How far before the tag an object's own data can start (Owner reaches -52).
 CLASS_FRONT = 64
 
 
@@ -103,11 +97,8 @@ def attribute(spans, addr):
 def neighbourhood(handle, addr, known, span=6):
     """The dwords around `addr`, naming any that are themselves known objects.
 
-    A referrer sitting in an anonymous heap block is not anonymous if the slots
-    beside it point at the OTHER designs: that shape is a vector, and a vector of
-    designs is the registration this whole exercise is looking for. Printing the
-    neighbours is what tells those apart from a lone pointer in some unrelated
-    struct.
+    Neighbours that point at other designs mark the referrer as a vector of
+    designs.
     """
     base = addr - span * 4
     raw = ev.read_bytes(handle, base, span * 8 + 4)
@@ -139,8 +130,7 @@ def main():
           f"{total / 1e6:.1f} MB")
     spans = build_attribution(snap)
 
-    # Every address by which any known object can be referred to, so a dword
-    # sitting next to our hit can be named rather than stared at.
+    # Every address by which any known object can be referred to.
     known = {}
     for lo, hi, label, base in spans:
         for form, delta in REF_FORMS.items():
@@ -152,8 +142,6 @@ def main():
                     f"{d.owner.civ_name if d.owner else None!r})", d.addr)
                    for d in snap.designs]
     if a.designs and not targets:
-        # Distinguish "you passed no flag" from "the galaxy is not up yet",
-        # which is the same empty list and a completely different problem.
         sys.exit("--designs found no ShipDesign objects, the galaxy is "
                  "probably still loading; wait and re-run")
     if a.addr:
@@ -161,9 +149,7 @@ def main():
     if not targets:
         ap.error("give --designs or --addr")
 
-    # One scan for every form of every target, rather than one scan per target:
-    # the memory is tens of megabytes and reading it once per design would turn
-    # a five-second answer into a minute of re-reading the same pages.
+    # One scan covers every form of every target.
     values = {}
     for label, addr in targets:
         for form, delta in REF_FORMS.items():

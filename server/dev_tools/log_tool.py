@@ -7,27 +7,15 @@ log_tool.py: read the launcher logs players have sent
     python server/dev_tools/log_tool.py firebase://cs-resurgence show <id> --out report.log
     python server/dev_tools/log_tool.py firebase://cs-resurgence prune --dry-run
 
-A launcher sends its redacted log to the relay's `POST /_logs` when a turn has
-failed and the player agrees, or when the player presses Send log (plan item
-M1). The relay stores each one as a Firestore document in `<prefix>_logs`, and
-nothing serves them back through the relay. This reads them with the
-operator's administrator credentials, the ones the referee holds, as
-`seat_tool.py` does.
+The relay stores each log a launcher sends (`POST /_logs`) as a Firestore
+document in `<prefix>_logs` and never serves them back. This reads them with
+the operator's administrator credentials.
 
-`list` prints the newest first: the log's id, when it arrived, the support
-code of the sign-in that sent it (the first eight characters of its uid, which
-is what the launcher shows a player under its title), why it was sent, the
-build, the galaxy, civ and turn it names, and its size. `--code` keeps only one
-player code's logs, which is how a player's report is matched to their log.
-`show` prints one log's text whole.
-
-`prune` deletes logs older than the relay's `LOG_KEEP_DAYS` and daily counts
-older than that. The relay already deletes a few old logs on every upload, so
-this is for a collection that has stopped receiving any.
-
-The collection names and the keep period are the relay's, repeated here
-because this tool does not import the relay; `test_log_upload.py` checks the
-two agree.
+`list` prints the newest first: id, arrival time, the sender's support code
+(the first eight characters of its uid, shown in the launcher), why it was
+sent, build, galaxy, civ, turn and size. `--code` keeps one player code's
+logs. `show` prints one log's text whole. `prune` deletes logs and daily
+counts older than `LOG_KEEP_DAYS`.
 """
 from __future__ import annotations
 
@@ -46,14 +34,13 @@ for _d in (SERVER, HERE):
 
 import firebase_store                                           # noqa: E402
 
-# `relay.LOG_COLLECTION`, `relay.LOG_QUOTA_COLLECTION` and
-# `relay.LOG_KEEP_DAYS`, for the default prefix.
+# Copies of `relay.LOG_COLLECTION`, `relay.LOG_QUOTA_COLLECTION` and
+# `relay.LOG_KEEP_DAYS`; `test_log_upload.py` checks they agree.
 LOG_SUFFIX = '_logs'
 LOG_QUOTA_SUFFIX = '_log_quota'
 LOG_KEEP_DAYS = 14
 
-# The fields `list` reads. The text is left out, so a listing does not
-# download every log to print one line about each.
+# The fields `list` reads; the text is left out.
 SUMMARY_FIELDS = ['uid', 'received_at', 'why', 'build', 'galaxy', 'civ',
                   'turn', 'bytes']
 
@@ -68,8 +55,8 @@ class LogRefused(Exception):
 def open_project(spec: str):
     """(Firestore client, prefix) for `firebase://project`."""
     project, _galaxy, bucket, prefix = firebase_store.parse_spec(spec)
-    # A store is borrowed for its client, as the relay's listing does. The
-    # galaxy name is a placeholder and nothing asks the store about it.
+    # A store is opened only for its Firestore client; the galaxy name is a
+    # placeholder.
     store = firebase_store.FirebaseTurnStore(project, '_logs', bucket=bucket,
                                              prefix=prefix)
     return store.fs, store.prefix

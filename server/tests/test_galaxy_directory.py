@@ -4,22 +4,17 @@ test_galaxy_directory.py: the list a launcher's Games tab is made of
     server\\.venv\\Scripts\\python.exe server\\tests\\test_galaxy_directory.py
     ... test_galaxy_directory.py --firebase firebase://demo-cs-resurgence
 
-The directory answers what a store cannot: which galaxies there are, what they
-are called, whether they are open, and whether this player already has a seat.
-Both implementations are checked against the same expectations, for the reason
-the store equivalence test gives, and the local one is checked against a galaxy
-served over HTTP as well as one in a folder, because that is the arrangement
-the two-machine test runs on and it is the one a listing could silently drop.
+The directory answers which galaxies there are, what they are called, whether
+they are open, and whether this player already has a seat. The local and
+Firebase directories are checked against the same expectations, and the local
+one against a galaxy served over HTTP as well as one in a folder.
 
-What is checked beyond the obvious: that a row carries a count and a flag and
-never the roster, because a launcher that could list the roster turns "is there
-a seat for me" into a way to enumerate who is playing; that a galaxy which has
-been registered but never started lists as forming rather than not at all; and
-that the spec a directory hands out opens through `open_store` without the
-caller learning what kind it was.
+A row carries a player count and a joined flag, never the roster. A galaxy
+registered but never started lists as forming. The spec a directory hands out
+opens through `open_store`.
 
 The Firebase half runs when the emulator's environment variables are set, or
-when a spec is given. Without either it is skipped and says so.
+when a spec is given.
 """
 import argparse
 import os
@@ -62,7 +57,6 @@ def make_blob(turn):
                    section(b'KNPL', bytes([0xAA]) * 8))
 
 
-# ── the shared expectations ──────────────────────────────────────────────────
 def run_sequence(d, label, started_id, forming_id):
     """The same checks against whichever directory this is.
 
@@ -135,7 +129,6 @@ def run_sequence(d, label, started_id, forming_id):
     return {g.id: g._replace(store=None) for g in rows}
 
 
-# ── local ────────────────────────────────────────────────────────────────────
 def run_local(tmp, http_base=None):
     """A folder of galaxies, and one served over HTTP from a galaxies.json."""
     root = os.path.join(tmp, 'galaxies')
@@ -158,8 +151,7 @@ def run_local(tmp, http_base=None):
 
     summary = run_sequence(d, 'local', 'sandbox', 'forming')
 
-    # A store that reopens without clearing the reason, as the HTTP store's
-    # `reopen` does, leaves it in the state. Fails if the row read it anyway.
+    # A reason left in an open galaxy's state is ignored by the row.
     import galaxy_directory
     left = galaxy_directory._row('g', 'G', OPEN, {
         'turn': 3, 'civs': [], turn_store.STATUS_KEY: OPEN,
@@ -188,7 +180,6 @@ def run_local(tmp, http_base=None):
     return summary
 
 
-# ── firebase ─────────────────────────────────────────────────────────────────
 def firebase_project(given):
     if given:
         return given

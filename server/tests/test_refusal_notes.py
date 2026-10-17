@@ -3,20 +3,12 @@ test_refusal_notes.py: a dropped order has to reach the player who made it
 ===========================================================================
     server\\.venv\\Scripts\\python.exe server\\tests\\test_refusal_notes.py
 
-Every refusal was already written down. It was written down on the referee's
-console, and on a player's machine that is nowhere. Two of the first
-two-machine rehearsal's six findings were silent for exactly that reason: a
-system rename and a conscription, both accepted by the client, both dropped by
-the merge, both simply gone the next turn with nothing to look at.
+A refusal reaches the player through the store: `merge` records each refusal
+against the civ that made it, `referee` writes it beside the turn as a note,
+and `player_turn.report_refusals` prints it into the launcher's log pane.
 
-The route is store-shaped, because the store is the only thing both sides
-touch: `merge` records each refusal against the civ that made it, `referee`
-writes that beside the turn, and `player_turn.report_refusals` prints it into
-the launcher's log pane. No new UI, which is what was asked for.
-
-The blobs here are short byte strings. What is under test is the route, not the
-diffing, and `merge` is exercised against real captures in
-`test_ship_designs.py`.
+The blobs here are short byte strings, since the route is under test, not the
+diffing; `test_ship_designs.py` runs `merge` against real captures.
 """
 import os
 import sys
@@ -95,7 +87,7 @@ def main():
     welcome = joins.welcome_note('Laptop', 7, 'Sol', 12)
     warning = abandonment.warning_note('Laptop', 2, 5)
     reclaim = abandonment.reclaim_note('Laptop', 5, 9)
-    # Fails if a pattern drifted from the sentence its writer produces.
+    # Each pattern must match the sentence its writer produces.
     check('a welcome is recognised whole',
           player_turn.note_parts(welcome), (welcome, [], []))
     check('a welcome with no planet number is still one',
@@ -121,7 +113,6 @@ def main():
         emit=lambda kind, **f: events.append((kind, f)))
     text = '\n'.join(said)
     check('a welcome with one refusal counts one refusal', n, 1)
-    # Fails with the old heading, which counted every line as a refusal.
     check('and the heading says one', 'refused 1 of your' in text, True)
     check('the welcome is under a note heading, not the refusal one',
           text.index('left you a note') < text.index(welcome[0]), True)
@@ -145,8 +136,7 @@ def main():
                                          for w in warning), True)
     check('and only warned is emitted', [k for k, _f in events], ['warned'])
     check('for the turn it was left on', [f['turn'] for _k, f in events], [9])
-    # Fails if the loop showed again a warning already shown when turn 9
-    # opened: closing turn 9 reads turn 10's note, and turn 9's own is spent.
+    # Closing turn 9 reads turn 10's note; turn 9's warning was already shown.
     said, events = [], []
     player_turn.report_refusals(
         s, 'Laptop', 9, log=said.append,

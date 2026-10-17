@@ -1,23 +1,20 @@
 """
 Two things the Galaxies page reads back from a galaxy: whether a player seated
-without clicking Join has played their turn (J6), and what the galaxy decided
-about a join that was asked for (J3's refused half).
+without clicking Join has played their turn, and a refused join.
 
     server\\.venv\\Scripts\\python.exe release\\tests\\test_join_answers.py
 
-Headless. Sections 1 to 6 run offline against galaxies made in a temporary
-folder, with the answer written by the store method the worker writes it with.
-Section 7 runs only when FIRESTORE_EMULATOR_HOST is set: it puts the relay
-behind a local port, lodges a join through it as an anonymous emulator user,
-has `joins.apply` and `joins.commit` refuse it the way the referee would, and
-reads the refusal back through the launcher's own code. Start the emulators with
+Headless. Sections 1 to 6 run offline against galaxies in a temporary folder.
+Section 7 runs only when FIRESTORE_EMULATOR_HOST is set: a join lodged through
+the relay is refused by `joins.apply` and `joins.commit` and read back through
+the launcher. Start the emulators with
 
     python functions/emulators.py --only firestore,storage,auth
 
 and set the three variables it prints.
 
-The launcher object is not built. The methods under test are called on a stub
-that carries only the attributes they read, so nothing reaches Tk or a port.
+The methods under test are called on a stub carrying only the attributes they
+read, so nothing reaches a window or a port.
 """
 import json
 import os
@@ -128,8 +125,7 @@ page = Page(data, root, "Neighbor")
 rows, extra = page.refresh()
 check("the directory says the player is in h3check", rows["h3check"].joined,
       True)
-# Fails when the refresh asks only for galaxies with a joined record, which
-# is what it did before J6: this install has none.
+# This install has no joined record for the galaxy.
 check("and the refresh asked it whether they have submitted",
       extra.get("submitted"), {"h3check": True})
 view = page.galaxy_view()
@@ -160,8 +156,8 @@ rec = {"requested_turn": 6, "name": "Ada"}
 refused7 = {"outcome": "refused", "reason": "no room", "turn": 7}
 check("an answer seating into a later turn is this request's",
       L.answer_for(rec, refused7), refused7)
-# Fails if the turn were not compared: the answer to an earlier request stays
-# filed under the same key, and a player who asked again would be shown it.
+# The answer to an earlier request stays filed under the same key, so the
+# turn is compared.
 check("an answer at the turn the request was lodged is an older request's",
       L.answer_for(rec, dict(refused7, turn=6)), None)
 check("and one before it too", L.answer_for(rec, dict(refused7, turn=3)),
@@ -210,7 +206,6 @@ check("and the row says so", you.text(rows["sandbox"], page.galaxy_view()),
       "joining next turn")
 check("with no button, because there is nothing to press yet",
       L.row_action(rows["sandbox"], page.galaxy_view().recs), None)
-# Fails if the refresh asked every row, or asked a galaxy the player is in.
 check("one galaxy was asked about the join, the one with the request",
       [s for s in asked if s == listed["sandbox"].store], [listed["sandbox"]
                                                            .store])
@@ -229,7 +224,6 @@ check("the refresh reads the refusal", sorted(extra.get("answers") or {}),
 kept = L.load_joined(data)["sandbox"].get("answer") or {}
 check("and keeps it in the joined record", kept.get("outcome"), "refused")
 view = page.galaxy_view()
-# Fails without the refused half: the row said "joining next turn" forever.
 check("the row says the join was refused", you.text(rows["sandbox"], view),
       "join refused")
 check("and offers Review", L.row_action(rows["sandbox"], view.recs), L.REASON)
@@ -251,8 +245,7 @@ try:
     rows, extra = page.refresh()
 finally:
     L.open_player_store = real_open
-# Fails if an answered request were asked about again every refresh, which
-# is a read per refused player per poll for as long as they leave it.
+# An answered request is not asked about again.
 check("an answered request is not asked about again",
       listed["sandbox"].store in asked, False)
 check("and the refusal is still shown",
@@ -266,8 +259,7 @@ L.send_join_request(store, L.join_request("Ada", None, "0.1.5", turn=5))
 L.save_joined(data, L.joined_record(rows["sandbox"], "Ada", None, root,
                                     turn=5))
 rows, extra = page.refresh()
-# Fails if an old answer were matched to a new request: the refusal for turn 5
-# is still filed under the same key.
+# The refusal for turn 5 is still filed under the same key.
 check("a request made again is not answered by the old refusal",
       extra.get("answers"), {})
 check("so the row is waiting again",
@@ -372,8 +364,7 @@ def run_emulator():
     def section(tag, payload):
         return tag + struct.pack("<I", len(payload) & sp.SIZE_MASK) + payload
 
-    # The smallest blob `turn_of` reads a turn out of, which is all a start
-    # needs. The worker refuses the request below before it reads the blob.
+    # The smallest blob `turn_of` reads a turn out of.
     blob0 = section(b"SAVE", section(b"GLOB", struct.pack("<I", 0) + b"." * 60))
     referee.start(blob0, ["DemoPlayer"], turn_seconds=1800)
     httpd = ThreadingHTTPServer(("127.0.0.1", 0), Relay)
@@ -387,8 +378,7 @@ def run_emulator():
                                       False, base)
         data = fresh_dir()
         player = turn_store.HttpTurnStore(base, token=lambda: token)
-        # A name the worker refuses before it looks at the blob, so the
-        # refusal is the worker's real sentence without a real galaxy.
+        # A name the worker refuses before it looks at the blob.
         name = "A" * (joins.NAME_LIMIT + 1)
         L.send_join_request(player, L.join_request(name, uid, "0.1.5",
                                                    turn=0))
@@ -404,8 +394,7 @@ def run_emulator():
               [o["outcome"] for o in outcomes], ["refused"])
         got = L.Launcher._join_answers(page, [row], L.load_joined(data))
         answer = (got.get(galaxy) or (None, {}))[1]
-        # Fails if the launcher asked under any key but the uid the relay
-        # filed the request under, or if the route needed a seat.
+        # The launcher asks under the relay's uid, with no seat.
         check("relay: the launcher reads the refusal back",
               answer.get("outcome"), "refused")
         check("relay: with the worker's reason",

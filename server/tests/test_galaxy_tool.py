@@ -1,6 +1,6 @@
 """
-test_galaxy_tool.py: the operator ends a galaxy and starts the next (K5)
-=========================================================================
+test_galaxy_tool.py: the operator ends a galaxy and starts the next
+====================================================================
     server\\.venv\\Scripts\\python.exe server\\tests\\test_galaxy_tool.py
 
     python functions/emulators.py --only firestore,storage,auth
@@ -9,17 +9,14 @@ test_galaxy_tool.py: the operator ends a galaxy and starts the next (K5)
     set FIREBASE_AUTH_EMULATOR_HOST=127.0.0.1:9099
     server\\.venv\\Scripts\\python.exe server\\tests\\test_galaxy_tool.py
 
-K5's done-when is that a galaxy is closed and a fresh one started, and a
-launcher pointed at the closed one says so rather than failing. The first part
-runs `galaxy_tool.py` against a folder of galaxies, offline. The second runs it
-against Firebase on the emulator and then looks at the result the way a player
-does, through the relay in process: the Galaxies listing, the closed galaxy's
-`/state` read by the launcher's own `closed_problem`, a submission into it, and
-its turn still served.
+A galaxy is closed and a fresh one started, and a launcher pointed at the
+closed one says so. The first part runs `galaxy_tool.py` against a folder of
+galaxies, offline. The second runs it against Firebase on the emulator and
+reads the result through the relay in process: the Galaxies listing, the
+closed galaxy's `/state` read by the launcher's `closed_problem`, a submission
+into it, and its turn still served.
 
-Every refusal is checked against what is on disk or in Firestore afterwards,
-because a tool that printed "refused" after writing half a start would
-otherwise pass. Every dry run is checked for having written nothing.
+Every refusal and every dry run is checked for having written nothing.
 """
 import io
 import os
@@ -75,7 +72,6 @@ def snapshot(root):
     return out
 
 
-# ── a folder of galaxies ─────────────────────────────────────────────────────
 def run_folder(tmp):
     root = os.path.join(tmp, 'galaxies')
     os.makedirs(root)
@@ -219,7 +215,6 @@ def run_replace(tmp):
           ['new', 'old'])
 
 
-# ── Firebase, seen through the relay ─────────────────────────────────────────
 def run_firebase():
     import test_relay_function as rf
     import launcher
@@ -294,9 +289,8 @@ def run_firebase():
             refused = exc
         check('the launcher\'s store refuses a submission into it',
               type(refused).__name__, 'GalaxyClosed')
-        # And the relay refuses it as well, for a launcher that skipped that
-        # check: the submission POST is the door a submission goes through,
-        # since the ticket in front of it authorises nothing.
+        # The relay refuses it too, at the submission POST, for a launcher
+        # that skipped the check.
         import relay
         code, _h, body = relay.handle(
             'POST', f'/{one}/submission/{first}/{CIVS[0]}',

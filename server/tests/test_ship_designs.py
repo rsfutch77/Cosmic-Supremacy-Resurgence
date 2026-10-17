@@ -3,26 +3,20 @@ test_ship_designs.py: a design a player makes has to survive the merge
 =======================================================================
     server\\.venv\\Scripts\\python.exe server\\tests\\test_ship_designs.py
 
-The fixture is real. `submissions/0006/Powerhouse.b64` in the 19 September 2026
-rehearsal galaxy holds a design a person made by clicking, object 206 named
-`test scout`, against `turns/0006.b64` which does not have it. That player made
-the same design on turns 5, 6 and 7 and watched it vanish three times, because
-`merge_orders` carried production queues and not designs.
+The fixture is the galaxy2 rehearsal store: `submissions/0006/Powerhouse.b64`
+holds a design a person made, object 206 named `test scout`, which
+`turns/0006.b64` does not have.
 
-The two faults interact, which is why the queue is tested here too. A queue that
-builds a design the served state does not have is a dangling reference, and the
-engine refuses the entire galaxy rather than the order: the client starts, reads
-it and exits in about four seconds. The guard that refuses such a queue stays,
-and these tests hold it to refusing only what is really dangling.
+A production queue that builds a design the galaxy does not hold makes the
+engine refuse the whole galaxy, so the merge refuses such a queue; these tests
+hold it to refusing only what is really dangling.
 
-The hard case is two players designing a ship on the same turn. The client
-allocates a new object id as one past the object count, so both pick the same
-number and merging both would put two objects into one galaxy under one id.
-Whoever is merged second is renumbered, and every reference to the id they
-submitted is rewritten with them.
+Two players designing a ship on the same turn both pick the same new object id
+(one past the object count). Whoever is merged second is renumbered, and every
+reference to the id they submitted is rewritten with them.
 
-A copy of the rehearsal galaxy is looked for beside this file first, so the test
-runs without the share; `--galaxy` points it at another store.
+The rehearsal store is looked for beside this file first, then on the share;
+`--galaxy` points it at another store.
 """
 import argparse
 import os
@@ -59,10 +53,8 @@ def said(log, fragment):
 def remake(record, owner=None, name=None):
     """A DSGN record with a different owner id or name, sizes corrected.
 
-    Built by editing a record a client really wrote rather than by
-    synthesising one, so a fixture keeps the client's byte shape whether or not
-    the builders are right about it. The shape of a synthesised record is
-    `test_build_dsgn.py`'s subject, not this file's.
+    Edits a record a client wrote, so the fixture keeps the client's byte
+    shape. `test_build_dsgn.py` covers synthesised records.
     """
     dsgn_ln = struct.unpack_from('<I', record, 4)[0] & sp.SIZE_MASK
     sdpr_ln = struct.unpack_from('<I', record, 16)[0] & sp.SIZE_MASK
@@ -108,7 +100,7 @@ def main(galaxy):
     ph_oid = mo.civ_by_name(served, 'Powerhouse')['oid']
     lt_oid = mo.civ_by_name(served, 'Laptop')['oid']
 
-    # ── 1. the design survives, and so does the queue that builds it ─────────
+    # The design survives, and so does the queue that builds it.
     log, notes = [], {}
     merged = mo.merge(served, [('Powerhouse', ph), ('Laptop', lt)],
                       log=log.append, notes=notes)
@@ -125,7 +117,6 @@ def main(galaxy):
           mo.prod_builds(mo.planet_index(merged)[139][1]), new_id)
     check('nothing was dropped', notes, {})
 
-    # The blob has to be a blob, not just agree field by field.
     try:
         sp.parse_blob(merged)
         parses = True
@@ -137,8 +128,8 @@ def main(galaxy):
     check('the merge grew the blob by exactly the record it added',
           len(merged) - len(served), len(record))
 
-    # ── 2. two players allocating the same id ────────────────────────────────
-    # Laptop's client, handed the same turn, allocates the same 206.
+    # Two players allocating the same id: Laptop's client, handed the same
+    # turn, allocates the same 206.
     rival = mo.add_design(served, lt_oid,
                           remake(record, owner=lt_oid, name='lt scout'))
     rival = mo.set_high_water(rival, new_id)
@@ -166,8 +157,7 @@ def main(galaxy):
     check('both designs are still there by name',
           {'test scout', 'lt scout'} <= set(names.values()))
 
-    # The reference that made this dangerous: every queue must resolve, and to
-    # a design its own owner holds.
+    # Every queue must resolve to a design its own owner holds.
     dangling = []
     for poid, (owner, prod, _plpr, _nm) in mo.planet_index(both).items():
         builds = mo.prod_builds(prod) if prod else None
@@ -187,7 +177,7 @@ def main(galaxy):
     check('the two-design galaxy reparses', parses)
     check('nothing was dropped from either player', notes, {})
 
-    # ── 3. what is refused, each named ───────────────────────────────────────
+    # What is refused, each named.
     def refuse(what, sub, civ='Powerhouse', fragment=''):
         log, notes = [], {}
         out = mo.merge(served, [(civ, sub)], log=log.append, notes=notes)
@@ -216,7 +206,7 @@ def main(galaxy):
            mo.add_design(served, ph_oid, remake(record, name='Colony Ship')),
            fragment='unique within a civ')
 
-    # Editing and deleting are separate orders nobody has measured.
+    # Editing and deleting a design are not carried.
     edited = mo.add_design(served, ph_oid, record)          # a legal new design
     edited_idx = mo.design_index(edited)
     log, notes = [], {}
@@ -229,9 +219,7 @@ def main(galaxy):
           any('deleting a design' in line
               for line in notes.get('Powerhouse', [])))
 
-    # Renamed to something the same length, so the edit is an edit and not a
-    # blob with every enclosing size left wrong. 'scout test' is what the
-    # player called their third attempt.
+    # Renamed to something the same length, so no enclosing size changes.
     tweaked = bytearray(ph)
     where = ph.find(record)
     tweaked[where:where + len(record)] = remake(record, name='scout test')
@@ -241,8 +229,8 @@ def main(galaxy):
     check('an existing design that came back changed is refused',
           said(log, 'editing a design is not carried yet'))
 
-    # ── 4. the dangling-reference guard still fires ──────────────────────────
-    # A queue naming a design that exists but belongs to the other player.
+    # The dangling-reference guard: a queue naming a design that exists but
+    # belongs to the other player.
     poaching = queue_ship(served, 139,
                           mo.with_prod_design(mo.planet_index(ph)[139][1],
                                               sorted(mine_lt)[0]))

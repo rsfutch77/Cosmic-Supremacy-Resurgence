@@ -1,8 +1,7 @@
 """
 The launcher must notice a game it did not start.
 
-Reproduces the reported nit: TestBed launched outside the launcher left the
-status line on "server running" instead of "Single Player is running". The
+TestBed launched outside the launcher must read "Single Player is running". The
 window is the real web_view.WebView with a recording stand-in for the page.
 """
 import json

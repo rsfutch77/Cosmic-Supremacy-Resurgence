@@ -5,9 +5,9 @@ join_turn_acceptance.py: a join through the referee, in a client that ran
     python join_turn_acceptance.py run --name Ada --turns 2
     python join_turn_acceptance.py load --dat join_turn_work/played.dat
 
-The live half of J3. `server/tests/test_joins.py` covers every decision the
-join pass makes and stubs the engine, so nothing in it says a joined galaxy
-loads, and a galaxy that does not load is a galaxy nobody is playing.
+Checks that a joined galaxy closes turns and loads in a real client.
+`server/tests/test_joins.py` covers the join pass's decisions with the engine
+stubbed.
 
 What this does and what counts as a failure:
 
@@ -26,26 +26,17 @@ What this does and what counts as a failure:
               any of them.
     play      the published galaxy is closed again, by the referee, with the
               newcomer on the roster. Failure: the second tick does not
-              advance, which is what a blob the engine half-read looks like.
+              advance.
     load      the published blob, stamped for the civ that joined, opens in a
               client that was not already holding it. Failure: the client
               exits during the load, or the galaxy never becomes readable.
 
-A blob that a client is already holding proves nothing about loading, so the
-final check is a cold launch, and it is stamped for the newcomer rather than
-for an incumbent: a galaxy that opened for the civ that was always there says
-nothing about the one that was added. The stamp is only meaningful because the
-newcomer owns a planet, which the measure step has already established.
+Requirements, both checked late: `cs_server.py` listening on 127.0.0.1:8888
+(the capture arrives over its `savegame` endpoint), and the machine's one game
+client, taken through `game_cycle`'s lock.
 
-Requirements, and both of them fail late rather than early if they are missing:
-`cs_server.py` listening on 127.0.0.1:8888, because the capture arrives over
-its `savegame` endpoint and a tick without it does the whole turn and loses it;
-and the machine's game client, which is one process shared by everything, taken
-through `game_cycle`'s lock.
-
-Nothing here touches a galaxy anybody else is using. The store under test is a
-copy, made per run, and `server/uidemo` and `server/galaxy_demo` are read and
-never written.
+The store under test is a copy made per run; `server/uidemo` and
+`server/galaxy_demo` are only read.
 """
 import argparse
 import json
@@ -92,7 +83,6 @@ def check(name, got, want=True):
         log(f'          wanted {want!r}, got {got!r}')
 
 
-# ── reading a galaxy ─────────────────────────────────────────────────────────
 def civ_count(blob):
     return struct.unpack_from('<I', blob, icv.civ_count_at(blob))[0]
 
@@ -119,7 +109,6 @@ def free_planets(blob):
             if not p['owner'] and p['nlen'] == 0]
 
 
-# ── the stub server the capture travels over ─────────────────────────────────
 def server_listening(host='127.0.0.1', port=8888, timeout=2.0) -> bool:
     try:
         with socket.create_connection((host, port), timeout=timeout):
@@ -131,12 +120,8 @@ def server_listening(host='127.0.0.1', port=8888, timeout=2.0) -> bool:
 def ensure_server():
     """(process or None). A server already on 8888 is used and never killed.
 
-    A packaged launcher hosting its own server outranks a checkout one, and it
-    writes captures to its own data directory rather than this one's, so a run
-    that killed it would break whatever is using it and a run that reuses it
-    has to know its captures land elsewhere. Reusing is the right answer and
-    `--save-dir` is how a caller says where they land; this run takes the
-    checkout default, which is what a checkout `cs_server` writes.
+    A packaged launcher's server writes captures to its own data directory;
+    pass `--save-dir` to say where they land.
     """
     if server_listening():
         log('  a server is already on 8888; using it and leaving it alone')
@@ -156,15 +141,13 @@ def ensure_server():
     raise SystemExit('cs_server.py did not come up on 8888')
 
 
-# ── the run ──────────────────────────────────────────────────────────────────
 def prepare(fixture, work, name, uid, seconds):
     """A private copy of a real galaxy with one join request waiting in it."""
     if os.path.exists(work):
         shutil.rmtree(work)
     shutil.copytree(fixture, work)
     store = turn_store.TurnStore(work)
-    # The clock is set short so the referee closes on demand rather than in
-    # four hours. Nothing else about the copy is touched.
+    # Deadline in the past, so the referee closes on demand.
     store.update_state({'deadline': time.time() - 1, 'turn_seconds': seconds})
     state = store.state()
     log(f'  copy of {os.path.basename(fixture)} at turn {state["turn"]}, '
@@ -184,17 +167,9 @@ def prepare(fixture, work, name, uid, seconds):
 def measure(before, after, control, name):
     """What the join did, against the turn before it and against a control.
 
-    Two comparisons, because neither alone says it. `before` is the turn that
-    was closed, and a real tick moves every civ's `OWNR` legitimately (stores,
-    population, newly explored systems) so byte identity against it is not a
-    claim anybody should make; what it can say is that nobody's planets or
-    ships changed hands.
-
-    `control` is the **same turn closed the same way with no join request**,
-    which is the comparison that can say a join took nothing from anybody. The
-    engine's turn is a pure function of state plus orders, measured over 20
-    turns across three process launches, so the two runs are comparable; where
-    they differ is the join and nothing else.
+    Against `before`, only planet and ship ownership is compared, since a tick
+    changes every `OWNR`. `control` is the same turn closed with no join
+    request; the engine's turn is deterministic, so `OWNR` bytes must match it.
     """
     was, now = holdings(before), holdings(after)
     ctl = holdings(control)
@@ -252,9 +227,7 @@ def run(fixture, work, name, uid, turns, seconds, save_dir):
         f'{len(free_planets(before))} free planet(s), civ count '
         f'{civ_count(before)}, high-water {high_water(before)}')
 
-    # The control: the same galaxy, the same turn, no join request. Without it
-    # nothing in this run can tell a join that took a planet from somebody
-    # apart from a turn in which somebody lost one.
+    # The control: the same galaxy, the same turn, no join request.
     control_root = work + '_control'
     if os.path.exists(control_root):
         shutil.rmtree(control_root)

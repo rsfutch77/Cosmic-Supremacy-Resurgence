@@ -1,30 +1,18 @@
 """
-test_people_and_hurry.py: the C3 immediate-effect rules, against a real galaxy
-==============================================================================
+test_people_and_hurry.py: the immediate-effect rules, against a real galaxy
+===========================================================================
     server\\.venv\\Scripts\\python.exe server\\tests\\test_people_and_hurry.py
 
 Hurry production, conscription, crew assignment, job reallocation and the
-recruitment rate all take effect the moment a player clicks them, so a
-submission carries the effect rather than the request. The rules that judge
-them are `people_acceptable` and `hurry_acceptable`, and neither had a test.
+recruitment rate take effect the moment a player clicks them, so a submission
+carries the effect. `people_acceptable` and `hurry_acceptable` judge them.
 
-The first case here is the one that matters most, because it is the one that
-was wrong in the field. `people_acceptable` asked whether a citizen's three
-opaque bytes were ZERO rather than whether they matched what was served, and it
-asked it of the citizen array alone. Two consequences, both reproduced below:
+A citizen's three opaque bytes are judged against what was served, across the
+citizen, military and crew arrays, so a drafted record stays in view.
 
-  * a civ holding such a record was refused every turn whatever it did,
-    including a turn in which it did nothing, and
-  * drafting that citizen moved the record into the military array, out of the
-    check's sight, so the rule accepted the turn that hid the bytes and refused
-    the turn that did not.
-
-`client/SinglePlayerGalaxy.dat` is the fixture because it is the only galaxy
-blob a checkout is guaranteed to have: every capture under `server/saves`,
-`server/galaxy_*/` and `client/*.dat` is gitignored game state. It carries two
-civs with seven citizens and four crew each, and the opaque bytes that provoked
-the bug are written into it here rather than waited for, which is what makes
-the case reproducible rather than a story about one galaxy.
+The fixture is `client/SinglePlayerGalaxy.dat`, the only galaxy blob a
+checkout is guaranteed to have: two civs with seven citizens and four crew
+each. The opaque bytes are written into it here.
 """
 import os
 import struct
@@ -41,9 +29,7 @@ for d in (os.path.join(ROOT, 'server'),
 import merge_orders as mo
 
 GALAXY = os.path.join(ROOT, 'client', 'SinglePlayerGalaxy.dat')
-ODD = bytes.fromhex('fe3b00')       # what GoodGuy's citizens carry in the live
-                                    # two-sided fixture, and what the check used
-                                    # to refuse outright
+ODD = bytes.fromhex('fe3b00')       # opaque citizen bytes seen in a live galaxy
 PASS, FAIL = [], []
 
 
@@ -87,16 +73,11 @@ def set_record_bytes(blob, planet, idx, rest):
 def conscript(blob, planet, idx):
     """Draft one citizen: out of the citizen array, into the military array.
 
-    The record is carried across with only the job byte rewritten. That is the
-    engine's own behaviour and not an assumption the tests make: a player
-    drafted a citizen on 20 September 2026 and the record arrived in the ship's
-    crew with one byte different,
+    The record is carried across with only the job byte rewritten, as the
+    engine does:
 
         citizen  000000940200001500
         crew     030000940200001500
-
-    which is what makes a soldier traceable back to the citizen they were, and
-    why the checks on what a record carries have to read all three arrays.
     """
     plpr = mo.planet_index(blob)[planet][2]
     arr = mo.citizen_bytes(plpr)
@@ -117,17 +98,15 @@ def main():
     check('the fixture starts clean', mo.people_acceptable(served, served, civ),
           (True, ''))
 
-    # The regression. A galaxy in which a citizen already carries opaque bytes
-    # is a galaxy the referee served, so submitting it back unaltered is the
-    # emptiest turn there is and must be accepted.
+    # Opaque bytes the referee served are accepted when submitted back
+    # unaltered.
     odd = set_record_bytes(served, planet, 0, ODD)
     accepted('a turn that changes nothing is accepted, opaque bytes and all',
              odd, odd, civ)
     refused('and inventing those bytes within the turn is still refused',
             served, odd, civ, 'opaque bytes in a people record were invented')
 
-    # The other half of the same bug: the checks used to lose sight of a record
-    # the moment it was drafted, so hiding the bytes was the accepted move.
+    # A drafted record is still checked.
     accepted('drafting the citizen holding them is accepted',
              odd, conscript(odd, planet, 0), civ)
     refused('and bytes invented ON a drafted record are refused too',
@@ -179,8 +158,7 @@ def main():
             'somebody changed hands')
 
     print('hurrying production is priced from the state served')
-    # 110 of 200 is the measured case: more than half done, and 4 credits for
-    # each of the 90 points left.
+    # 110 of 200: more than half done, 4 credits for each of the 90 points left.
     before = mo.set_progress(served, planet, 110)
     after = mo.set_progress(served, planet, 200)
     pb = mo.planet_index(before)[planet][2]

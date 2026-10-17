@@ -2,18 +2,10 @@
 The Galaxies page: what its table prints, what order a column puts it in, what
 each row offers to do, and which rows there are at all.
 
-Headless and offline. Everything here is the launcher's module-level code
-against rows built by hand and against galaxies made in a temporary folder. No
-game, no window, no network: the galaxies any of this opens are folders on this
-disk, which is also the case that must never mint an identity or reach Firebase.
-
-The half that is not here is the drawing. Whether the table lines up, whether
-Back is where the eye looks for it and whether the page reads as a table are
-questions for the screen, and the last review is the reason this file exists at
-all. What can be checked here is that a column sorts on its value rather than
-on its text, which is the thing a table gets wrong invisibly: the rows below are
-built deliberately out of order, and every ordering check names a column whose
-printed cell and underlying value disagree.
+Headless and offline: rows built by hand and galaxies in a temporary folder.
+A folder galaxy must never mint an identity or reach Firebase. Drawing is not
+covered. Every ordering check names a column whose printed cell and underlying
+value sort differently.
 """
 import inspect
 import json
@@ -83,9 +75,8 @@ def gx(gid, name, status="open", turn=4, left=None, players=2, joined=False,
                                    players, joined, store or f"C:\\g\\{gid}")
 
 
-# Deliberately out of order, in every column, and with one row whose value each
-# column cannot supply. A sort test on rows that already read correctly passes
-# without sorting anything.
+# Out of order in every column, with one row each column cannot supply a value
+# for.
 ROWS = [
     gx("lapsed", "Lapsed", turn=9, left=600, players=2),
     gx("retired", "Retired", status="closed", turn=110, left=3660, players=3),
@@ -93,8 +84,7 @@ ROWS = [
     gx("beacon", "Beacon", status="forming", turn=None, left=None, players=0),
     gx("sandbox", "sandbox", turn=100, left=59, players=1, joined=True),
 ]
-# What this launcher has joined, keyed by galaxy id. One entry here, because
-# the rows above are the one-galaxy case; section 5a joins a second.
+# What this launcher has joined, keyed by galaxy id. Section 5a joins a second.
 JOINING = {"crowded": {"galaxy": "crowded", "store": "C:\\g\\crowded",
                        "name": "Alice"}}
 VIEW = L.View(now=NOW, recs=JOINING)
@@ -237,10 +227,8 @@ check("and not even it is played once it is closed, only explained",
       L.row_action(ROWS[1], JOINING, own=ROWS[1].store), L.ENDED)
 
 print("\n5a. a player who is in several galaxies is in several galaxies")
-# Being in a galaxy is membership; playing one is the client's limit. So every
-# galaxy this player is in offers Play at the same time, and the rows are
-# asked for one at a time by name: a count would pass a page that offered Play
-# on the wrong two.
+# Every galaxy this player is in offers Play at the same time. Rows are checked
+# by name, since a count would pass Play offered on the wrong two.
 IN_BOTH = {"sandbox": {"galaxy": "sandbox", "store": "C:\\g\\sandbox",
                        "name": "Alice"},
            "lapsed": {"galaxy": "lapsed", "store": "C:\\g\\lapsed",
@@ -511,9 +499,8 @@ check("a reclaimed seat forgets that galaxy rather than all of them",
        "clear_joined(self.data_dir)" in start), (True, False))
 
 draw = inspect.getsource(L.Launcher._draw_galaxies)
-# The Launcher decides what the table holds and the view draws it, so the
-# repaint is checked in both: the rows in `_draw_galaxies`, the page's half in
-# app.js's drawRows.
+# The repaint is checked in both halves: the rows in `_draw_galaxies`, the
+# page's in app.js's drawRows.
 paint = js[js.index("function drawRows"):js.index("// ── prompts")]
 check("the table's buttons are the ones row_action names",
       "row_action(" in draw and "ACTION_TEXT[action]" in draw, True)
@@ -610,14 +597,9 @@ check("and the window shows one page and puts the others away",
       'p.classList.toggle("on", p.id === "page-" + name)' in swap, True)
 
 print("\n14. one galaxy is played at a time, and that is about playing")
-# The limit the page does not carry. Every joined row offers Play; the turn
-# loop is what there is one of, because it starts the game client and the
-# machine runs one of those.
-#
-# The dialog is stood in for rather than shown: each launcher below is given a
-# view that answers the question from `answers` and records what it was asked
-# in `asked`, so the offer to switch is exercised with no window and no
-# display.
+# There is one turn loop per machine, because it starts the game client. Each
+# launcher below gets a view that answers from `answers` and records questions
+# in `asked`.
 asked, answers = [], []
 
 
@@ -649,9 +631,7 @@ class Player:
         self.view = Asking(yes_no=answers)
         self.mp_playing = playing
         self.mp_thread = Loop(finishes) if playing is not None else None
-        # The loop outlives the game window, so Play means two things here:
-        # a live client is a second game and is refused, a closed one is a
-        # request to open the galaxy again. These are what that request sets.
+        # What a request to open the galaxy again sets.
         self.mp_client_gone = client_gone
         self.mp_turn = turn
         self.mp_reopen = threading.Event()
@@ -753,11 +733,9 @@ open_p = Player(playing=here)
 refused_again = open_p.take(sandbox)
 gone_p = Player(playing=here, client_gone=True, turn=11)
 reopened = gone_p.take(sandbox)
-# A live client is refused, because two games on one machine is the whole of
-# what this rule is for. A closed one is not a refusal: the player has sent
-# their turn and wants another look at the galaxy, and the loop still
-# following it is the only thing allowed to start a client, so it is asked.
-# Neither answers True: what must not happen either way is a second loop.
+# A live client is refused. A closed one asks the loop following the galaxy,
+# the only thing allowed to start a client. Neither answers True: there must
+# never be a second loop.
 check("a live client reads as playing",
       "already playing" in open_p.warned[0], True)
 check("and starts no second loop", refused_again, False)
@@ -775,9 +753,8 @@ check("the loop it asked is left running", gone_p.stopped, [])
 check("a galaxy with no turn recorded is still opened",
       Player(playing=here, client_gone=True).take(sandbox), False)
 
-# The rule this must never break: one game process per machine, held by the
-# advisory lock in client/dev_tools/game_cycle.py. Fails if Play reaches for a
-# client instead of signalling the loop that owns one.
+# One game process per machine, held by the advisory lock in
+# client/dev_tools/game_cycle.py. Play signals the loop that owns the client.
 take_src = inspect.getsource(L.Launcher._take_turn_loop)
 check("Play on a closed game starts nothing here",
       ("start_multiplayer" in take_src, "serve(" in take_src,
@@ -804,10 +781,8 @@ check("and the question names both galaxies",
 
 asked.clear()
 gone_sw = Player(playing=here_rec, client_gone=True, turn=11)
-# The dialog exists so a player mid-turn is not dropped out of it. With the
-# window already closed there is nothing to interrupt, so asking made a
-# switch feel like it needed permission it did not need. Fails if the
-# prompt still appears, which is what the operator saw.
+# The dialog protects a player mid-turn. With the window closed there is
+# nothing to interrupt, so no prompt appears.
 check("with no game open it does not ask", gone_sw.take(crowded), True)
 check("and nothing was put to the player", asked, [])
 check("and the first galaxy was let go of", len(gone_sw.stopped), 1)

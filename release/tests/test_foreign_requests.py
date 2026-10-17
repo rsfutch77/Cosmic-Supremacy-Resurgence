@@ -1,10 +1,9 @@
 """
 cs_server refuses requests from a foreign web page and serves the client's own.
 
-A page the player has open can reach a loopback port, so the server answers 403
-to anything carrying a browser's marks of another origin, and keeps a governor id
-inside DATA_DIR. The client's requests, which carry none of those marks, are
-served as before.
+The server answers 403 to anything carrying a browser's marks of another
+origin, and keeps a governor id inside DATA_DIR. The client's requests carry
+none of those marks.
 """
 import http.client
 import os

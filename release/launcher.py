@@ -19,7 +19,6 @@ CREATE_NO_WINDOW = 0x08000000
 APP_DIRNAME = "CosmicSupremacyResurgence"
 
 
-# ── Layout discovery ──────────────────────────────────────────────────────────
 def app_dir() -> str:
     """The directory the player sees: where the .exe sits, or release\\ in a checkout."""
     if getattr(sys, "frozen", False):
@@ -42,9 +41,8 @@ def game_root_candidates() -> "list[str]":
     """Where a game folder can legitimately be, in priority order."""
     cands = [os.path.join(app_dir(), "game"),   # a release
              app_dir()]                         # exes beside the launcher
-    # The checkout layout only applies when running from source. Frozen,
-    # _repo_root() is derived from a temp extraction path and names a directory
-    # that cannot exist; listing it in the not-found message is pure confusion.
+    # Frozen, _repo_root() names a temp extraction path, so the checkout
+    # layout applies only when running from source.
     if not getattr(sys, "frozen", False):
         cands.append(os.path.join(_repo_root(), "client"))
     return cands
@@ -53,9 +51,8 @@ def game_root_candidates() -> "list[str]":
 def find_game_root(modes) -> "str | None":
     """First directory that holds every EXE the manifest asks for.
 
-    A mode with a "session" names no EXE, because whatever runs the session
-    chooses the build. Asking for its EXE would decide the whole install is
-    broken over a file the manifest never claimed existed.
+    A mode with a "session" names no EXE: whatever runs the session chooses
+    the build.
     """
     wanted = {m["exe"] for m in modes if is_playable(m) and m.get("exe")}
     for cand in game_root_candidates():
@@ -71,17 +68,11 @@ def _short(mode) -> str:
 
 def is_playable(mode) -> bool:
     """
-    Can this mode actually be launched today?
+    Whether this mode can be launched.
 
-    A placeholder ("enabled": false, or simply no EXE named) is shown as a
-    greyed-out card advertising what is coming. It must not be counted when
-    looking for the game files, or a release that ships no multiplayer client
-    would decide the whole install is broken.
-
-    A mode with a "session" names something that starts the game itself rather
-    than being an EXE plus a pass file. Multiplayer is one: the turn loop writes
-    the .dat for the turn and chooses the build, so there is no galaxy file to
-    name and naming one would be a fiction.
+    A placeholder ("enabled": false, or no EXE named) is shown as a greyed-out
+    card and is not counted when looking for the game files. A mode with a
+    "session" (multiplayer) starts the game itself and names no galaxy file.
     """
     if not mode.get("enabled", True):
         return False
@@ -100,12 +91,8 @@ def find_galaxy_root(game_root: str, modes) -> "str | None":
 
 def set_app_user_model_id():
     """
-    Give Windows an explicit taskbar identity.
-
-    Without one, a process that loads the Python DLL can be grouped under the
-    interpreter's identity, and the taskbar button then shows the interpreter's
-    icon no matter what the window or the EXE carries. Setting this before the
-    first window is created makes the taskbar button ours.
+    Give Windows an explicit taskbar identity, so the taskbar button shows
+    our icon and not the Python interpreter's. Call before the first window.
     """
     try:
         import ctypes
@@ -159,7 +146,6 @@ def find_data_dir() -> str:
         return fallback
 
 
-# ── Server ────────────────────────────────────────────────────────────────────
 def port_is_free(host: str, port: int) -> bool:
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
         # No SO_REUSEADDR: we want to know whether anyone is actually listening,
@@ -174,8 +160,7 @@ def port_is_free(host: str, port: int) -> bool:
 def stub_server_answers(host: str, port: int, timeout: float = 1.5) -> bool:
     """True if whatever holds the port speaks our protocol (a dev server, say).
 
-    Asked only once the port is known to be taken, and only to name what has
-    taken it. It is not a licence to use that server: see `_boot`.
+    Used to name the holder, not to decide to share it: see `_boot`.
     """
     import http.client
     conn = None
@@ -195,16 +180,11 @@ def stub_server_answers(host: str, port: int, timeout: float = 1.5) -> bool:
                 pass
 
 
-# ── Who holds the port ────────────────────────────────────────────────────────
-# A held port is refused (see `_boot`), and the refusal is only useful if it
-# says what holds it. On a PC that is both a referee and a player the answer is
-# usually the referee worker's own cs_server, and after a worker is killed
-# rather than stopped it is that same cs_server outliving it. Both are told
-# apart the way server\referee_worker.py `is_our_cs_server` does it, by the
-# process's command line, plus one step it does not need: whether a
-# referee_worker.py is still among its parents. Nothing here ends a process.
-# The referee case alone is shared rather than refused, by `referee_share`,
-# once the worker's saves folder is known and there.
+# A held port is refused (see `_boot`) with a message naming the holder,
+# identified by command line as server\referee_worker.py `is_our_cs_server`
+# does, plus whether a referee_worker.py is among its parents. Nothing here
+# ends a process. A live referee's server is shared, by `referee_share`, once
+# its saves folder exists.
 HOLDER_REFEREE = "referee"          # this install's cs_server, its worker alive
 HOLDER_LEFT_OVER = "left_over"      # this install's cs_server, no worker
 HOLDER_OTHER_COPY = "other_copy"    # a cs_server from some other folder
@@ -216,13 +196,10 @@ LAUNCHER_EXE = "CosmicSupremacyLauncher.exe"
 SERVER_SCRIPT = "cs_server.py"
 WORKER_SCRIPT = "referee_worker.py"
 
-# The listener and up to this many parents. A venv interpreter adds one level
-# between the worker and the server it starts, so three is the usual depth.
-_HOLDER_DEPTH = 5
+_HOLDER_DEPTH = 5   # the listener plus parents read; three is usual
 
-# One PowerShell process: the listener's pid from the TCP table, then each
-# process's parent in turn, as JSON. `-InputObject @()` keeps a one-element
-# answer a list in Windows PowerShell 5.1.
+# One PowerShell call: the listener's pid, then each parent in turn, as JSON.
+# `-InputObject @()` keeps a one-element answer a list in PowerShell 5.1.
 _HOLDER_PS = (
     "$c = Get-NetTCPConnection -LocalPort {port} -State Listen "
     "-ErrorAction SilentlyContinue | Select-Object -First 1; "
@@ -240,10 +217,8 @@ def port_holder_chain(port: int) -> list:
     """[{pid, ppid, name, cmd}] for whatever listens on `port`, then its
     parents, nearest first. [] when nothing can be read.
 
-    Asked only once the port is known to be held, to word the refusal. A
-    parent that has exited leaves its pid in the child's record, and a pid
-    Windows has since reused names a stranger, so a parent is only believed
-    for what its command line says.
+    A parent pid may have exited or been reused, so a parent is identified
+    only by its command line.
     """
     if os.name != "nt":
         return []
@@ -277,10 +252,8 @@ def port_holder_chain(port: int) -> list:
 def install_server_scripts() -> list:
     """The cs_server.py files that count as this install's own.
 
-    A checkout's is server\\cs_server.py beside release\\. A packaged build in
-    dist\\<name>\\ under a checkout counts that checkout's, which is the layout
-    on the machine that builds and referees. A package unzipped anywhere else
-    finds none, and a referee there is from another copy.
+    server\\cs_server.py beside release\\ in a checkout, or in the checkout
+    above a packaged dist\\<name>\\. A package unzipped elsewhere finds none.
     """
     out, d = [], app_dir()
     for _ in range(4):
@@ -311,8 +284,8 @@ def _cmd_option(cmd: str, flag: str):
 def referee_saves(worker_cmd: str, server_script: str) -> str:
     """Where a referee worker's captures land, read off its command line.
 
-    `--save-dir` when given, else `--data-dir`\\saves, else the default the
-    worker documents, which is the server directory's own saves folder.
+    `--save-dir` when given, else `--data-dir`\\saves, else the server
+    directory's own saves folder.
     """
     saves = _cmd_option(worker_cmd, "--save-dir")
     if saves:
@@ -414,8 +387,7 @@ def port_held_message(port: int, holder: dict, speaks_protocol: bool,
                 "will not work until it is free. Tutorial and Demo are "
                 "unaffected.\n\n" + retry)
     # Nothing could be read about the holder, or it speaks the protocol from
-    # a process none of the above describes. What was said before this
-    # existed is still the most that can be said.
+    # a process none of the above describes.
     return (f"port {port} is held by another server",
             f"port {port} is in use by "
             + ("a server speaking our protocol" if speaks_protocol
@@ -438,22 +410,12 @@ def port_held_message(port: int, holder: dict, speaks_protocol: bool,
 def referee_share(holder: dict, speaks_protocol: bool, configured=None):
     """The saves folder of this PC's referee server to share, or None.
 
-    Only for a holder `port_holder` found to be this install's cs_server with
-    a live referee_worker.py among its parents, that answers the protocol, and
-    only when `multiplayer.json` names no `adopt_server` of its own: an entry
-    there is the operator's word and is used or refused as written, never
-    replaced by what was detected.
-
-    The folder is the one `referee_saves` read off the worker's command line.
-    It has to be an absolute path, since a relative one resolves against the
-    worker's working directory, which the process table does not give, and it
-    has to exist and be listable, since a folder that is not there fails the
-    same way reusing an unknown server did. Anything short of that is None,
-    and the port is refused with the words `port_held_message` gives it.
-
-    The worker's status file in server\\worker_work is not read. It records
-    the worker's pid and its cs_server's pid, not where captures land, and it
-    can outlive the worker that wrote it; the process table is live.
+    Only for a `HOLDER_REFEREE` holder that answers the protocol, and only
+    when `multiplayer.json` names no `adopt_server` (a configured entry is used
+    or refused as written). The folder, from `referee_saves`, must be absolute
+    (a relative one resolves against the worker's unknown working directory)
+    and listable. The worker's status file in server\\worker_work is not read:
+    it does not record where captures land and can outlive the worker.
 
     Sharing never touches the holder: it is not ended, rebound or restarted.
     """
@@ -479,10 +441,8 @@ def start_server(host: str, port: int, data_dir: str, galaxy_dir: str, sink):
     """
     Import cs_server and serve it on daemon threads. Returns (servers, logfile).
 
-    cs_server reads its environment at import time: PORT, and the DATA_DIR that
-    the log, saves\\ and governor blobs hang off, so the environment has to be
-    set before the import, not after. Hence the import sitting inside this
-    function rather than at module scope.
+    cs_server reads PORT and DATA_DIR from the environment at import time, so
+    the environment is set first and the import happens here.
     """
     os.environ["CS_DATA_DIR"] = data_dir
     os.environ["CS_GALAXY_DIR"] = galaxy_dir
@@ -497,18 +457,16 @@ def start_server(host: str, port: int, data_dir: str, galaxy_dir: str, sink):
     import http.server
     import cs_server
 
-    # Tee the server's own logging into the launcher's log pane. Every call site
-    # in cs_server goes through the module global, so rebinding it here catches
-    # them all, including _log_unknown_action.
+    # Tee the server's logging into the log pane. cs_server logs through the
+    # module global, so rebinding it catches every call site.
     inner = cs_server.log
     def tee(msg: str):
         inner(msg)
         sink(msg)
     cs_server.log = tee
 
-    # ── Listen on BOTH loopback addresses ────────────────────────────────────
-    # The client connects to the name "localhost", and Windows resolves that to
-    # ::1 before 127.0.0.1.
+    # Listen on both loopback addresses: the client connects to "localhost",
+    # which Windows resolves to ::1 before 127.0.0.1.
     servers = []
     httpd = http.server.HTTPServer((host, port), cs_server.CSHandler)
     threading.Thread(target=httpd.serve_forever, daemon=True,
@@ -524,21 +482,17 @@ def start_server(host: str, port: int, data_dir: str, galaxy_dir: str, sink):
                              name="cs_server-v6").start()
             servers.append(v6)
         except OSError as exc:
-            # A host with IPv6 disabled still works over IPv4, just slower to
-            # make the first connection. Not worth failing the launch.
+            # A host with IPv6 disabled still works over IPv4.
             sink(f"ipv6 loopback listener unavailable ({exc})")
 
     return servers, cs_server.LOGFILE
 
 
-# ── Client process ────────────────────────────────────────────────────────────
 def _process_names_via_api() -> "list[str] | None":
     """
     Every running process name, from the toolhelp snapshot API.
 
-    The status watcher asks once a second, and spawning tasklist.exe at that
-    rate to read a list the kernel will hand over directly is wasteful. Returns
-    None if the API is unavailable so the caller can fall back.
+    None if the API is unavailable, so the caller can fall back to tasklist.
     """
     try:
         import ctypes
@@ -630,9 +584,8 @@ def find_ai() -> "list[str] | None":
 def ai_args(mode) -> "list[str]":
     """The opponent's command line.
 
-    --stall 0 disables the no-turn-in-N-seconds bail
-
-    --vision known keeps the AI under the same fog of war the player is under.
+    --stall 0 disables the no-turn-in-N-seconds bail. --vision known keeps
+    the AI under the player's fog of war.
     """
     return ["--civ", mode["ai"]["civ"], "--apply", "--follow",
             "--vision", "known", "--stall", "0", "--wait-for-client", "180"]
@@ -662,28 +615,19 @@ def launch_mode(mode, game_root: str, galaxy_root: str) -> subprocess.Popen:
         raise FileNotFoundError(exe)
     if not os.path.exists(galaxy):
         raise FileNotFoundError(galaxy)
-    # cwd is the EXE's own folder: the client writes save_game_*.dat relative to
-    # it, and that is the arrangement every dev tool has been exercised against.
+    # cwd is the EXE's own folder: the client writes save_game_*.dat relative
+    # to it.
     return subprocess.Popen([exe, galaxy], cwd=game_root)
 
 
-# ── Player identity ───────────────────────────────────────────────────────────
-# One name, typed once. It is who this launcher says you are and it is the name
-# of your civilisation in a galaxy, because those are the same thing until there
-# are accounts to tell them apart.
-#
-# It lives in the data directory, not in manifest.json: the manifest ships to
-# everyone and an upgrade replaces it, while the data directory is this player's
-# and survives.
+# The player's name, which is also their civilisation's name in a galaxy. It
+# lives in the data directory, which survives upgrades that replace the manifest.
 IDENTITY_FILE = "identity.json"
 
-# The engine's civilisation name buffer. make_multiplayer_galaxy.py enforces the
-# same ceiling when it builds a roster, so a name that fits here fits a seat.
-NAME_LIMIT = 15
+NAME_LIMIT = 15   # the engine's civ name buffer, as make_multiplayer_galaxy.py
 
-# Characters Windows refuses in a file name. A civ name is one: TurnStore keeps
-# a player's orders in submissions\<turn>\<civ>.b64, so a name holding any of
-# these either writes somewhere else or does not write at all.
+# Characters Windows refuses in a file name. TurnStore keeps a player's orders
+# in submissions\<turn>\<civ>.b64, so a civ name is a file name.
 NAME_FORBIDDEN = r'\/:*?"<>|'
 
 NAME_RULES = (f"Up to {NAME_LIMIT} characters. Letters, digits and ordinary "
@@ -693,9 +637,8 @@ NAME_RULES = (f"Up to {NAME_LIMIT} characters. Letters, digits and ordinary "
 def validate_player_name(raw):
     """(name, None) for a name that can be used, or (None, why not).
 
-    The reason is written for the player, because it is shown next to the field
-    they are typing in. Surrounding spaces are trimmed rather than rejected,
-    which is the one correction a player never wants to be told about.
+    The reason is shown to the player next to the field. Surrounding spaces
+    are trimmed.
     """
     name = (raw or "").strip()
     if not name:
@@ -726,8 +669,7 @@ def load_identity(data_dir: str):
     """The name this player entered, or None.
 
     A file that is missing, unreadable or holds a name the rules reject counts
-    as no name at all. Asking again is cheap; submitting a whole turn under a
-    name no galaxy can accept is not.
+    as no name.
     """
     try:
         with open(identity_path(data_dir), encoding="utf-8") as fh:
@@ -745,13 +687,10 @@ def save_identity(data_dir: str, name: str) -> None:
 
 
 def legacy_civ(data_dir: str):
-    """The `civ` a player hand-wrote into multiplayer.json before this existed.
+    """The `civ` a player hand-wrote into multiplayer.json, or None.
 
-    Taken as typed, without the rules above. Those rules govern what a player
-    may enter; a name already sitting in a live galaxy's roster is that galaxy's
-    fact, and rejecting it here would lock a beta player out of a game they are
-    part way through. Only the length ceiling and the file name characters are
-    checked, because those are the two ways a name breaks rather than displeases.
+    Not held to the entry rules, since the name may already be in a live
+    roster. Only the length ceiling and the file name characters are checked.
     """
     try:
         with open(os.path.join(data_dir, MP_CONFIG), encoding="utf-8") as fh:
@@ -772,11 +711,8 @@ def legacy_civ(data_dir: str):
 def player_name(data_dir: str):
     """This player's name, adopting an older multiplayer.json's `civ` once.
 
-    Before the launcher asked, a player hand-wrote `civ` into multiplayer.json.
-    Upgrading must not make them type it again, so the first run after the
-    upgrade copies it across and from then on there is one place it is typed.
-    The `civ` key is left in the file rather than removed, so downgrading to a
-    launcher that still requires it works.
+    The `civ` key is left in multiplayer.json, so a launcher that still
+    requires it works.
     """
     name = load_identity(data_dir)
     if name:
@@ -791,20 +727,15 @@ def player_name(data_dir: str):
     return civ
 
 
-# What a galaxy's state says about itself, by the keys turn_store writes. Read
-# by key rather than through the store's own helpers for the reason
-# `min_build` already is: the launcher holds the state it read anyway, these
-# are answered from it without a second read, and a galaxy written before any
-# of them existed simply has none. Absent therefore means open and not
-# reclaimed, which is every galaxy that predates this.
+# What a galaxy's state says about itself, by the keys turn_store writes, read
+# from the state already held. An absent key means open and not reclaimed.
 STATUS_KEY = "status"
 CLOSED = "closed"
 CLOSED_REASON_KEY = "closed_reason"
 RECLAIMED_KEY = "reclaimed"
 
-# The other two words a listing uses. `forming` is not a status anything
-# writes: it is what a directory calls a galaxy whose store has no first turn
-# yet. They are here because the table orders and colours rows by them.
+# The other words a listing orders and colours rows by. `forming` is not
+# written anywhere: it is a galaxy whose store has no first turn yet.
 OPEN = "open"
 FORMING = "forming"
 
@@ -812,13 +743,9 @@ FORMING = "forming"
 def reclaimed_seat(state, name: str):
     """What became of this player's own seat, or None if nothing did.
 
-    Read out of the state the launcher already holds rather than asked of the
-    store a second time, and read by the raw key so that a galaxy written
-    before seats could be taken back answers None instead of raising.
-
-    Only the record for `name` is taken out. The key holds every seat this
-    galaxy has reclaimed, and carrying the rest of it any further would answer
-    "what happened to my seat" with a list of who else stopped playing.
+    Read by the raw key from the state already held, so a galaxy without the
+    key answers None. Only the record for `name` is returned, so other
+    players' reclaimed seats are never shown.
     """
     taken = (state or {}).get(RECLAIMED_KEY)
     if not isinstance(taken, dict):
@@ -828,10 +755,8 @@ def reclaimed_seat(state, name: str):
 
 
 def _count(value):
-    """A whole number from a record written elsewhere, or None.
-
-    Booleans are numbers in Python and are not counts anywhere else, so one in
-    a record is a malformed field rather than a turn number.
+    """A whole number from a record written elsewhere, or None. Booleans are
+    rejected as malformed.
     """
     if isinstance(value, bool) or not isinstance(value, int):
         return None
@@ -841,33 +766,15 @@ def _count(value):
 def roster_problem(name: str, civs, reclaimed=None):
     """Why this name cannot play this galaxy, or None. Written for the player.
 
-    The other players' names are not in the answer. A launcher pointed at a
-    store can read the whole roster, so printing it would let anyone who can
-    reach a galaxy list who is in it, and someone who has mistyped their own
-    name has no need to know that. What they get instead is how many seats the
-    galaxy has, which says whether they are at the wrong galaxy or merely
-    spelling their own name differently, and names nobody.
-
-    A seat that differs only in case is the exception, because the name it
-    echoes back is the one the player just typed. It reveals nobody new, and it
-    is the mistake a player makes when they were told their name out loud.
-
-    `reclaimed` is this player's own record from `reclaimed_seat`, and it is
-    the commonest reason a seat is missing once a galaxy has been running for a
-    while: the seat existed and the galaxy took it back. Told only that no seat
-    exists, a player who played for a fortnight reads their own empire being
-    deleted as the launcher being pointed at the wrong galaxy. The record names
-    nobody but the player holding it, and the message echoes only the name they
-    typed.
+    Other players' names are never shown; the seat count is given instead. A
+    seat that differs only in case is named, since it matches what the player
+    typed. `reclaimed` is this player's own record from `reclaimed_seat`, so a
+    seat the galaxy took back is reported as that and not as a missing seat.
     """
     seats = list(civs)
     if name in seats:
         return None
-    # A record with nothing in it says a seat was reclaimed and nothing about
-    # when or why, which is less than the roster count already says, so it is
-    # not a record. Anything that is not a mapping at all is a malformed state
-    # rather than a reclaim, and answering it as one would tell a player their
-    # empire was deleted on the strength of a typo.
+    # An empty record or a non-mapping is not reported as a reclaim.
     taken = reclaimed if isinstance(reclaimed, dict) and reclaimed else None
     if taken is not None:
         turn, missed = _count(taken.get("turn")), _count(taken.get("missed"))
@@ -891,34 +798,20 @@ def roster_problem(name: str, civs, reclaimed=None):
             "were given, or ask whoever made the galaxy to add a seat for you.")
 
 
-# ── Which build this is ───────────────────────────────────────────────────────
-# A build has to be able to name itself. A galaxy refuses one that is too old
-# (version_problem below), and a log from a failure nobody watched is worth much
-# less if it does not say which build wrote it.
-#
-# The name is stamped at package time rather than kept as a constant here,
-# because the packaging step is what decides it: build.ps1 takes the version
-# from its -Version switch, or from manifest.json when the switch is not given.
-# The switch is why dist\ holds a CosmicSupremacy-Resurgence-v0.1.1 that
-# manifest.json never mentioned, so the manifest on its own cannot answer which
-# build a player is running.
-#
-# stamp_build.py writes that decision to build.json and the spec packs it into
-# the frozen build beside manifest.json, which is the route manifest.json and
-# cosmic.ico already take: a data file read back through bundled().
-#
-# A build with no build.json reports the manifest's version with a marker, so a
-# checkout and an unstamped package are never mistaken for a release.
+# The build name is stamped at package time: build.ps1 takes it from its
+# -Version switch or from manifest.json, stamp_build.py writes it to
+# build.json, and the spec packs that beside manifest.json, read back through
+# bundled(). A build with no build.json reports the manifest's version with a
+# marker, so it is never mistaken for a release.
 BUILD_FILE = "build.json"
 DEV_MARK = "dev"                # run from a clone; no packaging step involved
 UNSTAMPED_MARK = "unstamped"    # packaged, but the stamp did not reach the bundle
 
-# Where a launcher that is too old is told to go. The site's download page and
-# this link both resolve to the same GitHub release asset.
+# Where a launcher that is too old is told to go.
 UPDATE_URL = "https://github.com/rsfutch77/Cosmic-Supremacy-Resurgence/releases/latest"
 
-# The key a galaxy's state carries its minimum build in. Optional: a galaxy
-# without one is played by any build, which is every galaxy that predates it.
+# The galaxy state key for its minimum build. A galaxy without one is played
+# by any build.
 MIN_BUILD_KEY = "min_build"
 
 
@@ -956,10 +849,8 @@ def build_id() -> str:
 def build_parts(build: str) -> "tuple[int, ...]":
     """The orderable part of a build name: "0.1.10+dev" gives (0, 1, 10).
 
-    Only the leading dotted number counts. What follows it says how a build was
-    made rather than how new it is, and ordering on it would put a stamped
-    0.1.1 and a development 0.1.1 on opposite sides of a gate neither is meant
-    to be caught by.
+    Only the leading dotted number counts; the suffix says how a build was
+    made, not how new it is.
     """
     lead = re.match(r"\d+(?:\.\d+)*", (build or "").strip())
     if lead is None:
@@ -971,9 +862,8 @@ def build_is_below(build: str, minimum: str) -> bool:
     """Is `build` older than `minimum`?
 
     Shorter names are padded with zeros, so 0.2 and 0.2.0 are the same build. A
-    minimum with no number in it orders nothing and holds nobody back; a build
-    with no number in it is below every minimum, because a launcher that cannot
-    say what it is cannot claim to be current.
+    minimum with no number holds nobody back; a build with no number is below
+    every minimum.
     """
     want = build_parts(minimum)
     if not want:
@@ -988,17 +878,9 @@ def build_is_below(build: str, minimum: str) -> bool:
 def version_problem(build: str, state) -> "str | None":
     """Why this build cannot play this galaxy, or None. Written for the player.
 
-    The minimum is `min_build` in the galaxy's state, and it is optional: a
-    galaxy that names none is played by any build.
-
-    The message names both builds and where the new one is, because the failure
-    it prevents is a silent one. A turn resolved by a client the referee does
-    not match produces a blob whose symptom is a mystery rather than an error,
-    and a player told only "no" has nothing to act on.
-
-    A minimum that cannot be read as a build is not enforced. That is the
-    referee's mistake, and a typo in one galaxy's state must not shut every
-    player out of it.
+    The minimum is the optional `min_build` in the galaxy's state. One that
+    cannot be read as a build is not enforced. The message names both builds
+    and where to get the new one.
     """
     minimum = (state or {}).get(MIN_BUILD_KEY)
     if not isinstance(minimum, str) or not build_parts(minimum):
@@ -1017,19 +899,9 @@ def version_problem(build: str, state) -> "str | None":
 def closed_problem(state) -> "str | None":
     """Why this galaxy is no longer being played, or None. For the player.
 
-    Beside `version_problem` and asked with it, ahead of the roster, for the
-    same reason: a galaxy the operator has ended is why everything below might
-    look wrong. Its roster is whatever it was when it stopped, a submission
-    into it is refused outright, and a launcher that checked the roster first
-    would report one of those instead of the one fact that explains them.
-
-    The operator's own words are shown when the state carries them. A galaxy is
-    ended for a reason a player has no other way of learning, and "closed" on
-    its own reads as a fault rather than a decision.
-
-    A state with no status is open. That is every galaxy written before a
-    galaxy could be closed, and treating a missing key as anything else would
-    end all of them.
+    Asked with `version_problem`, ahead of the roster check, since a closed
+    galaxy explains any roster or submission refusal. The operator's reason is
+    shown when the state carries one. A state with no status is open.
     """
     if (state or {}).get(STATUS_KEY) != CLOSED:
         return None
@@ -1045,22 +917,15 @@ def closed_problem(state) -> "str | None":
 GALAXY_ENDED_NOTE = "this galaxy has ended"
 
 # What the turn readout and the status line say while the turn loop cannot read
-# the galaxy's store. That is this machine's connection or the service in front
-# of the store, and it is not the galaxy stopping, which is what the same wait
-# would otherwise be called.
+# the galaxy's store: a connection or service problem, not the galaxy stopping.
 UNREACHABLE_NOTE = "cannot reach the galaxy, retrying"
 
 
-# ── The referee's warning about missed turns ──────────────────────────────────
 # server\abandonment.py warns a player who has missed too many turns in a row
-# through `put_note`, on the turn they missed, and repeats it every turn until
-# they play or the seat goes. A followed turn loop names it in a `warned`
-# event. Play reads the last closed turn's note once, before any loop runs,
-# and finds the warning by `warning_note`'s opening line, which is how it
-# tells it apart from the refusal lines the same note carries. The two files
-# have to agree on it and neither imports the other, the way `JOIN_DIR` and
-# `MIN_BUILD_KEY` are shared; release\tests checks this constant against
-# `warning_note`'s own output.
+# through `put_note`, each turn until they play or the seat goes. The warning
+# is found by `warning_note`'s opening line, which sets it apart from refusal
+# lines in the same note. Neither file imports the other; release\tests checks
+# this constant against `warning_note`'s output.
 MISSED_WARNING_OPENING = "You have missed "
 
 
@@ -1084,11 +949,8 @@ def warning_text(galaxy: str, lines) -> str:
     return (f"A warning from the referee{where}:\n\n" + "\n".join(lines))
 
 
-# ── A refusal from the relay ──────────────────────────────────────────────────
-# The relay answers a refused request with a status and a JSON body holding
-# one sentence, `{"error": ...}`. `urllib` raises that as an HTTPError whose
-# text is only the status line, so without this a player whose seat is held by
-# another sign-in read "HTTP Error 403: Forbidden".
+# The relay refuses a request with a status and a JSON body holding one
+# sentence, `{"error": ...}`. `urllib`'s HTTPError text is only the status line.
 SEAT_HELD = "already held by another sign-in"
 
 
@@ -1112,15 +974,12 @@ def relay_refusal(exc):
     return code, said.strip()
 
 
-# ── The player code ──────────────────────────────────────────────────────────
 # A player who reinstalls, moves the game, or runs a second copy signs in as a
-# new anonymous user, and the seat they held is refused to it (J4). The
-# operator rebinds the seat with server\dev_tools\seat_tool.py, whose
-# `candidates` lists every unseated sign-in by uid. The player code is the
-# first characters of this install's uid, which is enough for the operator to
-# pick the right line and is not a credential: what signs in is the refresh
-# token in fb_identity.json, which is never shown. The uid itself stays out of
-# sight, as H4 has it.
+# new anonymous user, and their seat is refused to it. The operator rebinds the
+# seat with server\dev_tools\seat_tool.py, whose `candidates` lists unseated
+# sign-ins by uid. The player code is the first characters of this install's
+# uid: enough to pick the line, and not a credential (the refresh token in
+# fb_identity.json signs in and is never shown).
 PLAYER_CODE_LENGTH = 8
 
 
@@ -1150,34 +1009,24 @@ def seat_held_text(civ: str, code) -> str:
             "move it to this copy.")
 
 
-# ── Multiplayer ───────────────────────────────────────────────────────────────
-# A multiplayer galaxy has a turn store, which is the one thing a player's
-# launcher, the other players' launchers and the referee all agree through. The
-# store says which turn is current and when it is due; the launcher's job is to
-# make the turn boundary invisible. The .dat push path is startup-only, so the
-# client has to restart every turn, and the only way that is acceptable is if
-# nobody has to think about it.
+# A multiplayer galaxy has a turn store that every launcher and the referee
+# agree through: it says which turn is current and when it is due. The client
+# reads a .dat only at startup, so it restarts every turn.
 #
-# The turn machinery ships inside the frozen build: build.ps1 names
-# player_turn, turn_store and the modules they reach from inside functions as
-# hidden imports, and copies the player client into game\ alongside the
-# single-player one. multiplayer_modules() imports them directly when frozen
-# and off sys.path when run from a clone; bind_multiplayer_paths() then points
-# them at the player's folders, because every one of them derives its paths
-# from __file__ and __file__ in a frozen build is a temporary directory.
+# The turn machinery ships in the frozen build as hidden imports (build.ps1),
+# with the player client copied into game\. multiplayer_modules() imports it,
+# and bind_multiplayer_paths() repoints its __file__-derived paths.
 MP_CONFIG = "multiplayer.json"
 
-# What the turn loop may start. Not in the manifest: the loop picks the build
-# itself, and a release does not ship the player build yet.
+# What the turn loop may start. Not in the manifest: the loop picks the build.
 MP_CLIENTS = ("CosmicSupremacy_Player.exe", "CosmicSupremacy_TestBed.exe")
 
 
 def multiplayer_file(data_dir: str):
     """multiplayer.json as it stands, or None if there is not one to read.
 
-    Separate from `multiplayer_config` because the file has two readers now.
-    A file naming only a `directory` is a whole configuration and carries no
-    store, and the store reader answering None for it must not lose the rest.
+    A file naming only a `directory` carries no store, so `multiplayer_config`
+    answers None for it while this still returns it.
     """
     return _read_json(os.path.join(data_dir, MP_CONFIG))
 
@@ -1186,25 +1035,11 @@ def adopted_server(data_dir: str):
     """Where an already-running server keeps its captures, or None.
 
     `multiplayer.json`'s `adopt_server`: the saves directory of a server this
-    launcher did not start and is allowed to share. Absent, which is the usual
-    case, the launcher refuses a held port rather than reusing one blindly,
-    except for this install's own referee, whose folder `referee_share` reads
-    off the worker's command line.
-
-    That refusal is right and stays: a capture lands in whatever directory the
-    server that took it was started with, there is no message in the protocol
-    to ask it which, and reusing one silently sent every turn to a folder this
-    launcher never read. What the refusal cannot know is the case where the
-    operator knows perfectly well whose server it is, which on a machine that
-    is both the referee and a player is every time: the unattended worker
-    holds the port and writes to its own saves directory. `referee_worker`
-    has the same escape for the same reason, `--adopt-server` with
-    `--save-dir`.
-
-    So this is not a way round the guard, it is the operator supplying the one
-    fact the protocol cannot: not "share it" but "share it, and it writes
-    here". A wrong directory fails the same way the bug did, so it is checked
-    and refused rather than believed.
+    launcher did not start and may share. Without it a held port is refused,
+    except for this install's own referee (see `referee_share`). The protocol
+    cannot report where a server writes captures, so the operator supplies it
+    here, and a wrong directory is checked and refused. `referee_worker` has
+    the same option, `--adopt-server` with `--save-dir`.
     """
     cfg = multiplayer_file(data_dir) or {}
     where = cfg.get("adopt_server")
@@ -1216,17 +1051,10 @@ def adopted_server(data_dir: str):
 def multiplayer_config(data_dir: str):
     """{"store": <dir or URL>} for this galaxy, or None.
 
-    Kept in the data directory rather than the manifest because it is per
-    player and per galaxy: the manifest ships to everyone, and which galaxy you
-    joined is yours.
-
-    Only `store` is required. `civ` used to be, and a file that still carries
-    one is read once by `legacy_civ` to seed the player's name, after which the
-    name comes from identity.json and this file names only the galaxy.
-
-    An optional `auth`, true or false, says whether to put this install's
-    Firebase identity on the requests. Left out, an https store is taken to
-    want one and everything else is taken not to: see `store_wants_token`.
+    Kept in the data directory, since it is per player and per galaxy. Only
+    `store` is required; a `civ` is read by `legacy_civ`. An optional boolean
+    `auth` says whether to send this install's Firebase identity: see
+    `store_wants_token`.
     """
     cfg = multiplayer_file(data_dir)
     if not cfg or not cfg.get("store"):
@@ -1237,11 +1065,9 @@ def multiplayer_config(data_dir: str):
 def multiplayer_modules():
     """The turn machinery, or None if this build cannot reach it.
 
-    Frozen, the modules are in the bundle and the checkout directories do not
-    exist, so the import is direct. From a clone they are found by putting
-    their four directories on sys.path first. A build that was frozen without
-    them still imports cleanly as a launcher, so the failure is reported rather
-    than raised: the rest of the launcher works.
+    Frozen, the modules are imported from the bundle; from a clone their four
+    directories go on sys.path first. A build frozen without them returns
+    None, and the rest of the launcher still works.
     """
     if not getattr(sys, "frozen", False):
         root = _repo_root()
@@ -1264,13 +1090,10 @@ def multiplayer_modules():
 def store_wants_token(cfg) -> bool:
     """Whether this galaxy's store is one to put an identity on.
 
-    A galaxy served by the beta's Cloud Function is reached over https and
-    wants a token. A folder on this disk and a `turn_server.py` on the LAN do
-    not: neither reads one, and signing this install up to Firebase to talk to
-    either would be an account nobody asked for and a network call a player who
-    is offline should not be waiting on. An `auth` key in multiplayer.json
-    overrides both ways, which is what points the launcher at the function
-    running in a local emulator.
+    An https store (the Cloud Function) wants a token. A folder or a LAN
+    `turn_server.py` does not, so it needs no Firebase sign-up or network
+    call. An `auth` key in multiplayer.json overrides either way (for a local
+    emulator).
     """
     want = cfg.get("auth")
     if isinstance(want, bool):
@@ -1281,13 +1104,10 @@ def store_wants_token(cfg) -> bool:
 def player_token(data_dir: str):
     """A zero-argument callable answering this install's Firebase ID token.
 
-    None when this build cannot reach `fb_auth`, which is the same answer as a
-    token that cannot be minted: the store sends no Authorization header and
-    behaves as it did before any of this existed.
-
-    The identity is separate from the player's name and is never shown. See
-    server\\fb_auth.py. Called after multiplayer_modules(), because that is
-    what puts server\\ on sys.path in a checkout.
+    None when this build cannot reach `fb_auth`; the store then sends no
+    Authorization header. The identity is separate from the player's name and
+    is never shown: see server\\fb_auth.py. Call after multiplayer_modules(),
+    which puts server\\ on sys.path in a checkout.
     """
     try:
         import fb_auth
@@ -1297,11 +1117,8 @@ def player_token(data_dir: str):
 
 
 def _takes_token(fn) -> bool:
-    """Whether `fn` accepts a `token` keyword.
-
-    Asked rather than assumed because the store side of this lands separately:
-    a launcher built against a turn_store that predates it has to keep opening
-    galaxies, without a TypeError and without quietly swallowing a real one.
+    """Whether `fn` accepts a `token` keyword, so a turn_store without it
+    still opens galaxies.
     """
     import inspect
     try:
@@ -1313,10 +1130,8 @@ def _takes_token(fn) -> bool:
 def open_player_store(turn_store, spec: str, token=None):
     """`open_store`, carrying this install's identity when there is one.
 
-    `open_store`, not `HttpTurnStore`, for the reason the call site already
-    gives: which kind of store a spec names is the spec's business. The token
-    is passed as the callable itself and not as a string, because a galaxy is
-    followed for longer than a token lasts.
+    The token is passed as a callable, since a galaxy is followed for longer
+    than a token lasts.
     """
     if token is None:
         return turn_store.open_store(spec)
@@ -1332,16 +1147,10 @@ def bind_multiplayer_paths(game_root: str, data_dir: str):
     """Point the turn machinery at the folders this player actually has.
 
     game_cycle and player_turn compute their paths from __file__ at import
-    time. In a frozen build __file__ names the directory PyInstaller unpacks
-    into, which holds no client executables and is deleted when the launcher
-    exits, so every one of those paths is wrong. They are rebound here: the
-    clients and the client working directory come from the game folder, and
-    anything written during a turn goes to the data directory, which is the
-    same place the stub server keeps its saves.
-
-    Done in a checkout too. There the game folder is client\\ and the paths
-    agree, except for the saves directory: the launcher runs the server against
-    its own data directory rather than the checkout's server\\saves.
+    time, which in a frozen build is PyInstaller's temporary directory. The
+    clients and their working directory are rebound to the game folder, and
+    turn output to the data directory where the stub server keeps its saves.
+    In a checkout only the saves directory changes.
     """
     import game_cycle as gc
     import player_turn
@@ -1354,9 +1163,8 @@ def bind_multiplayer_paths(game_root: str, data_dir: str):
     gc.BUILDS = {"resurgence": gc.EXE, "testbed": gc.TESTBED_EXE,
                  "player": gc.PLAYER_EXE}
     gc.SAVES = os.path.join(data_dir, "saves")
-    # serve() writes each turn's .dat under HERE before handing it to the
-    # client, and the client has to be able to read it after the launcher that
-    # wrote it is gone.
+    # serve() writes each turn's .dat under HERE, and the client must be able
+    # to read it after the launcher has exited.
     player_turn.HERE = data_dir
 
 
@@ -1372,10 +1180,7 @@ def fmt_ago(seconds: float) -> str:
     """How long ago something happened, for a line that is repainted every
     second.
 
-    Rounded rather than exact, because the question it answers is whether the
-    launcher is keeping up, not what the clock says. Anything under three
-    seconds is "just now": a number ticking 1, 2, 3 beside a status that is not
-    changing reads as a problem.
+    Rounded; anything under three seconds is "just now".
     """
     seconds = max(0.0, seconds)
     if seconds < 3:
@@ -1387,44 +1192,27 @@ def fmt_ago(seconds: float) -> str:
     return f"{int(seconds) // 3600}h ago"
 
 
-# ── The galaxy directory ──────────────────────────────────────────────────────
-# Which galaxies exist is a question a store cannot answer, so it is asked of a
-# directory: server\galaxy_directory.py, opened from a spec the way a store is.
-# The launcher lists what the directory holds and opens a galaxy with the store
-# spec the directory handed back, so no config file names a galaxy.
-#
-# The directory is reached only when multiplayer.json does not name a store. A
-# folder of turns and a LAN turn_server are named outright and keep working with
-# no directory, no identity and no network call, which is what development and
-# the two-machine test run on.
+# Which galaxies exist is asked of a directory, server\galaxy_directory.py,
+# opened from a spec the way a store is; a galaxy is opened with the store spec
+# the directory returns. A multiplayer.json that names a store (a folder or a
+# LAN turn_server) needs no directory, identity or network call.
 JOINED_FILE = "joined.json"
 
-# What the collection in that file is written under. A file carrying this key
-# holds one record per galaxy; anything else is the single record the file held
-# before a player could be in more than one, and is read as one of these. The
-# version is written for whoever reads the file next rather than for the reader
-# below, which tells the two shapes apart by the key.
+# A joined.json carrying this key holds one record per galaxy; any other shape
+# is a single record, read as one of these.
 JOINED_KEY = "galaxies"
 JOINED_VERSION = 2
 
-# The directory listed when nothing names another one. A player who has never
-# opened a config file gets this, which is the point of the Galaxies page.
-#
-# The relay rather than `firebase://cs-resurgence`, which is the same galaxies
-# read the other way: reading Firestore directly authenticates as the project,
-# and a player is not the project. It is the Cloud Run host rather than the
-# cloudfunctions.net one because the two are gated separately and only this one
-# is open to callers who are not members of the project.
+# The directory listed when nothing names another: the relay's Cloud Run host,
+# the only one open to callers outside the project. Players read through the
+# relay because a direct Firestore read authenticates as the project.
 BETA_DIRECTORY = "https://relay-r5t6py5oxa-uw.a.run.app"
 
 # Where a join request goes in a galaxy that is a folder. A store that knows its
 # own route is asked instead: see send_join_request.
 JOIN_DIR = "joins"
 
-# How often the page re-lists by itself. A listing is one query and the
-# launcher is one of many, so this is slow on purpose: the countdown a row
-# shows is worth less than the reads a faster poll would spend.
-GAMES_POLL_MS = 120000
+GAMES_POLL_MS = 120000   # how often the page re-lists itself; slow on purpose
 
 
 class JoinNotAccepted(Exception):
@@ -1434,9 +1222,8 @@ class JoinNotAccepted(Exception):
 def directory_spec(cfg, mp_cfg=None) -> str:
     """Which directory to list: multiplayer.json's, the manifest's, or the beta's.
 
-    multiplayer.json comes first because a player pointed at a folder of
-    galaxies is overriding the release they are running. The manifest comes
-    second, so a release can ship a different directory without a code change.
+    multiplayer.json overrides the release; the manifest lets a release ship a
+    different directory without a code change.
     """
     for src in (mp_cfg, (cfg or {}).get("multiplayer")):
         spec = (src or {}).get("directory")
@@ -1448,14 +1235,9 @@ def directory_spec(cfg, mp_cfg=None) -> str:
 def directory_to_list(cfg, mp_cfg=None):
     """Which directory the Galaxies page lists, or None when there is not one.
 
-    A multiplayer.json that names a `directory` is listed whatever else it
-    names, so a player who pointed the launcher at one galaxy by hand still
-    sees the rest of them beside it.
-
-    A multiplayer.json that names only a `store` reaches no directory at all.
-    That is the folder and LAN path, which runs with no identity and no
-    network call, and falling back to the beta's directory for it would be a
-    query nobody asked for on a machine that may well be offline.
+    A multiplayer.json `directory` is listed whatever else the file names. One
+    that names only a `store` (the folder and LAN path) reaches no directory,
+    so it makes no network call.
     """
     named = (mp_cfg or {}).get("directory")
     if isinstance(named, str) and named.strip():
@@ -1468,14 +1250,9 @@ def directory_to_list(cfg, mp_cfg=None):
 def open_galaxy_directory(spec: str, token=None):
     """The directory named by `spec`, or None when this build cannot open one.
 
-    `galaxy_directory` sits in server\\ beside the turn machinery and is reached
-    the same way, so multiplayer_modules() is what puts that directory on
-    sys.path in a checkout. A build frozen without it lists nothing rather than
-    failing to start, which is the rule the whole multiplayer half follows.
-
-    The token is asked for rather than assumed, the way `open_player_store`
-    asks: a launcher running against a `galaxy_directory` that predates the
-    relay listing still has to list a folder, without a TypeError.
+    `galaxy_directory` is in server\\, which multiplayer_modules() puts on
+    sys.path in a checkout. The token is passed only when `open_directory`
+    accepts one.
     """
     multiplayer_modules()
     try:
@@ -1490,9 +1267,7 @@ def open_galaxy_directory(spec: str, token=None):
 def install_uid(data_dir: str, mint: bool = False):
     """This install's Firebase uid, or None.
 
-    Read from fb_identity.json, and minted only when the galaxy being joined
-    wants an identity anyway. A folder galaxy asks for no uid and makes no
-    network call to discover it has none.
+    Read from fb_identity.json, and minted only when `mint` is set.
     """
     try:
         import fb_auth
@@ -1504,17 +1279,10 @@ def install_uid(data_dir: str, mint: bool = False):
     return ident.uid
 
 
-# ── What this player joined ───────────────────────────────────────────────────
-# The launcher's own record of the actions the player took, not settings they
-# are asked to keep, which is why this lives beside identity.json and
-# fb_identity.json rather than in multiplayer.json. Each record holds the store
-# spec the directory gave, so a galaxy that moves between a folder, a LAN server
-# and the beta is followed without anyone editing anything.
-#
-# One record per galaxy, keyed by galaxy id. Being in a galaxy is membership and
-# a player may hold seats in several at once; playing one is a client
-# constraint, because a machine runs one game, and that limit is enforced where
-# a turn loop starts rather than here.
+# The launcher's record of galaxies the player joined, one per galaxy id. Each
+# holds the store spec the directory gave, so a galaxy that moves is followed
+# without edits. A player may hold seats in several; the one-game-per-machine
+# limit is enforced where a turn loop starts.
 def joined_path(data_dir: str) -> str:
     return os.path.join(data_dir, JOINED_FILE)
 
@@ -1522,20 +1290,9 @@ def joined_path(data_dir: str) -> str:
 def joined_records(raw):
     """The records in a joined.json of either shape, keyed by galaxy id.
 
-    Before a player could hold more than one seat the file was a single record
-    with its `store` at the top level. One of those is read here as the
-    collection it would be written as today, so an install that joined a galaxy
-    before this existed is still in that galaxy afterwards. Nothing writes the
-    old shape again: the next save writes the collection.
-
-    A record with no store is no record: it names a galaxy the launcher cannot
-    open, and treating it as one would leave the player in front of a Play
-    button that has nowhere to go. A record that arrived without a galaxy id is
-    kept under its store spec, which is what the single-record file was played
-    from, so dropping it would be losing a seat over a missing key.
-
-    Order is the order the file lists, which is the order the galaxies were
-    joined in, so the page does not reshuffle itself between refreshes.
+    A single record with `store` at the top level is read as a one-entry
+    collection. A record with no store is dropped; one with no galaxy id is
+    kept under its store spec. Order is the file's, which is join order.
     """
     if not isinstance(raw, dict):
         return {}
@@ -1548,8 +1305,7 @@ def joined_records(raw):
             continue
         if not isinstance(rec.get("store"), str) or not rec["store"]:
             continue
-        # The key is what every caller matches a row against, so the record
-        # carries it whatever the file said.
+        # Callers match rows by the key, so the record carries it.
         out[str(gid)] = dict(rec, galaxy=str(gid))
     return out
 
@@ -1569,9 +1325,7 @@ def write_joined(data_dir: str, records) -> None:
 def save_joined(data_dir: str, record: dict) -> None:
     """Write down one galaxy, leaving every other one where it was.
 
-    Joining a second galaxy is joining rather than moving: the record for the
-    first is the seat the player still holds in it. A galaxy joined again keeps
-    the place it already had in the file rather than moving to the end.
+    A galaxy joined again keeps its place in the file.
     """
     records = load_joined(data_dir)
     gid = str(record.get("galaxy") or record.get("store") or "")
@@ -1582,9 +1336,7 @@ def save_joined(data_dir: str, record: dict) -> None:
 def clear_joined(data_dir: str, galaxy=None) -> None:
     """Forget one galaxy, or all of them.
 
-    One galaxy by default, because a seat taken back in one is not a reason to
-    forget the others. The file goes when the last record does, so an install
-    that has left every galaxy looks like one that never joined any.
+    One galaxy by default. The file is removed with the last record.
     """
     if galaxy is not None:
         records = load_joined(data_dir)
@@ -1603,10 +1355,9 @@ def joined_record(galaxy, name: str, uid, directory: str, now=None,
                   turn=None) -> dict:
     """What the launcher writes down when a player joins a galaxy.
 
-    `turn` is the galaxy's turn as read at the moment of joining, when the
-    caller has one, and the listing's otherwise. It is what `answer_for`
-    tells this request's answer apart from an older one by, and the listing
-    can be a boundary behind.
+    `turn` is the galaxy's turn read at the moment of joining when the caller
+    has one, else the listing's (which can lag a boundary). `answer_for` uses
+    it to tell this request's answer from an older one.
     """
     return {"directory": directory,
             "galaxy": galaxy.id,
@@ -1620,11 +1371,8 @@ def joined_record(galaxy, name: str, uid, directory: str, now=None,
 def newest_joined(records):
     """The record for the galaxy joined most recently, or None.
 
-    Asked only when nothing named a galaxy to play. The newest join is the one
-    the player last said they wanted, which is the best a caller with no row
-    can do, and it is a decision rather than whichever record the file happened
-    to list first. Two joins written in the same second are settled by galaxy
-    id, so the answer is the same on every call.
+    Used when nothing named a galaxy to play. Joins in the same second are
+    settled by galaxy id, so the answer is stable.
     """
     def when(item):
         gid, rec = item
@@ -1640,18 +1388,11 @@ def newest_joined(records):
 def galaxy_to_play(data_dir: str):
     """The galaxy this launcher plays, shaped like a multiplayer.json, or None.
 
-    multiplayer.json wins when it names a store: a folder or a LAN referee is a
-    galaxy somebody chose outright, and a listing must not take it from them.
-    Otherwise it is a galaxy the player joined, and the `joined` key carries
-    that record so the caller can tell which name the seat was asked for under.
-
-    This is the answer for a caller that named no row. A player in several
-    galaxies chooses one by pressing Play on its row, which reaches
-    `galaxy_config` instead and never asks this.
-
-    Answered from the records alone, with no store read, so it can name a join
-    that has not landed yet. What that galaxy does about a player with no seat
-    in it is the roster check's to say, as it was when there was one record.
+    A store named in multiplayer.json wins. Otherwise it is the newest joined
+    galaxy, with its record under `joined` so the caller knows which name the
+    seat was asked for under. For a caller that named no row (Play on a row
+    goes through `galaxy_config`). Answered from the records alone, with no
+    store read.
     """
     cfg = multiplayer_config(data_dir)
     if cfg:
@@ -1665,18 +1406,13 @@ def galaxy_to_play(data_dir: str):
     return out
 
 
-# ── Joining ───────────────────────────────────────────────────────────────────
-# A join is a request rather than a change. The worker applies it at a turn
-# boundary, on the authoritative blob, so a player who clicks Join during turn N
-# is playing at turn N+1. The launcher's half is to write the request down where
-# the worker will find it and to say plainly that it is waiting.
+# A join is a request. The worker applies it at a turn boundary, so a player
+# who clicks Join during turn N plays from turn N+1.
 def join_request(name: str, uid, build: str, turn=None, now=None) -> dict:
     """The request a Join writes, read by the worker at the next turn boundary.
 
-    The uid is in it because a seat is bound to the identity that claimed it,
-    and the worker is the only thing that can record that binding. It is None
-    for every folder and LAN galaxy, where there is no identity to bind to and
-    nothing asking for one.
+    The uid binds the seat to the identity that claimed it. It is None for
+    folder and LAN galaxies.
     """
     return {"name": name, "uid": uid, "build": build,
             "requested_at": now if now is not None else time.time(),
@@ -1686,15 +1422,10 @@ def join_request(name: str, uid, build: str, turn=None, now=None) -> dict:
 def send_join_request(store, req: dict) -> str:
     """Put a join request where this galaxy's worker will find it.
 
-    A store that has a `request_join` is asked, because a relay's own route is
-    the store's to know. A galaxy that is a folder has no such route and needs
-    none: the request is a file beside the submissions, named by the uid when
-    there is one and by the player's name when there is not, both of which are
-    already file-name safe.
-
-    Anything else raises rather than reporting success. A join that went
-    nowhere looks exactly like a join that is waiting for the next turn, and
-    the player has no way to tell those apart afterwards.
+    A store with a `request_join` is asked. For a folder galaxy the request is
+    a file beside the submissions, named by the uid, else the player's name
+    (both file-name safe). Anything else raises, since a join that went
+    nowhere would look like one waiting for the next turn.
     """
     ask = getattr(store, "request_join", None)
     if callable(ask):
@@ -1714,18 +1445,10 @@ def send_join_request(store, req: dict) -> str:
 def seat_claim_problem(name: str, seats, held: str = None):
     """Why this launcher cannot claim a seat called `name`, or None.
 
-    A seat belongs to the identity that claimed it, so a name already in the
-    roster is refused here rather than at the turn boundary, where the refusal
-    would reach the player as a join that quietly did nothing.
-
-    What comes back names nobody. It echoes the name the player typed and the
-    number of seats, for the reason `roster_problem` gives: a launcher that
-    answered "is there a seat for me" with the roster is a way to enumerate who
-    is playing. A seat differing only in capitalisation is refused the same way
-    and is not echoed back, because that spelling belongs to somebody else.
-
-    `held` is the name this install already holds in this galaxy, which is not
-    a claim to refuse.
+    A name already in the roster is refused here, before the turn boundary.
+    The message echoes only the typed name and the seat count (see
+    `roster_problem`); a seat differing only in case is refused and not
+    echoed. `held` is the name this install already holds in this galaxy.
     """
     seats = [str(c) for c in (seats or [])]
     if held and name == held:
@@ -1743,24 +1466,17 @@ def seat_claim_problem(name: str, seats, held: str = None):
 def pending_join(g, recs) -> bool:
     """Whether this player has asked for a seat in `g` and is not in it yet.
 
-    The state between clicking Join and the worker merging the civ at the next
-    turn boundary. It is a fact about the launcher's own records rather than
-    about the galaxy, because the galaxy shows nothing until the merge lands.
+    Between clicking Join and the worker merging the civ at the next turn
+    boundary. Read from the launcher's own records, since the galaxy shows
+    nothing until the merge.
     """
     return bool(recs) and g.id in recs and not g.joined
 
 
-# ── What became of a join ─────────────────────────────────────────────────────
-# The worker answers each request at the turn boundary it is resolved at, and
-# files the answer under the request's key: the uid when there is one and the
-# name when there is not, which is `turn_store.join_key`. A granted player
-# needs nothing read back, because the civ appears in the roster and the row
-# turns into Play. A refused one is on no roster, so the answer is the only
-# place the refusal and its reason reach them.
-#
-# The answer is asked for only while a request is pending and unanswered, and
-# kept in the joined record once it arrives, so a refusal a player leaves on
-# screen costs no read after the first.
+# The worker files its answer to each request under `turn_store.join_key` (the
+# uid, else the name). A granted player appears in the roster; a refused one
+# learns why only from the answer. An answer is read only while a request is
+# pending and unanswered, then kept in the joined record.
 JOIN_GRANTED, JOIN_REFUSED = "granted", "refused"
 
 
@@ -1771,13 +1487,10 @@ def _whole(n) -> bool:
 def answer_for(rec, answer):
     """`answer` when it answers the request this record holds, else None.
 
-    An answer stays filed after it is read and a second request is filed
-    under the same key, so a player refused once and asking again would
-    otherwise be shown the old refusal. The worker stamps an answer with the
-    turn it seats the player into, which is later than the turn the request
-    was lodged during, so an answer at or before the recorded turn belongs to
-    an earlier request. An answer or record with no turn is taken as it is,
-    because there is nothing to tell them apart by.
+    A second request is filed under the same key as an earlier answer. The
+    worker stamps an answer with the turn it seats the player into, so an
+    answer at or before the record's `requested_turn` belongs to an earlier
+    request. Without both turns the answer is taken as it is.
     """
     if not isinstance(rec, dict) or not isinstance(answer, dict):
         return None
@@ -1802,9 +1515,8 @@ def join_refusal(g, recs):
 def awaiting_answer(g, recs) -> bool:
     """Whether the request for a seat in `g` is still with the galaxy.
 
-    The only rows a Games refresh asks an answer for. A galaxy the player is
-    in has nothing to answer, a request already answered is not asked
-    about again, and a closed galaxy resolves no more requests.
+    The only rows a Games refresh asks an answer for: pending, unanswered, and
+    not closed.
     """
     return (pending_join(g, recs) and g.status != CLOSED
             and not isinstance(recs[g.id].get("answer"), dict))
@@ -1813,14 +1525,10 @@ def awaiting_answer(g, recs) -> bool:
 def read_join_answers(rows, recs, ask):
     """{galaxy id: (requested_at, answer)} for the requests that have one.
 
-    `ask(g, rec)` reads one galaxy's answer for one record, None while there
-    is none. It is called once per row that `awaiting_answer` names and for no
-    other. `requested_at` goes back with the answer so the record it is
-    written into can be checked to be the same request: a player can press
-    Join again while this runs off the UI thread.
-
-    Total, for the reason `_submitted_state` is: a galaxy that cannot be read
-    is left out rather than failing the listing.
+    `ask(g, rec)` reads one answer, None while there is none, and is called
+    only for rows `awaiting_answer` names. `requested_at` is returned so the
+    record can be checked to be the same request, since the player can press
+    Join again while this runs. A galaxy that cannot be read is left out.
     """
     out = {}
     for g in rows:
@@ -1873,28 +1581,19 @@ def refusal_text(g, rec) -> str:
 def joinable(g, recs=None) -> bool:
     """Whether this galaxy would take a join request from this player.
 
-    Only an open galaxy takes new players. One that is forming has no first
-    turn for a worker to merge a join into, and a closed one has stopped taking
-    them and is still listed, which is why the answer is a control being absent
-    rather than the row being absent.
+    Only an open galaxy takes new players. A forming one has no first turn to
+    merge a join into, and a closed one is listed without a Join control.
     """
     if g.joined or pending_join(g, recs):
         return False
     return g.status == OPEN
 
 
-# ── A seat that was granted and then taken back ───────────────────────────────
-# A player who joined, was seated, and then stopped playing has their civ
-# reclaimed by the referee (server\abandonment.py). The roster no longer names
-# them, so the directory's `joined` goes false, and their joined record, which
-# still holds the granted answer, would otherwise leave the row reading
-# "joining next turn" with no control on it for as long as the galaxy runs.
-#
-# The directory row does not carry the galaxy's `reclaimed` map, so it is read
-# from the state, once per galaxy, and only for a record whose request was
-# granted while its row says the player is not in: that combination is what a
-# reclaim leaves behind, and it is rare. What comes back is kept in the joined
-# record, the way an answer is, so a row left on screen costs no further read.
+# A seated player who stops playing has their civ reclaimed by the referee
+# (server\abandonment.py): the directory's `joined` goes false while the joined
+# record still holds the granted answer. The directory row does not carry the
+# `reclaimed` map, so the state is read once per galaxy for that combination
+# only, and the result is kept in the joined record.
 RECLAIMED_REC_KEY = "reclaimed"
 
 
@@ -1911,10 +1610,9 @@ def reclaim_suspect(g, recs) -> bool:
     """Whether a Games refresh should ask `g`'s state if this seat was taken
     back.
 
-    A request that was granted, on a row that says the player is not in, and
-    not already known to be reclaimed. A listing can lag the answer by one
-    refresh, since the answer is filed once the civ is in the roster, so the
-    state is what decides and this only chooses which rows to ask.
+    A granted request, on a row that says the player is not in, not already
+    known to be reclaimed. A listing can lag the answer by one refresh, so the
+    state decides and this only chooses which rows to ask.
     """
     if not pending_join(g, recs) or seat_reclaimed(g, recs):
         return False
@@ -1926,9 +1624,8 @@ def read_reclaims(rows, recs, read_state):
     """{galaxy id: (requested_at, record)} for seats the state says were taken
     back.
 
-    `read_state(g)` is one read of that galaxy's state. It is called once per
-    row that `reclaim_suspect` names and for no other. Total, for the reason
-    `read_join_answers` is.
+    `read_state(g)` is one read of that galaxy's state, called only for rows
+    `reclaim_suspect` names. A galaxy that cannot be read is left out.
     """
     out = {}
     for g in rows:
@@ -1974,7 +1671,6 @@ def reclaimed_text(g, rec) -> str:
             "new player.")
 
 
-# ── A galaxy the operator has ended ───────────────────────────────────────────
 def in_galaxy(g, recs=None, own=None) -> bool:
     """Whether `g` is this player's business: seated, asked for, or named in
     multiplayer.json."""
@@ -1991,10 +1687,8 @@ def ended_hint(ended) -> str:
 def ended_text(g) -> str:
     """What the Review button on an ended galaxy shows.
 
-    The operator's words come from the row's `closed_reason`, which the
-    directory carries for a closed galaxy, so pressing the button reads
-    nothing. A galaxy closed without a reason, or listed by a relay from
-    before rows carried one, still gets the sentence that it has closed.
+    The operator's words come from the row's `closed_reason`, so nothing is
+    read. A galaxy with no reason still gets the sentence that it has closed.
     """
     return closed_problem({STATUS_KEY: CLOSED,
                            CLOSED_REASON_KEY: getattr(g, "closed_reason",
@@ -2004,42 +1698,17 @@ def ended_text(g) -> str:
 # Turns are closed by a referee running as a scheduled task on one person's PC,
 # which starts when they log in. A machine that is off, or one that rebooted
 # and is sitting at a logon screen, leaves every galaxy it refs with a deadline
-# that passes and a turn nothing closes. Until this, a player could not tell
-# that apart from a turn about to close: the countdown reached zero and then
-# nothing happened, which is the same screen either way, so nobody had a reason
-# to tell the operator that the machine needed switching back on.
-#
-# Being past the deadline is not the fault, and a rule that said so would flag
-# every healthy galaxy six times a day. What the referee is allowed to be late
-# by is written down in its own files:
-#
-#   referee_worker.GRACE        20s   submissions are still taken after the
-#                                     deadline, so it does not even begin yet
-#   referee_worker.POLL          5s   how long a passed deadline can go unread
-#   N5                         ~10s   a measured tick, client launch included
-#   referee_worker.BACKOFF_MAX  300s  the longest a live worker waits between
-#                                     attempts at a turn that keeps failing
-#
-# So a worker that is up and working can be five minutes behind, and that is
-# STALL_FLOOR: below it, a galaxy is late and no more, whatever its turn
-# length. Above it the judgement has to scale, because a minute means nothing
-# to a 4-hour galaxy and a third of a turn to a 15-minute one, so the threshold
-# is a share of the turn. A quarter is late enough to be unambiguous and early
-# enough to be worth acting on, and STALL_CEILING holds it at an hour however
-# long the turn is, which is the operator's own line for lateness that is not
-# acceptable. At the beta's 4-hour turn the share and the ceiling agree.
-STALL_FLOOR = 300.0
-STALL_SHARE = 4.0
-STALL_CEILING = 3600.0
+# that passes and a turn nothing closes.
+STALL_FLOOR = 300.0      # seconds a working referee can run behind
+STALL_SHARE = 4.0        # stopped once overdue by turn length / STALL_SHARE
+STALL_CEILING = 3600.0   # stopped after an hour overdue, whatever the turn
 
 
 def stall_after(turn_seconds) -> float:
     """How overdue a turn has to be before its galaxy counts as stopped.
 
     A galaxy whose state carries no usable turn length is judged by the
-    ceiling. That is the latest this can fire, and late is the right direction
-    to be wrong in: calling a healthy galaxy stopped sends a player to the
-    operator over nothing, and telling them late costs them the difference.
+    ceiling, the latest this can fire.
     """
     try:
         seconds = float(turn_seconds)
@@ -2053,16 +1722,9 @@ def stall_after(turn_seconds) -> float:
 def stalled_for(deadline, turn_seconds, status=None, now=None) -> float:
     """How long this galaxy's turns have been stopped, or 0 if they have not.
 
-    Answered from the deadline and the turn length the caller already holds,
-    so it reads nothing. That is the point as much as the arithmetic is: the
-    store is metered, and a check that cost a read per galaxy per second would
-    spend more than the whole polling schedule H5 just cut.
-
-    A closed galaxy is never stopped. The worker deliberately ticks nothing in
-    one, so its deadline passes and stays passed for as long as the galaxy is
-    listed, and that is the operator having ended it rather than a machine
-    being off. A galaxy with no deadline has published no turn and has no clock
-    to be behind on.
+    Answered from the deadline and turn length the caller holds, with no read.
+    A closed galaxy is never stopped, since its deadline stays passed by
+    design. A galaxy with no deadline has no clock to be behind on.
     """
     if status == CLOSED or not deadline:
         return 0.0
@@ -2073,15 +1735,11 @@ def stalled_for(deadline, turn_seconds, status=None, now=None) -> float:
 def row_stalled_for(g, view=None) -> float:
     """`stalled_for` for one row of the table, whichever kind of row it is.
 
-    The turn length is fetched rather than named, because a row handed over by
-    a directory this launcher did not ship with would not carry one, and a
-    missing length is a threshold rather than a crash.
+    A row may not carry `turn_seconds`; a missing length uses the ceiling.
     """
     if view is not None and view.listed is not None:
-        # A listing is a reading of the galaxy as it was. One older than the
-        # floor, held over a sleep, a minimised window or a refresh still in
-        # flight on a dropped connection, cannot say the referee has not
-        # closed a turn since, and every row in it would read stopped.
+        # A listing older than the floor (held over a sleep, a minimised
+        # window or a stalled refresh) cannot show that the referee is behind.
         if view.clock - view.listed > STALL_FLOOR:
             return 0.0
     return stalled_for(g.deadline, getattr(g, "turn_seconds", None), g.status,
@@ -2091,62 +1749,38 @@ def row_stalled_for(g, view=None) -> float:
 def stall_hint(stalled) -> str:
     """The line under the table when a galaxy's turns have stopped.
 
-    One sentence, the same one however many galaxies are stopped. Which ones
-    they are is in the table, a word per row, and the operator's call is that
-    repeating it underneath was not worth the length. So nothing here varies,
-    and `stalled` is taken and not read.
-
-    The argument stays in the signature because the callers pass it and because
-    what this line is allowed to say is a question that gets revisited. Two
-    things a longer version carried are gone and are worth naming in case they
-    are wanted back: how long it has been stopped, which appears nowhere else
-    on the page because the time column reads `time is up` and never how long
-    ago, and who to tell, which was the only act the line offered.
+    One fixed sentence; the table marks which galaxies are stopped. `stalled`
+    is accepted and not read.
     """
     return "Some galaxies are stopped on the server, check back later"
 
 
-# ── The table the Galaxies page draws ────────────────────────────────────────
-# One row per galaxy, sorted by whatever column the player clicked. A column is
-# two halves that are deliberately not the same thing: the value it orders by,
-# and the text it prints. Those disagree wherever the text is written for a
-# player, which is nearly everywhere: turn 9 sorts below turn 11 but prints
-# above it, "1h 04m left" prints above "9:30" and is further away, and "you are
-# in" prints after "joining next turn" while being the row that matters more.
-# So the table sorts on the value and never on the cell.
+# The Galaxies table: one row per galaxy, sorted by the column the player
+# clicked. A column orders by its value and prints its text, and the two differ
+# (turn 9 sorts below turn 11), so the table never sorts on the cell.
 PLAY = "play"
 VIEW = "view"
 REASON = "reason"
-# Two more rows that only explain: a galaxy this player is in that the operator
-# has ended, and a seat the galaxy took back. Both read "Review" on the button,
-# because that is what pressing it gives.
+# Rows that only explain: an ended galaxy this player is in, and a seat the
+# galaxy took back. Both read "Review" on the button.
 ENDED = "ended"
 RECLAIMED = "reclaimed"
 ACTION_TEXT = {PLAY: "Play", VIEW: "View", REASON: "Review",
                ENDED: "Review", RECLAIMED: "Review"}
 
-# How far along a galaxy is, which is what the status column orders by. Not the
-# spelling of the word: alphabetically the closed galaxies come first, which is
-# the wrong end of a list of what there is to play.
+# The status column orders by how far along a galaxy is, not alphabetically.
 STATUS_ORDER = (OPEN, FORMING, CLOSED)
 
 
 class View(typing.NamedTuple):
     """What a cell needs to know that its own row does not carry.
 
-    `recs` is what this launcher has joined, keyed by galaxy id, so a row finds
-    its own record and no other row's.
-
-    `submitted` is keyed the same way. Finding out costs a read per galaxy, so
-    the launcher asks it of the galaxies this player is actually seated in and
-    of no others, and a row with no entry reads it as "not asked" rather than
-    as "not played".
-
-    `own` is the store multiplayer.json names outright, which is the one row
-    that is played whatever the listing says about it.
-
-    `listed` is when the rows were read, or None where that is not known. A
-    galaxy is only called stopped from a listing recent enough to say so.
+    `recs`: this launcher's joined records, keyed by galaxy id.
+    `submitted`: keyed the same way, asked only of galaxies the player is
+    seated in; a missing entry means not asked. `own`: the store
+    multiplayer.json names, played whatever the listing says. `listed`: when
+    the rows were read, or None; only a recent listing can call a galaxy
+    stopped.
     """
     now: "float | None" = None
     recs: "dict | None" = None
@@ -2163,9 +1797,8 @@ class View(typing.NamedTuple):
 class Column(typing.NamedTuple):
     """One column: what it sorts on, and what it prints.
 
-    `value` answers None for a galaxy the column cannot speak for, which is a
-    third thing and not a zero: a forming galaxy has no turn, and a closed one
-    has no countdown.
+    `value` answers None for a galaxy the column cannot speak for (a forming
+    galaxy has no turn, a closed one has no countdown).
     """
     key: str
     heading: str
@@ -2174,7 +1807,7 @@ class Column(typing.NamedTuple):
 
 
 def _name_value(g, view):
-    # Folded, or a galaxy called "sandbox" lands after every capitalised one.
+    # Case-folded, so lower-case names sort among capitalised ones.
     return (g.name or g.id or "").lower()
 
 
@@ -2188,15 +1821,8 @@ def _status_value(g, view):
 
 
 def _status_text(g, view):
-    """The galaxy's own word, or "stopped" over the top of it.
-
-    The word the store holds is `open`, and an open galaxy nothing is ticking
-    is the state this column has to be able to show: a player scanning the
-    table for somewhere to play reads the status before anything else, and a
-    row that said `open` about a galaxy whose referee has been off since
-    Tuesday is the table telling them the wrong thing at the place they look
-    first. The stored word is still what the column sorts on, which is the
-    table's standing rule and not an exception made here.
+    """The galaxy's own word, or "stopped" when its turns have stopped. The
+    column still sorts on the stored word.
     """
     if row_stalled_for(g, view):
         return "stopped"
@@ -2214,9 +1840,7 @@ def _turn_text(g, view):
 def _left_value(g, view):
     """Seconds until this galaxy's deadline, or None when it has not got one.
 
-    A closed galaxy has none by decision rather than by omission. Its deadline
-    is frozen at whatever it was when the operator ended it, and a clock
-    counting down to it promises a turn that never comes.
+    A closed galaxy has none: its deadline is frozen.
     """
     if g.status == CLOSED or not g.deadline:
         return None
@@ -2285,10 +1909,7 @@ def galaxy_column(key: str):
 
 
 GALAXY_LEFT = galaxy_column("left")
-# The two cells whose text is a function of the clock rather than of the
-# listing. Both are rewritten between listings, which is two minutes apart, and
-# a galaxy crossing into "stopped" in the middle of one must not wait for the
-# next query to say so.
+# The cells whose text depends on the clock, rewritten between listings.
 GALAXY_STATUS = galaxy_column("status")
 LIVE_COLUMNS = (GALAXY_STATUS, GALAXY_LEFT)
 
@@ -2297,16 +1918,8 @@ def sort_galaxies(rows, key: str = DEFAULT_SORT, reverse: bool = False,
                   view: "View | None" = None):
     """`rows` in the order one column asks for.
 
-    Ordered on the value the column computes and never on the text it draws,
-    because the two are written for different readers.
-
-    A row the column cannot speak for keeps to the bottom in both directions
-    rather than swapping ends with the reversal. A galaxy with no turn yet is
-    not the earliest turn and not the latest one, and either end would be a
-    claim the row does not make.
-
-    The sort is stable, so rows the column cannot tell apart stay in the order
-    the listing handed them over in.
+    Ordered on the column's value, never its text. Rows the column cannot
+    speak for stay at the bottom in both directions. The sort is stable.
     """
     col = galaxy_column(key)
     if col is None:
@@ -2322,10 +1935,8 @@ def sort_galaxies(rows, key: str = DEFAULT_SORT, reverse: bool = False,
 def same_store(a, b) -> bool:
     """Whether two store specs name the same galaxy.
 
-    Compared as written first, because a URL is a URL and there is nothing
-    else to do with one. Two local paths are compared as paths as well:
-    multiplayer.json is typed by a player and a directory's index is written
-    by a tool, so the same folder arrives here spelled two ways.
+    Compared as written, then as local paths, since a typed multiplayer.json
+    and a tool-written index can spell the same folder differently.
     """
     if not a or not b:
         return False
@@ -2339,34 +1950,15 @@ def same_store(a, b) -> bool:
 
 
 def row_action(g, recs=None, own=None):
-    """Which control this row offers: PLAY, VIEW, or nothing at all.
+    """Which control this row offers: PLAY, VIEW, a Review kind, or None.
 
-    Play is any galaxy you are in, and it is what the Multiplayer button used
-    to do. Every galaxy you hold a seat in offers it, because being in a galaxy
-    is membership and a player may be in several; which one is being played is
-    a question for the turn loop, which follows one at a time and says so when
-    Play is pressed on a second. View is a galaxy you could join: it opens the
-    notice, which is where the joining is confirmed, so the row itself joins
-    nothing.
-
-    A closed galaxy offers neither, because a turn played into one is refused
-    at the submission. One this player is in, has asked for, or named in
-    multiplayer.json offers Review instead, which reads the operator's reason
-    for ending it: a row that went quiet with no control on it reads as the
-    launcher failing. Nor does a galaxy this launcher has already asked for a
-    seat in offer anything: the request is with the worker and there is
-    nothing for a second click to do.
-
-    A seat the galaxy took back offers Review, which says so and lets the
-    player clear the record, since it holds a join the galaxy has undone.
-
-    `own` is the store multiplayer.json names, and it is offered Play whatever
-    the roster says. It is the galaxy the launcher was pointed at by hand, its
-    state may not even be readable from here, and the checks in
-    start_multiplayer are what answer whether a turn can be taken in it.
-
-    A request the galaxy refused offers Review, closed or not, because that
-    button is the only way to read why and to clear the request or ask again.
+    Play is any galaxy you hold a seat in, and `own` (the store
+    multiplayer.json names) whatever its roster says; start_multiplayer checks
+    whether a turn can be taken. View is a galaxy you could join and opens the
+    notice where joining is confirmed. A refused request (REASON) and a
+    reclaimed seat (RECLAIMED) offer Review, closed or not. A closed galaxy
+    offers ENDED if this player is in it, asked for it, or named it, else
+    nothing. A pending request offers nothing.
     """
     if join_refusal(g, recs):
         return REASON
@@ -2386,10 +1978,8 @@ def row_action(g, recs=None, own=None):
 class OwnGalaxy(typing.NamedTuple):
     """A row for the galaxy no directory lists.
 
-    The same facts a directory's row carries, declared here rather than
-    borrowed from `galaxy_directory`, because a build frozen without that
-    module still has a multiplayer.json to show and a row type that is allowed
-    to be missing is no row type at all.
+    The same fields a directory's row carries, declared here so a build frozen
+    without `galaxy_directory` can still show this row.
     """
     id: str
     name: str
@@ -2406,9 +1996,8 @@ class OwnGalaxy(typing.NamedTuple):
 def store_label(spec: str) -> str:
     """What to call a galaxy that is only a store spec.
 
-    The last part of it, which is the folder or the host a player would
-    recognise, because a folder of turns and a LAN referee are registered
-    nowhere and have no name but where they are.
+    The last part of it: the folder or host, since such a store has no other
+    name.
     """
     spec = str(spec)
     return os.path.basename(spec.rstrip("/\\").replace("\\", "/")) or spec
@@ -2417,14 +2006,9 @@ def store_label(spec: str) -> str:
 def named_galaxy(spec: str, state, player: "str | None" = None) -> OwnGalaxy:
     """The row for a store multiplayer.json names, built from its own state.
 
-    Identified by the spec, because that is all there is: a folder of turns
-    and a LAN referee are registered nowhere and have no id but where they
-    are. Shown under the name `store_label` reads out of it.
-
-    A store whose state cannot be read is forming rather than absent, for the
-    reason a directory's row gives: the referee publishes the first turn some
-    time after the folder exists, and a row that vanished in between reads as
-    the galaxy having failed.
+    Identified by the spec and shown under `store_label`. A store whose state
+    cannot be read is forming, since the referee publishes the first turn some
+    time after the folder exists.
     """
     spec = str(spec)
     name = store_label(spec)
@@ -2443,10 +2027,8 @@ def named_galaxy(spec: str, state, player: "str | None" = None) -> OwnGalaxy:
 def own_row(data_dir: str, cfg, player: "str | None" = None) -> OwnGalaxy:
     """Read the galaxy multiplayer.json names and turn it into a row.
 
-    Opened exactly as playing it opens it, `store_wants_token` and all, so a
-    folder and a LAN referee are read with no identity and no sign-in. A store
-    that cannot be reached is a row saying so rather than a listing that
-    fails: this is the one galaxy the player definitely wants to see.
+    Opened as playing opens it (`store_wants_token`), so a folder or LAN
+    referee needs no sign-in. An unreachable store still gives a row.
     """
     spec = cfg["store"]
     mods = multiplayer_modules()
@@ -2465,25 +2047,16 @@ def own_row(data_dir: str, cfg, player: "str | None" = None) -> OwnGalaxy:
 def galaxy_rows(data_dir: str, spec, player: "str | None" = None):
     """(rows, problem) for the Galaxies page: the directory's, and your own.
 
-    The galaxy multiplayer.json names goes first and goes in whether or not
-    the directory answered, because a player who has a store and no directory
-    still has a galaxy to play and a page that showed them nothing would be
-    the launcher looking broken.
-
-    A directory that cannot be reached is a problem reported beside whatever
-    rows there are rather than instead of them, for the same reason.
-
-    Called on a worker thread. Everything here reads a store or a service.
+    The galaxy multiplayer.json names goes first, whether or not the directory
+    answered, and an unreachable directory is reported beside the rows.
+    Called on a worker thread.
     """
     rows, problem = [], None
     if spec:
         try:
-            # The same rule a store follows, and asked the same way so that the
-            # `auth` key which points the launcher at a local emulator answers
-            # for the listing as well as for the galaxy: an https directory is
-            # the relay and wants this install's identity, a folder does not
-            # read one, and a player who is offline should not be waiting on a
-            # sign-up to see the galaxy they already have.
+            # Asked as a store is, so the `auth` key governs the listing too:
+            # an https directory (the relay) wants this install's identity, a
+            # folder does not.
             want = dict(multiplayer_file(data_dir) or {})
             want["store"] = spec
             token = player_token(data_dir) if store_wants_token(want) else None
@@ -2496,37 +2069,21 @@ def galaxy_rows(data_dir: str, spec, player: "str | None" = None):
         except Exception as exc:    # any directory; unreachable is usual
             problem = f"Could not reach the galaxy directory: {exc}"
     cfg = multiplayer_config(data_dir)
-    # Unless the directory already listed it. A registered galaxy has a name
-    # the operator gave it and a row read in the same query as the rest, and
-    # two rows for one galaxy reads as a fault. It is still played from the
-    # store multiplayer.json names, because `row_action` matches that row by
-    # its store rather than by where the row came from.
+    # Unless the directory already listed it. `row_action` matches that row by
+    # its store, so it is still played from the store multiplayer.json names.
     if cfg and not any(same_store(g.store, cfg["store"]) for g in rows):
         rows.insert(0, own_row(data_dir, cfg, player))
     return rows, problem
 
 
-# ── The notice a player reads before joining ──────────────────────────────────
-# server\beta_notice.py holds the words, in a .txt beside it, because they are
-# for players rather than for programmers. The launcher's half is to show them
-# where they cannot be walked past: on the join step, with the Join control on
-# the far side of them, rather than behind a help menu.
-#
-# Three values in that text are left to whoever shows it. Two are the galaxy's
-# own miss thresholds, which are per galaxy, so the numbers a player reads are
-# the ones the galaxy they are joining actually enforces rather than the
-# defaults. The third says what happens to the log copy, and the launcher fills
-# it from what the launcher does today.
-#
-# Every way of not having the whole notice is refused rather than shown short.
-# A rule with a blank where the number should be reads as no rule at all, and a
-# missing notice reads as there being nothing to agree to.
+# server\beta_notice.py holds the notice a player reads before joining, in a
+# .txt beside it. The launcher shows it on the join step, ahead of the Join
+# control, and fills its log-copy marker. A notice that is missing or has an
+# unfilled marker is refused, not shown short.
 
-# What can honestly be said about the log copy today. write_redacted_log
-# writes the copy beside launcher.log, and the launcher uploads it only when
-# the player presses Send: on the "send log" link, or in the box offered when
-# a turn goes wrong (M1). The notice is read once and believed afterwards, so
-# this is the clause that has to change if anything is ever sent without that.
+# What the notice says about the log copy: write_redacted_log writes it beside
+# launcher.log, and it is uploaded only when the player presses Send. This
+# clause must change if anything is ever sent without that.
 LOG_UPLOAD_CLAUSE = ("Nothing is sent by itself. The launcher writes that "
                      "copy to a file on your own machine, and it reaches us "
                      "only when you press Send, on the launcher's send log "
@@ -2536,9 +2093,8 @@ LOG_UPLOAD_CLAUSE = ("Nothing is sent by itself. The launcher writes that "
 def beta_notice_module():
     """server\\beta_notice, or None when this build cannot reach it.
 
-    Found the way `galaxy_directory` is, and answering None the same way, so
-    that a build frozen without it is a join refused with a reason rather than
-    a launcher that will not start.
+    Found the way `galaxy_directory` is. A build frozen without it refuses a
+    join with a reason.
     """
     multiplayer_modules()
     try:
@@ -2551,20 +2107,9 @@ def beta_notice_module():
 def beta_notice_text(state):
     """(notice, None) as this galaxy's player must read it, or (None, reason).
 
-    `state` is the galaxy being joined, for any value the notice wants to state
-    per galaxy. It states none today.
-
-    The reason is for showing rather than for swallowing. A build without the
-    module, a build without the file, and a marker nobody filled are three
-    different faults and one outcome for the player, so each of them refuses
-    here and says which it was.
-
-    **The notice no longer states the miss thresholds**, by a deliberate
-    editorial decision: turn limits are explained elsewhere and not on this
-    page. So the two markers are gone and with them the refusal that fired when
-    a build could not fill them. `miss_thresholds` and the `abandonment` import
-    behind it went at the same time and for the same reason. Any future value
-    the notice wants per galaxy goes in `values` and gets its own marker back.
+    `state` is the galaxy being joined, for any per-galaxy value the notice
+    states. A missing module, a missing file and an unfilled marker each
+    refuse with their own reason, which is meant to be shown.
     """
     notice = beta_notice_module()
     if notice is None:
@@ -2581,54 +2126,32 @@ def beta_notice_text(state):
     return body, None
 
 
-# ── The log, made fit to send ─────────────────────────────────────────────────
-# launcher.log is the only account of a failure nobody was watching, and it
-# cannot be sent anywhere as it stands. The launcher tees the stub server's own
-# logging into it, and that includes the HTTP bodies of the save protocol: a
-# save blob is base64 in the `data=` field and arrives in 400-character chunks
-# tagged `body+`. cs_server holds a savegame body to its first 4000 characters,
-# so it is around 4 KB per save request rather than the whole blob, and a
-# multiplayer turn makes two of those. They diagnose nothing; the same blob is
-# written to saves\ in full, and they are still most of the file: 12,744 bytes
-# of the 23,310-byte log this was measured against, from three requests.
+# launcher.log carries the stub server's logging, including save request
+# bodies: a base64 blob in the `data=` field, in 400-character chunks tagged
+# `body+`, up to 4000 characters per request. redact_log_text() makes the copy
+# that can be sent: body dumps replaced by a byte count, the Windows account
+# name taken out of paths, and the tail kept to a cap.
 #
-# redact_log_text() produces the copy that can be sent: body dumps replaced by
-# a count, the player's Windows account name taken out of the paths, and the
-# tail kept to a cap.
-#
-# WHAT THE REDACTED COPY STILL CONTAINS. Written out rather than summarised,
-# because the text a player is shown before they agree to send one has to be
-# written from this list rather than from a guess.
-#
-#   - The player's name, which is also their civilisation's name in a galaxy.
-#     It is on every multiplayer line: "[Alice] turn 12: submitted".
-#   - The galaxy: the store's path or URL exactly as multiplayer.json names it.
-#     For a directory store on another machine that is a UNC path and therefore
-#     that machine's name. The scrubbing covers this player's own account name,
-#     not a referee's machine.
-#   - The game name, turn number and action of each save request, from the head
-#     of the body that is kept: "gamename='DemoPlayt8'&turn=8&version=1". A
-#     `passhash` sits there too and is always empty; the engine sends a
-#     credential field that the stub server does not use.
-#   - Which modes were started and which exited, with exit codes, process ids
-#     and the names of the game executables.
-#   - The install's directory layout with the account name replaced:
-#     "C:\Users\<user>\Desktop\...". The rest of each path survives, so a folder
-#     a player named after themselves is still readable.
-#   - The whole of the AI opponent's reasoning in single player, which names
-#     planets, ships, research and engine addresses, and nothing about the
-#     machine it ran on.
-#   - Timestamps, to the second, of all of the above.
+# The redacted copy still contains (the send prompt is written from this list):
+#   - The player's name, on every multiplayer line: "[Alice] turn 12: submitted".
+#   - The galaxy's store path or URL as multiplayer.json names it. A UNC path
+#     names the referee's machine.
+#   - Each save request's game name, turn and action, from the kept head of the
+#     body: "gamename='DemoPlayt8'&turn=8&version=1", plus an always-empty
+#     `passhash`.
+#   - Which modes started and exited, with exit codes, process ids and the game
+#     executables' names.
+#   - The install's paths with the account name replaced:
+#     "C:\Users\<user>\Desktop\...". The rest of each path survives.
+#   - The AI opponent's full reasoning in single player (planets, ships,
+#     research and engine addresses).
+#   - Timestamps, to the second.
 LOG_NAME = "launcher.log"
 REDACTED_LOG_NAME = "launcher-redacted.log"
 
-# The ceiling on a copy meant to be sent. Several turns of a multiplayer
-# session fit once the body dumps are gone, and it is small enough to leave a
-# home connection without anyone thinking about it.
-LOG_UPLOAD_CAP = 256 * 1024
+LOG_UPLOAD_CAP = 256 * 1024   # bytes in a copy meant to be sent
 
-# Room held back from the cap for the line that says what the cap dropped.
-_CAP_NOTE = 200
+_CAP_NOTE = 200   # bytes held back for the line saying what the cap dropped
 
 # A line as launcher.log writes it: the stub server's own indented text with
 # the launcher's timestamp in front of it.
@@ -2642,9 +2165,8 @@ _BODY_MORE = re.compile(_STAMP + r"body(?:\+|\u2026)\s*[:(]")
 # carries the user, the game, the turn and the version. After it is the blob.
 _BODY_HEAD = re.compile("(" + _STAMP + r"body:\s*.*?\bdata=)(.+)$")
 
-# Any \Users\<name>\ in a path. The account name is the identifying part; the
-# rest of the path says where the install is, which is what a diagnostic needs.
-# Public and Default are Windows' own shared profiles and name nobody.
+# Any \Users\<name>\ in a path. Public and Default are Windows' own shared
+# profiles and name nobody.
 _USER_DIR = re.compile(r"([A-Za-z]:[\\/]+Users[\\/]+)(?!Public\b|Default\b)"
                        r"([^\\/\s\"']+)", re.I)
 USER_MARK = "<user>"
@@ -2653,13 +2175,9 @@ USER_MARK = "<user>"
 def scrub_paths(text: str) -> str:
     """Replace the Windows account name in any path with <user>.
 
-    Generalised rather than matched against this machine's account name. The
-    copy is written on the player's machine and read on somebody else's, and a
-    log can carry paths from a second profile or an older install that the
-    account name in force right now would not match.
-
-    A profile directory that is not under \\Users (a redirected domain profile,
-    say) is matched by its own literal path instead.
+    Matches any account name, since a log can carry paths from other profiles.
+    A profile directory not under \\Users (a redirected domain profile, say)
+    is matched by its own literal path.
     """
     text = _USER_DIR.sub(lambda m: m.group(1) + USER_MARK, text)
     home = os.path.expanduser("~")
@@ -2687,13 +2205,9 @@ def _keep_tail(text: str, cap: int) -> str:
 def redact_log_text(text: str, cap: int = LOG_UPLOAD_CAP) -> str:
     """An uploadable copy of a launcher log.
 
-    Each run of body lines becomes one line naming how many bytes went with it.
-    The count is kept rather than dropped because it is the one thing those
-    lines were ever good for: it separates a turn that sent a 300 KB save from
-    a turn that sent nothing, and that distinction is a diagnosis.
-
-    The cap keeps the tail, because the failure being reported is the last
-    thing that happened, and the line saying what was dropped goes at the top.
+    Each run of body lines becomes one line giving its byte count, which tells
+    a turn that sent a save from one that sent nothing. The cap keeps the
+    tail, with a line at the top saying what was dropped.
     """
     out = []
     elided = 0
@@ -2727,9 +2241,7 @@ def redact_log_text(text: str, cap: int = LOG_UPLOAD_CAP) -> str:
 def redacted_log(data_dir: str, cap: int = LOG_UPLOAD_CAP) -> str:
     """The uploadable copy of this install's launcher.log.
 
-    A missing or unreadable log answers with a copy that says so rather than
-    raising. Whatever asks for this wants something to send either way, and
-    "there was no log" is itself a report.
+    A missing or unreadable log gives a copy that says so.
     """
     path = os.path.join(data_dir, LOG_NAME)
     try:
@@ -2744,9 +2256,7 @@ def write_redacted_log(data_dir: str, out_path: "str | None" = None,
                        cap: int = LOG_UPLOAD_CAP) -> str:
     """Write the uploadable copy beside the log and return where it went.
 
-    The file is what a player reads before sending, what they attach to a
-    bug report when there is nowhere to send it, and what Send uploads, so
-    the copy sent is the copy they could read.
+    The file is what the player can read before sending and what Send uploads.
     """
     out_path = out_path or os.path.join(data_dir, REDACTED_LOG_NAME)
     with open(out_path, "w", encoding="utf-8", newline="\n") as fh:
@@ -2754,24 +2264,19 @@ def write_redacted_log(data_dir: str, out_path: "str | None" = None,
     return out_path
 
 
-# ── Sending the log ───────────────────────────────────────────────────────────
-# The redacted copy goes to the relay's `POST /_logs`, which stores it where
-# the operator reads it with server\dev_tools\log_tool.py and serves it to no
-# player (plan item M1). It is sent only when the player presses Send: from
-# the "send log" link beside "show log", or from the box offered once when a
-# followed turn could not be sent or the turn loop stopped with an error. The
-# box says what the copy holds before anything goes.
-#
-# The relay takes the text zlib-compressed and in base64 inside a small JSON
-# object. A measured 103,780-byte redacted copy is 10,094 bytes compressed.
-# It counts uploads per sign-in and per day and refuses past either with a
-# sentence, which is shown as it is.
+# The redacted copy goes to the relay's `POST /_logs`, read by the operator
+# with server\dev_tools\log_tool.py and served to no player. It is sent only
+# when the player presses Send: on the "send log" link, or in the box offered
+# once when a followed turn could not be sent or the turn loop stopped with an
+# error. The relay takes the text zlib-compressed and base64 in a small JSON
+# object, limits uploads per sign-in and per day, and refuses with a sentence
+# that is shown as it is.
 LOG_ROUTE = "_logs"
 LOG_WHY_TURN = "turn_failed"
 LOG_WHY_PLAYER = "player"
 
-# The loop kinds after which the box is offered. A closed galaxy is not among
-# them in effect: `mp_closed` is set first and the box is not offered for it.
+# The loop kinds after which the box is offered. A closed galaxy sets
+# `mp_closed` first and is not offered the box.
 LOG_OFFER_KINDS = ("lost", "failed", "serve_failed")
 
 LOG_SEND_TITLE = "Send your log"
@@ -2791,9 +2296,8 @@ def log_upload_base(data_dir: str, store_spec, directory) -> "str | None":
     """The relay a log goes to, or None when this install reaches none.
 
     The followed galaxy's relay first, then the directory's. A spec counts
-    when it is http(s) and wants this install's identity by the rule a store
-    follows (`store_wants_token`), so a folder or a LAN referee is never sent
-    a log and an emulator relay named with `auth` is.
+    when it is http(s) and `store_wants_token` says it wants an identity, so a
+    folder or LAN referee is never sent a log.
     """
     want = dict(multiplayer_file(data_dir) or {})
     for spec, is_store in ((store_spec, True), (directory, False)):
@@ -2846,10 +2350,9 @@ def send_log(base: str, token, payload: bytes, timeout: float = 30.0) -> dict:
 def log_sent_text(reply, code=None) -> str:
     """What a player reads once their log is sent.
 
-    The reference itself is shown in a copyable row under this text rather
-    than in it. `code` is this install's player code, which the operator
-    finds a player's logs by (`log_tool list --code`), so a lost reference
-    costs the player nothing.
+    The reference is shown in a copyable row under this text. `code` is this
+    install's player code, which the operator finds logs by
+    (`log_tool list --code`).
     """
     ref = (reply or {}).get("id")
     said = "Your log was sent to the galaxy's operator."
@@ -2870,12 +2373,9 @@ def log_sent_text(reply, code=None) -> str:
     return said
 
 
-# ── The references of logs sent ───────────────────────────────────────────────
-# The relay answers each upload with a reference. The last few are kept so a
-# player who closed the box can find one again, from the log history link
-# beside send log. This is the launcher's record of something the player did,
-# so it lives beside identity.json and joined.json. Newest first; a missing or
-# unreadable file is an empty list and is rewritten whole by the next send.
+# The relay answers each upload with a reference; the last few are kept for
+# the log history link. Newest first; a missing or unreadable file is an empty
+# list and is rewritten whole by the next send.
 LOG_REFS_FILE = "log_refs.json"
 LOG_REFS_KEY = "sent"
 LOG_REFS_KEEP = 5
@@ -2960,7 +2460,6 @@ def log_not_sent_text(why, path) -> str:
             "attach it to a bug report instead.")
 
 
-# ── UI ────────────────────────────────────────────────────────────────────────
 # What a piece of text means, as a colour: ordinary, secondary, faint, a
 # heading, good, needs attention, bad. The window maps each to the colour that
 # reads on whatever it is drawn over (web_view.ON_DARK and ON_LIGHT).
@@ -2990,46 +2489,25 @@ class GalaxyRow(typing.NamedTuple):
     action: "str | None" = None
     on_action: "typing.Callable | None" = None
 
-# ── The capture indicator ─────────────────────────────────────────────────────
-# What the turn loop last did with the player's work, beside the dot that says
-# the server is up. The question it answers is the one a player cannot answer
-# from the log: is what I have just done safe yet.
-#
-# Three states have to be distinguishable at a glance, because the player's next
-# move depends on which one it is. A capture running now means wait a moment. A
-# capture taken and not sent means the work is on this disk but not in the
-# galaxy, so closing the machine loses it. Sent means the galaxy has it and the
-# turn would survive this launcher being closed.
+# The capture indicator: what the turn loop last did with the player's work,
+# shown beside the server dot.
 CAPTURING = "capturing"     # the client is being asked for the player's state
 HELD = "held"               # captured here, not in the store yet
 SENT = "sent"               # the store holds everything captured
 CAPTURE_FAILED = "failed"   # the last capture did not come back
 
-# How long the indicator stays up after the game closes and the last send
-# finishes. Without it the answer a player closed the game to get was never
-# drawn at all: the send completing is the same event as the indicator being
-# hidden, so the amber "sending your turn" was replaced by nothing and the
-# green "turn sent" existed only between two frames. Ten seconds is long
-# enough to read on the way past and short enough that it is gone before the
-# next turn arrives.
+# Seconds the indicator stays up after the game closes and the last send
+# finishes, so "turn sent" can be read.
 CAPTURE_HOLD = 10.0
 
 
 def capture_readout(state, age: float, client_open: bool = True):
     """(text, colour) for the capture indicator, or ("", colour) to hide it.
 
-    `age` is how long ago the state was recorded. It is in the text for the two
-    states where staleness is the thing worth knowing: "sent 4m ago" on a turn
-    the player is still playing says the cadence is working, and the same line
-    frozen at "sent 40m ago" says it is not.
-
-    **The colour answers "is my work safe", and what that means moves when the
-    client closes.** While the game is open, work held here is safe: it is on
-    disk, the player is still playing, and the upload is not due yet, so green.
-    Once the game is gone there is nothing left to do but send, so held stops
-    being good news and only sent is green. Colouring a held capture amber
-    during play was the launcher warning a player about a cadence working
-    exactly as designed, on a 4-hour turn, for two hours.
+    `age` is how long ago the state was recorded, shown for held and sent. The
+    colour answers "is my work safe": while the game is open a held capture is
+    green, since the upload is not due yet; once the game is gone only sent is
+    green.
     """
     if state == CAPTURE_FAILED:
         return "could not save your turn", BAD
@@ -3064,71 +2542,54 @@ class Launcher:
         self.msgs: "queue.Queue[str]" = queue.Queue()
         self.servers: "list" = []
         self.child: "subprocess.Popen | None" = None
-        # The opponent. Tied to self.child's lifetime in both directions: it is
-        # started right after the game and killed the moment the game is gone,
-        # because an AI writing into a process that has exited is at best noise
-        # in the log and at worst an attach to whatever gets that pid next.
+        # The opponent, tied to self.child's lifetime: started after the game
+        # and killed when it is gone, so it never attaches to a reused pid.
         self.ai_child: "subprocess.Popen | None" = None
         # A cached handle on the running game, for the once-a-second turn
         # readout. Dropped whenever a read fails or the game exits.
         self._ctl_client = None
         # When the turn showing now first appeared, so a stuck opponent can be
-        # timed out rather than locking the player out of their own game.
+        # timed out.
         self._waiting_since = None
         self._last_seen_turn = None
         self._ctl_busy = False
         self.running_mode = None
-        # The multiplayer session: a worker thread running the turn loop, the
-        # store it follows, and the flag that asks it to stop between turns
-        # rather than mid-capture.
+        # The multiplayer session: the turn loop's worker thread, the store it
+        # follows, and a flag asking it to stop between turns.
         self.mp_thread = None
         self.mp_store = None
         self.mp_civ = None
-        # Which galaxy that loop is following, for the refusal a second Play
-        # gets. A name and a store spec rather than the row, because the row
-        # goes stale with the next listing and this has to name the galaxy for
-        # as long as it is being played.
+        # Which galaxy that loop follows (a name and store spec, which outlive
+        # the row), for the refusal a second Play gets.
         self.mp_playing = None
         self.mp_stop = False
         self.mp_note = ""
         self.mp_turn = None
-        # When this turn closes, as an absolute time. The turn loop reads the
-        # store on a schedule of its own and says how long is left with every
-        # `playing`, so the readout subtracts from this rather than asking the
-        # store once a second: see player_turn.POLL_SHARE for what one costs.
+        # When this turn closes, as an absolute time. The loop reports time
+        # left with every `playing`, so the readout subtracts from this and
+        # does not ask the store.
         self.mp_deadline = None
-        # This galaxy's turn length, read once with the state that start_
-        # multiplayer already reads, and the scale `stalled_for` judges a
-        # passed deadline against.
+        # This galaxy's turn length, read once in start_multiplayer: the scale
+        # `stalled_for` judges a passed deadline against.
         self.mp_turn_seconds = None
-        # Whether the loop is between turns rather than in one. Every other
-        # note the readout can show is about something this launcher is doing
-        # now and outranks a galaxy that has stopped; this is the state in
-        # which it has nothing else to say and the player is watching a clock
-        # that has run out.
+        # Whether the loop is between turns. Only then does a stopped galaxy
+        # outrank the readout's other notes.
         self.mp_waiting = False
         # Since when the loop has been unable to read the galaxy's store, or
-        # None while it can. The deadline a stall is judged from is the last
-        # one the loop heard, and while the store cannot be read that deadline
-        # stands still exactly as it does under a referee that is off.
+        # None while it can. An unreadable store freezes the deadline the same
+        # way a referee that is off does.
         self.mp_unreachable = None
-        # What the loop last did with the player's state, and when: one of the
-        # capture states above with a timestamp, or None before anything has
-        # been captured. Recorded by _mp_state on the worker thread and painted
-        # by _refresh_turn on the UI thread, which is the route mp_note already
-        # takes.
+        # What the loop last did with the player's state, and when: a capture
+        # state with a timestamp, or None. Recorded by _mp_state on the worker
+        # thread and painted by _refresh_turn on the UI thread.
         self.mp_capture = None
         # Set by Save during a multiplayer turn, cleared by the loop when it
-        # acts on it. An Event rather than a second call into the client,
-        # because the loop is already driving that client.
+        # acts on it; the loop is already driving the client.
         self.mp_send_now = threading.Event()
-        # Set by Play on the galaxy this loop is already following once its
-        # game window has closed, cleared by the loop when it opens the game
-        # again. The loop owns the client, so Play asks it rather than
-        # starting a second one, which is what the lock in game_cycle exists
-        # to prevent. `mp_reopening` is the UI side of the same thing: what
-        # the status line and the turn readout say between the press and the
-        # client coming back up.
+        # Set by Play on the followed galaxy once its game window has closed,
+        # cleared by the loop when it reopens the game. The loop owns the
+        # client (game_cycle's lock forbids a second). `mp_reopening` is what
+        # the UI says until the client is back up.
         self.mp_reopen = threading.Event()
         self.mp_reopening = False
         # Whether the galaxy being followed has been found closed, and the
@@ -3140,24 +2601,21 @@ class Launcher:
         self.mp_log_offered = False
         self.mp_seat_refused = False
         self.log_sending = False
-        # Whether the game client was up when the watcher last looked, so that
-        # it closing clears the turn readout at once rather than at the next
-        # poll, and whether the turn it was playing is still on its way to the
-        # galaxy afterwards.
+        # Whether the client was up at the watcher's last pass, so its closing
+        # clears the turn readout at once, and whether its turn is still being
+        # sent.
         self.mp_client_seen = False
         self.mp_client_gone = False
         self.mp_sending = False
         self.mp_turn_open = False
-        # The Galaxies page: which directory it lists, the store
-        # multiplayer.json names outright, and whether a listing is in flight.
-        # The directory is None when multiplayer.json names a store and no
-        # directory, which is the folder and LAN path and reaches no service.
+        # The Galaxies page: the directory it lists (None on the folder and
+        # LAN path), the store multiplayer.json names, and whether a listing is
+        # in flight.
         self.games_dir = None
         self.own_store = None
         self.games_busy = False
-        # The last listing, kept so that sorting a column repaints the table
-        # without going back to the directory for the same rows. None until
-        # one has been asked for, which is what the page says while it waits.
+        # The last listing, kept so sorting repaints without a new query. None
+        # until one has been asked for.
         self.games_rows = None
         self.games_listed = None
         self.games_extra = {}
@@ -3170,36 +2628,27 @@ class Launcher:
         # (row, column, Column, galaxy, near).
         self.page = "home"
         self._clocks: "list" = []
-        # This player's name, read from the data directory at boot. None until
-        # they have entered one, which is a state the launcher runs in happily:
-        # only multiplayer needs to know who you are.
+        # This player's name, read at boot. None until entered; only
+        # multiplayer needs it.
         self.player = None
-        # The status to fall back to whenever no game is running. Recorded when
-        # the server settles so that a game exiting restores whatever was true
-        # then ("ready", "port taken", "reusing the existing server")
-        # rather than a guess.
+        # The status to fall back to when no game is running, recorded when the
+        # server settles.
         self._ready: "tuple[str, str]" = ("starting…", WARN)
         # What the status line says now, which is what the window starts with.
         self._status: "tuple[str, str]" = self._ready
-        # Whether THIS launcher's server is the one on the port. False while a
-        # foreign server holds it, which is a state multiplayer cannot run in:
-        # the turn would be captured into that server's data directory.
+        # False while a foreign server holds the port. Multiplayer cannot run
+        # then: the turn would be captured into that server's data directory.
         self.server_ok = False
         # Set when a server this launcher did not start is being shared.
         self.save_dir = None
         self.game_root = self.galaxy_root = self.data_dir = None
-        # Every client the manifest knows about, including modes not shown: a
-        # hidden mode's client is still a running game that a second launch
-        # would kill.
+        # Every client the manifest knows about, including hidden modes, since
+        # a second launch would kill any running one.
         self.client_exes = {m["exe"] for m in cfg["modes"] if m.get("exe")}
-        # The multiplayer turn loop starts its own client, which the manifest
-        # therefore does not name. It still has to count as a running game, or
-        # a second launch would close someone's turn from under them.
+        # The turn loop's own clients also count as a running game.
         self.client_exes |= set(MP_CLIENTS)
-        # Diagnostics start before the data directory is known, where the game
-        # was found, and whether it was found at all, are exactly the lines a
-        # failed startup needs to leave behind, so they buffer until there is a
-        # file to put them in.
+        # Log lines buffer until the data directory is known, so a failed
+        # startup still records where the game was looked for.
         self._logfh = None
         self._pending: "list[str]" = []
 
@@ -3208,15 +2657,13 @@ class Launcher:
         view.after(120, self._drain)
         view.after(1000, self._watch_game)
 
-    # ── startup ──
     def _boot(self):
         self.data_dir = find_data_dir()
         self._open_log(self.data_dir)
         info = build_info()
         self.say(f"{self.cfg['product']} v{info['build']}")
         # When and from what the build was packaged. Absent from a checkout and
-        # from a package the stamp did not reach, which is itself the answer to
-        # "which build produced this log".
+        # from an unstamped package.
         made = " ".join(f"{k} {info[k]}" for k in ("stamped_at", "commit")
                         if info.get(k))
         if made:
@@ -3228,9 +2675,9 @@ class Launcher:
         self._show_log_refs_link()
         self.say(f"player  {self.player or 'not set yet'}")
 
-        # What the Galaxies page will list, before the game files are looked
-        # for: which galaxies exist is worth showing even to an install that
-        # cannot start one. Nothing is listed until the page is opened.
+        # Set up the Galaxies page before looking for game files, so an install
+        # that cannot start a game can still list galaxies. Nothing is listed
+        # until the page is opened.
         mp_cfg = multiplayer_file(self.data_dir)
         self.own_store = (multiplayer_config(self.data_dir) or {}).get("store")
         self.games_dir = directory_to_list(self.cfg, mp_cfg)
@@ -3249,8 +2696,8 @@ class Launcher:
         else:
             self.say("icon    none found")
 
-        # Only the modes actually offered gate startup. A hidden mode whose EXE
-        # the build no longer ships is a stale manifest row, not a broken install.
+        # Only the modes offered gate startup; a hidden mode's missing EXE is a
+        # stale manifest row.
         game_root = find_game_root(self.modes)
         if not game_root:
             searched = "\n".join("    " + c for c in game_root_candidates())
@@ -3283,23 +2730,12 @@ class Launcher:
         port = int(self.cfg["server"]["port"])
 
         if not port_is_free(host, port):
-            # A server on this port that answers the protocol used to be reused.
-            # It cannot be: every capture a turn takes lands in whatever data
-            # directory THAT server was started with, and there is no message in
-            # the protocol to ask it which one. On the night of 25 September a
-            # checkout cs_server writing to server\saves held the port while
-            # this launcher looked in release\data\saves, and every turn died
-            # two seconds after serving with "SaveGame succeeded but no capture
-            # appeared; is the launcher's server running?", which was true of
-            # a server that was not this one. Half-working that way is worse
-            # than refusing, so this refuses.
+            # Another server's captures land in its own data directory, which
+            # the protocol cannot report, so it is shared only when configured.
             ours = stub_server_answers(host, port)
             adopt = adopted_server(self.data_dir)
             if ours and adopt and os.path.isdir(adopt):
-                # The operator has said whose server it is and where it
-                # writes, which is the one fact the protocol cannot supply.
-                # On a machine that is both the referee and a player this is
-                # every time: the unattended worker holds the port.
+                # The operator has said where this server writes.
                 self.save_dir = adopt
                 self.server_ok = True
                 self.set_ready_status(
@@ -3309,21 +2745,17 @@ class Launcher:
                 self.say(f"captures are collected from {adopt}")
                 return
             if ours and adopt:
-                # A directory that is not there fails exactly the way the
-                # bug did, so it is refused rather than believed.
+                # A configured directory that is not there is refused.
                 self.say(f"adopt_server names {adopt}, which is not a "
                          f"directory; not sharing the server")
-            # Said by what holds it: the referee on this PC, one it left
-            # behind, another copy of the game or of this launcher, or a
-            # program that is not the game at all. Read, never ended.
+            # Worded by what holds the port. The holder is read, never ended.
             holder = port_holder(port_holder_chain(port),
                                  install_server_scripts())
             shared = referee_share(holder, ours, configured=adopt)
             if shared:
                 # This install's referee holds the port and its worker's
-                # command line says where it writes, so that folder is the
-                # one fact adopt_server would have supplied. The referee's
-                # server is used as it is and left running.
+                # command line says where it writes. Its server is used as it
+                # is and left running.
                 self.save_dir = shared
                 self.server_ok = True
                 self.set_ready_status(
@@ -3356,14 +2788,12 @@ class Launcher:
         self.say(f"server listening on {listening}")
         self.say(f"log     {logfile}")
 
-    # ── actions ──
     def on_play(self, mode):
         if not is_playable(mode):
             return
         if mode.get("id") == "multiplayer":
-            # Navigation, not a launch. Which galaxy to play is a choice the
-            # player makes in front of the list, and a button that guessed it
-            # for them is what the Galaxies page replaces.
+            # Navigation, not a launch: the galaxy is chosen on the Galaxies
+            # page.
             self.show_galaxies()
             return
         busy = running_clients(self.client_exes)
@@ -3384,13 +2814,11 @@ class Launcher:
             return
         self.running_mode = mode
         self.say(f"launched {mode['id']}: {mode['exe']} {mode['galaxy']}")
-        # "short", not "title": the buttons are imperative ("Play the Tutorial")
-        # and reading one back as a state gives "Play the Tutorial is running".
+        # "short", not "title": the button titles are imperative.
         self.set_status(f"{_short(mode)} is running", OK)
         if mode.get("ai"):
             self.start_ai(mode)
 
-    # ── Who you are ───────────────────────────────────────────────────────────
     def _show_identity(self):
         self.view.show_identity(self.player)
         self._show_player_code()
@@ -3398,10 +2826,9 @@ class Launcher:
     def _show_player_code(self):
         """Put this install's player code beside the build, once it has one.
 
-        Read from fb_identity.json and never minted here: an install that has
-        only played folder galaxies has no sign-in and shows no code. Asked
-        again after every listing and every Play, which is when a first
-        sign-in happens.
+        Read from fb_identity.json and never minted here, so an install with no
+        sign-in shows no code. Called again after every listing and every
+        Play, which is when a first sign-in happens.
         """
         self.view.show_build(
             build_line(build_id(), player_code(install_uid(self.data_dir))))
@@ -3409,10 +2836,7 @@ class Launcher:
     def ask_player_name(self, reason: str = ""):
         """Ask for the player's name, store it, and return it. None if cancelled.
 
-        Modal, and it validates in place: a name that does not fit is answered
-        beside the field the player is typing in. That is the whole point of
-        this dialog existing rather than a JSON file they edit, where the same
-        mistake surfaces as a turn that quietly went nowhere.
+        Modal, and it validates in place beside the field.
         """
         text = ("This is the name other players see, and the name of your "
                 "civilisation in a galaxy. You enter it once.")
@@ -3435,15 +2859,8 @@ class Launcher:
     def on_change_name(self):
         """Let a player change their name, except out from under a live galaxy.
 
-        Changing it is allowed because a beta player will spell it wrong, and
-        the only cost of changing it outside a galaxy is that the next galaxy
-        knows them by the new name.
-
-        Mid-galaxy is different. A galaxy's roster is fixed when it is generated
-        and the referee matches submissions to it by exact name, so a launcher
-        that renamed itself mid-turn would carry on playing and carry on being
-        ignored. Stopping first makes that a decision rather than a discovery at
-        the next deadline.
+        Refused while a galaxy is being played: the referee matches
+        submissions to the roster by exact name.
         """
         if self.mp_thread is not None and self.mp_thread.is_alive():
             self.warn("You are playing a galaxy right now.\n\nYour name "
@@ -3454,7 +2871,6 @@ class Launcher:
             return
         self.ask_player_name()
 
-    # ── The Galaxies page ────────────────────────────────────────────────────
     def show_page(self, name: str):
         """Swap the window's body between the launcher's two pages."""
         if self.page == name:
@@ -3466,11 +2882,10 @@ class Launcher:
         self.show_page("home")
 
     def show_galaxies(self):
-        """What the Multiplayer button does now: open the list, play nothing.
+        """What the Multiplayer button does: open the list, play nothing.
 
-        The listing is asked for on the way in rather than kept warm behind
-        the home page. A listing is a metered read in the beta, and a launcher
-        nobody is looking at has no use for a fresher one.
+        The listing is asked for on the way in, not kept warm behind the home
+        page.
         """
         self.show_page("galaxies")
         self._draw_galaxies()
@@ -3491,10 +2906,8 @@ class Launcher:
     def _games_tick(self):
         """Re-list on a slow timer, and keep the timer whatever a listing did.
 
-        Only while the page is on screen and the window is not minimised. A
-        countdown nobody is looking at is worth less than the reads a poll
-        behind a hidden page would spend. `on_restored` re-lists when the
-        window comes back, so a restored page is never a poll behind.
+        Only while the page is on screen and the window is not minimised.
+        `on_restored` re-lists when the window comes back.
         """
         if self.page == "galaxies" and not self.view.is_minimized():
             self.refresh_games()
@@ -3509,10 +2922,9 @@ class Launcher:
     def refresh_games(self):
         """List off the UI thread and repaint when it answers.
 
-        Off the thread because a directory is a network service in the beta,
-        and because the galaxy multiplayer.json names is opened and read here
-        as well. This window is also the game's server: blocking it stops the
-        server answering the client.
+        The directory and the multiplayer.json store may be network reads, and
+        this window is also the game's server: blocking it stops the server
+        answering the client.
         """
         if self.games_busy or not (self.games_dir or self.own_store):
             return
@@ -3528,9 +2940,8 @@ class Launcher:
                 extra["submitted"] = self._submitted_state(rows, recs, player)
             if recs:
                 extra["answers"] = self._join_answers(rows, recs)
-                # Asked with this refresh's answers folded in, so a seat
-                # whose granted answer arrives now is looked at now rather
-                # than one listing later.
+                # This refresh's answers folded in, so a seat whose granted
+                # answer arrives now is checked now.
                 seen = {gid: dict(recs[gid], answer=answer)
                         for gid, (_at, answer) in extra["answers"].items()
                         if gid in recs}
@@ -3542,27 +2953,14 @@ class Launcher:
     def _submitted_state(self, rows, recs, player):
         """Which of this player's galaxies have had the current turn handed in.
 
-        One extra read per galaxy this player is in, which is why it is not
-        asked of every row: a listing is one query and each of these is a
-        request per refresh on a store that may charge for it. A galaxy left
-        out of the answer is one that could not be read, which its row prints
-        as "you are in" rather than as "you have not played".
+        One read per galaxy this player is in. A galaxy that could not be read
+        is left out, and its row prints "you are in". Being in is the
+        directory's `joined`; no joined record is required, since a seat taken
+        under `seat_claim: first-use` never passes through Join. A galaxy with
+        a record is asked under the name its seat was claimed under, else the
+        current name.
 
-        Being in a galaxy is the directory's `joined`, and a joined record is
-        not required. An operator can seed a name into a roster and the player
-        takes that seat by playing under `seat_claim: first-use`, which never
-        passes through Join and so never writes a record. Writing one on Play
-        instead was not done: a record means "this player asked for a seat",
-        and one made for a seat that is later reclaimed would show that galaxy
-        as a join waiting on an answer nobody was asked for.
-
-        A galaxy with a record is asked for under the name its seat was
-        claimed under, because a player who has since changed their name
-        still holds the seat they joined with. One without is asked for under
-        the current name, which is the name `joined` was answered for.
-
-        Total, because the listing is posted back to the window after this and
-        an exception here would leave the page saying it is still listing.
+        Never raises: the listing is posted back to the window after this.
         """
         out = {}
         for g in rows:
@@ -3587,13 +2985,9 @@ class Launcher:
     def _join_answers(self, rows, recs):
         """What each galaxy decided about a join this launcher is waiting on.
 
-        One read per galaxy with a request pending and unanswered, and none for
-        any other: `read_join_answers` picks the rows. The read is the store's
-        `join_answer`, which the relay answers from one named document, keyed
-        by the request's own key so a player is only ever handed their own
-        answer. A store that has no such read is skipped.
-
-        Total, for the reason `_submitted_state` is.
+        One read of the store's `join_answer` per row `read_join_answers`
+        picks, keyed by the request's own key so a player only sees their own
+        answer. A store without that read is skipped. Never raises.
         """
         mods = multiplayer_modules()
         if mods is None:
@@ -3618,8 +3012,7 @@ class Launcher:
     def _reclaims(self, rows, recs):
         """Which granted seats the galaxy has since taken back.
 
-        One state read per galaxy `reclaim_suspect` names, and none for any
-        other. Total, for the reason `_submitted_state` is.
+        One state read per galaxy `reclaim_suspect` names. Never raises.
         """
         mods = multiplayer_modules()
         if mods is None:
@@ -3639,9 +3032,8 @@ class Launcher:
     def _on_games(self, rows, extra, err):
         """Take a listing in. Runs on the UI thread, off the message queue.
 
-        Join answers are written into joined.json here rather than on the
-        listing thread, because Join and Clear write that file from this
-        thread too.
+        Join answers are written into joined.json here because Join and Clear
+        write that file from this thread too.
         """
         self.games_busy = False
         try:
@@ -3660,11 +3052,8 @@ class Launcher:
     def _cell_colour(self, col, g, view, near: bool) -> str:
         """What colour one cell is drawn in.
 
-        Ordinarily how close the galaxy is to this player: lit for the ones
-        that are their business and dim for the rest. A stopped galaxy takes
-        the warning colour in its status cell whether or not they are in it,
-        because the row has to be different at a glance and a dim row that
-        merely reads differently is not.
+        Lit for galaxies that are this player's business, dim for the rest. A
+        stopped galaxy's status cell takes the warning colour regardless.
         """
         if col is GALAXY_STATUS and row_stalled_for(g, view):
             return WARN
@@ -3686,11 +3075,8 @@ class Launcher:
                              self.sort_desc, view)
         self._show_sort()
         self._show_source(rows)
-        # An empty table while the listing is in flight reads as a galaxy list
-        # with nothing in it, and the line above the table is not where
-        # somebody waiting for rows is looking. Said in the table, where the
-        # rows will be. `games_rows` is None only before the first listing
-        # lands, which is the one moment this is true.
+        # Before the first listing lands (`games_rows` is None) the table
+        # shows the waiting text.
         if self.games_rows is None:
             self.view.draw_galaxies(None, GALAXIES_WAITING)
             self._show_hint(rows, view)
@@ -3698,9 +3084,8 @@ class Launcher:
         drawn = []
         for r, g in enumerate(rows):
             action = row_action(g, view.recs, view.own)
-            # The rows lit are the ones that are this player's business: the
-            # galaxy they are in, the one they have asked to join, and the one
-            # they named themselves.
+            # Lit rows are this player's business: in it, asked to join it, or
+            # named it themselves.
             near = bool(g.joined or action in (PLAY, ENDED, RECLAIMED)
                         or pending_join(g, view.recs))
             cells = []
@@ -3719,9 +3104,8 @@ class Launcher:
     def _show_source(self, rows):
         """The line above the table: where these rows came from, or why not.
 
-        A directory that could not be reached is reported here rather than in
-        place of the table, because the galaxy multiplayer.json names is in
-        the table whatever the directory did and is still playable.
+        An unreachable directory is reported here and the table is still drawn,
+        since the galaxy multiplayer.json names is listed regardless.
         """
         if self.games_err:
             self.view.set_games_status(self.games_err, WARN)
@@ -3730,9 +3114,7 @@ class Launcher:
         elif not rows:
             self.view.set_games_status("No galaxies are listed here yet.", DIM)
         elif self.games_dir:
-            # Labelled, because the beta's directory is a Cloud Run hostname
-            # with a project hash in it and a bare URL above a table reads as
-            # something gone wrong rather than as where the list came from.
+            # Labelled, since the directory is a bare Cloud Run hostname.
             self.view.set_games_status(f"Connected to: {self.games_dir}", FAINT)
         else:
             self.view.set_games_status(
@@ -3742,17 +3124,8 @@ class Launcher:
     def _show_hint(self, rows, view):
         """One line saying what to press when there is nothing to play yet.
 
-        This is the hole the page was built to close. A player with a
-        directory and no seat pressed Multiplayer, the launcher had no galaxy
-        to play, and what they got was a roster refusal offering to change
-        their name. The answer belongs in front of the list, beside the thing
-        to press.
-
-        A stopped galaxy takes the line ahead of either. Both of the others
-        are about what there is to play; this one is the only state in the
-        page a player is asked to act on, and telling them to press View
-        instead would be the launcher watching a dead referee and talking
-        about something else.
+        A stopped galaxy takes the line first, then a refusal, a reclaimed
+        seat, an ended galaxy, and last what to press when nothing is playable.
         """
         actions = [row_action(g, view.recs, view.own) for g in rows]
         stalled = [(g, s) for g, s in
@@ -3781,22 +3154,16 @@ class Launcher:
             elif any(awaiting_answer(g, view.recs) for g in rows):
                 text = ("Your join is with the galaxy. A seat appears at the "
                         "next turn boundary, and Play appears with it.")
-        # Called once a second, and the stopped line's own clock rounds to
-        # minutes, so the view repaints only on a change.
+        # Called once a second; the view repaints only on a change.
         self.view.set_hint(text)
 
     def _tick_clocks(self):
         """Keep the countdowns and the stopped galaxies honest between
         listings.
 
-        Those two columns are rewritten and the order is left alone. A table
-        that re-sorted itself once a second would move the row being clicked
-        on out from under the pointer.
-
-        The hint goes with them. A galaxy crosses into stopped by the clock
-        rather than by anything a listing says, and the line that tells a
-        player what to do about it would otherwise appear up to two minutes
-        after the row it explains.
+        Only the live columns are rewritten; the order is left alone so rows
+        do not move under the pointer. The hint is redrawn too, since a galaxy
+        becomes stopped by the clock.
         """
         view = self._galaxy_view()
         for r, i, col, g, near in self._clocks:
@@ -3822,10 +3189,9 @@ class Launcher:
     def show_refusal(self, g):
         """Tell a refused player why, and let them ask again or clear it.
 
-        The reason is the worker's own sentence from the answer, shown whole.
-        Ask again goes through Join, so every check and the notice come
-        before a second request is sent. Clear forgets this galaxy's record
-        and nothing else, which puts View back on the row.
+        The reason is the worker's own sentence, shown whole. Ask again goes
+        through Join, so every check and the notice run again. Clear forgets
+        only this galaxy's record, which puts View back on the row.
         """
         rec = load_joined(self.data_dir).get(g.id)
         if not join_refusal(g, {g.id: rec} if rec else None):
@@ -3845,9 +3211,8 @@ class Launcher:
     def show_reclaimed(self, g):
         """Tell a player their seat was taken back, and let them clear it.
 
-        Everything shown is in the joined record already, so nothing is read.
-        Clear forgets this galaxy's record, which puts View back on the row so
-        a new seat can be asked for through Join and its notice.
+        Everything shown is in the joined record, so nothing is read. Clear
+        forgets this galaxy's record, which puts View back on the row.
         """
         rec = load_joined(self.data_dir).get(g.id)
         if not seat_reclaimed(g, {g.id: rec} if rec else None):
@@ -3864,8 +3229,7 @@ class Launcher:
     def show_ended(self, g):
         """Say that a galaxy has ended, in the operator's words.
 
-        From the row the Galaxies page already holds, which carries the reason
-        for a closed galaxy, so nothing is read when the button is pressed.
+        The reason comes from the row already held, so nothing is read.
         """
         self.say(f"games   {g.id} has ended")
         self._choice_dialog("Galaxy ended", ended_text(g),
@@ -3881,11 +3245,10 @@ class Launcher:
         return self.view.choose(title, body, choices)
 
     def play_galaxy(self, g):
-        """Take turns in one row's galaxy, which is what Multiplayer did.
+        """Take turns in one row's galaxy.
 
-        The page stays where it is. The turn readout and the turn controls sit
-        under every page and the status line is in the window's frame, so the
-        session can be watched from the page it was started on.
+        The page stays where it is; the turn readout, controls and status line
+        are visible from every page.
         """
         mode = next((m for m in self.modes if m.get("id") == "multiplayer"),
                     None)
@@ -3897,18 +3260,9 @@ class Launcher:
     def show_beta_notice(self, body: str, g, civ: str = None) -> bool:
         """Show the notice and answer whether the player joined from it.
 
-        Modal, and the only way past it is the Join button under the text. The
-        done condition for this text is that it is read before joining rather
-        than buried, so the button that joins is on the far side of it and
-        there is no other route to one: the row's Join opens this, and this
-        opens nothing else.
-
-        The text is scrolled rather than shortened. It is the whole of what a
-        player is agreeing to, and a summary with a Join button under it is the
-        thing this exists instead of.
-
-        The line above the text also says when the empire arrives, so no box
-        follows the Join: the row reads "joining next turn" from then on.
+        Modal, and the Join button under the full, scrolled text is the only
+        route to joining. The line above the text says when the empire
+        arrives, so no box follows the Join.
         """
         notice = beta_notice_module()
         heading = notice.title(body) if notice else "Before you join the beta"
@@ -3922,12 +3276,9 @@ class Launcher:
     def on_join(self, g):
         """Ask a galaxy for a seat. The worker seats the player at the next turn.
 
-        Everything here is a check the player can act on before anything is
-        written: who they are, whether this build can play the galaxy at all,
-        whether the galaxy is still running, and whether the name they typed is
-        already somebody's seat. Then the notice, which is the last thing
-        between a player and a seat. The request itself is the step after that,
-        so a refusal and a change of mind alike leave nothing behind.
+        Checks come first (name, build, closed galaxy, seat name), then the
+        notice, then the request, so a refusal or a change of mind writes
+        nothing.
         """
         civ = self.player or self.ask_player_name(
             "Before you can join a galaxy, this launcher needs to know who you "
@@ -3936,10 +3287,7 @@ class Launcher:
             self.say("join: no player name entered, not joining")
             return
 
-        # Nothing is asked about the galaxies this launcher has already
-        # joined. A seat in one is not a reason to refuse a seat in another:
-        # joining is membership, and which of them is being played is settled
-        # when Play is pressed.
+        # A seat in another galaxy does not block this join.
         rec = load_joined(self.data_dir).get(g.id)
 
         mods = multiplayer_modules()
@@ -3960,9 +3308,8 @@ class Launcher:
             self.warn(f"Could not reach {g.name or g.id}:\n\n{exc}")
             return
 
-        # Ahead of the seat check, for the reason start_multiplayer gives: a
-        # build this galaxy will not accept is why anything further down might
-        # look wrong, so it is answered first.
+        # The build and closed checks come ahead of the seat check, since
+        # either explains anything that looks wrong further down.
         if state is not None:
             problem = version_problem(build_id(), state)
             if problem:
@@ -3970,9 +3317,7 @@ class Launcher:
                          f"{state.get(MIN_BUILD_KEY)!r}")
                 self.warn(problem)
                 return
-            # Beside it, and ahead of the seat: the listing that offered this
-            # Join is as old as the last refresh, and a galaxy closed since
-            # then would otherwise take a request nothing will ever read.
+            # The listing may predate the galaxy closing.
             problem = closed_problem(state)
             if problem:
                 self.say(f"join: {g.id} is closed")
@@ -3990,10 +3335,7 @@ class Launcher:
                 self.on_change_name()
             return
 
-        # The last thing before the request, and the only one that is not a
-        # check: what a player is agreeing to is read here, with the Join on
-        # the far side of it, because a notice shown after the seat is asked
-        # for is a notice shown after the decision.
+        # The notice is the last step before the request.
         notice, why = beta_notice_text(state)
         if notice is None:
             self.say(f"join: the beta notice is not showable ({why})")
@@ -4017,24 +3359,20 @@ class Launcher:
                       "nothing has changed.")
             return
 
-        # The turn just read rather than the listing's, which can be a
-        # boundary behind; see `answer_for`.
+        # The turn just read; the listing's can be a boundary behind. See
+        # `answer_for`.
         now_turn = (state or {}).get("turn")
         save_joined(self.data_dir, joined_record(g, civ, uid, self.games_dir,
                                                  turn=now_turn))
         self.say(f"join: asked {g.id} for a seat as {civ} ({where})")
         self.refresh_games()
 
-    # ── Multiplayer session ──────────────────────────────────────────────────
     def galaxy_config(self, g):
         """A multiplayer.json-shaped config for the galaxy about to be played.
 
-        A row from the page names its own store, and that is what is played,
-        whether it came from the directory or from multiplayer.json. The
-        joined record is carried along when it is that row's, because the seat
-        may have been asked for under a name the player has since changed.
-
-        No row at all is the old question: whatever this launcher plays.
+        A row's own store is played. The row's joined record is carried along,
+        since the seat may have been asked for under an earlier name. With no
+        row, `galaxy_to_play` answers.
         """
         if g is None:
             return galaxy_to_play(self.data_dir)
@@ -4052,14 +3390,9 @@ class Launcher:
     def playing_now(self):
         """The galaxy this launcher's turn loop is following, or None.
 
-        The one place that answers whether a galaxy is being played. A player
-        may hold seats in several, and every one of those rows offers Play;
-        what there is only one of is this loop, because it drives the game
-        client and the machine runs one of those.
-
-        A running loop with nothing recorded against it answers with an empty
-        record rather than with None. What the caller acts on is that a loop
-        is running, and answering None there would let a second one start.
+        The one place that answers whether a galaxy is being played; there is
+        one loop, since it drives the game client. A running loop with nothing
+        recorded answers an empty record, never None, so a second cannot start.
         """
         if self.mp_thread is None or not self.mp_thread.is_alive():
             return None
@@ -4068,49 +3401,25 @@ class Launcher:
     def _take_turn_loop(self, g) -> bool:
         """Whether the turn loop is free for this galaxy, asking to switch.
 
-        This is where one-at-a-time lives, and it is about playing rather than
-        about joining. A player can be in as many galaxies as they like; the
-        turn loop starts the game client, the machine runs one of those, so
-        two loops would be two games fighting over it.
+        One galaxy is played at a time, since the turn loop drives the one
+        game client. A second Play names the galaxy being followed and offers
+        to switch, which stops that loop between turns. The stop happens ahead
+        of the caller's checks, the first of which asks whether a client is
+        running.
 
-        A second Play names the galaxy already being followed rather than
-        saying a galaxy is running, because "which one" is the question a
-        player with several seats is actually asking. Answering yes stops that
-        loop between turns and starts this one, which is the switch the
-        refusal offers and is the whole of what has to be done by hand
-        otherwise.
-
-        The stop happens here, ahead of the checks below, because the first of
-        them asks whether a game client is running and a loop still following
-        a galaxy is the usual reason one is. A galaxy that then refuses the
-        player leaves neither being followed, and Play on the first row starts
-        it again.
-
-        Play on the galaxy being followed, with its game window closed, is not
-        a second loop and is not refused: it asks the loop that is running to
-        open the game again. Answering False is still right, because what must
-        not happen here is a second loop, and the reopen is the running one's
-        to do.
+        Play on the followed galaxy with its window closed asks the running
+        loop to reopen the game, and still answers False.
         """
         playing = self.playing_now()
         if playing is None:
             return True
         here = playing.get("name") or playing.get("store") or "a galaxy"
         if g is not None and same_store(playing.get("store"), g.store):
-            # "Already playing" is true of the loop and not of the game.
-            # The loop outlives the window: once a turn is sent it waits for
-            # the referee, and at four hours a turn that is most of the day,
-            # so the two answer differently.
+            # The loop outlives the game window, waiting for the referee.
             if self.mp_client_gone:
-                # Play here means open the galaxy again, which is what the
-                # player is asking for: the turn is sent, and they want
-                # another look at the galaxy, or at a message in it. The loop
-                # is asked rather than a client started from here, for the
-                # reason Save is asked, because the loop owns that client.
-                #
-                # What it opens is the player's own submission for the turn it
-                # is on, so nothing they played is taken away, and the new
-                # turn instead if the referee has published one meanwhile.
+                # Ask the loop, which owns the client, to reopen the game: the
+                # player's own submission for this turn, or the new turn if
+                # the referee has published one.
                 self.mp_reopen.set()
                 self.mp_reopening = True
                 turn = self.mp_turn
@@ -4124,11 +3433,7 @@ class Launcher:
             return False
 
         there = (g.name or g.id) if g is not None else "another galaxy"
-        # Only ask when there is a game to lose. The dialog is there so a
-        # player mid-turn is not dropped out of it, and once they have
-        # closed the window themselves there is nothing on screen to
-        # interrupt: the loop is only waiting for the referee. Asking then
-        # made switching feel like it needed permission it did not need.
+        # Ask only when a game window is open to lose.
         if not self.mp_client_gone:
             if not self.view.ask_yes_no(
                     f"This launcher is playing {here} right now.\n\nYou can be in "
@@ -4141,9 +3446,8 @@ class Launcher:
         else:
             self.say(f"multiplayer: {here} had no game open, switching to {there}")
 
-        # The thread stop_multiplayer let go of. It clears the handle whether
-        # or not the loop finished, and a second loop started over one that is
-        # still capturing a turn is two of them driving the same client.
+        # stop_multiplayer clears the handle whether or not the loop finished,
+        # and two loops must not drive the same client.
         thread = self.mp_thread
         self.stop_multiplayer(f"switching to {there}")
         if thread is not None and thread.is_alive():
@@ -4164,10 +3468,7 @@ class Launcher:
                       f"({', '.join(busy)}).\n\nClose it first.")
             return
 
-        # Every capture this turn takes arrives through this launcher's own
-        # server, so a turn played without one is a turn that cannot be
-        # collected. The boot said why; saying it again here is the difference
-        # between a refusal and a turn that dies two seconds after it starts.
+        # Every capture arrives through this launcher's own server.
         if not self.server_ok:
             port = self.cfg["server"]["port"]
             self.warn(
@@ -4176,9 +3477,7 @@ class Launcher:
                 f"{port}. Close it and start this launcher again.")
             return
 
-        # The row the player pressed Play on, or, with no row, the galaxy this
-        # launcher plays. Either way this is a store spec and nothing below
-        # here knows which of the two it came from.
+        # The row's galaxy, or with no row the galaxy this launcher plays.
         cfg = self.galaxy_config(g)
         if cfg is None:
             self.warn(
@@ -4191,9 +3490,7 @@ class Launcher:
                 'example:\n\n{"store": "C:\\\\galaxies\\\\demo"}')
             return
 
-        # Asked for here and not at first run: a player who only ever opens the
-        # Tutorial should not be interrogated for a name nothing will use. This
-        # is the first moment one is genuinely needed.
+        # The name is first needed here, so it is not asked at first run.
         civ = self.player or self.ask_player_name(
             "Before you can join a galaxy, this launcher needs to know who you "
             "are.")
@@ -4208,32 +3505,21 @@ class Launcher:
                       "launcher works as normal.")
             return
         player_turn, turn_store = mods
-        # Before anything asks them for a path. The modules were imported with
-        # the wrong idea of where they are, and serving a turn is the first
-        # thing that acts on it.
+        # Before anything asks the modules for a path.
         bind_multiplayer_paths(self.game_root, self.data_dir)
 
         # The turn loop needs a client that never computes a turn of its own,
-        # which is not the one the single player modes use. Checked here rather
-        # than left to the worker thread, where a missing file surfaces as a
-        # failed turn several steps after the player pressed the button.
+        # not the single player one. Checked here, before the worker starts.
         if not any(os.path.exists(os.path.join(self.game_root, e))
                    for e in MP_CLIENTS):
             self.warn("This build ships no multiplayer client.\n\nExpected one "
                       f"of\n{', '.join(MP_CLIENTS)}\n\nin\n{self.game_root}")
             return
 
-        # `open_store`, not `TurnStore`: the store is a directory on one machine
-        # and a base URL once the referee is on another, and which one it is is
-        # the player's to write in multiplayer.json. Naming the class here made
-        # a URL silently mean "a folder called http:".
-        #
-        # A galaxy behind the beta's function is opened with this install's
-        # Firebase identity on the requests. A folder and a LAN turn_server are
-        # opened exactly as before, with no token and no sign-in. An identity
-        # that cannot be minted, because this player is offline or the project
-        # is not answering, is a missing header rather than a refusal to start:
-        # what the galaxy does about that is the galaxy's to say.
+        # `open_store` picks a folder or URL store from the spec. A galaxy
+        # behind the Cloud Function gets this install's Firebase identity; a
+        # folder or LAN turn_server gets none. An identity that cannot be
+        # minted is a missing header, not a refusal to start.
         token = player_token(self.data_dir) if store_wants_token(cfg) else None
         if token is not None and token() is None:
             self.say("multiplayer: no Firebase identity available, opening the "
@@ -4244,10 +3530,7 @@ class Launcher:
                       "publish a first turn before anyone can play it.")
             return
 
-        # Ahead of the roster, and ahead of anything being served. A galaxy can
-        # require a minimum build, and this launcher being too old for it is a
-        # reason the roster or the turn itself might look wrong further down,
-        # so it is the first thing answered.
+        # The build check comes ahead of the roster and of anything served.
         try:
             state = store.state()
         except (OSError, ValueError, KeyError) as exc:
@@ -4260,20 +3543,15 @@ class Launcher:
                          f"galaxy's minimum {state.get(MIN_BUILD_KEY)!r}")
                 self.warn(problem)
                 return
-            # Beside the build check and ahead of the roster, because a closed
-            # galaxy is one of the reasons the roster would read wrong: it
-            # holds whoever was in it when the operator ended it, and the turn
-            # a player went on to serve would be refused at the submission.
+            # Also ahead of the roster: a closed galaxy refuses submissions.
             problem = closed_problem(state)
             if problem:
                 self.say("multiplayer: this galaxy is closed")
                 self.warn(problem)
                 return
 
-        # The roster is the galaxy's list of seats, and the referee matches
-        # submissions to it by exact name and discards anything else. Checking
-        # here turns a turn played and thrown away into a message before
-        # anything starts. The other players' names stay in the store: see
+        # The referee matches submissions to the roster by exact name and
+        # discards anything else. Other players' names are never shown: see
         # roster_problem.
         try:
             seats = store.civs()
@@ -4284,8 +3562,7 @@ class Launcher:
             taken = reclaimed_seat(state, civ)
             problem = roster_problem(civ, seats, taken)
             if problem:
-                # The count, not the names. launcher.log is a file the player
-                # can open, so it is one more place the roster would leak from.
+                # The count, not the names, since the player can read the log.
                 if taken:
                     self.say(f"multiplayer: {civ!r} was reclaimed at turn "
                              f"{taken.get('turn')} after {taken.get('missed')} "
@@ -4293,17 +3570,9 @@ class Launcher:
                 self.say(f"multiplayer: {civ!r} is not one of this galaxy's "
                          f"{len(seats)} seat(s)")
                 if taken:
-                    # A reclaimed seat is not a name to spell differently, so
-                    # the offer that fits a misspelling is not made. The
-                    # launcher's own record of the join is dropped instead,
-                    # because the galaxy has undone the thing it records: left
-                    # in place it makes the page show a join still waiting to
-                    # land, which is a dead end rather than a row to join
-                    # again from. Only a galaxy that was joined from the list
-                    # has such a record; one named in multiplayer.json is the
-                    # player's own choice and is left alone. This galaxy's
-                    # record and no other: the seats this player holds
-                    # elsewhere are still theirs.
+                    # No rename offer for a reclaimed seat. This galaxy's
+                    # joined record (if it was joined from the list) is
+                    # dropped, so its row offers Join again.
                     if cfg.get("joined"):
                         clear_joined(self.data_dir,
                                      cfg["joined"].get("galaxy"))
@@ -4314,11 +3583,9 @@ class Launcher:
                     self.on_change_name()
                 return
 
-        # A player coming back after missing turns is the one the referee has
-        # left a warning for, and the turn loop only reads a note once a turn
-        # it followed has closed, which for this player is none of them. So
-        # the last closed turn's note is read once here, before the game
-        # opens over the top of anything said.
+        # The turn loop reads notes only for turns it followed, so a returning
+        # player's missed-turns warning is read once here, before the game
+        # opens.
         warning = self._warning_note(store, civ, (state or {}).get("turn"))
         if warning:
             self.say(f"multiplayer: the referee has warned {civ} about "
@@ -4338,9 +3605,8 @@ class Launcher:
                            "store": cfg["store"]}
         self.mp_stop = False
         self.mp_deadline = None
-        # Out of the state read above rather than asked for again. A galaxy
-        # whose state would not read leaves this None, which `stall_after`
-        # answers with its ceiling.
+        # From the state read above. None if it did not read, which
+        # `stall_after` answers with its ceiling.
         self.mp_turn_seconds = (state or {}).get("turn_seconds")
         self.mp_waiting = False
         self.mp_capture = None
@@ -4370,10 +3636,8 @@ class Launcher:
             try:
                 player_turn.follow(
                     store, civ,
-                    # The floor of the read schedule rather than the whole of
-                    # it. The last stretch before a deadline is read this
-                    # often and the rest of the turn backs off towards
-                    # player_turn.POLL_CEILING.
+                    # The read schedule's floor, used near the deadline; the
+                    # rest of the turn backs off towards POLL_CEILING.
                     poll=2.0,
                     on_state=self._mp_state,
                     save_dir=save_dir,
@@ -4382,10 +3646,8 @@ class Launcher:
                     reopen=self.mp_reopen,
                     log=self.say_threadsafe)
             except BaseException as exc:            # noqa: BLE001
-                # A dead worker must say so. Silence here reads as "my turn is
-                # still being set up", and the player waits forever. A relay
-                # refusal is said in the relay's own sentence, which is in the
-                # body of the response rather than in the exception's text.
+                # A dead worker must say so. A relay refusal is said in the
+                # relay's own sentence, from the response body.
                 said = relay_refusal(exc)
                 why = said[1] if said else str(exc)
                 self.say_threadsafe(f"multiplayer stopped: {why}")
@@ -4408,14 +3670,10 @@ class Launcher:
             self.mp_turn = turn
         left = facts.get("seconds_left")
         if left is not None:
-            # `playing` carries this several times a turn, on the loop's own
-            # capture cadence, which is far more often than a countdown needs.
             self.mp_deadline = time.time() + left
         if kind in ("playing", "waiting", "overtaken", "lost", "done",
                     "stopped", "failed", "serve_failed"):
-            # The reopen has either happened or is not going to. Left standing
-            # it would say the game was opening for the rest of the gap
-            # between turns.
+            # The reopen has either happened or is not going to.
             self.mp_reopening = False
 
         # A seat held by another sign-in refuses every upload while the loop
@@ -4429,9 +3687,8 @@ class Launcher:
                 civ, player_code(install_uid(self.data_dir)))))
         if kind == "send_failed":
             return
-        # The store going and coming back. Neither is a step of the turn, so
-        # the note beside the turn number is left alone, and the readouts ask
-        # `_mp_cut_off` before they judge the galaxy stopped.
+        # The store going and coming back. Not turn steps, so the note is left
+        # alone; the readouts ask `_mp_cut_off` before judging a stall.
         if kind == "unreachable":
             if getattr(self, "mp_unreachable", None) is None:
                 self.mp_unreachable = time.time()
@@ -4440,12 +3697,8 @@ class Launcher:
             self.mp_unreachable = None
             return
 
-        # The capture half of the readout. These arrive several times a turn
-        # and say nothing about which step of the turn is running, so they are
-        # recorded on their own and do not disturb the note beside the turn
-        # number. A capture that matches what the store already holds counts as
-        # sent, because that is what it means to the player: everything they
-        # have done is in the galaxy.
+        # Capture events are recorded apart from the turn note. A capture that
+        # matches what the store holds counts as sent.
         if kind == "capturing":
             self.mp_capture = (CAPTURING, time.time())
             return
@@ -4457,12 +3710,8 @@ class Launcher:
             self.mp_capture = (CAPTURE_FAILED, time.time())
             return
         if kind == "warned":
-            # The loop found a missed-turns warning in the referee's note for
-            # a closed turn and names its lines, so no second read of the note
-            # is made here. It is shown in a box rather than left in the log,
-            # and it is not a step of the turn, so the readout is left alone.
-            # The loop is the `player_turn` this launcher bundles, so every
-            # loop that can drive it emits this event.
+            # The loop found a missed-turns warning in a closed turn's note
+            # and passes its lines. Shown in a box; the readout is left alone.
             lines = facts.get("lines")
             store = self.mp_store
             if store is not None and lines:
@@ -4474,17 +3723,15 @@ class Launcher:
             return
         if kind in ("lost", "failed") and not getattr(self, "mp_closed",
                                                       False):
-            # A turn that could not be sent is how a galaxy closed under a
-            # followed loop first shows: every store refuses the submission.
-            # One read of the state says whether that is what happened.
+            # A galaxy closed under a followed loop first shows as a refused
+            # submission; one state read says whether that is the cause.
             self._mp_probe_closed(self.mp_store)
         if (kind in LOG_OFFER_KINDS
                 and not getattr(self, "mp_log_offered", False)
                 and SEAT_HELD not in str(facts.get("error") or "")):
-            # Once per followed galaxy, however many turns go wrong. Queued
-            # behind anything the probe above posted, so a galaxy found closed
-            # is marked closed before this is handled, and is not offered. A
-            # seat held by another sign-in has its own box saying what to do.
+            # Once per followed galaxy. Queued behind the probe above, so a
+            # galaxy found closed is not offered. A seat held by another
+            # sign-in has its own box.
             self.mp_log_offered = True
             self.msgs.put(("__log_offer__", self.mp_store))
         if kind == "submitted":
@@ -4494,20 +3741,15 @@ class Launcher:
         elif kind in ("waiting", "overtaken", "lost", "done",
                       "stopped", "failed"):
             # The turn is over, however it ended, so nothing is still on its
-            # way. Left standing, "sending your turn" would sit there for the
-            # whole gap between turns.
+            # way.
             self.mp_sending = False
-            # And nothing closing the window afterwards can put it back. A turn
-            # whose deadline passed while the game was still open finishes here,
-            # and the player closes the window minutes later: `_watch_mp_client`
-            # would otherwise announce that a turn sent long ago was on its way,
-            # beside a capture dot correctly reading "turn sent 2m ago".
+            # Closing the window after this must not report the turn as
+            # still sending (see `_watch_mp_client`).
             self.mp_turn_open = False
         if kind in ("serving", "playing", "reopening"):
             self.mp_turn_open = True
         if kind == "serving":
-            # A new turn: nothing of it has been captured yet, and leaving the
-            # last turn's "turn sent" standing would say the new one is safe.
+            # A new turn: nothing of it has been captured yet.
             self.mp_capture = None
 
         self.mp_note = {
@@ -4524,13 +3766,10 @@ class Launcher:
             "done": "finished",
         }.get(kind, kind)
         if getattr(self, "mp_closed", False):
-            # Whatever the loop does on its way out, the galaxy has ended and
-            # that is the one thing worth reading beside the turn number.
+            # Once the galaxy has ended, that is the note whatever the loop
+            # does on its way out.
             self.mp_note = GALAXY_ENDED_NOTE
-        # Set beside the note and from the same kind, so the two cannot come
-        # apart: the readout asks this before it falls back to "waiting for
-        # the next turn", and a galaxy that has stopped is what that wait has
-        # turned into.
+        # Set from the same kind as the note, so the two cannot come apart.
         self.mp_waiting = kind == "waiting"
         if kind in ("submitted", "waiting", "failed", "stopped", "done"):
             self.say_threadsafe(f"multiplayer: {self.mp_note} ({civ})")
@@ -4570,13 +3809,10 @@ class Launcher:
     def _warning_note(self, store, civ, current):
         """The referee's missed-turns warning for `civ`, or None.
 
-        The referee writes the warning on the turn the silent player is served
-        next, which is `current` (`abandonment.enforce`'s `new_turn`). The turn
-        before is read as well when that one has none, for a galaxy refereed by
-        a build that wrote it on the turn missed. At most two note reads, once
-        per Play. A turn with no note, a store that cannot be read, and a
-        galaxy with no turn yet all answer None: a warning is worth a read and
-        not worth a failed Play.
+        The referee writes the warning on the turn the player is served next,
+        `current` (`abandonment.enforce`'s `new_turn`); the turn before is also
+        read when that has none. A missing note, an unreadable store or no
+        turn yet all answer None.
         """
         if not civ or not _whole(current) or current < 1:
             return None
@@ -4592,11 +3828,10 @@ class Launcher:
     def _mp_probe_closed(self, store):
         """Read the followed galaxy's state once, and say so if it has closed.
 
-        Called on the worker thread when a turn could not be sent, and on a
-        thread of its own when the wait between turns runs past the point the
-        page would call the galaxy stopped: a closed galaxy's referee ticks
-        nothing, so from inside the loop the two look the same. The answer
-        goes to the UI thread through the message queue.
+        Called on the worker thread when a turn could not be sent, and on its
+        own thread when the wait between turns looks stopped, since a closed
+        galaxy and a stopped one look the same from the loop. The answer goes
+        to the UI thread through the message queue.
         """
         if store is None:
             return
@@ -4633,14 +3868,11 @@ class Launcher:
                  f"missed turns")
         self.warn(warning_text(name, lines))
 
-    # ── sending the log ──
     def _on_log_offer(self, store):
         """A followed turn went wrong: offer to send the log. UI thread.
 
-        Not for a store that is no longer the one followed, nor for a galaxy
-        found closed, which is a decision rather than a fault; and not where
-        there is no relay to send to, since a box saying so after every
-        failed turn would be noise. The link beside "show log" still says it.
+        Not for a store no longer followed, a galaxy found closed, or an
+        install with no relay to send to.
         """
         if store is not self.mp_store or getattr(self, "mp_closed", False):
             return
@@ -4650,8 +3882,7 @@ class Launcher:
                   quiet_if_nowhere: bool = False):
         """Write the redacted copy, say what it holds, and send it on Send.
 
-        UI thread. The copy is written first and is what is sent, so "Read it
-        first" opens exactly the bytes that would go.
+        UI thread. "Read it first" opens exactly the file that is sent.
         """
         if getattr(self, "log_sending", False):
             self.say("log: one is already on its way")
@@ -4748,9 +3979,8 @@ class Launcher:
     def _log_refs_dialog(self, title: str, body: str, refs):
         """A modal box like `_choice_dialog` with one row per reference.
 
-        Each reference is in a read-only entry, so it can also be selected by
-        hand, with its send time and a Copy button beside it. Close, Escape and
-        the window's own close dismiss it.
+        Each reference is in a read-only entry with its send time and a Copy
+        button. Close, Escape and the window's own close dismiss it.
         """
         self.view.log_refs(title, body, [
             (rec["id"], log_ref_when(rec.get("sent", ""))) for rec in refs])
@@ -4766,9 +3996,8 @@ class Launcher:
     def start_ai(self, mode, fresh_galaxy: bool = True):
         """Start the opponent, and say clearly if there is not one to start.
 
-        `fresh_galaxy` is false only for Load, which reopens the galaxy the
-        opponent's map was built on. Every other path starts the shipped galaxy
-        over from its first turn, and the opponent must start over with it.
+        `fresh_galaxy` is false only for Load, which keeps the opponent's
+        discovered map; every other path starts the galaxy over.
         """
         import gamectl
         dropped = gamectl.reset_ai_state(
@@ -4821,7 +4050,6 @@ class Launcher:
                 pass
         self.say("opponent stopped" + (f" ({why})" if why else ""))
 
-    # ── Game controls ────────────────────────────────────────────────────────
     def _show_controls(self, show: bool):
         self.view.show_controls(show)
 
@@ -4832,10 +4060,8 @@ class Launcher:
     def _in_background(self, label, work, done=None):
         """Run `work()` off the UI thread with the controls disabled meanwhile.
 
-        Ending a turn takes as long as the engine takes, and a save
-        serialises the whole object graph. Doing either on the UI thread
-        freezes the window for the duration, which reads exactly like a crash, and this window is
-        also the game's server, so it must keep answering while the game works.
+        Ending a turn and saving are slow, and this window is also the game's
+        server, so it must keep answering while the game works.
         """
         self._ctl_busy = True
         self._set_controls_enabled(False)
@@ -4865,18 +4091,11 @@ class Launcher:
         self._in_background("ending the turn", work)
 
     def on_save(self):
-        """Save, which means two different things and says which one it means.
+        """Save in single player; send the turn now in multiplayer.
 
         In single player it writes a .dat the player can load again. During a
-        multiplayer turn it means send my turn now: the turn loop is already
-        driving this client on its own cadence, and a second SaveGame into
-        data\\games would be a file nothing reads, taken from a client another
-        thread is saving at the same moment. The loop is asked instead, which
-        is why the two can never run at once against one client; the loop is
-        the only thing that ever calls SaveGame while it is running.
-
-        That is also the answer to waiting for the upload cadence. A player who
-        has just done something they care about presses this and it goes.
+        multiplayer turn it asks the turn loop to send, since the loop is the
+        only thing that calls SaveGame while it is running.
         """
         if self.playing_now() is not None:
             self.mp_send_now.set()
@@ -4975,47 +4194,36 @@ class Launcher:
             os.path.join(self.data_dir, "ai_state"), civ)
         if done is not None and done >= turn:
             return True, ""
-        # Never trap the player behind a stuck or crashed opponent. After the
-        # timeout the button comes back and the log says why, which is a better
-        # failure than a window that will not let you play.
+        # A stuck or crashed opponent never traps the player: after the
+        # timeout the button comes back.
         waited = time.time() - (self._waiting_since or time.time())
         if waited > gamectl.AI_READY_TIMEOUT:
-            # Kept short: this shares one line with the turn number, and a
-            # message that overflows is a message nobody reads.
+            # Kept short: this shares one line with the turn number.
             return True, f"{civ} not responding"
         return False, f"{civ} is thinking"
 
     def _mp_cut_off(self) -> bool:
         """Whether the loop's last read of the galaxy's store failed.
 
-        While it did, nothing here knows where the galaxy is: the deadline on
-        hand is the last one heard, and a referee that has closed the turn
-        since looks the same from here as one that is off. So no stall is
-        judged, and the readouts say the galaxy cannot be reached instead.
+        While it did, the deadline on hand may be stale, so no stall is judged
+        and the readouts say the galaxy cannot be reached.
         """
         return getattr(self, "mp_unreachable", None) is not None
 
     def _mp_stalled(self) -> float:
         """How long the galaxy being followed has been stopped, or 0.
 
-        Only while the loop is between turns. During a turn the deadline is
-        ahead and there is nothing to judge; afterwards it is the moment the
-        referee should have closed the turn, and how far past it we are is how
-        long the referee has been gone.
-
-        Nothing here reads the store. The deadline arrives with the loop's own
-        `playing` reports and the turn length was read once when the galaxy
-        was opened, which is what keeps a once-a-second check free.
+        Only while the loop is between turns. Nothing here reads the store:
+        the deadline comes from the loop's `playing` reports and the turn
+        length was read when the galaxy was opened.
         """
         if (not self.mp_waiting or getattr(self, "mp_closed", False)
                 or getattr(self, "mp_unreachable", None) is not None):
             return 0.0
         stopped = stalled_for(self.mp_deadline, self.mp_turn_seconds)
         if stopped and getattr(self, "mp_probed", None) != self.mp_deadline:
-            # A closed galaxy stops ticking by design, and from here that is
-            # the same wait as a referee that is off. One state read per
-            # deadline tells them apart; it is off the UI thread because this
-            # runs once a second.
+            # A closed galaxy and a referee that is off look the same here.
+            # One state read per deadline, off the UI thread, tells them apart.
             self.mp_probed = self.mp_deadline
             threading.Thread(target=self._mp_probe_closed,
                              args=(self.mp_store,), daemon=True,
@@ -5028,32 +4236,18 @@ class Launcher:
         import gamectl
         if self.mp_store is not None:
             state, when = self.mp_capture or (None, time.time())
-            # The indicator is about capturing, and a closed game is not being
-            # captured from. It used to stick on "saving your turn..." for the
-            # whole wait between turns: the last capture attempt emits
-            # `capturing` before it asks the client, the client is gone so the
-            # attempt fails, and the send that follows has nothing new to
-            # store and returns without emitting anything. Nothing superseded
-            # it. While the final submission is still in flight there is
-            # something worth saying, so that case keeps the indicator.
+            # Once the client has closed, the capture indicator stays up while
+            # the final submission is sending, then for CAPTURE_HOLD seconds.
             age = time.time() - when
             if self.mp_client_gone and not self.mp_sending:
                 if age > CAPTURE_HOLD:
                     state = None
             self._show_capture(state, age, client_open=not self.mp_client_gone)
             if self.mp_client_gone:
-                # The turn number and the countdown are facts about a client
-                # that has gone. Holding them on screen until the next poll
-                # tells the player their turn is still open when it is not,
-                # and the one thing they do need to know instead is whether
-                # the launcher is still sending it.
-                #
-                # The wait is also where a dead referee is seen from. A turn
-                # the galaxy is never going to close looks exactly like one
-                # about to be closed, and this line is what a player waiting
-                # for a turn is looking at, so it is where the difference has
-                # to be said. Only over the wait: everything above it is this
-                # launcher's own work and is both truer and more urgent.
+                # With the client gone, the turn number and countdown are
+                # replaced by what the launcher is doing. A stopped galaxy is
+                # reported only over the wait; this launcher's own work
+                # outranks it.
                 stopped = self._mp_stalled()
                 label = ("sending your turn" if self.mp_sending
                          else "opening the game again" if self.mp_reopening
@@ -5063,30 +4257,19 @@ class Launcher:
                          else self.mp_note or "waiting for the next turn")
                 self.view.set_turn_label(label)
             else:
-                # In multiplayer the clock belongs to the store, not to the
-                # client: the client's own countdown is held far into the
-                # future so it can never compute a turn the referee has not.
-                #
-                # It does not belong to this method either. Asking the store
-                # here is two Firestore document reads, and this runs once a
-                # second while a game window is open: 7,200 an hour against an
-                # allowance of 50,000 a day for the whole project, for a
-                # countdown whose only work is to subtract. The turn loop reads
-                # the store against the deadline and reports what it found, so
-                # this counts down from that and asks nothing.
+                # The clock belongs to the store; the client's own countdown
+                # is held far in the future. This runs once a second, so it
+                # counts down from the deadline the loop reported and does not
+                # read the store.
                 try:
                     if self.mp_turn is None or self.mp_deadline is None:
-                        # Nothing heard from the loop yet, which is the gap
-                        # between a galaxy being followed and its first turn
-                        # being served. One read answers it and is kept.
+                        # Nothing heard from the loop yet. One read answers it
+                        # and is kept.
                         self.mp_turn, self.mp_deadline = self.mp_store.current()
                     turn = self.mp_turn
                     left = self.mp_deadline - time.time()
                     label = f"turn {turn} \u00b7 {fmt_left(left)} left"
-                    # A player who reopened the game into an overdue turn
-                    # would otherwise read "0:00 left" for as long as the
-                    # referee stays down, which is the countdown claiming a
-                    # turn is about to close.
+                    # An overdue turn says it has stopped, not "0:00 left".
                     stopped = stalled_for(self.mp_deadline,
                                           self.mp_turn_seconds)
                     if self._mp_cut_off():
@@ -5100,12 +4283,9 @@ class Launcher:
                 except Exception:
                     pass
             for key, _label in CONTROLS:
-                # Next Turn and Load are meaningless here. The referee owns the
-                # clock, and a player who ends their own turn early would be
-                # asking for a state it has not computed. Save stays, and means
-                # send this turn now: see on_save.
-                # Save is the one that comes and goes: there is a turn to
-                # send only while a client is up to take it from.
+                # Next Turn and Load are off: the referee owns the clock. Save
+                # means send this turn now (see on_save), live only while a
+                # client is up.
                 live = key == "save" and not self.mp_client_gone
                 self.view.set_control(key, enabled=live)
             self._set_save_text("Send Turn")
@@ -5127,8 +4307,8 @@ class Launcher:
             ready, why = self._opponent_ready(t)
             label = f"turn {t}" + (f" · {why}" if why else "")
             self.view.set_turn_label(label)
-            # Only the turn button is gated. Save and Load stay live: neither
-            # advances the clock, so neither can make the opponent miss a turn.
+            # Only the turn button is gated; Save and Load do not advance the
+            # clock.
             if not self._ctl_busy:
                 self.view.set_control("turn", enabled=ready)
         except Exception:
@@ -5141,8 +4321,8 @@ class Launcher:
     def _show_capture(self, state, age: float, client_open: bool = True):
         """Paint the capture indicator, or take it away when there is none.
 
-        Taken away rather than blanked, so that a launcher with no turn loop
-        running shows one dot and one status.
+        Removed, not blanked, so a launcher with no turn loop shows one dot
+        and one status.
         """
         self.view.show_capture(*capture_readout(state, age, client_open))
 
@@ -5157,13 +4337,8 @@ class Launcher:
     def on_close(self):
         """Ask before quitting out from under a running game.
 
-        The warning is about the player's turn rather than about the local
-        server. It used to name the server and TestBed, which is the reason
-        this matters and not the thing a player can act on, and it only
-        described single player: in multiplayer the launcher is also the turn
-        loop, so quitting it with the game open abandons whatever has not been
-        sent. One sentence covers both, because in both the answer is the same
-        and it is the only one the player has.
+        The warning is about the player's turn, which covers both single
+        player and the multiplayer turn loop.
         """
         if running_clients(self.client_exes):
             if not self.view.ask_ok_cancel(
@@ -5180,7 +4355,6 @@ class Launcher:
                 pass
         self.view.close()
 
-    # ── output ──
     def say(self, msg: str):
         self.view.append_log(msg)
         self._persist(msg)
@@ -5213,8 +4387,7 @@ class Launcher:
         self.msgs.put(msg)
 
     def _watch_game(self):
-        # The table's countdowns, which are re-listed only every two minutes
-        # and would otherwise sit there being wrong for most of that.
+        # The table's countdowns tick between listings.
         if self.page == "galaxies":
             self._tick_clocks()
 
@@ -5247,27 +4420,9 @@ class Launcher:
                 self._status_if_changed(
                     "Multiplayer: opening the game again", OK)
             elif mp_live and self.mp_client_gone:
-                # The status line is the server's. It says what is running,
-                # and between turns nothing is: the loop is waiting for the
-                # referee, which at four hours a turn is most of the day. A
-                # green "Multiplayer" through all of it reads as a game
-                # session to a player who closed the game themselves.
-                #
-                # That the galaxy is still being followed is not lost, it is
-                # on the Games page, where the row for a galaxy you are in
-                # says so. This line goes back to what it says when the
-                # launcher has just opened and is only holding the port.
-                #
-                # Unless the galaxy has stopped, which is the one thing about
-                # the wait worth putting here. It is not the claim this branch
-                # exists to avoid: it says nothing about a game being open or
-                # a loop being alive, it says the referee has not closed a
-                # turn that fell due long enough ago to be a fault, and that
-                # is a thing the player has to act on rather than watch.
-                #
-                # A store this machine cannot read is said ahead of it. From
-                # here that wait looks the same as a stopped referee, and the
-                # one who can act on it is the player rather than the operator.
+                # Between turns with the game closed, the status line returns
+                # to its ready state, unless the store cannot be reached or
+                # the galaxy has stopped (in that order).
                 stopped = self._mp_stalled()
                 if self._mp_cut_off():
                     self._status_if_changed(UNREACHABLE_NOTE, WARN)
@@ -5287,15 +4442,10 @@ class Launcher:
                 self._status_if_changed(*self._ready)
 
         # The controls belong to a running game, and only to a mode that asked
-        # for them: Tutorial and Demo have their own UI and must not grow a
-        # Next Turn button that means nothing there.
+        # for them: Tutorial and Demo have their own UI.
         if mp_live:
-            # The controls belong to a game window, not to the loop. Next Turn,
-            # Send Turn and Load all act on a running client, and the loop
-            # outlives the window by most of a four-hour turn, so leaving them
-            # up left three dead buttons and a turn readout on screen for
-            # hours. What is worth saying while waiting is already in the
-            # status line above them. They come back when the client does.
+            # The controls act on a running client, so they are shown only
+            # while the game window is up.
             self._show_controls(not self.mp_client_gone)
             self._refresh_turn()
             self.view.after(1000, self._watch_game)
@@ -5311,11 +4461,9 @@ class Launcher:
     def _watch_mp_client(self, up: bool):
         """Notice the multiplayer client coming and going.
 
-        The turn loop starts its own client, so there is no child handle to
-        watch and the only evidence is the process list this already reads once
-        a second. What it is for is the moment the player closes the game
-        window: the readout is a fact about that client and has to go at once,
-        while the final capture and its submission carry on behind it.
+        The turn loop starts its own client, so this watches the process list.
+        When the player closes the game window the readout goes at once, while
+        the final capture and submission carry on.
         """
         if up:
             self.mp_client_seen = True
@@ -5326,16 +4474,13 @@ class Launcher:
         if self.mp_client_seen:
             self.mp_client_seen = False
             self.mp_client_gone = True
-            # The last capture and its submission run on the worker thread and
-            # are not waited for here: the readout goes now, the sending says
-            # so until the loop reports the turn finished.
+            # The last capture and submission run on the worker thread;
+            # sending is shown until the loop reports the turn finished.
             if self.mp_turn_open:
                 self.mp_sending = True
                 self.say("multiplayer: the game has closed, sending your turn")
             else:
-                # The turn had already finished before the window closed, so
-                # there is nothing on its way and saying so would contradict
-                # the capture dot beside it.
+                # The turn had already finished, so nothing is on its way.
                 self.say("multiplayer: the game has closed")
 
     def _name_for(self, exe_names) -> str:
@@ -5366,8 +4511,7 @@ class Launcher:
                 elif isinstance(msg, tuple) and msg and msg[0] == "__games__":
                     _tag, rows, extra, err = msg
                     self._on_games(rows, extra, err)
-                    # A listing of the beta's directory is often this
-                    # install's first sign-in, so its code can appear now.
+                    # A listing is often the first sign-in.
                     self._show_player_code()
                 elif isinstance(msg, tuple) and msg and msg[0] == "__mp_closed__":
                     _tag, store, problem = msg
@@ -5438,9 +4582,8 @@ if __name__ == "__main__":
     try:
         sys.exit(main())
     except Exception:
-        # A windowed build has no console, so an unhandled exception would
-        # otherwise be a window that never appears and no explanation anywhere.
-        # A plain Windows box, since the window that failed may be the reason.
+        # A windowed build has no console. A plain Windows box, since the
+        # window that failed may be the reason.
         detail = traceback.format_exc()
         try:
             import ctypes

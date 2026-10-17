@@ -1,10 +1,9 @@
 """
 build_website_checklist.py: write Website_Checklist.md from the standards
-==========================================================================
     python docs/verification/build_website_checklist.py
 
-Every WCAG 2.2 success criterion and every Opquast v5 rule is written out with
-one disposition, the same scheme as the security checklist:
+Every WCAG 2.2 success criterion and every Opquast v5 rule, each with one
+disposition:
 
     apply      a checkbox, with sub-items for cosmicresurgence.com
     done       a ticked checkbox, with what verified it
@@ -16,10 +15,9 @@ A rule with no decision is written as TO TAILOR. A sub-item beginning "[x] " is
 ticked. Decisions are looked up by exact id, then by WCAG guideline or Opquast
 theme.
 
-Then the R items: requirements drawn from sources that are guidance rather
-than numbered rule lists (Core Web Vitals, Lighthouse, MDN HTTP Observatory,
-Google Search Central, Apache release download pages, Microsoft SmartScreen
-guidance). Those are paraphrased and cite their source.
+R items come from guidance without numbered rules (Core Web Vitals,
+Lighthouse, MDN HTTP Observatory, Google Search Central, Apache release
+download pages, Microsoft SmartScreen guidance), paraphrased with a citation.
 
 Sources are read from tools/checklists/website/ (gitignored):
   wcag22.json               W3C, Web Content Accessibility Guidelines 2.2,
@@ -43,7 +41,7 @@ ARCHIVE = ('The archive is 2000s HTML. Fix it in `site/stage.py` as a '
            'transform over every page where the fix is mechanical; otherwise '
            'judge it on the WCAG-EM sample (R6).')
 
-# ── WCAG 2.2 ─────────────────────────────────────────────────────────────────
+# WCAG 2.2
 W = {
     '1.1.1': ('apply', None, [
         '198 of 229 pages carry `alt` on images. Find the images with no `alt`, and give decorative ones `alt=""` in a `stage.py` transform.',
@@ -105,7 +103,7 @@ W = {
     '4.1.3': ('na', 'No status messages: the site is static.', []),
 }
 
-# ── Opquast v5 ───────────────────────────────────────────────────────────────
+# Opquast v5
 NO_SALES = ('na', 'Nothing is sold. The archived premium pages are history; their purchase forms are inert (R4).', [])
 NO_ACCOUNTS = ('na', 'The site has no accounts. The archived register and password forms are inert (R4).', [])
 NO_FORMS = ('na', 'No live forms (R4).', [])
@@ -254,7 +252,7 @@ O = {
     245: ('apply', None, ['Data is not laid out with spaces or images instead of tables.']),
 }
 
-# ── R items: guidance sources, paraphrased ───────────────────────────────────
+# R items: guidance sources, paraphrased
 R = [
     ('R1', 'Core Web Vitals, web.dev "Web Vitals" (Google, updated 31 Oct 2024)',
      'At the 75th percentile of page loads, Largest Contentful Paint is 2.5 s or less, Interaction to Next Paint 200 ms or less, and Cumulative Layout Shift 0.1 or less.',

@@ -1,29 +1,17 @@
 """
 trigger_save_message.py: make the client save by posting it a window message
-=============================================================================
+
     python trigger_save_message.py                 # post the save message
     python trigger_save_message.py --gameid 0
     python trigger_save_message.py --probe          # report the path, touch nothing
 
-This is the launcher half of the message save path M3 weighs against the remote
-thread in `trigger_save.py`. It performs no `OpenProcess` for write, no
-`VirtualAllocEx`, no `WriteProcessMemory` and no `CreateRemoteThread`. It finds
-the client's main window and posts a registered window message to it with
-`PostMessageW`, which is a cross-process call every antivirus product allows.
+Finds the client's main window and posts it a registered window message with
+`PostMessageW`. No process memory is written and no remote thread is created.
 
-A posted message only reaches `SaveGame` if the client carries a resident
-handler for it. A stock client does not: `SaveGame` at `0x0048B350` has one
-caller, the Save/Load dialog's command handler `0x0048B950`, which reads the
-dialog's own slot list and name control to build the call and so cannot run
-without that dialog. Installing the handler is a byte patch to the player
-client, recorded in the plan under M3 as the open part of this route and not
-done here. Until it exists this tool posts the message and the caller finds no
-new capture, which the capture step reports the same way it reports any save
-that did not land.
-
-The message name is registered with `RegisterWindowMessageW`, so the launcher
-and the resident handler agree on the id without hardcoding a number, and the id
-is unique on the session.
+The message reaches `SaveGame` only if the client carries a resident handler for
+it. A stock client does not: `SaveGame` at `0x0048B350` has one caller, the
+Save/Load dialog's command handler `0x0048B950`, which needs that dialog open.
+Without the handler no capture appears.
 """
 import argparse
 import ctypes
@@ -34,23 +22,19 @@ from ctypes import wintypes
 HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 
-# No bytecode for trigger_save in the checkout: Defender quarantines its .pyc.
-# This module does not import trigger_save, and sets the flag so an incidental
-# import on this path never writes that file. See game_cycle.import_without_bytecode.
+# No bytecode for trigger_save: Defender quarantines its .pyc.
 sys.dont_write_bytecode = True
 from client_proc import find_pid
 
 user32 = ctypes.WinDLL("user32", use_last_error=True)
 ENUMPROC = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
 
-# The launcher and the resident handler both register this exact string, so the
-# message id matches without either side naming a number. Keep the two in step.
+# Registered by both the launcher and the resident handler; the two must match.
 SAVE_MESSAGE_NAME = "CosmicSupremacyResurgenceSave"
 
 
 def save_message_id() -> int:
-    """The registered id for the save message, the same value for every caller
-    in the session that registers the same string."""
+    """The registered id for the save message."""
     mid = user32.RegisterWindowMessageW(SAVE_MESSAGE_NAME)
     if not mid:
         raise OSError(f"RegisterWindowMessageW failed: {ctypes.get_last_error()}")
@@ -66,9 +50,8 @@ def _pid_of(hwnd) -> int:
 def main_window(pid: int):
     """The client's main top-level window, or None.
 
-    The main window is the visible top-level window the process owns. A child
-    dialog is skipped, and so is an invisible top-level helper window, so the
-    message reaches the window whose procedure the resident handler hooks.
+    The visible top-level window with the longest title; child dialogs and
+    hidden helper windows are skipped.
     """
     best = []
 
@@ -88,9 +71,8 @@ def main_window(pid: int):
 def post_save(gameid: int = 0):
     """Post the save message to the running client. Returns (ok, detail).
 
-    `ok` reports only that the message was posted, not that a save followed:
-    confirmation is a new capture appearing, which the caller checks, exactly as
-    the remote-thread path leaves the DONE check to the stub server.
+    `ok` reports only that the message was posted; the caller confirms the save
+    by a new capture appearing.
     """
     pid, pname = find_pid()
     if not pid:

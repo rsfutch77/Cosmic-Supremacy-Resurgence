@@ -5,11 +5,8 @@
     folder that gets zipped and attached to a GitHub release.
 
 .DESCRIPTION
-    Output lands in dist\ (gitignored) so the 8 MB client binaries are never
-    committed twice. The repo keeps sources; this script produces artifacts.
-
-    Build dependencies (PyInstaller) go in release\.venv-build, kept separate
-    from server\.venv so a build never perturbs the dev environment.
+    Output lands in dist\ (gitignored). Build dependencies (PyInstaller) go in
+    release\.venv-build, separate from server\.venv.
 
 .PARAMETER Version
     Override the version. Defaults to the "version" field in manifest.json.
@@ -109,9 +106,8 @@ $ReleaseDir = Split-Path -Parent $MyInvocation.MyCommand.Definition
 $RepoRoot   = Split-Path -Parent $ReleaseDir
 $ClientDir  = Join-Path $RepoRoot 'client'
 $ServerDir  = Join-Path $RepoRoot 'server'
-# The four directories the multiplayer turn machinery lives in. They are flat
-# module directories rather than packages, so each has to be on the analysis
-# path in its own right.
+# The multiplayer turn machinery lives in flat module directories, so each one
+# must be on the analysis path.
 $ServerTools = Join-Path $ServerDir 'dev_tools'
 $ClientTools = Join-Path $ClientDir 'dev_tools'
 $AiPlayerDir = Join-Path $ClientTools 'ai_player'
@@ -137,11 +133,9 @@ function Assert-NoLooseBytecode {
     }
 }
 
-# The processes that have a file open, by name and pid, from the file system's
-# own list (FileProcessIdsUsingFileInformation). Opening the file for this asks
-# only for its attributes and shares everything, so it cannot itself be the
-# thing holding the file. Used to name the holder when the archive step is
-# refused, which is otherwise only a guess.
+# The processes that have a file open, by name and pid, from
+# FileProcessIdsUsingFileInformation. The query handle asks only for attributes
+# and shares everything, so it never holds the file itself.
 function Get-FileHolders {
     param([string]$Path)
     if (-not ('CsBuild.Holders' -as [type])) {
@@ -208,25 +202,20 @@ function Wait-FilesReleased {
 }
 
 # ── Code signing ──────────────────────────────────────────────────────────────
-# Authenticode signing of the executables this project builds. Everything here
-# is inert until signing is configured, and a configured signer that cannot
-# sign fails the build rather than producing a quietly unsigned release.
+# Authenticode signing. Inert until a signer is configured; a configured signer
+# that cannot sign fails the build.
 #
-# Two kinds of signer are configured, and setting both is an error:
+# Two kinds of signer; setting both is an error:
 #   CertStore        a certificate named by thumbprint in the current user's
 #                    personal store (Cert:\CurrentUser\My). A hardware token
 #                    appears there while it is plugged in.
 #   ArtifactSigning  Azure Artifact Signing, reached through signtool with
 #                    Microsoft's Azure.CodeSigning.Dlib.dll and a metadata JSON
 #                    file naming the endpoint, account and certificate profile.
-#                    No key or secret is held here: the dlib authenticates as
-#                    the signed-in Azure identity.
-# Get-SignToolArguments is the one place that turns a configuration into a
-# signtool command line, so a further kind is one more case there.
+#                    The dlib authenticates as the signed-in Azure identity.
 
-# When a signer is configured these two are signed with the rest unless
-# -SkipGameExecutables is given. CosmicSupremacy.exe is the original client and is
-# never signed with this project's certificate.
+# Signed with the rest unless -SkipGameExecutables. CosmicSupremacy.exe, the
+# original client, is never signed.
 $PatchedGameExecutables = @('CosmicSupremacy_Resurgence.exe', 'CosmicSupremacy_Player.exe')
 
 # Microsoft's documented requirements for signtool with the Artifact Signing
@@ -322,8 +311,8 @@ function Assert-TimestampUrl {
 function Resolve-CertStoreSigning {
     param([string]$Thumbprint, [string]$TimestampUrl, [string]$SignToolPath, [bool]$AllowUntrusted)
     $d = Get-SigningDefaults
-    # A thumbprint copied out of the certificate dialog carries invisible
-    # formatting characters, so everything that is not a hex digit is dropped.
+    # A thumbprint copied from the certificate dialog carries invisible
+    # formatting characters.
     $thumb = ($Thumbprint -replace '[^0-9A-Fa-f]', '').ToUpperInvariant()
     if ($thumb.Length -ne 40) {
         throw "signing thumbprint must be 40 hex digits (SHA-1), got $($thumb.Length)"
@@ -370,10 +359,9 @@ function Resolve-ArtifactSigning {
     if (-not $CertProfile) { $missing += 'certificate profile (-SignArtifactProfile or CS_SIGN_AS_PROFILE)' }
     if ($missing.Count -gt 0) { throw "Artifact Signing is half configured, missing: $($missing -join '; ')" }
 
-    # The shapes Microsoft documents: the regional endpoint host, an account
-    # name of 3 to 24 characters and a profile name of 5 to 100, both letters,
-    # digits and single hyphens, starting with a letter and ending with a
-    # letter or digit.
+    # Microsoft's documented shapes: account 3 to 24 characters, profile 5 to
+    # 100, letters, digits and single hyphens, starting with a letter and
+    # ending with a letter or digit.
     if ($Endpoint -notmatch '^https://[A-Za-z0-9]+\.codesigning\.azure\.net/?$') {
         throw "Artifact Signing endpoint must look like https://eus.codesigning.azure.net, got '$Endpoint'"
     }
@@ -457,9 +445,7 @@ function Resolve-ArtifactSigning {
 }
 
 # Turns the signing parameters into a configuration object, or $null when none
-# is set. Everything that can be wrong with the configuration is checked here,
-# at the start of the build, so a mistyped thumbprint or a missing dlib costs
-# seconds and not a PyInstaller run.
+# is set. All configuration errors are raised here, at the start of the build.
 function Resolve-SigningConfig {
     param(
         [string]$Thumbprint,
@@ -494,8 +480,7 @@ function Resolve-SigningConfig {
         -AllowUntrusted ([bool]$AllowUntrusted)
 }
 
-# The signtool command line for one file. The only function that knows how the
-# signer is reached.
+# The signtool command line for one file.
 function Get-SignToolArguments {
     param($Config, [string]$File)
     switch ($Config.Kind) {
@@ -511,8 +496,7 @@ function Get-SignToolArguments {
     }
 }
 
-# The metadata file the dlib reads. It names the account and profile and holds
-# no secret, so it is written fresh for each signing run.
+# The metadata file the dlib reads: endpoint, account and profile, no secret.
 function Write-SigningMetadata {
     param($Config)
     $dir = Split-Path -Parent $Config.MetadataPath
@@ -521,10 +505,9 @@ function Write-SigningMetadata {
     [IO.File]::WriteAllText($Config.MetadataPath, $json, (New-Object Text.UTF8Encoding($false)))
 }
 
-# Reads the signature back. A file that signtool reported success on but that
-# does not carry our signature, or a signature with no timestamp, is a failure.
-# An untrusted chain is accepted only when the configuration says so, which is
-# the case for a self-signed certificate used to exercise the step.
+# Reads the signature back. A missing or foreign signature, or one with no
+# timestamp, is a failure. An untrusted chain is accepted only with
+# AllowUntrusted.
 function Assert-SignedFile {
     param($Config, [string]$File)
     $sig = Get-AuthenticodeSignature -LiteralPath $File
@@ -542,9 +525,8 @@ function Assert-SignedFile {
     return $sig
 }
 
-# Signs and verifies each file. Does nothing when no signer is configured.
-# The timestamp server and the signing service are network services that fail
-# now and then, so a failed signtool run is repeated before the build gives up.
+# Signs and verifies each file, retrying signtool. Does nothing when no signer
+# is configured.
 function Invoke-ReleaseSigning {
     param($Config, [string[]]$Path, [int]$Attempts = 3, [int]$RetryDelaySeconds = 5)
     if (-not $Config) { return }
@@ -590,9 +572,8 @@ $modes = @($cfg.modes | Where-Object { $_.show })
 if ($modes.Count -eq 0) { throw 'manifest has no modes with "show": true' }
 Write-Host "Modes  : $(($modes | ForEach-Object { $_.id }) -join ', ')"
 
-# Placeholder cards ("enabled": false, e.g. the coming-soon Multiplayer button)
-# are shown in the launcher but ship no files. They must be filtered out before
-# any path is built from $_.exe, or Join-Path is handed $null and throws.
+# Placeholder cards ("enabled": false) ship no files and have no exe, so they
+# are filtered out before any path is built from $_.exe.
 $playable = @($modes | Where-Object { $_.exe -and $_.galaxy -and ($_.enabled -ne $false) })
 if ($playable.Count -eq 0) { throw 'manifest has no playable modes to ship' }
 $placeholders = @($modes | Where-Object { $playable -notcontains $_ })
@@ -602,8 +583,6 @@ if ($placeholders.Count -gt 0) {
 }
 
 # ── 0b. Signing configuration ─────────────────────────────────────────────────
-# Resolved before anything is built so a certificate that is not there, or a
-# missing signtool, fails now.
 Write-Step "Signing configuration"
 $Signing = Resolve-SigningConfig -Thumbprint $SignCertThumbprint `
     -TimestampUrl $SignTimestampUrl -SignToolPath $SignToolPath `
@@ -622,8 +601,6 @@ if ($Clean) {
 }
 
 # ── 2. Verify every source file the manifest asks for ─────────────────────────
-# Done before the venv work so a missing binary fails in two seconds rather than
-# after a PyInstaller run.
 Write-Step "Checking source files"
 $missing = @()
 foreach ($m in $playable) {
@@ -661,7 +638,7 @@ $piVer = & $VenvPy -c "import PyInstaller; print(PyInstaller.__version__)"
 Write-Ok "PyInstaller $piVer"
 
 # ── 4. Icon ───────────────────────────────────────────────────────────────────
-# Optional: a build without an icon is fine, a build that dies over one is not.
+# Optional: a failure here does not stop the build.
 Write-Step "Extracting application icon"
 $IconOut = Join-Path $BuildDir 'cosmic.ico'
 $IconSrc = Join-Path $ClientDir 'CosmicSupremacy.exe'
@@ -674,11 +651,8 @@ if ($LASTEXITCODE -ne 0 -or -not (Test-Path $IconOut)) {
 }
 
 # ── 4a. The window's skin ─────────────────────────────────────────────────────
-# The launcher's window is drawn with the game's own UI art, which belongs to
-# the game and is never committed. It is extracted fresh from the client this
-# build ships, into release\webui\art, and rides inside the launcher with the
-# rest of release\webui. Unlike the icon it is required: without it the window
-# has no frame, no buttons and no title bar.
+# The window is drawn with the game's UI art, which is never committed. It is
+# extracted from the shipped client into release\webui\art and is required.
 Write-Step "Extracting the window's skin"
 $WebUi = Join-Path $ReleaseDir 'webui'
 $ArtDir = Join-Path $WebUi 'art'
@@ -688,10 +662,8 @@ if ($LASTEXITCODE -ne 0) { throw 'extract_ui_art failed' }
 Write-Ok "skin written to $ArtDir"
 
 # ── 4b. WebView2 Runtime bootstrapper ─────────────────────────────────────────
-# The launcher's window needs Microsoft Edge WebView2 Runtime, which a few
-# Windows 10 machines lack. Microsoft's bootstrapper rides inside the launcher
-# so webview_runtime.ensure() can install it. It is fetched once into the build
-# folder and must carry Microsoft's valid signature, cached or not.
+# Bundled so webview_runtime.ensure() can install WebView2 where it is missing.
+# Fetched once into the build folder; it must carry Microsoft's valid signature.
 Write-Step "WebView2 Runtime bootstrapper"
 $WebView2Setup = Join-Path $BuildDir 'MicrosoftEdgeWebview2Setup.exe'
 if (-not (Test-Path $WebView2Setup)) {
@@ -727,11 +699,8 @@ Write-Ok "created $Stage"
 # ── 6. Freeze the launcher ────────────────────────────────────────────────────
 Write-Step "Freezing launcher (PyInstaller)"
 
-# The build name is decided here and nowhere else, so it has to be carried into
-# the exe rather than left for the launcher to guess. stamp_build writes it to
-# build.json and launcher.build_info() reads it back through bundled(). Without
-# this a build made with -Version 0.1.1 ships a launcher calling itself
-# whatever manifest.json says, and the version gate compares the wrong number.
+# The build name is decided here. stamp_build writes it to build.json, which
+# launcher.build_info() reads back through bundled().
 & $VenvPy (Join-Path $ReleaseDir 'stamp_build.py') $Version $BuildDir | Out-Null
 if ($LASTEXITCODE -ne 0) { throw 'stamp_build failed' }
 $BuildStamp = Join-Path $BuildDir 'build.json'
@@ -741,46 +710,31 @@ Write-Ok "stamped build $Version"
 $piArgs = @(
     '--noconfirm', '--onefile', '--windowed',
     '--name', 'CosmicSupremacyLauncher',
-    # manifest.json rides inside the exe: it is the build's own definition of
-    # what the modes are, not something a player is meant to retune.
+    # manifest.json rides inside the exe.
     '--add-data', "$Manifest;.",
-    # build.json rides beside it, written a few lines above by stamp_build.
+    # build.json, written above by stamp_build.
     '--add-data', "$BuildStamp;.",
-    # beta_notice.txt is the text a player reads before joining. It is a
-    # data file, so the import graph never sees it and a frozen build
-    # would raise FileNotFoundError where the notice should be.
+    # beta_notice.txt, the text a player reads before joining. A data file,
+    # invisible to the import graph.
     '--add-data', "$ServerDir\beta_notice.txt;.",
-    # The WebView2 Runtime installer, fetched and checked in step 4b.
+    # The WebView2 Runtime installer, fetched and checked above.
     '--add-data', "$WebView2Setup;.",
-    # The window: the page, its script and style, and the skin from step 4a.
+    # The window: the page, its script and style, and the skin.
     # web_view.webui_dir() reads it back through bundled().
     '--add-data', "$WebUi;webui",
-    # cs_server is imported inside a function after its environment is set, so
-    # name it explicitly rather than relying on the import graph walker.
+    # Imported inside a function, so invisible to the import graph.
     '--paths', $ServerDir,
     '--hidden-import', 'cs_server',
-    # gamectl backs the Next Turn / Save / Load buttons and is imported inside
-    # the handlers, not at module scope, so name it rather than rely on the
-    # import graph walker finding it.
+    # gamectl backs Next Turn / Save / Load and is imported inside the handlers.
     '--hidden-import', 'gamectl',
-    # The multiplayer turn machinery. multiplayer_modules() imports player_turn
-    # and turn_store once a galaxy is configured, and from there every module
-    # is reached from inside a function: save_parser and set_blob_player stamp
-    # the turn blob, game_cycle starts and closes the client, gamestate and
-    # ejbo_viewer read the running client to confirm it came up as the right
-    # civ, advance_turns holds the turn clock, trigger_save takes the capture
-    # back, canonical and order_diff decide whether a capture carries orders.
-    # inject_civ and inject_design are pulled in by save_parser's neighbours.
-    # merge_orders is the referee's, named here so a checkout and a release
-    # agree about what a store-aware build contains.
+    # The multiplayer turn machinery, every module reached from inside a
+    # function once a galaxy is configured.
     '--paths', $ServerTools,
     '--paths', $ClientTools,
     '--paths', $AiPlayerDir,
     '--hidden-import', 'player_turn',
     '--hidden-import', 'turn_store',
-    # The Games tab lists galaxies through these two, and both are
-    # imported inside functions, so the graph walker does not see them.
-    # Without them a frozen build reports that it cannot list galaxies.
+    # The Games tab lists galaxies through these two, imported inside functions.
     '--hidden-import', 'galaxy_directory',
     '--hidden-import', 'firebase_store',
     # beta_notice carries the text a player must see before joining.
@@ -797,19 +751,16 @@ $piArgs = @(
     '--hidden-import', 'ejbo_viewer',
     '--hidden-import', 'advance_turns',
     '--hidden-import', 'trigger_save',
-    # This install's Firebase identity, imported by player_token() once a
-    # galaxy that wants one is opened. Missing from the bundle it would be an
-    # ImportError swallowed into "no token", so a release would talk to the
-    # beta's function anonymously and only the function would notice.
+    # This install's Firebase identity, imported by player_token(). Missing, it
+    # fails silently as "no token".
     '--hidden-import', 'fb_auth',
     '--distpath', $Stage,
     '--workpath', (Join-Path $BuildDir 'work'),
     '--specpath', $BuildDir
 )
 if ($IconOut) {
-    # --icon sets the icon Explorer draws on the EXE. The taskbar button comes
-    # from the *window* icon instead, so the .ico also ships as data for
-    # web_view to set on the window at runtime.
+    # --icon is the EXE's icon in Explorer. The taskbar uses the window icon,
+    # so the .ico also ships as data for web_view.
     $piArgs += @('--icon', $IconOut, '--add-data', "$IconOut;.")
 }
 $piArgs += (Join-Path $ReleaseDir 'launcher.py')
@@ -823,8 +774,7 @@ Write-Ok "built $([math]::Round((Get-Item $BuiltExe).Length / 1MB, 1)) MB"
 Invoke-ReleaseSigning -Config $Signing -Path $BuiltExe
 
 # ── 6b. Freeze the AI opponent ────────────────────────────────────────────────
-# Only if a mode asks for one. A release with no "ai" key in any mode should not
-# carry a second executable it never starts.
+# Only if a mode has an "ai" key.
 $wantsAI = @($modes | Where-Object { $_.ai }).Count -gt 0
 if ($wantsAI) {
     Write-Step "Freezing AI opponent (PyInstaller)"
@@ -839,10 +789,8 @@ if ($wantsAI) {
         '--paths', $AiDir,
         '--paths', $ToolsDir,
         '--hidden-import', 'ejbo_viewer',
-        # Into game\, not the folder root. The player should open the release
-        # and see exactly one thing to click; the opponent is machinery the
-        # launcher starts, and a second executable beside the launcher is an
-        # invitation to run the wrong one. find_ai() already looks here.
+        # Into game\, so the launcher is the only executable at the folder
+        # root. find_ai() looks here.
         '--distpath', $GameDir,
         '--workpath', (Join-Path $BuildDir 'work-ai'),
         '--specpath', $BuildDir
@@ -858,7 +806,6 @@ if ($wantsAI) {
     Write-Ok "game\CosmicSupremacyAI.exe  ($([math]::Round((Get-Item $BuiltAI).Length / 1MB, 1)) MB)"
     Invoke-ReleaseSigning -Config $Signing -Path $BuiltAI
 
-    # Fail the build rather than ship a Single Player mode with nobody in it.
     foreach ($m in @($modes | Where-Object { $_.ai })) {
         if (-not $m.ai.civ) { throw "mode '$($m.id)' has an ai block with no civ name" }
         Write-Ok "$($m.id): opponent plays '$($m.ai.civ)'"
@@ -871,8 +818,7 @@ if ($wantsAI) {
 Write-Step "Adding game files"
 Copy-Item (Join-Path $ReleaseDir 'PLAYER_README.txt') (Join-Path $Stage 'README.txt')
 
-# The zip is where the original binaries actually get distributed, so the file
-# explaining whose they are travels with them rather than only living in the repo.
+# The file explaining whose the original binaries are travels with them.
 $License = Join-Path $RepoRoot 'LICENSE'
 if (Test-Path $License) {
     Copy-Item $License (Join-Path $Stage 'LICENSE.txt')
@@ -881,12 +827,9 @@ if (Test-Path $License) {
     Write-Warn2 'no LICENSE at the repo root - shipping without one'
 }
 
-# A client double-clicked in game\ shows a setup message that walks the player
-# through the original site's sign-up flow. patch_launch_messages.py writes each
-# client into the stage with that text pointing at the launcher instead, and the
-# renderer failure message pointing at the issue tracker rather than an email
-# address at the host, so the copy is the patch and the tracked binary is only
-# read.
+# patch_launch_messages.py writes each client into the stage with its setup
+# message pointing at the launcher and its renderer failure message pointing at
+# the issue tracker. The tracked binary is only read.
 $PatchMessages = Join-Path $ClientDir 'dev_tools\patch_launch_messages.py'
 function Copy-Client {
     param($src, $dst)
@@ -894,7 +837,7 @@ function Copy-Client {
     if ($LASTEXITCODE -ne 0) { throw "patch_launch_messages failed for $(Split-Path -Leaf $src)" }
 }
 
-# Several modes share one EXE, so copy the distinct set rather than per mode.
+# Several modes share one EXE.
 $copied = @{}
 foreach ($m in $playable) {
     if (-not $copied.ContainsKey($m.exe)) {
@@ -910,16 +853,12 @@ foreach ($m in $playable) {
 }
 
 # ── 7b. The multiplayer client ────────────────────────────────────────────────
-# A session mode names no EXE, because the turn loop writes the .dat for each
-# turn and picks the build itself, so the copy above never reaches it. It still
-# needs a client on disk, and not the single player one: a player's client must
-# never compute a turn the referee has not, or the state it hands back mixes
-# their orders with a simulation nobody authorised.
+# A session mode names no EXE, so the copy above never reaches its client. A
+# player's client must never compute a turn the referee has not.
 #
 # Player is TestBed plus one byte that silences the coat-of-arms prompt. It is
-# gitignored, being a patched copy of a tracked binary, so a checkout that has
-# not run patch_hide_setup_prompts.py --build ships TestBed instead. That is the
-# same fallback game_cycle.resolve_exe makes, one prompt worse.
+# gitignored, so a checkout that has not run patch_hide_setup_prompts.py
+# --build ships TestBed, the same fallback game_cycle.resolve_exe makes.
 $mpModes = @($modes | Where-Object { $_.session -eq 'multiplayer' })
 if ($mpModes.Count -gt 0) {
     Write-Step "Adding the multiplayer client"
@@ -937,27 +876,22 @@ if ($mpModes.Count -gt 0) {
                          'patch_hide_setup_prompts.py --build and re-run')
         }
     } else {
-        # Not fatal: the rest of the release is still worth shipping. The
-        # launcher checks for this client before it starts a turn and says so.
+        # Not fatal: the launcher checks for this client before a turn.
         Write-Warn2 ('no multiplayer client in client\ - the Multiplayer card ' +
                      'will refuse to start')
     }
 }
 
 # ── 7c. No loose bytecode ─────────────────────────────────────────────────────
-# PyInstaller carries every module, trigger_save included, inside the launcher's
-# PYZ archive, so a release has no .pyc files and no __pycache__ folders. A
-# loose trigger_save .pyc is what Defender quarantines as
-# Exploit:Python/Leivion.C in a checkout, so one appearing here fails the build
-# rather than reaching a player's scanner.
+# Every module rides in the launcher's PYZ archive, so a release has no .pyc
+# files. Defender quarantines a loose trigger_save .pyc as
+# Exploit:Python/Leivion.C.
 Write-Step "Checking for loose bytecode"
 Assert-NoLooseBytecode $Stage
 Write-Ok "no .pyc and no __pycache__ in $StageName"
 
 # ── 7d. The patched game executables ──────────────────────────────────────────
-# Signed whenever a signer is configured, so Smart App Control can judge the
-# clients the launcher starts as well as the launcher. -SkipGameExecutables
-# leaves them unsigned.
+# Signed whenever a signer is configured, unless -SkipGameExecutables.
 if ($Signing -and -not $SkipGameExecutables) {
     Write-Step "Signing the patched game executables"
     $gameSign = @($PatchedGameExecutables | ForEach-Object { Join-Path $GameDir $_ } |
@@ -971,11 +905,9 @@ if (-not $SkipZip) {
     Write-Step "Creating archive"
     $Zip = "$Stage.zip"
     if (Test-Path $Zip) { Remove-Item -Force $Zip }
-    # The executables copied a moment ago are held open while the antivirus
-    # scans them, and Compress-Archive fails PermissionDenied on one it cannot
-    # open. A build on 29 September named the holder as MsMpEng, Defender's
-    # engine. So the archive waits for the scan to finish rather than failing
-    # into it, and the retry below stays for a holder that outlasts the wait.
+    # The antivirus holds freshly copied executables open while it scans them,
+    # and Compress-Archive fails PermissionDenied on a held file. The archive
+    # waits for the scan; the retry below covers a holder that outlasts it.
     $staged = @(Get-ChildItem $Stage -Recurse -File -Filter *.exe | ForEach-Object { $_.FullName })
     $wait = Wait-FilesReleased $staged 60
     if ($wait.Holders.Count -gt 0) {
@@ -1002,8 +934,7 @@ if (-not $SkipZip) {
     }
     Write-Ok "$Zip  ($([math]::Round((Get-Item $Zip).Length / 1MB, 1)) MB)"
 
-    # Published in the release notes so a player can verify the download, and so
-    # "is this the build I tested?" has an answer later.
+    # Published in the release notes so a player can verify the download.
     $sha = (Get-FileHash $Zip -Algorithm SHA256).Hash.ToLower()
     Set-Content -Path "$Zip.sha256" -Encoding ascii -Value "$sha  $(Split-Path -Leaf $Zip)"
     Write-Ok "SHA256 $sha"

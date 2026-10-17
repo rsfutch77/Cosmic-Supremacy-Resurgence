@@ -3,46 +3,20 @@ test_turn_cadence.py: captures are cheap, uploads are not, so count both
 =========================================================================
     server\\.venv\\Scripts\\python.exe server\\tests\\test_turn_cadence.py
 
-`follow` used to capture and submit on one 20-second cadence. The two halves
-cost different things: a capture is a SaveGame and a local write, an upload is
-a Cloud Storage Class A operation, and docs\\Public_Beta_Plan.md H5 measures
-those as the binding quota for the whole beta. So they now run on two cadences,
-and what has to be true of them is a matter of counts rather than of one
-interval firing.
+`follow` captures and uploads on separate cadences. Each case drives a fake
+clock across a whole turn and counts captures, uploads and store reads, and
+checks that the last capture of the turn reaches the store before it closes.
 
-A cadence is easy to test vacuously. One interval proves nothing about two, so
-every case here drives a fake clock across a whole turn and asserts how many
-captures happened against how many uploads did, plus that the last capture of
-the turn reaches the store before the turn closes wherever the upload cadence
-happened to fall.
+Store reads follow a schedule taken from the deadline: often near it, rarely
+far from it. The cases also check that a turn published late is picked up
+promptly and that nothing a player presses waits out a sleep.
 
-Reading the store is the third count and the one H5 names as the largest number
-in the beta. Each read is a Firestore document read against 50,000 a day for
-the whole project, and a fixed two-second poll held through a turn and through
-the wait after it spends 7,414 of them on one four-hour turn, measured here.
-So the store counts its own reads and the cases below count them across a whole
-turn, against a schedule taken from the deadline: often near it, rarely far
-from it. A schedule cheap enough to miss a turn would be worse than the poll it
-replaced, so what is asserted beside the counts is that a turn published after
-its deadline is still picked up promptly and that nothing a player presses
-waits out a sleep.
+The resume and orderless-capture guards (see test_loop_guards.py) are checked
+again here, including after Play reopens a turn whose game window has closed.
+Reopen checks look at the bytes handed to the client and the submission left
+in the store.
 
-The guards that predate this are checked again in the same harness, because
-they are what a rewrite of this loop is most likely to lose: a turn already
-submitted for is resumed rather than re-served, and a capture carrying no
-orders never overwrites a submission this loop did not write. See
-test_loop_guards.py for the incidents behind both.
-
-Opening a turn again, which is what Play means on a galaxy this loop is
-following once its game window has closed, is checked against those same two.
-It is the one thing that asks the loop to serve a turn it has already played.
-What is asserted is the bytes handed to the client and the submission left
-standing in the store, never that a client was started: a reopen that starts a
-client on the pristine turn passes every check that counts serves and loses
-the player's orders anyway.
-
-No client, no store on disk and no real time: the clock, the client and the
-store are all fakes, so the loop under test is the only real thing here.
+The clock, the client and the store are all fakes.
 """
 import os
 import sys
@@ -67,7 +41,6 @@ def check(name, got, want):
         print(f'          wanted {want!r}')
 
 
-# ── the fakes ────────────────────────────────────────────────────────────────
 class Clock:
     """Time the loop is given, which only moves when the loop sleeps."""
 
@@ -78,8 +51,7 @@ class Clock:
         return self.t
 
     def sleep(self, seconds):
-        # A zero-length sleep still has to move, or a nap whose remainder
-        # rounds to nothing spins forever against a clock that never advances.
+        # A zero-length sleep still advances, so a nap cannot spin forever.
         self.t += max(float(seconds), 0.01)
 
 
@@ -95,15 +67,10 @@ class Store:
         self.blob = blob
         self.subs = {}
         self.writes = []                # (when, blob) per submit that landed
-        # Every look at the clock or the turn number. On Firestore each one is
-        # a document read against 50,000 a day for the whole project, which
-        # docs\\Public_Beta_Plan.md H5 measures as the binding quota of the
-        # beta, so what this counts is what a launcher left open actually
-        # costs. Counted here rather than asserted one sleep at a time: one
-        # long nap proves nothing about a whole turn.
+        # Every look at the clock or the turn number; each is a Firestore
+        # document read.
         self.reads = 0
-        # When the referee closes this turn and publishes the next, which is
-        # the state a player who comes back to a galaxy can land in.
+        # When the referee closes this turn and publishes the next.
         self.next_at = None
 
     def _tick(self):
@@ -123,11 +90,7 @@ class Store:
         return self.deadline - self.clock.now()
 
     def turn_blob(self, turn):
-        """Each turn's own pristine blob, so a serve names the turn it served.
-
-        One blob for every turn would let a test that checks what went into
-        the client pass on the wrong turn's bytes.
-        """
+        """Each turn's own pristine blob, so a serve names the turn it served."""
         return self.blob if turn == self.opened else self.blob + b'NEXT'
 
     def submission(self, civ, turn):
@@ -145,14 +108,8 @@ class Store:
 class Ask:
     """A player pressing a button the loop watches for, Save or Play.
 
-    A threading.Event in the launcher, and the loop treats both the same way:
-    it looks for one where it would otherwise sleep, and clears it when it
-    acts on it.
-
-    `at` is when they press it, or several times if they press it more than
-    once. A press that has not happened yet is not cleared by the loop tidying
-    up after a turn, which is what makes a press made between turns reach the
-    loop the way a real Event would.
+    Stands in for the launcher's threading.Event. `at` is when they press it,
+    or a list of times. A press that has not happened yet is not cleared.
     """
 
     def __init__(self, clock, at=None):
@@ -180,19 +137,14 @@ def run_turn(capture_every=5.0, uploads_per_turn=2, submit_every=None,
     it. `close_at` is the player closing the game window, after which no
     capture can be taken until the turn is opened again.
 
-    `reopen_at` is Play pressed on this galaxy with the window closed, and
-    `next_turn_at` is the referee publishing the next turn, so that a reopen
-    can be made to land on either side of a turn closing. `rounds` has to be
-    2 for a reopen to be visible at all: the first pass ends when the window
-    closes, and the pass that opens it again is the second.
+    `reopen_at` is Play pressed with the window closed, and `next_turn_at` is
+    the referee publishing the next turn. A reopen needs `rounds=2`: the first
+    pass ends when the window closes.
 
     `loses_orders` is a client that comes up without what was loaded into it.
-    It is the shape of the 18 September loss, and what it is here for is to
-    put an orderless capture against a submission carrying orders.
 
-    `stop_after` is the player pressing stop that many seconds in, which is
-    what lets a case run the loop across a stretch of a day and count what it
-    read. With `rounds` of 0 it is the only thing that ends the loop.
+    `stop_after` is the player pressing stop that many seconds in. With
+    `rounds` of 0 it is the only thing that ends the loop.
     """
     clock = Clock()
     store = Store(clock, seconds=seconds)
@@ -205,10 +157,7 @@ def run_turn(capture_every=5.0, uploads_per_turn=2, submit_every=None,
         store.writes.clear()            # a submission that was already there
 
     captures, served, serve_times, states = [], [], [], []
-    # What the client holds: the blob last loaded into it, and when. A turn
-    # opened again is opened on the player's own submission, so a capture
-    # taken afterwards carries what they played before the window closed as
-    # well as whatever they do next.
+    # What the client holds: the blob last loaded into it, and when.
     loaded = {'blob': base, 'at': 0.0}
 
     def player_state(now):
@@ -216,9 +165,7 @@ def run_turn(capture_every=5.0, uploads_per_turn=2, submit_every=None,
         return loaded['blob'] + b'ORDER' * done
 
     attempts = []
-    # The game window: it closes at `close_at` and the next serve opens it
-    # again. Counting serves rather than holding a flag is what lets one
-    # harness cover a window that stays shut and one that is opened again.
+    # The game window closes at `close_at` and the next serve opens it again.
     shut = {'after': None}
 
     def window_gone():
@@ -250,18 +197,15 @@ def run_turn(capture_every=5.0, uploads_per_turn=2, submit_every=None,
     player_turn.serve = fake_serve
     player_turn.collect = fake_collect
     player_turn.close = lambda: None
-    # A predicate rather than a constant when a test needs the two guards to
-    # tell a played turn from an empty one, which a constant cannot.
+    # A predicate when a test needs the guards to tell a played turn from an
+    # empty one.
     player_turn.carries_orders = (
         orders if callable(orders) else
         lambda served_b, sub, civ: orders)
     player_turn.describe_orders = lambda *a: 'summary'
-    # `collect` hands back a path that `sp.load_any` reads. The fake hands back
-    # the bytes themselves, so loading one is the identity.
+    # The fake `collect` hands back bytes, so loading one is the identity.
     player_turn.sp = types.SimpleNamespace(load_any=lambda b: b)
-    # `follow` asks game_cycle whether the client is still there, but only once
-    # a capture has already failed. Stubbed so this answers for the fake client
-    # rather than reading whatever happens to be running on this machine.
+    # Answers for the fake client when `follow` asks whether it is running.
     import game_cycle
     saved_pids = game_cycle.client_pids
     game_cycle.client_pids = lambda: [] if window_gone() else [4242]
@@ -291,17 +235,10 @@ def run_turn(capture_every=5.0, uploads_per_turn=2, submit_every=None,
                                  final=player_state(clock.now()))
 
 
-# ── the counts ───────────────────────────────────────────────────────────────
 def test_two_cadences():
-    """A capture every 5s and two uploads across a ten-minute turn.
-
-    Fails if the two halves share one interval, in either direction: equal
-    counts means nothing was separated, and 30 uploads is the old 20-second
-    submit still running the show.
-    """
+    """A capture every 5s and two uploads across a ten-minute turn."""
     print('two cadences across one turn')
-    # A player doing something every minute, so no capture is a repeat of the
-    # one before it and nothing is skipped for being identical.
+    # An edit every minute, so no capture is skipped as identical.
     r = run_turn(capture_every=5.0, uploads_per_turn=2, seconds=600.0,
                  edits_at=tuple(range(60, 600, 60)))
     check('captures land on the capture cadence, not the upload one',
@@ -316,11 +253,7 @@ def test_two_cadences():
 
 
 def test_cadences_are_parameters():
-    """Both halves move when their parameter moves, and neither drags the other.
-
-    Fails if either interval is a constant buried in the loop: the counts
-    would not change with the arguments.
-    """
+    """Each cadence follows its own parameter."""
     print('both cadences are parameters')
     r = run_turn(capture_every=2.0, uploads_per_turn=4, seconds=600.0,
                  edits_at=tuple(range(30, 600, 30)))
@@ -338,11 +271,7 @@ def test_cadences_are_parameters():
 
 
 def test_idle_turn_costs_one_upload():
-    """A turn nobody plays must not spend the quota once per interval.
-
-    Fails if the identical-capture skip was lost in the split: the counts
-    would be one upload per interval instead of one for the turn.
-    """
+    """A turn nobody plays costs one upload: identical captures are skipped."""
     print('an idle turn')
     r = run_turn(capture_every=5.0, uploads_per_turn=4, seconds=600.0,
                  edits_at=())
@@ -354,10 +283,8 @@ def test_idle_turn_costs_one_upload():
 def test_last_capture_always_sent():
     """Whatever the cadence did, the last capture reaches the store.
 
-    Two shapes: a player who does something after the final interim upload has
-    already gone, and a player who does something in the last second of the
-    turn. Fails if the final upload carries the state as of the last cadence
-    rather than as of the deadline.
+    Covers an edit after the last interim upload and one in the last seconds
+    of the turn: the final upload carries the state as of the deadline.
     """
     print('the last capture of the turn')
     r = run_turn(capture_every=5.0, uploads_per_turn=2, seconds=600.0,
@@ -380,12 +307,7 @@ def test_last_capture_always_sent():
 
 
 def test_save_sends_now():
-    """Save during a turn sends at once rather than at the next cadence.
-
-    Fails if the request waits for the upload interval, which is the whole
-    complaint: at a 300-second cadence an ignored request is invisible for five
-    minutes.
-    """
+    """Save during a turn sends at once, on top of the upload cadence."""
     print('send now')
     played = (60.0, 350.0, 500.0)
     quiet = run_turn(capture_every=5.0, uploads_per_turn=2, seconds=600.0,
@@ -403,11 +325,8 @@ def test_save_sends_now():
 
 
 def test_client_closing_does_not_lose_the_turn():
-    """The player closes the game window; the last capture still goes.
-
-    Fails if the loop reports the turn lost, or stores nothing, because the
-    final capture could not be taken from a client that is gone.
-    """
+    """The player closes the game window; the last capture still goes, and the
+    loop stops asking the gone client for captures."""
     print('the game window closing')
     r = run_turn(capture_every=5.0, uploads_per_turn=2, seconds=600.0,
                  edits_at=(120.0,), close_at=400.0)
@@ -418,11 +337,7 @@ def test_client_closing_does_not_lose_the_turn():
           r.uploads[-1][1], b'BASE' * 64 + b'ORDER')
     check('the loop does not call the turn lost',
           [k for _t, k, _f in r.states if k == 'lost'], [])
-    # The check that was missing, and the bug it would have caught: the first
-    # version kept asking a gone client for a capture every five seconds for
-    # the rest of the turn, about 40 times over the 200 seconds after it
-    # closed, logging `SaveGame did not report success` each time. Counting
-    # captures that succeeded cannot see that; only counting attempts can.
+    # Counts attempts, since failed captures never appear in `captures`.
     after = [t for t in r.attempts if t >= 400.0]
     check('it stops asking a client that has gone', len(after), lambda n: n <= 1)
     check('and the turn ends there rather than running to the deadline',
@@ -430,12 +345,7 @@ def test_client_closing_does_not_lose_the_turn():
 
 
 def test_indicator_states():
-    """The three things the launcher's indicator has to be able to say.
-
-    Fails if a capture starting, a capture held and a capture stored are not
-    distinguishable from the emitted states, which is what the launcher paints
-    from.
-    """
+    """The emitted states tell a capture starting, held and stored apart."""
     print('what the loop tells a UI')
     r = run_turn(capture_every=5.0, uploads_per_turn=2, seconds=600.0,
                  edits_at=(60.0, 400.0))
@@ -454,13 +364,9 @@ def test_indicator_states():
 
 
 def test_send_now_between_turns_does_not_spin():
-    """A Save pressed after the turn closed must not turn the wait into a spin.
+    """A Save pressed after the turn closed does not turn the wait into a spin.
 
-    `nap` wakes early when a send is asked for, and between turns nothing
-    clears that request, so an ungated version returns from every sleep at
-    once and the loop hammers the store while the clock never moves. Fails as
-    a store read count in the thousands, or as a clock that never advances
-    past the deadline.
+    `nap` wakes early for a send request, and between turns nothing clears it.
     """
     print('a request made between turns')
     clock = Clock()
@@ -486,9 +392,8 @@ def test_send_now_between_turns_does_not_spin():
     player_turn.describe_orders = lambda *a: 'summary'
     player_turn.sp = types.SimpleNamespace(load_any=lambda b: b)
     try:
-        # Pressed as the turn closes, and again well after it, while the loop
-        # is waiting for the referee. The second press is the one that has
-        # nowhere to go: there is no turn to send, and nothing clears it.
+        # Pressed as the turn closes, and again while the loop waits for the
+        # referee, when there is no turn to send.
         player_turn.follow(store, 'DemoPlayer', poll=2.0, rounds=0, stop=stop,
                            send_now=Ask(clock, (start + 60.0,
                                                 start + 200.0)),
@@ -506,37 +411,24 @@ def test_send_now_between_turns_does_not_spin():
           round(reads['n'] / elapsed, 2), lambda r: r <= 1.0)
 
 
-# ── Play again on a turn whose game window has closed ────────────────────────
 BASE = b'BASE' * 64
 
 
 def carries(served_b, sub, civ):
-    """A capture carries orders when it differs from what was served.
-
-    A predicate rather than a constant, so the two guards can tell a played
-    turn from an empty one the way the real `carries_orders` does.
-    """
+    """A capture carries orders when it differs from what was served."""
     return sub != served_b
 
 
 def tail(blob):
-    """What a blob carries beyond the pristine turn, so a check reads.
-
-    Comparing whole blobs prints two hundred bytes of BASE at the reader and
-    hides the five that differ, which is the half the check is about.
-    """
+    """What a blob carries beyond the pristine turn, for readable checks."""
     return blob[len(BASE):] if blob.startswith(BASE) else blob
 
 
 def test_play_again_opens_the_turn_on_the_submission():
-    """Play on a galaxy this loop is following, its window closed, opens it.
+    """Play with the window closed reopens the turn on the player's submission.
 
-    The failure that matters is not that no client starts. It is that the
-    client starts on the store's pristine turn: that is the 18 September loss
-    with a button on it, an orderless state served over a played one and then
-    captured back over the submission carrying the order. So every check here
-    is on the bytes that went into the client and on what the store holds
-    afterwards, and none of them is satisfied by a serve having happened.
+    Checks the bytes that went into the client and what the store holds
+    afterwards, so the pristine turn is never served over a played one.
     """
     print('opening the turn again')
     r = run_turn(seconds=600.0, edits_at=(30.0, 400.0), close_at=100.0,
@@ -552,8 +444,7 @@ def test_play_again_opens_the_turn_on_the_submission():
           [f.get('turn') for _t, k, f in r.states if k == 'serving'], [7, 7])
     check('the loop says what it is doing',
           [k for _t, k, _f in r.states if k == 'reopening'], ['reopening'])
-    # The trap this feature could have been: a window that opens, shows the
-    # turn, and quietly drops everything done in it.
+    # What is done in the reopened window is captured and stored.
     check('captures resume after it opens',
           len([t for t, _b in r.captures if t > 205.0]), lambda n: n >= 70)
     check('an edit made after it opened reaches the store',
@@ -567,10 +458,8 @@ def test_play_again_opens_the_turn_on_the_submission():
 def test_reopen_after_the_turn_closed_serves_the_new_turn():
     """The referee publishes while the window is shut, then Play is pressed.
 
-    The old turn is closed: anything played in it now is refused at the
-    submission, and capturing a dead turn back over the submission standing
-    for it is the destructive half of the same failure. Fails if the loop
-    opens the turn it remembers rather than the turn the store is on.
+    The loop opens the turn the store is on, and the closed turn keeps its
+    submission.
     """
     print('opening again after the turn closed')
     r = run_turn(seconds=600.0, edits_at=(30.0,), close_at=100.0,
@@ -590,15 +479,8 @@ def test_reopen_after_the_turn_closed_serves_the_new_turn():
           len(r.served), 2)
 
 
-# ── what the store is asked for, which is the quota that binds ───────────────
 def test_the_read_schedule():
-    """The shape of the gap, which every count below comes out of.
-
-    Fails if the gap stops being tied to the deadline: a constant does not move
-    with the distance, and a schedule that only ever backs off does not come
-    back to the floor on the far side of a deadline, which is where a turn
-    actually appears.
-    """
+    """The poll gap follows the distance to the deadline on both sides of it."""
     print('the read schedule')
     g = player_turn.poll_gap
     check('four hours out, the ceiling', g(14400.0), 300.0)
@@ -615,20 +497,12 @@ def test_the_read_schedule():
 
 
 def test_reads_across_a_whole_turn():
-    """How many times the store is read per turn, which is what H5 pays for.
+    """How many times the store is read across a whole turn.
 
-    Measured against the fixed two-second poll in this same harness: 1,084
-    reads across a fifteen-minute turn and 7,414 across a four-hour one, which
-    at six turns a day is 44,484 for one player out of 50,000 for the project.
-
-    Fails for any schedule that keeps a short interval through the stretches of
-    a turn where nothing can happen. The thresholds sit an order of magnitude
-    under the fixed poll, so nothing close to the old behaviour passes, and the
-    lower bounds fail a schedule that has stopped reading the store at all.
+    The lower bounds fail a schedule that has stopped reading the store.
     """
     print('what a turn costs at the store')
-    # A fifteen-minute turn played to its deadline with the game window open,
-    # which is the shape with the most deadlines in a day.
+    # A fifteen-minute turn played to its deadline with the game window open.
     r = run_turn(seconds=900.0, edits_at=tuple(range(60, 900, 60)))
     check('a fifteen-minute turn played out is under a hundred reads',
           r.reads, lambda n: 50 <= n <= 110)
@@ -636,8 +510,7 @@ def test_reads_across_a_whole_turn():
           len(r.captures), lambda n: 176 <= n <= 182)
     check('as is the upload budget', len(r.uploads), 2)
 
-    # A four-hour turn whose player closes the game window five minutes in,
-    # which is H5's launcher left open all day.
+    # A four-hour turn whose player closes the game window five minutes in.
     r = run_turn(seconds=14400.0, close_at=300.0, stop_after=14400.0,
                  rounds=0, edits_at=(120.0,))
     check('a four-hour turn spent waiting is under two hundred',
@@ -649,13 +522,10 @@ def test_reads_across_a_whole_turn():
 
 
 def test_a_turn_published_late_is_not_waited_out():
-    """The referee ticks on its own clock, so a turn arrives after its deadline.
+    """A turn published after its deadline is served promptly.
 
-    N5 measures a tick at about ten seconds, and a referee can be a great deal
-    later than that. A schedule that sleeps to the deadline and then backs off
-    would be blind exactly where a turn appears. Fails if the second serve is
-    more than a floor behind a turn published just after its deadline, or more
-    than a twentieth of the lateness behind one published long after it.
+    Within a floor gap when it is just late, and within a twentieth of the
+    lateness when it is long overdue.
     """
     print('a turn published late')
     r = run_turn(seconds=600.0, close_at=100.0, next_turn_at=630.0,
@@ -672,13 +542,7 @@ def test_a_turn_published_late_is_not_waited_out():
 
 
 def test_the_wide_gap_does_not_stretch_the_capture_cadence():
-    """The store read and the capture run on separate clocks, deliberately.
-
-    The comment on the nap at the end of the play loop is why: sleeping a whole
-    interval regardless stretches the capture cadence to the interval above it,
-    and the interval above it is now five minutes rather than two seconds.
-    Fails as twelve captures across an hour instead of seven hundred.
-    """
+    """A wide store-read gap leaves the capture cadence at five seconds."""
     print('a wide gap and a five-second capture')
     r = run_turn(seconds=3600.0, edits_at=tuple(range(60, 3600, 60)))
     check('an hour-long turn is still captured every five seconds',
@@ -689,21 +553,16 @@ def test_the_wide_gap_does_not_stretch_the_capture_cadence():
 
 
 def test_stop_and_send_survive_the_long_sleep():
-    """A player never waits out a gap the schedule chose.
+    """Stop, Send Turn and Play are answered within a `nap`, not a poll gap.
 
-    The three presses that must not wait: stop, Send Turn during a turn, and
-    Play between turns. All three land where the schedule is at its widest, so
-    a version that sleeps its gap in one go fails each of them by minutes
-    instead of by the half second `nap` allows.
+    All three land where the schedule is at its widest.
     """
     print('what a player presses')
     r = run_turn(seconds=14400.0, close_at=100.0, stop_after=5000.0, rounds=0)
     check('stop, pressed inside a five-minute sleep, ends the loop at once',
           r.elapsed, lambda t: 5000.0 <= t <= 5001.0)
 
-    # Asked between two captures rather than on one, so that answering it
-    # means `nap` woke for it rather than the capture cadence happening to
-    # land on the same second.
+    # Asked between two captures, so only `nap` waking can answer it in time.
     r = run_turn(seconds=14400.0, edits_at=(60.0,), close_at=200.0, rounds=1,
                  ask_at=Clock().now() + 102.0)
     check('Send Turn is answered when asked, not when the store is next read',
@@ -715,14 +574,9 @@ def test_stop_and_send_survive_the_long_sleep():
           r.serve_times[1], lambda t: 5000.0 <= t <= 5001.0)
 
 
-# ── the guards that predate the two cadences ─────────────────────────────────
 def test_guards_survive():
-    """The two turn-12 guards, in the rewritten loop.
-
-    Fails exactly as the 18 September incident did: the pristine turn served
-    over a played one, or an orderless capture written over a stranger's
-    submission.
-    """
+    """A played submission is resumed, and an orderless capture never replaces
+    a submission this loop did not write."""
     print('the guards from turn 12')
     played = b'BASE' * 64 + b'COLONISE'
     r = run_turn(seconds=120.0, prior=played, orders=True)
@@ -739,11 +593,9 @@ def test_guards_survive():
     check('an orderless submission is served fresh rather than resumed',
           r.served[0], b'BASE' * 64)
 
-    # The same guard, on the far side of a reopen. Opening a turn again starts
-    # a fresh pass, so `sent` is empty and the submission standing for the
-    # turn is once more one this pass did not write. A client that comes up
-    # without what was loaded into it is then exactly the turn-12 shape, and
-    # the capture it hands back must not land.
+    # The same guard after a reopen. A reopen starts a fresh pass, so the
+    # standing submission is one this pass did not write, and an empty
+    # client's capture must not land.
     r = run_turn(seconds=600.0, edits_at=(30.0,), close_at=100.0,
                  reopen_at=Clock().now() + 200.0, rounds=2, orders=carries,
                  loses_orders=True)

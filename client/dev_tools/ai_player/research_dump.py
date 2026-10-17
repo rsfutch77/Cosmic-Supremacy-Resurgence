@@ -1,6 +1,6 @@
 """
-research_dump.py: read the technology table out of the running client
-======================================================================
+research_dump.py: read the technology table out of the running client.
+
     python research_dump.py              # human-readable dump of all 80
     python research_dump.py --emit       # Python literals for research.py
     python research_dump.py --diff       # compare live against research.py
@@ -67,7 +67,7 @@ def read_table(snap):
 
 
 def tree_of(name):
-    """The UI presents three trees. The split is derivable from the names."""
+    """Which of the UI's three research trees a tech belongs to, by name."""
     if name.startswith("Doctrine:"):
         return "doctrine"
     if name.startswith("Planetary Defense"):

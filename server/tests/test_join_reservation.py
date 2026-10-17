@@ -4,30 +4,16 @@ test_join_reservation.py: a join keeps off a planet a ship is flying to
     server\\.venv\\Scripts\\python.exe server\\tests\\test_join_reservation.py
 
 `inject_civ.pick_homeworld` takes the uncolonised planet furthest from
-everything claimed. A planet nobody owns is still claimed when a ship is under
-orders to fly there, and on the galaxies in this repository those two never
-disagree by accident: the maximin pick lands hundreds of units from anything
-anyone is doing. So a test that injects a civ and finds it did not take a
-colonisation in flight has proved nothing unless the collision was arranged
-first.
+everything claimed, and a planet a ship is under orders to fly to counts as
+claimed. The collision is arranged: the test finds the planet the pick returns
+with nothing reserved, orders a colony ship there, and then injects. With
+reservations suppressed, the same joins take the contested planet.
 
-That is what this does. It reads which planet the pick returns with nothing
-reserved, orders a colony ship to that exact planet, and then injects. The
-mutation check is the other half: calling the picker the way it was called
-before reservations existed, with an empty `taken`, takes the contested planet
-every time, so the passing assertion is not vacuous.
+Twelve joins in a row on one blob check the object ids, the `GLXY` civ count
+and the high-water id. Loading such a galaxy in the client is
+`server/dev_tools/join_acceptance.py`.
 
-The repeated-join arithmetic is here as well, because it costs nothing and is
-the half of K2 a client cannot make more true: twelve joins in a row on one
-blob, with the object ids, the `GLXY` civ count and the high-water id checked
-after each one. What a client is needed for, and what
-`server/dev_tools/join_acceptance.py` does instead, is that such a galaxy then
-loads, plays and ticks.
-
-`client/SinglePlayerGalaxy.dat` is the fixture for the reason `test_wipe_civ.py`
-and `test_inject_donor.py` use it: it is tracked. The galaxies that carry
-colonisations in flight of their own are gitignored captures, and a test cannot
-depend on one.
+The fixture is `client/SinglePlayerGalaxy.dat`, which is tracked.
 """
 import os
 import struct
@@ -94,7 +80,6 @@ def main():
     print(f'{os.path.basename(GALAXY)}: {len(blob):,} bytes, '
           f'{len(icv.owner_records(blob))} civ(s)')
 
-    # ── the collision, arranged ──────────────────────────────────────────────
     print('\na colony ship is sent to the planet the picker wants')
     contested = icv.pick_homeworld(icv.planet_records(blob),
                                    icv.reserved_planets(blob), margin=0.0)
@@ -107,9 +92,7 @@ def main():
           [d['kind'] for d in icv.ship_destinations(staged)
            if d['ship'] == ship], ['planet'])
 
-    # The pick is re-taken on the staged blob rather than reused from above:
-    # adding a ship moves offsets, and the point is what the picker says about
-    # the blob that is actually injected into.
+    # Re-taken on the staged blob, since adding a ship moves offsets.
     unreserved = icv.pick_homeworld(icv.planet_records(staged), set(),
                                     margin=0.0)
     check('with nothing reserved the picker takes the contested planet',
@@ -125,7 +108,6 @@ def main():
           next(p['owner'] for p in icv.planet_records(joined)
                if p['id'] == home_id), oid_of(joined, 'Ceti'))
 
-    # ── the orders in flight ─────────────────────────────────────────────────
     print('\nevery order in flight survives the join byte for byte')
     after = routs(joined)
     check('the same ships carry a ROUT', sorted(after), sorted(before))
@@ -133,7 +115,6 @@ def main():
         check(f'ship {sid} keeps its ROUT unchanged', after.get(sid),
               before[sid])
 
-    # ── twelve joins on one blob ─────────────────────────────────────────────
     print('\ntwelve joins in a row')
     grown = staged
     base_civs = len(icv.owner_records(grown))
@@ -159,8 +140,7 @@ def main():
     check('the result still reparses section by section',
           bool(sp.parse_blob(grown)))
 
-    # The donor cannot drift onto a civ the run itself added, which is what
-    # makes twelve joins twelve clones of one seat rather than a chain.
+    # The donor never drifts onto a civ the run added.
     seat = icv.seat_one(icv.owner_records(grown))['name']
     smallest = min(icv.owner_records(grown), key=lambda o: o['ln'])['name']
     check('seat one is still the civ it was before the twelve joins',
@@ -168,8 +148,7 @@ def main():
     check('the rule the default replaced would have drifted onto a newcomer',
           smallest.startswith('Join'))
 
-    # And the reservation is what keeps those twelve off the contested planet.
-    # With the destinations hidden, the same twelve joins take it.
+    # Control: with the destinations hidden, the same twelve joins take it.
     print('\nthe same twelve joins with reservations suppressed')
     real = icv.ship_destinations
     try:

@@ -1,14 +1,12 @@
 """
 patch_hide_setup_prompts.py: silence the one-time setup prompts in a client
-============================================================================
+
     python patch_hide_setup_prompts.py --build     # make the player exe
     python patch_hide_setup_prompts.py --status
     python patch_hide_setup_prompts.py --revert    # delete it
 
 `--build` copies `CosmicSupremacy_TestBed.exe` to `CosmicSupremacy_Player.exe`
-and patches the copy. **The tracked binaries are never modified.** A patched
-client in the working tree is one `git commit -a` away from entering the history,
-which is why every patch here writes somewhere gitignored instead.
+and patches the copy. The tracked binaries are never modified.
 
 The client has three one-time setup prompts, each its own Win32 dialog resource:
 
@@ -16,40 +14,18 @@ The client has three one-time setup prompts, each its own Win32 dialog resource:
     218   Customize Your Civilization
     225   Pick your Civilization Name and Coat of Arms
 
-On a served turn they are all in the way. A client that comes up behind a modal
-prompt is not a turn a player can take, and the launcher cannot dismiss one on
-the player's behalf without deciding something that belongs to the player.
-
-**210 and 218 need no patch on the right build.** They are gated correctly as
-shipped; they became unconditional only in `CosmicSupremacy_Resurgence.exe`,
-where two of the six T1-T5 turn-pipeline bypasses land on their guards:
+210 and 218 are gated correctly in the TestBed build. In
+`CosmicSupremacy_Resurgence.exe` two turn-pipeline bypasses NOP their guards:
 
     0x0056E0EF   JNZ 0x56E189, skip when [session+0x19B] is set   -> 6x NOP
     0x0056E133   JZ  0x56E189, skip when 0x508C60() returns 0     -> 2x NOP
 
-So a player's client wants `CosmicSupremacy_TestBed.exe`, which is the same
-binary without those 22 bytes, and a player must not compute turns anyway.
-
-**225 is what this patch is for.** Its decision function `0x0056E700` is the only
-path that opens it, and it is gated on the local civ's `Owner:384` being
-non-zero. That field is a COUNT: the civ's `OWPR` section is exactly
-`138 + Owner:384` bytes, so writing a value adds that many one-byte records whose
-meaning is undecoded and quite possibly the civilisation traits. Setting it to
-silence a cosmetic prompt would fabricate game state, so this patch returns from
-the decision function instead, which fabricates nothing.
+225 is opened only by the decision function `0x0056E700`, gated on the local
+civ's `Owner:384` being non-zero. `Owner:384` is a count (the `OWPR` section is
+`138 + Owner:384` bytes) and must not be written to silence the prompt. This
+patch makes the decision function return immediately:
 
     0x0056E700   sub esp, 0x18   ->   ret
-
-One byte, no instruction lengths change, no branch targets move. The dialog and
-every path that builds it are left intact, so a caller that wants to open it can
-still do so.
-
-[ ] **The real fix is a one-time civilisation setup step.** In the original, a
-player chose their name and coat of arms once and the blob carried it forever,
-which is why the field was non-zero and the prompt never came back. Our galaxies
-are generated locally and never go through that flow. Until the launcher or the
-site offers it, this patch stands in for it, and `Owner:384` stays untouched
-rather than guessed at.
 """
 import argparse
 import os

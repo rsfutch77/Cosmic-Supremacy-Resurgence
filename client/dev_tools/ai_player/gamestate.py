@@ -1,9 +1,8 @@
 """
-gamestate.py: Read-only snapshot of the running game for the AI player
-=======================================================================
-Wraps ejbo_viewer's raw EJBO scan in the entity model the strategy rules are
-written against (see STRATEGY.md §2). Everything here is a READ; no method in
-this module writes to the game. Actuators live in actions.py.
+gamestate.py: Read-only snapshot of the running game for the AI player.
+
+Wraps ejbo_viewer's EJBO scan in the entity model of STRATEGY.md §2. Nothing
+here writes to the game; actuators live in actions.py.
 """
 import collections
 import math
@@ -14,39 +13,27 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import ejbo_viewer as ev
 
-# ── .data statics (stable across launches) ─────────────────────────────────
+# .data statics, stable across launches.
 TURN_COUNTER     = 0x008578E8
 LOCAL_PLAYER     = 0x00857904   # ref node -> the human civ's Owner
 
-# PlanetProperties is embedded in the Planet allocation at +0x60, which is
-# planet_tag + 88; the same frame the annotations call Planet:88. Every
-# __thiscall on a PlanetProperties takes ECX = planet_tag + this.
+# PlanetProperties sits at planet_tag + 88 (allocation + 0x60).
 PLANET_PROPERTIES = 88
 
-# Ship:52 order types the UI can issue. 6 (Bio bomb) and 8 are real but the AI
-# has no use for them: bio-bombing requires war and is a civilian-killing weapon,
-# and 8 is unidentified beyond carrying Ship:61 = 0x0B.
+# Ship:52 order types the UI can issue. Type 8 is unidentified.
 ORDER_TYPES = {0: "none", 1: "move", 2: "scout", 3: "colonize", 4: "attack",
                5: "conquer", 6: "bio bomb", 7: "move near"}
 
-# The three that ALSO require Ship:56, the order's target-object reference node
-# (Ship::HasActiveTargetedOrder, 0x004D9880). Colonize and Scout carry their
-# target as coordinates instead, which is why the coordinate-only writer works
-# for them and not for these.
+# Order types that also require Ship:56, the target-object reference node
+# (Ship::HasActiveTargetedOrder, 0x004D9880). Colonize and Scout use coordinates.
 TARGETED_ORDER_TYPES = (1, 4, 7)
 NULL_NODE        = ev.NULL_REF_NODE      # 0x00857C54
 PILING_UP_WEALTH = 0x0080B540            # shared "generating wealth" singleton
 FACILITY_VFTABLE = 0x00752BA4
 
-# ── Id tables (all CONFIRMED in the annotations unless marked) ─────────────
-# Names beyond the observed ids come from the wiki manual joined to the research
-# grants table, then checked against the live tables; see
-# docs/CosmicSupremacy_Stat_Tables.md for the derivation and the full stats.
-# Job 3 is the UI's "Military": a stationed military unit and a ship crew member
-# are the same citizen record with job 3, confirmed by drafting one and reading
-# Planet:168 back as job id 3. The UI string table at 0x0035209D lists exactly six
-# jobs, Military / Banker / Scientist / Miner / Worker / Farmer, which are ids
-# 3/6/2/5/1/0. Id 4 is in no table and no UI list; treat it as unused.
+# Id tables; full stats in docs/CosmicSupremacy_Stat_Tables.md. Job 3 is the
+# UI's "Military": stationed units and ship crew are citizen records with job 3.
+# Job id 4 is unused.
 JOBS       = {0: "farmer", 1: "worker", 2: "scientist", 3: "military/crew",
               5: "miner", 6: "banker"}
 CREW_JOB   = 3
@@ -74,10 +61,8 @@ def is_ptr(v):
     return v is not None and PTR_LO < v < PTR_HI
 
 
-# ── Object wrapper ─────────────────────────────────────────────────────────
 class Obj:
-    """One EJBO-tagged object. Field access is by the offset the annotations
-    use, so code reads the same way the annotation file does: p.u32(104)."""
+    """One EJBO-tagged object, with fields read by annotation offset: p.u32(104)."""
 
     def __init__(self, snap, raw):
         self.snap = snap
@@ -92,7 +77,7 @@ class Obj:
         n = f" {self.name!r}" if self.name else ""
         return f"<{self.type} #{self.id}{n} @0x{self.addr:08X}>"
 
-    # -- primitive reads; None when the offset is outside the class window --
+    # Primitive reads return None when the offset is outside the class window.
     def u32(self, off):
         f = self._f.get(off)
         return None if f is None else f["u32"]
@@ -102,9 +87,7 @@ class Obj:
         return None if f is None else f["i32"]
 
     def f32(self, off):
-        """Decode from the raw bytes. The viewer's own 'f32' key is a formatted
-        string that is blank whenever the value does not look float-ish, so it
-        cannot be used for a field known to be a float."""
+        """Decode a float from the raw bytes (the viewer's 'f32' key may be blank)."""
         f = self._f.get(off)
         if f is None:
             return None
@@ -136,9 +119,7 @@ class Obj:
                                         for i in range(0, span, stride)]
 
     def node_target(self, off):
-        """Reference-node idiom: the field points at a node whose first dword is
-        the target's allocation start. Returns that start, or None for the static
-        null node."""
+        """Follow a reference node to the target's allocation start, or None."""
         v = self.u32(off)
         if not is_ptr(v) or v == NULL_NODE:
             return None
@@ -146,7 +127,6 @@ class Obj:
         return t if is_ptr(t) else None
 
 
-# ── Entities ───────────────────────────────────────────────────────────────
 class Civ(Obj):
     @property
     def civ_name(self):  return self.sso(-44)
@@ -168,13 +148,12 @@ class Civ(Obj):
 
     @property
     def unlocked_facilities(self):
-        """Facility TYPE ids this civ may build, from the [vftable, id] vector."""
+        """Facility type ids this civ may build, from the [vftable, id] vector."""
         return [struct.unpack_from("<I", r, 4)[0] for r in self.vec(172, 8)]
 
     @property
     def stocks(self):
-        """{resourceId: amount}: 0 metal, 1 deuterium, 2 radioactives,
-        3 crystal, 4 exotics."""
+        """{resourceId: amount}, keyed as in RESOURCES."""
         return {struct.unpack_from("<I", r, 0)[0]: struct.unpack_from("<i", r, 4)[0]
                 for r in self.vec(1128, 8)}
 
@@ -184,8 +163,7 @@ class Civ(Obj):
 
 
 class Design(Obj):
-    """ShipDesign.
-"""
+    """ShipDesign."""
 
     @staticmethod
     def _n(v):
@@ -215,13 +193,12 @@ class Design(Obj):
 
         return self.speed is not None
 
-    # Kept as an alias so nothing silently changes meaning; prefer stats_cached.
+    # Alias; prefer stats_cached.
     computed = stats_cached
 
     @property
     def firepower(self):
-        """(light, heavy, third): the UI's #/#/# display. An uncomputed design
-        reads (-1,-1,-1), which must not be mistaken for an unarmed hull."""
+        """(light, heavy, third): the UI's #/#/# display; uncomputed reads 0."""
         return tuple(self._n(self.i32(o)) or 0 for o in (60, 64, 68))
 
     def _parts(self, off):
@@ -238,15 +215,12 @@ class Design(Obj):
     @property
     def modules(self):  return self._parts(224)
 
-    # -- role taxonomy (ours, derived; see STRATEGY.md §2.4) ----------------
+    # Role taxonomy: STRATEGY.md §2.4.
     @property
     def owner(self):
         """The civ this design belongs to: ShipDesign:260, a reference node.
 
-        Designs are PER CIV and every civ's are visible in memory, so anything
-        choosing a design to build must filter on this. Without it a rule will
-        happily pick the rival's design, which is both wrong and not something a
-        player could do.
+        Every civ's designs are in memory, so build choices must filter on this.
         """
         return self.snap.civ_of(self.node_target(260))
 
@@ -256,8 +230,7 @@ class Design(Obj):
     def is_troop(self):  return 1 in self.modules
     @property
     def is_warship(self):
-        """Armed per its FITTED WEAPONS, not per its firepower numbers.
-        """
+        """Armed if it has fitted weapons or positive firepower."""
         return bool(self.weapons) or max(self.firepower) > 0
 
     @property
@@ -292,10 +265,7 @@ class Ship(Obj):
 
     @property
     def crew(self):
-        """Crew aboard: 16-byte records at Ship:124, the same shape as the
-        Planet:144 citizens, each carrying job id 3.
-
-        """
+        """Crew aboard: 16-byte citizen records at Ship:124, job id 3."""
         return [struct.unpack_from("<I", r, 0)[0] for r in self.vec(124, 16)]
 
     @property
@@ -317,10 +287,8 @@ class Planet(Obj):
     def food_cap(self):     return self.i32(116)
     @property
     def rates(self):
-        """Per-unit output packed into Planet:96, one byte each: food per
-        farmer, production per worker, science per scientist. The homeworld
-        customisation writes byte 0 here, so this is the planet's real rate
-        rather than the base-table value."""
+        """Per-unit output bytes at Planet:96: food/farmer, production/worker,
+        science/scientist. Includes the homeworld customisation."""
         return (self.byte(96, 0), self.byte(96, 1), self.byte(96, 2))
     @property
     def food_rate(self):    return self.byte(96, 0)
@@ -401,15 +369,9 @@ WRAPPERS = {"Owner": Civ, "Planet": Planet, "Ship": Ship,
 def resolve_civ(snap, name=None, quiet=False):
     """The civ a tool should act for, or None with a printed reason.
 
-    Wraps Snapshot.our_civ so every entry point behaves the same: an explicit
-    --civ must exist, and with no --civ we take the local player rather than
-    guessing at a name that customisation may have changed.
-
-    `quiet` is for callers that are polling a client which is still starting.
-    A client that has not yet filled its player slot fails this read two or
-    three times before succeeding, and printing `error:` each time makes a
-    normal launch look like a fault in every log anyone reads afterwards. The
-    caller polling knows the difference; this function does not.
+    An explicit --civ must exist; with none, the local player is used.
+    `quiet` suppresses the error for callers polling a client that is still
+    starting.
     """
     try:
         return snap.our_civ(name)
@@ -423,7 +385,6 @@ def dist(a, b):
     return math.sqrt(sum((x - y) ** 2 for x, y in zip(a, b)))
 
 
-# ── Snapshot ───────────────────────────────────────────────────────────────
 class Snapshot:
     """One scan of the game. Construct, then read; nothing refreshes itself."""
 
@@ -434,7 +395,6 @@ class Snapshot:
         self.h = self.state.handle
         self.refresh()
 
-    # -- raw access -----------------------------------------------------
     def read(self, addr, n):
         return ev.read_bytes(self.h, addr, n)
 
@@ -445,14 +405,12 @@ class Snapshot:
     def class_at(self, vftable):
         return ev.resolve_class_name(self.h, vftable, self.state.rtti_cache)
 
-    # -- scan -----------------------------------------------------------
     def refresh(self):
         self.state.scan()
         self.turn = self.rd32(TURN_COUNTER)
         by = collections.defaultdict(list)
         for raw in self.state.objects:
-            # Objects inside the module image are static templates (the .data
-            # Admiral and Governor), not live entities.
+            # Objects inside the module image are static templates.
             if raw["static"]:
                 continue
             cls = WRAPPERS.get(raw["type"])
@@ -464,8 +422,7 @@ class Snapshot:
         self.designs = by["ShipDesign"]
         self.suns    = by["Sun"]
 
-        # Allocation-start -> entity, accepting every pointer form a reference
-        # node might carry for that class.
+        # Allocation start -> entity, for every pointer form a node may carry.
         self._civ_by_start = {}
         for c in self.civs:
             for s in c.starts:
@@ -476,12 +433,10 @@ class Snapshot:
             self._design_by_start[d.addr - 12] = d
         self._planet_by_start = {p.addr - 8: p for p in self.planets}
 
-    # -- link resolution ------------------------------------------------
     def civ_of(self, start):    return self._civ_by_start.get(start)
     def design_of(self, start): return self._design_by_start.get(start)
     def planet_of(self, start): return self._planet_by_start.get(start)
 
-    # -- convenience ----------------------------------------------------
     def civ(self, name):
         """A civ by the name at Owner:-44."""
         return next((c for c in self.civs if c.civ_name == name), None)
@@ -489,10 +444,7 @@ class Snapshot:
     def local_civ(self):
         """The human player's civ, from the .data local-player node.
 
-        Preferred over matching a name, because the civ name is EDITABLE during
-        home-world customisation: a hardcoded 'GoodGuy' silently matches nothing
-        the moment a player renames their empire, and every rule then quietly
-        does nothing. The pointer is stable and confirmed across separate games.
+        The civ name is editable during customisation; this pointer is stable.
         """
         node = self.rd32(LOCAL_PLAYER)
         if not is_ptr(node) or node == NULL_NODE:
@@ -529,8 +481,7 @@ class Snapshot:
         return s, dist(planet.pos, s.pos)
 
     def systems(self):
-        """{Sun: [Planet]} by nearest-sun. A heuristic: see the module docstring
-        and system_report()."""
+        """{Sun: [Planet]} by nearest sun, a heuristic; see system_report()."""
         groups = collections.defaultdict(list)
         for p in self.planets:
             s, _ = self.nearest_sun(p)
@@ -539,9 +490,7 @@ class Snapshot:
         return groups
 
     def system_report(self):
-        """Evidence for or against the nearest-sun grouping: if a system really is
-        a tight cluster, every planet's radius is far below the gap to the next
-        sun. Prints the numbers rather than asserting them."""
+        """Numbers that test the nearest-sun grouping: orbit radii vs sun gaps."""
         groups = self.systems()
         sizes  = sorted(len(v) for v in groups.values())
         radii  = [dist(p.pos, s.pos) for s, ps in groups.items() for p in ps]

@@ -3,31 +3,18 @@ test_no_console_windows.py: the dev tools stop flashing cmd windows
 =====================================================================
     server\\.venv\\Scripts\\python.exe server\\tests\\test_no_console_windows.py
 
-"We get a lot of cmd windows opening when we launch sandbox." Every one is a
-console child started from a windowed parent without `CREATE_NO_WINDOW`, and
-the worst of them is `game_cycle.client_pids`, which shells out to PowerShell
-once per poll of the turn loop.
+A console child started from a windowed parent without `CREATE_NO_WINDOW`
+opens a cmd window. Each call a turn makes is invoked with `subprocess.run`
+replaced by a recorder, and the flag is read off the recorded call. The
+recorder returns the output the real command would, so parsed results are
+shown to still parse.
 
-**A test that asserts a flag is set somewhere proves nothing.** The calls that
-matter are the ones a turn actually makes, so each of those is invoked here
-with `subprocess.run` replaced by a recorder, and the flag is read off the call
-that came out. The recorder also hands back the output the real command would,
-so a call whose result is parsed is shown to still parse: a flag that quietly
-broke `client_pids` would close a player's client at the next poll, having
-decided nothing was running.
+The sweep at the end reads the source of every tool covered and fails if any
+subprocess call has no `creationflags`.
 
-The sweep at the end is the regression half. It reads the source of every tool
-this touches and fails if any subprocess call in them has no `creationflags`
-at all, so the next one added is not silently a window.
-
-**Nothing here launches or closes a client.** `subprocess.run` is replaced
-before any of it, so the PowerShell that would have killed a process is a
-recorded argument list and nothing else, and `CLIENT_LOCK` is repointed at a
-temporary path so the lock another session may be holding is neither read nor
-removed.
-
-What this cannot do is watch the screen. Whether a window still appears when
-the sandbox launches is a thing a person has to look at.
+Nothing here launches or closes a client, and `CLIENT_LOCK` is repointed at a
+temporary path. Whether a window still appears on screen has to be checked by
+a person.
 """
 import ast
 import os
@@ -52,10 +39,8 @@ PASS, FAIL = [], []
 
 CREATE_NO_WINDOW = 0x08000000
 
-# The tools swept for a missing flag. `client/dev_tools` is where the operator
-# saw the windows; `check_store.py` is the one tool outside it that shells out
-# on a path a player can reach; the referee and its worker run unattended
-# behind a scheduled task, where every window is one nobody asked for.
+# The tools swept for a missing flag: `client/dev_tools`, `check_store.py`,
+# and the referee and its worker.
 SWEPT = ([os.path.join(ROOT, 'client', 'dev_tools', n)
           for n in sorted(os.listdir(os.path.join(ROOT, 'client', 'dev_tools')))
           if n.endswith('.py')] +
@@ -77,9 +62,8 @@ def check(name, got, want=True):
 class Recorder:
     """Stands in for `subprocess.run` and remembers how it was called.
 
-    `answers` is keyed by a word in the command line, so one recorder serves
-    calls whose results are parsed differently. Anything not named gets empty
-    output, which is what a call whose result is ignored would see.
+    `answers` maps a word in the command line to the stdout returned. Anything
+    not named gets empty output.
     """
 
     def __init__(self, answers=None):
@@ -109,8 +93,7 @@ class Recorder:
 
 def with_recorder(module, answers, body):
     """Run `body` with `module.subprocess.run` recorded, and give the record
-    back. Restored whatever happens, because these modules are imported once
-    and a leaked stub would make the next case pass for the wrong reason."""
+    back. The real `run` is always restored."""
     rec = Recorder(answers)
     kept = module.subprocess.run
     module.subprocess.run = rec
@@ -121,7 +104,6 @@ def with_recorder(module, answers, body):
     return rec
 
 
-# ── the calls a turn makes ───────────────────────────────────────────────────
 def test_client_pids():
     """The one that runs per poll, on both tools that have a copy of it."""
     print('client_pids, the call a turn makes many times')
@@ -137,8 +119,7 @@ def test_client_pids():
         check(f'{label}: and the pids still parse out of the output',
               got[0], [4120, 8864])
 
-    # The parse is the thing a wrong flag would break silently, so it is
-    # checked against the shapes the real command produces rather than one.
+    # The output shapes the real command produces.
     for out, want in (('', []), ('\r\n', []), ('4120\r\n', [4120]),
                       ('4120\r\n8864\r\n', [4120, 8864])):
         got = []
@@ -168,9 +149,8 @@ def test_pid_alive():
 def test_close_client():
     """The Stop-Process call, once per turn.
 
-    `CLIENT_LOCK` is repointed first. `close_client` reads the lock and, when
-    the holder is this process, removes it; another session may be holding the
-    real one and a test is not allowed to touch that.
+    `CLIENT_LOCK` is repointed first, since `close_client` may remove the lock
+    and another session may hold the real one.
     """
     print('close_client, the Stop-Process call')
     for label, module in (('game_cycle', game_cycle),
@@ -235,12 +215,11 @@ def test_check_store_sessions():
 
 
 def test_referee_tick():
-    """The `advance_turns` child, once per tick on an unattended machine (N7).
+    """The `advance_turns` child, once per tick on an unattended machine.
 
-    `tick` is run whole with the client's half stood in for: `game_cycle` and
-    `player_turn` are replaced in `sys.modules` for the length of the call, so
-    nothing is launched, closed or locked, and the capture it reads back is a
-    file written here. What comes out is the one subprocess call a tick makes.
+    `game_cycle` and `player_turn` are replaced in `sys.modules` for the call,
+    so nothing is launched, closed or locked, and the capture is a file
+    written here.
     """
     print('referee.tick, the advance_turns child')
     tmp = tempfile.mkdtemp(prefix='nowin_tick_')
@@ -294,14 +273,12 @@ def test_referee_tick():
           FakeClient.closed, [True])
 
 
-# ── the two that are deliberately left alone ─────────────────────────────────
 def test_the_client_launches_are_left_detached():
-    """`launch` starts the game, which is a windowed program with no console.
+    """`launch` starts the game with `DETACHED_PROCESS`, never combined with
+    `CREATE_NO_WINDOW`.
 
-    `DETACHED_PROCESS` and `CREATE_NO_WINDOW` are both console-creation flags
-    and cannot be combined, and the client has no console to hide, so this is
-    the right flag and the one already there. Pinned so that a later sweep for
-    the other one does not change it.
+    The two are console-creation flags that cannot be combined, and the client
+    has no console to hide.
     """
     print('the client launches keep DETACHED_PROCESS')
     for label, path in (('game_cycle',
@@ -318,7 +295,6 @@ def test_the_client_launches_are_left_detached():
               False)
 
 
-# ── the sweep ────────────────────────────────────────────────────────────────
 def read(path) -> str:
     with open(path, encoding='utf-8') as f:
         return f.read()
@@ -346,11 +322,9 @@ def spawns(path):
 
 
 def test_sweep():
-    """No subprocess call in these tools may be written without the flag.
+    """No subprocess call in these tools is written without `creationflags`.
 
-    The regression half. Naming the file and the line makes a failure
-    actionable, and a file with no subprocess call in it contributes nothing
-    rather than passing vacuously.
+    A failure names the file and line.
     """
     print('the sweep: every spawner in these tools names creationflags')
     bare, total = [], 0

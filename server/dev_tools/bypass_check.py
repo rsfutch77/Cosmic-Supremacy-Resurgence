@@ -1,49 +1,27 @@
 """
 bypass_check.py: does a client that goes around the relay reach anything?
-==========================================================================
     python bypass_check.py                         # cs-resurgence, h3check
     python bypass_check.py --galaxy verify
     python bypass_check.py --project P --bucket B --galaxy G
 
-The second half of plan item H4. The relay's own refusals are measured by
-`test_relay_function.py` and J4; this is the other door. Every launcher reaches
-the store through the relay, and the deployed Security Rules exist so that a
-launcher, or anything that has read the launcher's source, cannot reach
-Firestore or the bucket by speaking to Google directly with the same identity.
-
-So this signs in anonymously the way a launcher does, in a scratch directory
-and never with a real install's `fb_identity.json`, and then skips the relay:
+Signs in anonymously the way a launcher does (in a scratch directory, never
+with a real install's `fb_identity.json`) and then skips the relay:
 
     Firestore REST     list the galaxy collection, get the galaxy document and
                        an archived turn, create, patch and delete a document
     Firebase Storage   list, download a real turn object, upload, delete
     GCS JSON API       the same four, with the Firebase ID token as bearer
 
-each with that token, and each again with no token at all. Reads aim at real
-paths, because a read of something that does not exist proves nothing. Writes
-and deletes aim only at a throwaway path under `bypass_probe_<date>_<run>`
-that nothing reads and nothing writes, so a probe that unexpectedly succeeds
-costs the galaxy nothing and the harness removes what it made with the
-operator's own credentials.
+each with that token and again with no token. Reads aim at real paths. Writes
+and deletes aim at a throwaway prefix `bypass_probe_<date>_<run>`, where one
+document and one object are first planted with the operator's credentials so
+a delete probe has something to hit; both are read back afterwards.
 
-A delete aimed at nothing proves nothing either: the GCS JSON API answers an
-anonymous delete of a missing object with 404 before it answers who is asking.
-So the harness first plants one document and one object under the throwaway
-prefix with the operator's credentials, aims the update and delete probes at
-those as well, reads back that both survived, and removes them at the end
-along with anything else the run left under its prefix.
-
-Before any probe, the live rules are read back through the Rules API and
-printed, so the run records what was actually deployed rather than what the
-repository's draft files say. A probe is ALLOWED on any 2xx. Everything else
-is a refusal, and the status is printed so a 404 where a 403 was expected is
-visible rather than scored as a pass.
-
-The anonymous user this makes is deleted at the end, through the Identity
-Toolkit's admin endpoint with the operator's default credentials, even when a
-probe failed, and the delete is read back. Exit status is the number of probes
-allowed, so zero means the door is shut. This touches the live project and is
-run under the `firebase-live` lease.
+The live rules are read back through the Rules API and printed first. A probe
+is ALLOWED on any 2xx and every status is printed. The anonymous user and the
+throwaway prefix are removed at the end with the operator's credentials. Exit
+status is the number of probes allowed. Touches the live project; run under
+the `firebase-live` lease.
 """
 from __future__ import annotations
 
@@ -83,7 +61,6 @@ TURNS = 'turns'
 TIMEOUT = 30.0
 
 
-# ── one request, scored ─────────────────────────────────────────────────────
 def call(method, url, headers=None, body=None, content_type=None):
     """(status, text) for one request. Never raises on an HTTP status."""
     data = None
@@ -148,7 +125,6 @@ class Probes:
         return ok
 
 
-# ── the operator's credentials, for reading rules and for cleaning up ───────
 def admin_headers(project):
     import google.auth
     import google.auth.transport.requests
@@ -191,7 +167,6 @@ def show_rules(project, bucket, admin, out):
     return wanted <= seen
 
 
-# ── the anonymous identity, made and unmade ─────────────────────────────────
 def sign_in(scratch):
     ident = fb_auth.FirebaseIdentity(scratch)
     token = ident.token()
@@ -217,7 +192,6 @@ def delete_user(project, uid, admin, out):
     return gone
 
 
-# ── the probes ──────────────────────────────────────────────────────────────
 def firestore_probes(p, who, headers, project, galaxy, turn_doc, scratch_doc,
                      planted_doc):
     docs = docs_url(project)
@@ -287,7 +261,6 @@ def storage_probes(p, who, fb_headers, gcs_headers, bucket, galaxy, turn_obj,
           gcs_headers)
 
 
-# ── the planted pair, and the sweep ─────────────────────────────────────────
 PLANTED = b'planted by bypass_check; nothing reads this'
 
 
@@ -324,11 +297,9 @@ def still_there(project, bucket, planted_doc, planted_obj, admin):
 
 
 def sweep(project, bucket, run, admin, out):
-    """Remove everything under the run's prefix, planted or not, as admin.
+    """Remove everything under the run's prefix, as admin.
 
-    The planted pair is expected here. Anything else is what an allowed write
-    made, and it has already been reported as ALLOWED above. True when the
-    prefix reads back empty.
+    True when the prefix reads back empty.
     """
     docs = docs_url(project)
     status, text = call('GET', f'{docs}/{run}?pageSize=100', admin)
@@ -361,9 +332,7 @@ def sweep(project, bucket, run, admin, out):
 def real_turn(bucket, galaxy, admin):
     """The lowest published turn object of the galaxy, by admin listing.
 
-    A read probe has to name an object that exists, or a 404 would look like
-    a refusal. The admin listing also shows the bucket is reachable at all,
-    which is what the client probes are measured against.
+    Read probes need an object that exists, so a 404 cannot pass as a refusal.
     """
     prefix = urllib.parse.quote(f'{COLLECTION}/{galaxy}/{TURNS}/', safe='')
     status, text = call('GET', f'{GCS}/storage/v1/b/{bucket}/o?prefix='

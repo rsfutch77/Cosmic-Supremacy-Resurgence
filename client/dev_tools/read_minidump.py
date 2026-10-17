@@ -1,20 +1,12 @@
 """
-read_minidump.py: what actually faulted, out of the game's own crash dump
-==========================================================================
+read_minidump.py: what faulted, from the game's own crash dump
+
     python read_minidump.py                       # newest dump beside the EXE
     python read_minidump.py <file.dmp>
 
-The client writes a minidump when it dies. That dump names the exception and the
-instruction that raised it, which is the difference between "the client crashed
-after we did X" and knowing which code was executing, and this project has
-already spent a day on the first kind of statement.
-
-Reads the MINIDUMP directly: header, stream directory, the exception stream
-(type 6) for the code and address, the module list (type 4) to say which module
-the address belongs to, and the thread list (type 3) for the count. No debugger
-and no symbols, which are not available here anyway; the useful output is an
-address inside CosmicSupremacy_Resurgence.exe that can be looked up against the
-addresses this project already knows.
+Reads the minidump directly: the exception stream (type 6) for the code and
+address, the module list (type 4) to name the module the address falls in, and
+the thread list (type 3) for the count. No debugger or symbols needed.
 """
 import argparse
 import glob

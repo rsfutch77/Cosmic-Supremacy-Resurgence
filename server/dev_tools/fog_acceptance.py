@@ -1,30 +1,17 @@
 """
 fog_acceptance.py: does an order from a FILTERED client still merge?
-=====================================================================
     python fog_acceptance.py --drop 3
 
-The test that decides D1. "A filtered blob loads" is a much weaker claim than
-it sounds: the thing a player's client has to do is **accept an order and hand
-it back in a form the referee can apply against the unfiltered galaxy**. A
-filter that quietly changes what comes back would not fail loudly. It would
-produce a subtly wrong galaxy.
+Checks that a client served a filtered blob returns orders the referee can
+merge against the unfiltered galaxy. Ticking a filtered blob is not tested: a
+player's clock is held. Two runs:
 
-Under B2 a filtered blob never has to tick: a player's client runs the build
-without T1-T5 and its clock is held, so this deliberately does not test that.
-
-Two runs, and the control is the point:
-
-    control   serve the UNFILTERED state, let the AI issue orders, capture,
+    control   serve the unfiltered state, let the AI issue orders, capture,
               merge against the authoritative blob
-    filtered  serve the FILTERED state, same AI, same civ, capture, merge
-              against the SAME authoritative blob
+    filtered  serve the filtered state, same AI, same civ, capture, merge
+              against the same authoritative blob
 
-Running only the filtered half would show that something merged, and leave
-"would it have merged anyway, and identically" unanswered. A4's lesson: the
-available conclusion was the wrong one because nobody ran the control.
-
-**Nothing here touches the turn store.** No submission is made. The galaxy is
-live and this is an experiment beside it, not in it.
+The turn store is only read; no submission is made.
 """
 import argparse
 import os

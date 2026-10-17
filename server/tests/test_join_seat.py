@@ -1,6 +1,6 @@
 """
-test_join_seat.py: a granted join binds its seat (J3 and J4)
-==============================================================
+test_join_seat.py: a granted join binds its seat
+================================================
     server\\.venv\\Scripts\\python.exe server\\tests\\test_join_seat.py
 
     python functions/emulators.py --only firestore,storage,auth
@@ -10,16 +10,13 @@ test_join_seat.py: a granted join binds its seat (J3 and J4)
     server\\.venv\\Scripts\\python.exe server\\tests\\test_join_seat.py
 
 A join granted at a boundary writes `seats[uid] = civ` on the galaxy document,
-in the same write as the roster. The first part runs offline: the rules that
-decide which seats move, and a folder galaxy, which carries no seat map and
-must not grow one. The second part needs the emulator and runs the story end
-to end with the relay in process: a sign-in lodges a join through the relay,
-the referee closes the turn with the engine stubbed, the joiner submits as the
-new civ with `seat_claim` off and lands, and a different sign-in is refused,
-with first-use off and with it on.
+in the same write as the roster. The offline part checks the rules that decide
+which seats move, and that a folder galaxy grows no seat map. The emulator part
+runs end to end with the relay in process: a sign-in lodges a join, the referee
+closes the turn with the engine stubbed, the joiner submits as the new civ with
+`seat_claim` off, and a different sign-in is refused with first-use off and on.
 
-Every refusal is paired with the store underneath, because the relay saying 403
-is not evidence that nothing landed. The referee's store is the oracle.
+Every refusal is checked against the referee's store underneath.
 """
 import os
 import shutil
@@ -88,7 +85,6 @@ def granted(name, uid):
     return {'name': name, 'uid': uid, 'outcome': joins.GRANTED}
 
 
-# ── offline ──────────────────────────────────────────────────────────────────
 def test_rules():
     print('which seats a commit moves')
     quiet = []
@@ -153,7 +149,6 @@ def test_folder(blob):
         shutil.rmtree(root, ignore_errors=True)
 
 
-# ── on the emulator, with the relay in process ───────────────────────────────
 def run_emulator(blob):
     import test_relay_function as rf
     from http.server import ThreadingHTTPServer
@@ -169,9 +164,9 @@ def run_emulator(blob):
     uid_y, token_y = rf.sign_up()
     uid_z, token_z = rf.sign_up()
     uid_w, token_w = rf.sign_up()
-    # A holds DemoPlayer. Z holds a seat left over from a reclaimed `Ghost`,
-    # the state a reclaim leaves: the roster no longer names it and the seat
-    # map still does. First use is off, the default.
+    # A holds DemoPlayer. Z holds a seat left over from a reclaimed `Ghost`:
+    # the roster no longer names it and the seat map still does. First use is
+    # off, the default.
     ref.doc.set({'seats': {uid_a: 'DemoPlayer', uid_z: 'Ghost'}}, merge=True)
 
     httpd = ThreadingHTTPServer(('127.0.0.1', 0), rf.RelayHandler)
@@ -193,8 +188,7 @@ def run_emulator(blob):
         check('two joins are waiting',
               sorted(r['key'] for r in ref.join_requests()),
               sorted([uid_x, uid_w]))
-        # The control. Fails if X could already play, which would make the
-        # check after the boundary say nothing about the join.
+        # Control: X cannot play before the boundary.
         refused = rf.refusal(x.submit, 'Joiner', turn, rf.make_blob(turn))
         check('X cannot play Joiner before it exists', rf.status_of(refused),
               403)

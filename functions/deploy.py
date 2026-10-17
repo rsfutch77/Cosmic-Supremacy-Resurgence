@@ -1,50 +1,20 @@
 """
 deploy.py: the only deploy this directory is allowed to do
-============================================================
+
     python functions/deploy.py --check          say what would run
     python functions/deploy.py                  run it
 
     firebase deploy --only functions:relay --project cs-resurgence
 
-That command, from this directory, and nothing else.
+`cs-resurgence` also serves the live website from `site/`. A `firebase deploy`
+without `--only`, from a directory whose `firebase.json` has a `hosting` block,
+replaces that website. This directory's `firebase.json` must have no `hosting`
+key, and this script refuses any deploy not scoped to `--only functions`.
 
-Why this exists rather than a note
------------------------------------
-`cs-resurgence` serves the live public website cosmicresurgence.com. Its Hosting
-config is `site/firebase.json` and its content is `site/`, and a `firebase
-deploy` with no `--only`, run from a directory whose `firebase.json` has a
-`hosting` block, replaces a live website with whatever that block points at.
-H0 recorded the same hazard for the rules deploy and solved it the same way: a
-config that names one thing.
+The predeploy step runs `bundle.py`, which rebuilds `cs_store/` from `server/`.
 
-Three things keep that from being possible here, and each is worth stating
-because any one of them alone is a rule someone can forget.
-
-1. **This `firebase.json` has no `hosting` key.** A deploy driven by it has
-   nothing to deploy to Hosting even if it is asked. `firebase deploy` from
-   here deploys the codebase in the `functions` array and reports "no hosting
-   target" for the rest, because there is no rest.
-2. **`--only functions:relay` names one function of one codebase.** Even in a
-   config that grew a second thing, this cannot reach it.
-3. **The Hosting config is in another directory and the CLI only reads one.**
-   `site/firebase.json` is never loaded by a command run from here, and no
-   firebase command is ever run from `site/`.
-
-This script refuses to run anything that does not satisfy 2, so a hurried edit
-to the command is a refusal rather than an outage.
-
-What the predeploy step does
------------------------------
-`firebase.json` runs `bundle.py` first, which copies the store's modules into
-`cs_store/` so the upload carries them. It is a build product, ignored by git,
-and rebuilt from `server/` every time, so a deploy cannot ship a stale copy of
-a module that was edited in `server/`.
-
-What a first deploy needs that this cannot do
-----------------------------------------------
-Signing a Cloud Storage URL from a Cloud Functions runtime needs the IAM
-Credentials API, because the runtime service account has no private key. Once,
-by the operator, in the project:
+A first deploy needs the IAM Credentials API to sign Cloud Storage URLs, since
+the runtime service account has no private key. Once, by the operator:
 
     gcloud services enable iamcredentials.googleapis.com --project cs-resurgence
     SA=<runtime-sa>@cs-resurgence.iam.gserviceaccount.com
@@ -53,10 +23,8 @@ by the operator, in the project:
         --role=roles/iam.serviceAccountTokenCreator \\
         --project cs-resurgence
 
-The runtime account is the one the deploy reports, and the binding is the
-account granted the role **on itself**, which is what lets it ask the IAM API to
-sign for it. Without it every signed URL raises about a missing private key, and
-nothing in that message says any of this.
+The runtime account is the one the deploy reports, granted the role on itself.
+Without it every signed URL raises about a missing private key.
 """
 import argparse
 import os

@@ -1,13 +1,11 @@
 """
 A new game must not start the opponent with the last game's knowledge.
 
-Both of the opponent's state files outlive the game that wrote them, and both
-were reported by players after v0.1: a fog-of-war map carried over lets BadGuy
-colonise inside the player's home system on turn 1, and a carried-over pass
-marker holds the launcher's readiness gate open for the whole early game.
+A carried-over fog-of-war map lets the opponent colonise inside the player's
+home system on turn 1, and a carried-over pass marker holds the readiness gate
+open for the early game.
 
-Needs nothing running: it only exercises the file handling, and the
-launcher's start_ai on a stand-in rather than a launcher with a server.
+Needs nothing running: file handling, and start_ai on a stand-in.
 """
 import os
 import pathlib
@@ -58,8 +56,7 @@ try:
            "discovered_96_deadbeef_BadGuy.json", "pass_BadGuy.json"])
     check("new game leaves the directory empty", listing(state), [])
 
-    # Load resumes the galaxy the map belongs to, so the map stays and only the
-    # pass marker goes: the save reopens at a turn the marker has passed.
+    # Load resumes the galaxy the map belongs to, so only the pass marker goes.
     state = os.path.join(tmp, "load", "ai_state")
     populate(state)
     removed = gamectl.reset_ai_state(state, "BadGuy", keep_discovery=True)
@@ -68,8 +65,8 @@ try:
           ["discovered_108_a1b2c3d4_BadGuy.json",
            "discovered_96_deadbeef_BadGuy.json"])
 
-    # Another civ's files are not ours to delete. duel.py and the multiplayer
-    # work both run several civs against one state directory.
+    # Another civ's files are not ours to delete: several civs can share one
+    # state directory.
     state = os.path.join(tmp, "other_civ", "ai_state")
     populate(state)
     with open(os.path.join(state, "pass_GoodGuy.json"), "w",
@@ -86,7 +83,7 @@ try:
     removed = gamectl.reset_ai_state(os.path.join(tmp, "absent"), "BadGuy")
     check("a missing state directory is not an error", removed, [])
 
-    # The gate the reset exists to close: with no marker, the launcher waits.
+    # With no marker, the launcher waits.
     state = os.path.join(tmp, "gate", "ai_state")
     populate(state)
     check("a stale marker reads back", gamectl.ai_pass_marker(state, "BadGuy"),
@@ -95,9 +92,8 @@ try:
     check("after the reset there is nothing to satisfy the gate",
           gamectl.ai_pass_marker(state, "BadGuy"), (None, None))
 
-    # The launcher clears it on the way to starting the opponent. A stand-in
-    # carries what start_ai reads, and launch_ai finds no opponent, so nothing
-    # is started and the method returns after its warning.
+    # The launcher clears it on the way to starting the opponent. launch_ai
+    # finds no opponent, so nothing is started.
     said = []
     real_launch_ai = L.launch_ai
     L.launch_ai = lambda mode, data_dir: None

@@ -1,30 +1,19 @@
 """
 set_local_player.py: tell a running client which civ the player controls
-=========================================================================
+
     python set_local_player.py --list
     python set_local_player.py --civ BadGuy
     python set_local_player.py --id 202
 
-Two clients sharing one galaxy have to control different civs. The client does
-not take that from the save blob: `0x00857904` holds a reference cell naming the
-local civ, and it is filled at load from a TLS red-black tree of player slots,
-the same roster the testbed galaxy join populates. The selection routine at
-`0x0052DE10` walks that tree and takes the first slot whose `+0x38` is non-zero,
-reading the civ's object id from the slot's `+0x30`.
+`0x00857904` holds a reference cell naming the local civ. It is filled at load
+from a TLS red-black tree of player slots: the selection routine at `0x0052DE10`
+takes the first slot whose `+0x38` is non-zero and reads the civ's object id from
+its `+0x30`. Neither OWNR order nor Owner:4 in the blob affects the selection.
 
-Two things were measured against that and neither moves the selection:
-
-    OWNR order in the blob        swapping the two OWNR sections changes nothing
-    Owner:4, the trailing u32     swapping 0 and 21 changes nothing
-
-So the blob cannot carry the answer and the roster has to be driven some other
-way. Until the join path that populates the tree is reconstructed, this writes
-the result directly: `0x00537BF0(objectId)` is the engine's own lookup, mapping
-an object id to its reference cell through the map at `0x00857C7C`, and its
-return value is what `0x00857904` is supposed to hold.
-
-`0x0052DD80` is called by the engine immediately after its own store at
-`0x0052F4B7`, so `--refresh` repeats that sequence rather than only the store.
+This writes the cell directly with `0x00537BF0(objectId)`, the engine's lookup
+from object id to reference cell through the map at `0x00857C7C`. The engine
+calls `0x0052DD80` right after its own store at `0x0052F4B7`; `--refresh` does
+the same.
 """
 import argparse
 import ctypes
@@ -38,7 +27,7 @@ sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(HERE, "ai_player"))
 
 # No bytecode for trigger_save: Defender quarantines its .pyc as
-# Exploit:Python/Leivion.C. See game_cycle.import_without_bytecode.
+# Exploit:Python/Leivion.C.
 sys.dont_write_bytecode = True
 from trigger_save import (find_pid, write, kernel32,
                           PROCESS_VM_READ, PROCESS_VM_WRITE, PROCESS_VM_OPERATION,
@@ -74,8 +63,7 @@ def civs():
     local = snap.local_civ()
     out = []
     for c in snap.civs:
-        # the object id is the key the engine's own map uses; EJBO objects carry
-        # it eight bytes ahead of the address the viewer reports
+        # The object id sits just ahead of the address the viewer reports.
         oid = snap.rd32(c.addr - 4)
         out.append((c.civ_name, oid, c.addr, local is not None and c.addr == local.addr))
     return out

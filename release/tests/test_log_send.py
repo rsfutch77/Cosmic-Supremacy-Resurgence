@@ -1,15 +1,12 @@
 """
-Sending the launcher's log (M1): when the player is offered it, what they are
-told, and that nothing leaves without Send.
+Sending the launcher's log: when the player is offered it, what they are told,
+and that nothing leaves without Send.
 
     server\\.venv\\Scripts\\python.exe release\\tests\\test_log_send.py
 
-Headless. The relay is a local HTTP server on a free port that records what it
-is sent and answers the way `functions/relay.py` does, so this needs no
-emulator; `server/tests/test_log_upload.py` runs the real relay. The launcher
-object is not built: its methods run on a stand-in carrying the attributes
-they read, with a `FakeView` for the window. The Tk rows of the reference box
-are built once on a withdrawn root and read back without being shown.
+Headless. The relay is a local HTTP server that records what it is sent and
+answers the way `functions/relay.py` does; `server/tests/test_log_upload.py`
+runs the real relay. Launcher methods run on a stand-in with a `FakeView`.
 """
 import base64
 import http.server
@@ -171,7 +168,7 @@ try:
           L.log_upload_base(d, None, ROOT + "/"), ROOT)
     check("a folder galaxy reaches no relay",
           L.log_upload_base(fresh_dir(), r"C:\galaxies\sandbox", None), None)
-    # Fails if an http spec were taken without the identity rule a store uses.
+    # An http spec follows the identity rule a store uses.
     check("a LAN referee over http reaches none",
           L.log_upload_base(fresh_dir(), "http://192.168.1.5:8765", None),
           None)
@@ -200,7 +197,6 @@ try:
     title, text, buttons = dialogs(app)[0]
     check("the box says why it is asking",
           text.startswith(L.LOG_TURN_LEAD.strip()[:30]), True)
-    # Fails if the box stopped saying what the copy holds (M2).
     check("and what the copy holds and what is taken out",
           all(s in text for s in ("player name", "galaxy", "turn numbers",
                                   "Windows account name is taken out",
@@ -231,7 +227,6 @@ try:
           dialogs(app)[-1],
           lambda t: t[0] == "Log sent"
           and t[2] == ["20260929T040000Z-abcdefgh-0a0b0c"])
-    # Fails if the box stopped offering the player code for a lost reference.
     check("and told the player code finds the log if the reference is lost",
           dialogs(app)[-1][1], lambda b: "If you lose the log reference" in b
           and "player code" in b and "abcd1234" in b)
@@ -252,7 +247,6 @@ try:
     check("Read it first opens the copy that would be sent", app.opened,
           [os.path.join(d, L.REDACTED_LOG_NAME)])
     check("and asks again", len(dialogs(app)), 2)
-    # Fails if Not now or closing the box sent anything.
     check("Not now sends nothing", Relay.got, [])
     check("the button's box has no failed-turn lead",
           dialogs(app)[0][1].startswith("Send the launcher's log"), True)
@@ -330,7 +324,6 @@ try:
     js = open(os.path.join(REPO, "release", "webui", "app.js"),
               encoding="utf-8").read()
     rows = js[js.index("for (const ref of p.refs"):js.index("const btns")]
-    # Fails if a row's button copied anything but its own reference.
     check("each row's button copies its own reference",
           "navigator.clipboard.writeText(ref.id)" in rows, True)
     check("and the entry holding it is read-only",
@@ -344,7 +337,6 @@ try:
     for i in range(7):
         L.record_log_ref(d, f"ref-{i}", when=1790000000 + i)
     kept = L.load_log_refs(d)
-    # Fails if the cap were dropped or the list kept oldest first.
     check(f"the last {L.LOG_REFS_KEEP}, newest first",
           [r["id"] for r in kept], ["ref-6", "ref-5", "ref-4", "ref-3",
                                     "ref-2"])
@@ -423,8 +415,7 @@ try:
     seen = []
     while not app.msgs.empty():
         seen.append(app.msgs.get())
-    # Fails if a refused upload in the middle of a turn is only logged, which
-    # is how a refused player saw the status flicker and nothing else.
+    # A refused upload mid-turn is shown, not only logged.
     check("a refused upload mid-turn puts up the held-seat box",
           [m[0] for m in seen], ["__mp_refused__"])
     check("which names the seat and this copy's player code",

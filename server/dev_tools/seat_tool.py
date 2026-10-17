@@ -1,6 +1,5 @@
 """
 seat_tool.py: the operator's hand on a galaxy's seat map
-=========================================================
     python seat_tool.py firebase://cs-resurgence/sandbox list
     python seat_tool.py firebase://cs-resurgence/sandbox candidates
     python seat_tool.py firebase://cs-resurgence/sandbox candidates --code Ab3dE9xQ
@@ -8,44 +7,17 @@ seat_tool.py: the operator's hand on a galaxy's seat map
     python seat_tool.py firebase://cs-resurgence/sandbox rebind DemoPlayer <uid> --dry-run
     python seat_tool.py firebase://cs-resurgence/sandbox bind Newcomer <uid>
 
-A seat is a `seats` entry on the galaxy document, `{uid: civ}`, and the relay
-lets a Firebase uid act as a civ only when that entry says so (J4). The uid is
-per data directory rather than per person, so a player who reinstalls Windows,
-moves the install or runs a second copy arrives with a uid that holds nothing
-and is refused their own empire. This moves the seat to the new uid.
+A seat is a `seats` entry on the galaxy document, `{uid: civ}`; the relay lets
+a Firebase uid act as a civ only when that entry says so. The uid is per data
+directory, so a reinstall or a second copy arrives with a uid that holds
+nothing. `rebind` moves the seat to the new uid, in one transaction. Runs with
+the operator's administrator credentials, never through the relay.
 
-It runs with the operator's administrator credentials, the same ones the
-referee uses, and never through the relay. No player route writes a seat
-except the opt-in first-use claim, and that stays true.
-
-How the operator learns the new uid
------------------------------------
-The player cannot see their uid, and the file that holds it, `fb_identity.json`,
-also holds a refresh token that is a credential. Nobody asks a player for that
-file. `candidates` answers the question from the operator's side instead: it
-lists every Firebase sign-in that holds no seat in this galaxy, most recently
-active first, with when it was created and when it last refreshed a token. A
-launcher refreshes on start and hourly while it runs, so a player who has just
-been refused on a fresh install is the unseated sign-in created and refreshed
-a few minutes ago. Sign-ins seated in another galaxy are marked, because a
-player who plays two galaxies is not the stranger being looked for.
-
-The launcher also shows a player code, the first eight characters of its uid,
-under its title and in the refusal a player meets when their seat is held by
-another sign-in. `candidates --code` narrows the listing to the uids starting
-with it, case-sensitive as a uid is, and says so when none match or several
-do. The code is not a credential: it names a sign-in, and a rebind still needs
-the operator's administrator credentials.
-
-Why rebind and not release
---------------------------
-A release, deleting the seat and letting the next first-use claim take it, was
-considered and not built. Under `seat_claim: 'first-use'` it hands an
-established empire to whichever sign-in submits as that civ first, and the
-roster is public, so it is a land grab of the one thing a player is trying to
-get back. Under the default, where first-use is off, a released civ is played
-by nobody until the operator binds it anyway. A rebind names the uid, happens
-in one transaction and leaves no window.
+`candidates` lists every sign-in holding no seat in this galaxy, most recently
+active first; a launcher refreshes its token on start and hourly. Sign-ins
+seated in another galaxy are marked. `--code` narrows the listing to uids
+starting with the player code the launcher shows (the first eight characters of
+its uid, case-sensitive). The code names a sign-in and is not a credential.
 
 What it refuses
 ---------------
@@ -58,15 +30,12 @@ What it refuses
 
 A target that already holds this very civ changes nothing and says so.
 
-`bind` is the same write for a civ that no uid holds, and refuses a held one.
-A join granted at a boundary binds its own seat (`joins.commit`), so `bind` is
-for the cases that leaves unseated: a referee killed between publishing the
-new civ and committing it, a civ seeded into the roster by hand, and a joiner
-whose sign-in was already playing another civ. `joined` names the uid that
-asked, and a request still waiting names it too.
+`bind` is the same write for a civ that no uid holds, and refuses a held one:
+for a civ left unseated by an interrupted join, a civ seeded by hand, or a
+joiner already playing another civ. `joined` names the uid that asked.
 
-The last move of each seat is kept on the document under `seats_rebound`, which
-is not in the store's state allowlist and so is never served to a player.
+The last move of each seat is kept under `seats_rebound`, which is outside the
+store's state allowlist and never served to a player.
 """
 from __future__ import annotations
 
@@ -88,13 +57,10 @@ for _d in (SERVER, HERE):
 
 import firebase_store                                           # noqa: E402
 
-# Where the last move of each seat is recorded on the galaxy document.
-REBOUND_KEY = 'seats_rebound'
+REBOUND_KEY = 'seats_rebound'   # galaxy document field holding each seat's last move
 
-# A Firebase uid is letters and digits: 28 for an anonymous user, and never
-# anything else from the providers this project uses. Checked because the uid
-# becomes part of a Firestore field path, where a dot or a slash would write
-# somewhere other than `seats`.
+# A uid becomes part of a Firestore field path, so it must be plain letters and
+# digits; a dot or slash would write outside `seats`.
 UID_RE = re.compile(r'^[A-Za-z0-9]{1,128}$')
 
 IDENTITY_TOOLKIT = 'https://identitytoolkit.googleapis.com'
@@ -105,7 +71,6 @@ class SeatRefused(Exception):
     """An operator request this tool declined, with the reason as its text."""
 
 
-# ── the galaxy document ──────────────────────────────────────────────────────
 def open_galaxy(spec: str):
     store = firebase_store.open_firebase_store(spec)
     if not store.galaxy:
@@ -136,8 +101,8 @@ def holder_of(doc: dict, civ: str):
 
 def check_rebind(doc: dict, galaxy: str, civ: str, new_uid: str,
                  bind: bool = False):
-    """The uid the seat moves from, or SeatRefused. Pure, so the transaction
-    and a dry run apply exactly the same rules.
+    """The uid the seat moves from, or SeatRefused. Shared by the transaction
+    and a dry run.
 
     With `bind`, the civ must be one nobody holds and the answer is None.
     """
@@ -167,8 +132,8 @@ def rebind(store, civ: str, new_uid: str, dry_run: bool = False,
     """Move `civ`'s seat to `new_uid`, or with `bind` seat a civ nobody holds.
     Returns what was done.
 
-    In a transaction, so a first-use claim landing in the same second cannot
-    leave the civ held twice or the target holding two seats.
+    Transactional, so a concurrent first-use claim cannot leave the civ held
+    twice or the target holding two seats.
     """
     def done(old, dry):
         return {'civ': civ, 'from': old, 'to': new_uid,
@@ -191,8 +156,7 @@ def rebind(store, civ: str, new_uid: str, dry_run: bool = False,
                            bind)
         if old == new_uid:
             return old
-        # A civ name is whatever a player typed and may hold a dot, so its
-        # path is quoted rather than joined. A uid was checked to be plain.
+        # A civ name may hold a dot, so its path is quoted. A uid is plain.
         fields = {f'seats.{new_uid}': civ,
                   FieldPath(REBOUND_KEY, civ).to_api_repr():
                       {'from': old, 'to': new_uid, 'at': time.time()}}
@@ -204,14 +168,12 @@ def rebind(store, civ: str, new_uid: str, dry_run: bool = False,
     return done(_move(store.fs.transaction(), store.doc), False)
 
 
-# ── Firebase Auth, read as an administrator ──────────────────────────────────
 def _auth_base(project: str):
     """(url prefix, headers) for the Identity Toolkit admin API.
 
     The Auth emulator accepts `Bearer owner` as an administrator. Against the
-    real service the request carries the operator's default credentials,
-    billed to the galaxy's project for the reason `FirebaseTurnStore.credentials`
-    gives.
+    real service the request carries the operator's default credentials, with
+    the galaxy's project as quota project.
     """
     emu = os.environ.get('FIREBASE_AUTH_EMULATOR_HOST')
     if emu:
@@ -294,7 +256,7 @@ def candidates(store, users: list = None, elsewhere: dict = None) -> list:
 
     Each row is `{uid, created, last_active, elsewhere}`, times as epoch
     seconds. `last_active` is the later of the last sign-in and the last token
-    refresh, which is the last time that install's launcher was running.
+    refresh.
     """
     doc = galaxy_doc(store)
     held = seats(doc)
@@ -314,7 +276,6 @@ def candidates(store, users: list = None, elsewhere: dict = None) -> list:
     return rows
 
 
-# ── the command line ─────────────────────────────────────────────────────────
 def _when(epoch) -> str:
     if not epoch:
         return '-'
@@ -373,11 +334,7 @@ def _row_line(r) -> str:
 def _by_code(store, out, rows, code) -> int:
     """`candidates --code`: the sign-in a player's player code names.
 
-    The launcher shows the first characters of its uid as a player code, so a
-    player can read it out and the operator need not pick the stranger out by
-    timing. Exactly one match is the answer. None and several are each said
-    plainly, because a rebind to the wrong one of two locks a player out.
-    Exit status 0 for exactly one match and 1 otherwise, so a script can tell.
+    Exit status 0 for exactly one match and 1 for none or several.
     """
     found = by_code(rows, code)
     if len(found) == 1:

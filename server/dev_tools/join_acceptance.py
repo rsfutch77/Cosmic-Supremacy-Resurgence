@@ -7,22 +7,12 @@ join_acceptance.py: does a galaxy still play after civs join it?
     python join_acceptance.py k2 --joins 12 --turns 100
     python join_acceptance.py load --dat k2_out.dat
 
-The live half of K1 and the long run of K2. Everything `inject_civ` does to a
-blob is checked on disk elsewhere; what is checked here is the engine, so every
-step runs a real client and reads the blob the client wrote back.
+Every step runs a real client and reads the blob the client wrote back.
 
-`prepare` builds the K1 fixture. It gives seat one two colony ships and two
-colonise orders, and the first of those two targets is chosen to be the exact
-planet `pick_homeworld` returns when reservations are not fed to it. That is
-what makes the K1 placement check able to fail: on this galaxy, as on every
-galaxy in the repository, the maximin pick does not collide with a colonisation
-in flight by accident, so a collision has to be arranged before the reservation
-has anything to do. With the order in place an unreserved picker takes the
-planet the colony ship is flying to, and the run records both answers.
-
-The second order is short range, a planet a system away rather than across the
-galaxy, because the colonisation has to actually complete inside a run that a
-person will wait for. It is the one whose arrival turn is compared.
+`prepare` gives seat one two colonise orders. The far target is the planet
+`pick_homeworld` returns with no reservations, so the placement check can
+fail; the near target is a system away, so its colonisation completes within
+the run.
 
 The runs, and what counts as a failure:
 
@@ -46,17 +36,12 @@ The runs, and what counts as a failure:
               already holding it. Failure: the client exits during the load, or
               the state never becomes readable.
 
-The turn count matters to what K1 proves. The near target is settled within two
-turns and the contested planet takes fifty-two, so a run short enough to see the
-first says nothing about the second, and the second is the one the reservation
-was written for. Sixty turns covers both.
+On the default fixture the near target settles within two turns and the far
+one takes fifty-two, so `k1 --turns 60` covers both.
 
-A blob that loads once is not the bar, so nothing here scores a load by the
-process still being alive: `game_cycle.launch` waits for the galaxy to become
-readable and reports the turn it read. The trap on the other side is that the
-same check fails for a galaxy that loaded perfectly well when the blob is
-stamped for a civ that owns nothing. Every blob written here is stamped for a
-civ that owns at least one planet and the stamp is named in the log.
+A load counts only when `game_cycle.launch` reads the galaxy's state. That
+check also fails for a blob stamped for a civ that owns nothing, so every
+blob here is stamped for a civ that owns a planet, named in the log.
 
 Nothing here writes to a turn store. The galaxy under test is a copy on disk.
 """
@@ -127,9 +112,7 @@ def high_water(blob):
 def routs(blob):
     """Every ship's raw `ROUT` bytes, by ship object id.
 
-    Compared before and after an injection. The parsed fields would miss a
-    section that kept its numbers and moved, and the splice that widens the
-    enclosing sections is exactly the operation that could move one.
+    Raw bytes, so a section that moved without changing its fields is caught.
     """
     out = {}
     tree = sp.parse_blob(blob)
@@ -142,7 +125,6 @@ def routs(blob):
     return out
 
 
-# ── the client ───────────────────────────────────────────────────────────────
 def advance(n, secs=10):
     """Drive the running client `n` turns. Raises unless it got there."""
     r = subprocess.run([sys.executable, ADVANCE, str(n), "--secs", str(secs)],
@@ -157,11 +139,7 @@ def advance(n, secs=10):
 def play(dat, turns, purpose, tag, secs=10, every=1):
     """Launch on `dat`, advance `turns` turns, capture every `every` of them.
 
-    Captures come out of the running client rather than out of a relaunch, so a
-    run of twenty turns costs one load rather than twenty. `game_cycle.launch`
-    is what decides the galaxy opened, and it waits on the state rather than on
-    a timer.
-
+    Captures come out of the running client, so a run costs one load.
     Returns (turn the client opened at, [(turn, blob)]).
     """
     import game_cycle as gc
@@ -200,14 +178,8 @@ def load_check(dat, purpose, exe=None, min_suns=11):
     return snap.turn
 
 
-# ── prepare ──────────────────────────────────────────────────────────────────
 def near_target(blob, civ):
-    """The closest free planet to a civ's homeworld.
-
-    Range is the whole of why this one exists. The far target proves the
-    reservation binds; a colonisation only proves it completed if somebody is
-    still waiting when it does.
-    """
+    """(homeworld, closest free planet to it) for a civ."""
     owner = oid_of(blob, civ)
     planets = icv.planet_records(blob)
     home = max((p for p in planets if p["owner"] == owner),
@@ -254,9 +226,7 @@ def prepare(fixture, civ, joiner):
                              f"the order was staged; the rest of the run would "
                              f"prove nothing")
 
-    # What the placement would do with no reservation at all. This is the
-    # control for the check below: without it, "the newcomer did not take the
-    # target" is a sentence about a galaxy where the collision never arose.
+    # Control: an unreserved pick must collide with the far target.
     unreserved = icv.pick_homeworld(icv.planet_records(base), set(), margin=0.0)
     log(f"\n  an unreserved pick would take planet #{unreserved['id']}")
     if unreserved["id"] != far["id"]:
@@ -319,7 +289,6 @@ def prepare(fixture, civ, joiner):
     return meta
 
 
-# ── K1 ───────────────────────────────────────────────────────────────────────
 def meta():
     with open(path("k1_meta.json")) as f:
         return json.load(f)
@@ -336,10 +305,8 @@ def first_flip(caps, planet_id, want_owner):
 def flight(blob):
     """Every ship under orders: what it is doing, where, and how far along.
 
-    The progress field is what makes this worth comparing turn by turn. Two
-    runs can agree on every planet's owner while one of them is flying a ship
-    somewhere else, and a colonisation that lands on the right turn by accident
-    is the failure this is meant to catch.
+    Includes progress, so two runs that agree on planet owners but differ on a
+    ship in flight do not compare equal.
     """
     return {d["ship"]: (d["order_type"], tuple(sorted(d["planets"])),
                         round(d["progress"], 2))
@@ -397,9 +364,7 @@ def k1(turns, secs=10):
             f"planet #{m['far']} to be settled in either galaxy; the schedule "
             f"above is the near target's")
 
-    # Every ship under orders, every turn, in both galaxies. The owner of one
-    # planet agreeing says nothing about the ship that has not arrived yet, and
-    # the contested planet is the one a ship is still flying to.
+    # Every ship under orders, every turn, in both galaxies.
     log(f"\n=== ships under orders, turn by turn ===")
     shared = dict(j_caps)
     diverged = []
@@ -421,9 +386,7 @@ def k1(turns, secs=10):
         last_flight = flight(b_caps[-1][1])
         log(f"  at turn {b_caps[-1][0]} both galaxies read {last_flight}")
 
-    # A galaxy where nothing changes cannot show that anything works. The
-    # colonised planet has to grow, and so does the world the newcomer was
-    # given, or the run is a screenshot rather than a game.
+    # The colonised planet and the newcomer's homeworld must both grow.
     log(f"\n=== the galaxy moved ===")
     for label, caps, pid in (("near target", j_caps, m["near"]),
                              ("joiner homeworld", j_caps, m["home"])):
@@ -435,9 +398,7 @@ def k1(turns, secs=10):
             log(f"  FAIL: #{pid} did not grow, so the run proves nothing")
             ok = False
 
-    # The joined galaxy must still hold the civ that joined, with the homeworld
-    # it was given. A civ the engine dropped on load would leave every other
-    # check above passing.
+    # The joined civ and its homeworld must survive the run.
     last = j_caps[-1][1]
     still = oid_of(last, m["joiner"])
     home_owner = owner_of(last, m["home"])
@@ -461,17 +422,13 @@ def k1_load():
     return 0
 
 
-# ── K2 ───────────────────────────────────────────────────────────────────────
 def k2(fixture, joins, turns, secs=10, stamp=None, stamp_mode="newcomer"):
     """N joins spread across M turns of one galaxy.
 
-    Each segment plays its turns from a cold launch and captures once, so the
-    blob every join is applied to is one the engine wrote. The civ a segment is
-    stamped for is by default the one that joined last, which is the only stamp
-    that shows a newcomer is playable rather than merely present. `seat-one`
-    keeps every segment on the civ the galaxy started with, which is the mode to
-    fall back to if a newcomer's client turns out to want something from a
-    person before it will advance a turn.
+    Each segment plays its turns from a cold launch and captures once, so
+    every join is applied to a blob the engine wrote. By default a segment is
+    played as the civ that joined last; `seat-one` keeps every segment on the
+    civ the galaxy started with.
     """
     blob = sp.load_any(fixture)
     schedule = [round((i + 1) * turns / joins) for i in range(joins)]
@@ -604,10 +561,7 @@ def main():
     if a.step == "k1load":
         return k1_load()
     if a.step == "load":
-        # A result of a run is not shown to load by the run that produced it:
-        # the client that wrote it was already open. Opening it cold is the
-        # only thing that says the blob the engine wrote back is one the engine
-        # will take, which is the check K4's tick step exists to make.
+        # Opened cold, in a client that was not already holding it.
         blob = sp.load_any(path(a.dat))
         log(f"{a.dat}: turn {wa.turn_of(blob)}, {len(blob):,} bytes, "
             f"{civ_count(blob)} civ(s), high-water {high_water(blob)}")

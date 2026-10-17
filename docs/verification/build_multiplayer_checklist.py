@@ -1,21 +1,15 @@
 """
 build_multiplayer_checklist.py: write Multiplayer_Checklist.md
-===============================================================
     python docs/verification/build_multiplayer_checklist.py
 
-Two parts.
+**M items**, the multiplayer experience. Their sources may not be reproduced
+(Xbox Requirements, Epic Games Store testing guide, Pinelle et al. 2009, Fair
+Play Alliance, PEGI Online Safety Code), so each is written in this project's
+words and cites the original by ID.
 
-**M items**, the multiplayer experience: joining, playing turns, connection
-loss, identity and seats, talking to other players, reporting and enforcement.
-Their sources are platform requirements and published research that may not be
-reproduced (Xbox Requirements, Epic Games Store testing guide, Pinelle et al.
-2009, Fair Play Alliance, PEGI Online Safety Code), so each requirement is
-written in this project's words and cites the original by ID.
-
-**GAG items**, accessibility: every guideline of the Game Accessibility
-Guidelines checklist, reproduced (gameaccessibilityguidelines.com, "no
-restriction on use beyond republishing under a different name"), each with one
-disposition:
+**GAG items**, accessibility: every Game Accessibility Guidelines entry,
+reproduced (gameaccessibilityguidelines.com, "no restriction on use beyond
+republishing under a different name"), each with one disposition:
 
     apply   a checkbox, with sub-items
     done    ticked, with what verified it
@@ -23,9 +17,9 @@ disposition:
             listed so it is stated to players, not hidden
     na      not applicable, with the reason
 
-The GAG spreadsheet carries no IDs, so they are assigned here by category,
-level and position: GAG-Mot-B1 is Motor, Basic, first row. A guideline that
-appears under several categories carries the same decision in each.
+GAG IDs are assigned by category, level and position: GAG-Mot-B1 is Motor,
+Basic, first row. A guideline under several categories carries the same
+decision in each.
 
 Sources are read from tools/checklists/multiplayer/ (gitignored).
 """
@@ -39,8 +33,7 @@ OUT = os.path.join(HERE, '2 - Multiplayer_Checklist.md')
 
 CLIENT = 'The client is the original binary; its interface cannot change without patching it.'
 
-# ── M items ──────────────────────────────────────────────────────────────────
-# (id, requirement in our words, sources, sub-items)
+# M items: (id, requirement in our words, sources, sub-items)
 M = [
     ('Joining a galaxy', [
         ('M1', 'A player can find a galaxy, see what it is (turn length, turn number, how many players, whether it is open) and ask to join, from the launcher, without reading documentation first.',
@@ -152,7 +145,7 @@ M = [
     ]),
 ]
 
-# ── GAG decisions, by guideline text ─────────────────────────────────────────
+# GAG decisions, by guideline text
 NA = lambda why: ('na', why, [])
 LIMIT = ('limit', CLIENT, [])
 

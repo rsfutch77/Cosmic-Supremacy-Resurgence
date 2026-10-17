@@ -1,6 +1,5 @@
 """
-galaxy_tool.py: the operator ends a galaxy and starts the next one (K5)
-========================================================================
+galaxy_tool.py: the operator ends a galaxy and starts the next one
     python galaxy_tool.py firebase://cs-resurgence list
     python galaxy_tool.py firebase://cs-resurgence close sandbox --reason "Season one is over."
     python galaxy_tool.py firebase://cs-resurgence reopen sandbox
@@ -9,56 +8,31 @@ galaxy_tool.py: the operator ends a galaxy and starts the next one (K5)
         --min-build 0.2.0
     python galaxy_tool.py firebase://cs-resurgence start season2 ... --dry-run
 
-A galaxy has no season timer. The operator calls one over and starts another,
-and this is the whole of that from a command line. It runs with the operator's
-administrator credentials, the ones the referee holds, against a galaxy
-directory: a `firebase://project` spec, or a folder of galaxies for development.
-The relay has no route for any of it, on purpose.
+Runs with the operator's administrator credentials against a galaxy
+directory: a `firebase://project` spec, or a folder of galaxies for
+development. The relay has no route for any of it.
 
-Closing
--------
-`close` writes `status: closed` and the operator's reason into the galaxy's own
-state, through `galaxy_directory.set_status`, so the listing and the store
-cannot disagree. Nothing is deleted. Turns, submissions, notes and the archive
-all still read; the stores refuse a submission (`GalaxyClosed`), the relay
-refuses an upload ticket with the reason in the refusal, the referee worker
-idles, and `joins` and `abandonment` leave a closed galaxy alone. A launcher
-reads the status and the reason out of `/state` and says the galaxy has ended
-(`launcher.closed_problem`). The reason is required, because "closed" on its
-own reads to a player as a fault rather than a decision. After the write the
-tool reads the current turn and its archive back, so a close that left the
-galaxy unreadable is reported rather than assumed away.
+`close` writes `status: closed` and the required reason into the galaxy's
+state through `galaxy_directory.set_status`. Nothing is deleted; turns and the
+archive still read, submissions are refused, and the launcher shows the
+reason. The current turn and its archive are read back after the write.
 
-Starting
---------
-`start` registers a galaxy in the directory, which is what makes the Galaxies
-page list it, and publishes its first turn with the roster. The galaxy is one
-of two things:
+`start` registers a galaxy and publishes its first turn with the roster, from
+one of:
 
   --generate FILE   a freshly generated galaxy, made into one civ per player by
                     `make_multiplayer_galaxy.build`
-  --blob FILE       a galaxy already in the shape wanted; every --player has to
-                    be a civ in it, since a roster naming a civ the galaxy does
-                    not hold fails every submission from that player
+  --blob FILE       a galaxy that already holds a civ for every --player
 
-It refuses an id that already has a turn, so a typo cannot publish over a
-running galaxy. `--warn` and `--reclaim` set the abandonment thresholds (K3),
-and `--seat-claim first-use` opens a Firebase galaxy's roster to first-use
-claims, which is off by default for the reason `relay.claim_seat` gives.
-`--min-build 0.2.0` writes the galaxy's `min_build`, L2's gate: a launcher
-older than it refuses to play and points at the release page. It has to be a
-dotted number, because the launcher reads anything else as no minimum.
+It refuses an id that already has a turn. `--warn` and `--reclaim` set the
+abandonment thresholds, `--seat-claim first-use` opens a Firebase galaxy's
+roster to first-use claims, and `--min-build` (a dotted number) is the oldest
+launcher build that may play. `--replaces OLD` closes OLD only after the new
+galaxy is published.
 
-`--replaces OLD` closes OLD once the new galaxy is published, and not before,
-so a start that fails leaves the old galaxy open and players are never left
-with nothing to play. Its reason defaults to a sentence naming the new galaxy.
-
-The referee worker ticks one galaxy, named by its `--store`. A fresh galaxy is
-not ticked until the worker is pointed at it; the tool prints that command and
-does not run it.
-
-`--dry-run` on any write checks everything it can, including building a
-generated galaxy in memory, says what it would do, and writes nothing.
+The referee worker ticks one galaxy, named by its `--store`; the tool prints
+that command and does not run it. `--dry-run` checks everything, including
+building a generated galaxy in memory, and writes nothing.
 """
 from __future__ import annotations
 
@@ -78,15 +52,14 @@ import abandonment                                              # noqa: E402
 import galaxy_directory as gd                                   # noqa: E402
 import turn_store                                               # noqa: E402
 
-# The beta's turn length.
-TURN_SECONDS = 14400
+TURN_SECONDS = 14400                # the beta's turn length
 
 # What a replaced galaxy tells its players when the operator gives no reason.
 REPLACED = 'This galaxy has ended. {name} has started in its place.'
 
 SEAT_CLAIMS = ('first-use',)
 
-# A build the launcher's `build_parts` can order. Anything else gates nobody.
+# A build the launcher's `build_parts` can order; anything else is no minimum.
 MIN_BUILD = re.compile(r'\d+(?:\.\d+)*')
 
 
@@ -94,7 +67,6 @@ class Refused(Exception):
     """An operator request this tool declined, with the reason as its text."""
 
 
-# ── reading ──────────────────────────────────────────────────────────────────
 def is_firebase(directory) -> bool:
     return isinstance(directory, gd.FirebaseGalaxyDirectory)
 
@@ -115,7 +87,6 @@ def readable(store) -> dict:
     return out
 
 
-# ── closing ──────────────────────────────────────────────────────────────────
 def check_close(directory, gid: str, reason: str):
     """The row being closed, or Refused. Changes nothing."""
     if not (reason or '').strip():
@@ -171,7 +142,6 @@ def reopen(directory, gid: str, dry_run: bool = False, out=None) -> dict:
     return {'gid': gid, 'dry_run': False}
 
 
-# ── starting ─────────────────────────────────────────────────────────────────
 def first_blob(players, blob_path: str = None, generate: str = None,
                log=None) -> bytes:
     """The first turn of the new galaxy, or Refused."""
@@ -290,7 +260,6 @@ def start(directory, gid: str, name: str, players, blob_path: str = None,
     return done
 
 
-# ── the command line ─────────────────────────────────────────────────────────
 def cmd_list(directory, out) -> int:
     rows = directory.galaxies()
     if not rows:

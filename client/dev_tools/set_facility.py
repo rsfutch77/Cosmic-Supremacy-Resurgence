@@ -1,17 +1,14 @@
 """
 set_facility.py: List or set facility counts on a planet
-=========================================================
+
 Each planet's built facilities live in an MSVC std::map at Planet:204. Every node
-holds an embedded Facility at node+12, with the facility TYPE ID at node+16 and
-its COUNT at node+20. The count is a plain int, so raising it needs no
-allocation and changes no container structure, it is the one safe way to give a
-planet more of something it already has.
+holds an embedded Facility at node+12, with the type id at node+16 and the count
+(a plain int) at node+20.
 
     python set_facility.py --list
     python set_facility.py --planet 41 --type 0 --count 10
 
-Limitation: a facility TYPE the planet does not already have cannot be added,
-because that needs a new map node and external code cannot call the game's
+Only existing types can be raised: a new type needs a map node from the game's
 allocator. Build one of the type first, then raise its count.
 
 Known type ids: 0 farm, 2 shipyard, 4 university, 6 military camp,

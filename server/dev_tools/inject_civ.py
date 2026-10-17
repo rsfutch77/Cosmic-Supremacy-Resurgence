@@ -10,45 +10,13 @@ the same way `inject_design.py` gets a ship design built.
     python inject_civ.py ../saves/<capture>.b64 --name Ceti --name Draco \
         -o ../loadgame_blob.b64
 
-`--name` is repeatable, so a two-civ galaxy becomes a twenty-civ galaxy in one
-pass: each new civ gets its own auto-picked homeworld, chosen to sit as far as
-possible from every planet already spoken for. A planet nobody owns yet counts
-as spoken for when a ship is already under orders to fly there, so a join does
-not take a colonisation out from under a colony ship in flight.
+`--name` is repeatable. Each new civ gets an auto-picked homeworld as far as
+possible from every planet already spoken for; an unowned planet a ship is
+already ordered to counts as spoken for.
 
-[ ] The reservation is verified against blobs on disk only. A galaxy with two
-colonisations in flight was injected into and the ships' `ROUT` sections came
-out byte-identical, and across the tick archive the planet a colonise order
-names is the planet that changes hands two ticks later, 7 times out of 7. What
-is not verified is that such a galaxy then loads in the client and the colony
-ship still arrives, which is the second half of K1's "done when".
-
-**A new civ is levelled to what a generated civ starts with, not to what its
-donor holds now.** Cloning is how a civ gets built, and a donor in a played
-galaxy is a developed empire: its homeworld carries eleven turns of population
-and stores, its `OWNR` carries every design it has researched and its bank.
-`starting_kit` puts the clone back to the generation state on every field this
-project has decoded (the citizen array, the stationed military, the
-recruitment rate, the production queue and its progress, the design book, the
-credit balance and the research topic) and gives it the hulls a generated civ
-starts with. What it cannot put back is named in `starting_kit`'s docstring.
-Pass `kit=False` for the old behaviour, which is a clone of the donor as it
-stands.
-
-[ ] **A CLONED CIV INHERITS THE DONOR'S EXPLORED MAP, AND THAT IS A CHEAT.**
-`EXSY` is copied verbatim, so injecting a civ off a developed donor hands the
-newcomer everything that donor had found, including, once anyone has met
-anyone, where the home planets are. Nobody should start a game knowing that.
-
-[ ] **Homeworld placement is one hardcoded policy, and it should be a choice.**
-`pick_homeworld` spreads civs as far apart as it can, which is the right default
-for testing the strategy; contact is then a thing the AI has to earn rather than
-a thing the setup hands it. It is not the only placement anyone will want:
-RANDOM placement is the obvious second (it is what a real galaxy generator does,
-and it is the only way to test how the rules cope with a hostile neighbour two
-systems away), and clustered or per-team placement follow from that. Make it a
-`--placement` option rather than adding a second function.
-
+A new civ is levelled to what a generated civ starts with (`starting_kit`),
+not to what its donor holds now. Pass `kit=False` for a plain clone of the
+donor.
 """
 import argparse
 import math
@@ -65,72 +33,42 @@ OWNR, DATA, PLNT, PLPR, DSGN, SDPR, KNPL, GLXY = (
     b"OWNR", b"DATA", b"PLNT", b"PLPR", b"DSGN", b"SDPR", b"KNPL", b"GLXY")
 SOLA, SUN, ROUT = b"SOLA", b"SUN ", b"ROUT"
 
-# How close a ROUT target has to sit to an object's stored position to be read
-# as naming that object. Every target measured came in at 0.0000, and the
-# nearest miss in the corpus was 12.5, so the exact value of this tolerance
-# changes nothing; it exists so the match does not depend on float equality.
+# How close a ROUT target has to sit to an object's stored position to name
+# that object. Measured targets sit exactly on it; the tolerance only avoids
+# float equality.
 MATCH_TOL = 0.01
 
-# ── what a generation hands a civ ────────────────────────────────────────────
-# Counted rather than assumed, over the five independent generations captured
-# in `server/saves` (save_008, save_009, save_016, save_234, save_236) plus the
-# two turn-1 captures save_127 and save_146, eleven civs between them. Every
-# civ agrees on every row below.
-#
-# It is worth naming why a constant is right here when `wipe_civ` concluded the
-# opposite for a blank `PLPR`. These are counts and flags, not a run of bytes
-# out of another galaxy: the one thing that has to come from this galaxy, the
-# empty production queue, is taken from one of its own planets by `empty_prod`.
+# What a generated civ starts with, as every generated civ in the captures
+# reads it.
 STARTING_SHIPS = 2
 STARTING_CREDITS = 200          # 200 at turn 0; the turn-1 captures read 216,
                                 # which is 200 and one turn of income
 STARTING_RECRUIT = 0
 STARTING_PROGRESS = 0
 
-# The homeworld's food, store over capacity, as the client shows it. Measured
-# on `client\\SinglePlayerGalaxy.dat`, whose two starting civs sit on separately
-# placed homeworlds and **both** read 0/600, so it is the starting value rather
-# than one planet's.
-#
-# Found because a joiner showed 104/1280 on screen, which is its donor's
-# eleven-citizen capital on a seven-citizen world. An unowned planet in the
-# same galaxy reads 0/40, so the transplant was overwriting the planet's own
-# figure with the donor's rather than leaving something untouched.
-#
-# Not computed from population on purpose: capacity rises with a planet's
-# development and 4, 5, 8 and 11 citizens give 240, 360, 760 and 1280, which
-# fits no simple curve in population alone. A generated homeworld is the only
-# thing that can say what a generated homeworld holds.
+# A generated homeworld's food, store over capacity, as the client shows it.
+# Capacity grows with development, not population alone, so it is a constant.
 STARTING_FOOD_STORE = 0
 STARTING_FOOD_CAP = 600
 
 # The homeworld's facilities and the rest of its settled block, as a generation
-# writes them. Counted across 32 homeworlds at age 0.0 in the local blobs: every
-# one carries these three facilities, and all but two carry the two undecoded
-# values below, those two being earlier joiner outputs of this tool. See
-# `merge_orders.SETTLED_LEN` for the layout and what each field is.
+# writes them. See `merge_orders.SETTLED_LEN` for the layout.
 STARTING_FACILITIES = ((2, 1), (6, 1), (9, 1))
 STARTING_SETTLED_COUNTER = 1
 STARTING_SETTLED_LAST = 10
 
-# A homeworld's founding turn. Every homeworld read carries 0 and an age equal
-# to the turn, and every colony its real founding turn, so a joiner's capital
-# is written as a homeworld rather than as a colony founded today: whether the
-# engine reads founded-at-0 as "capital" is not known, and matching every
-# incumbent's capital is the reading that cannot be wrong about it.
+# A homeworld's founding turn. Every homeworld carries 0 (a colony carries its
+# real founding turn), so a joiner's capital matches the incumbents'.
 HOMEWORLD_FOUNDED = 0
 
-# Both research fields read this at generation, and picking a field overwrites
-# it, so it is the marker for "nothing chosen" rather than a field id.
+# Both research fields read this at generation: "nothing chosen".
 RESEARCH_UNSET = b"\xff\xff\xff\xff"
 
-# Four farmers, two workers and one scientist, in that order, and no stationed
-# military. The array is kept sorted by job, which is why the order is part of
-# the fact rather than incidental to it.
+# Four farmers, two workers and one scientist, and no stationed military. The
+# array is kept sorted by job.
 STARTING_JOBS = (0, 0, 0, 0, 1, 1, 2)
 
 
-# ── section helpers ───────────────────────────────────────────────────────────
 def set_len(buf, off, new_len):
     ver = struct.unpack_from("<I", buf, off + 4)[0] >> 26
     struct.pack_into("<I", buf, off + 4, (ver << 26) | new_len)
@@ -145,11 +83,9 @@ def add_len(buf, off, delta):
 def splice(blob, start, end, new_bytes, log=print, what=""):
     """Replace blob[start:end], widening every section that encloses it.
 
-    Sections nest and carry spanning lengths, so a payload cannot grow on its
-    own: `inject_design.py` produced a blob the client rejected outright by
-    missing one ancestor. Ancestors are found from a point strictly INSIDE the
-    replaced range, so the enclosing sections are widened and the neighbours are
-    not.
+    Ancestors are found from a point strictly inside the replaced range, so
+    enclosing sections are widened and neighbours are not. Missing one
+    ancestor makes the client reject the blob.
     """
     delta = len(new_bytes) - (end - start)
     out = bytearray(blob)
@@ -176,13 +112,11 @@ def replace_u32(buf, old, new, start, end):
         pos = i + 4
 
 
-# ── records ───────────────────────────────────────────────────────────────────
 def owner_records(blob):
     """Every OWNR, with its name and object id located.
 
-    Validated by shape rather than by trusting the tag: a four-byte run can
-    occur inside binary payloads, so a candidate has to carry a plausible
-    name length, a printable name and a DATA child right behind it.
+    The tag bytes can occur inside binary payloads, so a candidate needs a
+    plausible name length, a printable name and a DATA child right behind it.
     """
     out = []
     for off in idg.find_all(blob, OWNR):
@@ -266,10 +200,8 @@ def dist(a, b):
 def system_records(blob, tree=None):
     """Every solar system: the SUN's id and position, and its planets' ids.
 
-    Membership comes from the tree, because `SOLA` holds one `SUN` followed by
-    that system's `PLNT` children. Object ids tile the galaxy contiguously and a
-    system's id is the first id of its block, so membership could be guessed
-    from the numbering, but a guess is not needed when the nesting states it.
+    Membership comes from the tree: `SOLA` holds one `SUN` followed by that
+    system's `PLNT` children.
     """
     tree = sp.parse_blob(blob) if tree is None else tree
     out = []
@@ -289,29 +221,17 @@ def system_records(blob, tree=None):
 def ship_destinations(blob, tree=None):
     """Where every ship carrying an order is going, as planet ids.
 
-    **A `ROUT` records no destination id.** What it carries is the target XYZ,
-    and that triple is a copy of the destination object's own stored position.
-    Measured over the 234 distinct galaxy blobs in this repository, all 381
-    `ROUT` targets landed either exactly on a `PLNT` position or exactly on a
-    `SUN` position, with nothing in between: the 381 split 56 planet-exact and
-    325 sun-exact, and the closest a sun-exact target ever came to a planet was
-    12.5, which is that system's innermost orbit radius.
+    A `ROUT` records no destination id. Its target XYZ is a copy of the
+    destination object's stored position, either a `PLNT` or a `SUN`.
+    `ROUT`'s `ref_id` at `+92` is the ship's starting orbit, not the
+    destination.
 
-    `ROUT`'s `ref_id` at `+92` is not the destination. It is non-zero on 29 of
-    the 381 orders, and on every one of those it repeats the id in the enclosing
-    `DYNO`'s orbit field, which is where the ship started, not where it is
-    going. The orders carrying it are also the ones still at progress 0.
+    A target on a planet reserves that planet. A target on a sun reserves every
+    planet in that `SOLA`, since the planet is not chosen until the colonise
+    order is issued.
 
-    A target on a planet reserves that planet. A target on a sun names the
-    system and not a planet inside it, so every planet in that `SOLA` is
-    reserved: which planet a colony ship settles for is not written down until
-    the colonise order is issued, and a scout in transit marks the frontier that
-    the placement margin exists to keep clear anyway.
-
-    The presence of a `ROUT` is the test for a live order, not the has-orders
-    byte. An engine-issued scout order carries a `ROUT` and advancing progress
-    with has-orders clear, so filtering on that byte would miss ships that are
-    genuinely in flight.
+    A live order is one with a `ROUT`. The has-orders byte can be clear on an
+    engine-issued scout order in flight.
     """
     tree = sp.parse_blob(blob) if tree is None else tree
     planets = planet_records(blob)
@@ -352,11 +272,7 @@ def reserved_planets(blob, tree=None):
 def system_spacing(blob, tree=None):
     """Median distance from a system to its nearest neighbour.
 
-    The placement margin is quoted in this unit rather than as a constant
-    because galaxies are not all the same density: the 108-system galaxies in
-    this repository measure 143 for it and the 32-system ones 171 to 172, while
-    the closest two systems ever come is 99.8. One constant cannot mean "a
-    system hop" in both.
+    The placement margin is quoted in this unit because galaxy density varies.
     """
     pos = [s["pos"] for s in system_records(blob, tree)]
     if len(pos) < 2:
@@ -369,43 +285,12 @@ def system_spacing(blob, tree=None):
 def seat_one(owners):
     """The civ to clone when the caller names no donor.
 
-    The lowest object id, which is the civ the galaxy generator allocated
-    first. It is the right default for two independent reasons.
-
-    **It names the seat that carries the homeworld customisation.** A generated
-    galaxy does not hand its civs equal worlds: seat one gets the customisation
-    the setup screens apply and the rest get the engine default, a difference of
-    the two `PLPR` bytes `make_multiplayer_galaxy.RATE_OFFSETS` names, and a
-    cloned civ inherits its donor's world. Of the 472 multi-civ galaxy blobs in
-    this repository, 183 hold exactly one customised homeworld, and the civ
-    holding it is the lowest object id in 183 of the 183. The two rules that
-    read like alternatives are wrong most of the time: the first `OWNR` in the
-    blob names it 60 times of 183 and the smallest `OWNR` 39 times of 183.
-    Those 183 blobs are 5 distinct civ rosters captured at many turns each, so
-    the count measures consistency across a galaxy's life rather than 183
-    independent generations.
-
-    **It cannot select a civ this tool has just added.** A new civ takes
-    `max_object_id + 1`, so a newcomer is always the highest id and never the
-    lowest. The rule is a fixed point under its own injection, which is what
-    makes a multi-name run clone every newcomer off the same civ instead of
-    chaining each off the last.
-
-    Both rejected rules fail that second test as well. The smallest `OWNR` is
-    the newcomer immediately after the first injection, because a fresh clone
-    owns one planet and nothing else. `OWNR` length also tracks designs,
-    citizens and stores, so it moves during ordinary play: over the 161 tick
-    inputs in `server/referee_work` the smallest `OWNR` names two different civs
-    within one galaxy in three of the seven galaxies, while the lowest object id
-    gives a single answer in all seven. Blob order belongs to the engine's
-    serialiser and is not seat order: 171 of the 472 blobs present something
-    other than the lowest id first, and in the three-civ demo galaxy the civ
-    `inject_civ` appended last comes back first after a tick.
-
-    `Owner:4` orders the civs the same way on all 183 and is rejected for a
-    different reason: it is a field this tool assigns and `--userid` lets the
-    caller force, including to a value already in use, so a donor rule reading
-    it would depend on an argument of the same command.
+    The lowest object id: the civ the generator allocated first. That seat
+    carries the homeworld customisation (the `PLPR` bytes
+    `make_multiplayer_galaxy.RATE_OFFSETS` names), which a clone inherits. A
+    new civ takes `max_object_id + 1`, so the rule never picks a newcomer and
+    every civ in a multi-name run clones the same donor. Blob order and `OWNR`
+    size are not seat order.
     """
     return min(owners, key=lambda o: o["oid"])
 
@@ -413,14 +298,9 @@ def seat_one(owners):
 def pick_homeworld(planets, taken, margin=0.0):
     """The uncolonised planet furthest from everything already claimed.
 
-    Maximin rather than "furthest from the mean": with twenty civs to place, the
-    mean sits in the middle of the galaxy and every pick lands on the same rim.
-
-    `margin` is a floor under the winning distance rather than a tie-breaker:
-    the pick is refused when even the furthest free planet sits closer than it.
-    On the galaxies in this repository the floor does not bind, twenty
-    consecutive picks stay above 218 while a system hop measures 143 to 172, so
-    it is a guard for a crowded galaxy and not a change to the usual pick.
+    Maximin over every claimed position. `margin` is a floor under the winning
+    distance: the pick is refused when even the furthest free planet sits
+    closer than it.
     """
     claimed = [p["pos"] for p in planets if p["owner"]] + \
               [p["pos"] for p in planets if p["id"] in taken]
@@ -441,13 +321,11 @@ def pick_homeworld(planets, taken, margin=0.0):
     return best
 
 
-# ── the starting kit ──────────────────────────────────────────────────────────
 def starting_citizens(owner_id):
     """The citizen array a generated homeworld carries, owned by `owner_id`.
 
     Nine bytes a citizen: the job id, two zero bytes, the owning civ's object
-    id, a per-citizen value and a trailing zero. Every generated homeworld
-    measured reads zero for that per-citizen value on all seven records.
+    id, a per-citizen value (zero at generation) and a trailing zero.
     """
     return b"".join(bytes((job, 0, 0)) + struct.pack("<I", owner_id)
                     + b"\x00\x00" for job in STARTING_JOBS)
@@ -458,14 +336,8 @@ def empty_prod(blob):
 
     A `PROD` is 37 bytes and ends in a nested section naming what is queued,
     `WLTH` for nothing and `FCLT` or `SHIP` for something. A never-colonised
-    planet's is the `WLTH` shape, and in every blob measured it is byte for
-    byte the record a generated homeworld carries, so the free rocks of this
-    galaxy are a source for it and no constant has to be carried in the tree.
-    That is the rule `wipe_civ` arrived at for a blank `PLPR`, and it costs
-    nothing here because a join already needs a free planet.
-
-    None when the galaxy has no uncolonised planet left, which is a galaxy that
-    could not have seated anybody anyway.
+    planet's is the `WLTH` shape, byte for byte what a generated homeworld
+    carries. None when no uncolonised planet is left.
     """
     tree = sp.parse_blob(blob)
     glxy = next(tree[0].find("GLXY"))
@@ -510,10 +382,8 @@ def planet_plpr(blob, planet_oid):
 def remove_section(buf, off):
     """Delete the whole section at `off`, shrinking every section above it.
 
-    `splice` cannot do this. It widens every section containing a point inside
-    the range it replaces, and for a deletion that range is the section itself,
-    whose own length would come out negative before the bytes carrying it are
-    dropped. Only strict ancestors are adjusted here.
+    Only strict ancestors are adjusted; `splice` would also adjust the deleted
+    section itself.
     """
     _ver, ln = idg.sec_len(bytes(buf), off)
     out = bytearray(buf)
@@ -527,19 +397,11 @@ def remove_section(buf, off):
 def keep_starting_design(rec, log=print):
     """Drop every design from a cloned `OWNR` but the one it was generated with.
 
-    A generated civ owns exactly one `DSGN`, its Colony Ship, and the engine
-    allocates it immediately after the civ itself, so the lowest design object
-    id inside an `OWNR` is the design that civ started with. Cloning a donor
-    whole hands a newcomer the donor's whole book: at turn 180 of the war
-    galaxy that is eight designs, two engine marks and a battleship among them.
-
-    The count dword sits four bytes in front of the first `DSGN`, which is
-    where `merge_orders.add_design` finds it, and a record whose count does not
-    match the designs present is left alone rather than guessed at.
-
-    One design is a shape the engine writes itself, since that is what every
-    civ has until it researches a second, and that is the argument for doing
-    this to a record the engine is about to deserialise.
+    A generated civ owns exactly one `DSGN`, its Colony Ship, allocated right
+    after the civ, so the lowest design object id inside an `OWNR` is the one
+    it started with. The count dword sits four bytes in front of the first
+    `DSGN`; a record whose count does not match the designs present is left
+    alone.
     """
     found = idg.design_records(bytes(rec))
     if len(found) < 2:
@@ -572,38 +434,21 @@ def starting_kit(blob, name, home_id, design_id, ships=STARTING_SHIPS,
                  credits=STARTING_CREDITS, template=None, log=print):
     """Level a civ this tool has just cloned to what a generation hands one.
 
-    The donor is a live empire, so a clone of it is a live empire minus its
-    fleet. This puts back every field the project has decoded: the homeworld's
-    citizen array and stationed military, its recruitment rate, its production
-    queue and the points accumulated toward it, the civ's credits and its
-    research topic, and the hulls. The design book is trimmed earlier, inside
-    the clone, because that is where the new design ids are handed out.
+    Resets the homeworld's citizen array and stationed military, recruitment
+    rate, production queue and progress, food, facilities and settled block,
+    plus the civ's credits and research topic, and adds the starting hulls.
+    The design book is trimmed earlier, inside the clone.
 
-    **The homeworld `PLPR` is put back field by field, not replaced.** A
-    transplant once differed from a generated homeworld at 17 fixed offsets.
-    Read as fields they are the food pair, the facility list and the settled
-    block after `PROD`, and the offsets only looked scattered because the
-    facility list is variable length: a donor that has built one more facility
-    shifts everything after it by eight bytes. All three are reset here. The
-    founding turn and age are written as every incumbent homeworld reads, not
-    as a colony founded today; see `HOMEWORLD_FOUNDED`.
+    The homeworld `PLPR` is reset field by field, because some planet fields
+    are uniform within a galaxy and differ between galaxies. The facility list
+    is variable length, so later fields shift with it. The rate pair at `+4`
+    and `+11` (`make_multiplayer_galaxy.RATE_OFFSETS`) is kept from the donor.
 
-    A whole generated `PLPR` is not copied in instead, because a planet record
-    carries fields that are uniform within a galaxy and differ between
-    galaxies, which `wipe_civ.pristine_planet` measured, so a template from
-    another galaxy would bring that galaxy's values with it.
+    Not reset: `OWPR` (138 bytes, 178 on a civ that has researched), `CVTR`,
+    `SERV`, `GOVS`, `ADMS`, `SPQS` and `USSE`, the civ traits among them.
 
-    What a joiner keeps from its donor on purpose is the rate pair at `+4` and
-    `+11`, which `make_multiplayer_galaxy.RATE_OFFSETS` names.
-
-    Inside `OWNR`, `OWPR` grows from 138 bytes to 178 on a civ that has
-    researched, and `CVTR`, `SERV`, `GOVS`, `ADMS`, `SPQS` and `USSE` are
-    untouched. Each is a place a donor's history still reaches a newcomer, the
-    civ traits among them.
-
-    Nothing raises. `joins._grant` turns any exception out of `add_civ` into a
-    refusal, which costs the player their seat, and a seat is worth more than a
-    level start, so each step reports what it could not do and the rest go on.
+    Nothing raises: each step logs what it could not do and the rest go on,
+    since an exception out of `add_civ` refuses the join.
     """
     import merge_orders as mo
     import inject_ship as ish
@@ -735,15 +580,13 @@ def starting_kit(blob, name, home_id, design_id, ships=STARTING_SHIPS,
     return blob
 
 
-# ── the injection ─────────────────────────────────────────────────────────────
 def pick_donor(blob, template=None):
     """(source blob, donor OWNR record, how) for a clone that names no donor.
 
-    Seat one of `blob` when it still holds a planet. An abandonment wipe can
-    leave seat one holding nothing, and can leave every civ holding nothing,
-    so the next choice is seat one of `template`, an earlier turn of the same
-    galaxy, which keeps the customised homeworld `seat_one` is chosen for.
-    Without a template, any civ in `blob` that holds a planet is used.
+    Seat one of `blob` when it still holds a planet, else seat one of
+    `template` (an earlier turn of the same galaxy), else any civ in `blob`
+    that holds a planet. An abandonment wipe can leave seat one, or every
+    civ, holding nothing.
     """
     owners = owner_records(blob)
     held = {p["owner"] for p in planet_records(blob) if p["owner"]}
@@ -766,14 +609,10 @@ def add_civ(blob, new_name, donor_name=None, home_id=None, taken=(),
             log=print):
     """Clone a civ into the blob and level it to a generated civ's start.
 
-    `kit` is on by default because the referee's join path calls this with a
-    name and nothing else, and because the alternative default is a clone of
-    whatever the donor holds today, which in a played galaxy is that player's
-    capital, design book and bank. `ships` overrides the hull count for a
-    caller that has measured the galaxy's own, which is what
-    `make_multiplayer_galaxy` does at generation. `template` is an earlier
-    turn of this galaxy, used by `pick_donor` when no named donor is given and
-    seat one holds no planet, and by the starting kit when no ship is left.
+    `kit` is on by default; the referee's join path passes only a name.
+    `ships` overrides the starting hull count. `template` is an earlier turn
+    of this galaxy, used by `pick_donor` and by the starting kit when no ship
+    is left to copy.
     """
     owners = owner_records(blob)
     if not owners:
@@ -802,8 +641,7 @@ def add_civ(blob, new_name, donor_name=None, home_id=None, taken=(),
     if donor_home is None:
         raise SystemExit(f"{donor['name']!r} owns no planet to copy")
 
-    # A planet nobody owns can still be somebody's: a ship already under orders
-    # to fly there loses its colonisation if the newcomer lands on it first.
+    # An unowned planet a ship is already ordered to is reserved.
     dests = ship_destinations(blob)
     reserved = {pid for d in dests for pid in d["planets"]}
     for d in dests:
@@ -849,7 +687,7 @@ def add_civ(blob, new_name, donor_name=None, home_id=None, taken=(),
     log(f"  donor homeworld: planet #{donor_home['id']} {donor_home['name']!r} "
         f"(PLPR {donor_home['plpr_ln']} bytes)")
 
-    # -- 1. the homeworld, before anything shifts the planet offsets ----------
+    # The homeworld first, before anything shifts the planet offsets.
     donor_plpr = bytearray(
         source[donor_home["plpr_payload"]:donor_home["plpr_end"]])
     n = replace_u32(donor_plpr, donor["oid"], new_id, 0, len(donor_plpr))
@@ -858,8 +696,7 @@ def add_civ(blob, new_name, donor_name=None, home_id=None, taken=(),
     out = splice(blob, target["plpr_payload"], target["plpr_end"],
                  bytes(donor_plpr), log=log, what="plpr")
 
-    # The name is in front of the PLPR, so re-read the record after the splice
-    # rather than reusing offsets the splice may have moved.
+    # The name sits in front of the PLPR, so re-read the record after a splice.
     target = next(p for p in planet_records(out) if p["id"] == target["id"])
     hq = f"{new_name}'s HQ".encode("ascii")
     out = splice(out, target["name_at"], target["name_at"] + 4 + target["nlen"],
@@ -871,7 +708,7 @@ def add_civ(blob, new_name, donor_name=None, home_id=None, taken=(),
     log(f"  planet #{target['id']} owner -> {new_id}, named {hq.decode()!r}")
     blob = bytes(buf)
 
-    # -- 2. the OWNR clone ---------------------------------------------------
+    # The OWNR clone.
     owners = owner_records(blob)
     if source is not blob:
         donor = next(o for o in owner_records(source)
@@ -892,13 +729,12 @@ def add_civ(blob, new_name, donor_name=None, home_id=None, taken=(),
                            struct.pack("<I", len(nb)) + nb))
     log(f"  name {donor['name']!r} -> {new_name!r}")
 
-    # The design book, before the ids are handed out, so no id is spent on a
-    # design that is about to go.
+    # Trim the design book before new design ids are handed out.
     if kit:
         rec = bytearray(keep_starting_design(rec, log=log))
 
-    # Fresh ids for the cloned designs. Two civs may share a design NAME (both
-    # start with a 'Colony Ship') but an object id is galaxy-wide.
+    # Fresh ids for the cloned designs: names may repeat across civs, object
+    # ids are galaxy-wide.
     next_id = new_id
     kit_design = None
     for off in idg.find_all(bytes(rec), DSGN):
@@ -911,8 +747,8 @@ def add_civ(blob, new_name, donor_name=None, home_id=None, taken=(),
             kit_design = next_id
         log(f"  design object id {old} -> {next_id}")
 
-    # KNPL is the known-PLAYERS vector: a leading count, then one record per civ
-    # met. A civ that has just appeared has met nobody.
+    # KNPL is the known-players vector: a leading count, then one record per
+    # civ met. A new civ has met nobody.
     k = bytes(rec).find(KNPL)
     if k >= 0:
         kver, kln = idg.sec_len(bytes(rec), k)
@@ -924,10 +760,8 @@ def add_civ(blob, new_name, donor_name=None, home_id=None, taken=(),
         else:
             log(f"  KNPL left alone (count field reads {met}, not a count)")
 
-    # The last u32 of the payload is Owner:4, and it is the ONE per-civ field a
-    # clone would otherwise duplicate: the blanket replace_u32 above rewrites the
-    # donor's OBJECT id, and this is a different number entirely. Two generated
-    # civs read 20 and 21, so max+1 continues the sequence.
+    # The last u32 of the payload is Owner:4, a per-civ number distinct from the
+    # object id (generated civs read 20, 21, ...). It must be unique.
     donor_uid = struct.unpack_from("<I", source, donor["end"] - 4)[0]
     uid = (max(struct.unpack_from("<I", blob, o["end"] - 4)[0]
                for o in owners) + 1) if user_id is None else user_id
@@ -936,12 +770,12 @@ def add_civ(blob, new_name, donor_name=None, home_id=None, taken=(),
                                          "hides the civ from the highscore list)")
     log(f"  Owner:4 {donor_uid} -> {uid}{forced}")
 
-    # -- 3. splice the clone in after the last OWNR --------------------------
+    # Splice the clone in after the last OWNR.
     at = max(o["end"] for o in owner_records(blob))
     log(f"  inserting {len(rec)} bytes at {at}:")
     blob = splice(blob, at, at, bytes(rec), log=log, what="ownr")
 
-    # -- 4. the two counters -------------------------------------------------
+    # The GLXY civ count and the high-water object id.
     buf = bytearray(blob)
     ca = civ_count_at(buf)
     civs = struct.unpack_from("<I", buf, ca)[0]
@@ -954,7 +788,7 @@ def add_civ(blob, new_name, donor_name=None, home_id=None, taken=(),
         log(f"  high-water object id {hi} -> {next_id}")
     blob = bytes(buf)
 
-    # -- 5. the starting kit, last, because the hulls need a civ that exists --
+    # The starting kit comes last: the hulls need a civ that exists.
     if kit:
         blob = starting_kit(
             blob, new_name, target["id"], kit_design,
@@ -963,7 +797,6 @@ def add_civ(blob, new_name, donor_name=None, home_id=None, taken=(),
     return blob, target["id"]
 
 
-# ── entry point ───────────────────────────────────────────────────────────────
 def describe(blob, log=print):
     owners = owner_records(blob)
     planets = planet_records(blob)

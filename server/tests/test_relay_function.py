@@ -11,49 +11,19 @@ test_relay_function.py: what the relay lets a player do, and what it does not
 `emulators.py` resolves each port before anything binds and prints the three
 variables. Add `--print-env` to have it resolve and print without starting.
 
-**The project has to be named**, and `emulators.py` names `demo-cs-resurgence`,
-which is what this test runs as. Started without a `--project`, the CLI takes
-the default out of `functions/.firebaserc`, which is the live project
-`cs-resurgence`, and the Auth emulator then mints tokens whose `aud` is that.
-The emulator suite refuses to let a `demo-` project reach a real one, so every
-token is refused as minted for another project and the run fails at "a real
-emulator token is accepted" with nothing in the message about the project. The
-store equivalence test does not care, because it mints no tokens, which is why
-the two runs disagree about whether the same emulator is usable.
+The emulators must run as project `demo-cs-resurgence`, which `emulators.py`
+names. Without a `--project` the Auth emulator mints tokens for the live
+project, and every token is refused at "a real emulator token is accepted".
 
-The equivalence test proves three stores agree. It cannot prove anything about
-this, and H7 recorded why: every run of it, on the emulator and against the live
-project, authenticated as an administrator. A store that three implementations
-agree about is still a store no player can open.
+Every refusal checks the status code and that the store underneath is
+unchanged. The referee's store (`FirebaseTurnStore` with administrator
+credentials) is the oracle: every write a player makes through the relay is
+read back through it.
 
-So this test is the other half, and it is a test of refusals. Half of what the
-relay is for is the requests it declines, and a refusal is the easiest thing in
-a test suite to fake: a check that a call failed passes just as well when the
-call failed for the wrong reason, or when the thing it was meant to do was never
-possible. Every refusal below therefore checks the status code **and** that the
-store underneath is unchanged, and each one is written next to a note saying
-what would have made it fail. A check that cannot fail has gone wrong here
-before.
-
-The referee's store is the oracle. It is `FirebaseTurnStore` with an
-administrator's credentials, which is what the referee holds, and every write a
-player makes through the relay is read back through it: the relay saying 200 is
-not evidence that bytes landed, and the relay saying 403 is not evidence that
-they did not.
-
-Two things the emulator cannot prove, said here rather than implied
--------------------------------------------------------------------
-**Signed URLs are not signed on the emulator.** There is no key to sign with
-and nothing checks a signature, so `relay.signed_url` hands out the emulator's
-own open endpoint. Only turns and pre-H13 submissions are served that way; a
-submission is carried by the relay itself, so its size cap and its check that
-the bytes are a save run here exactly as they run deployed.
-
-**Token signatures are not checked on the emulator.** The emulator mints
-unsigned tokens by design and `relay.verify` reads the claims itself rather than
-pulling in `firebase_admin` to be told to skip the signature. The crafted tokens
-below therefore exercise the claim checks and say nothing about the signature
-check, which is `firebase_admin`'s and runs only against a real project.
+The emulator neither signs URLs nor checks token signatures. Signed URLs point
+at the emulator's open endpoint, and the crafted tokens exercise the claim
+checks only. The signature check is `firebase_admin`'s and runs only against a
+real project.
 """
 import base64
 import json
@@ -79,17 +49,13 @@ PROJECT = os.environ.get('CS_RELAY_PROJECT') or 'demo-cs-resurgence'
 BUCKET = os.environ.get('CS_RELAY_BUCKET') or f'{PROJECT}.firebasestorage.app'
 AUTH_HOST = os.environ.get('FIREBASE_AUTH_EMULATOR_HOST') or '127.0.0.1:9099'
 
-# Set before `relay` is imported, because it reads both at import. The cap is
-# two kilobytes rather than the megabyte a deployment uses, so that an
-# oversized submission is a small body: what is under test is the refusal, not
-# the emulator's throughput.
+# Set before `relay` is imported, which reads them at import. The 2 KB cap
+# keeps an oversized submission small.
 os.environ['CS_RELAY_PROJECT'] = PROJECT
 os.environ['CS_RELAY_BUCKET'] = BUCKET
 os.environ['CS_RELAY_MAX_BYTES'] = '2048'
 os.environ.setdefault('FIREBASE_AUTH_EMULATOR_HOST', AUTH_HOST)
-# The referee writes below and the relay is asked straight after, so a held copy
-# of the galaxy's public face would answer from before the write, and a check
-# that something is absent would pass on it. Every answer here is read fresh;
+# Held copies are off, so every answer reflects the referee's last write.
 # test_relay_costs.py covers the held copies.
 os.environ['CS_RELAY_STATE_CEILING'] = '0'
 os.environ['CS_RELAY_LISTING_SECONDS'] = '0'
@@ -136,18 +102,15 @@ MINE = make_blob(TURN, b'o')
 THEIRS = make_blob(TURN, b'n')
 MINE8 = make_blob(TURN + 1, b'q')
 MINE8_B = make_blob(TURN + 1, b'r')
-# Incompressible filler, so that the encoded form is genuinely over the cap
-# rather than zlib turning a large blob into a small object.
+# Incompressible filler, so the encoded form is over the cap.
 HUGE = make_blob(TURN + 1, os.urandom(8192), size=8192)
 
 
-# ── identities ───────────────────────────────────────────────────────────────
 def sign_up():
     """A new anonymous user from the Auth emulator: (uid, id token).
 
-    The same call the launcher's `fb_auth` makes against the real service, with
-    the emulator's stand-in API key. Anonymous sign-in is H4's identity: a
-    stable uid per install, no login screen and no account.
+    The same call the launcher's `fb_auth` makes, with the emulator's stand-in
+    API key.
     """
     url = (f'http://{AUTH_HOST}/identitytoolkit.googleapis.com/v1/'
            f'accounts:signUp?key=fake-api-key')
@@ -162,9 +125,7 @@ def sign_up():
 def craft_token(**claims):
     """An unsigned token with whatever claims are asked for.
 
-    For the checks that a claim is read rather than assumed. The signature is
-    three characters of nonsense, which the emulator verifier does not look at
-    and `firebase_admin` would refuse outright.
+    The signature is placeholder text, which the emulator verifier ignores.
     """
     base = {'aud': PROJECT,
             'iss': f'https://securetoken.google.com/{PROJECT}',
@@ -179,14 +140,10 @@ def craft_token(**claims):
     return f'{part({"alg": "none"})}.{part(base)}.xxx'
 
 
-# ── the relay behind an HTTP port ────────────────────────────────────────────
 class RelayHandler(BaseHTTPRequestHandler):
     """`relay.handle` behind a socket, so `HttpTurnStore` can reach it.
 
-    The adapter `main.py` is, minus Cloud Functions. Everything the deployed
-    relay decides is in `relay.handle` and is what runs here; what is not
-    covered is the three lines that turn a Cloud Functions request into its
-    arguments.
+    Stands in for the Cloud Functions adapter in `main.py`.
     """
 
     def log_message(self, fmt, *args):
@@ -232,7 +189,6 @@ def body_of(exc):
         return ''
 
 
-# ── the run ──────────────────────────────────────────────────────────────────
 def main():
     if not os.environ.get('FIRESTORE_EMULATOR_HOST'):
         print('SKIPPED: no FIRESTORE_EMULATOR_HOST. This run says nothing '
@@ -289,17 +245,14 @@ def run(referee, galaxy, base, player_a, player_b, player_c, anonymous, ids):
         return relay.handle(method, f'/{galaxy}{path}', headers, body)
 
     print('who is asking')
-    # Fails if the relay answered a request that carried no token, which is the
-    # whole of what stands between an open bucket and a closed one.
     check('a request with no token is refused',
           call('GET', '/state')[0], 401)
     check('and the store is still only reachable as the referee',
           referee.state()['turn'], 7)
     check('a request whose token is not a token is refused',
           call('GET', '/state', 'not-a-token')[0], 401)
-    # Fails if `aud` were not compared: an ID token from any other Firebase
-    # project is a real signed token, and the only thing that says it is not
-    # for this project is the claim.
+    # A token from another Firebase project is validly signed; only `aud`
+    # rejects it.
     check('a token minted for another project is refused',
           call('GET', '/state', craft_token(aud='demo-somewhere-else'))[0],
           401)
@@ -309,8 +262,7 @@ def run(referee, galaxy, base, player_a, player_b, player_c, anonymous, ids):
     check('an expired token is refused',
           call('GET', '/state', craft_token(exp=int(time.time()) - 60))[0],
           401)
-    # Fails if a crafted token were accepted for any reason at all, which would
-    # make the four checks above pass for the wrong reason.
+    # Shows the refusals above are not refusing every token.
     check('a real emulator token is accepted',
           call('GET', '/state', token_a)[0], 200)
 
@@ -318,15 +270,12 @@ def run(referee, galaxy, base, player_a, player_b, player_c, anonymous, ids):
     state = player_a.state()
     check('state holds exactly the five fields the interface names',
           sorted(state), ['civs', 'deadline', 'hash', 'turn', 'turn_seconds'])
-    # Fails if the relay returned the galaxy document rather than the five
-    # fields: the seat map lives in that document, and handing it out would
-    # tell every player which uid is which civ.
+    # The seat map would tell every player which uid is which civ.
     check('and not the seat map beside them', 'seats' in state, False)
     check('current() is the turn the referee published',
           player_a.current()[0], 7)
-    # Fails if the blob did not come back through a signed URL and decode: the
-    # relay never carries a blob, so these bytes came from Cloud Storage in the
-    # base64 wire form and were decoded by the store.
+    # The relay never carries a turn blob: these bytes came from Cloud Storage
+    # in the base64 wire form and were decoded by the store.
     check('a turn blob comes back through Storage as it went in',
           player_a.turn_blob(7), BLOB7)
     check('has_turn is True for a published turn', player_a.has_turn(7), True)
@@ -338,9 +287,7 @@ def run(referee, galaxy, base, player_a, player_b, player_c, anonymous, ids):
           player_a.archive_record(7), None)
 
     print('a uid with no seat')
-    # The Games tab's view of a galaxy this player has not joined. Fails if the
-    # relay refused an unseated caller outright, which would stop a launcher
-    # showing a galaxy before its player is in it.
+    # The Games tab's view of a galaxy this player has not joined.
     check('an unseated caller reads the clock', player_c.current()[0], 7)
     check('an unseated caller reads a published turn',
           player_c.turn_blob(7), BLOB7)
@@ -349,27 +296,17 @@ def run(referee, galaxy, base, player_a, player_b, player_c, anonymous, ids):
           status_of(refused), 403)
     check('and is told that it holds no seat',
           'no seat' in body_of(refused), True)
-    # Fails if the refusal were only the relay declining to answer while the
-    # write happened anyway.
     check('nothing of theirs reached the store',
           referee.submission('DemoPlayer', 7), None)
 
-    # A player's first turn on a galaxy, which was impossible until 28
-    # September. The turn loop asks whether this civ has already played before
-    # it serves them, and under `first-use` a seat binds when a player submits,
-    # so at that moment every player is seatless. Refusing the question made
-    # the answer unreachable: to play you had to read your submission, to read
-    # it you needed a seat, and to get a seat you had to submit.
-    #
-    # Seatless is no submission rather than no entry, which is true and not a
-    # convenience: a submission is only ever written by the submission route,
-    # and that needs a seat.
+    # Under `first-use` a seat binds on the first submission, so a seatless
+    # player must be able to ask whether it has already played. Only the
+    # submission route writes a submission, and it needs a seat, so a seatless
+    # caller has none.
     check('an unseated caller asking for its own submission is told there '
           'is none, rather than refused',
           player_c.submission('DemoPlayer', 7), None)
     check('and the same for a note', player_c.note('DemoPlayer', 7), [])
-    # Fails if the fix had been "let anyone read anything": a caller that does
-    # hold a seat must still not read another civ's.
     denied = refusal(player_a.submission, 'Neighbor', 7)
     check('while a seated caller reading another civ is still refused',
           status_of(denied), 403)
@@ -380,8 +317,7 @@ def run(referee, galaxy, base, player_a, player_b, player_c, anonymous, ids):
     where = player_a.submit('DemoPlayer', 7, MINE)
     check('submit names where it landed',
           bool(where) and 'DemoPlayer' in where, True)
-    # The oracle: the referee reads the object, so this says bytes landed in
-    # the store rather than that the relay said 200.
+    # The referee reads the object back, so this shows the bytes landed.
     check('the referee reads back exactly what was submitted',
           referee.submission('DemoPlayer', 7), MINE)
     check('has_submitted sees it through the relay',
@@ -392,8 +328,6 @@ def run(referee, galaxy, base, player_a, player_b, player_c, anonymous, ids):
 
     print('a seated player may not be another player')
     refused = refusal(player_a.submit, 'Neighbor', 7, THEIRS)
-    # Fails if the seat map were not consulted. This is the rule H4 recorded as
-    # inexpressible in Security Rules: here it is a string comparison.
     check('submitting as another civ is refused', status_of(refused), 403)
     check('and the refusal names the seat this caller does hold',
           'DemoPlayer' in body_of(refused), True)
@@ -407,8 +341,7 @@ def run(referee, galaxy, base, player_a, player_b, player_c, anonymous, ids):
     player_b.submit('Neighbor', 7, THEIRS)
     check('the other player submits for themselves',
           referee.submission('Neighbor', 7), THEIRS)
-    # Fails if the read rule were dropped once the object existed, which is the
-    # version of this bug that a test written before the object exists misses.
+    # The read rule still holds once the object exists.
     check('and it is still unreadable by the first',
           status_of(refusal(player_a.submission, 'Neighbor', 7)), 403)
 
@@ -422,13 +355,10 @@ def run(referee, galaxy, base, player_a, player_b, player_c, anonymous, ids):
         check(f'{what} through the relay is refused', code, 403)
         check(f'and {what} says the referee does it, not the caller',
               'referee' in json.loads(body)['error'], True)
-    # Fails if a publish had gone through: the turn the referee published is
-    # still the turn, and turn 8 does not exist.
     check('the clock did not move', referee.current()[0], 7)
     check('and no turn 8 was written', referee.has_turn(8), False)
-    # H13. The ticket names the relay's own route, so a body posted there is a
-    # submission. Fails if the route still refused it, which is what every
-    # launcher following the ticket would then be told.
+    # The ticket names the relay's own route, so a body posted there is a
+    # submission.
     ticket = json.loads(call('GET', '/upload/submission/7/DemoPlayer',
                              token_a)[2])
     check('the upload ticket names the relay route, a POST, and no commit',
@@ -440,18 +370,16 @@ def run(referee, galaxy, base, player_a, player_b, player_c, anonymous, ids):
                sp.encode_save(MINE))[0], 200)
     check('and is what the referee reads',
           referee.submission('DemoPlayer', 7), MINE)
-    # A query is not a way past the routing. Fails if the path were split
-    # before the query was cut off, which is how `/start?civ=A` became a route
-    # nothing matched and a 404 where a 403 belonged.
+    # The query is cut off before the path is routed, so `/start?civ=A` is
+    # still a refused route (403).
     check('a query does not turn a refused route into an unknown one',
           call('POST', '/start?civ=A&seconds=60', token_a, BLOB8)[0], 403)
 
     print('a submission is for the turn being played')
     referee.publish(8, BLOB8)
     refused = refusal(player_a.submit, 'DemoPlayer', 7, MINE)
-    # Fails if the turn were taken from the caller rather than from the galaxy
-    # document. A player who kept a stale ticket, or a launcher that lost the
-    # clock, would otherwise write into a turn the referee has closed.
+    # The turn is taken from the galaxy document, so a stale ticket cannot
+    # write into a turn the referee has closed.
     check('a submission for the previous turn is refused',
           status_of(refused), 409)
     check('and the refusal names the turn being played',
@@ -464,11 +392,8 @@ def run(referee, galaxy, base, player_a, player_b, player_c, anonymous, ids):
 
     print('a submission is capped and has to be a save')
     refused = refusal(player_a.submit, 'DemoPlayer', 8, HUGE)
-    # Fails if the cap were not checked before the body was stored.
     check('an oversized submission is refused', status_of(refused), 413)
-    # Every refusal comes before the write, so the submission this one was
-    # sent over is still the player's turn. Fails if the relay stored first
-    # and checked after, which is what the Storage ticket had to do.
+    # Every refusal comes before the write, so the earlier submission stands.
     check('and the submission it was sent over still stands',
           referee.submission('DemoPlayer', 8), MINE8)
     check('and the galaxy document still says they have submitted',
@@ -485,8 +410,7 @@ def run(referee, galaxy, base, player_a, player_b, player_c, anonymous, ids):
 
     code, _h, body = call('POST', ticket_url(call, token_a, 8, 'DemoPlayer'),
                           token_a, sp.encode_save(make_blob(3)))
-    # A real save, of the wrong turn. Fails if the check stopped at "does this
-    # parse", which is the check that is easy to write and easy to pass.
+    # A real save of the wrong turn: parsing alone is not enough.
     check('a save of another turn is refused', code, 400)
     check('and does not replace it either',
           referee.submission('DemoPlayer', 8), MINE8)
@@ -496,9 +420,8 @@ def run(referee, galaxy, base, player_a, player_b, player_c, anonymous, ids):
     player_a.submit('DemoPlayer', 8, MINE8)
 
     print('who has submitted is answered without listing the bucket')
-    # H9. A launcher asks this every poll, and a bucket listing is a Class A
-    # operation, the allowance that binds. Counted at the client the relay
-    # holds, so any listing the route makes, by any path, is seen.
+    # A launcher asks this every poll. Listings are counted at the relay's
+    # Storage client, so any listing the route makes is seen.
     under = relay.store_for(galaxy)
     client = under.gcs
     listed = []
@@ -518,27 +441,22 @@ def run(referee, galaxy, base, player_a, player_b, player_c, anonymous, ids):
         check('and False for a player who has not',
               player_b.has_submitted('Neighbor', 8), False)
         check('and none of those three polls listed the bucket', listed, [])
-        # H13. A past turn is answered from the submission documents, so it
-        # does not list the bucket either on a galaxy started with them.
+        # A past turn is answered from the submission documents.
         check('a past turn is answered from the stored submissions',
               json.loads(call('GET', '/submissions/7', token_a)[2]),
               ['DemoPlayer', 'Neighbor'])
         check('and that did not list the bucket either', listed, [])
-        # The control. Fails if the counter could not see a listing at all, in
-        # which case the lines above would pass whatever the route did.
+        # Shows the counter can see a listing at all.
         under._objects(7)
         check('CONTROL: a listing made on purpose is counted', len(listed), 1)
     finally:
         client.list_blobs = real_list
-    # H10. The relay used to carry its own copy of the listing, which agreed
-    # with the store's by inspection only.
     check('the relay has no listing of its own',
           hasattr(relay, '_submitted_civs'), False)
     check('the document agrees with the stored submissions for the current '
           'turn', referee.submitted_civs(8), referee.listed_civs(8))
-    # A commit that read turn 7 and landed after the publish of turn 8. Fails
-    # if it read as a turn-8 submission, or if the partial turn-7 key it leaves
-    # hid the real turn-7 submissions from a later reader.
+    # A commit that read turn 7 and landed after the publish of turn 8 must
+    # neither count for turn 8 nor hide the turn-7 submissions.
     referee.record_submitted('Third', 7)
     check('a commit landing after the publish is not read as this turn',
           'Third' in referee.submitted_civs(8), False)
@@ -563,16 +481,12 @@ def run(referee, galaxy, base, player_a, player_b, player_c, anonymous, ids):
 
     print('a seat the operator did not bind')
     refused = refusal(player_c.submit, 'Third', 8, MINE8)
-    # Fails if an unseated uid could take a seat without the operator saying
-    # so. First use is a land grab among strangers and is off unless asked for.
+    # First-use seat claims are off unless the operator turns them on.
     check('claiming a seat is refused until the operator allows it',
           status_of(refused), 403)
     referee.doc.set({'seat_claim': 'first-use'}, merge=True)
-    # Reading is not joining. Fails if a read could claim a seat, which under
-    # first-use would hand the seat to whoever browsed the galaxy first rather
-    # than to whoever played it. The read answers "nothing here" rather than
-    # refusing, because a seatless caller genuinely has no note; what this is
-    # about is the line below, that looking bound nothing.
+    # A read never claims a seat under first-use. A seatless caller has no
+    # note, so the read answers empty.
     check('a read answers empty rather than claiming',
           player_c.note('Third', 8), [])
     check('and no seat was bound by the attempt',
@@ -583,8 +497,7 @@ def run(referee, galaxy, base, player_a, player_b, player_c, anonymous, ids):
     doc = referee.doc.get().to_dict()
     check('and the seat is written down rather than assumed each time',
           (doc.get('seats') or {}).get(uid_c), 'Third')
-    # Fails if the claim did not hold: the whole point of writing it down is
-    # that the second caller cannot take the same civ.
+    # The recorded claim stops a second caller taking the same civ.
     player_d = HttpTurnStore(base, token=lambda: token_d)
     refused = refusal(player_d.submit, 'Third', 8, MINE8)
     check('a second caller may not take a seat that is held',
@@ -603,12 +516,9 @@ def run(referee, galaxy, base, player_a, player_b, player_c, anonymous, ids):
           referee.civs(), ['DemoPlayer', 'Neighbor', 'Third'])
 
     print('the token does not follow a redirect off site')
-    # A signed URL carries its own authorisation, and Cloud Storage reads an
-    # Authorization header it was not given in the signature as a credential
-    # and refuses the request over it. `urllib` copies every header onto a
-    # redirect unless something stops it. Fails if that handler were dropped,
-    # which on the emulator nothing else would notice, because the emulator
-    # ignores the header.
+    # Cloud Storage refuses a signed URL request that also carries an
+    # Authorization header, and `urllib` copies headers onto a redirect. The
+    # emulator ignores the header, so only this check covers the handler.
     handler = turn_store._drop_auth_on_redirect()()
     req = urllib.request.Request('http://one.test/a')
     req.add_header('Authorization', 'Bearer secret')
@@ -624,9 +534,8 @@ def run(referee, galaxy, base, player_a, player_b, player_c, anonymous, ids):
            if k.lower() == 'authorization'], [])
 
     print('the launcher sends no header when it has no identity')
-    # The contract with the launcher: a token callable that answers None, or no
-    # callable at all, behaves exactly as this store did before there was one.
-    # Fails if the header were sent unconditionally, or an empty one sent.
+    # A token callable that answers None, or no callable at all, sends no
+    # Authorization header.
     check('a store with no token is refused by the relay rather than crashing',
           status_of(refusal(anonymous.state)), 401)
     empty = HttpTurnStore(base, token=lambda: None)
@@ -634,10 +543,8 @@ def run(referee, galaxy, base, player_a, player_b, player_c, anonymous, ids):
           status_of(refusal(empty.state)), 401)
 
     print('what the relay carries and what it does not')
-    # H13. A submission is served from its document, and a caller that sends
-    # back the tag it was given is told 304 with no body. Fails if the tag were
-    # not the blob's, or if a matching one still sent the bytes, which is the
-    # egress this exists to save.
+    # A submission is served from its document with the blob's ETag; a
+    # matching If-None-Match gets 304 and no body.
     code, headers, body = call('GET', '/submission/8/DemoPlayer', token_a)
     check('a submission is served as its wire form, with its tag',
           (code, sp.decode_save(body), headers.get('ETag')),
@@ -655,9 +562,8 @@ def run(referee, galaxy, base, player_a, player_b, player_c, anonymous, ids):
     check('asked with another tag, it sends the bytes',
           (code, sp.decode_save(body) if code == 200 else None),
           (200, MINE8))
-    # The turn blob is the one every launcher downloads and it grows with the
-    # galaxy, so it stays on Storage. Fails if the route answered with a body
-    # rather than a redirect.
+    # The turn blob grows with the galaxy, so it is served from Storage by
+    # redirect.
     code, headers, body = call('GET', '/turn/8', token_a)
     check('a turn download is a redirect, not a body', code, 302)
     check('and carries no bytes of the blob', body, b'')
@@ -669,20 +575,15 @@ def run(referee, galaxy, base, player_a, player_b, player_c, anonymous, ids):
 
 
 def run_catalog(referee, galaxy, root, token_a, token_c):
-    """The one route that is about no galaxy, and the directory over it.
+    """The galaxy listing route and the directory over it.
 
-    A player holds no Google credential, so the collection the referee streams
-    is unreadable to them and the listing is the only way they learn a galaxy
-    exists. What it may say about a galaxy is what `/state` may say, and this
-    is where that stays true.
+    A listing row may say only what `/state` may say about a galaxy.
     """
     def call(method, path, token=None):
         headers = {'Authorization': f'Bearer {token}'} if token else {}
         return relay.handle(method, path, headers, b'')
 
     print('the listing, which is about no galaxy')
-    # Fails if the listing were open where every other route is closed, which
-    # would make the id of every galaxy readable by anyone who found the URL.
     check('a listing with no token is refused', call('GET', '/')[0], 401)
     check('and one with a token that is not a token is refused',
           call('GET', '/', 'not-a-token')[0], 401)
@@ -692,10 +593,8 @@ def run_catalog(referee, galaxy, root, token_a, token_c):
     mine = [r for r in rows if r['id'] == galaxy]
     check('the galaxy the referee started is in it', len(mine), 1)
     row = mine[0]
-    # Fails if the listing read the galaxy document rather than the same
-    # allowlist `/state` reads. The seat map is in that document, and a listing
-    # that carried it would hand every player the uid to civ mapping that the
-    # galaxy's own state is filtered to protect.
+    # A row is built from the `/state` allowlist, so it carries no uid to civ
+    # mapping.
     check('a row carries no seat map', 'seats' in row, False)
     check('and not the record of who was seated when',
           turn_store.JOINED_KEY in row, False)
@@ -717,9 +616,7 @@ def run_catalog(referee, galaxy, root, token_a, token_c):
           g.players, len(referee.state()['civs']))
     check('the row names a store back through this same relay',
           g.store, f'{root}/{galaxy}')
-    # Fails if the spec a row hands out were one the player cannot open: the
-    # whole point of listing through the relay is that what is listed is also
-    # what is playable.
+    # The store a row names is one the player can open.
     played = directory.store(galaxy)
     check('and that store reads the same turn the row showed',
           played.state()['turn'], g.turn)
@@ -729,16 +626,13 @@ def run_catalog(referee, galaxy, root, token_a, token_c):
     print('what a player may not do to the listing')
     check('a POST to the listing is not a route',
           call('POST', '/', token_a)[0], 404)
-    # Naming a galaxy and opening or closing it are the operator's, and a
-    # directory that quietly did nothing would be worse than one that refuses.
+    # Registering, opening and closing a galaxy are the operator's.
     check('registering through the relay is refused',
           type(refusal(directory.register, galaxy)).__name__,
           'NotImplementedError')
     check('and so is opening or closing a galaxy',
           type(refusal(directory.set_status, galaxy, 'closed')).__name__,
           'NotImplementedError')
-    # Fails if the listing trusted the caller rather than the token: a second
-    # identity must see the same galaxies and be joined to none of them.
     other = galaxy_directory.open_directory(root, token=lambda: token_c)
     check('another signed-in caller sees the same galaxies',
           sorted(r.id for r in other.galaxies()),
@@ -746,17 +640,9 @@ def run_catalog(referee, galaxy, root, token_a, token_c):
 
 
 def run_joins(referee, galaxy, call, ids):
-    """J3 through the relay: the one request from a caller with no seat.
+    """Joins through the relay: the one request from a caller with no seat.
 
-    Every other route here is a seated player proving they are the player whose
-    seat it is. This one has to let somebody in who holds nothing, so what
-    stands in place of the seat check is narrower and each piece of it is
-    checked below against the referee's own store rather than against the
-    relay's answer.
-
-    The referee is the oracle throughout, for the reason this file gives: a 200
-    is not evidence that a request landed and a 403 is not evidence that one
-    did not.
+    Each check reads back through the referee's store.
     """
     uid_a, token_a = ids['a']
     uid_c, token_c = ids['c']
@@ -766,30 +652,26 @@ def run_joins(referee, galaxy, call, ids):
         return call('POST', '/join', token, json.dumps(fields).encode('utf-8'))
 
     print('a join is the one request from somebody with no seat')
-    # Fails if the relay had required a seat to lodge a join, which would mean
-    # only players already in a galaxy could ask to be in it.
     code, _h, body = lodge(token_d, name='Newcomer', build='0.1.0+dev',
                            uid='somebody-elses-uid', requested_at=0.0)
     check('an unseated caller may lodge a join', code, 200)
     waiting = referee.join_requests()
     check('and the referee sees it waiting',
           [r['key'] for r in waiting], [uid_d])
-    # The one that matters. Fails if the body's uid were taken: a request filed
-    # under another player's uid is that player's next seat, taken from them at
-    # the boundary by a caller who only had to read a uid once.
+    # A request filed under another player's uid would take that player's next
+    # seat.
     check('filed under the uid in the token and not the one in the body',
           waiting[0]['uid'], uid_d)
     check('carrying the name that was asked for', waiting[0]['name'],
           'Newcomer')
     check('and the turn the galaxy is actually playing',
           waiting[0]['requested_turn'], referee.current()[0])
-    # Fails if the caller's clock were kept. `requested_at` decides which of
-    # two joins gets the last free planet, so a caller that sent a zero would
-    # win every race forever.
+    # `requested_at` decides which of two joins gets the last free planet, so
+    # the caller may not set it.
     check('and a clock the caller did not set',
           waiting[0]['requested_at'] > 1.0, True)
-    # Fails if lodging a join bound a seat. A join is a request, granted by the
-    # worker on the authoritative blob, which is the whole of J3's shape.
+    # A join is granted by the worker on the authoritative blob; lodging one
+    # binds nothing.
     check('lodging a join takes no seat',
           (referee.doc.get().to_dict().get('seats') or {}).get(uid_d), None)
     check('and adds nobody to the roster', referee.civs(),
@@ -798,8 +680,8 @@ def run_joins(referee, galaxy, call, ids):
     print('a request is read back by the caller that lodged it')
     check('the caller reads their own request',
           json.loads(call('GET', '/join', token_d)[2])['state'], 'waiting')
-    # Fails if the route answered about the galaxy rather than about the
-    # caller, which is how a launcher would learn who else is asking to join.
+    # The route answers about the caller only, so it does not reveal who else
+    # is asking to join.
     check('another caller sees nothing of it',
           json.loads(call('GET', '/join', token_a)[2])['state'], 'none')
     check('and may not ask for it by key',
@@ -807,9 +689,8 @@ def run_joins(referee, galaxy, call, ids):
     check('the caller may ask for it by its own key',
           json.loads(call('GET', f'/join/{uid_d}', token_d)[2])['name'],
           'Newcomer')
-    # Fails if the relay grew the listing route `turn_server.py` has. On a LAN
-    # the worker is whoever holds the port; here the same list is a roster of
-    # everyone trying to join, which F4 refuses to hand a launcher.
+    # The relay has no route listing waiting joins: that list would name
+    # everyone trying to join.
     check('there is no route here that lists what is waiting',
           call('GET', '/joins', token_d)[0], 403)
 
@@ -819,17 +700,13 @@ def run_joins(referee, galaxy, call, ids):
     check('a caller may not answer its own request', code, 403)
     check('and says the worker does it at a boundary',
           'worker' in json.loads(body)['error'], True)
-    # Fails if the refusal were the relay declining to answer while the write
-    # happened anyway.
     check('and nothing was answered', referee.join_answer(uid_d), None)
     check('the request is still waiting',
           [r['key'] for r in referee.join_requests()], [uid_d])
 
     print('who may ask, and for what name')
     code, _h, body = lodge(token_a, name='Another')
-    # Fails if a seated player could lodge a join, which at the boundary is a
-    # second empire for one player refused as a name clash, and reads to them
-    # as the galaxy having lost their seat.
+    # A seated player lodging a join would be asking for a second empire.
     check('a caller already on the roster is refused', code, 409)
     check('and is told which seat it holds',
           'DemoPlayer' in json.loads(body)['error'], True)
@@ -837,7 +714,6 @@ def run_joins(referee, galaxy, call, ids):
                                                     name='DemoPlayer')[0], 409)
     check('and so is the same name spelled differently',
           lodge(token_d, name='demoplayer')[0], 409)
-    # Fails if a refused lodge had overwritten the request already waiting.
     check('and the request that was waiting is untouched',
           referee.join_request(uid_d)['name'], 'Newcomer')
     lodge(token_d, name='Newcomer2')
@@ -845,19 +721,16 @@ def run_joins(referee, galaxy, call, ids):
           [r['name'] for r in referee.join_requests()], ['Newcomer2'])
 
     print('a seat that was reclaimed is not a seat')
-    # K4 takes a seat back and leaves the player able to come back, so the
-    # check above has to be about the roster and not about the seat map. Fails
-    # if it asked only whether a uid appears in `seats`, which would lock a
-    # reclaimed player out of the galaxy they were reclaimed from.
+    # A reclaim leaves the uid in `seats`, so whether a caller may ask again is
+    # decided by the roster.
     referee.update_state({'civs': ['DemoPlayer', 'Neighbor']})
     check('the reclaimed player may ask for a seat again',
           lodge(token_c, name='Third')[0], 200)
     check('and the referee sees both requests',
           sorted(r['key'] for r in referee.join_requests()),
           sorted([uid_c, uid_d]))
-    # The seat map still names Third for this uid, as a reclaim leaves it.
-    # Fails if a write from it were taken, which the referee would then drop
-    # for not being on the roster, or refused as if the seat never existed.
+    # The seat map still names Third for this uid, as a reclaim leaves it. A
+    # write from it is refused with the reclaim details.
     referee.update_state({turn_store.RECLAIMED_KEY: {
         'Third': {'turn': 8, 'missed': 12}}})
     now_turn = referee.current()[0]
@@ -881,7 +754,6 @@ def run_joins(referee, galaxy, call, ids):
           400)
     check('one with no token at all is refused',
           call('POST', '/join', None, b'{"name": "Nobody"}')[0], 401)
-    # Fails if any of the four above had been written anyway.
     check('and none of them changed what is waiting',
           [r['name'] for r in referee.join_requests()
            if r['key'] == uid_d], ['Newcomer2'])
@@ -893,9 +765,8 @@ def run_joins(referee, galaxy, call, ids):
     out = json.loads(call('GET', '/join', token_d)[2])
     check('the answer reaches the player through the same door',
           out['state'], 'answered')
-    # The whole point of the route. A refused player is on no roster, so
-    # `player_turn.follow` never runs for them and the note the worker left is
-    # on a path they cannot read. Fails if the reason were dropped.
+    # A refused player is on no roster and cannot read the worker's note, so
+    # the reason arrives here.
     check('and carries the reason rather than only the outcome',
           out['answer']['reason'], 'this galaxy had no room')
     check('the request is no longer waiting',
@@ -904,10 +775,8 @@ def run_joins(referee, galaxy, call, ids):
           call('GET', f'/join/{uid_d}/answer', token_a)[0], 403)
 
     print('a refused player who asks again is waiting, not refused')
-    # Answering a request consumes it, so a request that is waiting is always
-    # newer than any answer on file. Fails if the route looked at the answer
-    # first, which tells a player who pressed Join again that the galaxy has
-    # already refused a request it has not seen yet.
+    # Answering a request consumes it, so a waiting request is always newer
+    # than any answer on file and is reported first.
     lodge(token_d, name='Newcomer3')
     out = json.loads(call('GET', '/join', token_d)[2])
     check('the second request is what the player reads back',
@@ -924,11 +793,8 @@ def run_joins(referee, galaxy, call, ids):
     print('the record of who was seated stays behind the door')
     referee.update_state({turn_store.JOINED_KEY: {
         'Third': {'turn': 8, 'uid': uid_c, 'planet': 6, 'system': 'Tau Ceti'}}})
-    # The store has to carry `joined`, because `joins.commit` writes it and the
-    # acceptance tool reads it back, and it holds the uid of everyone who has
-    # ever been seated. Fails if the relay served the whole allowlist: that is
-    # the uid-to-civ mapping `seats` is kept out of `/state` to protect, handed
-    # to every player in the galaxy.
+    # `joined` holds the uid of everyone ever seated, so `/state` leaves it out
+    # along with `seats`.
     state = json.loads(call('GET', '/state', token_d)[2])
     check('the seated record is not in the state a player reads',
           turn_store.JOINED_KEY in state, False)
@@ -939,9 +805,8 @@ def run_joins(referee, galaxy, call, ids):
     print('a closed galaxy takes no more joins')
     referee.close('the beta ended')
     code, _h, body = lodge(token_d, name='Latecomer')
-    # Fails if the closed check sat only on the store's own `request_join`,
-    # which the relay reaches with admin credentials: the guard has to be on
-    # the door a player uses.
+    # The relay reaches the store with admin credentials, so the closed check
+    # must be on the relay's route.
     check('a join into a closed galaxy is refused', code, 409)
     check('and says the galaxy is closed',
           'closed' in json.loads(body)['error'], True)

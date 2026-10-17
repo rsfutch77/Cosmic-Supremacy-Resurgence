@@ -1,36 +1,16 @@
 """
 test_stalled_galaxy.py: telling a dead referee from a late one
-================================================================
     server\\.venv\\Scripts\\python.exe release\\tests\\test_stalled_galaxy.py
 
-Turns are closed by a referee on one person's PC, started by a scheduled task
-when they log in. When that machine is off, every galaxy it refs runs its
-countdown to zero and then does nothing, which until now looked exactly like a
-turn about to be closed. What is under test is the difference: which galaxies
-the launcher calls stopped, which it leaves alone, and what it says about the
-ones it calls.
+Which galaxies the launcher calls stopped, which it leaves alone, and what it
+says about them. A referee is allowed to be late, so every stopped galaxy is
+checked beside a healthy one also past its deadline: a few seconds over, and
+the same lateness at two turn lengths, which shows the threshold scales.
 
-**The claim that matters is the second one.** Anything can flag an overdue
-galaxy; a rule that flags every one of them is wrong six times a day per
-galaxy, because a referee is allowed to be late. So every check here that a
-stopped galaxy is named runs beside one on a galaxy that is also past its
-deadline and is healthy, at the two distances that break a naive rule: a few
-seconds over, which is the ordinary case, and the same absolute lateness in
-two galaxies with different turn lengths, which is what says the threshold
-scales rather than being a constant someone liked.
-
-Headless and offline. The table is checked against rows built by hand and
-against copies of the operator's own `server\\uidemo` galaxies, with their
-deadlines rewritten in the copy; the originals are fingerprinted before and
-after and checked untouched. The readout and the status line are checked
-against a Launcher built without `__init__` whose view is a FakeView, so no
-window opens, no game starts and no port is taken. Nothing reads a store more than the code under
-test already does, which is itself one of the checks: H5's binding quota is
-Firestore reads and this runs once a second.
-
-What is not here is the drawing. Whether the warning colour is visible against
-the panel, whether a three-line hint pushes the table about and whether
-"stopped" reads as urgent at a glance are questions for a screen.
+Headless and offline. Rows are built by hand or copied from `server\\uidemo`,
+whose originals are fingerprinted and checked untouched. The readout and status
+line run against a Launcher built without `__init__` with a FakeView. Store
+reads are counted. Drawing is not covered.
 """
 import hashlib
 import json
@@ -51,12 +31,8 @@ import galaxy_directory                                         # noqa: E402
 import launcher as L                                            # noqa: E402
 from fake_view import FakeView                                  # noqa: E402
 
-# `referee_worker.py` is read rather than imported. Importing it reaches
-# `referee` and the whole of `server\\dev_tools`, which is a referee's worth of
-# machinery for three numbers, and this file is meant to run wherever the
-# launcher does. Reading the source still ties the numbers to the file that
-# owns them: a threshold that stopped agreeing with the worker's own backoff
-# fails here rather than quietly stopping meaning anything.
+# `referee_worker.py` is read, not imported, because importing it pulls in all
+# of `server\\dev_tools`. The numbers still come from the file that owns them.
 WORKER_SRC = (pathlib.Path(REPO) / "server" / "referee_worker.py").read_text(
     encoding="utf-8")
 
@@ -108,8 +84,7 @@ def gx(gid, name=None, status="open", turn=11, over=None, left=None,
     """One listed galaxy, placed relative to NOW.
 
     `over` is how long ago its deadline passed and `left` is how long until it
-    does, so a row reads as the state it is meant to be in rather than as an
-    epoch nobody can check by eye.
+    does.
     """
     if over is not None:
         deadline = NOW - over
@@ -123,10 +98,8 @@ def gx(gid, name=None, status="open", turn=11, over=None, left=None,
 
 
 print("\n1. the threshold comes from the referee's own numbers")
-# A worker that is up and working can be a whole BACKOFF_MAX behind a turn it
-# is retrying, plus the grace it waits out, plus the poll that notices the
-# deadline, plus N5's measured tick. A floor under any of that would call a
-# working referee dead.
+# A working referee can be BACKOFF_MAX plus the grace, the poll and a tick
+# behind, so the floor must be above that.
 ordinary = GRACE + POLL + 10.0
 check("the floor covers the longest gap a live worker leaves between tries",
       L.STALL_FLOOR >= BACKOFF_MAX, True)
@@ -147,9 +120,7 @@ check("and every threshold sits between the floor and the ceiling",
 
 
 print("\n2. late is not stopped")
-# The case a naive threshold gets wrong, and the reason this file exists. N5
-# measures a tick at about ten seconds and the worker reads the clock every
-# five, so a turn a few seconds past its deadline is a turn being closed now.
+# A turn a few seconds past its deadline is a turn being closed now.
 four = dict(turn_seconds=FOUR_HOURS, now=NOW)
 quarter = dict(turn_seconds=QUARTER_HOUR, now=NOW)
 check("a turn with time left on it is not stopped",
@@ -191,9 +162,7 @@ check("and a forming row is not stopped however old the listing is",
 
 
 print("\n3. the table says which galaxy it is")
-# Two of these are past their deadline and healthy. If the rule were "the
-# deadline has passed", crowded and lapsed would read stopped as well and the
-# column would be telling a player the wrong thing about four rows out of six.
+# Crowded and lapsed are past their deadline and healthy.
 ROWS = [
     gx("sandbox", "Sandbox", over=7200, joined=True),           # stopped
     gx("crowded", "Crowded Galaxy", over=30),                   # 30s late
@@ -260,13 +229,9 @@ check("it tells them to come back, which is true most of the time",
 check("in a player's words rather than the plan's",
       hint, lambda t: not any(w in t for w in (
           "referee", "worker", "scheduled task", "N1", "store", "Firestore")))
-# One sentence, by the operator's call. The table marks which galaxies are
-# stopped a word per row, and repeating that underneath was not worth the
-# length.
+# One sentence: the table already marks each stopped galaxy.
 check("it is one short line", hint.count(".") <= 1 and len(hint) < 80, True)
-# Fails if the line started varying again. Whatever is stopped and however
-# long ago, this reads the same, which is what makes it one string to review
-# rather than four.
+# The line reads the same whatever is stopped and however long ago.
 check("the same line however many galaxies are stopped",
       L.stall_hint([(by_id["sandbox"], 7200.0), (by_id["outpost"], 400.0)]),
       hint)
@@ -277,8 +242,7 @@ check("and however long they have been stopped",
 def hint_for(rows, recs=None, now=NOW):
     """The line under the table, or "" when the table has nothing to say.
 
-    `now` is the moment the rows are read against, because the hand-built rows
-    below sit around NOW and the ones read off disk carry real epoch deadlines.
+    `now` is the moment the rows are read against.
     """
     app = object.__new__(L.Launcher)
     app.view = FakeView()
@@ -301,8 +265,7 @@ check("which the stopped line takes precedence over, being the one to act on",
 
 
 print("\n5. the galaxies the operator tests against, read off disk")
-# Copies. `sandbox` in the original was advanced to turn 12 by the worker and
-# nothing here may touch it, so every file is fingerprinted before and after.
+# Copies. The originals are fingerprinted before and after.
 SRC = os.path.join(REPO, "server", "uidemo")
 
 
@@ -321,10 +284,9 @@ before = fingerprint(SRC)
 copy = os.path.join(fresh_dir(), "uidemo")
 shutil.copytree(SRC, copy)
 
-# Where each copied galaxy's deadline is put, and why. The pairs that matter
-# are crowded against sandbox, which are the same turn length at two distances
-# past the deadline, and outpost against lapsed, which are the same distance
-# past it at two turn lengths.
+# Each copied galaxy's deadline. Crowded and sandbox share a turn length at two
+# distances past the deadline; outpost and lapsed share a distance at two turn
+# lengths.
 PLACED = {
     "sandbox": -7200,       # 4h turn, 2h over            stopped
     "crowded": -30,         # 4h turn, half a minute over open
@@ -341,8 +303,7 @@ for gid, offset in PLACED.items():
     state["deadline"] = clock + offset
     with open(path, "w", encoding="utf-8") as fh:
         json.dump(state, fh, indent=2)
-# The index names the originals by absolute path, so the copy has to be
-# repointed at itself or this would list the galaxies it must not read.
+# The index names the originals by absolute path, so the copy is repointed.
 index = os.path.join(copy, galaxy_directory.INDEX)
 with open(index, encoding="utf-8") as fh:
     listed = json.load(fh)
@@ -557,9 +518,8 @@ check("which says it in the warning colour there too",
 
 
 print("\n8. a store this machine cannot reach is not a galaxy that has stopped")
-# The loop says `unreachable` when its read of the store fails. The deadline
-# on hand is then the last one heard, which stands still exactly as it does
-# under a referee that is off, so the readouts must not call it stopped.
+# The loop says `unreachable` when its read of the store fails. The last
+# deadline heard then stands still, and the readouts must not call it stopped.
 app = bare(mp_store=Store(), mp_thread=Thread())
 app.mp_turn, app.mp_deadline = 12, time.time() - 7200
 app._mp_state("waiting", turn=12, civ="DemoPlayer")

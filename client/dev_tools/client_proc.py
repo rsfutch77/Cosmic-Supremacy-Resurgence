@@ -1,28 +1,11 @@
 """
-client_proc.py: find the game client's process, in one place
-=============================================================
+client_proc.py: find the game client's process
+
     from client_proc import find_pid, NOT_THE_CLIENT
     pid, name = find_pid()
 
-Every tool here that attaches to the running game needs the same answer to the
-same question, and until now each carried its own copy of it. **Six copies**,
-of which two had been fixed and four had not.
-
-The bug the fixed ones carry a guard against: the player-facing launcher is
-`CosmicSupremacyLauncher.exe`, which matches the substring `CosmicSupremacy`
-and is a **64-bit** process. Attaching to it and injecting a 32-bit stub gets
-as far as `VirtualAllocEx` returning an address above 4 GB, which then will not
-pack into a `push imm32`. A confusing way to discover you are in the wrong
-process.
-
-It has cost two separate afternoons. Once in `trigger_save.py`, fixed there;
-then again in `advance_turns.py`, which is the copy `hold_clock` and the
-referee's tick both use, where it meant a client's clock was never actually
-held, the launcher had 86400 written into its own memory at the address the
-client keeps its clock at, and nothing failed loudly.
-
-Fixing a defect in one copy of six does not fix the defect. This module is the
-one copy.
+The launcher, `CosmicSupremacyLauncher.exe`, also matches `CosmicSupremacy` but
+is a 64-bit process, so it is excluded by default.
 """
 import ctypes
 from ctypes import wintypes
@@ -40,10 +23,7 @@ NOT_THE_CLIENT = ('launcher',)
 def find_pid(exe_substr='CosmicSupremacy', exclude=NOT_THE_CLIENT):
     """(pid, name) of the running game client, or (None, None).
 
-    `exclude` is a tuple of lowercase substrings that disqualify a match. It is
-    a parameter rather than a constant so a caller that genuinely wants the
-    launcher can ask for it, but the default is what every existing caller
-    means by "the client".
+    `exclude` is a tuple of lowercase substrings that disqualify a match.
     """
     arr = (wintypes.DWORD * 4096)()
     cb = ctypes.c_ulong()

@@ -1,31 +1,13 @@
 """
 test_capture_indicator.py: what the launcher shows about a turn in flight
-==========================================================================
     server\\.venv\\Scripts\\python.exe release\\tests\\test_capture_indicator.py
 
-Four things a player reads off the launcher while a turn is running, and one
-they read before it starts:
+Covers the capture indicator (capturing, captured but not sent, sent), the
+Save button, the turn readout, and the refusal of a foreign server on 8888.
 
-  the capture indicator  beside the server's dot: capturing now, captured but
-                         not sent, and sent, told apart at a glance rather than
-                         by reading the log.
-  the Save button        which means capture and send my turn now during a
-                         multiplayer turn, and write a .dat outside one.
-  the turn readout       which is a fact about the game client, so it goes the
-                         moment the client does, while the submission carries
-                         on behind it, and says instead when the game is being
-                         opened again.
-  the port refusal       a server on 8888 that is not this launcher's is
-                         refused rather than reused: it keeps its captures in
-                         its own folder and there is no way to ask it which.
-
-Headless. No window is opened and no game is started: the launcher's view is
-a FakeView that records what it was told to show, and the launcher object is
-built without running __init__ so that nothing reaches a window, a data
-directory or a port. What is under test is the launcher's own logic, which is
-where all four of these live. The one window detail that matters here, the
-indicator showing only while it has something to say, is checked against
-web_view.WebView with a recording stand-in for the page.
+Headless: the view is a FakeView and the Launcher is built without __init__.
+The indicator's visibility is checked against web_view.WebView with a
+recording stand-in for the page.
 """
 import os
 import queue
@@ -52,13 +34,10 @@ def check(label, got, want):
         fails.append(label)
 
 
-# ── stubs ────────────────────────────────────────────────────────────────────
 class Store:
     """A galaxy clock the readout can ask about, counting what it is asked.
 
-    Each of these is a Firestore document read on a live galaxy, against
-    50,000 a day for the whole project, so what the count is for is the
-    readout asking once rather than once a second.
+    Each call is a Firestore document read on a live galaxy.
     """
 
     def __init__(self, turn=14, left=930.0):
@@ -83,21 +62,14 @@ class Thread:
 
 
 def bare(**over):
-    """A Launcher with no window behind it.
-
-    __init__ builds widgets, opens a log and starts a server, none of which
-    this can have. The attributes the methods under test read are set here
-    instead, so what runs is the real method against a FakeView.
-    """
+    """A Launcher with no window behind it: the real methods against a FakeView."""
     app = object.__new__(L.Launcher)
     app.mp_store = None
     app.mp_note = ""
     app.mp_turn = None
     app.mp_deadline = None
-    # The turn length and whether the loop is between turns, which together
-    # decide whether a passed deadline is a referee about to close a turn or
-    # one that has stopped. Four hours, so that a deadline a few seconds old
-    # is ordinary here, which is what every readout above is written against.
+    # Together these decide whether a passed deadline is a late referee or a
+    # stopped one. Four hours, so a deadline a few seconds old is ordinary.
     app.mp_turn_seconds = 14400
     app.mp_waiting = False
     app.mp_civ = "DemoPlayer"
@@ -106,8 +78,8 @@ def bare(**over):
     app.mp_thread = None
     app.mp_client_seen = False
     app.mp_client_gone = False
-    # Whether a turn is still on its way, which is what decides if
-    # closing the window announces a send or just notices the close.
+    # Whether a turn is still on its way, which decides if closing the window
+    # announces a send.
     app.mp_turn_open = True
     app.mp_sending = False
     app.mp_send_now = threading.Event()
@@ -140,18 +112,15 @@ check("captured says saved", seen[L.HELD][0],
 check("sent says sent", seen[L.SENT][0], lambda t: "sent" in t.lower())
 check("all three read differently",
       len({t for t, _c in seen.values()}), 3)
-# While the game is open, work held here is safe: it is on disk, the player is
-# still playing, and the upload is not due yet. Amber there was the launcher
-# warning about a cadence working as designed, for two hours of a four-hour
-# turn.
+# While the game is open, held work is on disk and the upload is not due yet,
+# so it is not a warning.
 check("a capture held while the game is open is good news",
       seen[L.HELD][1], L.OK)
 check("sent is the colour the server dot uses when it is up",
       seen[L.SENT][1], L.OK)
 
 print("\n1b. and what those states mean once the game has closed")
-# Fails if the colour did not move with the client. Once the game is gone
-# there is nothing left to do but send, so held stops being good news.
+# Once the game is gone, held work is waiting to be sent.
 closed = {s: L.capture_readout(s, 8.0, client_open=False)
           for s in (L.CAPTURING, L.HELD, L.SENT)}
 check("a capture still unsent after the game closed is amber",
@@ -192,9 +161,8 @@ check("and sending repaints it green", app.view.capture[1], L.OK)
 app._show_capture(None, 0.0)
 check("and it goes again when the loop stops", shown(app), False)
 
-# The window's half: the page hides the dot and its status for empty text
-# (app.js), so a launcher with no turn loop shows one dot and one status, and a
-# state reaches the page in the colour that reads on the status pipe.
+# The page hides the dot and its status for empty text (app.js), and a state
+# reaches the page in the colour that reads on the status pipe.
 wv = WV.WebView({"product": "CS"})
 wv.window = PageWindow(wv)
 wv.show_capture(*L.capture_readout(L.CAPTURING, 0.0))
@@ -298,25 +266,19 @@ check("and the readout stops saying it",
 check("without putting the closed turn's countdown back",
       app.view.turn_label, lambda t: "turn 14" not in t)
 
-# The answer the player closed the game to get. Until 28 September it was
-# never drawn: the send finishing and the indicator being hidden were the same
-# event, so the amber "sending your turn" was replaced by nothing at all and
-# the operator reported never having seen a confirmation.
+# The send finishing is drawn as a confirmation.
 check("the confirmation is on screen after the send, not skipped",
       app.view.capture[0], lambda t: "sent" in t.lower())
 check("and it is green, because the turn is safe",
       app.view.capture[1], L.OK)
 check("and the indicator is still up to be read", shown(app), True)
-# Held, not kept. Fails if the confirmation became permanent, which would
-# outlast the turn it is about and greet the next one.
+# The confirmation is held for a while, not kept.
 app.mp_capture = (L.SENT, time.time() - L.CAPTURE_HOLD - 1)
 app._refresh_turn()
 check("and it goes once it has been up long enough", shown(app), False)
 
-# Play, on the galaxy this loop is following with its window closed, asks the
-# loop to open the game again. Between the press and the client coming up the
-# readout has to say that, or the player presses a button and nothing on the
-# window changes for as long as a client takes to start.
+# Play with the window closed asks the loop to open the game again, and the
+# readout says so until the client is up.
 app.mp_reopening = True
 app._refresh_turn()
 check("a game being opened again says so rather than saying it is waiting",
@@ -335,12 +297,8 @@ check("with the galaxy's clock on it",
 check("and Save live again", app.view.controls["save"]["enabled"], True)
 
 print("\n7. the countdown subtracts, it does not poll the store")
-# This runs once a second for as long as a game window is open. Asking the
-# store for the turn and the clock was two Firestore document reads a second,
-# 7,200 an hour, against 50,000 a day for the whole project: the readout was
-# costing more than the turn loop it was reporting on. The loop reads the
-# store on a schedule taken from the deadline and says how long is left with
-# every capture, so this counts down from that.
+# The readout runs once a second and must not read the store. It counts down
+# from the time left that the loop reports with every capture.
 store = Store(turn=14, left=930.0)
 app = bare(mp_store=store, mp_thread=Thread(alive=True))
 app._refresh_turn()
@@ -368,12 +326,8 @@ taken = boot[boot.index("if not port_is_free("):
              boot.index("self.servers, logfile = start_server")]
 check("nothing reuses a server this launcher did not start",
       "already serving our protocol" in boot, False)
-# A taken port has three ways out. Two report a healthy server on purpose: an
-# operator who has said in multiplayer.json where the holding server writes is
-# supplying the one fact the protocol cannot, and this install's own referee
-# has that fact on its worker's command line. What has to stay
-# true is the half that was actually protecting anything: a taken port that
-# nobody has said anything about is still refused.
+# A taken port is accepted when multiplayer.json says where the holding server
+# writes, or when it is this install's own referee. Otherwise it is refused.
 check("a taken port with nothing said about it is still refused",
       "not reusing it" in inspect.getsource(L.port_held_message)
       and "self.warn(box)" in taken, True)
@@ -385,8 +339,7 @@ check("or on referee_share finding this PC's referee and its folder",
       "shared = referee_share(holder, ours, configured=adopt)" in taken, True)
 check("the refusal really is the branch that was read",
       len(taken), lambda n: 400 < n < 4000)
-# The words are in `port_held_message`, which `_boot` hands what holds the
-# port; the unreadable-holder case keeps the sentence it always had.
+# The words are in `port_held_message`, which `_boot` hands what holds the port.
 said = inspect.getsource(L.port_held_message)
 check("the refusal hands its words to port_held_message",
       "port_held_message(port, holder, ours" in taken, True)
@@ -457,8 +410,8 @@ playing = _status_for(False, False)
 waiting = _status_for(False, True)
 sending = _status_for(True, True)
 check("playing names the civ", "DemoPlayer" in playing, True)
-# The bug: the loop stays alive between turns, so a closed game read as an open
-# one for hours. Fails if waiting and playing say the same thing.
+# The loop stays alive between turns, so waiting and playing must read
+# differently.
 check("waiting does not read as playing", waiting == playing, False)
 check("and is the launcher's own ready line", waiting, READY[0])
 check("which says nothing about multiplayer",
@@ -473,10 +426,8 @@ check("the real launcher falls back to its ready line",
 print()
 print("Play on the galaxy already being followed")
 src = inspect.getsource(L.Launcher._take_turn_loop)
-# The loop outlives the game window, so Play means two different things here.
-# A live client is a second game on one machine and is refused. A closed one
-# is a request to open the galaxy again, and the loop already following it is
-# the only thing allowed to start a client, so it is asked rather than told.
+# With a live client, Play is refused as a second game. With the client closed,
+# it asks the loop, the only thing allowed to start a client, to open it again.
 check("the two states are told apart", "mp_client_gone" in src, True)
 check("a closed game asks the loop to open it again",
       "self.mp_reopen.set()" in src, True)
@@ -493,10 +444,8 @@ print("\n" + ("ALL PASSED" if not fails else f"FAILURES: {fails}"))
 print()
 print("the indicator once the game window has closed")
 src = inspect.getsource(L.Launcher._refresh_turn)
-# It used to stick on 'saving your turn...' for the whole wait between
-# turns: the last attempt emits `capturing` before asking a client that is
-# gone, the attempt fails, and the send after it has nothing new to store
-# so it returns without emitting. Nothing superseded the state.
+# A failed last capture followed by a send with nothing new to store must not
+# leave the indicator on 'saving your turn...'.
 check("a closed game stops the indicator saying anything",
       "mp_client_gone and not self.mp_sending" in src, True)
 check("and a state of None is what hides it",
@@ -508,9 +457,8 @@ check("while a submission in flight still says so",
 print()
 print("the turn controls follow the game window, not the loop")
 wsrc = inspect.getsource(L.Launcher._watch_game)
-# Next Turn, Send Turn and Load all act on a running client. The loop
-# outlives the window by most of a four-hour turn, so showing them while
-# it waits left three dead buttons on screen for hours.
+# Next Turn, Send Turn and Load act on a running client, so they are hidden
+# while the loop waits without one.
 check("they are hidden once the client has gone",
       "_show_controls(not self.mp_client_gone)" in wsrc, True)
 check("and nothing shows them unconditionally while a loop runs",
@@ -536,10 +484,8 @@ mid = _Close(turn_open=True)
 L.Launcher._watch_mp_client(mid, False)
 check("a turn still open says it is being sent", mid.mp_sending, True)
 
-# The deadline passed while the game was still open, so the loop finished
-# the turn and emitted `waiting` minutes before the window was closed.
-# Announcing a send then contradicted the capture dot beside it, which
-# correctly read 'turn sent 2m ago'.
+# The loop finished the turn and emitted `waiting` before the window was
+# closed, so closing it announces no send.
 done = _Close(turn_open=False)
 L.Launcher._watch_mp_client(done, False)
 check("a turn already finished does not", done.mp_sending, False)
@@ -573,9 +519,8 @@ _json.dump({'adopt_server': 12},
            open(os.path.join(_d, 'multiplayer.json'), 'w'))
 check("a value that is not a path is not one", L.adopted_server(_d), None)
 
-# The guard it does not remove: a held port with no adopt_server is still
-# refused, because a capture lands wherever that server was started and
-# nothing in the protocol can ask it which folder that is.
+# A held port with no adopt_server is still refused: the protocol cannot ask
+# that server where its captures land.
 bsrc = inspect.getsource(L.Launcher._boot)
 check("a held port with nothing said about it is still refused",
       'not reusing it' in inspect.getsource(L.port_held_message)

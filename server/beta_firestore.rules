@@ -1,21 +1,10 @@
-// beta_firestore.rules: the Firestore rules for the beta
-// =======================================================
-// No client reads or writes Firestore directly. A player's launcher reaches a
-// galaxy only through the relay (functions/relay.py), which uses admin
-// credentials, and the referee uses a service account. Neither is governed by
-// security rules, so the rules deny everything.
+// beta_firestore.rules: the Firestore rules for the beta, as deployed to cs-resurgence.
+// Clients never touch Firestore directly. The relay (functions/relay.py) and the
+// referee use admin credentials, which bypass rules, so every client read and
+// write is denied. Field-level access (relay.PRIVATE_FIELDS) is enforced in the relay.
 //
-// This is the ruleset deployed to cs-resurgence (released 21 September 2026,
-// read back from the Firebase Rules API on 7 October 2026).
-//
-// A rule that allowed any signed-in client to read a galaxy document would
-// serve `seats` (uid to civ) and `joined`, which the relay withholds on purpose
-// (relay.PRIVATE_FIELDS), and with anonymous sign-in "signed in" is anyone.
-// Field-level access is enforced in the relay, where it can be expressed.
-//
-// There is deliberately no firebase.json beside this file. The only Hosting
-// config is site/firebase.json, which serves the live website, so rules are
-// deployed by hand, from a directory whose firebase.json names nothing else:
+// No firebase.json sits beside this file, so deploy by hand from a directory
+// whose firebase.json names nothing else:
 //
 //     firebase deploy --only firestore:rules
 

@@ -1,16 +1,14 @@
 """
 Two things a player reads out loud to somebody else: what holds port 8888 when
-the launcher cannot have it (N6), and the player code the operator matches to
-a sign-in when a seat has to be moved to a reinstalled copy (J4).
+the launcher cannot have it, and the player code the operator matches to a
+sign-in when a seat moves to a reinstalled copy.
 
     server\\.venv\\Scripts\\python.exe release\\tests\\test_port_and_support.py
 
-Headless. The port half runs on command lines written the way Windows reports
-them, and then reads whatever really holds 8888 on this machine, read only:
-nothing here ends, binds or connects to that process. On the referee's own PC
-that holder is the live worker's cs_server, which is exactly the case the
-message is for. The support half makes a relay refusal on a local HTTP server
-on a free port and reads it back through the store the launcher uses.
+Headless. The port half runs on command lines in the shape Windows reports,
+then reads whatever really holds 8888 here, read only: nothing ends, binds or
+connects to that process. The support half reads a relay refusal from a local
+HTTP server back through the store the launcher uses.
 
 The launcher object is not built.
 """
@@ -62,8 +60,8 @@ def proc(pid, ppid, cmd, name="python.exe"):
     return {"pid": pid, "ppid": ppid, "name": name, "cmd": cmd}
 
 
-# The shape measured on the referee's PC: the listener, the venv redirector
-# that started it, the worker, and the worker's own redirector.
+# The listener, the venv redirector that started it, the worker, and the
+# worker's own redirector.
 REFEREE = [proc(28420, 27412, f"{PY}  {OURS}"),
            proc(27412, 7416, f"{VENV} {OURS}"),
            proc(7416, 28016, f"{PY}  {HERE}\\server\\referee_worker.py "
@@ -81,15 +79,13 @@ check("named by the listener's pid", got["pid"], 28420)
 check("with the worker found among its parents", got["worker"], 7416)
 check("and the worker's captures where it documents them",
       got["saves"], HERE + r"\server\saves")
-# Fails if the worker's presence were not looked for: a cs_server outliving a
-# killed worker is the case the operator got stuck on.
+# A cs_server can outlive a killed worker.
 left = L.port_holder(REFEREE[:2] + [proc(7416, 1, "explorer.exe",
                                          "explorer.exe")], [OURS])
 check("the same cs_server with no worker left is a leftover",
       left["kind"], L.HOLDER_LEFT_OVER)
 check("and a leftover has no worker", left["worker"], None)
-# Fails if any cs_server.py counted as ours, which is the check
-# `is_our_cs_server` makes by path for the same reason.
+# Ours is decided by path, as `is_our_cs_server` does.
 other = L.port_holder(REFEREE, [r"D:\elsewhere\server\cs_server.py"])
 check("a cs_server from another folder is another copy's",
       other["kind"], L.HOLDER_OTHER_COPY)
@@ -126,8 +122,7 @@ check("the status line says the referee holds it", status,
       "port 8888 is held by this PC's referee")
 check("the box says it belongs to the referee on this PC",
       "referee running on this PC" in box, True)
-# Fails if the advice could be pasted wrong: the entry has to be valid JSON
-# naming the worker's own saves folder.
+# The advice must paste as valid JSON naming the worker's saves folder.
 entry = next(x.strip() for x in box.splitlines() if "adopt_server" in x)
 try:
     pasted = json.loads("{" + entry + "}")
@@ -168,11 +163,8 @@ worker_at = [proc(28420, 27412, f"{PY}  {OURS}"),
 held = L.port_holder(worker_at, [OURS])
 check("a referee whose saves folder is there is shared, from that folder",
       L.referee_share(held, True), os.path.normpath(saves))
-# Fails if an adopt_server entry could be overridden by what was detected.
 check("an adopt_server entry wins over what was detected",
       L.referee_share(held, True, configured=r"D:\named\saves"), None)
-# Fails if a folder that is not there were believed: that is how every turn
-# went to a folder nobody read.
 gone = L.port_holder(worker_at[:2] + [proc(
     7416, 28016, f"{PY}  {HERE}\\server\\referee_worker.py --store x "
                  f'--save-dir "{saves}_not_there"')], [OURS])
@@ -185,8 +177,8 @@ not_a_dir = os.path.join(os.path.dirname(saves), "x.txt")
 open(not_a_dir, "w").close()
 check("a file where the folder should be is not shared",
       L.referee_share(dict(held, saves=not_a_dir), True), None)
-# Fails if a relative path were resolved against this launcher's folder: it
-# is relative to the worker's, which the process table does not give.
+# A relative path is relative to the worker's folder, which the process table
+# does not give.
 was = os.getcwd()
 os.chdir(os.path.dirname(saves))
 try:
@@ -239,8 +231,7 @@ check("a checkout counts its own server directory",
       os.path.join(REPO, "server", "cs_server.py") in scripts, True)
 
 print("\n4. what really holds 8888 here, read only")
-# Read from the TCP table and the process list only. No socket is opened to
-# the port, not even to see whether it answers.
+# Read from the TCP table and the process list only. No socket is opened.
 chain = L.port_holder_chain(8888)
 if not chain:
     print("  (skipped: nothing listens on 8888 here)")
@@ -255,8 +246,7 @@ else:
               lambda k: k in (L.HOLDER_REFEREE, L.HOLDER_LEFT_OVER))
         print(f"  classified {live['kind']}, worker {live.get('worker')}, "
               f"saves {live.get('saves')}")
-        # The protocol answer is taken as given: asking would open a socket
-        # to the holder, and this section only reads.
+        # The protocol answer is taken as given: asking would open a socket.
         decided = L.referee_share(live, True)
         print(f"  a launcher here with no adopt_server would "
               + (f"share it, collecting from {decided}" if decided
@@ -348,8 +338,7 @@ try:
         raised = None
     except Exception as exc:                                    # noqa: BLE001
         raised = exc
-    # Fails if the store consumed or closed the body before raising, in which
-    # case the player would read "HTTP Error 403: Forbidden" again.
+    # The body must survive the raise, or the player reads only the HTTP status.
     check("the store the launcher uses raises it with the body still there",
           L.relay_refusal(raised), lambda r: r is not None
           and L.SEAT_HELD in r[1])

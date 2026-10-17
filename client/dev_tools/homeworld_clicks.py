@@ -1,17 +1,16 @@
 """
 homeworld_clicks.py: read, save and restore the homeworld customisation record
-================================================================================
+
 The start-of-game popup distributes an allowance (GSET `homeworld_changes`,
-default 30) across four options. What the engine stores is the click counts,
-four int32 in the uninitialised tail of `.data`:
+default 30) across four options. The engine stores the click counts as four
+int32 in the uninitialised tail of `.data`:
 
     0x00842AE4   space       clicks
     0x00842AE8   food        clicks
     0x00842AEC   production  clicks
     0x00842AF0   science     clicks
 
-Everything the UI shows is derived from those counts plus the base table
-`[300, 32, 30, 40]`:
+The UI derives its values from the counts and the base table `[300, 32, 30, 40]`:
 
     space              = 300 + 50 + 5 x spaceClicks
     food per farmer    = 32 + foodClicks
@@ -19,13 +18,8 @@ Everything the UI shows is derived from those counts plus the base table
     science/scientist  = 40 + scienceClicks
 
 Only the space result is written to an object (`Planet:104`, high 16 bits). The
-other three are recomputed from the counts, so a client that comes up with the
-counts at zero produces base rates on a homeworld that was customised, even
-though the save blob restored everything else about it.
-
-A save blob serialises objects, and these are not on an object, so no blob can
-carry them. They have to travel beside the blob and be written back into the
-process after the galaxy loads. That is what `--restore` is for.
+counts are not in the save blob, so they travel beside it and `--restore` writes
+them back after the galaxy loads.
 
 Usage:
     python homeworld_clicks.py                       # read and show derived values
@@ -41,7 +35,7 @@ import os
 import struct
 import sys
 from ctypes import wintypes
-from client_proc import find_pid, NOT_THE_CLIENT  # one copy, see client_proc.py
+from client_proc import find_pid, NOT_THE_CLIENT
 
 PROCESS_VM_READ           = 0x0010
 PROCESS_VM_WRITE          = 0x0020
@@ -55,8 +49,7 @@ BASE_TABLE       = (300, 32, 30, 40)
 SPACE_FLAT_BONUS = 50
 SPACE_PER_CLICK  = 5
 
-# Enough either side to show a sibling record at the same stride, which is what
-# a per-civ layout would look like.
+# Bytes shown either side of the record by --scan.
 SCAN_BEFORE = 0x20
 SCAN_AFTER  = 0x40
 

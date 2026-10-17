@@ -1,19 +1,12 @@
 """
 exsy.py: read and rewrite a civ's explored-systems table
-=========================================================
     from exsy import parse, build, systems_known
 
 `EXSY` sits under `OWNR > DATA` and is one civ's record of the systems it has
-entered. `filter_blob.py` removes whole `SOLA` subtrees from `GLXY`, which is
-clean for the galaxy tree because a system is self-contained; it is not clean
-for this, because every dropped system is still named here by id.
+entered, naming each by id. A filter that drops `SOLA` subtrees from `GLXY`
+must drop the same systems here.
 
-## Layout, measured
-
-Derived on the live galaxy1 blob at turn 13 and checked against all three
-civs' tables, 266, 153 and 111 bytes. Each parse consumes every byte, which is
-the check that matters: a layout that is merely plausible stops early or runs
-over, and this one lands exactly on the end three times out of three.
+## Layout
 
     u32   system count
     per system:
@@ -27,29 +20,14 @@ over, and this one lands exactly on the end three times out of three.
             u32   an observed quantity, undecoded
             str   planet name
 
-`str` is a `u32` length followed by exactly that many bytes, **unpadded**, so
-records are not aligned and the table can only be walked, never indexed.
+`str` is a `u32` length followed by exactly that many unpadded bytes, so
+records are not aligned and the table can only be walked.
 
-## What it is
-
-**A cache of what this civ has seen, not a record of what it decided.** Three
-things say so, and they matter because they decide whether dropping a row can
-lose anything a player would miss.
-
-- The same planet carries different values in different civs' tables. Planet
-  `DemoPlayer's HQ` reads `(198, 11)` in one and `(198, 7)` in another.
-- One civ records `BadGuy's HQ` as owned by 206 while another has the correct
-  202. That is a civ remembering what was true when it last looked; the
-  engine is already keeping per-player knowledge, and it is already stale in
-  the way fog of war is supposed to be.
-- A rename is authored on the object itself, `PLNT`/`SUN ` payload +24, so a
-  name survives in the galaxy tree whether or not it is cached here.
-
-So removing a system's row removes a cached observation. It cannot remove
-anybody's decision, which is what makes this safe to filter.
-
-The undecoded fields are carried through byte for byte rather than
-reconstructed, so filtering cannot change a value it does not understand.
+The table is a per-civ cache of observations: the same planet carries
+different values in different civs' tables, and an owner can be stale. A
+rename is stored on the object itself (`PLNT`/`SUN ` payload +24). Dropping a
+row therefore loses no player decision. Undecoded fields are carried through
+byte for byte.
 """
 import struct
 
@@ -64,12 +42,8 @@ def _wr_str(b: bytes) -> bytes:
 
 
 def parse(payload: bytes):
-    """[system] for one civ's table, or raise if it does not walk cleanly.
-
-    Raising on a short or long read is deliberate. A tolerant reader that
-    returned what it managed would let a misunderstood table look like a small
-    one, and the caller would then rewrite it and destroy the rest.
-    """
+    """[system] for one civ's table; raises ValueError unless the walk ends
+    exactly on the last byte, so a misread table is never rewritten."""
     i = 0
     n_sys, = struct.unpack_from('<I', payload, i)
     i += 4
@@ -95,8 +69,7 @@ def parse(payload: bytes):
 
 
 def build(systems) -> bytes:
-    """The wire form of a table. `build(parse(x)) == x` for a table we
-    understand, which is the only guarantee worth having here."""
+    """The wire form of a table. `build(parse(x)) == x`."""
     out = bytearray(struct.pack('<I', len(systems)))
     for s in systems:
         out += struct.pack('<II', s['system'], s['sun'])

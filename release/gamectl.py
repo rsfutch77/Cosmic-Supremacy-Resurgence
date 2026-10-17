@@ -1,7 +1,7 @@
 """
 gamectl.py: Next Turn, Save and Load, driven from outside the game
-===================================================================
-The three buttons the TestBed dialog provides, reimplemented
+
+The three buttons the TestBed dialog provides, reimplemented.
 """
 from __future__ import annotations
 
@@ -95,7 +95,6 @@ class Client:
             raise GameError(f"could not open the game process (pid {pid}); "
                             f"error {ctypes.get_last_error()}")
 
-    # -- lifetime --
     def close(self):
         if self.h:
             kernel32.CloseHandle(self.h)
@@ -107,7 +106,6 @@ class Client:
     def __exit__(self, *_exc):
         self.close()
 
-    # -- memory --
     def rd32(self, addr):
         buf = (ctypes.c_ubyte * 4)()
         n = ctypes.c_size_t()
@@ -128,7 +126,6 @@ class Client:
     def wr32(self, addr, value):
         self.wr(addr, struct.pack("<I", value))
 
-    # -- turn clock --
     def turn(self):
         return self.rd32(TURN_COUNTER)
 
@@ -136,8 +133,7 @@ class Client:
         return self.rd32(TURNLENGTH_ADDR)
 
     def advance_turn(self, timeout=45.0, drive=1, poll=0.25):
-        """Resolve exactly one turn, then put the turn length back.
-        """
+        """Resolve exactly one turn, then put the turn length back."""
         before = self.turn()
         if before is None:
             raise GameError("cannot read the turn counter: is the game still up?")
@@ -166,7 +162,6 @@ class Client:
             except GameError:
                 pass        # the process is gone; nothing left to restore
 
-    # -- save --
     def _alloc(self, size):
         addr = kernel32.VirtualAllocEx(self.h, None, size,
                                        MEM_COMMIT | MEM_RESERVE,
@@ -184,9 +179,8 @@ class Client:
                   timeout_ms: int = 30000) -> bool:
         """Call the engine's SaveGame in a remote thread. Returns its bool result.
 
-        CAUTION, inherited from trigger_save.py: the serialiser walks the whole
-        object graph, so this must not run during turn resolution. The launcher
-        calls it between turns, which is the only time a player can click it.
+        The serialiser walks the whole object graph, so this must not run
+        during turn resolution.
         """
         raw = name.encode("latin-1", "replace")[:STRING_CAP]
         s = bytearray(STRING_SIZE)
@@ -231,7 +225,7 @@ class Client:
                                            MEM_RELEASE)
 
 
-# ── Turning a captured save into something Load can launch ────────────────────
+# Turning a captured save into something Load can launch
 def decode_blob(text) -> bytes:
     """Wire format (base64 of [size][zlib]) -> the raw blob a .dat holds."""
     if isinstance(text, str):
@@ -263,8 +257,8 @@ def newest_capture(save_dir: str, since: float = 0.0):
     return best[1] if best else None
 
 
-# ── Is the opponent ready for the next turn? ─────────────────────────────────
-# The AI records the last turn it FINISHED deciding, and the launcher will not
+# Is the opponent ready for the next turn?
+# The AI records the last turn it finished deciding, and the launcher will not
 # let the player advance past it.
 AI_READY_TIMEOUT = 45.0     # after this, let the player play anyway
 
@@ -288,25 +282,13 @@ def ai_pass_marker(state_dir: str, civ: str):
 def reset_ai_state(state_dir: str, civ: str, keep_discovery: bool = False):
     """Forget what the opponent learned in an earlier game. Returns what it removed.
 
-    Two of the opponent's files outlive the game that produced them.
-
-    `discovered_<galaxy>_<civ>.json` is its fog-of-war map, keyed by galaxy
-    geometry and civ name. Single Player always launches the same shipped
-    galaxy, so the key is identical in every game, and a second game starts the
-    opponent already holding the map it built in the first. Everything it may
-    colonise or attack is filtered through that set, so it can send a colony
-    ship straight into the player's home system on turn 1 without ever having
-    scouted it.
-
-    `pass_<civ>.json` records the last turn it finished deciding, and is not
-    keyed by galaxy at all. The launcher's readiness gate opens whenever that
-    turn is at or past the current one, so a marker left at turn 180 satisfies
-    the gate for the whole of the next game's first 180 turns and the player
-    never waits for the opponent to move.
+    `discovered_<galaxy>_<civ>.json` is its fog-of-war map. Single Player
+    always launches the same galaxy, so the key repeats across games.
+    `pass_<civ>.json` is the last turn it finished deciding, not keyed by
+    galaxy, and the readiness gate opens at or past it.
 
     `keep_discovery` is for Load, which resumes the galaxy the map belongs to.
-    The pass marker goes either way: a loaded save reopens at a turn the marker
-    has already passed.
+    The pass marker is removed either way.
     """
     safe = _safe_civ(civ)
     victims = [os.path.join(state_dir, f"pass_{safe}.json")]
@@ -330,8 +312,7 @@ def reset_ai_state(state_dir: str, civ: str, keep_discovery: bool = False):
 
 
 def capture_to_dat(save_dir: str, out_path: str, since: float = 0.0) -> str:
-    """Convert the newest captured save into a .dat the client can be launched on.
-    """
+    """Convert the newest captured save into a .dat the client can be launched on."""
     cap = newest_capture(save_dir, since)
     if cap is None:
         raise GameError(

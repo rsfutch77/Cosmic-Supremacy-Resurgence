@@ -3,18 +3,9 @@ test_beta_notice.py: the player notice says what the code actually does
 ========================================================================
     server\\.venv\\Scripts\\python.exe server\\tests\\test_beta_notice.py
 
-The notice is the one file in the tree whose readers are strangers, and the
-only way it can be wrong is by drifting away from the code it describes. Prose
-does not fail a test on its own, so each check here is tied to something that
-does change: a constant, a function, or a list written in another file.
-
-The section that matters most is the one about the diagnostic log, because it
-is the only part a player is asked to act on. It is written from the itemised
-list in `release/launcher.py`'s redaction section header, and that list is
-counted here. A bullet added there and not added to the notice fails this test,
-which is the only thing that keeps the two from drifting.
-
-Nothing here edits `release/launcher.py`; it is read as text.
+Each check ties the notice's prose to something in the code: a constant, a
+function, or a list written in another file. `release/launcher.py` is read as
+text.
 """
 import os
 import re
@@ -44,13 +35,7 @@ def check(name, got, want=True):
 
 
 def flat(body: str) -> str:
-    """The notice as one lowercase line.
-
-    The file is hard-wrapped for reading, so a phrase a player sees as one
-    sentence is two lines in the bytes. Searching the raw text would fail on
-    where the wrap happened rather than on what it says, which is a check
-    failing for the wrong reason.
-    """
+    """The notice as one lowercase line, so phrase checks ignore line wraps."""
     return ' '.join(body.split()).lower()
 
 
@@ -63,8 +48,7 @@ def launcher_bullets(src: str) -> list:
     """The itemised list under WHAT THE REDACTED COPY STILL CONTAINS.
 
     Each item begins a comment line with a lone comma, which is that file's
-    bullet. Counting them is how the notice is held to the list rather than to
-    somebody's memory of it.
+    bullet.
     """
     lines = src.splitlines()
     try:
@@ -85,7 +69,6 @@ def notice_bullets(body: str) -> list:
     return [ln for ln in body.splitlines() if ln.startswith('  - ')]
 
 
-# ── checks ───────────────────────────────────────────────────────────────────
 def check_found():
     print('file: the notice is where the launcher will look for it')
     body, why = beta_notice.text_or_reason()
@@ -95,8 +78,7 @@ def check_found():
           os.path.dirname(beta_notice.path()), os.path.join(ROOT, 'server'))
     check('file: its first line is a title a panel can use',
           beta_notice.title(body), 'Before you join the beta')
-    # The control: a build that does not carry the file must say so rather
-    # than hand back an empty notice that reads as "there are no rules".
+    # Control: a build without the file returns a reason, not an empty notice.
     saved = beta_notice.NOTICE_NAME
     try:
         beta_notice.NOTICE_NAME = 'no_such_notice.txt'
@@ -111,21 +93,7 @@ def check_found():
 
 
 def check_the_five(body: str):
-    """What the notice actually undertakes to say.
-
-    It used to assert all five of N4's topics plus the diagnostic copy. The
-    notice was rewritten to four short bullets by an editorial decision, and
-    asserting the old list against it would only record that the file no longer
-    matches a plan item. What is asserted instead is what this notice claims, so
-    that a later edit which drops one of these is still caught.
-
-    **What it no longer says**, recorded here rather than silently dropped: that
-    a name is a claim and not a credential, that every player holds the whole
-    galaxy and a modified client is a maphack, that nobody inherits a deleted
-    empire, and what leaves the player's computer. If any of those is meant to
-    reach a player it now has to reach them somewhere else. The maphack and the
-    data-collection points are the two worth being deliberate about.
-    """
+    """The topics the notice covers, so an edit that drops one is caught."""
     print('content: what this notice undertakes to say')
     low = flat(body).lower()
     check('content: it asks players not to cheat', 'cheat' in low)
@@ -139,10 +107,7 @@ def check_the_five(body: str):
 def check_placeholders(body: str):
     """No invented value, and no marker left showing.
 
-    The two miss thresholds were markers here and are gone with the sentences
-    that carried them: the notice states no turn limits at all now, so there is
-    nothing per galaxy for it to be given. `log_upload` is the only key left and
-    M1 has still not settled it.
+    `log_upload` is the only placeholder key.
     """
     print('placeholders: nothing invented, nothing left showing')
     check('placeholders: no marker survives in the shipped notice',
@@ -159,18 +124,10 @@ def check_placeholders(body: str):
           ['x'])
 
 def check_against_launcher(body: str):
-    """The notice no longer describes the diagnostic copy, so there is nothing
-    to hold item for item against the launcher's own list.
+    """The notice makes no claim about the diagnostic log.
 
-    This used to count the bullets in `launcher.py`'s redaction section and
-    require the notice to carry one phrase for each, so that a line added there
-    and not here failed. The rewritten notice does not mention the log at all.
-    That coupling is therefore gone, and with it the guarantee that what the
-    launcher collects is what a player was told it collects.
-
-    Recorded rather than deleted outright: if the diagnostic copy is ever sent
-    anywhere, M1, then somewhere has to say so and this check is the shape of
-    what should guard it.
+    If the log is ever sent anywhere, the notice must describe it, and this
+    check should hold it to the launcher's redaction list.
     """
     print('log: the notice no longer describes the diagnostic copy')
     low = flat(body).lower()
@@ -178,24 +135,14 @@ def check_against_launcher(body: str):
           all(w not in low for w in ('log', 'upload', 'diagnostic')))
 
 def check_against_code(body: str):
-    """Every claim the notice makes has to be true of the code.
-
-    The list shrank with the notice. What it used to check, and cannot now,
-    is recorded in `check_the_five`: the anonymous id, the four-hour turn, that
-    nobody inherits a deleted empire, and that there is one galaxy with no
-    season timer are all things the notice no longer says. A notice that says
-    less needs fewer of these, and the rule that survives is the one that
-    matters: it must not say anything the code does not do.
-    """
+    """Every claim the notice makes is true of the code."""
     print('claims: the rest of the notice against the code it describes')
     low = flat(body).lower()
-    # An absent player really is removed, and by this code.
     ab = os.path.join(ROOT, 'server', 'abandonment.py')
     check('claims: an absent player really is removed',
           os.path.exists(ab) and 'def enforce' in read(ab))
     check('claims: and the notice says they may be', 'kick' in low or
           'remov' in low)
-    # The galaxy really can be ended by the operator, and really is restartable.
     ts = os.path.join(ROOT, 'server', 'turn_store.py')
     check('claims: a galaxy really can be closed',
           os.path.exists(ts) and 'def close' in read(ts))

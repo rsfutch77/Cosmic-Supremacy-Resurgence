@@ -5,13 +5,9 @@ join_kit_acceptance.py: a joiner's starting kit, in a client that ran
     python join_kit_acceptance.py run --name Ada --turns 3
     python join_kit_acceptance.py load --dat join_work/kit/played.dat
 
-`server/tests/test_starting_kit.py` covers what the kit is and proves it
-field by field against a civ `make_multiplayer_galaxy` adds at generation, and
-none of it says the resulting galaxy loads. This does the other half.
-
-It is `join_turn_acceptance.py` with the kit's questions added rather than a
-second harness: the join still has to arrive through the referee, and the two
-things most likely to break are the two things that file already measures.
+Checks that a galaxy with a kitted joiner closes turns through the referee and
+loads in a client. `server/tests/test_starting_kit.py` checks the kit itself
+on disk. The steps follow `join_turn_acceptance.py`, with the kit checks added.
 
 What this does and what counts as a failure:
 
@@ -23,27 +19,20 @@ What this does and what counts as a failure:
               recruitment, production queue and points, credits, research
               topic, design book, hulls and hull records match a civ built by
               `make_multiplayer_galaxy` at generation. Failure: any field
-              differing, which is what the old behaviour did on nine of them.
+              differing.
     untouched every incumbent's planets, ships and `OWNR` bytes byte-identical
-              to the control run. Failure: any difference, which would mean the
-              kit took something from somebody.
-    play      two more turns close. Failure: a short tick, which is what a blob
-              the engine half-read looks like.
+              to the control run. Failure: any difference.
+    play      two more turns close. Failure: a short tick.
     client    the published blob, stamped for the newcomer, opens in a client
               that was not already holding it, and the engine's own objects are
               read back rather than the blob's: one planet, two ships, the
               starting bank, no research topic, one design. Failure: the client
-              exiting during the load, the D1 shape, or the engine disagreeing
-              with the blob about what the newcomer has.
+              exiting during the load, its state never becoming readable, or
+              the engine disagreeing with the blob about what the newcomer has.
 
-The last one is the point of the file. `inject_ship` into a mid-game galaxy is
-a path nobody had exercised: K2's twelve joins were given nothing, and the ship
-sections are the part of a blob the engine is known to rewrite on its own.
-
-Requirements, both of which fail late rather than early: `cs_server.py`
-listening on 127.0.0.1:8888, and the machine's one game client, taken through
-`game_cycle`'s advisory lock. A server already on 8888 is used and never
-killed, because a packaged launcher hosting its own outranks a checkout one.
+Requirements, both checked late: `cs_server.py` listening on 127.0.0.1:8888,
+and the machine's one game client, taken through `game_cycle`'s advisory lock.
+A server already on 8888 is used and never killed.
 
 Nothing here touches a galaxy anybody else is using. The store under test is a
 copy made per run, and `server/uidemo` and `server/galaxy_demo` are read only.
@@ -77,9 +66,7 @@ import joins
 import referee
 import turn_store
 
-# Under `join_work`, which `.gitignore` already covers, rather than a new
-# directory beside it that it does not: a harness that leaves untracked
-# scratch in the tree is a harness whose output somebody else commits.
+# Under `join_work`, which `.gitignore` covers.
 WORK = os.path.join(SERVER, 'join_work', 'kit')
 FIXTURE = os.path.join(SERVER, 'galaxy_demo')
 REFERENCE = os.path.join(REPO, 'client', 'SinglePlayerGalaxy.dat')
@@ -102,7 +89,6 @@ def check(name, got, want=True):
         log(f'          wanted {want!r}, got {got!r}')
 
 
-# ── reading a galaxy ─────────────────────────────────────────────────────────
 def civ_count(blob):
     return struct.unpack_from('<I', blob, icv.civ_count_at(blob))[0]
 
@@ -124,9 +110,8 @@ def homeworld(blob, name):
 def masked_ship(blob, ship, owner_oid):
     """A ship record with its identity blanked, leaving the hull.
 
-    The object id twice, the owner, the position, the orbit and the design are
-    what one civ's ship differs from another's by; everything else, the `DYNO`
-    and the crew included, is the kind of ship and its condition.
+    Blanks the object id (both places), the owner, the position, the orbit and
+    the design. The `DYNO` and the crew are kept.
     """
     rec = bytearray(blob[ship['off']:ship['end']])
     icv.replace_u32(rec, owner_oid, 0, 0, len(rec))
@@ -181,7 +166,6 @@ def free_planets(blob):
             if not p['owner'] and p['nlen'] == 0]
 
 
-# ── the stub server the capture travels over ─────────────────────────────────
 def server_listening(host='127.0.0.1', port=8888, timeout=2.0) -> bool:
     try:
         with socket.create_connection((host, port), timeout=timeout):
@@ -210,14 +194,11 @@ def ensure_server():
     raise SystemExit('cs_server.py did not come up on 8888')
 
 
-# ── the run ──────────────────────────────────────────────────────────────────
 def reference_kit():
     """What a civ added at galaxy generation starts with.
 
-    Built rather than written down, by running `make_multiplayer_galaxy.build`
-    on the tracked fixture, so the thing a joiner is compared against is a civ
-    created the way every civ in a new galaxy is created. A list of numbers
-    kept here would drift from that function the first time it changed.
+    Built by running `make_multiplayer_galaxy.build` on the tracked fixture.
+    Returns (kit of the added civ, kit of seat one).
     """
     fresh = mmg.build(sp.load_any(REFERENCE), ['Alpha', 'Beta', 'Gamma'],
                       log=quiet)
@@ -246,7 +227,7 @@ def prepare(fixture, work, name, uid, seconds):
 
 
 def describe_donor(blob, log=log):
-    """What seat one holds, which is what a clone used to come out as."""
+    """Log what seat one holds. Returns (name, kit)."""
     seat = icv.seat_one(icv.owner_records(blob))['name']
     k = kit_of(blob, seat)
     log(f'  seat one is {seat!r}: {k["planets"]} planet(s), '
@@ -362,11 +343,9 @@ def run(fixture, work, name, uid, turns, seconds, save_dir):
               civ_count(after), len(icv.owner_records(after)))
         check('the high-water id matches the largest object id',
               high_water(after), idg.max_object_id(after))
-        # A SHIP record carries its object id twice and `inject_ship` used to
-        # leave the donor's in the second place. Only the newcomer's hulls can
-        # say anything about the fix: galaxy_demo already holds a ship this
-        # tool cloned before it, and repairing somebody else's ship is not a
-        # thing a join is allowed to do.
+        # A SHIP record carries its object id twice. Only the newcomer's hulls
+        # are checked; galaxy_demo already holds older clones with a stale
+        # second id, and a join must not touch other civs' ships.
         stale = [s['id'] for s in ish.ship_records(after)
                  if struct.unpack_from('<I', after, s['end'] - 4)[0] != s['id']]
         check('every hull the join added names itself in both places it '
@@ -420,11 +399,8 @@ def run(fixture, work, name, uid, turns, seconds, save_dir):
               seen.get('designs'), 1)
         check('every hull on that design',
               len(seen.get('ship_designs') or []), 1)
-        # Not the starting bank exactly: the newcomer has been seated for a
-        # turn or two by now and the engine has paid it an income, which is
-        # the same 200 to 216 step the turn-1 generation captures show. What
-        # can be said is that the engine agrees with the blob and that the
-        # figure is nothing like the donor's.
+        # The engine has paid income since the join, so the bank is at least
+        # the starting credits and below the donor's.
         check('the engine agrees with the blob about the newcomer\'s bank',
               seen.get('cash'), mo.credits_of(final, civ(final, name)['oid']))
         check('which is the starting bank and its income, not the donor\'s',

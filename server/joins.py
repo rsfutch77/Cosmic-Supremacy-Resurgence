@@ -1,6 +1,6 @@
 """
 joins.py: the seat a stranger asked for
-=========================================
+
     import joins
 
     blob, done = joins.apply(store, turn, new_turn, blob, log=log)  # the referee
@@ -9,119 +9,31 @@ joins.py: the seat a stranger asked for
 
     python joins.py ../uidemo/sandbox          # what is waiting, changing nothing
 
-The launcher writes a join request and stops. This is the other end: the worker
-reads the request at a turn boundary, adds the civ to the blob the tick
-produced, and seats the player on the roster. A player who asks during turn N is
-playing at turn N+1, which is J3, and the whole reason it happens here rather
-than in the launcher is that the galaxy belongs to the referee. A join applied
-to a copy a player holds is a join that lasts until the next turn is published
-over it.
-
-The request, and who owns its shape
-------------------------------------
-`release/launcher.py` writes it and this reads it, so the shape is a contract
-between two files that are owned by different people. It is a JSON object:
+At a turn boundary the referee adds each requested civ to the blob the tick
+produced and seats the player on the roster, so a player who asks during turn N
+plays at turn N+1. The launcher writes the request, a JSON object:
 
     {"name": "Ada", "uid": null, "build": "0.1.0+dev",
      "requested_at": 1790486818.25, "requested_turn": 11}
 
-Unchanged from what the launcher already writes, which is the whole of why it
-is unchanged: two live galaxies in `server/uidemo` hold requests in that form,
-written by the launcher's own button, and a shape agreed by changing the file
-that produces it is a shape nobody can test today.
+Requests and answers are kept by the store (`store.join_requests()`,
+`store.answer_join()`); a folder holds them at `<store>/joins/<uid or name>.json`
+and `joins/done/`. An answer holds the request, the outcome, and for a granted
+one the planet and system. Answers are read back by key, never listed.
 
-**Where it is kept is the store's and not this module's.** A folder holds it at
-`<store>/joins/<uid or name>.json` and the answer at `joins/done/`, which is
-what J3 shipped; a Firebase galaxy holds both as documents under the galaxy,
-and a LAN service passes them through to the folder behind it. This module asks
-`store.join_requests()` and `store.answer_join()` and never learns which it is
-talking to, which is the same seam every other galaxy state crosses. J3 read
-the folder itself, so the beta galaxy, which is Firebase, could not take a join
-at all.
+`resolve_turn` runs abandonment before joins, so a join sees the planets a
+reclaim freed.
 
-The answer, which the launcher reads to tell a refused player why, holds the
-request it answers, the outcome, and for a granted one the planet and system
-the player landed in.
-It is read back by key, never listed: a list of who is trying to join a galaxy
-is the enumeration F4 and J4 both refuse to hand a launcher.
+`apply` changes only bytes. `commit` runs after `publish` and does every
+durable write, so a referee killed between them leaves an empire with no roster
+entry, which the next boundary refuses and an operator can settle. The seat map
+(`seats`, `{uid: civ}`, Firebase galaxies only) is written in the same
+`update_state` merge as the roster.
 
-Why the order in `resolve_turn` is abandonment first
------------------------------------------------------
-Both run on the blob the tick produced, before it is published. Abandonment
-goes first for two reasons and neither is preference. A reclaim frees planets
-and a name, so a join in the same tick sees the room the reclaim made, which is
-the state a full sandbox is actually in. And a wipe needs an uncolonised planet
-to take a blank `PLPR` from, which is the one resource a join consumes, so
-joining first can push a reclaim into its slow archive-walking fallback or
-leave a seat held that should have gone. The reverse order buys nothing: a civ
-seated this turn has a missed streak of one and cannot be warned or reclaimed
-by the same tick.
-
-Why the roster is written after the blob is published
-------------------------------------------------------
-The two have to agree or the galaxy is broken in one of two ways, and they are
-not equally bad. A civ in the roster and not in the galaxy is a player the
-launcher admits and whose every submission the referee then drops as "not a civ
-in this galaxy", which reads to them as the game refusing their orders, turn
-after turn, with nothing to fix. A civ in the galaxy and not in the roster is a
-player the launcher turns away, once, with a refusal an operator can answer by
-adding the name.
-
-So `apply` only changes bytes, `commit` runs after `publish` and does every
-durable write, and a referee killed between them leaves the recoverable half of
-that pair.
-
-The seat, and why it is written with the roster
-------------------------------------------------
-A galaxy served through the relay also holds `seats`, `{uid: civ}`, which is
-what the relay checks before it lets a sign-in act as a civ (J4). A granted
-join binds the new civ to the uid that asked, so a joiner can play without the
-operator's `seat_tool.py bind` and nobody can claim the civ first under
-`seat_claim: first-use`.
-
-The seat goes into the same `update_state` merge as the roster, which on a
-Firebase galaxy is one document write. There is no moment at which the roster
-names the civ and no seat holds it, which is the window a first-use claim by a
-stranger would use, and no moment at which a seat names a civ the roster does
-not. A referee killed before that write leaves the case above, an empire on the
-board with no roster entry and no seat, and the operator's answer is the same
-two steps: add the name, and bind the uid from the request with `seat_tool.py
-bind`.
-
-Only a store that carries a seat map is given one. The directory store and the
-LAN service have no seat map because nothing on those transports checks a uid;
-writing one into their state would serve every player the uid of every other,
-which is what the relay keeps `seats` out of `/state` to prevent. `joined`
-records the uid on all three. It is not self-repairing and is deliberately not: the next boundary
-refuses the still-waiting request rather than seating whoever asked, because a
-rule that seats a name already in the galaxy hands an empire to anybody who
-types it in a galaxy whose roster was ever edited by hand.
-
-Applying one join twice is the failure that matters
-----------------------------------------------------
-It is a second empire for one player, and unlike a lost join it cannot be
-noticed by the player it happened to. Three things stop it and they are
-deliberately independent. An answered request is consumed, which on a folder is
-a move into `joins/done/` and in Firebase is a delete batched with the answer.
-A name already on the roster is refused. And `inject_civ.add_civ` refuses a
-name already in the blob, which is the check that still holds when the other
-two have been defeated by a store restored from a backup.
-
-The third is what carries a worker killed between `publish` and `commit`. The
-request is still waiting, the roster does not name the seat, and the galaxy
-does hold the empire, so the next boundary refuses the request for a civ of
-that name standing on the board that no roster claims, and says in the log that
-a roster and a galaxy which disagree are the operator's to settle. One empire,
-not two.
-
-A join that cannot be granted changes nothing
-----------------------------------------------
-`pick_homeworld` raises `SystemExit` for a galaxy with no free planet and again
-for one whose furthest free planet is inside the crowding margin. Inside a tick
-that ends the turn for everybody, which is the class of failure N2 exists to
-stop, so every call into the injection is guarded and a refusal leaves the blob
-exactly as it arrived. The player is told through `put_note`, the same path a
-refused order uses.
+One request is never granted twice: an answered request is consumed, a name on
+the roster is refused, and `inject_civ.add_civ` refuses a name already in the
+blob. Every call into the injection is guarded, and a refused join leaves the
+blob unchanged; the player is told through `put_note`.
 """
 import argparse
 import json
@@ -138,35 +50,20 @@ for _d in (HERE, os.path.join(HERE, 'dev_tools'),
 import inject_civ as icv
 import turn_store
 
-# Where a request and its answer sit in a galaxy that is a folder, for the
-# operator tools that read the files themselves. Taken from the store rather
-# than spelled again here, because the store is what writes them and two
-# spellings of one path is a way for the two to disagree.
+# Where a request and its answer sit in a galaxy that is a folder.
 JOIN_DIR = turn_store.JOIN_DIR
 DONE_DIR = turn_store.JOIN_DONE_DIR
 
-# What a seat granted here is recorded as, in the galaxy's own state, beside
-# `reclaimed`. It is a record and not an enforcement: J4 binds a seat to the
-# uid that claimed it, and the binding cannot be checked by anything until
-# something writes it down. This is the thing that writes it down. The name is
-# the store's, for the reason the two above are: a field a store does not know
-# about is a field one of them silently drops.
+# The state key recording each granted seat (turn, uid, build, planet, system).
 JOINED_KEY = turn_store.JOINED_KEY
 
-# The engine's name buffer, which `add_civ` also refuses past. Checked here as
-# well so a request that is too long is answered with a sentence rather than
-# with the injection's `SystemExit`.
-NAME_LIMIT = 15
+NAME_LIMIT = 15   # the engine's civ name buffer, in characters
 
-# What a wiped civ's shell is renamed to when the player who lost it rejoins
-# under the same name. A reclaim keeps the `OWNR` (that is K4's shell, and it
-# is kept because deleting it creates a dangling reference) so the name is
-# still in the galaxy and `add_civ` would refuse it. The shell is not the
-# player's empire any more and the name is theirs, so the shell gives it up.
+# A reclaimed civ's `OWNR` shell stays in the blob. When its player rejoins under
+# the same name, the shell is renamed to this.
 VACATED = 'Vacated {oid}'
 
-# What the engine calls a system nobody has named yet, which in a young galaxy
-# is most of them. See home_system.
+# The engine's name for a system nobody has named.
 UNNAMED = 'Unnamed'
 
 GRANTED, REFUSED = 'granted', 'refused'
@@ -175,52 +72,30 @@ GRANTED, REFUSED = 'granted', 'refused'
 # field: `FirebaseTurnStore.state` leaves it out and the relay never serves it.
 SEATS_KEY = 'seats'
 
-# What a Firebase uid looks like, the same test `seat_tool.UID_RE` makes. A uid
-# is a map key under `seats`, so anything else could write outside the map.
+# The characters of a Firebase uid (as `seat_tool.UID_RE`). A uid is a map key
+# under `seats`, so anything else could write outside the map.
 UID_CHARS = frozenset('ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz'
                       '0123456789')
 
 
-# ── reading what is waiting ──────────────────────────────────────────────────
 def request_dir(store) -> str:
-    """Where this galaxy's join requests are, or '' when it is not a folder.
-
-    For an operator and for the acceptance tools, which read the files
-    themselves. Nothing in this module reaches a request this way any more:
-    every store answers `join_requests` and `answer_join`, so a galaxy in
-    Firebase takes a join the same way a folder does and this module cannot
-    tell which it is holding.
-    """
+    """Where this galaxy's join requests are, or '' when it is not a folder."""
     root = getattr(store, 'root', None)
     return os.path.join(root, JOIN_DIR) if isinstance(root, str) else ''
 
 
 def pending(store, log=print) -> list:
-    """Every join request waiting on this galaxy, oldest first.
-
-    The store's own answer, whichever store it is. Ordered by when the player
-    asked, so two requests that can only both be granted if there is room for
-    both are settled by who asked first rather than by how a listing happened
-    to come back. The key is what the request is filed under, the uid when the
-    player has one and their name when they do not, and it is what the answer
-    is filed under in turn.
-    """
+    """Every join request waiting on this galaxy, oldest first. Each carries
+    `key`, the uid or else the name, which the answer is filed under."""
     return list(store.join_requests(log=log) or [])
 
 
-# ── deciding ─────────────────────────────────────────────────────────────────
 def _civ(blob, name: str):
     return next((o for o in icv.owner_records(blob) if o['name'] == name), None)
 
 
 def _holdings(blob, oid: int):
-    """(planet ids, ship ids) one civ holds.
-
-    Both halves, because the question they answer is whether anything of this
-    civ is still on the board. A reclaim leaves the `OWNR` shell and takes
-    every planet and every ship, which is K4's whole design, so a civ with
-    neither is wreckage and a civ with either is somebody's.
-    """
+    """(planet ids, ship ids) one civ holds. A reclaimed shell holds neither."""
     import inject_ship as ish
     return ([p['id'] for p in icv.planet_records(blob) if p['owner'] == oid],
             [s['id'] for s in ish.ship_records(blob) if s['owner'] == oid])
@@ -229,15 +104,8 @@ def _holdings(blob, oid: int):
 def refusal(name: str, roster, blob) -> str:
     """Why this name cannot be seated in this galaxy, or ''.
 
-    Only the reasons that are about the name. Whether the galaxy has room is
-    the injection's to answer, because the answer is the placement and asking
-    it twice would be two policies that can disagree.
-
-    A clash with a name already on the roster is refused rather than merged
-    into that seat. The launcher refuses it at the button, so a request that
-    gets this far is one where the seat was taken between the click and the
-    boundary, and handing the second player the first player's empire is the
-    one outcome worse than telling them to pick another name.
+    Only reasons about the name; whether there is room is the injection's. A
+    name already on the roster is refused, never merged into that seat.
     """
     if len(name) > NAME_LIMIT:
         return (f'The name {name!r} is longer than the {NAME_LIMIT} characters '
@@ -245,9 +113,7 @@ def refusal(name: str, roster, blob) -> str:
                 f'shorter name.')
     problem = turn_store.name_problem(name)
     if problem:
-        # A request filed before the relay checked names, or written to a
-        # folder store by hand. Refused here so it is answered once rather than
-        # failing inside the injection on every tick.
+        # Refused here so it is answered once, not failed in the injection each tick.
         return (f'The name {name!r} cannot be used: {problem}. No seat was '
                 f'made. Join again with another name.')
     if any(c == name for c in roster):
@@ -276,13 +142,7 @@ def vacated_name(blob, oid: int) -> str:
 
 def _vacate(blob, name: str, oid: int, log=print):
     """Rename a wiped civ's shell so the player who lost it can use the name.
-
-    `make_multiplayer_galaxy.rename_civ` is the operation, and it is the same
-    one that file already performs on a live blob when a wanted name is held by
-    a civ about to give it up. The shell keeps its object id, its dead row on
-    the diplomacy list and every reference to it, so nothing dangles; all it
-    loses is the name, which belongs to the player and not to the wreckage.
-    """
+    The shell keeps its object id and every reference to it."""
     import make_multiplayer_galaxy as mmg
     fresh = vacated_name(blob, oid)
     out = mmg.rename_civ(blob, name, fresh, log=lambda *a: None)
@@ -292,22 +152,9 @@ def _vacate(blob, name: str, oid: int, log=print):
 
 
 def forget_inherited_map(blob, name: str, log=print):
-    """Empty a newly added civ's `EXSY`, which it inherited from its donor.
-
-    `inject_civ` clones a donor's `OWNR` whole, and `EXSY` is the explored map
-    inside it, so a civ added off seat one starts knowing every system seat one
-    has entered. In a generated galaxy that is one row and
-    `make_multiplayer_galaxy.reset_exsy` clears it for everybody at creation.
-    In a galaxy fifty turns old it is the donor's whole map, including where
-    people live, handed to a stranger who has not left home, and the donor is a
-    player who is still in the game.
-
-    Only this civ's table is touched. `reset_exsy` clears every civ's, which is
-    right at creation and would take every incumbent's map here.
-
-    Emptying rather than pruning, because a civ that has just been created has
-    entered nothing: the engine writes the row for its own system on load,
-    measured at generation and the reason that file empties the table too.
+    """Empty a newly added civ's `EXSY`, the explored map it inherited from its
+    donor's cloned `OWNR`. Only this civ's table is touched; the engine writes
+    the row for its own system on load.
     """
     import save_parser as sp
     import exsy
@@ -336,19 +183,8 @@ def forget_inherited_map(blob, name: str, log=print):
 
 
 def home_system(blob, planet_id: int):
-    """(sun object id, what to call it) for the planet a newcomer was given.
-
-    A system name is what a player is told, because "you are in Tau Ceti" is
-    something they can find on their own map and a planet object id is not. In
-    a galaxy where nobody has named anything the name is the engine's
-    placeholder, and a player told they are in "Unnamed" has been told nothing,
-    so that case says so plainly. The planet name in the same sentence is the
-    findable half either way.
-
-    The label rather than the raw name, because the note and the seat record
-    both take it from here and a player reading one and an operator reading the
-    other should not be given two different answers.
-    """
+    """(sun object id, label) for the planet a newcomer was given. An unnamed
+    system is labelled 'an unnamed system'."""
     import merge_orders as mo
     for sys_rec in icv.system_records(blob):
         if planet_id not in sys_rec['planets']:
@@ -366,13 +202,7 @@ def home_system(blob, planet_id: int):
 
 
 def welcome_note(name: str, turn: int, system: str, planet_id: int) -> list:
-    """What a player who has just been seated is told.
-
-    The system is the point of it. J3 asks that a newcomer is told where they
-    landed rather than having to find their own homeworld on a map of a galaxy
-    they have never seen, and the system name is the thing the map is labelled
-    with.
-    """
+    """What a player who has just been seated is told, including their system."""
     return [
         f'You joined this galaxy as {name} at turn {turn}.',
         f'Your homeworld is {name}\'s HQ, planet #{planet_id}, in {system}.',
@@ -386,16 +216,12 @@ def refusal_note(name: str, reason: str) -> list:
             reason]
 
 
-# ── applying ─────────────────────────────────────────────────────────────────
 def donor_template(store, blob, before: int, log=print):
     """An earlier turn of this galaxy to clone a newcomer from, or None.
 
-    Needed only when seat one of `blob` holds no planet or no ship is left to
-    clone a starting hull from, both of which abandonment wipes cause; see
-    `inject_civ.pick_donor` and `inject_ship.add_ship`. The earliest turn the
-    store holds is tried first, because seat one held its homeworld there and
-    its record is closest to a generated start. A turn that cannot be read is
-    skipped.
+    Needed only when seat one of `blob` holds no planet or no ship is left (see
+    `inject_civ.pick_donor` and `inject_ship.add_ship`). The earliest turn is
+    tried first, and a turn that cannot be read is skipped.
     """
     import abandonment
     import inject_ship as ish
@@ -428,10 +254,8 @@ def _grant(store, blob, req: dict, roster, turn: int, log=print,
            template=None):
     """One request against one blob. Returns (blob, outcome).
 
-    Nothing raises out of here. Every way the injection can refuse is a
-    `SystemExit` (no free planet, nothing outside the crowding margin, a name
-    the blob already holds) and a `SystemExit` inside a tick ends the turn for
-    every player in the galaxy, which is exactly what N2 was written to stop.
+    Nothing raises out of here. The injection refuses with `SystemExit`, which
+    inside a tick would end the turn for every player.
     """
     name = req['name'].strip()
     out = {'key': req.get('key'), 'name': name, 'uid': req.get('uid'),
@@ -447,13 +271,8 @@ def _grant(store, blob, req: dict, roster, turn: int, log=print,
     if standing is not None:
         planets, ships = _holdings(blob, standing['oid'])
         if planets or ships:
-            # An empire under this name is on the board and nobody is seated on
-            # it. That is not a case to guess at: seating the asker would hand
-            # a stranger whatever is there on the strength of a name they
-            # typed, and it is reachable without any fault of the referee's,
-            # because a roster edited by hand is all it takes. It is the
-            # operator's to resolve, and the log says so in the one place they
-            # will look.
+            # An empire under this name is on the board with nobody seated on it.
+            # The asker is refused and the operator resolves it.
             out.update(outcome=REFUSED,
                        reason=(f'This galaxy already holds an empire called '
                                f'{name!r} that is not on its roster, so no '
@@ -489,8 +308,7 @@ def _grant(store, blob, req: dict, roster, turn: int, log=print,
     try:
         joined = forget_inherited_map(joined, name, log=log)
     except Exception as exc:                                # noqa: BLE001
-        # A newcomer keeping the donor's map is a cheat and is not worth
-        # losing the seat over, so this is reported and the join stands.
+        # The join stands; the failure is logged.
         log(f'  joins: {name} kept the donor\'s explored map, '
             f'{type(exc).__name__}: {exc}')
 
@@ -502,20 +320,12 @@ def _grant(store, blob, req: dict, roster, turn: int, log=print,
 
 
 def apply(store, turn: int, new_turn: int, blob: bytes, log=print):
-    """Grant every join waiting on this galaxy. The referee's seam.
+    """Grant every join waiting on this galaxy.
 
-    Called with the turn that has just been closed, the turn about to be
-    published, and the blob the tick produced for it, before `publish`. Returns
-    `(blob, outcomes)`, and the caller passes the outcomes to `commit` once the
-    blob is published. Nothing durable is written here.
-
-    A closed galaxy grants nothing and consumes nothing, which is what
-    `abandonment.enforce` does with the same state and for the same reason: a
-    galaxy the operator has ended asks nothing of anybody. Leaving the requests
-    where they are rather than refusing them is deliberate, because `reopen`
-    exists and a request thrown away is a join a reopened galaxy would have
-    granted. The player is not left guessing either way: their launcher reads
-    the galaxy's status and says it has ended before it says anything else.
+    Called with the turn just closed, the turn about to be published, and the
+    blob the tick produced for it, before `publish`. Returns `(blob, outcomes)`
+    for `commit` once the blob is published. Nothing durable is written here.
+    A closed galaxy grants nothing and leaves its requests waiting.
     """
     if store.is_closed():
         if pending(store, log=lambda *a: None):
@@ -535,28 +345,21 @@ def apply(store, turn: int, new_turn: int, blob: bytes, log=print):
         blob, out = _grant(store, blob, req, roster, new_turn, log=log,
                            template=template)
         if out['outcome'] == GRANTED:
-            # Added to the roster this pass and not only in `commit`, so a
-            # second request for the same name inside one turn is refused by
-            # the same rule that refuses one arriving a turn late.
+            # So a second request for the same name this turn is refused.
             roster.append(out['name'])
         outcomes.append(out)
     return blob, outcomes
 
 
-# ── the seat ─────────────────────────────────────────────────────────────────
 def is_uid(uid) -> bool:
     return isinstance(uid, str) and 0 < len(uid) <= 128 and \
         set(uid) <= UID_CHARS
 
 
 def seat_map(store):
-    """`{uid: civ}` for a store that carries seats, or None for one that does
-    not.
-
-    Only a `FirebaseTurnStore` does. The class is looked up in `sys.modules`
-    rather than imported, because a store of that class can only exist once
-    `firebase_store` has been imported, and importing it here would pull the
-    Google client libraries into every referee that runs a folder galaxy.
+    """`{uid: civ}` for a store that carries seats (a `FirebaseTurnStore`), or
+    None. `firebase_store` is looked up in `sys.modules` so it is not imported
+    for folder galaxies.
     """
     fb = sys.modules.get('firebase_store')
     if fb is None or not isinstance(store, fb.FirebaseTurnStore):
@@ -573,22 +376,13 @@ def seat_changes(seats: dict, roster, seated, log=print):
     commit, and `seated` the granted outcomes. `bind` is `{uid: civ}` to write
     and `drop` the uids whose entry is removed.
 
-    Three rules, each about a seat somebody else could otherwise use:
+      * a uid that already holds a civ still on the roster keeps it, and the
+        new civ is left unseated for `seat_tool.py bind`.
+      * a uid holding a civ no longer on the roster (reclaimed) is moved to the
+        new civ.
+      * any other uid still holding the new civ's name loses that entry.
 
-      * a uid that already holds a civ still on the roster keeps it and the new
-        civ is left unseated. The relay refuses a join from a seated sign-in,
-        so this is a first-use claim that landed between the request and the
-        boundary, and moving the uid would take a live empire off the player
-        playing it. The log says so and `seat_tool.py bind` finishes it.
-      * a uid holding a civ no longer on the roster, a reclaimed seat, is moved
-        to the new civ. That is a reclaimed player coming back.
-      * any other uid still holding the new civ's name loses that entry. The
-        name was free to take, so the entry is left over from a reclaim, and
-        left in place it would let the reclaimed sign-in play the newcomer's
-        empire.
-
-    An outcome with no uid, or one that is not a Firebase uid, is a request
-    lodged in a folder by name, and has no seat to bind.
+    An outcome without a valid Firebase uid has no seat to bind.
     """
     live = set(roster)
     bind, drop = {}, set()
@@ -619,8 +413,8 @@ def seat_changes(seats: dict, roster, seated, log=print):
 def seat_fields(bind: dict, drop) -> dict:
     """The `seats` merge for `update_state`, with each dropped uid deleted.
 
-    A nested map rather than dotted paths, because `set(..., merge=True)`
-    merges a nested map entry by entry and does not read dots as paths.
+    A nested map, because `set(..., merge=True)` merges it entry by entry and
+    does not read dots as paths.
     """
     from google.cloud import firestore
     fields = dict(bind)
@@ -629,24 +423,14 @@ def seat_fields(bind: dict, drop) -> dict:
     return {SEATS_KEY: fields}
 
 
-# ── committing ───────────────────────────────────────────────────────────────
 def append_note(store, civ: str, turn: int, lines, log=print) -> None:
-    """Add to whatever note that civ already has for that turn.
-
-    `put_note` replaces, and two writers reach one turn's note. A welcome note
-    is written for the turn the newcomer is about to play, and the referee
-    writes that turn's refusals before the newcomer's launcher reads either, so
-    a replace by whichever of them goes second loses the other.
-
-    Failures are the caller's, because the two callers want different things
-    from one: the referee already has a line for a note it could not write, and
-    this module has its own below.
-    """
+    """Append to the civ's note for that turn (`put_note` replaces). Raises on
+    failure."""
     store.put_note(civ, turn, list(store.note(civ, turn)) + list(lines))
 
 
 def _note_or_log(store, civ: str, turn: int, lines, log=print) -> None:
-    """The same, with a note that cannot be written not worth a turn."""
+    """`append_note`, logging a failure instead of raising."""
     try:
         append_note(store, civ, turn, lines, log=log)
     except OSError as exc:
@@ -655,19 +439,7 @@ def _note_or_log(store, civ: str, turn: int, lines, log=print) -> None:
 
 def _file_answer(store, out: dict, log=print) -> None:
     """Consume the request this outcome answers, and record the answer.
-
-    Consuming it is what stops one request being granted twice. It is not the
-    only thing that stops it (the roster check and `add_civ`'s own name check
-    both do) and that is the point: this one can fail, on a file another
-    process has open or on a network that is down, and the other two still
-    hold.
-
-    The store decides how. A folder writes the answer into `joins/done/` and
-    removes the request; Firebase deletes the request and writes the answer in
-    one batch, so there is no window at all. A failure here is reported rather
-    than raised, because the seat has already been published and losing the
-    turn over the paperwork would be the worse outcome.
-    """
+    A failure is logged, not raised, since the seat is already published."""
     key = out.get('key')
     if not key:
         return
@@ -684,13 +456,8 @@ def _file_answer(store, out: dict, log=print) -> None:
 def commit(store, turn: int, new_turn: int, outcomes, log=print) -> list:
     """Seat the players `apply` placed, and answer the ones it refused.
 
-    Every durable write is here and every one of them happens after the blob
-    holding the new civs has been published, so a referee that dies in the
-    middle leaves an empire nobody is seated on, which an operator can answer,
-    rather than a roster that lies about what the galaxy holds, which nobody
-    can.
-
-    Returns the outcomes it acted on, so a caller can archive them.
+    Must run after the blob holding the new civs is published. Returns the
+    outcomes it acted on.
     """
     if not outcomes:
         return []
@@ -707,16 +474,12 @@ def commit(store, turn: int, new_turn: int, outcomes, log=print) -> list:
                 'turn': int(new_turn), 'uid': out.get('uid'),
                 'build': out.get('build'), 'planet': out.get('planet'),
                 'system': out.get('system'), 'at': time.time()}
-            # A player who was reclaimed and has come back holds a new empire,
-            # so the record of the old one stops being the answer to "what
-            # happened to my seat". Left in place it would be read as the
-            # current state of a name that is on the roster again.
+            # A returning reclaimed player's old reclaim record is dropped.
             taken.pop(out['name'], None)
         fields = {'civs': roster, JOINED_KEY: record}
         if taken != (store.reclaimed() or {}):
             fields[turn_store.RECLAIMED_KEY] = taken
-        # In the same write as the roster, so no reader sees one without the
-        # other. See the module docstring.
+        # Seats go in the same write as the roster.
         seats = seat_map(store)
         bind, drop = ({}, []) if seats is None else seat_changes(
             seats, state.get('civs', []), seated, log=log)
@@ -732,34 +495,24 @@ def commit(store, turn: int, new_turn: int, outcomes, log=print) -> list:
 
     for out in outcomes:
         if out['outcome'] == GRANTED:
-            # The note goes on the turn about to be played rather than the one
-            # just closed, because `player_turn.report_refusals` reads the note
-            # for a turn the player played and a newcomer played neither the
-            # closed turn nor any before it.
+            # On the turn about to be played, the first one the newcomer plays.
             _note_or_log(store, out['name'], new_turn,
                          welcome_note(out['name'], new_turn,
                                       out.get('system') or 'your home system',
                                       out.get('planet')), log=log)
         else:
-            # A refused player is on no roster and will play no turn, so the
-            # turn this lands on is the one they asked during. It is on disk
-            # for the operator either way; see the report for what does not
-            # yet read it back to the player.
+            # On the turn the refused player asked during.
             _note_or_log(store, out['name'], turn,
                          refusal_note(out['name'], out['reason']), log=log)
         _file_answer(store, out, log=log)
     return list(outcomes)
 
 
-# ── the operator's dry run ───────────────────────────────────────────────────
 def review(store, log=print) -> list:
     """What the next boundary would do with what is waiting, changing nothing.
 
-    The blob it reasons about is the galaxy's current turn rather than the one
-    a tick has yet to produce, so a placement it reports can differ from the
-    one that happens if the turn colonises the planet it picked. It is a dry
-    run for the same reason `abandonment.review` is one: an operator has to be
-    able to ask before anything does.
+    Reasons about the current turn's blob, so a reported placement can differ
+    from the one the next tick makes.
     """
     waiting = pending(store, log=log)
     if not waiting:

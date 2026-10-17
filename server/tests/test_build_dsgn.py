@@ -3,34 +3,17 @@ test_build_dsgn.py: a synthesised design has to have the shape a client writes
 ==============================================================================
     server\\.venv\\Scripts\\python.exe server\\tests\\test_build_dsgn.py
 
-A DSGN payload is objectId(4), one SDPR child, and one trailing byte. The
-trailer was surveyed across every blob on disk on 19 September 2026: the 18
-turns and 36 submissions of the galaxy2 rehearsal store, the galaxy1 store, and
-the captures in `server/saves`. 327 blobs decoded, 1015 DSGN records, and in
-all 1015 the trailer is exactly one byte and that byte is zero. No raw DSGN tag
-hit was rejected by `design_records`, and every per-civ design count dword
-agreed with the records found, so the survey saw every record there is.
+A DSGN payload is objectId(4), one SDPR child, and one trailing zero byte.
+Every real record surveyed carries that trailer.
 
-`build_dsgn` emitted objectId + SDPR and stopped, so a synthesised design was
-one byte shorter than a cloned one and its DSGN length word was one short of
-what the client writes. `inject()` never had the fault, because it copies the
-bytes the client produced.
+The round trip takes a real design's parts through `read_design`, rebuilds it
+with `build_dsgn`, and requires the result byte for byte. The `e1x2` and `e1x4`
+probe designs in `server/saves` carry no scanner; `build_sdpr` defaults one in,
+so those rebuild four bytes longer, and that default is tested on its own.
 
-The round trip below is the check that holds the two paths together: take a
-real design's parts through `read_design`, rebuild it with `build_dsgn`, and
-require the result byte for byte. 980 of the 1015 surveyed records satisfy it.
-The other 35 are the `e1x2` and `e1x4` probe designs in `server/saves`, which
-carry no scanner; `build_sdpr` defaults a scanner in, so those rebuild four
-bytes longer. That default is deliberate and is tested here as itself. Every
-design in the rehearsal galaxies, including the ones a person made by clicking,
-carries exactly one scanner.
-
-The run reads galaxy2 and `server/saves`, which is 847 of the 1015 records;
-galaxy1 was part of the survey and is not a fixture this test depends on.
-
-The rehearsal store is looked for beside this file first, so the test runs
-without the share; `--galaxy` points it at another store. The captures in
-`server/saves` are always read.
+The galaxy2 rehearsal store is looked for beside this file first, then on the
+share; `--galaxy` points it at another store. The captures in `server/saves`
+are always read.
 """
 import argparse
 import glob
@@ -64,9 +47,8 @@ def check(name, got, want=True):
 def blobs(galaxy):
     """Every decodable blob to survey, newest evidence first.
 
-    A capture that will not decode is skipped rather than failed: two of the
-    August captures in `server/saves` are truncated, and they were truncated
-    before any of this.
+    A capture that will not decode is skipped; some in `server/saves` are
+    truncated.
     """
     paths = []
     if os.path.exists(os.path.join(galaxy, 'turns')):
@@ -134,7 +116,7 @@ def main(galaxy):
             if built == real:
                 same += 1
             elif not rparts['scanners']:
-                # The defaulted scanner, tested on its own below.
+                # The defaulted scanner, tested below.
                 defaulted += 1
             else:
                 differ += 1
@@ -149,9 +131,7 @@ def main(galaxy):
     check('and that is most of them', same > 0)
 
     print('the defaulted scanner is the one thing a rebuild adds')
-    # A design recorded with no scanner comes back with the UI's default, which
-    # makes the record four bytes longer. The only such designs on disk are the
-    # e1x2 and e1x4 probes in server/saves; nothing a client wrote lacks one.
+    # A design with no scanner is given the UI's default, four bytes longer.
     bare = dict(parts, scanners=[])
     filled = idg.build_dsgn(500, 'probe', bare, 198)
     check('a design asked for with no scanner is given one',
@@ -160,8 +140,8 @@ def main(galaxy):
           len(filled) - len(idg.build_dsgn(500, 'probe', parts, 198)), 0)
 
     print('the section parser sees the trailer as the DSGN epilogue')
-    # save_parser reaches the same conclusion independently: it chains the SDPR
-    # child and reports the byte left over after it as the epilogue.
+    # save_parser chains the SDPR child and reports the leftover byte as the
+    # epilogue.
     tree = sp.parse_sections(rec, 0, len(rec))
     check('a synthesised record parses as one DSGN', len(tree), 1)
     check('with one SDPR child', [c.tag for c in tree[0].children], [b'SDPR'])
@@ -193,9 +173,8 @@ def main(galaxy):
             check('its trailer is a zero byte like every other',
                   trailer_of(new, off), b'\x00')
 
-            # The count dword before a civ's first design has to follow the
-            # insertion, or the client reads one design short and the layout
-            # walks off from there.
+            # The count dword before a civ's first design must follow the
+            # insertion, or the client misreads the layout.
             mine = [r for r in after
                     if idg.owner_of_design(new, r[0])
                     == idg.owner_of_design(new, off)]
@@ -204,8 +183,7 @@ def main(galaxy):
             check('the civ design count dword matches the records',
                   count, len(mine))
 
-            # Every enclosing section was widened by the record length, so the
-            # ends that used to land on a boundary still do.
+            # Every enclosing section is widened by the record length.
             grow = len(rec2)
             olds = {t: ln for _o2, t, _v, ln in
                     idg.containing_sections(blob, ref_off)}

@@ -1,53 +1,33 @@
 """
 patch_launch_messages.py: point a shipped client's setup messages at the launcher
-=================================================================================
+
     python patch_launch_messages.py --source CosmicSupremacy.exe --out <stage>\\game\\CosmicSupremacy.exe
     python patch_launch_messages.py --status <exe> [<exe> ...]
 
-`--source`/`--out` reads a client and writes a patched copy to `--out`. The
-release build calls it in place of copying each client into `game\\`, so the
-patched bytes are written once, to a new file, and **the tracked binaries are
-never modified**. `--out` refuses any path git tracks.
+`--source`/`--out` reads a client and writes a patched copy to `--out`; the
+release build uses it when staging each client into `game\\`. `--out` refuses
+any path git tracks.
 
-A client started without a galaxy pass, which is what double-clicking one in
-`game\\` does, tries to register the `.csgalaxy` file association and then
-shows one of two message boxes. Both walk the player through the original
-site's flow: visit the portal, sign up, download a Galaxy Pass, drag it onto
-the exe. The portal they name is the first host string, which the localhost
-redirect turned into `127.0.0.1:8888`. A third message, shown when a client
-has no login, names the same host.
-
-That host string is display text only. It is copied into the global string at
-`0x0086F104` at startup, and every read of that global is one of these three
-format calls. The connection host is the second string, read by different code,
-and nothing here touches either of them.
+A client started without a galaxy pass shows a setup message that walks the
+player through the original site's flow and names the first host string
+(`127.0.0.1:8888`, copied to `0x0086F104` at startup). The login message names
+the same host. The replacements keep the leading product-name `%s` and point
+at the launcher:
 
     0x00779C90   586 bytes   "%s setup partly failed! ..."
     0x00779EE0   444 bytes   "%s setup completed successfully. ..."
     0x0077A460    40 bytes   "Please login via the %s portal.\\nVisit %s"
 
-Each is a sprintf format whose first argument is the product name, followed by
-the host, the extension and the exe name in an order that differs per message.
-The replacements keep that leading `%s` and drop the rest.
-
-A fourth message, shown when Direct3D fails to create a device, asks the player
-to email `problems@` at the connection host, so it reads
-`problems@127.0.0.1:8888`. Its caller at `0x0057295F` passes the host from the
-global at `0x0086F124` and then the path of the client's `log.txt`.
+The Direct3D failure message asks for email to `problems@%s`; its caller at
+`0x0057295F` passes the host from `0x0086F124`, then the path of `log.txt`. The
+replacement names the issue tracker and consumes the host with `%.0s`:
 
     0x00779130  1223 bytes   "\\n\\nYou can do the following ... problems@%s ..."
 
-Its replacement names the project's issue tracker instead and consumes the host
-with `%.0s`, which prints none of it, so the log path still lands on the second
-conversion.
-
-Every replacement uses a leading run of its original's arguments, each one
-`%s` or `%.0s`. The caller removes its own arguments from the stack, so sprintf
-leaving the trailing ones unread is safe. Each replacement is written into the
-original's slot and the remainder is filled with NUL bytes, so no address moves
-and no length grows.
-
-The four strings sit at the same address in all four clients.
+Each replacement uses a leading run of its original's arguments (`%s` or
+`%.0s`), which is safe because the caller cleans the stack. It is written into
+the original's slot and padded with NUL bytes, so no address moves. The four
+strings sit at the same address in all four clients.
 """
 import argparse
 import os

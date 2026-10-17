@@ -1,11 +1,9 @@
 """
 The web window's controller loop and what it sends the page, without a window.
 
-web_view.WebView runs every Launcher call on one thread, as Tk does, and a
-prompt waits by running that loop, so timers keep firing under a dialog as they
-do under a Tk modal. A stand-in for the pywebview window records the script the
-page would be sent, and answers come in from another thread as the page's
-js_api calls do. pywebview itself is not imported.
+A stand-in for the pywebview window records the script the page would be sent,
+and answers come in from another thread as the page's js_api calls do.
+pywebview itself is not imported.
 """
 import json
 import os

@@ -1,12 +1,8 @@
 """
 snapshot.py: Save and restore full game memory state
-=====================================================
-Takes a snapshot of all writable memory regions in the running game process
-and can restore them later (same session only, heap addresses are only valid
-while the process is still running).
 
-This captures everything: EJBO objects, .data section globals (turn counter,
-sync flag, dirty flags), heap-allocated state, order lists, etc.
+Snapshots every writable memory region of the running game process (EJBO
+objects, .data globals, heap state) and restores it later.
 
 Usage:
     python snapshot.py save                 # save to snapshot_<timestamp>.bin
@@ -26,9 +22,8 @@ import os
 import json
 import time
 from datetime import datetime
-from client_proc import find_pid, NOT_THE_CLIENT  # one copy, see client_proc.py
+from client_proc import find_pid, NOT_THE_CLIENT
 
-# ── Windows API ───────────────────────────────────────────────────────────
 PROCESS_VM_READ           = 0x0010
 PROCESS_VM_WRITE          = 0x0020
 PROCESS_VM_OPERATION      = 0x0008
@@ -97,7 +92,7 @@ def write_bytes(h, addr, data):
     return bool(ok and written.value == len(data))
 
 
-# ── Known .data section addresses to read for summary ─────────────────────
+# .data addresses read for the snapshot summary.
 DATA_SECTION_SIGNALS = {
     0x0080AA08: ("turn_countdown", "i32"),
     0x0086F1A1: ("sync_flag", "u8"),
@@ -160,17 +155,13 @@ def read_signal_values(h):
     return values
 
 
-# ── Snapshot file format ──────────────────────────────────────────────────
-#
-# The .bin file is a simple concatenation:
+# Snapshot .bin format:
 #   [JSON header as UTF-8, null-terminated]
 #   [region 1 data bytes]
 #   [region 2 data bytes]
 #   ...
-#
-# The JSON header contains the region table (base address + size for each
-# region) plus metadata (PID, timestamp, signal values, EJBO counts).
-# On restore, each region's data is written back to its original base address.
+# The header holds the region table (base and size of each region) plus
+# metadata (PID, timestamp, signal values, EJBO counts).
 
 
 def snapshot_path(name):
@@ -195,12 +186,10 @@ def cmd_save(name=None):
 
     print(f"[+] Attached to {proc_name} (PID {pid})")
 
-    # Enumerate writable regions
     print("[*] Scanning memory regions...")
     regions = enum_writable_regions(h)
     print(f"    {len(regions)} writable regions found")
 
-    # Read all regions
     print("[*] Reading memory...")
     data_chunks = []
     total_bytes = 0
@@ -219,7 +208,6 @@ def cmd_save(name=None):
         print(f"    Skipped {skipped} regions >16MB (likely video/mapped memory)")
     print(f"    Read {len(data_chunks)} regions, {total_bytes:,} bytes total")
 
-    # Gather metadata
     signals = read_signal_values(h)
     ejbo_count, type_counts = count_ejbo_objects(data_chunks)
 
@@ -232,7 +220,6 @@ def cmd_save(name=None):
     if "timer_display" in signals:
         print(f"    Timer display: {signals['timer_display']}")
 
-    # Build header
     if name is None:
         name = f"snapshot_{datetime.now():%Y%m%d_%H%M%S}"
 
@@ -253,7 +240,6 @@ def cmd_save(name=None):
         ],
     }
 
-    # Write file
     fpath = snapshot_path(name)
     header_json = json.dumps(header, indent=2).encode("utf-8")
 
@@ -271,10 +257,8 @@ def cmd_save(name=None):
 
 
 def cmd_restore(name):
-    # Load snapshot
     fpath = snapshot_path(name)
     if not os.path.exists(fpath):
-        # Try as full path
         if os.path.exists(name):
             fpath = name
         else:
@@ -285,7 +269,6 @@ def cmd_restore(name):
     with open(fpath, "rb") as f:
         raw = f.read()
 
-    # Split header and data
     null_pos = raw.index(b'\x00')
     header = json.loads(raw[:null_pos].decode("utf-8"))
     data_blob = raw[null_pos + 1:]
@@ -297,7 +280,6 @@ def cmd_restore(name):
     print(f"    Total data: {header['total_bytes']:,} bytes")
     print(f"    EJBO objects: {header['ejbo_count']}")
 
-    # Connect to game
     pid, proc_name = find_pid()
     if not pid:
         print("ERROR: CosmicSupremacy not found. Launch the game first.")
@@ -319,7 +301,6 @@ def cmd_restore(name):
 
     print(f"[+] Attached to {proc_name} (PID {pid})")
 
-    # Write regions back
     print("[*] Restoring memory...")
     offset = 0
     restored = 0
@@ -339,8 +320,7 @@ def cmd_restore(name):
         if ok:
             restored += 1
         else:
-            # Try writing in smaller blocks, some regions may have
-            # changed protection since the snapshot
+            # Some regions may have changed protection since the snapshot.
             block_size = 4096
             partial_ok = 0
             partial_fail = 0
@@ -363,7 +343,6 @@ def cmd_restore(name):
     if failed:
         print(f"    Regions with errors: {failed}")
 
-    # Read back signals to confirm
     signals = read_signal_values(h)
     if "turn_countdown" in signals:
         tc = signals["turn_countdown"]

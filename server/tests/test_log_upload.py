@@ -5,10 +5,9 @@ test_log_upload.py: a launcher's log reaches the operator and nobody else
     (set the three variables it prints)
     server\\.venv\\Scripts\\python.exe server\\tests\\test_log_upload.py
 
-docs\\Public_Beta_Plan.md M1. Done when a turn's log uploads under the cap, and
-a failure the operator did not witness is diagnosed from the uploaded copy
-alone. Checked here, with the relay in process on the Firestore and Auth
-emulators and real anonymous sign-ins:
+A turn's log uploads under the cap, and a failure the operator did not witness
+is diagnosed from the uploaded copy alone. Checked with the relay in process
+on the Firestore and Auth emulators and real anonymous sign-ins:
 
   * the relay and the operator's tool name the same collections and keep
     period, and the relay takes everything the launcher's cap lets through
@@ -20,11 +19,10 @@ emulators and real anonymous sign-ins:
     and the next day opens both again
   * an upload deletes a bounded batch of logs past the keep period
   * `log_tool.py` lists, filters by player code, prints and prunes
-  * **the done-when**: the real `player_turn.follow` plays a turn against the
-    relay with a client that ticked past its turn, every upload is refused,
-    the launcher's own methods log it and offer to send, the player presses
-    Send, and the operator's tool reads the stored copy back. The diagnosis
-    is made from that text and nothing else.
+  * end to end: the real `player_turn.follow` plays a turn against the relay
+    with a client that ticked past its turn, every upload is refused, the
+    launcher's own methods log it and offer to send, the player presses Send,
+    and the operator's tool reads the stored copy back and diagnoses it
 """
 import base64
 import io
@@ -57,8 +55,8 @@ PROJECT = os.environ.get('CS_RELAY_PROJECT') or 'demo-cs-resurgence'
 BUCKET = os.environ.get('CS_RELAY_BUCKET') or f'{PROJECT}.firebasestorage.app'
 AUTH_HOST = os.environ.get('FIREBASE_AUTH_EMULATOR_HOST') or '127.0.0.1:9099'
 PREFIX = f'logs_{int(time.time())}'
-# Set before `relay` is imported, because it reads them at import. The caps are
-# small so that reaching them is a handful of uploads.
+# Set before `relay` is imported, which reads them at import. Small caps, so
+# a handful of uploads reaches them.
 os.environ['CS_RELAY_PROJECT'] = PROJECT
 os.environ['CS_RELAY_BUCKET'] = BUCKET
 os.environ['CS_RELAY_PREFIX'] = PREFIX
@@ -175,7 +173,6 @@ def tool(*args):
     return code, out.getvalue()
 
 
-# ── the agreements ───────────────────────────────────────────────────────────
 def test_agreements(relay, L):
     print('the relay, the tool and the launcher agree')
     import log_tool
@@ -185,7 +182,6 @@ def test_agreements(relay, L):
           PREFIX + log_tool.LOG_QUOTA_SUFFIX)
     check('the keep period', relay.LOG_KEEP_DAYS, log_tool.LOG_KEEP_DAYS)
     check('the route', relay.LOG_ROUTE, L.LOG_ROUTE)
-    # Fails if the relay refused a copy the launcher's own cap produced.
     check('the relay takes a copy at the launcher cap',
           relay.LOG_TEXT_MAX >= L.LOG_UPLOAD_CAP, True)
     check('the reasons the launcher sends are the relay\'s',
@@ -195,7 +191,6 @@ def test_agreements(relay, L):
           True)
 
 
-# ── the route ────────────────────────────────────────────────────────────────
 def test_route(relay, L, root, fs, ids):
     print('the route')
     uid_a, token_a = ids['a']
@@ -218,8 +213,6 @@ def test_route(relay, L, root, fs, ids):
           (rec.get('why'), rec.get('build'), rec.get('galaxy'),
            rec.get('civ'), rec.get('turn')),
           ('player', '0.1.6', 'sandbox', 'DemoPlayer', 7))
-    # Fails if the stored bytes were the upload's rather than text that
-    # inflates back to exactly what was sent.
     check('and the text comes back exactly',
           zlib.decompress(bytes(rec.get('data') or b'')).decode('utf-8'),
           text)
@@ -246,8 +239,7 @@ def test_route(relay, L, root, fs, ids):
     bomb = base64.b64encode(zlib.compress(b'x' * (4 * relay.LOG_TEXT_MAX), 9))
     code, said = post(root, '/_logs', json.dumps(
         {'log': bomb.decode(), 'why': 'player'}).encode(), token_b)
-    # Fails if the text were inflated whole before its size was looked at:
-    # the body is small, so only the inflate cap refuses it.
+    # The body is small, so only the inflate cap refuses it.
     check('a small body that inflates past the cap is refused 413',
           (code, len(bomb) < relay.LOG_BODY_MAX), (413, True))
     check('not JSON is refused 400',
@@ -295,7 +287,7 @@ def test_caps(relay, L, root, fs, ids):
     before = stored(fs, relay)
     check('the day\'s total is now reached', len(before), 5)
     code, said = post(root, '/_logs', body, token_c)
-    # Fails if the daily total were not checked: c has sent nothing.
+    # c has sent nothing, so only the daily total refuses it.
     check('a fresh sign-in is refused once the day is full',
           (code, 'as many logs today' in said.get('error', '')), (429, True))
     check('and nothing was stored', stored(fs, relay), before)
@@ -321,7 +313,7 @@ def test_caps(relay, L, root, fs, ids):
               post(root, '/_logs', body, token_c)[0], 200)
         left = [i for i, r in stored(fs, relay).items()
                 if r['received_at'] < cutoff]
-        # Fails if the batch were unbounded (0 left) or never ran (7 left).
+        # 0 left means an unbounded batch; 7 means none ran.
         check('it deleted a batch of five of them', len(left), 2)
         check('and kept the new one', len(stored(fs, relay)), 3)
     finally:
@@ -366,7 +358,6 @@ def test_prune_all(relay, fs):
           list(fs.collection(relay.LOG_QUOTA_COLLECTION).stream()), [])
 
 
-# ── the done-when ────────────────────────────────────────────────────────────
 class FakeClock:
     def __init__(self):
         self.t = time.time()
@@ -495,8 +486,7 @@ def test_done_when(relay, L, root, ids):
     app.say("  body: userid=1&gamename='DemoPlayt7'&turn=7&version=1&data="
             + 'Q' * 300)
 
-    # The client ticked past its turn, which the module docstring of
-    # player_turn describes: every capture is a save of turn 8.
+    # The client ticked past its turn: every capture is a save of turn 8.
     ticked = make_blob(TURN + 1, b't')
     clock = FakeClock()
     saved = (player_turn.serve, player_turn.collect, player_turn.close,
@@ -559,8 +549,7 @@ def test_done_when(relay, L, root, ids):
     check('the turn and civ that were lost', (found.get('civ'),
                                                found.get('turn')),
           ('DemoPlayer', TURN))
-    # Fails without `player_turn.failure_text`: the log then says only
-    # "HTTP Error 400: Bad Request", which diagnoses nothing.
+    # `player_turn.failure_text` puts the relay's reason in the log.
     check('and why: the save was of another turn',
           found.get('why') or '',
           lambda w: f'is not a save of turn {TURN}' in w)
@@ -594,7 +583,7 @@ def main():
         test_caps(relay, L, root, fs, ids)
         test_tool(relay, fs, ids)
         test_prune_all(relay, fs)
-        # The done-when runs on a fresh day's count.
+        # The end-to-end case runs on a fresh day's count.
         for snap in fs.collection(relay.LOG_QUOTA_COLLECTION).stream():
             snap.reference.delete()
         test_done_when(relay, L, root, ids)

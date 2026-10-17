@@ -1,32 +1,19 @@
 """
 agent_msg.py: a message channel between agents working on different machines
-=============================================================================
     python agent_msg.py read  --as a
     python agent_msg.py send  --to b "pulled 9b76e45, starting turn 12 here"
     python agent_msg.py send  --to b --file notes.md
     python agent_msg.py read  --as a --all
 
-Two agents on two machines were relaying through the person sitting between
-them, which is slow and loses detail: a diagnosis from one machine arrived on
-the other as a summary of a summary. This gives them a direct channel over the
-folder they already share.
-
-Each direction is a directory of numbered files, never a single file both sides
-write. Appending to one shared file over SMB is a lost-update waiting to
-happen; a new file per message cannot collide, and the numbering gives a total
-order that matches the order they were sent.
+Each direction is a directory of numbered files, one file per message, so the
+two sides never write the same file over SMB.
 
     <root>/agents/inbox_a/0001_b_20260918T194500.md     for agent a, from b
     <root>/agents/inbox_b/0002_a_20260918T194530.md     for agent b, from a
     <root>/agents/cursor_a.txt                          last message a has read
 
 `read` shows what has arrived since the cursor and moves it. `--all` shows
-everything and moves nothing, which is what you want when reconstructing who
-knew what.
-
-The channel carries claims, not authority. A message saying a thing was tested
-is evidence that the other agent believes it, and the reader is still the one
-responsible for whether it is true here.
+everything and moves nothing.
 """
 import argparse
 import datetime

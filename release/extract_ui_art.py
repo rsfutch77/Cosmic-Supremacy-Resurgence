@@ -3,15 +3,10 @@ extract_ui_art.py: lift the game's own UI skin out of a Win32 PE into image file
 ==================================================================================
     python extract_ui_art.py client\\CosmicSupremacy.exe release\\webui\\art
 
-The client draws its windows, buttons and scrollbars from images it carries as
-resources. Most are PNGs in a string-named "PNG" resource type, a few older ones
-are RT_BITMAP. Each is written under its resource name, so MAINWINDOWBORDERUPPERLEFT
-becomes MAINWINDOWBORDERUPPERLEFT.png. Bitmaps are written as .bmp, with the file
-header the resource leaves out.
-
-Only the pieces the launcher's skin uses are written, chosen by name prefix. The
-art belongs to the game and is never committed: the build extracts it from the
-same EXE it ships.
+Most pieces are PNGs in a string-named "PNG" resource type, a few are
+RT_BITMAP, written as .bmp with the file header added. Each file takes its
+resource name. Only the pieces the launcher's skin uses are written, chosen by
+name prefix. The art is never committed.
 """
 import os
 import struct
@@ -21,9 +16,8 @@ from extract_icon import first_leaf, parse_sections, rva_to_off
 
 RT_BITMAP = 2
 
-# Name prefixes of the pieces the skin draws. A piece is 9-slice or 3-slice
-# chrome named by position (UPPERLEFT, MIDDLE, LOWERRIGHT) and state (HIGH, SEL,
-# DISABLED), so a prefix takes the whole set.
+# Name prefixes of the pieces the skin draws. Pieces are named by position and
+# state, so a prefix takes the whole 9-slice or 3-slice set.
 PREFIXES = (
     "MAINWINDOWBORDER",
     "WINDOWBORDER",

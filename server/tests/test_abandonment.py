@@ -3,30 +3,19 @@ test_abandonment.py: the seat of a player who stopped playing
 ==============================================================
     server\\.venv\\Scripts\\python.exe server\\tests\\test_abandonment.py
 
-K3 warns a player who has missed too many turns in a row and then takes their
-civ off the board. Everything here is offline: the count is a read of archive
-records the referee already writes, and the wipe is `wipe_civ`, which is bytes
-in and bytes out. What is **not** tested here is that a wiped blob loads and
-ticks, which needs the game client and is `wipe_acceptance.py`.
+A player who misses too many turns in a row is warned and then has their civ
+wiped. Everything here is offline: the count reads the referee's archive
+records, and the wipe is `wipe_civ`. Loading a wiped blob in the client is
+`wipe_acceptance.py`.
 
-Each galaxy in this file is built to hold the condition it is about, rather
-than borrowed from one that might. That is the whole reason for the setup
-below being as long as it is:
+Each galaxy is built to hold the condition it is about:
 
-  * the silence is built. A galaxy where everybody submitted every turn would
-    pass "nobody was warned" without the count ever working.
-  * the **full galaxy is built**, by giving every uncolonised planet an owner,
-    and the test asserts that `wipe_civ` refuses it without a template before
-    asking whether the module finds one. Run against the fixture as it ships,
-    which has 156 free planets, the template search would never be entered and
-    the K4 constraint would go untested while appearing to pass.
-  * the **late joiner is built**, seated at a turn most of the archive predates.
-    This is the case that decides whether the counter is usable at all: a walk
-    backwards that reads "no submission" as "missed" reclaims a seat the turn
-    after it is taken, and every galaxy that has ever been joined mid-game
-    would have fired it.
-  * a control galaxy where the same civ played every turn is run through the
-    same `enforce`, so a warning that appeared for everyone would be caught.
+  * a civ that stops submitting;
+  * a full galaxy, every uncolonised planet given an owner, which `wipe_civ`
+    is shown to refuse without a template before the archive search is tried;
+  * a late joiner, seated at a turn most of the archive predates, whose
+    unseated turns must not count as missed;
+  * a control galaxy where everyone played, run through the same `enforce`.
 """
 import os
 import shutil
@@ -77,15 +66,11 @@ def raises(name, fn, want=Exception):
     check(f'{name}, but nothing was raised', False)
 
 
-# ── building a galaxy that holds the condition ───────────────────────────────
 def fill_every_planet(blob, owner_name):
     """Give every uncolonised planet an owner, so the galaxy has no free rock.
 
-    This is the late sandbox K4 names and no archived galaxy has reached, so it
-    has to be constructed. Only the owner dword is written: a planet with an
-    owner and no name is not a planet anyone would want to play, and nothing
-    here loads it. What matters is that `pristine_planet` can no longer find a
-    template in it, which is the condition under test.
+    Only the owner dword is written, enough that `pristine_planet` finds no
+    template.
     """
     civ = next(o for o in icv.owner_records(blob) if o['name'] == owner_name)
     buf = bytearray(blob)
@@ -105,10 +90,8 @@ def build(root, turns, played, roster=None, blobs=None, first=1):
     """A galaxy with an archive that says exactly who played which turn.
 
     `played` is {turn: [civ]}. Every other civ in that turn's roster is written
-    into `missing`, which is the shape `referee.resolve_turn` writes and the
-    shape the counter reads. `roster` may be a {turn: [civ]} as well, which is
-    how a late joiner is expressed: a civ that is in neither list for a turn
-    was not seated for it.
+    into `missing`, as `referee.resolve_turn` does. `roster` may also be a
+    {turn: [civ]}; a civ in neither list for a turn was not seated for it.
     """
     blob = sp.load_any(GALAXY)
     store = TurnStore(root)
@@ -128,21 +111,18 @@ def build(root, turns, played, roster=None, blobs=None, first=1):
                 'missing': sorted(c for c in seats if c not in subs),
             })
         else:
-            # The last turn is the one being closed, which the referee has not
-            # archived yet, so whoever played it is known from the submission
-            # and nowhere else. Leaving these out would make every civ in the
-            # galaxy look one turn more silent than it is.
+            # The last turn is the one being closed and has no archive record
+            # yet, so who played it is known only from the submissions.
             for civ in subs:
                 store.submit(civ, turn, this)
     return store
 
 
-# ── counting ─────────────────────────────────────────────────────────────────
 def test_counting(tmp):
     print('\ncounting, out of the archive the referee already writes')
 
     # BadGuy plays 1 to 3 and then stops. Turn 20 is the turn being closed and
-    # has no archive record yet, which is the referee's position when it calls.
+    # has no archive record yet.
     root = os.path.join(tmp, 'silent')
     store = build(root, 20, {t: ROSTER if t <= 3 else ['DemoPlayer']
                              for t in range(1, 21)})
@@ -165,17 +145,12 @@ def test_counting(tmp):
     check('one turn played resets the count',
           abandonment.missed_streak(store, VICTIM, 20), 5)
 
-    # A limit stops the read without changing the answer either side of it.
     check('a limit caps the count rather than ending it early',
           abandonment.missed_streak(store, VICTIM, 20, limit=3), 3)
 
 
 def test_late_joiner(tmp):
-    """The check that decides whether any of this is usable.
-
-    Failure here is a `missed` of 19 for a player seated two turns ago, which
-    is an instant reclaim of every seat the moment it is joined.
-    """
+    """Turns before a civ was seated do not count as missed."""
     print('\na seat taken at turn 19 has not missed the 18 turns before it')
     root = os.path.join(tmp, 'joiner')
     seats = {t: (ROSTER if t < 19 else ROSTER + ['Latecomer'])
@@ -211,7 +186,6 @@ def test_thresholds(tmp):
           (2, abandonment.RECLAIM_AFTER))
 
 
-# ── the two stages ───────────────────────────────────────────────────────────
 def test_warning(tmp):
     print('\nthe warning, one turn before it is due and on the turn it is')
     root = os.path.join(tmp, 'warning')
@@ -233,7 +207,7 @@ def test_warning(tmp):
     check('and the galaxy is unchanged', out is blob)
     check('nobody else is warned', store.note('DemoPlayer', 5), [])
 
-    # The control. Same call, same thresholds, a galaxy nobody abandoned.
+    # Control: the same call on a galaxy nobody abandoned.
     root = os.path.join(tmp, 'control')
     played = build(root, 5, {t: ROSTER for t in range(1, 6)})
     abandonment.set_thresholds(played, warn=1, reclaim=2)
@@ -264,9 +238,7 @@ def test_reclaim(tmp):
     check('the wipe holds', wipe_civ.check(out, VICTIM, before, ships))
     check('the seat is off the roster', store.civs(), ['DemoPlayer'])
     rec = store.reclaimed(VICTIM)
-    # `missed` is 5 rather than 6 because the count stops once the answer is
-    # settled. See missed_streak: in a galaxy the referee has been enforcing
-    # all along the two numbers are the same one.
+    # `missed` is 5, not 6: `missed_streak` stops once the answer is settled.
     check('and the store records why', bool(rec) and rec['turn'] == 6
           and rec['missed'] == 5)
     check('the player is left a note saying so',
@@ -279,12 +251,8 @@ def test_reclaim(tmp):
 
 
 def test_reclaim_in_a_full_galaxy(tmp):
-    """K4's constraint: no free planet to take a blank PLPR from.
-
-    The precondition is asserted before the thing under test, because a galaxy
-    with a free planet in it would take the template out of itself and this
-    would pass without the archive being touched at all.
-    """
+    """A full galaxy has no free planet to take a blank PLPR from, so the
+    template comes from an earlier turn in the archive."""
     print('\nthe reclaim, in a galaxy where every planet is colonised')
     plain = sp.load_any(GALAXY)
     full = fill_every_planet(plain, 'DemoPlayer')
@@ -295,8 +263,7 @@ def test_reclaim_in_a_full_galaxy(tmp):
            lambda: wipe_civ.blank_plpr(full, None, log=lambda *a: None),
            SystemExit)
 
-    # Turns 1 to 4 are the galaxy as it shipped; from turn 5 it is full. The
-    # template can only come from the archive.
+    # Turns 1 to 4 are the galaxy as it shipped; from turn 5 it is full.
     root = os.path.join(tmp, 'full')
     store = build(root, 8, {t: ['DemoPlayer'] for t in range(1, 9)},
                   blobs={t: full for t in range(5, 9)})
@@ -319,8 +286,7 @@ def test_reclaim_in_a_full_galaxy(tmp):
                                                       ships))
     check('the seat is taken', store.civs(), ['DemoPlayer'])
 
-    # A galaxy with no earlier turn to take one from keeps the seat rather than
-    # losing a turn over it.
+    # With no earlier turn to take a template from, the seat stays.
     root = os.path.join(tmp, 'full_no_history')
     lone = TurnStore(root)
     lone.start(full, civs=ROSTER, turn=9, turn_seconds=14400)
@@ -378,13 +344,11 @@ def close_turn(store):
 
 
 def test_silent_player_run(tmp):
-    """K3's done-when, through the referee rather than around it.
+    """One player submits every turn and the other never does, through
+    `resolve_turn`.
 
-    One player submits every turn and the other never does, and the turns are
-    closed by `resolve_turn`, so the count, the notes and the reclaim are the
-    ones a live referee produces. What the silent player's launcher would read
-    is read the way it reads it: the note of the turn it is served, and the
-    refusal `launcher.roster_problem` builds from the state.
+    The silent player's view is read as the launcher reads it: the note of the
+    turn it is served, and the refusal `launcher.roster_problem` builds.
     """
     print('\na galaxy run with one player silent')
     import launcher
@@ -401,7 +365,7 @@ def test_silent_player_run(tmp):
         new = close_turn(store)
         notes[new] = list(store.note(VICTIM, new))
         if new == 4:
-            # A referee rerun over turn 3, which it has already closed once.
+            # A referee rerun over turn 3, which is already closed.
             abandonment.enforce(store, 3, store.turn_blob(4), new_turn=4,
                                 log=lambda *a: None)
             rerun = list(store.note(VICTIM, 4))

@@ -1,32 +1,23 @@
 """
-test_submission_path.py: a submission through the relay, since H13
-====================================================================
+test_submission_path.py: a submission through the relay
+========================================================
     python functions/emulators.py --only firestore,storage,auth
     (set the three variables it prints)
     server\\.venv\\Scripts\\python.exe server\\tests\\test_submission_path.py
 
-docs\\Public_Beta_Plan.md H13. A submission used to be a Cloud Storage object,
-uploaded to a signed URL the relay handed out and checked by a commit call
-afterwards. Each upload was a Class A operation against 5,000 a month for the
-whole project, which capped the beta at about 27 players. Now the relay takes
-the body itself and stores it as a Firestore document, one write against
-20,000 a day.
+The relay takes a submission body itself and stores it as a Firestore
+document. Checked here:
 
-What has to be true of that, each checked here:
-
-  * **how many uploads a player makes**, counted through the real
-    `player_turn.follow` on a fake clock at four-hour turns, because that
-    number is what every figure in H13 is multiplied by
-  * **the launchers already in players' hands still submit**, run as the
-    `turn_store.py` those builds carry, taken out of git at the commit each
-    was stamped with, against this relay
+  * how many uploads a player makes, counted through the real
+    `player_turn.follow` on a fake clock at four-hour turns
+  * shipped launchers still submit, run as the `turn_store.py` each build
+    carries, recovered from git at the commit it was stamped with
   * a read of a submission the launcher already holds is a 304 with no body,
     and one it does not hold is the bytes
   * the size caps: a body over the relay's cap, a body built to inflate, and
     a save too large for a document, each refused with nothing stored
-  * a Storage upload made on a ticket handed out before the relay was
-    redeployed is brought in by its commit, and one that is not a save is
-    deleted
+  * a Storage upload made on an older ticket is brought in by its commit, and
+    one that is not a save is deleted
   * `publish` keeps `SUBMISSION_TURNS_KEPT` turns of submissions and deletes
     the rest
 
@@ -63,11 +54,9 @@ os.environ['CS_RELAY_PROJECT'] = PROJECT
 os.environ['CS_RELAY_BUCKET'] = BUCKET
 os.environ['CS_RELAY_PREFIX'] = PREFIX
 os.environ.setdefault('FIREBASE_AUTH_EMULATOR_HOST', AUTH_HOST)
-# The deployed cap, whatever the shell carries: the bomb and the document cap
-# below are sized against it.
+# The deployed cap, which the bomb and document cap cases are sized against.
 os.environ.pop('CS_RELAY_MAX_BYTES', None)
-# Every answer read fresh, because the referee writes and the relay is asked
-# straight after. test_relay_costs.py covers the held copies.
+# Held copies are off; test_relay_costs.py covers them.
 os.environ['CS_RELAY_STATE_CEILING'] = '0'
 os.environ['CS_RELAY_LISTING_SECONDS'] = '0'
 
@@ -80,10 +69,9 @@ PASS, FAIL, SKIP = [], [], []
 TURN = 7
 FOUR_HOURS = 14400
 
-# The commits the two builds in players' hands were stamped with, read out of
-# `build.json` inside each packaged launcher. Both stamps carry `+`, a dirty
-# tree, so what is recovered is the committed file; `git diff` of
-# `server/turn_store.py` between the two shows no change to `submit`.
+# The commits the shipped builds were stamped with, from each launcher's
+# `build.json`. Both were dirty trees, so the committed file is what is
+# recovered.
 OLD_BUILDS = (('v0.1.4', '7940532'), ('v0.1.5', '9b39f0d'))
 
 
@@ -109,14 +97,10 @@ def make_blob(turn, filler=b'.', size=60):
                    section(b'KNPL', bytes([0xAA]) * 8))
 
 
-# ── how many uploads a player makes ──────────────────────────────────────────
 def test_uploads_per_turn():
-    """The count every H13 figure is multiplied by, at four-hour turns.
+    """Uploads per player per four-hour turn, through the real `follow`.
 
-    Through the real `follow` with its real defaults, on the fake clock and
-    fake client test_turn_cadence.py drives. Fails if the loop's cadence
-    changes, which would make H13's arithmetic describe a loop that no longer
-    exists.
+    Uses the fake clock and client from test_turn_cadence.py.
     """
     print('uploads per player per turn, measured through follow')
     import test_turn_cadence as T
@@ -139,11 +123,9 @@ def test_uploads_per_turn():
 
 
 def test_warned_event():
-    """The loop names the warning part of a note, so a launcher need not.
+    """The loop emits the warning part of a note as its own event.
 
-    Checked against the note `abandonment` actually writes: refusals first,
-    the warning appended. Fails if the warning were matched by a sentence
-    that `warning_note` no longer opens with, or if refusals leaked into it.
+    Uses the note `abandonment` writes: refusals first, the warning appended.
     """
     print('the warning part of a note is its own event')
     import abandonment
@@ -171,7 +153,6 @@ def test_warned_event():
           abandonment.warning_note('X', 1, 0))
 
 
-# ── the relay behind a socket ────────────────────────────────────────────────
 class RelayHandler(BaseHTTPRequestHandler):
     """`relay.handle` behind a socket, as test_relay_function.py has it."""
 
@@ -223,9 +204,8 @@ def status_of(fn, *a):
 def old_turn_store(label, commit):
     """The `turn_store` module a shipped build carries, or None without git.
 
-    Executed under its own name, so it keeps its own `HttpTurnStore` and its
-    own helpers and shares nothing with the module under test but
-    `save_parser`, which is what the build carries too.
+    Executed under its own name, sharing only `save_parser` with the module
+    under test.
     """
     try:
         src = subprocess.run(
@@ -240,14 +220,11 @@ def old_turn_store(label, commit):
     return mod
 
 
-# ── the cases against the relay ──────────────────────────────────────────────
 def test_old_launchers(referee, base, token):
-    """The two builds in players' hands, against this relay.
+    """The shipped builds submit against this relay.
 
-    What they do is read the ticket's `url`, `method`, `encoding` and
-    `commit`, send the body there, and commit only when a commit is named.
-    Fails if the ticket's shape moved away from what they read, or if the
-    route it names refused what they send.
+    They read the ticket's `url`, `method`, `encoding` and `commit`, send the
+    body there, and commit only when a commit is named.
     """
     print('launchers already shipped')
     turn = referee.current()[0]
@@ -263,8 +240,6 @@ def test_old_launchers(referee, base, token):
         check(f'{label}: its submission is what the referee reads',
               referee.submission('DemoPlayer', turn), mine)
         # Its own closed check, the ticket, and the POST the ticket names.
-        # Before H13 the third was a PUT to Storage and a fourth, the commit,
-        # came back here.
         check(f'{label}: in three relay requests and no commit',
               [(m, p.split('/')[2], s)
                for m, p, s, _n in RelayHandler.served],
@@ -282,12 +257,7 @@ def test_old_launchers(referee, base, token):
 
 
 def test_reads_by_tag(referee, base, token):
-    """A read of bytes the launcher holds is 304; anything else is the bytes.
-
-    Fails if the tag were ignored, which sends the whole submission on every
-    read `player_turn` makes before and after an upload, or if a stale tag
-    were answered 304, which would hide a submission written elsewhere.
-    """
+    """A read of bytes the launcher holds is 304; anything else is the bytes."""
     print('reading a submission back by its tag')
     turn = referee.current()[0]
     player = HttpTurnStore(base, token=lambda: token, state_seconds=0)
@@ -323,8 +293,7 @@ def test_caps(referee, call, turn):
     code, _h, _b = call('POST', f'/submission/{turn}/DemoPlayer', over)
     check('a body over the relay cap is refused', code, 413)
     # A few kilobytes of zlib that inflate past the store's decompressed cap,
-    # with a size header that lies. Fails if the relay inflated it whole
-    # before asking how big it was.
+    # with a size header that lies.
     bomb = base64.b64encode(
         struct.pack('<I', 100)
         + zlib.compress(b'\0' * (turn_store.MAX_DECODED_BYTES + 4096), 9))
@@ -332,8 +301,7 @@ def test_caps(referee, call, turn):
     check('a body that inflates past the cap is refused as too large',
           (len(bomb) < relay.MAX_BYTES, code), (True, 413))
     # A real save whose compressed form is past what a document may hold,
-    # sent raw so it is under the body cap. Fails if the store wrote it and
-    # left Firestore to refuse, or if the relay turned it into a 500.
+    # sent raw so it is under the body cap.
     size = firebase_store.MAX_SUBMISSION_DATA + 16 * 1024
     big = make_blob(turn, os.urandom(size), size=size)
     code, _h, body = call('POST', f'/submission/{turn}/DemoPlayer', big)
@@ -344,11 +312,8 @@ def test_caps(referee, call, turn):
 
 
 def test_old_ticket_commit(referee, call, turn):
-    """An upload made on a Storage ticket from before the redeploy.
-
-    Fails if its commit left the upload as an object the referee no longer
-    reads, or left a refused one in the bucket.
-    """
+    """A commit of a Storage upload moves it into a document, or deletes it
+    when it is not a save."""
     print('an upload on a ticket handed out before the redeploy')
     mine = make_blob(turn, b'k')
     name = referee.submission_object('DemoPlayer', turn)
@@ -370,9 +335,7 @@ def test_old_ticket_commit(referee, call, turn):
 def test_notes(referee, call):
     """A note is a document, read by the relay with no Storage operation.
 
-    Fails if the note were still an object, which costs every launcher a
-    Class B each turn whether or not there is a note, or if a note left
-    before H13 could no longer be read.
+    A note stored as an object on an older galaxy is still read.
     """
     print('notes are documents')
     turn = referee.current()[0]
@@ -400,9 +363,7 @@ def test_notes(referee, call):
 def test_pruning(referee):
     """`publish` keeps `SUBMISSION_TURNS_KEPT` turns and deletes the rest.
 
-    Fails if nothing is deleted, which fills Firestore's 1 GiB at a hundred
-    players within months, or if a kept turn goes, which breaks
-    `referee --verify` for the turns it is meant to reach.
+    `referee --verify` reads the kept turns.
     """
     print('old submissions are deleted at publish')
     kept = firebase_store.SUBMISSION_TURNS_KEPT

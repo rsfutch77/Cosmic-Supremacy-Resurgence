@@ -1,22 +1,10 @@
-// beta_storage.rules: the Cloud Storage rules for the beta
-// =========================================================
-// No client reads or writes the bucket through the Firebase SDK. A launcher
-// downloads a turn through a signed URL the relay hands it, and a launcher
-// from before H13 uploads through a signed URL too; a signed URL is authorised
-// by its signature, not by these rules. The relay and the referee use service
-// accounts, which bypass rules. So the rules deny everything.
+// beta_storage.rules: the Cloud Storage rules for the beta, as deployed to cs-resurgence.
+// Launchers reach the bucket only through signed URLs from the relay, which are
+// authorised by their signature. The relay and referee use service accounts,
+// which bypass rules, so every client read and write is denied.
+// The Storage emulator is given a copy by functions/emulators.py.
 //
-// This is the ruleset deployed to cs-resurgence (released 21 September 2026,
-// read back from the Firebase Rules API on 7 October 2026). The Storage
-// emulator is given a copy by functions/emulators.py.
-//
-// A rule allowing signed-in clients to create submission objects would let
-// anyone, since anonymous sign-in is free, write any civ's object and fill the
-// bucket. Submission size is capped by the relay (`MAX_BYTES`, 1 MiB of base64)
-// and the store (`MAX_SUBMISSION_DATA`), not here.
-//
-// Deployed by hand, as `firebase deploy --only storage`, for the reason
-// beta_firestore.rules gives.
+// Deploy by hand: firebase deploy --only storage
 
 rules_version = '2';
 

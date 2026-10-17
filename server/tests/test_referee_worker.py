@@ -3,26 +3,17 @@ test_referee_worker.py: the five things unattended has to mean
 ===============================================================
     server\\.venv\\Scripts\\python.exe server\\tests\\test_referee_worker.py
 
-Every check here is paired with the case that would pass a broken
-implementation, because each of these is easy to satisfy vacuously:
+Each check is paired with its control:
 
-  * the overdue turn. A worker that closes a turn at startup unconditionally
-    passes "an overdue turn is closed" and destroys every turn that was not
-    overdue, so a store whose deadline has **not** passed is asserted to be
-    left alone, and so is one that is four seconds past it and still inside the
-    grace window a player's launcher is submitting in.
-  * the second copy. A test that reads a flag proves nothing about a guard, so
-    a second worker is actually started, as a process, and its exit code is the
-    answer. A third is started after the first is killed, because a guard that
-    refuses everything for ever is not a guard either.
-  * the stub server. A real listener is bound on a spare port and the refusal
-    is asked for against it, then the port is freed and a real `cs_server.py`
-    is started on it. Port 8888 is never touched: a launcher may hold it, and
-    the answer this code gives about 8888 must not depend on this test.
+  * the overdue turn: a turn not yet due, or inside the grace window, is left
+    alone.
+  * the second copy: a second worker process is refused, and one started after
+    the first is killed is allowed.
+  * the stub server: a listener on a spare port is refused, then a real
+    `cs_server.py` is started on it. Port 8888 is never touched.
 
-What is not here is a real tick, which needs the game client. Everything that
-would reach one is stubbed at `referee.resolve_turn`, and what is under test is
-the worker's decision to call it rather than anything it does.
+A real tick needs the game client, so `referee.resolve_turn` is stubbed and
+the worker's decision to call it is what is tested.
 """
 import inspect
 import json
@@ -60,12 +51,7 @@ def tmpdir(prefix):
 
 
 def fresh_store(seconds_left=3600.0, turn=12, civs=('DemoPlayer', 'Neighbor')):
-    """A store whose deadline is exactly where the case wants it.
-
-    `start` puts the deadline a turn length away, so the clock is moved
-    afterwards rather than by choosing a turn length, which keeps the two
-    directions of every overdue check one number apart.
-    """
+    """A store whose deadline is `seconds_left` from now."""
     s = TurnStore(tmpdir('store'))
     s.start(b'BASE' * 64, list(civs), turn_seconds=3600, turn=turn)
     s.update_state({'deadline': time.time() + seconds_left})
@@ -83,8 +69,7 @@ class Calls:
         if self.raises is not None:
             raise self.raises
         if self.publishes:
-            # What a real resolution does to the clock, which is what stops the
-            # loop closing the same turn again.
+            # Advance the clock as a real resolution would.
             turn, _ = store.current()
             store.publish(turn + 1, b'BASE' * 64)
         return store.current()[0]
@@ -111,12 +96,10 @@ def lines():
     return said, said.append
 
 
-# ── the overdue turn, in both directions ─────────────────────────────────────
 def test_overdue():
     print('the overdue turn')
 
-    # Not due at all. The case a worker that always catches up would destroy:
-    # closing this turn throws away every submission still being played.
+    # Not due at all.
     s = fresh_store(seconds_left=3600)
     check('overdue_by is 0 on a turn with an hour left', rw.overdue_by(s), 0.0)
     calls = stub = Calls()
@@ -128,8 +111,7 @@ def test_overdue():
         check('and closes nothing', calls.n, 0)
         check('and the turn is still 12', s.current()[0], 12)
 
-        # Four seconds past the deadline is inside the grace window, where a
-        # player's launcher is still writing the turn it just captured.
+        # Four seconds past the deadline is inside the grace window.
         s = fresh_store(seconds_left=-4)
         check('overdue_by is 0 inside the grace window', rw.overdue_by(s), 0.0)
         said, log = lines()
@@ -137,7 +119,7 @@ def test_overdue():
               rw.close_overdue(s, log=log), False)
         check('and still closes nothing', calls.n, 0)
 
-        # The case the item exists for: the machine was off across a deadline.
+        # The machine was off across a deadline.
         s = fresh_store(seconds_left=-7200)
         check('overdue_by counts a turn two hours late',
               round(rw.overdue_by(s)), 7200 - int(rw.GRACE))
@@ -151,9 +133,8 @@ def test_overdue():
               any('came due' in x and 'closing it now' in x for x in said), True)
         check('and the galaxy has moved on', s.current()[0], 13)
 
-        # One turn, however late. Three turns passed while the machine was off
-        # and none of them had submissions to collect; publishing them in a
-        # minute spends orders no player was given the chance to write.
+        # One turn is closed however many deadlines were missed, so players
+        # get a chance to play the next.
         s = fresh_store(seconds_left=-7200)
         rw.close_overdue(s, log=lambda *a: None)
         check('and only one, however many deadlines were missed',
@@ -162,11 +143,9 @@ def test_overdue():
         undo()
 
 
-# ── the loop ─────────────────────────────────────────────────────────────────
 def test_loop():
     print('the loop')
 
-    # A due turn closes.
     s = fresh_store(seconds_left=-60)
     calls = Calls()
     undo = stub_referee(calls)
@@ -177,7 +156,7 @@ def test_loop():
                      sleeper=lambda *a: None), rw.EXIT_OK)
         check('and closed it once', calls.n, 1)
 
-        # The control: the same call on a turn with time left must do nothing.
+        # Control: a turn with time left.
         s = fresh_store(seconds_left=3600)
         calls = Calls()
         undo(); undo = stub_referee(calls)
@@ -187,9 +166,7 @@ def test_loop():
               rw.EXIT_OK)
         check('and closed nothing', calls.n, 0)
 
-        # A refusal out of the referee is a SystemExit, which is not an
-        # Exception. A worker that catches the wrong one dies overnight on a
-        # condition that clears by itself.
+        # A referee refusal is a SystemExit, which is not an Exception.
         s = fresh_store(seconds_left=-60)
         calls = Calls(raises=SystemExit('refusing to tick: nothing is '
                                         'listening on 127.0.0.1:8888'))
@@ -201,7 +178,6 @@ def test_loop():
               any('nothing is listening' in x for x in said), True)
         check('and the turn is left where it was', s.current()[0], 12)
 
-        # The same for an ordinary exception.
         s = fresh_store(seconds_left=-60)
         calls = Calls(raises=OSError('the share went away'))
         undo(); undo = stub_referee(calls)
@@ -211,8 +187,8 @@ def test_loop():
         check('and the backoff is said out loud',
               any('waiting' in x for x in said), True)
 
-        # A closed galaxy is not ticked. The worker stays up, because closing
-        # is the operator's word and they may take it back.
+        # A closed galaxy is not ticked, and the worker stays up in case it
+        # is reopened.
         s = fresh_store(seconds_left=-60)
         s.close('testing')
         calls = Calls()
@@ -229,14 +205,10 @@ def test_loop():
         undo()
 
 
-# ── one worker per galaxy ────────────────────────────────────────────────────
 def start_worker(store_root, work_dir, *extra):
     """A real worker process over a galaxy whose turn is not due.
 
-    `--no-cs-server` because this must not bind port 8888, which a launcher may
-    hold, and because a worker that never reaches a deadline never needs a
-    capture. Nothing here can reach the game client: `run` calls the referee
-    only when a turn is due, and this one is due in an hour.
+    Callers pass `--no-cs-server` so port 8888 is never bound.
     """
     return subprocess.Popen(
         [sys.executable, WORKER, '--store', store_root,
@@ -247,11 +219,8 @@ def start_worker(store_root, work_dir, *extra):
 def wait_for_holder(path, timeout=30.0):
     """What the worker holding the galaxy wrote about itself, once it has.
 
-    The pid it records is its own and is not the one `Popen` returned: a
-    virtualenv's `python.exe` on Windows is a launcher that runs the real
-    interpreter as a child, so the process that takes the mutex is a
-    grandchild of this test. That is why the refusal is asserted against the
-    pid in the record rather than against the one this test started.
+    The recorded pid is not the one `Popen` returned: a virtualenv's
+    `python.exe` on Windows runs the real interpreter as a child.
     """
     end = time.time() + timeout
     while time.time() < end:
@@ -267,12 +236,9 @@ def wait_for_holder(path, timeout=30.0):
 
 
 def kill_tree(proc):
-    """End a worker and the interpreter its launcher started.
+    """End a worker and the interpreter its launcher started, by pid.
 
-    By pid rather than by image name. A kill by name reaches every Python on
-    the machine, which is how a test in `release\\tests` nearly ended another
-    agent's session, and the pid of a process this test started is the only
-    thing it is entitled to end.
+    Never kill by image name: that reaches every Python on the machine.
     """
     subprocess.run(['taskkill', '/T', '/F', '/PID', str(proc.pid)],
                    capture_output=True,
@@ -304,9 +270,7 @@ def test_second_copy():
         check('and says which galaxy it has', held and held.get('store'),
               s.root)
 
-        # The check that matters: a second worker, as a process, is refused.
-        # `--once` so that a guard which failed to refuse shows up as a clean
-        # exit 0 rather than as a test that hangs.
+        # `--once`, so a guard that fails to refuse exits 0 instead of hanging.
         second = start_worker(s.root, work, '--no-cs-server', '--once')
         out, _ = second.communicate(timeout=60)
         check('a second worker is refused', second.returncode,
@@ -315,9 +279,8 @@ def test_second_copy():
               held and f"pid {held['pid']}" in out, True)
         check('and it did not close a turn', 'closing turn' in out, False)
 
-        # A worker on a different galaxy is not refused, or one machine could
-        # only ever run one galaxy. It is the galaxy that is guarded here; the
-        # single game client is `game_cycle`'s lock and a different question.
+        # The guard is per galaxy. The single game client is `game_cycle`'s
+        # lock.
         other = fresh_store(seconds_left=3600)
         third = start_worker(other.root, work, '--no-cs-server', '--once')
         out, _ = third.communicate(timeout=60)
@@ -326,10 +289,8 @@ def test_second_copy():
     finally:
         kill_tree(first)
 
-    # And the guard is gone with the process that held it, with nothing to
-    # clear by hand. A stale lock file that outlived its holder is exactly how
-    # the client lock has misled this project before, so the file is not what
-    # is being asked here: the mutex is.
+    # The mutex goes with the process that held it, whatever the status file
+    # says.
     fourth = start_worker(s.root, work, '--no-cs-server', '--once')
     out, _ = fourth.communicate(timeout=60)
     check('the galaxy is free once the worker holding it has died',
@@ -337,9 +298,8 @@ def test_second_copy():
     check('and the refusal is not repeated to the next one',
           'another worker already has' in out, False)
 
-    # The status file is how a worker starting later learns which cs_server
-    # its predecessor began, so a write from the loop must not erase what
-    # startup wrote. It accumulates rather than replacing.
+    # The status file accumulates, so the cs_server pid written at startup
+    # survives later writes.
     solo = rw.GalaxyGuard(tmpdir('store'), work_dir=tmpdir('work'))
     solo.acquire(cs_server_pid=4242)
     try:
@@ -354,10 +314,8 @@ def test_second_copy():
           os.path.exists(solo.path), False)
 
 
-# ── the stub server the capture arrives on ───────────────────────────────────
 def spare_port():
-    """A port nothing is using, which is never 8888: a launcher may be on it
-    and this test must not touch it."""
+    """A port nothing is using, which is never 8888."""
     s = socket.socket()
     s.bind(('127.0.0.1', 0))
     port = s.getsockname()[1]
@@ -375,11 +333,8 @@ def test_stub_server():
 
     stranger = socket.socket()
     stranger.bind(('127.0.0.1', port))
-    # A backlog deep enough that the connections these checks make are not
-    # themselves what closes the port. With a backlog of one, the second
-    # `port_listening` call finds a queue that is full and reports the port as
-    # free, and the test then measures its own accept queue rather than the
-    # code.
+    # A deep backlog, so the probes below never fill the accept queue and read
+    # the port as free.
     stranger.listen(64)
     try:
         check('a bound port reads as in use', rw.port_listening(port), True)
@@ -398,10 +353,8 @@ def test_stub_server():
         check('and says why reusing it is not an option',
               refused and 'data directory' in refused, True)
 
-        # The recorded pid matches and the process under it is this test, not
-        # a cs_server. That is what a reused pid looks like, and it is the
-        # case the safety check exists for: without it the worker would end a
-        # process picked by a number in a file.
+        # The recorded pid now belongs to this test, not a cs_server: a reused
+        # pid, which the worker must not end.
         reused = None
         try:
             rw.ensure_stub_server(tmpdir('data'), port=port,
@@ -415,15 +368,12 @@ def test_stub_server():
         check('and this process is still running', os.getpid() > 0, True)
         check('while a stranger with no recorded pid is described as one',
               'previous worker of this galaxy' in refused, False)
-        # Fails if the check were satisfied by the script name alone. This
-        # process is a Python running a file in this project and is still not
-        # a cs_server.
+        # A Python running a file in this project is not enough to count as a
+        # cs_server.
         check('the test itself is not mistaken for one',
               rw.is_our_cs_server(os.getpid()), False)
 
-        # The operator who knows whose server it is says so, and is not
-        # refused. Without this the flag would be untested in the only
-        # direction it exists for.
+        # `--adopt-server` accepts the stranger.
         said, log = lines()
         adopted = rw.ensure_stub_server(tmpdir('data'), port=port, adopt=True,
                                         work_dir=tmpdir('work'), log=log)
@@ -435,8 +385,7 @@ def test_stub_server():
 
     check('the port is free again', rw.port_listening(port), False)
 
-    # The other half: a free port is started on, and the worker then knows
-    # where the capture will land because it said so.
+    # A free port gets a server whose save directory the worker chose.
     data, work = tmpdir('data'), tmpdir('work')
     said, log = lines()
     server = rw.ensure_stub_server(data, port=port, work_dir=work, log=log)
@@ -452,11 +401,8 @@ def test_stub_server():
     check('and it stops with the worker', server.alive(), False)
     check('leaving the port free', rw.port_listening(port), False)
 
-    # ── a worker killed outright, and the one that comes after it ────────────
-    # The whole point: a console window closed at 22:35 left a cs_server
-    # holding 8888, and until this the replacement refused to start and named
-    # a taskkill for somebody to run. Nobody is watching an unattended
-    # machine, so the galaxy stayed down.
+    # A worker killed outright leaves its cs_server running; the next worker
+    # ends it and starts its own.
     print('  recovering a server a killed worker left behind')
     data, work = tmpdir('data'), tmpdir('work')
     orphan = rw.ensure_stub_server(data, port=port, work_dir=work,
@@ -464,9 +410,7 @@ def test_stub_server():
     check('a server is up to be orphaned', rw.port_listening(port), True)
     stale = orphan.listener_pid
     check('and its listener pid was recorded', isinstance(stale, int), True)
-    # Fails if the check cannot recognise a cs_server this code just started,
-    # which would make the recovery below dead and every other check here pass
-    # for the wrong reason.
+    # Control for the recovery below.
     check('which is recognisable as ours', rw.is_our_cs_server(stale), True)
 
     # The worker is now gone without running `stop`. Nothing holds `orphan`
@@ -485,8 +429,7 @@ def test_stub_server():
         check('the orphan is gone', rw.is_our_cs_server(stale), False)
         check('the port is held by the new server',
               rw.port_listening(port), True)
-        # Fails if the replacement adopted the orphan instead of starting one,
-        # which would leave the worker guessing about a save directory again.
+        # The replacement is a new server, so its save directory is known.
         check('which is a server this worker started',
               replacement.listener_pid != stale, True)
         check('and writes where this worker said',
@@ -499,7 +442,7 @@ def test_stub_server():
     check('and the port is free at the end', rw.port_listening(port), False)
 
 
-# ── the machine must not sleep ───────────────────────────────────────────────
+# powercfg output for a scheme that never sleeps.
 NEVER = """
     Power Setting GUID: 29f6c1db-86da-48c5-9fdb-f2b67b1f44da  (Sleep after)
       GUID Alias: STANDBYIDLE
@@ -534,18 +477,14 @@ def test_sleep():
     check('a scheme that could not be read is a warning, not silence',
           any('WARNING' in x for x in rw.sleep_report({})), True)
 
-    # The request itself. It is not a setting and cannot become one, but a
-    # worker that could not even ask has to say so, so the call is checked
-    # rather than assumed.
     check('Windows accepts the request to stay awake', rw.keep_awake(), True)
 
-    # And against the live machine, which is what the operator will read.
+    # The live machine's power scheme.
     live = rw.sleep_settings()
     check('the live power scheme reads back', bool(live), True)
     check('and it names the idle sleep timeout', 'STANDBYIDLE' in live, True)
 
 
-# ── the task definition that is shipped rather than described ────────────────
 def test_task_definition():
     print('the scheduled task')
     import xml.etree.ElementTree as ET
@@ -553,10 +492,7 @@ def test_task_definition():
     path = os.path.join(ROOT, 'referee_worker_task.xml')
     raw = open(path, encoding='utf-8').read()
 
-    # An XML comment cannot hold a double hyphen, and the underline this
-    # project puts under a heading everywhere else is exactly that. It cost a
-    # round of "incorrect comment syntax" from Task Scheduler, which names a
-    # line and a column and not the character.
+    # An XML comment cannot hold a double hyphen; Task Scheduler rejects it.
     comment = raw.split('<!--', 1)[1].split('-->', 1)[0]
     check('the comment carries no double hyphen', '--' in comment, False)
 
@@ -570,12 +506,9 @@ def test_task_definition():
         el = root.find(path, ns)
         return el.text if el is not None else None
 
-    # The command line the task will carry, read out of the script that writes
-    # it. Fails if the task ever gets a window an operator can close: closing a
-    # console window sends CTRL_CLOSE_EVENT to everything attached to it, so a
-    # minimized one is a taskbar button whose only behaviour is to stop the
-    # galaxy, silently, with nothing in the log saying why. That happened once,
-    # and the only trace was the task reporting 0xC000013A.
+    # The task's command line, read from the script that writes it. Closing a
+    # console window sends CTRL_CLOSE_EVENT to the worker, so the task must
+    # have no window.
     script = open(os.path.join(ROOT, 'run_worker.ps1'),
                   encoding='utf-8').read()
     task_args = script.split('$Pass = @(', 1)[1].split(')', 1)[0]
@@ -596,7 +529,7 @@ def test_task_definition():
     check('a crash that exits nonzero is restarted too',
           text('.//t:RestartOnFailure/t:Interval'), 'PT5M')
 
-    # The three Windows defaults that would stop the galaxy on their own.
+    # Windows defaults that would stop the task on their own.
     check('it starts on battery',
           text('.//t:DisallowStartIfOnBatteries'), 'false')
     check('and is not stopped by unplugging the machine',
@@ -606,13 +539,10 @@ def test_task_definition():
     check('and is not stopped when the machine stops being idle',
           text('.//t:IdleSettings/t:StopOnIdleEnd'), 'false')
 
-    # Nothing about this file registers anything. A template that shipped with
-    # a registration in it would be the one thing the operator did not ask for.
     check('the placeholders are still placeholders in the template',
           '{{USERID}}' in raw, True)
 
 
-# ── the log that outlives the window ─────────────────────────────────────────
 def test_heartbeat():
     """What the worker tells the galaxy about itself, and what it costs."""
     print('the heartbeat a player can see')
@@ -638,7 +568,7 @@ def test_heartbeat():
     check('a failing worker still reports, with its count',
           b2.wrote[0][rw.WORKER_FAILURES_KEY], 3)
 
-    # A heartbeat that could end a turn would be worse than none at all.
+    # A failed heartbeat must not end the turn.
     said = []
     rw.heartbeat(Beat(raises=True), 1, log=said.append)
     check('a store that refuses it does not stop the worker',
@@ -650,9 +580,7 @@ def test_heartbeat():
     rw.heartbeat(Old(), 0, log=lambda *a: None)
     check('and a store too old to carry one simply has none', True, True)
 
-    # The cost rule. An idle pass must write nothing, or one galaxy spends
-    # 17,280 writes a day against a 20,000 a day tier, which would undo
-    # more than the polling work saved.
+    # An idle pass writes nothing; only a closed turn sends a heartbeat.
     src = inspect.getsource(rw.run)
     idle = src.split('referee.wait_for_client_free')[0]
     check('no heartbeat on an idle pass', 'heartbeat(' in idle, False)
@@ -675,7 +603,6 @@ def test_log():
           text.count('\n'), 3)
 
 
-# ── the operator page ────────────────────────────────────────────────────────
 def test_operator_page():
     """The page the worker writes so the galaxy is read without a terminal."""
     print('the operator page')
@@ -705,7 +632,7 @@ def test_operator_page():
         check('and the roster', 'DemoPlayer' in text and 'Neighbor' in text,
               True)
 
-        # The control: an idle pass writes nothing.
+        # Control: an idle pass writes nothing.
         idle = os.path.join(tmpdir('page'), 'operator.html')
         s = fresh_store(seconds_left=3600)
         undo(); undo = stub_referee(Calls())

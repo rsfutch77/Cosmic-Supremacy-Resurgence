@@ -3,31 +3,17 @@ test_starting_kit.py: a joiner starts with what everybody else started with
 ============================================================================
     server\\.venv\\Scripts\\python.exe server\\tests\\test_starting_kit.py
 
-`inject_civ.add_civ` builds a civ by cloning one, and the civ it clones is seat
-one, who in a galaxy that has been running is a developed empire. Before this
-the newcomer got that empire's homeworld as it stands, its whole design book and
-its bank, and no hulls, and none of that was anybody's decision.
+`inject_civ.add_civ` clones seat one, which in a running galaxy is a developed
+empire, then resets the clone to the starting kit. The reference for the kit is
+a civ `make_multiplayer_galaxy.build` adds at creation.
 
-The kit is what a generation hands a civ, and the reference for "the same as
-everybody else" is a civ `make_multiplayer_galaxy.build` adds at creation, which
-is why the comparison below is against one of those rather than against a list
-of numbers written down here twice.
+The donor is developed first (more designs, population, bank, research topic,
+recruitment rate and production points), and each kit field is compared with
+the generated civ and with the same injection run with `kit=False`.
 
-**A test that asserts a joiner has ships proves nothing.** Every check that says
-a field reads the starting value is paired with the same field read off a civ
-`build` created, and with the same injection run with `kit=False`, which is the
-donor's state coming across. If the kit did nothing, the first set would still
-pass on a fresh fixture and the third would stop failing, so the fixture is
-developed first: seat one is given a fifth design, a bigger population, a bank,
-a research topic, a recruitment rate and production points, which is what a
-donor looks like on the turn somebody joins.
-
-`client/SinglePlayerGalaxy.dat` is the fixture for the reason `test_wipe_civ`
-and `test_inject_donor` use it: the galaxies with real histories on this branch
-are gitignored captures and a test cannot depend on them.
-
-What is NOT tested here is that any of it loads and plays.
-`server/dev_tools/join_kit_acceptance.py` is that, and it needs the client.
+The fixture is `client/SinglePlayerGalaxy.dat`, as for `test_wipe_civ` and
+`test_inject_donor`. Loading and playing a joined galaxy is
+`server/dev_tools/join_kit_acceptance.py`, which needs the client.
 """
 import os
 import struct
@@ -64,7 +50,6 @@ def quiet(_msg=''):
     pass
 
 
-# ── reading a civ ────────────────────────────────────────────────────────────
 def civ(blob, name):
     return next(o for o in icv.owner_records(blob) if o['name'] == name)
 
@@ -77,12 +62,7 @@ def homeworld(blob, name):
 
 
 def kit_of(blob, name):
-    """Every field of the starting kit this project can read, for one civ.
-
-    One dict rather than a dozen accessors, because the claim being made is
-    about all of them at once: a newcomer who matches on ten fields and not on
-    the eleventh has not started level.
-    """
+    """Every field of the starting kit this project can read, for one civ."""
     o = civ(blob, name)
     hq = homeworld(blob, name)
     plpr = bytes(blob[hq['plpr_payload']:hq['plpr_end']]) if hq else b''
@@ -124,8 +104,7 @@ def settled_masked(blob, planet_id):
 def masked_plpr(blob, name):
     """A civ's homeworld PLPR with its owner id and rate pair blanked.
 
-    Those are the differences a joiner is allowed from a generated civ, so two
-    records that agree here agree on every byte that is anybody's decision.
+    Those are the only differences a joiner may have from a generated civ.
     """
     o = civ(blob, name)
     hq = homeworld(blob, name)
@@ -137,14 +116,10 @@ def masked_plpr(blob, name):
 
 
 def masked_ship(blob, ship, owner_oid):
-    """A ship record with everything that makes it this ship blanked out.
+    """A ship record with its identity blanked, leaving the hull.
 
-    What is left is the hull: the section shape, the `DYNO` and the crew. Two
-    ships that agree here are the same kind of ship in the same condition,
-    which is the claim a starting fleet makes. The identity is the object id,
-    which a record carries twice, plus the owner, the position, the orbit and
-    the design, and those are what one civ's ship is allowed to differ from
-    another's by.
+    Blanked: the object id (carried twice), owner, position, orbit and design.
+    What is left is the section shape, the `DYNO` and the crew.
     """
     rec = bytearray(blob[ship['off']:ship['end']])
     icv.replace_u32(rec, owner_oid, 0, 0, len(rec))
@@ -184,13 +159,11 @@ def exsy_of(blob, name):
     return None
 
 
-# ── a donor that looks like somebody who has been playing ────────────────────
 def develop(blob, name, log=quiet):
     """Make seat one look like a civ eighty turns in.
 
-    Every field the kit resets is moved off its starting value, and only
-    through the writers `merge_orders` already uses on live blobs, so the
-    fixture is a state the rest of the project believes in.
+    Every field the kit resets is moved off its starting value, using the
+    writers `merge_orders` uses on live blobs.
     """
     o = civ(blob, name)
     hq = homeworld(blob, name)
@@ -201,9 +174,8 @@ def develop(blob, name, log=quiet):
         + b'\x00\x00'
     blob = mo.set_people(blob, hq['id'], citizen * 19, [soldier] * 3)
 
-    # a facility built on the capital, and a settled block that has lived
-    # through some turns: a population history, and both undecoded counters
-    # moved, which is what the h3check capital looked like at turn 18
+    # a facility built on the capital, and a settled block with a population
+    # history and both undecoded counters moved
     blob = mo.set_facilities(blob, hq['id'],
                              [(0, 4)] + list(icv.STARTING_FACILITIES))
     blob = mo.set_settled(blob, hq['id'], pop=19,
@@ -235,12 +207,7 @@ def develop(blob, name, log=quiet):
 
 
 def generated_reference(fixture, players):
-    """A galaxy `make_multiplayer_galaxy` built, and the civ it added to it.
-
-    This is the definition of the starting kit that the rest of the file
-    compares against: not a list of numbers, but a civ created the way every
-    civ in a new galaxy is created.
-    """
+    """A galaxy `make_multiplayer_galaxy` built: the reference starting kit."""
     return mmg.build(fixture, players, log=quiet)
 
 
@@ -289,8 +256,7 @@ def main():
                   'progress', 'food', 'facilities', 'settled', 'prod',
                   'credits', 'research', 'designs', 'ships', 'hulls'):
         check(f'{field} matches the generated civ', got[field], ref[field])
-    # J5's done-when. Fails on any byte the fields above do not name, which is
-    # how the 17 offsets were found in the first place.
+    # Catches any byte the fields above do not name.
     check('the homeworld PLPR is the generated one, byte for byte, but for '
           'the owner id and the rate pair',
           masked_plpr(joined, 'Newcomer'), masked_plpr(fresh, 'Gamma'))
@@ -393,11 +359,8 @@ def main():
           [t for t in (idg.sec_len(kept, 0),)][0][1], len(kept) - 8)
 
     print('\na galaxy where every ship left is already under orders')
-    # The engine deletes SHIP sections itself when a ship is destroyed and
-    # renumbers nothing, which K4 established, so dropping the idle ones is a
-    # shape a real galaxy reaches. A late galaxy where everybody's fleet is in
-    # flight is exactly the one a joiner turns up in, and it is the one that
-    # used to leave `add_ship` with nothing it would clone.
+    # The engine deletes SHIP sections itself and renumbers nothing, so
+    # dropping the idle ships gives a real shape: no idle hull to clone.
     crowded = played
     for s in sorted(ish.ship_records(crowded), key=lambda s: -s['off']):
         if not s['ordered']:

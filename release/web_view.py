@@ -1,17 +1,13 @@
 """
 web_view.py: the launcher's window as a web page in the game's own skin
-=========================================================================
+
 The view `launcher.Launcher` draws through, by pywebview over release\\webui.
 The page draws what this file tells it (window.ui.set and friends in app.js)
 and hands the player's presses back through `Bridge`, pywebview's js_api.
 
-Threading. pywebview owns the main thread for its window and runs each js_api
-call on a thread of its own. The Launcher expects every call and timer on one
-thread, and a dialog that keeps that thread's timers running while it waits.
-`WebView` gives it that: one controller thread runs every Launcher call, every
-timer, and every press posted from the page, one at a time; and a prompt waits
-by running that same loop until it is answered, so the queue drain and the
-once-a-second watch carry on underneath a dialog.
+Threading: one controller thread runs every Launcher call, timer and posted
+press, one at a time. A prompt waits by running that same loop, so timers keep
+running underneath a dialog.
 """
 from __future__ import annotations
 
@@ -30,10 +26,8 @@ import launcher as L
 
 PAGE_W, PAGE_H = 720, 540
 
-# The launcher names what a piece of text means with a colour (launcher.OK and
-# the rest). The page draws the table on the game's slate and the status line
-# on the light blue of its lower pipe, so each is mapped to one that reads on
-# each.
+# The launcher's meaning colours (launcher.OK and the rest), mapped to ones
+# that read on the table's slate and on the status line's light blue.
 ON_DARK = {L.TEXT: "#e8eef2", L.DIM: "#93a6b5", L.FAINT: "#6b7d8c",
            L.ACCENT: "#a3d8fe", L.OK: "#3ddc84", L.WARN: "#ffb020",
            L.BAD: "#ff6b5e"}
@@ -65,11 +59,8 @@ def ensure_art(webui: str) -> None:
 
 
 class Bridge:
-    """What the page can ask for. pywebview runs each on its own thread, so
-    each one posts its work to the controller thread and returns at once.
-
-    A press that arrives before the Launcher exists, while it is still booting,
-    is dropped: there is nothing yet to act on it.
+    """What the page can ask for. Each call posts its work to the controller
+    thread and returns at once. A press before the Launcher exists is dropped.
     """
 
     def __init__(self, view: "WebView"):
@@ -151,11 +142,10 @@ class WebView:
         self._prompt_ids = itertools.count(1)
         self._answers: dict = {}
         self._row_actions: list = []
-        # What the page shows now, so a once-a-second repaint that changes
-        # nothing sends nothing.
+        # What the page shows now, so a repaint that changes nothing sends
+        # nothing.
         self._sent: dict = {}
 
-    # ── running the window ──
     def run(self, make_app) -> None:
         """Open the window and run `make_app()` on the controller thread once
         the page is up. Returns when the window has closed."""
@@ -170,9 +160,7 @@ class WebView:
         self.window.events.closing += self._on_closing
         self.window.events.closed += self._on_closed
         self.window.events.restored += self._on_restored
-        # Named, so a missing runtime fails here instead of quietly drawing the
-        # page in the Internet Explorer engine. webview_runtime has checked
-        # for it before this runs.
+        # Named, so a missing runtime fails here.
         webview.start(self._controller, (make_app,), gui="edgechromium",
                       http_server=True, debug="--debug" in sys.argv)
 
@@ -234,7 +222,6 @@ class WebView:
         self._sent[key] = value
         return True
 
-    # ── native window ──
     def _on_shown(self) -> None:
         self._shown = True
         self._hwnd = self.window.native.Handle.ToInt64()
@@ -256,10 +243,8 @@ class WebView:
         no title bar."""
         user32 = ctypes.windll.user32
         hwnd = self.window.native.Handle.ToInt64()
-        # pywebview takes a normal window's title bar and borders off the size
-        # it is given, and a frameless window has neither, so the page would
-        # come up short by both. With no frame the window is all page: size it
-        # to the page, in this monitor's pixels.
+        # pywebview subtracts a title bar and borders a frameless window does
+        # not have, so the size is set here in this monitor's pixels.
         scale = user32.GetDpiForWindow(hwnd) / 96
         swp_nomove, swp_nozorder = 0x2, 0x4
         user32.SetWindowPos(hwnd, None, 0, 0, round(PAGE_W * scale),
@@ -271,8 +256,7 @@ class WebView:
                                       lr_loadfromfile)
                 if h:
                     user32.SendMessageW(hwnd, wm_seticon, which, h)
-        # A borderless form has no minimize box, so a click on its taskbar
-        # button cannot minimize it. Giving it the style back restores that.
+        # A borderless form has no minimize box, which taskbar minimize needs.
         gwl_style, ws_minimizebox = -16, 0x00020000
         user32.SetWindowLongW.restype = ctypes.c_long
         style = user32.GetWindowLongW(hwnd, gwl_style)
@@ -289,7 +273,6 @@ class WebView:
         self._closed = True
         self.post(lambda: None)
 
-    # ── lifecycle ──
     def build(self, app) -> None:
         self.app = app
         self._set(
@@ -317,7 +300,6 @@ class WebView:
         if self._shown:
             self._dress()
 
-    # ── who you are, and the build ──
     def show_identity(self, player) -> None:
         self._set(name=player or "")
 
@@ -325,7 +307,6 @@ class WebView:
         if self._changed("build", text):
             self._set(build=text)
 
-    # ── status line ──
     def set_status(self, text: str, colour: str) -> None:
         self._set(status={"text": text,
                           "colour": ON_LIGHT.get(colour, ON_LIGHT_TEXT)})
@@ -338,7 +319,6 @@ class WebView:
     def disable_modes(self) -> None:
         self._set(modesDisabled=True)
 
-    # ── game controls ──
     def show_controls(self, show: bool) -> None:
         if self._changed("controls_shown", bool(show)):
             self._set(controlsShown=bool(show))
@@ -356,7 +336,6 @@ class WebView:
         if self._changed("turn_label", text):
             self._set(turnLabel=text)
 
-    # ── pages and the table ──
     def show_page(self, name: str) -> None:
         self._set(page=name)
 
@@ -397,14 +376,12 @@ class WebView:
         if self._changed("hint", text or ""):
             self._set(hint=text or "")
 
-    # ── the log ──
     def append_log(self, msg: str) -> None:
         self._js("log", [msg])
 
     def show_log_refs_link(self) -> None:
         self._set(logRefs=True)
 
-    # ── prompts ──
     def _prompt(self, spec: dict):
         """Show a dialog and run the controller loop until it is answered.
 

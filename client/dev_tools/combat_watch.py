@@ -1,21 +1,13 @@
 """
-combat_watch.py: report every shot fired, as it happens
-========================================================
+combat_watch.py: report ship damage and losses each turn
+
     python combat_watch.py                 # follow until Ctrl-C
     python combat_watch.py --turns 200 --out combat.csv
 
-Ships are DELETED on death rather than flagged, and `Ship:136` condition is the
-only per-ship damage state, so a battle leaves exactly two traces: a condition
-that fell, and a hull that stopped existing. Both are invisible in a standings
-line, two civs can fight, lose ships and rebuild between two samples of "score
-and planet count" with nothing to show for it.
-
-This samples every ship each turn and prints only the differences, so a run can
-be left alone and the first engagement is still caught with the turn number, the
-civs involved and what it cost them. It writes nothing to the game.
-
-Run it ALONGSIDE duel.py: the rules are what cause the fight, and reading the
-same process from two programs is fine.
+Ships are deleted on death, and `Ship:136` condition is the only per-ship damage
+state, so a battle shows as a condition that fell or a ship that disappeared.
+This samples every ship each turn and prints only the differences. It writes
+nothing to the game and can run alongside duel.py.
 """
 import argparse
 import csv

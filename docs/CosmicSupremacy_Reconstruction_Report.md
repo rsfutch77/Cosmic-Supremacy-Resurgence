@@ -342,6 +342,8 @@ So the score list holds one row per distinct `Owner:4`, and the collision, not t
 
 [ ] **Homeworld placement is one hardcoded policy.** New civs are placed as far from every claimed planet as possible, which is the right default for testing an AI (contact becomes something it has to earn) but not the only one worth having, random placement is what a real generator does and is the only way to test a hostile neighbour two systems away, and clustered or per-team placement follow from it. Wants a `--placement` option rather than a second function.
 
+- [ ] **A galaxy injected with a colonisation in flight is verified on disk only.** The colony ships' `ROUT` sections come out byte-identical after injection, and across the tick archive the planet a colonise order names is the planet that changes hands two ticks later, 7 times out of 7. Done when such a galaxy is loaded in the client and the colony ship still arrives.
+
 ### Audit: is memory editing still needed for multiplayer? (August 2026)
 
 **Verdict: no, not for state sync, with one confirmed gap and one caveat.** Both directions of the multiplayer loop now run through the save blob, and everything the memory-editing tools write is carried by it. What memory access remains is either test harness or a small amount of `.data` bookkeeping the blob does not serialise.
@@ -1112,6 +1114,8 @@ Each is a Win32 dialog resource, not an in-engine overlay, so the main window's 
 
 **The homeworld click counters are not `.data` globals.** `0x00842AE4` through `0x00842AF0` have no absolute references in `.text`. They are fields of the prompt's own singleton, which lives at `0x00840BC8`, at offsets `0x1F1C` through `0x1F28`, and `0x00498E10` zeroes all four every time the prompt is prepared. So they read zero after a load because the dialog is constructed once per process and cleared on every open, not because a save failed to carry them.
 
+- [ ] **A one-time civilisation setup step should replace `patch_hide_setup_prompts.py`.** In the original, a player chose a name and coat of arms once and the blob carried it, which kept `Owner:384` non-zero and the prompt away. Locally generated galaxies never go through that flow, so the patch stands in for it and `Owner:384` is left untouched. Done when the launcher or the site offers the setup step and the patch is no longer applied.
+
 **Side effect:** Applying T1–T5 removes the Next Turn button from the UI. This is intentional for the multiplayer build, turns are advanced externally via `fast_turns.py`, not by player clicks.
 
 ### What T1–T5 skip, read out of the file (September 2026)
@@ -1573,3 +1577,23 @@ The relay, the referee worker and their costs are planned and measured in
   reopen, is noticed later. Kept at 5 seconds for the beta, decided 7 October 2026; due before a
   second live galaxy is started or after the beta, whichever comes first. Done when the worker's
   poll follows the deadline and a measured day of one idle galaxy reads under 2,000 documents.
+
+- [ ] **Citizens a player owns on someone else's planet cannot be managed.** `merge_orders.py`
+  only considers planets the submitter owns, so a player with population on a rival's colony
+  cannot reassign it. The per-citizen owner already says whose each citizen is, but letting one
+  player write into another's `PLPR` has not been measured. Done when a reassignment on a rival's
+  planet is measured in the client and the merge either accepts it or refuses it with a note.
+
+- [ ] **Nothing checks that a submitted order is legal**, only that it is the player's own. A
+  technology the civ cannot research, or a queue entry it cannot afford, is copied as given. Done
+  when the merge applies the rule the UI enforces for each order type it accepts.
+
+- [ ] **Order types nobody has measured are not merged:** facility selection outside the queue,
+  governors, admirals and diplomacy proposals. Done when each is measured against a change made
+  in the UI and is either accepted or refused with a note.
+
+- [ ] **A running client's default star names read as renames.** A client writes `Unnamed`
+  wherever the blob holds an empty name, and `merge_orders.py` sees each one as an attempted
+  system rename every turn. `server/tests/test_rename_materialisation.py` states the wanted
+  behaviour; it skips without its `fog_work/fix80.dat` fixture. Done when that test passes
+  against a multi-civ blob.

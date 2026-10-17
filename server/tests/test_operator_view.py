@@ -4,28 +4,17 @@ test_operator_view.py: the operator page says what is true and writes nothing
     server\\.venv\\Scripts\\python.exe server\\tests\\test_operator_view.py
     ... test_operator_view.py --demo server\\galaxy_demo
 
-Run against a **copy** of a real archived galaxy rather than a galaxy made up
-here. A view that renders a store nobody has ever played proves very little: it
-would pass with an empty roster, no archive and no deadline, which is exactly
-the case every interesting line of the view is about. The default source is
-`server\\galaxy_demo`, which holds turns 7 to 11 of a three-civ galaxy with four
-real archive records. It is copied into a temporary directory first, and the
-original is never opened for writing, because the referee or another tool may
-be using it.
+Runs against a copy of a real archived galaxy, by default `server\\galaxy_demo`
+(turns 7 to 11 of a three-civ galaxy with four archive records). The original
+is never opened for writing.
 
-What is checked, and what would have failed each check, is in the name of each
-line. Three of them are controls: a check that cannot fail says nothing, and
-the overdue, the refusal and the write-protection checks each have a paired
-case that must come out the other way.
+The overdue, refusal and write-protection checks each have a CONTROL case that
+must come out the other way.
 
-The HTTP half runs `turn_server.py` on the loopback address, which is what shows
-that the view reads a store through `open_store` without caring which kind it
-got. A real Firebase store is not opened here: it needs the emulator, and
-`test_store_equivalence` already covers the store interface against it. The one
-thing the view does to Firebase outside that interface, a `get` of the galaxy
-document for its seats and heartbeat, is checked against a stand-in document
-that records what was done to it, and against a real document on the emulator
-by `test_seat_rebind.py`.
+The HTTP half runs `turn_server.py` on loopback, so the view reads through
+`open_store`. The view's one Firebase read outside the store interface, a
+`get` of the galaxy document, is checked against a stand-in document here and
+against the emulator by `test_seat_rebind.py`.
 """
 import argparse
 import hashlib
@@ -59,12 +48,7 @@ def check(name, got, want=True):
 
 
 def fingerprint(root: str) -> dict:
-    """Every file under a store, by content. The evidence for "never writes".
-
-    Content rather than mtime, because a write that replaced a file with the
-    same bytes would still be a write this view is not allowed to make, and
-    because a copy's mtimes are not stable across filesystems.
-    """
+    """Every file under a store, by content hash."""
     out = {}
     for base, _dirs, files in os.walk(root):
         for name in sorted(files):
@@ -78,10 +62,8 @@ def fingerprint(root: str) -> dict:
 class CountingStore:
     """A store that records which store methods the view reached for.
 
-    The H6 finding is about which method gets called, not about what comes
-    back, so counting is the only way to test it: a view that called
-    `submissions(turn)` would produce exactly the same page and cost a download
-    per player per refresh on Firebase.
+    Calling `submissions(turn)` would give the same page while downloading
+    every blob, so the calls are what is checked.
     """
 
     def __init__(self, inner):
@@ -100,14 +82,10 @@ class CountingStore:
         return counted
 
 
-# ── the copy every check runs against ────────────────────────────────────────
 def prepare(demo: str, tmp: str, gid: str = 'sandbox') -> str:
-    """Copy the demo galaxy, and give the current turn a real submission.
+    """Copy the demo galaxy, and give the current turn one real submission.
 
-    The archive ends at turn 10 and the galaxy stands at turn 11, so nobody has
-    submitted for the turn in progress and the roster half of the view would be
-    vacuous. One civ submits the turn's own blob, which is a submission the
-    store would accept, leaving the other civ genuinely outstanding.
+    The first civ submits the turn's own blob, leaving the others waiting.
     """
     root = os.path.join(tmp, 'galaxies', gid)
     shutil.copytree(demo, root)
@@ -125,7 +103,6 @@ def set_deadline(root: str, deadline: float) -> None:
     store._put_state(state)
 
 
-# ── checks ───────────────────────────────────────────────────────────────────
 def check_read_only(root: str):
     print('read-only: the store cannot be written through this view')
     store = ov.read_only(turn_store.TurnStore(root))
@@ -137,8 +114,7 @@ def check_read_only(root: str):
         except ov.ReadOnlyError:
             blocked = True
         check(f'read-only: {name}() is not reachable', blocked)
-    # The control. An allowlist that blocked everything would pass the line
-    # above and make the whole view useless, so the reads have to be reachable.
+    # Control: the reads stay reachable.
     for name in ('state', 'civs', 'has_submitted', 'archive_record'):
         try:
             getattr(store, name)
@@ -179,7 +155,7 @@ def check_no_bulk_download(root: str):
           'turn_blob' in counting.calls, False)
     check('efficiency CONTROL: the page still knows who submitted',
           bool(report['submitted']))
-    # The proxy is what makes the line above hold in a year's time.
+    # The read-only proxy blocks `submissions` outright.
     proxied = ov.read_only(inner)
     try:
         proxied.submissions
@@ -242,8 +218,7 @@ def check_overdue(root: str, tmp: str):
     check('overdue: and the text says so rather than printing a minus sign',
           'OVERDUE' in ov.render_text([r]))
 
-    # The control. Without it, a view that said OVERDUE unconditionally would
-    # pass every line above.
+    # Control: a turn with time left.
     early = os.path.join(tmp, 'early')
     shutil.copytree(root, early)
     set_deadline(early, time.time() + 7200)
@@ -271,7 +246,7 @@ def check_refusals(root: str, tmp: str):
           any('2 order(s) refused from Neighbor' in p for p in r['problems']))
     check('refusals: a submission from outside the roster is called out',
           any('Stranger' in p and 'ignored' in p for p in r['problems']))
-    # The control: the same galaxy without those fields must be clean of them.
+    # Control: the same galaxy without those fields.
     clean = ov.galaxy_report(turn_store.TurnStore(root))
     check('refusals CONTROL: an untouched galaxy reports neither',
           any('refused' in p or 'ignored' in p for p in clean['problems']),
@@ -281,9 +256,7 @@ def check_refusals(root: str, tmp: str):
 def check_closed_and_reclaimed(root: str, tmp: str):
     """A galaxy the operator ended, and a seat the referee took back.
 
-    Both are states a player sees and the operator has to be able to confirm,
-    and both live in the galaxy's own state rather than in any listing, so a
-    view that read only the directory would show a closed galaxy as open.
+    Both are read from the galaxy's own state.
     """
     print('operator state: a closed galaxy and a reclaimed seat')
     ended = os.path.join(tmp, 'ended')
@@ -312,8 +285,7 @@ def check_closed_and_reclaimed(root: str, tmp: str):
     check('operator state: the page says the same', '1 November' in page
           and 'seats taken back' in page)
 
-    # The control: an untouched galaxy must read as open with nobody removed,
-    # or the two checks above would pass on a view that said it of everything.
+    # Control: an untouched galaxy reads as open with nobody removed.
     clean = ov.galaxy_report(turn_store.TurnStore(root))
     check('operator state CONTROL: an untouched galaxy is open',
           clean['status'], turn_store.OPEN)
@@ -324,12 +296,8 @@ def check_closed_and_reclaimed(root: str, tmp: str):
 
 
 def check_worker(root: str, tmp: str):
-    """The heartbeat `referee_worker` writes, read back as health.
-
-    A failing worker and a stopped one look the same from a deadline alone,
-    which is the reason the heartbeat exists, so each is checked against the
-    other as its control.
-    """
+    """The heartbeat `referee_worker` writes tells a failing worker from a
+    stopped one, each checked against the other."""
     print('worker: a failing referee and a stopped one are told apart')
     import referee_worker
     check('worker: the view reads the names the worker writes',
@@ -433,12 +401,10 @@ def check_seats(root: str, tmp: str):
 
 
 def check_firebase_document(tmp: str):
-    """The one extra read a Firebase galaxy costs, and that it is only a read.
+    """A Firebase galaxy costs the view one document `get` and nothing else.
 
-    A `FirebaseTurnStore` whose document reference records what is done to it
-    and whose clients cannot be built, so the view can reach Firebase for
-    nothing but what this hands it. The live store is not touched and no
-    emulator is needed; `test_seat_rebind.py` reads a real document.
+    Uses a `FirebaseTurnStore` whose document reference records what is done
+    to it and whose clients cannot be built.
     """
     print('firebase: the galaxy document is read once, and only read')
     import firebase_store
@@ -507,9 +473,8 @@ def check_unreadable(tmp: str):
     check('failure: main() exits 2 on a galaxy it cannot read',
           ov.main([missing]), 2)
 
-    # A spec that open_store itself refuses, which is what a Firebase spec on a
-    # machine with no Google credentials does. It has to be a row too, because
-    # a traceback tells the operator nothing about the other galaxies.
+    # A spec that open_store refuses, as a Firebase spec does on a machine with
+    # no Google credentials.
     real = turn_store.open_store
 
     def refuse(spec, **kw):
@@ -560,7 +525,7 @@ def check_html(root: str):
 
 
 def check_http(root: str):
-    """The same galaxy read over HTTP, which is what proves the seam holds."""
+    """The same galaxy read over HTTP gives the same report."""
     print('seam: the same galaxy through open_store over HTTP')
     import turn_server
     turn_server.VERBOSE = False
@@ -578,10 +543,8 @@ def check_http(root: str):
         check('seam: the last tick agrees',
               over_http['last_tick']['closed_at'],
               direct['last_tick']['closed_at'])
-        # Compared by count and by the phrase each one opens with. The full
-        # text carries a countdown read a few milliseconds apart on each side,
-        # and a check that fails when a duration rolls over a decimal place is
-        # a check that fails for the wrong reason.
+        # Compared by count and opening phrase, since the full text carries a
+        # countdown read at slightly different times.
         check('seam: the same number of problems',
               len(over_http['problems']), len(direct['problems']))
         check('seam: and the same problems',

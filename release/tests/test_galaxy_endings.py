@@ -1,7 +1,7 @@
 """
 Two ways a galaxy stops being one a player can play, and what the launcher
-says about each: the operator ended it (K5), or the referee took the player's
-seat back after missed turns and warned them first (K3).
+says about each: the operator ended it, or the referee took the player's seat
+back after missed turns and warned them first.
 
     server\\.venv\\Scripts\\python.exe release\\tests\\test_galaxy_endings.py
 
@@ -10,8 +10,8 @@ the store methods the operator's tools and the referee use: `close` for an
 ended galaxy, `abandonment.enforce` for a warning, and the same state write
 `abandonment.reclaim` makes for a seat taken back.
 
-The launcher object is not built. The methods under test are called on a stub
-that carries only the attributes they read, so nothing reaches Tk or a port.
+The methods under test are called on a stub carrying only the attributes they
+read, so nothing reaches a window or a port.
 """
 import inspect
 import json
@@ -156,11 +156,8 @@ view = page.galaxy_view()
 check("the directory lists the closed galaxy as closed",
       rows["season1"].status, L.CLOSED)
 check("and still as one the player is in", rows["season1"].joined, True)
-# Fails if the You column kept its "your turn" reading: a closed galaxy has
-# no turn left to play.
 check("the You column says it has ended",
       you.text(rows["season1"], view), "galaxy ended")
-# Fails with the old rule, which offered a closed galaxy nothing at all.
 check("the row offers Review", L.row_action(rows["season1"], view.recs),
       L.ENDED)
 check("labelled Review", L.ACTION_TEXT[L.ENDED], "Review")
@@ -170,13 +167,10 @@ check("a closed galaxy the player is not in still offers nothing",
       L.row_action(rows["strangers"], view.recs), None)
 check("the fresh galaxy is offered View",
       L.row_action(rows["season2"], view.recs), L.VIEW)
-# Fails if the hint went on about View only: the player has to be told the
-# galaxy they were playing is over before they are told where else to go.
 check("the line under the table says it ended and what to do",
       page.hint(rows.values()),
       lambda t: "season1 has ended" in t and "Review" in t
       and "another galaxy" in t)
-# Fails if the submitted poll still asked a closed galaxy every refresh.
 check("the refresh did not ask the closed galaxy whether a turn was played",
       extra.get("submitted", {}).get("season1"), None)
 check("nor open its store at all", old in asked, False)
@@ -190,12 +184,10 @@ try:
     L.Launcher.show_ended(page, rows["season1"])
 finally:
     L.open_player_store = real_open
-# Fails if Review went back to reading the galaxy's state.
 check("pressing Review reads no store", asked, [])
 title, body, _choices = page.dialogs()[-1]
 check("the box is titled for an ended galaxy", title, "Galaxy ended")
 check("it says the galaxy has been closed", "has been closed" in body, True)
-# Fails if the row's reason were not used.
 check("with the operator's reason in it", REASON_TEXT in body, True)
 check("and says what to do", "Pick another galaxy" in body, True)
 check("a row closed with no reason still gets a sentence",
@@ -223,12 +215,10 @@ store.close(reason=REASON_TEXT)
 page = Page(data, root, "Ada")
 rows, extra = counted_refresh(page)
 view = page.galaxy_view()
-# Fails if the row still said "joining next turn": a closed galaxy resolves
-# no more requests, so that is a wait with no end.
+# A closed galaxy resolves no more join requests.
 check("the row says the galaxy ended rather than joining next turn",
       you.text(rows["ended"], view), "galaxy ended")
 check("and offers Review", L.row_action(rows["ended"], view.recs), L.ENDED)
-# Fails if awaiting_answer still polled a closed galaxy.
 check("no answer is asked for from a closed galaxy",
       L.awaiting_answer(rows["ended"], view.recs), False)
 check("so the refresh did not open its store", ended in asked, False)
@@ -340,18 +330,14 @@ check("a turn that could not be sent reads the state once",
       app.mp_store.reads, 1)
 check("and hands the closure to the Tk thread, ahead of the log offer",
       app.drain(), ["__mp_closed__", "__log_offer__"])
-# Fails if the offer to send the log were made for a galaxy that ended,
-# which is the operator's decision and not a fault (M1).
+# An ended galaxy is the operator's decision, not a fault.
 check("which is then not made", app.offered, [])
-# Fails without the stop: the loop waited for a turn that never comes.
 check("which stops the loop", app.mp_stop, True)
 check("says so beside the turn number", app.mp_note, L.GALAXY_ENDED_NOTE)
 check("and shows the operator's reason", app.warned,
       lambda w: len(w) == 1 and REASON_TEXT in w[0])
 check("and relists, so the row changes too", app.refreshed, 1)
 app.state("stopped", turns=0)
-# Fails if the loop's own "stopped" on the way out overwrote the reason it
-# stopped.
 check("the loop's own stop does not overwrite that", app.mp_note,
       L.GALAXY_ENDED_NOTE)
 app.state("lost", turn=7, civ="Ada", error="again")
@@ -377,8 +363,7 @@ stopped = L.Launcher._mp_stalled(app)
 deadline_probe = time.time() + 10
 while app.msgs.empty() and time.time() < deadline_probe:
     time.sleep(0.05)
-# Fails without the probe: a closed galaxy's wait read "turns have stopped",
-# which sends a player to the operator about a machine that is fine.
+# The probe tells a closed galaxy from a stopped referee.
 check("a wait past the stall line asks the state once",
       app.mp_store.reads, 1)
 check("and finds the galaxy closed", app.drain(), ["__mp_closed__"])
@@ -405,7 +390,6 @@ check("a report about a store no longer followed is dropped",
 
 print("\n6. the referee's warning about missed turns (K3)")
 said = abandonment.warning_note("Ada", 6, 12)
-# Fails if abandonment's opening line and the launcher's constant drift.
 check("the launcher recognises abandonment's own warning",
       L.abandonment_warning(said), said)
 check("a note of refusals only is not a warning",
@@ -433,8 +417,6 @@ check("the referee left Ada a note on turn 5, the turn she opens next",
 check("and none on turn 4", quiet.note("Ada", 4), [])
 app = App(quiet)
 got = L.Launcher._warning_note(app, quiet, "Ada", 5)
-# Fails if Play read only the turn before the open one, which is where an
-# older referee wrote the warning and where nobody reads it now.
 check("Play at turn 5 reads it", got, lambda g: bool(g) and
       g[0].startswith("You have missed 2 turns"))
 older = turn_store.open_store(make_galaxy(os.path.join(root, "older"),
@@ -494,20 +476,17 @@ for kind, facts in events:
     app.state(kind, **facts)
 check("the warned event is shown as a warning", app.drain(),
       ["__mp_warning__"])
-# Fails if the launcher went back to reading the note.
 check("with no read of the note", app.mp_store.reads, 0)
 check("and shown", app.warned, lambda w: len(w) == 1 and "missed" in w[0])
 check("with the event's lines whole",
       all(line in app.warned[0] for line in got), True)
-# Fails if the raw kind leaked into the readout, which it used to.
 check("the readout is left alone", app.mp_note, "waiting for the next turn")
 app = App(NoNotes())
 app.mp_civ = "Bob"
 app.mp_note = "waiting for the next turn"
 app.state("refused_orders", turn=4, civ="Bob", count=1,
           lines=["system rename dropped"])
-# Fails if refused_orders still triggered a read of the note, which here
-# holds a warning and would post one.
+# The note here holds a warning, which a read would post.
 check("refusals alone show nothing extra", app.drain(), [])
 check("and read nothing", app.mp_store.reads, 0)
 check("and leave the readout alone", app.mp_note,
@@ -536,8 +515,6 @@ rows, extra = counted_refresh(page)
 view = page.galaxy_view()
 check("the directory no longer has Ada in the galaxy",
       rows["sandbox"].joined, False)
-# Fails without the reclaim read: the granted record read "joining next
-# turn", with no button, for as long as the galaxy ran.
 check("the refresh found the reclaim in the same pass as the answer",
       sorted(extra.get("reclaims") or {}), ["sandbox"])
 check("and kept it in the joined record",
@@ -551,7 +528,6 @@ check("the line under the table says so",
       page.hint(rows.values()),
       lambda t: "taken back" in t and "Review" in t)
 told = L.reclaimed_text(rows["sandbox"], L.load_joined(data)["sandbox"])
-# Fails if the message said no seat exists, which is what K3 asks it not to.
 check("Review says the seat was taken back after the missed turns",
       "took the seat 'Ada' back at turn 20 after 12 missed turns" in told,
       True)

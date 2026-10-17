@@ -3,29 +3,16 @@ test_rename_materialisation.py: a default name is not a rename
 ===============================================================
     server\\.venv\\Scripts\\python.exe server\\tests\\test_rename_materialisation.py
 
-**This test fails today. That is the point.** It states the behaviour the
-19 September rehearsal says we want, so whoever fixes `merge_orders` can tell
-when they are done, and so the bug cannot quietly persist behind a green suite.
+A running client materialises the default star name `Unnamed` wherever the
+blob holds an empty string, so a submission appears to rename every unnamed
+system. For a civ holding a system's majority, that would overwrite the name
+with `Unnamed` every turn.
 
-A client that has been running materialises the default star name `Unnamed`
-wherever the blob holds an empty string, the same effect as A4's 756 bytes
-across 108 suns, here 7 bytes across each of 32. `merge_orders` compares names
-and sees 32 attempted system renames every single turn.
-
-They are dropped today only because nobody holds a majority of a system's
-planets. Measured in the rehearsal: with a fixture giving a civ 3 of 4 planets
-in system 193, the merge **accepts** the phantom rename. In a real game a
-player who controls a system would have its name overwritten with `Unnamed`
-every turn, silently, including over a name they had just set.
-
-The fix is the A4 lesson: **materialisation is not an edit.** Compare the
-submitted name against what was SERVED. Empty in, `Unnamed` out, is the engine
-filling in a default. Only a name that differs from the served name and is not
-the engine's default counts as a player renaming something.
-
-`canonical.py` deliberately does not mask star names, because masking a name to
-forgive a default would also forgive a real change. Same reasoning, same
-answer: do not mask, compare against what was served.
+The rule: compare the submitted name against what was served. An empty name
+served and `Unnamed` submitted is the engine filling in a default; only a name
+that differs from the served one and is not the default is a rename.
+`canonical.py` does not mask star names, since masking would also forgive a
+real change.
 """
 import os
 import struct
@@ -98,7 +85,7 @@ def main():
 
     print(f'civ {civ!r}, system {target}, majority granted in the fixture only')
 
-    # 1. The engine filling in its default must NOT count as a rename.
+    # 1. The engine filling in its default does not count as a rename.
     materialised = set_sun_name(served, target, DEFAULT_NAME)
     log = []
     merged = merge_orders.merge(served, [(civ, materialised)],
@@ -106,14 +93,14 @@ def main():
     check('a default name over an empty one is not a rename',
           merged == served, True)
 
-    # 2. A real rename by a civ that holds the majority must still work.
+    # 2. A real rename by a civ that holds the majority is taken.
     renamed = set_sun_name(served, target, b'Homestead')
     log = []
     merged = merge_orders.merge(served, [(civ, renamed)], log=log.append)
     check('a real rename by the majority holder is still taken',
           merged != served, True)
 
-    # 3. And it must not be possible to erase a real name with the default.
+    # 3. The default cannot erase a real name.
     named = set_sun_name(served, target, b'Homestead')
     wiped = set_sun_name(named, target, DEFAULT_NAME)
     merged = merge_orders.merge(named, [(civ, wiped)], log=lambda *a: None)

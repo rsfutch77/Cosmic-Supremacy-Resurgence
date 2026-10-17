@@ -1,29 +1,16 @@
 """
 fog_tables.py: what the per-civ tables reference, and what filtering breaks
-============================================================================
     python fog_tables.py <blob>
 
-`filter_blob.py` removes whole uncolonised `SOLA` subtrees. That is clean for
-the galaxy tree, because a system is self-contained. This reports what the two
-per-civ tables still name afterwards, so "does a filtered blob load" is asked
-about a blob whose dangling references are known rather than guessed at.
+Reports the ids the two per-civ tables under `OWNR` name, and whether each
+still exists in the blob:
 
-The answer turned out to be narrower than expected, and one half of the
-suspicion was wrong:
-
-- **`EXSY` does dangle.** It is keyed by system id, so every dropped system
-  leaves a row naming nothing. `exsy.py` reads and rewrites it.
-- **`KNPL` does not, and cannot.** Its records are keyed by **civ** id, not
-  planet id, despite the name. The one record in galaxy1 reads
-  `[198, 198, 3, ...]`, and 198 is DemoPlayer, a civ, with 3 being the turn
-  contact was made. Dropping uncolonised systems removes no civs, so this
-  table is untouched by system filtering.
-
-That was worth measuring rather than assuming: `KNPL` was half of the suspected
-cause of the client bailing at a turn boundary on a filtered blob, and it
-cannot be any of it. An id-based check that does not know which *kind* of id it
-is holding reports a civ id as a dangling planet, which is exactly the false
-lead this tool exists to stop.
+- `EXSY` is keyed by system id, so a dropped system leaves a dangling row.
+  `exsy.py` reads and rewrites it.
+- `KNPL` is keyed by civ id, despite the name: a u32 count, then 36-byte
+  records whose first u32 is a civ id (e.g. `[198, 198, 3, ...]`, 3 being the
+  turn contact was made). System filtering removes no civs, so it cannot
+  dangle.
 """
 import argparse
 import os
@@ -41,9 +28,8 @@ KNPL_RECORD = 36
 def read_knpl(blob, sec):
     """[civ id]: the first word of each fixed-size record.
 
-    The trailing `u32` of a `KNPL` payload is the one field in the format that
-    is not deterministic, which `canonical.py` masks, so this reads the key and
-    deliberately leaves the rest alone.
+    The trailing `u32` of a `KNPL` payload is not deterministic
+    (`canonical.py` masks it), so only the key is read.
     """
     p, end = sec.payload, sec.end
     if p + 4 > end:
@@ -60,7 +46,7 @@ def read_knpl(blob, sec):
 
 
 def galaxy_ids(blob, tree):
-    """(object ids in the galaxy tree, civ ids), kept apart on purpose."""
+    """(object ids in the galaxy tree, civ ids), as separate sets."""
     save = tree[0]
     objs = set()
     for tag in ('SUN ', 'PLNT', 'SHIP'):
@@ -89,9 +75,7 @@ def survey(blob, label=''):
             print(f'  EXSY  {len(payload):>4}B  systems {known}{flag}')
         for sec in ownr.find('KNPL'):
             ids, note = read_knpl(blob, sec)
-            # Checked against CIVS, not objects. Checking these against object
-            # ids reports every row as dangling, which is how this table got
-            # blamed for a bail it cannot cause.
+            # KNPL ids are civ ids, so they are checked against civs.
             missing = [i for i in ids if i not in civs]
             flag = f'  <-- {len(missing)} unknown civ(s) {missing}' if missing else ''
             print(f'  KNPL  {len(blob[sec.payload:sec.end]):>4}B  '

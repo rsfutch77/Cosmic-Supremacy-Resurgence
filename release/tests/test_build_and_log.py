@@ -2,14 +2,11 @@
 The build a launcher reports, the galaxy gate that reads it, and the copy of
 the log that is fit to send.
 
-All of it is the launcher's own module-level code, so it runs headless in about
-a second. No game and no window: nothing here starts a client, and nothing here
-uploads anything.
+Headless: no game, no window, no upload.
 
-The redaction is exercised against release\\data\\launcher.log when a checkout
-has one, because a real log is the only thing that proves the body dumps match
-what cs_server actually writes. A checkout without one still runs every other
-check, on a log built here.
+The redaction also runs against release\\data\\launcher.log when a checkout has
+one, since only a real log shows what cs_server writes. Otherwise it uses a log
+built here.
 """
 import json
 import os
@@ -60,9 +57,7 @@ check("and when it was packaged", bool(stamped.get("stamped_at")), True)
 check("and the checkout it came from, in a checkout",
       bool(stamped.get("commit")), True)
 
-# bundled() finds a data file beside the launcher when frozen and beside the
-# source when not, so pointing it at the stamp directory is what a frozen build
-# does for real.
+# Pointing bundled() at the stamp directory is what a frozen build does.
 real_bundled = L.bundled
 L.bundled = lambda name: os.path.join(stamp_dir, name)
 check("a stamped build reports the stamp", L.build_id(), "9.9.9")

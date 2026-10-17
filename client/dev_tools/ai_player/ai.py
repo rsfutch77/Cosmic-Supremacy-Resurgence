@@ -1,8 +1,8 @@
 """
-ai.py: the turn loop (STRATEGY.md §1)
-======================================
-Turns the toolbox into an actual player. Wakes when the turn counter moves,
-snapshots memory, runs every rule once in priority order, writes, and sleeps.
+ai.py: the turn loop (STRATEGY.md §1).
+
+Wakes when the turn counter moves, snapshots memory, runs every rule once in
+priority order, writes, and sleeps.
 
     python ai.py                          # dry run, one pass, right now
     python ai.py --apply                  # act on this turn
@@ -12,10 +12,8 @@ snapshots memory, runs every rule once in priority order, writes, and sleeps.
     python ai.py --apply --follow --drive 10 --halt-on-contact
 
 `--halt-on-contact` stops the loop on the first turn an enemy planet is visible,
-after the rules have run (so R-XTM-03 has already committed the fleet) and
-restores the turn length on the way out. It exists because driving turns at 10s
-resolves a battle faster than a human can open the report: without it the first
-fight is over before anyone sees it.
+after the rules have run (so R-XTM-03 has already committed the fleet), and
+restores the turn length on the way out.
 
 """
 import json
@@ -38,17 +36,8 @@ TURN_COUNTER    = gs.TURN_COUNTER
 TURNLENGTH_ADDR = 0x0080AA08
 DEFAULT_LENGTH  = 3600
 
-# ── Rule order ────────────────────────────────────────────────────────────────
-# Spelled out rather than concatenating each module's list, because the order is
-# a STRATEGY decision and concatenation quietly encoded the wrong one: the
-# facility rule sat ahead of both ship-build rules, so on a civ whose only
-# shipyard was the homeworld it took that planet's production every single turn.
-# The empire built farms for 40 turns, never produced a ship, never explored, and
-# never found the enemy. Nothing looked broken; every rule was doing its job.
-#
-# The principle: PRODUCTION IS THE SCARCE RESOURCE, and only shipyard planets can
-# make ships, while facilities can be built anywhere. So ships get first refusal
-# on a shipyard and facilities take what is left.
+# Rule order is a strategy decision. Only shipyard planets can make ships, while
+# facilities can be built anywhere, so ship builds get first claim on production.
 RULES = [
     # 1. Preserve what exists. A wreck must not be claimed by anything else,
     #    and a starving colony undoes any amount of expansion.
@@ -67,24 +56,17 @@ RULES = [
     ("R-XPL-08", exploit.run_hurry),          # spend surplus cash on all of it
 
     # 3. Crew, then research. Crew gates every order rule below.
-    #    Conscription runs BEFORE the loader so a unit bought this turn is on
-    #    the planet when R-XPL-06 next looks; the load itself waits a turn,
-    #    because this pass's snapshot was taken before the draft.
+    #    Conscription runs before the loader; a unit drafted this turn is
+    #    loaded next turn, since this pass's snapshot predates the draft.
     ("R-XPL-05", exploit.run_crew_supply),
     ("R-XPL-09", exploit.run_conscript),
     ("R-XPL-06", exploit.run_crew_load),
     ("R-XPL-04", exploit.run_research),
 
-    # 4. Orders. Attack before colonise before scout: a warship should fight
-    #    rather than explore, and a colony ship should take a known planet in
-    #    preference to going looking for a new one.
-    # Conquer before raid: a troop hull and a warship want OPPOSITE targets;
-    # the invasion wants the planet nothing defends, the raid wants one with
-    # something to fight; so letting the invasion claim its target first keeps
-    # the warships from being sent to escort an empty rock.
-    # Garrison BEFORE ordering anything: a hull that just took a planet should
-    # put its troops down before R-XTM-04 sends it at the next one, or the
-    # occupation never happens and the planet rebels straight back.
+    # 4. Orders: garrison, conquer, raid, colonise, scout.
+    #    A hull that just took a planet lands its troops before R-XTM-04 sends
+    #    it on, or the planet rebels. Invasions claim undefended targets before
+    #    raids pick defended ones.
     ("R-XTM-06", exterminate.run_xtm06),
     ("R-XTM-04", exterminate.run_xtm04),
     ("R-XTM-03", exterminate.run_xtm03),
@@ -94,10 +76,9 @@ RULES = [
 
 
 def pass_marker_path(civ_name):
-    """Where the loop records the last turn it finished deciding.
+    """Path of the file recording the last turn the loop finished deciding.
 
-    Lives beside the discovery set, so CS_AI_STATE_DIR moves both together and a
-    frozen build writes somewhere that survives the process.
+    Lives in sensors.STATE_DIR, beside the discovery set.
     """
     safe = "".join(c if c.isalnum() else "_" for c in (civ_name or "unknown"))
     return os.path.join(sensors.STATE_DIR, f"pass_{safe}.json")
@@ -117,22 +98,16 @@ class Loop:
     def __init__(self, civ_name="GoodGuy", dry_run=True, vision="all",
                  top=0, log=print, settle=1.5, state=None, skip=(),
                  halt_on_contact=False):
-        # `skip` names rules NOT to run, by their R-XXX-NN id. It exists for
-        # bisecting a crash: the client died twice at the same turn from the
-        # same saved state, which makes the fault deterministic and therefore
-        # attributable; disable a suspect, replay, and see whether the crash
-        # moves. Guessing from what happened just beforehand has already cost
-        # this project a day.
+        # `skip` names rules not to run, by R-XXX-NN id, for bisecting a
+        # reproducible crash.
         self.skip = set(skip)
         self.civ_name = civ_name
         self.dry_run = dry_run
         self.vision = vision
         self.top = top
         self.log = log
-        # `state` lets several loops share one connection and one scan cache;
-        # duel.py drives two civs in one process and a second ViewerState would
-        # mean a second process handle and a second full memory scan per turn
-        # for no gain. Left None, a loop still owns its own, as it always did.
+        # `state` lets several loops share one connection and scan cache.
+        # Left None, the loop opens its own.
         self.state = state or gs.ev.ViewerState()
         if self.state.handle is None and not self.state.connect():
             raise RuntimeError("CosmicSupremacy is not running")
@@ -145,16 +120,13 @@ class Loop:
         # Seconds to let turn resolution finish before snapshotting.
         self.settle = settle
         # Stop the loop the turn an enemy planet first becomes visible, so a
-        # human can drive the approach and read the battle report. Unattended
-        # turn driving would otherwise resolve the fight in seconds and leave
-        # nothing but the aftermath to look at.
+        # human can drive the approach and read the battle report.
         self.halt_on_contact = halt_on_contact
         self.halt_reason = None
         # Set by run(); one_pass uses it to notice when it is outrunning the
         # turn it is deciding for.
         self.drive = None
 
-    # -- turn clock -----------------------------------------------------
     def turn(self):
         b = gs.ev.read_bytes(self.state.handle, TURN_COUNTER, 4)
         return struct.unpack("<I", b)[0] if b and len(b) == 4 else None
@@ -163,13 +135,8 @@ class Loop:
                       heartbeat=15.0):
         """Block until the turn counter moves past `after`.
 
-        Says so, and keeps saying so. A silent poll loop is indistinguishable
-        from a hung one; the first version printed nothing here and got killed
-        twice by hand while it was working perfectly.
-
-        Also re-asserts the driven turn length DURING the wait, not only after a
-        boundary: if the engine resets it to 3600 mid-wait, a loop that only
-        re-checks after a turn would sit there for an hour.
+        Logs a heartbeat while waiting, and re-asserts the driven turn length
+        during the wait because the engine can reset it to 3600.
         """
         start = last_beat = time.time()
         self.log(f"[loop] waiting for turn {after + 1} "
@@ -180,12 +147,8 @@ class Loop:
                 self.log("[loop] lost the process")
                 return None
             if t > after:
-                # The counter moves at the START of turn resolution, not the
-                # end. A snapshot taken immediately can catch the engine
-                # mid-rewrite: one pass read "0 planet(s)" for a civ that had
-                # three, and the next read four. Deciding on that would have
-                # had R-XPN-01 see no shipyard and R-XPN-02 no targets. Let it
-                # settle before looking.
+                # The counter moves at the start of turn resolution, so an
+                # immediate snapshot can catch the engine mid-rewrite.
                 time.sleep(self.settle)
                 return t
             if drive and self.read_turn_length() != drive:
@@ -197,12 +160,6 @@ class Loop:
                          f"elapsed (turn length {self.read_turn_length()}s)")
                 last_beat = now
             if timeout and now - start > timeout:
-                # NOT the customisation popup. That was asserted here for
-                # months and it is wrong: measured Aug 2026 on a fresh galaxy
-                # with 'Customize Your Home World' up and unanswered, turns 0, 1
-                # and 2 all resolved normally. Whatever stalls the pipeline, the
-                # popup is not it, and naming the wrong cause sends whoever
-                # reads this to click a dialog that was never the problem.
                 self.log(f"[loop] no turn in {timeout}s. The turn pipeline is "
                          f"not firing. Check the client is alive and that the "
                          f"turn length at 0x{TURNLENGTH_ADDR:08X} is what you "
@@ -210,7 +167,6 @@ class Loop:
                 return None
             time.sleep(poll)
 
-    # -- turn driving (optional) ----------------------------------------
     def set_turn_length(self, secs):
         gs.ev.write_bytes(self.state.handle, TURNLENGTH_ADDR,
                           struct.pack("<I", secs))
@@ -225,16 +181,12 @@ class Loop:
             self.remote = remote.Remote(self.state.pid, log=self.log)
         return self.remote
 
-    # -- one decision pass ----------------------------------------------
     def _snapshot_settled(self, tries=3, pause=1.5):
         """Snapshot, and retry if the galaxy looks half-rewritten.
 
-        The turn counter moves at the START of resolution, so a snapshot can
-        catch the engine mid-rewrite and report a civ owning nothing. A fixed
-        settle delay only moves the race: 1.5s was enough most turns and still
-        produced a "0 planet(s)" read. Losing every planet between two turns is
-        not something that happens in this game, so treat it as evidence the
-        read was torn and look again rather than guessing at a longer sleep.
+        A snapshot taken during turn resolution can show a civ owning no
+        planets. A civ cannot lose every planet between two turns, so that read
+        is treated as torn and repeated.
         """
         for attempt in range(tries):
             t0 = time.time()
@@ -247,12 +199,8 @@ class Loop:
                 return snap, None
             if snap.owned_planets(civ):
                 return snap, civ
-            # Retry even on the FIRST pass, when there is no history to compare
-            # against. That blind spot let a torn read through on loop start:
-            # the pass reported "0 planet(s)" for a five-planet civ and computed
-            # its buildable-facility set from an empty empire. A civ genuinely
-            # holding nothing has already lost, so a wasted re-read costs
-            # nothing and the check is worth having unconditionally.
+            # Retried on the first pass too, when there is no history. A civ
+            # that truly holds nothing has already lost.
             had = self.history.prev and self.history.prev["planets"]
             self.log(f"[loop] read 0 planets"
                      + (f" for a civ that had {len(had)}" if had else "")
@@ -262,27 +210,10 @@ class Loop:
         return snap, civ
 
     def one_pass(self, snap=None):
-        """One decision pass. `snap` lets a caller supply a SHARED snapshot.
+        """One decision pass. `snap` lets a caller supply a shared snapshot.
 
-        The scan is 94% of a pass (1.8s against 0.1s for all seventeen rules),
-        so a controller that scans per civ pays it N times for one turn's worth
-        of information. duel.py passes one snapshot to every civ instead.
-
-        [ ] **THAT 1.8s FIGURE IS NO LONGER TRUE AND THE SHARING ARGUMENT NOW
-        UNDERSTATES ITS OWN CASE.** Measured Aug 2026 over 22 passes: 2.73 turns
-        elapsed per pass at a 25-second turn length, i.e. roughly 68 SECONDS of
-        wall clock each, against 571 remote-thread engine calls in the run; some
-        26 per pass. The rules, not the scan, now dominate: every draft price,
-        design speed and firepower read is a CreateRemoteThread plus a wait.
-        Turns outrun passes at any sane turn length because of it, which is the
-        §1 contiguity hazard arriving through the back door. Cache the read-only
-        getters (draft cost, design speed, min crew) across a pass before
-        trusting any per-turn measurement again.
-
-        Sharing is not just cheaper, it is arguably more correct: every civ then
-        decides from the SAME start-of-turn state, rather than each later civ
-        seeing the earlier ones' writes. Civs share no objects; a planet or ship
-        belongs to exactly one of them; so nothing a rule reads about its own
+        With a shared snapshot every civ decides from the same start-of-turn
+        state. Civs share no objects, so nothing a rule reads about its own
         empire goes stale mid-turn.
         """
         if snap is not None:
@@ -300,16 +231,8 @@ class Loop:
                  f"{len(snap.owned_ships(civ))} ship(s), cash {civ.cash}, "
                  f"research {civ.research}, score {civ.score}")
 
-        # Uncomputed designs on a civ whose turn counter is ALSO stuck: the
-        # rules will all skip and the loop will then wait for a turn that never
-        # comes, so say so rather than looping in silence.
-        #
-        # The customisation popup used to be named here as the cause. It is not:
-        # measured Aug 2026, a fresh galaxy resolved turns 0-2 normally with that
-        # dialog up and unanswered. Judging it on the stat cache alone was also
-        # wrong once: it fired on a healthy game at turn 99 whose designs read
-        # computed=True a moment later, because a cold or torn read looks
-        # identical to an unstarted game. Hence both conditions.
+        # Warns when no owned design is computed and the turn counter has not
+        # moved since the last pass, which means the game is not running.
         ours = {s.design for s in snap.owned_ships(civ) if s.design}
         stuck = (self.history.prev
                  and self.history.prev.get("turn") == snap.turn)
@@ -319,8 +242,8 @@ class Loop:
                      "check the client is alive and that something is driving "
                      "the turn length.")
 
-        # Everything the engine told us last turn is now stale. Design-level
-        # facts survive (nothing refits a design); per-turn ones do not.
+        # Per-turn engine results go stale at a turn boundary. Design-level
+        # facts survive, since nothing refits a design.
         if self.remote is not None:
             self.remote.begin_pass()
 
@@ -329,12 +252,8 @@ class Loop:
 
         act = actions.Actuator(snap, dry_run=self.dry_run, log=self.log,
                                remote_factory=self._get_remote)
-        # Per-rule wall clock. Two performance hypotheses were wrong in a row;
-        # engine calls, then the memory scan, both measured and neither the
-        # cause; so the loop now reports where the time actually goes instead
-        # of inviting a third guess. A pass that outruns the turn length is not
-        # a slow pass, it is a pass whose decisions are taken against a game
-        # that has already moved on (§1).
+        # Per-rule wall clock. A pass that outruns the turn length decides
+        # against a game that has already moved on (§1).
         rule_times = {}
         pass_started = time.time()
         for name, fn in RULES:
@@ -366,19 +285,15 @@ class Loop:
                 self.log(f"[loop] rule {name} raised {type(e).__name__}: {e}")
             finally:
                 rule_times[name] = time.time() - rule_started
-        # Tell the sensors what WE did to the treasury, so next turn's income
-        # reading reflects the economy and not this pass's purchases.
+        # Record this pass's spending so next turn's income reading excludes it.
         self.history.note_cash_effect(act.cash_effect)
         self.passes += 1
         self.log(f"    {act.summary()}")
         if self.remote is not None:
             self.log(f"    {self.remote.cache_summary()}")
-        # THE PLAYER IS WAITING ON THIS. In Single Player the launcher gates
-        # its Next Turn button on this marker, because a turn advanced before
-        # the opponent has decided is a turn the opponent simply does not play,
-        # silently, with nothing in any log to say a side sat one out. Written
-        # only after every rule has run, and written atomically so a killed loop
-        # cannot leave a half-file that reads as a completed turn.
+        # In Single Player the launcher gates its Next Turn button on this
+        # marker. It is written after every rule has run, atomically, so a
+        # killed loop cannot leave a file that reads as a completed turn.
         self._mark_pass_done(snap.turn)
 
         elapsed = time.time() - pass_started
@@ -391,13 +306,8 @@ class Loop:
                     + ", ".join(f"{n} {t:.1f}s" for n, t in slow if t >= 0.05)
                     if any(t >= 0.05 for _n, t in slow) else ""))
 
-        # A pass that outlasts the driven turn is a pass that writes orders the
-        # engine is simultaneously resolving. That is how the first-contact run
-        # died: turns driven at 12s, and the pass that finally had two attack
-        # orders to issue made ~30 remote calls and overran the boundary. The
-        # actuator now rolls back a torn order, but rolling back every turn is
-        # not playing the game; the honest fix is to drive slower. Measured
-        # against scan plus rules, since the whole pass sits inside the turn.
+        # A pass that outlasts the driven turn writes orders while the engine
+        # resolves them. Measured as scan plus rules.
         total = self.last_scan_secs + elapsed
         if self.drive and total > self.drive * 0.6:
             self.log(f"    [!] this pass took {total:.1f}s against a "
@@ -405,10 +315,7 @@ class Loop:
                      f"the boundary; raise --drive to at least "
                      f"{max(30, int(total * 3))}s.")
 
-        # Checked AFTER the rules, not before, so R-XTM-03 has already committed
-        # the fleet on this same pass. Halting first would leave the human to
-        # issue the attack by hand, which is not what handing over the approach
-        # means.
+        # Checked after the rules, so R-XTM-03 has already committed the fleet.
         if self.halt_on_contact:
             self._check_contact(snap, civ, act)
         return snap.turn
@@ -423,8 +330,7 @@ class Loop:
                            "stamp": time.time(), "passes": self.passes}, fh)
             os.replace(tmp, path)
         except OSError as exc:
-            # A missing marker makes the launcher fall back to a timeout, which
-            # is worse than exact but still playable. Never worth failing a pass.
+            # Without a marker the launcher falls back to a timeout.
             self.log(f"[loop] could not record the completed pass: {exc}")
 
     def _check_contact(self, snap, civ, act):
@@ -444,7 +350,6 @@ class Loop:
             f"CONTACT on turn {snap.turn}: {len(ranked)} enemy planet(s) "
             f"visible, weakest is {target} (weakness {weakness})")
 
-    # -- drive ----------------------------------------------------------
     def run(self, follow=False, max_turns=None, drive=None, stall=None):
         original = None
         self.drive = drive
@@ -481,15 +386,13 @@ class Loop:
             if original is not None:
                 self.set_turn_length(original)
                 now = self.read_turn_length()
-                # A dead process reads None; saying "restored to Nones" hides
-                # the far more important fact that the client is gone.
+                # A dead process reads None.
                 self.log(f"[loop] turn length restored to {now}s" if now
                          else "[loop] could not restore turn length; the "
                               "client is gone (it exited or crashed)")
             if self.remote is not None:
                 self.remote.close()
-            # Last, so it is the final thing on screen and so it can promise the
-            # turn length is back to normal, which the block above just did.
+            # Last, so it follows the turn length restore.
             if self.halt_reason:
                 self.log(f"\n[loop] {self.halt_reason}\n"
                          f"[loop] stopping here. The fleet has its orders and "
@@ -498,14 +401,8 @@ class Loop:
 
 
 def wait_for_client(seconds, log=print):
-    """Block until a client is attachable, or give up after `seconds`.
-
-    The launcher starts the game and the AI back to back, and the client needs
-    several seconds to load a galaxy before its memory says anything. Without
-    this the AI loses the race on every launch and exits with "CosmicSupremacy
-    is not running", an error about the wrong thing, since the client is
-    starting perfectly well.
-    """
+    """Block until a client with a loaded galaxy is attachable, or give up
+    after `seconds`. Returns True on success."""
     deadline = time.time() + seconds
     said = False
     while time.time() < deadline:

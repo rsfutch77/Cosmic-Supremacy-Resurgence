@@ -1,6 +1,6 @@
 """
 new_duel_galaxy.py: turn a fresh two-civ galaxy into an N-civ AI testbed
-========================================================================
+
     # with a brand-new galaxy already running (drag DemoGalaxy_local.csgalaxy
     # onto the EXE, or launch it with that as the argument):
     python new_duel_galaxy.py --add Ceti --secs 5
@@ -13,8 +13,7 @@ new_duel_galaxy.py: turn a fresh two-civ galaxy into an N-civ AI testbed
   5. set the galaxy's own turn length      set_turnlength
   6. relaunch on the result
 
-The turn length is set in `GSET`, not driven: the engine re-applies it at every
-boundary, so the galaxy keeps its own time and the controller never races it.
+The turn length is set in `GSET`, which the engine re-applies at every boundary.
 Below 60s needs `patch_turn_floor.py --apply` or the engine clamps it.
 """
 import argparse

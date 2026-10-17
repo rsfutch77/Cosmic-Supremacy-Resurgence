@@ -1,20 +1,14 @@
 """
 inject_ship.py: give a civ a ship in a save blob
-==========================================================
     python inject_ship.py ../saves/<capture>.b64 --civ Ceti --count 2 \
         -o ../loadgame_blob.b64 --dat ../../client/three_civ.dat
 
-A ship is cloned from one already in the galaxy, because a `SHIP` is the
-section this project has never had to build from nothing. Which one is cloned
-decides what the new civ gets: a record carries its own crew, so the 104-byte
-Colony Ship a generation hands a civ and the 86-byte one the engine builds for
-it later are different ships, and taking the smallest available hands a
-newcomer two empty ones. `pick_donor` chooses by design name and then by crew,
-and `inject_civ.starting_kit` is the caller that cares.
+A ship is cloned from one already in the galaxy. A record carries its own
+crew, so the donor decides the new ship's complement; `pick_donor` chooses by
+design name and then by crew.
 
 `--allow-ordered` clones a ship that is under orders and clears the order in
-the copy, which is the only thing that works in a galaxy far enough along that
-every fleet is in flight. Without it such a galaxy has no donor at all.
+the copy, for a galaxy where every ship is in flight.
 """
 import argparse
 import os
@@ -77,18 +71,10 @@ def crew_count(blob, ship):
 def pick_donor(blob, ships, design_id, want=None):
     """The ship to clone, preferring one already of the design being built.
 
-    An unordered donor comes first, because cloning an ordered one means
-    stripping its `ROUT` and this does not do that. Among unordered ones the
-    donor is chosen by design name and then by crew, and neither is incidental.
-    A ship carries its crew in its own `SHPR`, so the clone starts with the
-    donor's complement: at generation a Colony Ship is 104 bytes carrying two
-    crew, while one the engine has built later in the same galaxy is 86 bytes
-    carrying none. Taking the smallest record, which is what this did before,
-    hands a newcomer two empty hulls and calls it the starting fleet.
-
-    Matching is by design NAME rather than object id, because a design id is
-    galaxy-wide and per-civ: the design a newcomer is given is a fresh clone
-    that no existing ship can be flying.
+    Unordered donors first, then by design name, then by most crew. A ship
+    carries its crew in its own `SHPR` (a generated Colony Ship is 104 bytes
+    with two crew, an engine-built one 86 bytes with none). Designs match by
+    name because a newcomer's design is a fresh clone no ship is flying yet.
     """
     names = {oid: nm for _off, oid, nm in idg.design_records(blob)}
     if want is None:
@@ -101,15 +87,8 @@ def pick_donor(blob, ships, design_id, want=None):
 def clear_admiral(rec, at, log=print):
     """Zero a cloned DYNO's admiral id, which would name the donor's officer.
 
-    The blanket owner repointing above catches the civ's object id and not an
-    admiral's, so a clone of a ship with an admiral aboard would leave a
-    newcomer's hull naming somebody else's.
-
-    **This has never fired.** `admiral_id` reads zero on all 653 ships across
-    143 blobs in this repository, so it is a guard against a state nothing on
-    disk is in rather than a fix for one that was seen. It is here because
-    every other reference inside a cloned record is repointed and this was the
-    one that was not.
+    Owner repointing does not cover admiral ids. Every captured ship reads
+    zero here, so this is a guard.
     """
     try:
         payload = at + 8
@@ -131,13 +110,7 @@ def clear_order(blob, ship_oid, log=print):
 
     The three edits `inject_order.py` makes, reversed: the `SHCO` order-type
     byte, the has-orders byte, and the conditional `ROUT` and trailing word.
-    `make_multiplayer_galaxy.clear_ship_orders` does this to every ship in a
-    fresh galaxy and records that the result is byte-identical to the idle
-    `DYNO` the engine writes itself. Here it is one ship, because every other
-    ship in a galaxy under way belongs to somebody who gave it that order.
-
-    The imports are function-local because `merge_orders` imports this file's
-    neighbours and only this one function needs them.
+    The result is byte-identical to an idle `DYNO` the engine writes.
     """
     import inject_order as ior
     import merge_orders as mo
@@ -170,8 +143,7 @@ def ships_at(blob):
     """Where a SHIP goes in a galaxy that holds none: after the last SOLA.
 
     Inside GLXY the sections run OWNR, SOLA, SHIP, NEBU, and nothing counts the
-    ships, so a galaxy whose last ship was deleted takes a new one at the
-    position the first one held.
+    ships.
     """
     at = max(o["end"] for o in icv.owner_records(blob))
     while blob[at:at + 4] == b"SOLA":
@@ -237,16 +209,10 @@ def add_ship(blob, civ_name, design_id=None, home_id=None, allow_ordered=False,
         f"position -> ({home['pos'][0]:.0f}, {home['pos'][1]:.0f}, "
         f"{home['pos'][2]:.0f})")
 
-    # The owner id appears in a SHIP record more than once, and rewriting only
-    # the one at +16 leaves the clone half-owned. The consequence is not
-    # cosmetic: a colony founded by such a ship comes up with citizens carrying
-    # the DONOR civ's id, which looks exactly like a planet whose population
-    # belongs to two empires. It is not, it is this bug.
-    #
-    # Offsets are not fixed, so every remaining occurrence is repointed rather
-    # than two known ones, the same idiom inject_civ uses when it clones an
-    # OWNR. Matches are unaligned because the format is packed, so each one is
-    # logged and can be checked.
+    # The owner id appears in a SHIP record more than once, at offsets that are
+    # not fixed. Every occurrence is repointed (unaligned, since the format is
+    # packed) and logged. A missed one gives a colony founded by the ship
+    # citizens owned by the donor civ.
     repointed = []
     for off in range(base, len(rec) - 3):
         if off == base + 16:
@@ -258,13 +224,7 @@ def add_ship(blob, civ_name, design_id=None, home_id=None, allow_ordered=False,
         log(f"  repointed {len(repointed)} further owner reference(s) at "
             f"payload offset(s) {repointed}")
 
-    # A SHIP record ends with its own object id a second time, and this tool
-    # was leaving the donor's there. Every ship the engine wrote reads its own
-    # id in both places: 553 of the 685 ships across 151 blobs agree, and all
-    # 132 that do not are ships this tool cloned, in galaxies it built. The
-    # engine tolerates the stale value (galaxy_demo carried one through five
-    # ticks) but a clone that names another ship is a dangling reference of
-    # exactly the kind the wipe work went out of its way not to create.
+    # A SHIP record ends with its own object id a second time.
     tail = struct.unpack_from("<I", rec, len(rec) - 4)[0]
     if tail == donor["id"]:
         struct.pack_into("<I", rec, len(rec) - 4, new_id)

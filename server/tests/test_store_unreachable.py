@@ -4,11 +4,9 @@ test_store_unreachable.py: the turn loop says when it loses the store
     server\\.venv\\Scripts\\python.exe server\\tests\\test_store_unreachable.py
 
 The launcher judges a galaxy stopped from the last deadline the turn loop
-reported. A store this machine cannot read leaves that deadline standing just
-as a referee that is off does, so a player with no connection was told the
-galaxy had stopped. `follow` now says `unreachable` when a read of the store
-fails and `reachable` when one succeeds again, and this checks that it does,
-once each, from the wait at the top of a turn and from inside one.
+reported, and an unreadable store leaves that deadline standing. `follow` emits
+`unreachable` when a read of the store fails and `reachable` when one succeeds
+again, once each, from the wait at the top of a turn and from inside one.
 
 Runs against a temporary TurnStore whose `current()` fails on the reads named.
 `serve`, `collect` and `close` are replaced, so no client is started or closed.

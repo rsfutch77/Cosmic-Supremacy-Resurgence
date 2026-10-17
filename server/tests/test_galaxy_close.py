@@ -4,21 +4,13 @@ test_galaxy_close.py: a galaxy the operator has called over
     server\\.venv\\Scripts\\python.exe server\\tests\\test_galaxy_close.py
     ... test_galaxy_close.py --firebase firebase://demo-cs-resurgence
 
-K5 has no season timer. The operator ends a galaxy and starts a fresh one, and
-closing one has to stop submissions, keep everything readable, and leave every
-launcher able to say why rather than fail.
+The operator ends a galaxy and starts a fresh one. Closing stops submissions,
+keeps everything readable, and lets every launcher say why. Checked against
+the directory, HTTP and Firebase stores.
 
-The three stores are checked rather than one, because the word has to mean the
-same thing wherever a player's launcher found the galaxy. The HTTP half matters
-most: that is the transport a player actually holds, and a galaxy closed only in
-the directory the operator was looking at would go on taking that player's turns
-for as long as they had the store spec.
-
-Every refusal here is paired with the same call against an open galaxy, so a
-store that refused every submission for some unrelated reason could not pass.
-The readable-after-closing checks are made against turns, an archive record and
-a note that were **written before the close**, because a galaxy with an empty
-archive would answer them all without reading anything.
+Every refusal is paired with the same call against an open galaxy, and the
+readable-after-closing checks read a turn, an archive record and a note written
+before the close.
 """
 import argparse
 import os
@@ -75,12 +67,7 @@ def make_blob(turn):
 
 
 def furnish(store, turn=12):
-    """A galaxy with something in it worth still being able to read.
-
-    A turn, a submission, an archive record and a note, all written while the
-    galaxy was open. Without these the readable-after-closing checks would be
-    asking an empty store whether it could answer nothing.
-    """
+    """A galaxy with a turn, a submission, an archive record and a note."""
     store.start(make_blob(turn), ROSTER, turn_seconds=14400)
     store.submit('DemoPlayer', turn, make_blob(turn))
     store.archive(turn, {'turn': turn, 'published': turn + 1,
@@ -92,12 +79,8 @@ def furnish(store, turn=12):
 def closing_a_store(store, label, turn, closer=None):
     """What closing does to one store, whichever kind it is.
 
-    `closer` is where the operator's write goes when it cannot go through the
-    store under test. An `HttpTurnStore` refuses to close a galaxy on purpose:
-    it is the player's transport, and neither `turn_server.py` nor the relay
-    offers a route for the two writes that end a player's game. So the galaxy
-    is closed where it lives and the HTTP store is asked what it now sees,
-    which is exactly the arrangement a real close happens in.
+    `closer` is where the operator's write goes when the store under test is
+    an `HttpTurnStore`, which refuses to close or reopen a galaxy.
     """
     print(f'\nclosing a galaxy, {label}')
     closer = closer or store
@@ -147,7 +130,7 @@ def run_local(tmp, base_url, served_root):
           [g.id for g in d.galaxies()].count('ended'), 1)
     check('its turn is still in the row', d.galaxy('ended').turn, turn)
 
-    # The check that matters: a launcher holds a store spec, not a directory.
+    # A launcher holds a store spec, not a directory.
     spec = d.galaxy('ended').store
     alone = open_store(spec)
     check('a store opened from the spec alone knows it is closed',
@@ -180,24 +163,19 @@ def run_local(tmp, base_url, served_root):
     closing_a_store(store, 'a directory', furnish(store))
 
     print('\nthe store, over HTTP, which is what a player holds')
-    # `state_seconds=0` because the close is written through the directory and
-    # read back over HTTP at once, which a held `/state` would answer from the
-    # moment before the close.
+    # `state_seconds=0`, since the close is written through the directory and
+    # read back over HTTP at once.
     served = turn_store.HttpTurnStore(base_url, state_seconds=0)
     closing_a_store(served, 'an HTTP store', 12,
                     closer=turn_store.TurnStore(served_root))
 
 
 def run_firebase(spec, keep=False):
-    """The beta deployment's half, as far as Firestore alone can answer it.
+    """Closing a Firebase galaxy, using Firestore only.
 
-    Turns, submissions and notes are Cloud Storage and are not touched here:
-    `functions/firebase.json` names no storage rules file, so the storage
-    emulator refuses to start, and a galaxy cannot be `start`ed without it.
-    What is left is exactly the part K5 turns on, because status, the reason
-    and the reclaimed seats are Firestore fields on the galaxy document, and
-    the relay serves them out of `STATE_FIELDS`. The submission refusal on this
-    store is **not** covered by this run; see the report.
+    Status, the reason and the reclaimed seats are Firestore fields on the
+    galaxy document, served by the relay out of `STATE_FIELDS`. No blob is
+    written, so the submission refusal is not covered here.
     """
     import firebase_store
     gid = f'closetest_{int(time.time())}'
@@ -242,10 +220,9 @@ def run_firebase(spec, keep=False):
         check('and takes the reason with it', store.closed_reason(), None)
     finally:
         if not keep:
-            # The document and its archive, and not `delete_everything`: that
-            # lists Cloud Storage, and with no storage emulator running the
-            # client reaches the real service. Nothing in this run wrote a
-            # blob, so there is nothing in Storage to remove.
+            # Not `delete_everything`, which lists Cloud Storage and without
+            # a storage emulator reaches the real service. Nothing here wrote
+            # to Storage.
             for snap in store.doc.collection('archive').stream():
                 snap.reference.delete()
             store.doc.delete()
@@ -271,9 +248,7 @@ def main():
 
     import turn_server
     tmp = tempfile.mkdtemp(prefix='gclose_')
-    # Outside `tmp`, because `tmp` is the directory of galaxies under test and
-    # a folder directory lists its subdirectories: a served galaxy inside it
-    # would turn up as a third row nothing put there.
+    # Outside `tmp`, which is a directory of galaxies and would list it.
     elsewhere = tempfile.mkdtemp(prefix='gserve_')
     served = os.path.join(elsewhere, 'served')
     os.makedirs(served, exist_ok=True)

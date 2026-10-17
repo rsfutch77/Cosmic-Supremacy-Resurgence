@@ -3,33 +3,16 @@ test_bad_submissions.py: one bad submission cannot stall the galaxy
 ====================================================================
     server\\.venv\\Scripts\\python.exe server\\tests\\test_bad_submissions.py
 
-At four hours a turn, a submission that ends the tick costs every player in the
-galaxy their turn. Measured against the referee as it stood, using the real
-turn 9 of `server/galaxy_demo`: a submission truncated in half, an empty one,
-and bytes that are not a save each raised out of `merge_orders.merge` and took
-`resolve_turn` with them. A submission from another turn and one from another
-galaxy did something worse than raise: they merged, and an order out of a state
-nobody is playing was written into the galaxy.
+A bad submission (truncated, empty, not a save, oversized, from another turn
+or another galaxy) is dropped with a note to its sender, and the turn closes
+for everyone else. Uses turn 9 of `server/galaxy_demo`.
 
-Every case here is run with two good submissions beside the bad one, because a
-referee that dropped everything would pass the half of this that only shows a
-bad submission being refused. The good pair is real on one side and synthetic
-on the other: `submissions/0009/DemoPlayer.b64` is what a person played, and
-Neighbor's is the served turn with one planet renamed, which is the smallest
-order the merge takes.
+Every case runs with two good submissions beside the bad one:
+`submissions/0009/DemoPlayer.b64` is what a person played, and Neighbor's is
+the served turn with one planet renamed.
 
-One note in here is not about this at all and is left standing: with two good
-submissions and no bad one, whoever is merged second is told `research:
-DROPPED, belongs to` the first. That rule compares the submission against the
-accumulating blob rather than against the state as served, unlike every other
-rule in `merge_orders`, so it fires on a player who did nothing. It predates
-this file and is not N2's to fix; the checks below ask that no player is told
-their SUBMISSION was dropped rather than that they were told nothing.
-
-The engine tick is stubbed. What is under test is which submissions reach the
-merge and what the galaxy and the players are left with, none of which needs a
-turn to be computed; a real `resolve_turn` needs the client and the save server
-and is not what this file can hold to account.
+The checks on the good players look only for "submission DROPPED" notes. The
+engine tick is stubbed.
 """
 import os
 import struct
@@ -50,10 +33,8 @@ import referee
 from turn_store import TurnStore
 
 GALAXY = os.path.join(ROOT, 'server', 'galaxy_demo')
-# A different galaxy, not a different turn of this one: two civs rather than
-# three, 108 systems rather than 32, 547 planets rather than 165. `duel3.b64`
-# looks like a candidate and is not one; it is this same galaxy at turn 3, and
-# the turn check answers it before the galaxy check is reached.
+# A different galaxy, not a different turn of this one. (`duel3.b64` is this
+# same galaxy at turn 3.)
 OTHER_GALAXY = os.path.join(ROOT, 'server', 'saves',
                             'save_066_20260918_015123_g0_t110.b64')
 TURN = 9
@@ -76,8 +57,7 @@ def said(lines, fragment):
 
 def set_turn(blob, turn):
     """The same blob carrying a different turn number, so a fixture from
-    another galaxy can be offered for the turn being closed and the galaxy
-    check is what answers rather than the turn check."""
+    another galaxy reaches the galaxy check."""
     tree = sp.parse_blob(blob)
     glob = next(tree[0].find('GLOB'))
     out = bytearray(blob)
@@ -100,8 +80,7 @@ def fixtures():
 def bad_cases(good, old, other):
     """{label: (bytes, what the note has to say)}.
 
-    The empty case is the decoded blob being empty rather than the file being
-    missing: a submission that is there and carries nothing.
+    The empty case is a submission that exists and decodes to nothing.
     """
     return {
         'truncated': (good[:len(good) // 2], 'not a save blob'),
@@ -115,13 +94,10 @@ def bad_cases(good, old, other):
     }
 
 
-# ── the screen, one submission at a time ─────────────────────────────────────
 def test_screen(served, good, neighbor, old, other):
     print('screen_submission')
 
-    # The control. A screen that refuses everything passes every check below
-    # and loses the galaxy its turn, so the two good submissions are asked
-    # first and asked again inside every case that follows.
+    # Control: the two good submissions pass.
     check('the submission a person really played passes the screen',
           referee.screen_submission(served, 'DemoPlayer', good, TURN),
           (True, ''))
@@ -138,14 +114,12 @@ def test_screen(served, good, neighbor, old, other):
     check('a civ the galaxy does not hold is dropped rather than raising',
           (ok, 'not a civ in this galaxy' in why), (False, True))
 
-    # The galaxy check has to be about the galaxy and not about the bytes: a
-    # submission that changed nothing at all is still this galaxy.
+    # A submission that changed nothing is still this galaxy.
     check('an untouched copy of the served state is not called a foreign one',
           referee.screen_submission(served, 'Neighbor', served, TURN),
           (True, ''))
 
 
-# ── the merge, which is what a submission reaches once the screen passes ─────
 def test_merge_guard(served, good, neighbor):
     print('merge drops one submission, not the turn')
 
@@ -165,9 +139,8 @@ def test_merge_guard(served, good, neighbor):
     check('the player whose orders were taken is told nothing',
           notes.get('Neighbor'), None)
 
-    # Order reversed, because a submission that fails is rolled back to what
-    # the blob held when it was reached, and reaching it second is the case
-    # where that matters.
+    # Order reversed: a failed submission is rolled back to what the blob held
+    # when it was reached.
     notes = {}
     other_way = mo.merge(served, [('DemoPlayer', good[:len(good) // 2]),
                                   ('Neighbor', neighbor)],
@@ -178,7 +151,6 @@ def test_merge_guard(served, good, neighbor):
           sorted(notes), ['DemoPlayer'])
 
 
-# ── the turn closing, which is what the galaxy sees ──────────────────────────
 def fresh_store(served):
     root = tempfile.mkdtemp(prefix='badsub_')
     s = TurnStore(root)
@@ -189,9 +161,7 @@ def fresh_store(served):
 def close_turn(store):
     """`resolve_turn` with the engine stubbed. Returns the turn it published.
 
-    `tick` is the only part that needs a client. Stubbing it keeps everything
-    this file is about: the reading, the screening, the notes, the ordering
-    between them, and what lands in the store.
+    `tick` is the only part that needs a client.
     """
     def fake_tick(blob, turns=1, secs=10, save_dir=None, log=print, **kw):
         return set_turn(blob, TURN + 1)
@@ -215,10 +185,8 @@ def test_resolve(served, good, neighbor, old, other):
           played_topic != served_topic)
 
     cases = dict(bad_cases(good, old, other))
-    # A submission whose bytes never decode, which the store raises on while
-    # listing rather than handing over. Written as a file rather than through
-    # `submit`, because `submit` encodes whatever it is given and this case is
-    # about what arrives already wrecked.
+    # A submission whose bytes never decode, so the store raises while
+    # listing. Written as a file, since `submit` would encode it.
     cases['unreadable on the wire'] = (None, 'not a save the referee can '
                                              'decode')
 
@@ -257,13 +225,10 @@ def test_resolve(served, good, neighbor, old, other):
 
 
 def test_save_path_still_first(served, good):
-    """N1: a referee that cannot save changes nothing at all.
+    """A referee that cannot save changes nothing, drop notes included.
 
-    The drop notes are collected earlier in `resolve_turn` than the merge's
-    are, so this is the check that they are still written no earlier than the
-    turn is closable. A referee that noted a drop and then refused to tick
-    would leave the player a note about a turn that did not close, and write it
-    again on the next attempt.
+    Drop notes are collected early in `resolve_turn`, and must not be written
+    for a turn that does not close.
     """
     print('a referee that cannot save leaves nothing behind')
     store = fresh_store(served)

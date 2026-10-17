@@ -1,17 +1,12 @@
 """
 The message save path does no process injection, and the switch stays off.
 
-M3 weighs a save that posts a window message against the remote thread
-`trigger_save.py` uses. The message path exists so the launcher can stop calling
-`OpenProcess` for write, `VirtualAllocEx`, `WriteProcessMemory` and
-`CreateRemoteThread`, which is what an antivirus product objects to. A path that
-quietly kept one of those calls would defeat its own reason to exist, so this
-checks the module's source for them, checks that `game_cycle` chooses it only
-when the operator asks, and checks that the default is still the injection path
-a packaged build has taken a real turn with.
+The message path saves without `OpenProcess` for write, `VirtualAllocEx`,
+`WriteProcessMemory` or `CreateRemoteThread`. This checks the module's source
+for those calls, that `game_cycle` chooses it only when the operator asks, and
+that the default is still the injection path.
 
-No game and no window. Nothing here starts a client; the checks read source and
-drive the switch with the environment.
+No game and no window: source reads and environment switches only.
 """
 import ast
 import os
@@ -32,10 +27,8 @@ def check(label, got, want=True):
         fails.append(label)
 
 
-# ── The message tool calls none of the injection primitives ───────────────────
-# Read as text rather than imported, because importing it loads ctypes and the
-# Win32 libraries, and the claim under test is about what the file says, not
-# about a live process.
+# The message tool calls none of the injection primitives. Read as text, since
+# the claim is about what the file says.
 source = open(MESSAGE_TOOL, encoding="utf-8").read()
 INJECTION_CALLS = [
     "VirtualAllocEx", "WriteProcessMemory", "CreateRemoteThread",
@@ -50,8 +43,7 @@ called = {
 for name in INJECTION_CALLS:
     check(f"message tool never calls {name}", name not in called)
 
-# It must also not import trigger_save, which is the module that carries them
-# and the one whose bytecode Defender quarantines.
+# It must also not import trigger_save, which carries them.
 imported = set()
 for node in ast.walk(tree):
     if isinstance(node, ast.Import):
@@ -63,7 +55,7 @@ check("message tool does not import trigger_save", "trigger_save" not in importe
 # The one cross-process call it does make is a posted window message.
 check("message tool posts a window message", "PostMessageW" in source)
 
-# ── The switch, read through game_cycle ───────────────────────────────────────
+# The switch, read through game_cycle
 sys.path.insert(0, DEV)
 sys.path.insert(0, os.path.join(DEV, "ai_player"))
 import game_cycle as gc                                          # noqa: E402

@@ -1,10 +1,8 @@
 """
 trigger_save.py: Make the running client POST a savegame, with no user click
-============================================================================
-Calls the game's own save routine in a remote thread.  The point is to capture
-real save blobs (`server/cs_server.py` now persists them to `server/saves/`) so
-the blob format (`ROUT` in particular) can be checked against bytes the engine
-actually produced instead of against a layout read out of the disassembly.
+
+Calls the game's own save routine in a remote thread. `server/cs_server.py`
+stores the posted blob in `server/saves/`.
 
     python trigger_save.py                      # save into slot 0
     python trigger_save.py --name "rout probe"
@@ -16,7 +14,7 @@ import ctypes
 import struct
 import sys
 from ctypes import wintypes
-from client_proc import find_pid, NOT_THE_CLIENT  # one copy, see client_proc.py
+from client_proc import find_pid, NOT_THE_CLIENT
 
 PROCESS_VM_READ           = 0x0010
 PROCESS_VM_WRITE          = 0x0020
@@ -68,11 +66,8 @@ def build_call_stub(fn_addr: int, args, this_ptr: int) -> bytes:
     """
     code = b""
     for a in reversed(args):
-        # Two's complement, not "<i". The argument list mixes a small signed
-        # gameid (-1 is the new-slot sentinel) with a VirtualAllocEx address,
-        # and an allocation above 0x7FFFFFFF overflows a signed pack and raises.
-        # `push imm32` stores four raw bytes either way; signedness is the
-        # callee's interpretation, not the encoding's.
+        # Packed as unsigned two's complement: arguments mix a signed gameid
+        # (-1 is the new-slot sentinel) with addresses that may exceed 0x7FFFFFFF.
         code += b"\x68" + struct.pack("<I", a & 0xFFFFFFFF)
     code += b"\xB9" + struct.pack("<I", this_ptr)
     code += b"\xB8" + struct.pack("<I", fn_addr)

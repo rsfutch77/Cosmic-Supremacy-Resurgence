@@ -6,27 +6,14 @@ emulators.py: start the emulator suite on ports that are actually free.
     python functions/emulators.py --only firestore,storage
     python functions/emulators.py --project demo-other
 
-The Firebase CLI binds whatever `firebase.json` names and fails if something
-already holds it. The defaults it ships are popular numbers: 8080 is the first
-port a great many things take, and on this machine a torrent client holds it, so
-`emulators:start` failed on a clean checkout with an error about Firestore
-rather than about the port.
-
-Rather than pick different fixed numbers, which only moves the collision, this
-resolves each port at startup: the configured one when it is free, otherwise the
-next free one above it. The resolved set is written to `.firebase.emulators.json`
-beside `firebase.json`, and the CLI is pointed at that copy with `--config`.
-
-The copy lives in this directory on purpose. `firebase.json` resolves
-`functions.source` relative to the config file, so a config written to a
-temporary directory would look for the function's code there and find nothing.
-
-`.firebase.emulators.json` and the env file are build products and gitignored.
+Each port is the configured one when free, otherwise the next free one above
+it. The resolved config is written to `.firebase.emulators.json` beside
+`firebase.json` (it must sit here, since `functions.source` resolves relative to
+the config) and passed to the CLI with `--config`. It and the env file are
+gitignored build products.
 
 Tests read `FIRESTORE_EMULATOR_HOST`, `STORAGE_EMULATOR_HOST` and
-`FIREBASE_AUTH_EMULATOR_HOST` and fall back to the documented defaults, so a run
-started here and a run started by hand on the defaults both work. `--print-env`
-exists so a shell can pick the values up without starting anything.
+`FIREBASE_AUTH_EMULATOR_HOST` and fall back to the documented defaults.
 """
 from __future__ import annotations
 
@@ -44,8 +31,7 @@ RESOLVED = os.path.join(HERE, '.firebase.emulators.json')
 ENV_FILE = os.path.join(HERE, '.firebase.emulators.env')
 
 # Which emulator feeds which environment variable, and how the value is spelled.
-# Storage's client library wants a URL and the other two want host:port, which
-# is a difference in the libraries rather than in the emulators.
+# Storage's client library wants a URL; the others want host:port.
 ENV_FOR = {
     'firestore': ('FIRESTORE_EMULATOR_HOST', '{host}:{port}'),
     'storage': ('STORAGE_EMULATOR_HOST', 'http://{host}:{port}'),
@@ -56,17 +42,9 @@ ENV_FOR = {
 def port_is_free(port: int, host: str = '127.0.0.1') -> bool:
     """Whether a listener can bind `port` right now.
 
-    Binding is the only honest test. A connect that is refused says nothing
-    about a socket held in TIME_WAIT or bound to another interface, and both of
-    those still fail the emulator.
-
-    **Do not set `SO_REUSEADDR` here.** On Windows it does not mean what it
-    means on POSIX: it permits binding a port another socket is actively bound
-    to, so the probe succeeds against a port that is genuinely in use and this
-    function answers free for everything. The first version did set it, and a
-    test holding 8080 and 8081 watched the resolver hand back 8080 anyway.
-    `SO_EXCLUSIVEADDRUSE` is the Windows flag that means what POSIX callers
-    expect, and a bare bind is the strict test everywhere else.
+    Do not set `SO_REUSEADDR`: on Windows it allows binding a port that is in
+    use. `SO_EXCLUSIVEADDRUSE` is the strict Windows flag; a bare bind is strict
+    elsewhere.
     """
     with contextlib.closing(socket.socket(socket.AF_INET, socket.SOCK_STREAM)) as s:
         excl = getattr(socket, 'SO_EXCLUSIVEADDRUSE', None)
@@ -85,9 +63,7 @@ def port_is_free(port: int, host: str = '127.0.0.1') -> bool:
 def free_port_from(preferred: int, taken=(), host: str = '127.0.0.1') -> int:
     """`preferred` when it is free, else the next free port above it.
 
-    `taken` holds ports this run has already handed out, since two emulators
-    resolved in the same pass would otherwise both be given the same number:
-    nothing is listening on it yet.
+    `taken` holds ports this run has already handed out but nothing listens on.
     """
     port = preferred
     while port < 65536:
@@ -116,33 +92,20 @@ def resolve(config_path: str = CONFIG, host: str = '127.0.0.1'):
     return cfg, ports, env
 
 
-# The storage emulator refuses to start without a rules file, and firebase.json
-# deliberately does not name one: adding a `storage` key there would make rules
-# deployable from the config whose whole purpose is that it can reach nothing
-# but functions. So the reference is injected into the generated copy instead,
-# where only the emulator ever sees it.
+# The storage emulator needs a rules file. firebase.json must not have a
+# `storage` key, since it deploys functions only, so the reference goes into the
+# generated copy.
 STORAGE_RULES = os.path.join(os.path.dirname(HERE), 'server',
                              'beta_storage.rules')
 LOCAL_STORAGE_RULES = '.storage.emulator.rules'
 
 
 def add_storage_rules(cfg):
-    """Point the emulator at the deny-all storage rules, if they are there.
-
-    Without this, `emulators:start --only storage` exits with "Cannot start the
-    Storage emulator without rules file", which reads as a broken emulator
-    rather than a missing line, and a galaxy cannot be started against it at
-    all. Found when a test could exercise the Firestore half of a store and not
-    the Storage half.
-    """
+    """Point the emulator at the deny-all storage rules, if they are there."""
     if not os.path.exists(STORAGE_RULES):
         return cfg
-    # Copied in rather than referenced where it lives. The first version pointed
-    # at `../server/beta_storage.rules` and the Storage emulator refused it as
-    # "outside of project directory", so the emulator went from failing for want
-    # of a rules file to failing for the path to one, which is worse: the second
-    # message does not name the fix. The copy is a build product beside the
-    # generated config and is gitignored with it.
+    # The emulator refuses a rules path outside the project directory, so the
+    # file is copied beside the generated config (gitignored).
     local = os.path.join(HERE, LOCAL_STORAGE_RULES)
     with open(STORAGE_RULES, encoding='utf-8') as src:
         body = src.read()
@@ -170,14 +133,9 @@ def main(argv=None) -> int:
     ap.add_argument('--host', default='127.0.0.1')
     ap.add_argument('--print-env', action='store_true',
                     help='resolve and print, start nothing')
-    # A demo project by default, and named rather than left to the CLI. Without
-    # a --project the CLI takes the default out of .firebaserc, which is the
-    # live project, and the Auth emulator then mints tokens whose `aud` is that
-    # name. A test running as a demo project refuses those as minted for
-    # another project, and the message says nothing about which project or why,
-    # so the documented way to start the suite produced a run that failed for a
-    # reason nothing on screen named. A `demo-` project is also the suite's own
-    # guard against an emulator run reaching real resources.
+    # A `demo-` project keeps an emulator run off real resources and makes the
+    # Auth emulator mint tokens whose `aud` matches the tests. Without --project
+    # the CLI uses the live project from .firebaserc.
     ap.add_argument('--project', default='demo-cs-resurgence',
                     help='the project the emulators serve')
     args = ap.parse_args(argv)

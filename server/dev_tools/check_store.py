@@ -1,27 +1,16 @@
 """
 check_store.py: can this machine see the galaxy, and if not, why
-=================================================================
     python check_store.py                       # read the launcher's config
     python check_store.py <path-or-url>
     python check_store.py --civ Neighbor <path>
 
-"No galaxy in that folder" has several causes that look identical from the
-launcher: the path is wrong, the share is unreachable, the credentials are
-missing, the store has not been created yet, or the config's backslashes were
-eaten somewhere between being typed and being parsed. This separates them.
+Run it on the failing machine. It prints the config byte for byte, then walks
+the store path from the top down and names the first component that cannot be
+reached, with the operating system's error.
 
-Run it on the machine that is failing. It reports what the config actually
-holds, byte for byte, then walks the path from the top down so the first
-component that cannot be reached is named, with the operating system's own
-error rather than a bare "missing".
-
-**A host spelled as an address and the same host spelled by name are different
-SMB targets.** Windows keeps sessions per target, so a machine holding an
-authenticated session to `\\POWERHOUSE1` falls back to anonymous for
-`\\192.168.0.4` and is refused, while the other machine, which reaches the
-share locally, sees nothing wrong at all. That cost a round of wrong guesses
-between two machines, so when a UNC target fails this tries the other spelling
-and says whether it works.
+A host spelled as an address and the same host spelled by name are different
+SMB targets, and Windows keeps sessions per target. When a UNC component
+fails, this tries the other spelling and says whether it works.
 """
 import argparse
 import json
@@ -36,10 +25,7 @@ sys.path.insert(0, os.path.join(REPO, 'server'))
 
 import turn_store
 
-# `net use` is a console program, and a console child started from a windowed
-# parent gets a window of its own. Nothing this tool reads comes from that
-# window; the output is captured and parsed below. `release/stamp_build.py`
-# carries the same constant.
+# Keeps `net use` from opening a console window when the parent is windowed.
 CREATE_NO_WINDOW = 0x08000000
 NO_WINDOW = CREATE_NO_WINDOW if os.name == 'nt' else 0
 
@@ -65,8 +51,7 @@ def show_config(data_dir):
     return cfg
 
 
-# Windows error codes worth translating, because the number alone sends people
-# to the wrong fix.
+# Windows error codes translated into the likely cause.
 WINERR = {
     3: 'that path does not exist on the share, so the store has probably not '
        'been created there yet',
@@ -251,9 +236,7 @@ def main():
     civs = store.civs()
     print(f'\ngalaxy: turn {turn}, {store.seconds_left():.0f}s left')
     print(f'  roster: {civs}')
-    # `submitted_civs` and not `submissions`: only the names are printed, and
-    # the dict would have downloaded every player's blob to throw it away,
-    # which on a Firebase store is a download per player.
+    # Names only; `submissions` downloads every player's blob.
     print(f'  submitted for this turn: '
           f'{store.submitted_civs(turn) or "(none)"}')
     if civ:

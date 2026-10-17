@@ -3,11 +3,9 @@ test_empty_galaxy.py: a galaxy that abandonment has emptied takes a join
 =========================================================================
     server\\.venv\\Scripts\\python.exe server\\tests\\test_empty_galaxy.py
 
-Abandonment wipes every civ whose player stops, and when every player stops no
-civ holds a planet. The client opens a galaxy only for a civ that holds one, so
-such a galaxy cannot be ticked, and a join cloned its newcomer from seat one's
-homeworld, which the wipe has taken. The galaxy has to continue once somebody
-joins:
+When every player stops, abandonment leaves no civ holding a planet. The client
+opens a galaxy only for a civ that holds one, and seat one's homeworld, the
+usual donor, is gone. The galaxy continues once somebody joins:
 
   * `inject_civ.add_civ` clones from an earlier turn when seat one holds no
     planet, or from any civ that still holds one;
@@ -74,8 +72,7 @@ def emptied(blob):
     """The fixture with every planet uncolonised and every ship deleted.
 
     `wipe` refuses a galaxy of one `OWNR`, so the last civ is emptied directly,
-    as `test_tick_stamp.py` does. Its ships go too, because a reclaim deletes
-    them and a galaxy with no ship left has none to clone a starting hull from.
+    as `test_tick_stamp.py` does. Its ships go too, as a reclaim deletes them.
     """
     out, _one = seat_one_wiped(blob)
     civs = {o['oid'] for o in icv.owner_records(out)}

@@ -1,6 +1,7 @@
 """
 rtti_static.py: the class model, read off the disk
-===================================================
+Reads MSVC RTTI from a client exe: classes, vftables, bases and CLASS_FRONT.
+
     python rtti_static.py                      # the CLASS_FRONT table, derived
     python rtti_static.py --check              # compare it to ejbo_viewer's
     python rtti_static.py --all                # every polymorphic class
@@ -8,23 +9,13 @@ rtti_static.py: the class model, read off the disk
     python rtti_static.py --sizes              # allocation size per class
     python rtti_static.py --exe <path>         # any build; they share RTTI
 
-`ejbo_viewer.resolve_class_name` walks RTTI in the RUNNING process, one vftable
-at a time, and answers only "what is this object". That is the right tool when
-an address is in hand, and it cannot answer the questions that come before a
-galaxy is loaded: what classes exist, which of them carry more than one vftable,
-and how far in front of the EJBO tag each one's allocation really starts.
+Every polymorphic class has a Complete Object Locator per vftable, giving that
+vftable's offset in the complete object and a class hierarchy descriptor that
+lists every base and its displacement. The game need not be running.
 
-MSVC emits enough to answer all three on disk. Every polymorphic class has a
-Complete Object Locator per vftable, carrying that vftable's offset within the
-complete object and a pointer to the class hierarchy descriptor, which lists
-every base and its displacement. Nothing here needs the game running.
-
-The payoff is CLASS_FRONT. An EJBO tag sits 8 bytes into the `Object` subobject,
-so a class whose `Object` base is at a nonzero displacement starts its
-allocation that much further forward, and a reader working from tag-8 silently
-truncates it. That is how Owner hid its civ name for as long as it did. The rule
-is `CLASS_FRONT = Object.mdisp + 8`, and it reproduces both values that were
-found by hand.
+An EJBO tag sits 8 bytes into the `Object` subobject, so a class whose `Object`
+base is at a nonzero displacement starts that much further in front of the tag:
+`CLASS_FRONT = Object.mdisp + 8`.
 """
 import argparse
 import collections
@@ -95,7 +86,7 @@ class Image:
 def demangle(mangled):
     """'.?AVPlanet@@' -> 'Planet'; template forms -> 'Base<Arg>'.
 
-    Kept identical to ejbo_viewer._demangle so the two agree on names.
+    Must match ejbo_viewer._demangle.
     """
     if not (mangled.startswith(".?A") and mangled.endswith("@@")):
         return None
@@ -145,9 +136,8 @@ class Rtti:
         """Complete Object Locators, keyed by VA.
 
         {signature, offset, cdOffset, pTypeDescriptor, pClassHierarchyDescriptor}
-        A 32-bit locator has signature 0, so the shape is confirmed by requiring
-        a known type descriptor and a hierarchy descriptor that is itself well
-        formed, rather than by the signature alone.
+        A 32-bit locator has signature 0, so a match also requires a known type
+        descriptor and a well-formed hierarchy descriptor.
         """
         img, out = self.img, {}
         for name, sva, _vsz, ra, rsz in img.sections:
@@ -246,27 +236,18 @@ def cmd_front(rtti, check):
     return 1 if bad else 0
 
 
-# ── allocation sizes ───────────────────────────────────────────────────────
-# `operator new`, identified by shape rather than by name: a hotpatch prologue
-# followed by the retry loop that calls the new-handler held at 0x0081A92C. It
-# takes 669 call sites in this binary, far more than any other function reached
-# with a small pushed immediate.
+# `operator new`: a hotpatch prologue followed by the retry loop that calls the
+# new-handler held at 0x0081A92C.
 OPERATOR_NEW = 0x0065165A
 
 
 def allocation_sizes(rtti, img):
     """class -> Counter of sizes passed to operator new at its allocation sites.
 
-    Heuristic, and honest about it. For each `push <size>; call operator new`
-    the next call is taken to be the constructor, and a constructor is
-    recognised by its store of a known primary vftable. It therefore misses a
-    class whose constructor is inlined, which is why ShipDesign and Fleet come
-    back empty, and a size seen at several sites is worth more than one seen
-    once.
-
-    Where it does answer, it agrees with the live stride measurements in
-    ejbo_viewer.CLASS_EXTENTS: Planet 600 against a 608 stride, Sun 96 against
-    104, both of which are the allocation plus an 8-byte heap block header.
+    Heuristic: for each `push <size>; call operator new` the next call is taken
+    to be the constructor, recognised by its store of a known primary vftable.
+    Classes with inlined constructors (ShipDesign, Fleet) are missed. A live
+    stride is the allocation plus an 8-byte heap block header.
     """
     try:
         import capstone

@@ -1,16 +1,11 @@
 """
 webview_runtime.py: make sure Microsoft Edge WebView2 Runtime is present before a window opens
-==============================================================================================
-The launcher's window is a web page drawn by WebView2. Windows 11 ships the
-runtime and most Windows 10 machines have it, but some do not, and without it
-pywebview falls back to the Internet Explorer engine, which cannot draw the page.
-So the check runs first, and a missing runtime is installed with Microsoft's
-bootstrapper (MicrosoftEdgeWebview2Setup.exe, about 2 MB), which the build packs
-into the launcher. The bootstrapper downloads the runtime itself and needs no
-administrator rights: run unelevated, it installs for the current user.
 
-Nothing here can use the launcher's own window, which is the thing that needs
-the runtime, so every message is a plain Windows message box.
+Without the runtime pywebview falls back to the Internet Explorer engine, which
+cannot draw the page. A missing runtime is installed with Microsoft's bundled
+bootstrapper, which needs no administrator rights: run unelevated, it installs
+for the current user. Messages are plain Windows message boxes, since the
+window itself needs the runtime.
 """
 from __future__ import annotations
 
@@ -96,8 +91,7 @@ def ensure(product: str, bootstrapper: "str | None") -> bool:
         return False
 
     try:
-        # The documented unattended form. It shows nothing while it works, which
-        # is why the question above says how long it takes.
+        # The documented unattended form. It shows nothing while it works.
         subprocess.run([bootstrapper, "/silent", "/install"], timeout=INSTALL_TIMEOUT)
     except (OSError, subprocess.TimeoutExpired):
         pass

@@ -1,34 +1,22 @@
 """
 research_tick_check.py: does a turn add research points, and to whom?
-=======================================================================
+
     python research_tick_check.py                  # read only, no turns fired
     python research_tick_check.py --drive launcher # one turn the launcher's way
     python research_tick_check.py --drive held     # one turn with the countdown held
     python research_tick_check.py --drive both     # one of each, launcher first
 
-Players reported after v0.1 that clicking Next Turn adds no research points to
-the selected technology. This is the tool that measured it, and it is kept
-because the same reading is the regression test for the fix.
-
-ANSWERED: the human civ was not being empire-ticked at all, on any turn fired
-by any means, because the shipped galaxy carries `Owner:4 == 0` for it. Both
-rivals gained +40 research a turn while the local player held at 0 for eight
-turns; writing a fresh unique id into `Owner:4` started it at +40 immediately.
-Cash moves in both states, which is what hid it. Full measurement in
-docs/CosmicSupremacy_Memory_Reconstruction_Report.md, "Research/science
-accrual"; the shipping fix is server/dev_tools/set_civ_id.py.
-
-The two drive modes remain because they are different code paths and a future
-fault may live in one of them:
+Reports each civ's research stockpile before and after a turn. A civ with
+`Owner:4 == 0` is not empire-ticked and gains no research while cash still
+moves; server/dev_tools/set_civ_id.py fixes it in the blob.
 
     launcher   what release/gamectl.py does: write 1 to the turn countdown at
                0x0080AA08, poll until the turn counter moves, then immediately
-               restore the countdown. That restore can land inside a boundary
-               that has not finished.
+               restore the countdown.
     held       what fast_turns.py does: write the countdown low and leave it
                there across the whole boundary.
 
-THIS ADVANCES REAL TURNS in whatever game is running. Run it on a throwaway
+This advances real turns in whatever game is running. Run it on a throwaway
 game, or save first.
 """
 import argparse
@@ -111,8 +99,7 @@ def drive_held(snap, timeout=60.0, poll=0.25):
         if now is not None and now != before:
             landed = now
             break
-    # Only now, and after a further settle, does the countdown go back. Holding
-    # it through the whole boundary is the entire difference from the launcher.
+    # The countdown is restored only after the boundary has settled.
     time.sleep(3.0)
     ev.write_bytes(h, TURNLENGTH_ADDR, struct.pack("<I", original))
     if landed is None:
@@ -140,17 +127,11 @@ def one_turn(label, drive, timeout):
 
 
 def set_owner4(snap, value):
-    """Give the local player a fresh per-civ id, the one field it reads 0 for.
+    """Give the local player a fresh per-civ id in Owner:4.
 
-    `Owner:4 == 0` is CONFIRMED to be what marks a civ as not empire-ticked:
-    writing a fresh unique id here and firing one turn started research at the
-    same +40 the rivals were getting, and brought Owner:24 and the score back
-    with it. See the September 2026 note in
-    docs/CosmicSupremacy_Memory_Reconstruction_Report.md.
-
-    This is a LIVE write and it does not outlive the process. The shipping fix
-    is the same four bytes in the galaxy blob, via
-    server/dev_tools/set_civ_id.py.
+    `Owner:4 == 0` marks a civ as not empire-ticked. This is a live write that
+    does not outlive the process; server/dev_tools/set_civ_id.py writes the same
+    four bytes into the galaxy blob.
     """
     import ejbo_viewer as ev
     civ = snap.local_civ()

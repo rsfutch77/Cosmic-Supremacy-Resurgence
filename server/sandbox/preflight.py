@@ -1,6 +1,6 @@
 """
 preflight.py: can this machine reach the galaxy, step by step
-==============================================================
+
     python preflight.py firebase://cs-resurgence/h3check
 
 Run by bootstrap.ps1 before the worker. Each step is printed before it starts,
@@ -17,9 +17,8 @@ import ssl
 import sys
 import time
 
-# The Google client libraries verify against certifi's bundle, and gRPC against
-# its own. A new sandbox's Windows store holds few roots and fetches the rest on
-# demand, which Python's ssl module never asks it to do.
+# The Google client libraries verify against certifi's bundle. A new sandbox's
+# Windows store holds few roots and Python's ssl module never fetches more.
 import certifi
 
 HERE = os.path.dirname(os.path.abspath(__file__))

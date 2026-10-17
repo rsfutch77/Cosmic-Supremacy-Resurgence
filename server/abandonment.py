@@ -1,6 +1,6 @@
 """
 abandonment.py: the seat a player stopped using
-=================================================
+
     import abandonment
 
     blob = abandonment.enforce(store, turn, blob, log=log)   # the referee's line
@@ -9,50 +9,15 @@ abandonment.py: the seat a player stopped using
     python abandonment.py ../galaxies/sandbox            # what it would do
     python abandonment.py ../galaxies/sandbox --warn 6 --reclaim 12 --set
 
-A permanent sandbox has no end, so it has to be able to take a seat back.
-A player who misses too many turns in a row is warned, and if they keep missing
-them their civ is wiped and their seat is taken. That is K3, and it needs no
-new bookkeeping: the archive already records who submitted for each turn, so
-the count is a read of what the referee has been writing all along.
+A player who misses too many turns in a row is warned through `put_note` every
+turn, and past a second threshold their civ is wiped and their seat taken. The
+count reads the archive record of each turn: a civ in `submitted` played, a civ
+in `missing` was seated and did not, and a civ in neither (or a turn with no
+record) ends the count. The turn being closed has no record yet and is read from
+its submissions.
 
-Two stages, because one is a punishment and two is a warning that can be acted
-on. The warning goes through `put_note`, which is the path a player's launcher
-already shows, and it repeats every turn until they play or the seat goes: a
-note written once, on the exact turn the count crossed, is a note the player who
-comes back three turns later never sees.
-
-Why this is a module and not part of the referee
-------------------------------------------------
-`referee.resolve_turn` is one function that closes a turn, and everything about
-which civs are still playing is a different question from how a turn is
-computed. Keeping it out means the count can be run against a live galaxy
-without a client, an engine or a turn, which is what the `__main__` below is
-for: an operator can ask what would happen before anything does.
-
-Counting, and the mistake that would make it worthless
--------------------------------------------------------
-A civ that joined at turn 90 has no submission for turn 89, and a naive walk
-backwards reads that as a player who has missed every turn since the galaxy
-began. It would reclaim a seat the moment it was taken. So the count reads the
-archive record, which separates the three cases: a civ named in `submitted`
-played, a civ named in `missing` was seated and did not, and a civ in neither
-was not in the roster for that turn, which ends the count.
-
-A turn with no archive record ends the count as well, rather than being guessed
-at, with one exception: the turn being closed right now, whose record the
-referee has not written yet and whose roster is the one being read. Ending the
-count early can only delay a reclaim; guessing at it can take a seat that was
-never missed.
-
-The template a wipe needs
--------------------------
-`wipe_civ` replaces a wiped planet's `PLPR` with one from a planet nobody has
-colonised, and a galaxy where every planet is taken has none. That is the
-ordinary late state of a sandbox and it is exactly when an abandonment happens,
-so the template comes from an earlier turn of this galaxy, which is what the
-store's archive of turns is. The search doubles its step backwards rather than
-walking every turn, so turn 1 of a 500-turn galaxy is 10 reads away, and an
-early turn is where a free planet is most likely to be anyway.
+A wipe needs a template `PLPR` from an uncolonised planet. When the current
+blob has none, earlier turns are searched, doubling the step backwards.
 """
 import argparse
 import os
@@ -67,11 +32,7 @@ for _d in (HERE, os.path.join(HERE, 'dev_tools'),
 
 import turn_store
 
-# The thresholds, in consecutive missed turns, and the state keys that override
-# them per galaxy. At the beta's 4-hour turns the reclaim is two days and the
-# warning is one, which is the balance the plan asks for: long enough that a
-# player who slept is not punished, short enough that a sandbox does not fill
-# with empires nobody is playing.
+# Thresholds in consecutive missed turns, and the state keys that override them per galaxy.
 WARN_KEY, RECLAIM_KEY = 'warn_after_misses', 'reclaim_after_misses'
 WARN_AFTER, RECLAIM_AFTER = 6, 12
 
@@ -82,16 +43,8 @@ PLAYED, MISSED, UNSEATED = 'played', 'missed', 'unseated'
 def thresholds(state) -> tuple:
     """(warn, reclaim) for a galaxy, from its state or from the defaults.
 
-    Either one set to 0 turns that stage off, so an operator can run a galaxy
-    that warns and never reclaims, which is the right setting for a galaxy of
-    people who know each other.
-
-    Anything that is not a whole number at or above zero falls back to the
-    default rather than being refused, for the reason `version_problem` ignores
-    a minimum build it cannot read: one typo in one galaxy's state must not
-    decide what happens to every seat in it. Note that this is a fallback and
-    not a disable, so a galaxy is never left silently unenforced by a mistyped
-    threshold; 0 is the way to say never, and it has to be said on purpose.
+    0 turns a stage off. Anything that is not a whole number at or above zero
+    falls back to the default.
     """
     def read(key, fallback):
         value = (state or {}).get(key)
@@ -113,12 +66,10 @@ def set_thresholds(store, warn: int = None, reclaim: int = None) -> dict:
 
 
 def turn_outcome(store, civ: str, turn: int, current: int = None) -> str:
-    """What one civ did with one turn, as far as the store can say.
+    """What one civ did with one turn: PLAYED, MISSED or UNSEATED.
 
-    `current` is the turn being closed, if one is. Its archive record does not
-    exist yet, so that turn alone is read from the submission itself; the civ
-    is known to be seated for it, because the caller took the name out of the
-    roster that is closing.
+    `current` is the turn being closed, which has no archive record yet and is
+    read from the submission; the civ is assumed seated for it.
     """
     record = store.archive_record(turn)
     if record is not None:
@@ -136,18 +87,8 @@ def turn_outcome(store, civ: str, turn: int, current: int = None) -> str:
 def missed_streak(store, civ: str, through: int, limit: int = None) -> int:
     """How many turns in a row this civ has missed, ending at `through`.
 
-    Stops at the first turn they played, at the first turn they were not seated
-    for, and at `limit`, which exists so that a galaxy hundreds of turns long
-    does not read hundreds of archive records to answer a question that is
-    settled once the count passes the reclaim threshold.
-
-    A count that reaches the limit is reported as the limit. In a galaxy the
-    referee has been enforcing all along the two are the same number, because
-    the seat goes on the turn the threshold is crossed; they differ only the
-    first time enforcement runs over an archive that was written before it,
-    where the note then says the threshold rather than the true depth of the
-    silence. Understating that is better than reading a hundred records to put
-    a larger number in a sentence that ends the same way.
+    Stops at the first turn they played or were not seated for, and at `limit`;
+    a count that reaches the limit is reported as the limit.
     """
     count = 0
     turn = through
@@ -162,11 +103,7 @@ def missed_streak(store, civ: str, through: int, limit: int = None) -> int:
 def review(store, through: int = None) -> list:
     """What the thresholds say about every seat, changing nothing.
 
-    A list of `{civ, missed, warn, reclaim}`, in roster order. This is the
-    operator's dry run and the test's observation point, and it is also the
-    thing to run before a referee starts enforcing on a galaxy that has been
-    played for months: turning the count on does not start it from today, it
-    reads the archive that is already there.
+    A list of `{civ, missed, warn, reclaim}`, in roster order.
     """
     state = store.state()
     warn, reclaim = thresholds(state)
@@ -186,12 +123,8 @@ def review(store, through: int = None) -> list:
 
 
 def _has_free_planet(blob) -> bool:
-    """Whether a blob holds a planet nobody has colonised.
-
-    The same test `wipe_civ.pristine_planet` makes, asked without the refusal,
-    because here a blob with no free planet is a reason to look at an earlier
-    turn rather than a failure.
-    """
+    """Whether a blob holds a planet nobody has colonised (the
+    `wipe_civ.pristine_planet` test, without raising)."""
     import inject_civ as icv
     return any(not p['owner'] and p['nlen'] == 0
                for p in icv.planet_records(blob))
@@ -199,13 +132,7 @@ def _has_free_planet(blob) -> bool:
 
 def candidate_turns(before: int, floor: int = 0) -> list:
     """Turns to look in for a template, recent first, doubling backwards.
-
-    A sandbox that needs a template is one that has run long enough to fill,
-    so a walk from the present to the beginning would read every turn it has.
-    Doubling reaches the start of a 500-turn galaxy in 10 steps, and the floor
-    is included whether or not the doubling lands on it, because the earliest
-    turn is the one most likely to still hold a free planet.
-    """
+    The floor is always included."""
     out, step, turn = [], 1, before
     while turn > floor:
         out.append(turn)
@@ -218,9 +145,7 @@ def candidate_turns(before: int, floor: int = 0) -> list:
 def find_template(store, before: int, floor: int = 0, log=print):
     """(blob, turn) for an earlier turn holding a free planet, or (None, None).
 
-    `before` is exclusive of nothing: a caller passes the turn before the one
-    being wiped, because the blob being wiped is the one that has no free
-    planet left.
+    `before` is inclusive; callers pass the turn before the one being wiped.
     """
     for turn in candidate_turns(before, floor):
         try:
@@ -228,8 +153,6 @@ def find_template(store, before: int, floor: int = 0, log=print):
                 continue
             blob = store.turn_blob(turn)
         except (OSError, ValueError):
-            # A turn that cannot be read is one fewer place to look, not a
-            # reason to leave a seat held by somebody who left.
             continue
         if _has_free_planet(blob):
             log(f'  abandonment: template from turn {turn}')
@@ -238,13 +161,7 @@ def find_template(store, before: int, floor: int = 0, log=print):
 
 
 def warning_note(civ: str, missed: int, reclaim: int) -> list:
-    """What a player who has stopped playing is told, and why it says it.
-
-    The number of turns left is the only part that matters, so it is the part
-    that is concrete. A warning that said only "you have missed several turns"
-    would leave a player who is away for a week no way to know whether coming
-    back on Friday is soon enough.
-    """
+    """The note lines warning a player how many turns remain before reclaim."""
     lines = [f'You have missed {missed} turns in a row.']
     if reclaim:
         left = max(reclaim - missed, 0)
@@ -256,12 +173,7 @@ def warning_note(civ: str, missed: int, reclaim: int) -> list:
 
 
 def reclaim_note(civ: str, missed: int, turn: int) -> list:
-    """What is left for the player whose seat has just gone.
-
-    Written into the turn that took it, so a player who comes back and reads
-    their last turn's note finds the reason there rather than only a launcher
-    refusing to start.
-    """
+    """The note lines written into the turn that reclaimed a seat."""
     return [
         f'This civ was wiped at turn {turn} after {missed} missed turns in a '
         f'row.',
@@ -279,25 +191,16 @@ def _holds(existing: list, lines: list) -> bool:
 
 
 def _append_note(store, civ: str, turn: int, lines, log=print) -> None:
-    """Add to whatever note that civ already has for that turn.
-
-    `put_note` replaces, and the referee writes refusals through it before this
-    runs. A civ counted as missing did not submit and so has no refusals, which
-    makes the collision impossible today; appending costs one read and means it
-    stays impossible if that ever stops being true.
-    """
+    """Append to the civ's note for that turn (`put_note` replaces). Lines
+    already present are not written again."""
     try:
         existing = list(store.note(civ, turn))
         lines = list(lines)
         if _holds(existing, lines):
-            # A referee rerun over a turn it already closed once writes the
-            # same note again, and a warning read twice in one note looks like
-            # two warnings.
             return
         store.put_note(civ, turn, existing + lines)
     except OSError as exc:
-        # The same rule the referee applies to a refusal note: a note that
-        # cannot be written is not worth losing a turn over.
+        # A note that cannot be written does not stop the turn.
         log(f'  abandonment: could not leave {civ} a note about turn {turn}, '
             f'{exc}')
 
@@ -305,15 +208,9 @@ def _append_note(store, civ: str, turn: int, lines, log=print) -> None:
 def reclaim(store, civ: str, blob: bytes, turn: int, missed: int, log=print):
     """Wipe one civ out of `blob` and take its seat off the roster.
 
-    Returns the blob to publish, which is the one that came in when the wipe
-    could not be done. A wipe that fails leaves the seat held and the count
-    running, so the next turn tries again, which is right: the alternative is a
-    roster that no longer names a civ the galaxy is still full of.
-
-    The roster write happens only after the wipe has produced a blob, for the
-    same reason `uncolonise` zeroes the owner last. A seat removed from a civ
-    that is still on the board is a player locked out of an empire that is
-    still playing itself.
+    Returns (blob to publish, summary or None). A failed wipe returns the blob
+    unchanged and leaves the seat held, so the next turn tries again. The roster
+    is written only after the wipe has produced a blob.
     """
     import wipe_civ
 
@@ -329,9 +226,7 @@ def reclaim(store, civ: str, blob: bytes, turn: int, missed: int, log=print):
         wiped, planets, ships = wipe_civ.wipe(blob, civ, log=log,
                                               template_blob=template)
     except (SystemExit, ValueError, KeyError, StopIteration) as exc:
-        # `wipe_civ` raises SystemExit for the two cases it refuses outright, a
-        # civ that is not there and a galaxy of one. Neither is worth stopping
-        # a turn for, and both are worth saying out loud.
+        # `wipe_civ` raises SystemExit for a missing civ and for a galaxy of one.
         log(f'  abandonment: could not wipe {civ}, {type(exc).__name__}: {exc}')
         return blob, None
 
@@ -347,24 +242,13 @@ def reclaim(store, civ: str, blob: bytes, turn: int, missed: int, log=print):
 
 
 def enforce(store, turn: int, blob: bytes, log=print, new_turn: int = None):
-    """Warn, reclaim, and hand back the blob to publish. The referee's seam.
+    """Warn, reclaim, and hand back the blob to publish.
 
-    Called with the turn that has just been closed and the blob the tick
-    produced for the next one, before `publish`. Before, because a reclaim
-    changes that blob, and republishing a turn to change it afterwards would
-    restart the clock on a turn players are already holding.
-
-    A warning is written on `new_turn`, the turn the player is served next,
-    and not on the turn they missed. A launcher reads the note of a turn it is
-    playing, and a player who missed a turn played none of the turns a note on
-    the missed one would sit on, so it would be read by nobody. Each turn's
-    note then carries one warning, the count as that turn opened. `new_turn`
-    defaults to the turn number the blob carries, and a blob no later than
-    `turn` puts the warning on `turn`.
-
-    Everything here is skipped for a closed galaxy. Nobody is required to play
-    a galaxy that has ended, and a run of the referee over one would otherwise
-    reclaim every seat in it.
+    Called with the turn just closed and the blob the tick produced for the
+    next one, before `publish`, since a reclaim changes that blob. A warning is
+    written on `new_turn`, the turn the player is served next, which defaults to
+    the turn the blob carries; a blob no later than `turn` puts it on `turn`.
+    A closed galaxy is skipped.
     """
     if store.is_closed():
         return blob
@@ -387,8 +271,7 @@ def enforce(store, turn: int, blob: bytes, log=print, new_turn: int = None):
             blob, done = reclaim(store, civ, blob, turn, missed, log=log)
             if done is not None:
                 continue
-            # The wipe did not happen, so the warning is still the honest
-            # thing to leave them.
+            # The wipe failed, so the civ is warned instead.
         if warn and missed >= warn:
             on = new_turn if new_turn is not None and new_turn > turn else turn
             _append_note(store, civ, on,

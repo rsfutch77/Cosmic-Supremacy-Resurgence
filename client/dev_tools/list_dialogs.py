@@ -1,23 +1,18 @@
 """
 list_dialogs.py: report the Win32 dialogs a running client has open
-====================================================================
+
     python list_dialogs.py
     python list_dialogs.py --all        # every window, not only dialogs
 
-The customisation prompts are real Win32 dialogs rather than in-engine overlays,
-and they matter to the served path: a client that comes up behind a modal prompt
-is not a turn a player can take. Three exist, each its own dialog resource:
+The customisation prompts are Win32 dialogs, each its own dialog resource:
 
     210   Customize Your Home World
     218   Customize Your Civilization
     225   Pick your Civilization Name and Coat of Arms
 
-The main window's title is not enough to tell whether one is up, since a child
-dialog leaves the title reading "Galaxy Map". This enumerates the windows owned
-by the client's process instead, so a check costs no human attention.
-
-Dialogs report the class name `#32770`, which is what `--all` filters on by
-default.
+A child dialog leaves the main window title reading "Galaxy Map", so this
+enumerates the windows owned by the client's process. Dialogs report the class
+name `#32770`.
 """
 import argparse
 import ctypes
@@ -29,7 +24,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 
 # No bytecode for trigger_save: Defender quarantines its .pyc as
-# Exploit:Python/Leivion.C. See game_cycle.import_without_bytecode.
+# Exploit:Python/Leivion.C.
 sys.dont_write_bytecode = True
 from trigger_save import find_pid
 

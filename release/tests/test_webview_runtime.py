@@ -2,9 +2,8 @@
 The WebView2 Runtime check that runs before the launcher opens its window: what
 it does when the runtime is there, missing, refused, or fails to install.
 
-The registry, the message boxes and the installer are all stood in for, so no
-dialog opens and nothing is installed. The registry read itself is run once
-against this machine, which only has to answer without raising.
+The registry, the message boxes and the installer are stood in for. The real
+registry read runs once against this machine and only has to not raise.
 """
 import os
 import sys

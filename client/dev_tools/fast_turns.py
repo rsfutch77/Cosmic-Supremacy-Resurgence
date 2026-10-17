@@ -1,6 +1,6 @@
 """
 fast_turns.py: Set the turn length to 60 seconds for testing
-==============================================================
+
 Pokes the GSET turnlength value in memory from 3600 (60 min) to 60 (1 min).
 Run after the game has loaded a galaxy.
 
@@ -13,7 +13,7 @@ import ctypes
 from ctypes import wintypes
 import struct
 import sys
-from client_proc import find_pid, NOT_THE_CLIENT  # one copy, see client_proc.py
+from client_proc import find_pid, NOT_THE_CLIENT
 
 PROCESS_VM_READ      = 0x0010
 PROCESS_VM_WRITE     = 0x0020
@@ -43,7 +43,6 @@ def main():
         print(f"ERROR: Could not open PID {pid}")
         sys.exit(1)
 
-    # Read current value
     buf = (ctypes.c_ubyte * 4)()
     read = ctypes.c_size_t()
     ok = kernel32.ReadProcessMemory(h, ctypes.c_void_p(TURNLENGTH_ADDR),
@@ -59,7 +58,6 @@ def main():
     else:
         print("Could not read current value")
 
-    # Write new value
     data = struct.pack('<I', new_length)
     wbuf = (ctypes.c_ubyte * 4)(*data)
     written = ctypes.c_size_t()

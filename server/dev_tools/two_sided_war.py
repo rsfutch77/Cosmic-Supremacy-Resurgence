@@ -1,26 +1,20 @@
 """
 two_sided_war.py: determinism across a battle both sides can fight
-====================================================================
-A4 measured determinism across a war in which only one side was armed: an
-attacker against an unarmed defender and its planet. This arms the defender and
-repeats the measurement, so the engagement exercises return fire rather than
-target practice.
+
+Arms the defender so the engagement exercises return fire, then measures
+determinism across the war.
 
     python two_sided_war.py fixture                 # offline, arms BadGuy
     python two_sided_war.py arm                     # live, war and orders
     python two_sided_war.py run --turns 70 --runs 3 # live, the branches
     python two_sided_war.py compare a.dat b.dat
 
-`run` is the measurement. It ticks the fork several times from a cold load and
-compares the results to each other, which is the case the referee exercises, and
-it plays one branch straight through without reloading, which is the case a
-player's client exercises. A control fixture with no war runs the same way, so a
-difference found under combat can be told apart from one the client produces
-whatever the galaxy is doing.
+`run` ticks the fork several times from a cold load and compares the results
+(the referee's case), and plays one branch straight through without reloading
+(a player's client's case). A control fixture with no war runs the same way.
 
-Star names are normalised away before the played branch is compared, and only
-there. A running client materialises the default name `Unnamed` over every empty
-one, which is 7 bytes per sun and nothing to do with the simulation.
+Star names are cleared before the played branch is compared, since a running
+client writes the default name `Unnamed` over every empty one.
 """
 import argparse
 import os
@@ -44,9 +38,8 @@ import inject_ship as ish
 import merge_orders as mo
 import canonical
 
-# GoodGuy's `f1` in the rehearsal galaxy: the cheapest hull that carries a
-# weapon. BadGuy is given the same parts so neither side has an advantage the
-# comparison would have to account for.
+# GoodGuy's `f1` in the rehearsal galaxy, the cheapest armed hull. BadGuy gets
+# the same parts.
 FIGHTER = {"chassis": [0], "scanners": [0], "engines": [0], "weapons": [0]}
 DESIGN_NAME = "bgf1"
 CREW = 2                      # crew per injected warship
@@ -58,14 +51,10 @@ def log(msg=""):
     print(msg, flush=True)
 
 
-# ── the fixture, offline ─────────────────────────────────────────────────────
 def build_fixture(blob, civ="BadGuy", count=2):
     """Give `civ` a fighter design and `count` hulls over its largest planet.
 
-    The design is synthesised rather than cloned out of the other civ, because a
-    DSGN carries the id of the civ that owns it and a clone would name the wrong
-    one. `inject_design.make` writes the owning civ's id into the record it
-    builds.
+    The design is synthesised, since a DSGN carries its owning civ's id.
     """
     home = mo.civ_by_name(blob, civ)
     like = next(oid for _off, oid, _n in idg.design_records(blob)
@@ -92,10 +81,7 @@ PEACE = 3
 def set_relation(act, a, b, code):
     """Write one relation code between two civs, both directions.
 
-    `declare_war` is the actuator for going to War and applies the standing
-    cost that goes with it. Nothing existed for the other direction, and the
-    control arm needs it: it has to be able to take a galaxy that is ALREADY at
-    war back to peace.
+    Used by the control arm to return a galaxy already at war to peace.
     """
     import remote
     for x, y in ((a, b), (b, a)):
@@ -110,33 +96,18 @@ def set_relation(act, a, b, code):
                  f"{act.RELATION_NAMES.get(code, code)}")
 
 
-# Units a one-engine fighter covers in a turn, measured on `cycle.dat`: `f1`
-# made about 6.4 and the heavier `b1` about 3.4. Speed follows the parts, so a
-# hull built from the same list moves at the same rate whatever galaxy it is in.
-# It is a rate rather than a constant of the format, so a stage placed by it
-# lands within a turn either way rather than exactly.
-UNITS_PER_TURN = 6.4
+UNITS_PER_TURN = 6.4   # approximate distance a one-engine `f1` covers per turn
 
 
 def stage(blob, attacker="GoodGuy", defender="BadGuy", turns_away=0.0):
     """Move the attacker's armed hulls onto the defender's largest planet.
 
-    `turns_away` backs them off along the line they came in on, so contact falls
-    that many turns into the run instead of immediately. Nought puts them on top
-    of it, which is what the determinism measurement wants; two leaves room for
-    a player to give orders and submit them BEFORE the battle resolves, which is
-    the case the end-to-end loop has never run.
+    `turns_away` backs them off along their line of approach, so contact falls
+    that many turns into the run. Nought puts them on the planet; a few turns
+    leaves room for a player to submit orders before the battle resolves.
 
-    WITHOUT THIS THERE IS NO BATTLE TO MEASURE. Sent from where `cycle.dat`
-    leaves them, the attacker's warships cover about 3.4 units per turn against
-    a separation of 450, so they need roughly 140 turns to arrive and a 70-turn
-    branch ends with them still in transit. Measured: a 70-turn branch in which
-    every surviving hull came out at condition 1.0 and the defenders never fired.
-
-    Combat triggers on co-location, so placing the attacker at the target is the
-    same engagement the approach would have produced, without spending 140 turns
-    of client time reaching it. The approach itself is not what A4 set out to
-    measure.
+    Combat triggers on co-location. From where `cycle.dat` leaves them the
+    attacker's warships are about 140 turns from the target.
     """
     home = _largest_planet(blob, defender)
     atk = mo.civ_by_name(blob, attacker)
@@ -190,19 +161,16 @@ def _armed_designs(blob, owner_rec):
     return out
 
 
-# ── arming it, live ──────────────────────────────────────────────────────────
 def arm(dat, attacker="GoodGuy", defender="BadGuy", declare=True,
         save_dir=None, play=0, secs=5, keep_open=False):
     """Load `dat`, crew the defender's hulls, declare war, send the attacker in.
 
     Returns (fork, played). `fork` is the capture every loaded branch starts
     from. `played` is the same session carried on for `play` further turns with
-    no reload, which is the only way to produce that arm: every other entry
-    point here loads a blob first.
+    no reload.
 
-    `declare` off produces the control: the same galaxy, the same crewed hulls,
-    the same fleet movement, and no war. Combat is gated on the relation, so the
-    control moves ships without anybody shooting.
+    `declare` off produces the control: the same galaxy, crewed hulls and fleet
+    movement, at peace, so nobody shoots.
     """
     import game_cycle as gc
     import gamestate as gs
@@ -227,15 +195,9 @@ def arm(dat, attacker="GoodGuy", defender="BadGuy", declare=True,
                                                     act.CITIZEN_STRIDE)))
         log(f"\n  {defender}'s planet under attack: {home}")
 
-        # An injected hull comes out of the blob with no crew, because the donor
-        # record it was cloned from carries none. A crewless ship loses its
-        # orders at every boundary and has nobody to fight with.
-        #
-        # Both civs are crewed, not just the defender. In the A4 fixture only
-        # the defender has injected hulls and the attacker's own warships are
-        # already crewed, so this is the same work there; where BOTH sides were
-        # armed by injection, which is what a two-player galaxy needs, crewing
-        # one of them would leave the other unable to sail.
+        # Injected hulls may have no crew, and a crewless ship loses its orders
+        # at every boundary. Both civs are crewed, since either may have been
+        # armed by injection.
         armed = _crew_injected(act, snap, dfn, home)
         log(f"  crewed {len(armed)} {defender} warship(s)")
         if not armed:
@@ -248,10 +210,7 @@ def arm(dat, attacker="GoodGuy", defender="BadGuy", declare=True,
         if declare:
             act.declare_war(atk, dfn)
         else:
-            # NOT merely skipping the declaration. `cycle.dat` already holds
-            # these two at War, so a control that only declined to declare
-            # would run the same war as the experiment and forgive whatever it
-            # found. Peace has to be written.
+            # `cycle.dat` already holds these two at War, so peace is written.
             set_relation(act, atk, dfn, PEACE)
 
         # Re-read: conscription and the relation writes both move state the
@@ -282,8 +241,7 @@ def arm(dat, attacker="GoodGuy", defender="BadGuy", declare=True,
 
     played_blob = None
     if play:
-        # Same client, no reload. Capturing the fork did not disturb it:
-        # SaveGame serialises the galaxy and leaves it running.
+        # Same client, no reload. SaveGame leaves the galaxy running.
         log(f"\n  playing {play} turn(s) on in the SAME session")
         _advance(play, secs)
         played_blob = sp.load_any(
@@ -292,9 +250,7 @@ def arm(dat, attacker="GoodGuy", defender="BadGuy", declare=True,
             f"canonical {canonical.canonical_hash(played_blob)[:16]}")
 
     if keep_open:
-        # The played arm continues THIS session, so the client has to survive
-        # the call that produced the fork. It is also how a human checks the
-        # crewing by eye before the branches are spent on it.
+        # Lets a human check the crewing on screen before running branches.
         log("  client left running")
     else:
         gc.close_client()
@@ -304,8 +260,8 @@ def arm(dat, attacker="GoodGuy", defender="BadGuy", declare=True,
 def _crew_injected(act, snap, civ, home=None):
     """Crew every `DESIGN_NAME` hull `civ` owns, drafting from `home`.
 
-    `home` defaults to the civ's most populous planet, which is where a draft
-    can actually come from. Returns the hulls crewed, empty when it owns none.
+    `home` defaults to the civ's most populous planet. Returns the hulls
+    crewed, empty when it owns none.
     """
     if home is None:
         mine = snap.owned_planets(civ)
@@ -319,11 +275,8 @@ def _crew_injected(act, snap, civ, home=None):
             continue
         if getattr(sh.design, "name", None) != DESIGN_NAME:
             continue
-        # A clone carries whatever crew its donor had, and the donor is whichever
-        # unordered hull the blob offered. `cycle.dat` supplies an empty colony
-        # ship and a generated galaxy supplies a crewed one, so both cases turn
-        # up. conscript_to_crew fills an empty vector only, by design, so an
-        # already-crewed hull is left alone rather than topped up.
+        # A clone carries its donor's crew, which may be none. conscript_to_crew
+        # fills an empty vector only, so a crewed hull is left alone.
         if sh.crewed:
             done.append(sh)
             continue
@@ -344,7 +297,6 @@ def _advance(turns, secs):
         raise SystemExit("advance_turns failed")
 
 
-# ── the branches, live ───────────────────────────────────────────────────────
 def branch(blob, turns, secs=5, save_dir=None):
     """One cold load of `blob`, `turns` turns, and the capture that comes out."""
     import referee
@@ -352,13 +304,11 @@ def branch(blob, turns, secs=5, save_dir=None):
                         log=log)
 
 
-# ── comparison ───────────────────────────────────────────────────────────────
 def without_sun_names(blob):
     """The blob with every system name set empty.
 
-    Only for the played-against-loaded comparison. `canonical.py` deliberately
-    does not mask names, because a mask that forgives a default also forgives a
-    change.
+    Only for the played-against-loaded comparison. `canonical.py` does not
+    mask names.
     """
     for oid, (_owners, _total, (ln, _name)) in mo.systems(blob).items():
         if ln:
@@ -380,24 +330,15 @@ def compare(a, b, label_a="A", label_b="B"):
     return False
 
 
-# ── combat evidence ──────────────────────────────────────────────────────────
-# A `NEWS` payload is a fixed 44-byte record, eleven dwords, the last three of
-# which are a position:
+# A `NEWS` payload is a fixed 44-byte record, eleven dwords:
 #
 #     +8   u32    the turn the item was raised
-#     +20  u32    small, ascending per civ, ROLE UNKNOWN
-#     +24  u32    small, ascending per civ, ROLE UNKNOWN
+#     +20  u32    small, ascending per civ, role unknown
+#     +24  u32    small, ascending per civ, role unknown (+20 is often +24 - 1)
 #     +32  3xf32  where it happened, zero for items with no place
 #
-# Only the turn and the position are established. +20 and +24 were first read as
-# a category and an item id, which a second galaxy contradicted: the value that
-# carried no position in one carried one in the other, and +20 is often +24
-# minus one, which reads more like a chain. They are reported raw and nothing
-# here branches on them.
-#
-# How many items an engagement raises is also unsettled: two in one measured
-# battle, one in another. `contacts` therefore tests only that a positioned item
-# appeared, which is the claim the experiment needs.
+# +20 and +24 are reported raw and nothing branches on them. An engagement may
+# raise one or more items.
 NEWS_LEN = 44
 
 
@@ -419,11 +360,7 @@ def news(blob):
 def contacts(before, after):
     """News raised between two blobs that carries a position.
 
-    The point of this experiment is that an engagement happened, and a hull
-    going missing does not show that: a warship can be lost in transit without
-    meeting anything. A positioned news item on a turn inside the window is
-    direct evidence of an event at a place, and the pair of them names both
-    sides of it.
+    A positioned item is evidence of an engagement; a missing hull is not.
     """
     was = {(w, t, c, i) for w, t, c, i, _p in news(before)}
     return [n for n in news(after)
@@ -444,9 +381,7 @@ def fleet(blob):
 def report_losses(before, after):
     """What each civ lost between two blobs.
 
-    The point of the experiment is that BOTH sides shoot, so an attacker that
-    loses nothing means the defender never fired and the run proves no more than
-    A4 already did.
+    An attacker that loses nothing means the defender never fired.
     """
     b, a = fleet(before), fleet(after)
     for civ in sorted(set(b) | set(a)):
@@ -458,7 +393,6 @@ def report_losses(before, after):
     return b, a
 
 
-# ── phases ───────────────────────────────────────────────────────────────────
 def phase_fixture(args):
     blob = sp.load_any(args.source)
     log(f"{args.source}: {len(blob):,} bytes")
@@ -508,8 +442,6 @@ def phase_run(args):
 
     log("=== loaded against loaded ===")
     if len(loaded) < 2:
-        # One branch compares against nothing. Saying "reproduced" here would
-        # be a claim the run did not make.
         log("  only one branch was run, so there is nothing to compare it to\n")
     else:
         same = all(compare(loaded[0], o, "L1", f"L{i + 2}")
@@ -537,9 +469,8 @@ def phase_run(args):
 def phase_publish(args):
     """Put a prepared galaxy into a turn store as turn 1, ready to play.
 
-    The roster matters as much as the blob: the launcher refuses a name that is
-    not on it, so the civs named here are the names the two players have to
-    type.
+    The launcher refuses a name not on the roster, so the civs named here are
+    the names the players must type.
     """
     from turn_store import open_store
     blob = sp.load_any(args.blob)

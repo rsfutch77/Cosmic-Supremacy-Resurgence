@@ -1,14 +1,10 @@
-"""
-actions.py: Actuators: the button clicks the AI is allowed to make
-==================================================================
-
-"""
+"""actions.py: actuators, the button clicks the AI is allowed to make."""
 import struct
 
 import gamestate as gs
 import remote
 
-# Order-object field offsets, from the layout above.
+# Order-object field offsets.
 ORD_ORIGIN   = 4
 ORD_TARGET   = 16
 ORD_ROUTE    = 40      # begin/end/cap at +40/+44/+48
@@ -32,45 +28,24 @@ class Actuator:
         self.dry_run = dry_run
         self.log = log
         self.writes = []
-        # Elevated access is needed ONLY to construct engine objects. Most
-        # passes never do, so it is acquired lazily: a turn that just queues a
-        # build or reassigns a citizen should not be opening a handle with
-        # PROCESS_ALL_ACCESS at all.
+        # Elevated access is needed only to construct engine objects, so it is
+        # acquired lazily.
         self._remote = remote_
         self._remote_factory = remote_factory
-        # Ships already committed by an earlier rule THIS PASS. Every rule in a
-        # pass reads the SAME snapshot, so a ship ordered by one rule still
-        # looks idle to the next one; Expand sent a colony ship to a planet and
-        # Explore, reading the stale order type, redirected it to a star in the
-        # same pass. That repeated for eight turns and expansion stalled. Rule
-        # ORDER cannot fix it; something has to record the claim.
+        # Every rule in a pass reads the same snapshot, so the sets below record
+        # what earlier rules in this pass already changed.
+        # Ships committed to an order this pass.
         self.claimed_ships = set()
-        # Ships crewed THIS PASS. Same stale-snapshot problem as claimed_ships:
-        # R-XPL-06 loads crew, then R-XPN-02 reads Ship:124 from the snapshot,
-        # still sees an empty vector and refuses to order the ship. It sorts
-        # itself out next turn, so it costs a turn per ship rather than
-        # deadlocking -- but it made crew loading look like it had failed.
+        # Ships crewed this pass (the snapshot still shows Ship:124 empty).
         self.crewed_ships = set()
-        # Planets whose CITIZENS a rule has already rewritten this pass. S-food
-        # owns farmers and R-XPL-01 owns everyone else, but they read the same
-        # snapshot: if S-food converts a banker to a farmer to stop a famine,
-        # R-XPL-01 still sees a banker at that index and would convert it
-        # straight back, undoing the famine fix every single turn.
+        # Planets whose citizens a rule has rewritten this pass, so S-food and
+        # R-XPL-01 do not undo each other.
         self.claimed_planets = set()
-        # Planets whose PRODUCTION a rule has already set this pass. Planet:296
-        # and Planet:344 hold exactly one build, so a second write silently
-        # replaces the first: R-XTM-01 queued a warship at the homeworld and
-        # R-XPN-01 queued a colony ship over the top of it in the same pass,
-        # and the log read as though both had been ordered. Enforced HERE rather
-        # than in each rule, because every rule that builds goes through these
-        # two actuators and none of them can be relied on to remember.
+        # Planets whose production was set this pass. Planet:296 and Planet:344
+        # hold one build, so a second write would replace the first.
         self.claimed_production = set()
-        # Net effect OUR OWN actions had on the treasury this pass, signed:
-        # negative when we spend. The income sensor differences Owner:8 across
-        # turns, so without this our spending reads as a collapsing economy;
-        # hurrying 1,184 credits made the next turn report income -742/turn and
-        # R-XPL-08 refused to hurry "into a falling balance" that was entirely
-        # its own purchase.
+        # Signed effect of this pass's actions on the treasury (negative when
+        # spending), so the income sensor can exclude it.
         self.cash_effect = 0
 
     @property
@@ -89,11 +64,8 @@ class Actuator:
     def production_claimed(self, planet):
         """Has a rule already set this planet's production this pass?
 
-        Rules should FILTER on this when choosing where to build. The raise in
-        _claim_production stays as a backstop for anything that does not, but a
-        backstop that fires aborts the whole rule: R-XPN-01 hit it, propagated a
-        ValueError to the loop, and skipped every other shipyard it might have
-        used that turn.
+        Rules filter on this when choosing where to build. The raise in
+        _claim_production is a backstop and aborts the whole rule.
         """
         return planet.id in self.claimed_production
 
@@ -111,10 +83,9 @@ class Actuator:
         return planet.id in self.claimed_planets
 
     def is_crewed(self, ship):
-        """Crewed per the snapshot, OR crewed by a rule earlier this pass."""
+        """Crewed per the snapshot, or crewed by a rule earlier this pass."""
         return ship.crewed or ship.id in self.crewed_ships
 
-    # -- primitive ------------------------------------------------------
     def _write(self, addr, data, what):
         old = self.snap.read(addr, len(data)) or b""
         self.writes.append((addr, old, data, what))
@@ -134,13 +105,10 @@ class Actuator:
         return self._write(addr, struct.pack("<f", value), what)
 
     def _live_cash(self, civ):
-        """Owner:8 as it stands in the process right now.
+        """Owner:8 (cash) as it stands in the process right now.
 
-        `civ.cash` comes from the snapshot's field dump, which is taken once and
-        never moves when a debit is written. Two drafts in one pass would both
-        price against the same opening balance, and the second write would erase
-        the first: the treasury would lose one draft's cost for N drafts. Every
-        read that a cash WRITE is computed from has to come from here.
+        `civ.cash` is fixed at snapshot time, so every cash write must be
+        computed from this read.
         """
         b = self.snap.read(civ.addr + 8, 4)
         if b is None or len(b) != 4:
@@ -148,19 +116,11 @@ class Actuator:
         return struct.unpack("<i", b)[0]
 
     def _live_vec(self, obj, off, stride):
-        """A vector's records, with BOTH its extents and its data read live.
+        """A vector's records, with both its extents and its data read live.
 
-        `Obj.vec` takes begin/end from the snapshot's field dump and reads only
-        the payload live, so a SECOND write to one vector in the same pass spans
-        the extent the pass opened with and runs off the end of the live data.
-
-        Measured 2026-09-19 against a running client: two `conscript_to_crew`
-        calls in one pass produced four crew records while removing two
-        citizens. The second call spanned the pre-draft 18 records, picked from
-        stale bytes past the live end, wrote the same 16 back and set `end` to
-        the value the first call had already left there, so the planet was
-        untouched and two people were created. `vector_is_sane` already reads
-        through `snap.rd32` for this reason; so does every read here.
+        `Obj.vec` takes begin/end from the snapshot and only the payload live,
+        so a second write to one vector in the same pass must read through
+        here.
         """
         base = obj.addr + off
         begin, end = self.snap.rd32(base), self.snap.rd32(base + 4)
@@ -174,19 +134,16 @@ class Actuator:
                                         for i in range(0, span, stride)]
 
     def _live_ptr(self, obj, off):
-        """One of a vector's three pointers as it stands now, not as the
-        snapshot recorded it. A `begin` computed against a stale `end` is the
-        shape that corrupted a military vector once already."""
+        """One of a vector's three pointers as it stands now in the process."""
         return self.snap.rd32(obj.addr + off)
 
     def _xyz(self, addr, xyz, what):
         return self._write(addr, struct.pack("<fff", *xyz), what)
 
-    # -- order rollback --------------------------------------------------
-    # retarget_order writes an order across several disjoint regions, and a
-    # half-applied retarget is worse than none: the route describes one
-    # destination while Ship:52/56 describe another, which is the shape that has
-    # now crashed this client twice. These two helpers let a caller undo it.
+    # retarget_order writes an order across several disjoint regions. A
+    # half-applied retarget, with the route naming one destination and
+    # Ship:52/56 another, crashes the client, so these helpers let a caller
+    # undo it.
     def _order_bytes(self, ship, ord_ptr):
         """Read back every region retarget_order is about to overwrite."""
         if not gs.is_ptr(ord_ptr):
@@ -202,8 +159,7 @@ class Actuator:
         out = []
         for addr, size in spans:
             data = self.snap.read(addr, size)
-            # A region we could not read is a region we cannot promise to
-            # restore. Say so now rather than discover it during a rollback.
+            # A region that cannot be read cannot be restored.
             if data is None or len(data) != size:
                 self.log(f"  [warn] could not snapshot 0x{addr:08X}+{size} for "
                          f"rollback; a failure here will leave a torn order")
@@ -222,9 +178,7 @@ class Actuator:
                  f"crashes the client at the next turn boundary")
         for addr, data in saved:
             if not gs.ev.write_bytes(self.snap.h, addr, data):
-                # Nothing better is available: the process is usually already
-                # gone by the time we get here. Name it precisely so the log
-                # says whether the ship was left torn.
+                # The process is usually already gone at this point.
                 self.log(f"  [rollback] FAILED at 0x{addr:08X}; {ship} may be "
                          f"left in an inconsistent state")
 
@@ -237,7 +191,7 @@ class Actuator:
                 f"every coordinate in this order came from the old turn's "
                 f"snapshot and the ship has since moved")
 
-    # -- A: set a citizen's job (Planet:144 element +0) ------------------
+    # A: set a citizen's job (Planet:144 element +0).
     def set_job(self, planet, index, job_id):
         """Change one citizen's job. A plain int in an existing vector element:
         no allocation, no structural change."""
@@ -251,27 +205,18 @@ class Actuator:
         return self._u32(begin + index * 16, job_id,
                          f"{planet} citizen {index} -> {gs.JOBS[job_id]}")
 
-    # -- D: queue a ship (Planet:296 + Planet:344) ----------------------
+    # D: queue a ship (Planet:296 + Planet:344).
     def queue_ship(self, planet, design):
         """Start building a ship on a planet.
 
-        A ship build does NOT allocate a production object. `Planet:296` points
-        straight at the shared `ShipDesign` in its ALLOCATION-START form
-        (tag - 12, the multiple-inheritance primary vftable); confirmed by
-        reading it while a scout was queued and decoding the target in place as
-        the design itself, down to its name string and speed. That makes this
-        the cheapest actuator in the set: two plain writes to long-lived
-        objects, no allocation, none of the lifetime hazards ship orders had.
-
-        Contrast a FACILITY build, where `Planet:296` points at a freshly
-        heap-allocated `Facility`; that direction is still not solved.
+        No production object is allocated. `Planet:296` points at the shared
+        `ShipDesign` in its allocation-start form (tag - 12, the
+        multiple-inheritance primary vftable), and Planet:344 is set to 1.
         """
         if design.type != "ShipDesign":
             raise ValueError(f"{design} is not a ShipDesign")
-        # NOT gated on the derived stat block. That block is a lazy cache set
-        # to -1 whenever parts change; a design reading -1 is perfectly
-        # buildable and the UI shows real numbers for it by calling the getters.
-        # What actually makes a design unbuildable is having no parts.
+        # Not gated on the derived stat block, a lazy cache set to -1 whenever
+        # parts change. A design is unbuildable only when it lacks parts.
         if not design.chassis:
             raise ValueError(f"{design} has no chassis; the UI could not have "
                              f"produced it and it is not buildable")
@@ -288,28 +233,20 @@ class Actuator:
                        f"Planet:296 -> ShipDesign {design.design_name!r} (tag-12)")
         return self._u32(planet.addr + 344, 1, "Planet:344 build-active -> 1") and ok
 
-    # -- C: start a facility build (three plain writes) -----------------
+    # C: start a facility build (three plain writes).
     PLANET_EMBEDDED_FACILITY = 280   # Facility{vftable, typeId} lives here
 
     def build_facility(self, planet, type_id):
         """Start building a facility. Nothing is allocated.
 
-        A planet is BORN carrying a valid `Facility{vftable, typeId}` embedded at
-        Planet:280, written once by the PlanetProperties constructor and
-        resident for the planet's whole life. Selecting a building overwrites
-        its type id at Planet:284; starting the build points Planet:296 at the
-        embedded object. That is the entire mechanism, and it is why Planet:284
-        survives a switch to generating wealth; it is a field of a permanent
-        object, not of a production object that comes and goes.
+        Every planet carries a permanent `Facility{vftable, typeId}` embedded
+        at Planet:280, written by the PlanetProperties constructor. Selecting a
+        building writes its type id to Planet:284; starting the build points
+        Planet:296 at the embedded object.
 
-        Safer than the ship actuator: the target is inside the planet, so
-        nothing can be freed underneath it.
-
-        THIS SKIPS THE ENGINE'S OWN CanBuildFacility CHECK (0x004F5030), so the
-        caller must not ask for a type the civ cannot actually build. Owner:172
-        is documented as the unlocked-type list but reads EMPTY on a civ with
-        three facilities standing, so it cannot be trusted as that gate; the
-        rules use evidence instead, meaning a type already built somewhere.
+        This skips the engine's CanBuildFacility check (0x004F5030), so the
+        caller must only ask for a type the civ can build. Owner:172 reads
+        empty even on civs with facilities and is not a reliable gate.
         """
         if type_id not in gs.FACILITIES:
             raise ValueError(f"{type_id} is not a known facility type")
@@ -330,7 +267,7 @@ class Actuator:
                        "Planet:296 -> the planet's embedded Facility") and ok
         return self._u32(planet.addr + 344, 1, "Planet:344 build-active -> 1") and ok
 
-    # -- I': fit parts to a design --------------------------------------
+    # I': fit parts to a design.
     # The five part categories sit at a 24-byte stride, each a std::vector of
     # 8-byte [vftable, subtypeId] records.
     PART_VECTORS = {
@@ -342,21 +279,15 @@ class Actuator:
     }
 
     def fit_parts(self, design, category, ids):
-        """Populate an EMPTY part vector on a design.
+        """Populate an empty part vector on a design.
 
-        A default-constructed design arrives with a chassis and a scanner but
-        NO ENGINE, which is why its speed and cost stay at the -1 sentinel and
-        why it cannot be built. Fitting an engine is what turns it into a real
-        design.
+        A default-constructed design has a chassis and a scanner but no engine,
+        so its speed and cost stay at -1 and it cannot be built.
 
-        The buffer comes from the engine's OWN `operator new`, so when the
-        vector is eventually destroyed its `operator delete` is the matching
-        half of the pair. That is the same reasoning that makes create_order
-        safe, and the reason a VirtualAllocEx buffer would not be.
-
-        ONLY fills a vector that is currently null. Growing or replacing an
-        existing engine-owned buffer would mean freeing memory we did not
-        allocate, which is exactly the hazard this avoids.
+        The buffer comes from the engine's own `operator new`, so the engine's
+        `operator delete` can free it. Only a null vector is filled; replacing
+        an engine-owned buffer would mean freeing memory this code did not
+        allocate.
         """
         if category not in self.PART_VECTORS:
             raise ValueError(f"{category!r} is not one of "
@@ -389,23 +320,16 @@ class Actuator:
                  f" to {design}")
         return buf
 
-    # -- I'': give a design an owner ------------------------------------
+    # I'': give a design an owner.
     DESIGN_OWNER = 260
 
     def set_design_owner(self, design, civ):
         """Point ShipDesign:260 at a civ's owner reference node.
 
-        A default-constructed design carries the static null node 0x00857C54
-        here, while every design made through the UI carries a real node
-        resolving to its civ's Owner; confirmed across four designs, two civs.
-        That is the difference between a design the game considers yours and one
-        that belongs to nobody, and is the likeliest reason a constructed design
-        does not appear in the UI's design list.
-
-        The node is REUSED from another design of the same civ, never
-        fabricated. That is the same rule the report gives for Ship:40: take the
-        node from something that already has one, because a hand-made node is
-        not registered anywhere the engine knows about.
+        A default-constructed design carries the static null node 0x00857C54;
+        UI-made designs carry a node resolving to the civ's Owner. The node is
+        reused from another design of the same civ, because a hand-made node is
+        not registered with the engine.
         """
         def owner_of(d):
             node = d.u32(self.DESIGN_OWNER)
@@ -413,10 +337,7 @@ class Actuator:
                 return None
             return self.snap.civ_of(self.snap.rd32(node))
 
-        # Compare by ADDRESS, not identity. Snapshot.refresh() rebuilds every
-        # wrapper, so a Civ handed in by a caller is a different object from the
-        # one in the current snapshot even though both describe the same Owner;
-        # an `is` check here could never match after a refresh.
+        # Compared by address: Snapshot.refresh() rebuilds every wrapper.
         donor = next((d for d in self.snap.designs
                       if d.addr != design.addr
                       and (owner_of(d) is not None)
@@ -432,36 +353,26 @@ class Actuator:
         return self._u32(design.addr + self.DESIGN_OWNER, node,
                          f"ShipDesign:260 -> Owner {civ.civ_name!r}")
 
-    # -- I: create a ship design ----------------------------------------
+    # I: create a ship design.
     def create_design(self, name, civ=None):
-        """Default-construct a new ShipDesign. UNTESTED; see the warning below.
+        """Default-construct a new ShipDesign. Untested.
 
-        The engine allocates 280 bytes and its own constructor at 0x00546EC0
-        initialises them; that constructor takes no arguments and reaches the
-        EJBO-tagging base class, so the result should be a properly tagged,
-        enumerable design.
+        The engine allocates 280 bytes and its no-argument constructor at
+        0x00546EC0 initialises them, reaching the EJBO-tagging base class. The
+        result has empty part vectors and needs fit_parts before it is
+        buildable.
 
-        THE RESULT HAS NO PARTS. All five part vectors (chassis, scanners,
-        engines, weapons, modules) come back empty, and a design with no chassis
-        or engine is almost certainly not buildable. Populating them means
-        growing engine-owned vectors, which is not solved. So this produces a
-        valid object, not yet a usable design.
+        The one-argument constructor at 0x005470A0 is
+        ShipDesign::ShipDesign(Stream*), a deserializer for the save format's
+        DSGN section; it is not a copy constructor.
 
-        There is NO CLONE PATH. The one-argument constructor at 0x005470A0 was
-        mistaken for a copy constructor; it is ShipDesign::ShipDesign(Stream*),
-        a deserializing constructor for the save format's DSGN section. Passing
-        it a design crashed the client.
-
-        Every construction is VERIFIED before a single byte is written into the
-        result; that check is the whole lesson from the crash.
+        Every construction is verified before any byte is written into it.
         """
         if len(name) > 15:
             raise ValueError(f"{name!r} is longer than the 15-char SSO buffer; "
                              f"a longer name would move the string off-heap and "
                              f"turn ShipDesign:8 into a pointer")
-        # The UI requires a unique design name before it will save one, so a
-        # duplicate is a value a human could not have produced. It also makes
-        # every later lookup by name ambiguous.
+        # The UI requires a unique design name.
         clash = [d for d in self.snap.designs if d.design_name == name]
         if clash:
             raise ValueError(
@@ -491,9 +402,8 @@ class Actuator:
         self._u32(tag + 24, len(name), "name _Mysize")
         self._u32(tag + 28, 15, "name _Myres (SSO)")
 
-        # A design with no owner belongs to nobody. The default constructor
-        # leaves ShipDesign:260 as the static null node, so attaching an owner
-        # is part of creating a design, not an optional extra.
+        # The default constructor leaves ShipDesign:260 as the static null
+        # node, so an owner is attached here.
         if civ is not None:
             self.snap.refresh()
             fresh = next((d for d in self.snap.designs if d.addr == tag), None)
@@ -504,25 +414,22 @@ class Actuator:
                 try:
                     self.set_design_owner(fresh, civ)
                 except ValueError as e:
-                    # Loud, but not fatal: the design exists and is worth
-                    # inspecting even unowned, and raising here would strand it
-                    # AND skip everything the caller wanted to do next.
+                    # Not fatal: the design exists and can be inspected unowned.
                     self.log(f"  [warn] could not set the owner: {e}")
         return block
 
     def set_wealth_mode(self, planet):
         """Stop building and generate wealth instead.
 
-        The reverse of queue_ship, and the one production direction that was
-        always reachable: every idle planet shares one static `PilingUpWealth`
-        singleton, so this is a known-constant pointer write.
+        Every idle planet points Planet:296 at one static `PilingUpWealth`
+        singleton.
         """
         self.log(f"  {planet} -> generating wealth")
         ok = self._u32(planet.addr + 296, gs.PILING_UP_WEALTH,
                        "Planet:296 -> PilingUpWealth singleton")
         return self._u32(planet.addr + 344, 0, "Planet:344 build-active -> 0") and ok
 
-    # -- J: move a trained unit from a planet onto a ship as crew -------
+    # J: move a trained unit from a planet onto a ship as crew.
     SHIP_CREW      = 124      # begin/end/cap at 124/128/132
     PLANET_MILITARY = 168     # begin/end/cap at 168/172/176
     CITIZEN_LIST   = 144      # begin/end/cap at 144/148/152
@@ -531,29 +438,11 @@ class Actuator:
     def load_crew(self, planet, ship, count=2):
         """Move `count` stationed military units into a ship's crew vector.
 
-        CONFIRMED many times since; scouts, warships and troop hulls have all
-        been crewed this way and flown. It now also TOPS UP an already-crewed
-        ship, which it used to refuse; see `_set_ship_crew` for what that costs.
-        The reasoning it rests on:
-
-        A stationed military unit, a ship's crew member and a planet citizen all
-        appear to be the SAME 16-byte record: [jobId, flags, owner-node,
-        turnAdded]. Crew read job id 3 and flags 0x004F0000, which is the exact
-        citizen shape, and Planet:168's elements read 3 in the same slot. The
-        annotation calls that slot "upkeep, 3 on all units", which now looks like
-        a misread of the job id, since every unit having the same upkeep and
-        every unit having job 3 are indistinguishable from one sample.
-
-        So loading crew is a MOVE between two vectors of identical records:
-
-          * the ship's crew buffer comes from the engine's own operator new, so
-            new/delete stay a matched pair; the same rule fit_parts follows
-          * the planet's military vector is SHRUNK by walking `end` back, which
-            frees nothing and keeps its capacity, exactly what set_population.py
-            does to reduce a population safely
-
-        A crewed ship differed from an identical uncrewed one at 124/128/132 and
-        nowhere else, so there is no separate crew count to keep in step.
+        Military units, crew members and citizens share one 16-byte record:
+        [jobId, flags, owner-node, turnAdded]. The ship's crew buffer comes
+        from the engine's own operator new; the planet's military vector
+        shrinks by walking `end` back, which frees nothing. The crew vector at
+        Ship:124/128/132 is the only crew state; there is no separate count.
         """
         self._require_sane(planet.addr + self.PLANET_MILITARY,
                            f"{planet}'s military vector")
@@ -572,7 +461,7 @@ class Actuator:
         if self.remote is None:
             raise RuntimeError("load_crew needs a remote.Remote to allocate")
 
-        # Take from the END so the surviving records stay contiguous from begin.
+        # Take from the end so the surviving records stay contiguous from begin.
         taken = b"".join(mil[-count:])
         buf = self._set_ship_crew(ship, b"".join(aboard) + taken,
                                   len(aboard) + count)
@@ -586,23 +475,13 @@ class Actuator:
                  f"({len(aboard)} -> {len(aboard) + count} aboard)")
         return buf
 
-    # A std::vector is three pointers into ONE allocation. If they ever stop
-    # agreeing, anything that walks begin..end walks across unrelated memory.
+    # A std::vector is three pointers into one allocation.
     VEC_SANE_SPAN = 64 * 16          # 64 records is far past anything real
 
     def vector_is_sane(self, base, what=""):
         """begin/end/cap consistent, and pointing into the same allocation?
 
-        THIS EXISTS BECAUSE WE CORRUPTED ONE. A planet's military vector was
-        found with `begin` at 0x0AD4F928 and `end` at 0x02D99268 (two different
-        heap regions) and the engine crashed walking it a turn later, reading
-        0x02DBF00C. The write that exposed it was ours, computing a new `end`
-        from a `begin` that no longer belonged to the same buffer as the `end`
-        it replaced.
-
-        A vector we did not put in that state is one we must not write to: the
-        damage is already done and adding to it destroys the evidence as well as
-        the client. So this refuses rather than repairs.
+        Returns (ok, reason). Callers refuse to write to a vector that fails.
         """
         begin = self.snap.rd32(base)
         end   = self.snap.rd32(base + 4)
@@ -623,8 +502,7 @@ class Actuator:
                            f"{self.CITIZEN_STRIDE}-byte records")
         if span > self.VEC_SANE_SPAN:
             return False, f"span {span} is implausibly large"
-        # The give-away in the crash we had: begin and end in different 64 KB
-        # regions of very different heaps.
+        # begin and end in different heap regions means a corrupt vector.
         if (begin >> 24) != (end >> 24):
             return False, (f"begin 0x{begin:08X} and end 0x{end:08X} are in "
                            f"different heaps; this vector is already corrupt")
@@ -639,27 +517,9 @@ class Actuator:
     def _set_ship_crew(self, ship, records, n, allow_replace=False):
         """Point a ship's crew vector at a fresh engine buffer holding `records`.
 
-        REPOINTING A CREW VECTOR THE ENGINE ALREADY OWNS CRASHES THE CLIENT, and
-        that is measured, not feared. This method was written to "top up" a
-        crewed ship by allocating a bigger buffer and abandoning the old one, on
-        the reasoning that a leak is bounded and harmless. The original code had
-        refused to do exactly that, saying growing an engine-owned buffer would
-        mean freeing memory we did not allocate. It was right.
-
-        The bisect that found it, 45 turns per arm from one checkpoint:
-
-            conscription on, crew loading on   -> client dies, ~30 turns later
-            conscription on, crew loading OFF  -> survives 45/45, 19 drafts
-
-        Conscription was blamed first, and it is innocent: it merely PRODUCES the
-        units, which is what makes the loader run at all. With drafting off there
-        was nothing to load and the crash went away, which framed the wrong
-        suspect for three arms.
-
-        So a crew vector is only ever FILLED WHEN EMPTY. Filling an empty one is
-        the path every game before this session used, and it is in every arm that
-        survives. `allow_replace` exists for a caller that has proven it owns the
-        buffer; nothing sets it today.
+        Repointing a crew vector the engine already owns crashes the client, so
+        a crew vector is only filled when empty. `allow_replace` is for a caller
+        that has proven it owns the buffer; nothing sets it.
         """
         old = self._live_ptr(ship, self.SHIP_CREW)
         if gs.is_ptr(old) and not allow_replace:
@@ -681,16 +541,9 @@ class Actuator:
     def _append_military(self, planet, records):
         """Add 16-byte units to a planet's stationed-military vector.
 
-        Uses spare capacity when the engine's buffer has it, and otherwise
-        reallocates through the ENGINE'S OWN `operator new` and repoints the
-        three pointers. That reallocation is legitimate precisely because the
-        buffer comes from the engine's allocator: when recruitment later grows
-        the vector, the engine frees a block its own allocator handed out.
-
-        The abandoned block leaks, which is the same bounded trade `load_crew`
-        makes for a ship's crew vector, and that path runs in every arm of the
-        crash bisect that SURVIVES, which is what makes it credible rather than
-        merely argued.
+        Uses spare capacity when the buffer has it. An empty vector gets a
+        fresh buffer from the engine's own `operator new`. A full engine-owned
+        vector is refused.
         """
         base = planet.addr + self.PLANET_MILITARY
         self._require_sane(base, f"{planet}'s military vector")
@@ -707,16 +560,13 @@ class Actuator:
                       f"military end -> {len(mil) + len(records)} unit(s)")
             return
         if gs.is_ptr(begin):
-            # Same rule as a ship's crew vector, and for the same measured
-            # reason: repointing a vector the engine already owns is what
-            # crashed the client. A planet's military vector is worse than a
-            # ship's, because recruitment appends to it; the engine and this
-            # code would be trading ownership of one buffer every few turns.
+            # An engine-owned military vector must not be repointed: the
+            # engine also appends to it on recruitment.
             raise ValueError(
                 f"{planet}'s military vector is full "
                 f"({(cap or 0) - (end or 0)} bytes spare, need {need}) and "
                 f"already engine-owned; growing it is what crashed the client")
-        # An EMPTY vector belongs to nobody yet, so this is the one safe case.
+        # An empty vector has no owner yet, so a fresh buffer is safe.
         size = len(blob)
         buf = self.remote.operator_new(size)
         self._write(buf, blob, f"{len(records)} unit(s) into a fresh buffer")
@@ -725,21 +575,10 @@ class Actuator:
         self._u32(base + 8, buf + size, "military cap")
 
     def unload_crew(self, ship, planet, count=1, keep=None):
-        """Garrison troops FROM a ship onto a planet; the reverse of load_crew.
+        """Garrison troops from a ship onto a planet; the reverse of load_crew.
 
-        Why the AI needs it: a freshly conquered planet is disloyal and in civil
-        disorder, and the repair is occupying infantry. The invasion already
-        leaves one unit behind as the garrison; putting the rest of the hull's
-        troops down is what turns a captured planet into a held one.
-
-        `keep` guards the flight crew; unload past `ShipDesign:76` and the ship
-        is stranded wherever it happens to be, which is by definition inside
-        hostile territory.
-
-        The planet side APPENDS, and appending is the direction a vector cannot
-        do for free. When the engine's buffer has spare capacity the records go
-        in place and only `end` moves; otherwise the whole vector is reallocated
-        and the old block is abandoned, same trade as _set_ship_crew.
+        `keep` is the flight crew minimum (`ShipDesign:76`) the ship retains.
+        The planet side uses spare capacity in the engine's buffer only.
         """
         self._require_sane(ship.addr + self.SHIP_CREW, f"{ship}'s crew vector")
         self._require_sane(planet.addr + self.PLANET_MILITARY,
@@ -773,26 +612,18 @@ class Actuator:
             self._u32(planet.addr + self.PLANET_MILITARY + 4, end + need,
                       f"planet military end -> {len(mil) + count} unit(s)")
         else:
-            # DO NOT REALLOCATE A PLANET'S MILITARY VECTOR. This branch used to,
-            # and it is what corrupted one: our buffer became `begin`, then the
-            # engine's own push_back on the next recruited unit reallocated
-            # through ITS allocator and left the three pointers straddling two
-            # allocations: begin at 0x0AD4F928 with end at 0x02D99268. A turn
-            # later the engine walked begin..end across unrelated memory and
-            # died reading 0x02DBF00C.
-            #
-            # A ship's crew vector survives the same treatment because nothing
-            # but us ever grows it. A planet's does not: recruitment appends to
-            # it, so the engine and this code end up fighting over who owns the
-            # buffer, and the engine always wins because it frees.
+            # A planet's military vector must not be reallocated here. The
+            # engine appends to it on recruitment through its own allocator,
+            # so a buffer from this code leaves begin and end in different
+            # allocations. Ship crew vectors are safe because only this code
+            # grows them.
             raise ValueError(
                 f"{planet}'s military vector has no spare capacity "
                 f"({(cap - end) if (cap and end) else '?'} bytes free, need "
                 f"{need}); growing an engine-owned vector it also appends to is "
                 f"what corrupted one and crashed the client")
 
-        # The ship side only SHRINKS, which needs no allocation at all: walk
-        # `end` back and the surviving records stay contiguous from `begin`.
+        # The ship side only shrinks: walk `end` back, no allocation.
         cb = self._live_ptr(ship, self.SHIP_CREW)
         self._u32(ship.addr + self.SHIP_CREW + 4,
                   cb + (len(aboard) - count) * self.CITIZEN_STRIDE,
@@ -800,27 +631,15 @@ class Actuator:
         self.log(f"  garrisoned {count} unit(s) from {ship} onto {planet}")
         return count
 
-    # -- J: sell a facility (engine call) --------------------------------
+    # J: sell a facility (engine call).
     def sell_facility(self, planet, type_id, count=1):
         """Sell `count` of a facility type, crediting the civ's treasury.
 
-        A player can sell a building, so an AI should be able to. The use is not
-        tidying up: it is a recovery move. A civ that loses the planets funding
-        its expensive buildings faces a cascade -- upkeep it can no longer pay
-        against income it no longer has -- and liquidating those buildings is
-        how a human trades a long-term asset for immediate solvency instead of
-        surrendering.
-
-        THIS GOES THROUGH THE ENGINE, and that is not incidental. Selling pays
-        cash, and STRATEGY.md 1.1 forbids writing the treasury: a sale that
-        credited itself would be arithmetically identical to inventing money,
-        and we would have no way to tell a correct payout from a generous one.
-        PlanetProperties::SellFacility prices the building, credits Owner:8 and
-        removes the units in one call, so the payout is the engine's number.
-
-        Refuses on the online path. The call site at 0x0056EF91 is guarded by
-        the offline flag at 0x0086F1A0 -- in multiplayer the server owns the
-        transaction, and applying it locally would desync rather than cheat.
+        Goes through PlanetProperties::SellFacility, which prices the building,
+        credits Owner:8 and removes the units, since STRATEGY.md 1.1 forbids
+        writing the treasury. Refused on the online path: the call site at
+        0x0056EF91 is guarded by the offline flag at 0x0086F1A0, and in
+        multiplayer the server owns the transaction.
         """
         have = planet.facilities.get(type_id, 0)
         if have < count:
@@ -845,16 +664,16 @@ class Actuator:
         self.writes.append((planet.addr, b"", b"", f"sold {count} x {name}"))
         return ok
 
-    # -- K: hurry the current production (engine call) --------------------
+    # K: hurry the current production (engine call).
     HURRY_MIN_FRACTION = 0.5
 
     def hurry_state(self, planet):
         """(cost, done, total, fraction) for this planet's current build.
 
-        Every number comes from the engine, not from us: the cost function at
-        0x00555660 and the PlanetProperties total-production virtual at vftable
-        slot 0x74. cost is -1 when the production cannot be hurried at all,
-        which is what a planet generating wealth (production kind 7) returns.
+        Every number comes from the engine: the cost function at 0x00555660
+        and the PlanetProperties total-production virtual at vftable slot 0x74.
+        cost is -1 when the production cannot be hurried, as for a planet
+        generating wealth (production kind 7).
         """
         if self.remote is None:
             return None
@@ -871,15 +690,9 @@ class Actuator:
     def hurry_production(self, planet):
         """Spend cash to complete this planet's build now.
 
-        This is the one use for cash we have actually found. Ships and
-        facilities accumulate PRODUCTION, and cash sat unspent at 46,000 while
-        builds crawled -- hurrying converts the idle balance into finished
-        buildings at 4 credits per unit of remaining production.
-
-        Engine call, for the same reason as sell_facility: it debits Owner:8,
-        which STRATEGY.md 1.1 forbids us to write. Every precondition below is
-        one the engine itself enforces, checked here only to avoid spawning a
-        remote thread for a call that would refuse.
+        Engine call, since it debits Owner:8 (STRATEGY.md 1.1). The
+        preconditions checked here are ones the engine enforces; checking them
+        first avoids a remote thread for a call that would refuse.
         """
         st = self.hurry_state(planet)
         if st is None:
@@ -898,9 +711,7 @@ class Actuator:
                 f"refuses below {self.HURRY_MIN_FRACTION:.0%}; "
                 f"'the production needs to be at least half finished'")
         civ = self.snap.civ_of(self.snap.rd32(planet.u32(40)))             if gs.is_ptr(planet.u32(40)) else None
-        # Live, not snapshot: the engine debits Owner:8 itself for every
-        # hurry, so a second hurry in the same pass is priced against a
-        # balance that has already been spent.
+        # Live cash: the engine debits Owner:8 on every hurry.
         cash = self._live_cash(civ) if civ else None
         if cash is not None and cost > cash:
             raise ValueError(f"{planet} hurry costs {cost}, cash is {cash}")
@@ -909,18 +720,15 @@ class Actuator:
                      f"({done}/{total}) for {cost} credits")
             return None
         ok = self.remote.hurry_production(planet.addr)
-        # The callee returns AL, so only the low byte is meaningful; the
-        # upper 24 bits of EAX are whatever the function last had there.
+        # The callee returns AL, so only the low byte of EAX is meaningful.
         ok = None if ok is None else bool(ok & 0xFF)
         self.log(f"  hurried {planet} for {cost} credits (engine says {ok})")
         self.cash_effect -= cost
         self.writes.append((planet.addr, b"", b"", f"hurried for {cost}"))
         return ok
 
-    # -- N: conscript a citizen into the military (engine call) ------------
-    # Never a farmer. Food is the one thing that actually kills a colony, and
-    # S-01 exists to put citizens back onto it; drafting one straight off the
-    # farms would have the two rules fighting each other every turn.
+    # N: conscript a citizen into the military (engine call).
+    # Never a farmer, so drafts do not undo S-01's farm assignments.
     DRAFT_PREFERENCE = (6, 2, 5, 1)        # banker, scientist, miner, worker
 
     def draft_cost(self, civ, count=1):
@@ -930,43 +738,20 @@ class Actuator:
         return self.remote.draft_cost(civ.addr, count)
 
     def conscript(self, planet, civ):
-        """Turn ONE citizen into a stationed military unit, at the engine's price.
+        """Turn one citizen into a stationed military unit, at the engine's price.
 
-        The crew bottleneck this exists to break: a ship with no crew cannot
-        move and the engine CANCELS its order at the next boundary, so every
-        order rule is gated on crew, and recruitment delivers roughly one unit
-        per ten turns. Meanwhile cash accumulates with nothing to buy; 6,121
-        on a civ whose scouts were grounded, against 115 for a conscript.
-
-        Engine call, for the STRATEGY.md §7 reason and more sharply than usual:
-        the price depends on empire-wide military INCLUDING ship crew, and it
-        debits Owner:8, which §1.1 forbids us to write. A draft we priced
-        ourselves would be indistinguishable from a free one.
-
-        The engine refuses outright when the cost exceeds the treasury; `jg`
-        before any list write, so a rejected draft changes nothing at all. The
-        checks here only avoid spawning a remote thread for a call that would
-        refuse.
-
-        ONE per call, and that is a correctness bound rather than caution: the
-        engine ERASES the drafted record and memmoves the tail down, so every
-        index above it shifts. A second index taken from the same snapshot would
-        name a different citizen than the one it was chosen for. A rule that
-        wants two drafts takes them on two turns, against two snapshots.
+        The price comes from the engine's GetDraftCost, which depends on
+        empire-wide military including ship crew. One draft per call: removing
+        a citizen shifts every index above it.
         """
         if self.remote is None and not self.dry_run:
             raise RuntimeError("conscription needs a remote.Remote")
-        # THE INDEX MUST COME FROM A LIVE READ, NOT FROM THE SNAPSHOT. The
-        # snapshot is taken once per turn and shared by every civ, so by the
-        # time this runs the planet's citizen vector may have moved underneath
-        # it, and the engine shifts that vector itself: CommitPopulation erases
-        # each drafted record and memmoves the tail, and auto-conscripts surplus
-        # population above space/10 while it is in there. An index chosen from a
-        # stale list names a citizen who has shifted or gone.
+        # The index must come from a live read. The engine shifts the citizen
+        # vector itself (CommitPopulation erases and memmoves, and
+        # auto-conscripts population above space/10).
         self._require_sane(planet.addr + self.CITIZEN_LIST,
                            f"{planet}'s citizen vector")
-        # `planet.population` is the snapshot's extent over live bytes, so
-        # comparing the two is what actually detects the vector moving.
+        # `planet.population` is the snapshot's extent over live bytes.
         live = [struct.unpack_from("<I", r, 0)[0]
                 for r in self._live_vec(planet, self.CITIZEN_LIST,
                                         self.CITIZEN_STRIDE)]
@@ -995,17 +780,11 @@ class Actuator:
         if cost is None:
             raise RuntimeError("cannot draft without the engine's price")
 
-        # THE MIGRATION, BY HAND. `ChangeCitizenJobs` did all of this and is
-        # PROVEN to kill the client about 30 turns later; a five-arm bisect put
-        # it beyond doubt (§7). What it does that our writes do not is run
-        # `CommitPopulation` on a REMOTE THREAD, mutating and reallocating the
-        # two containers while the main thread may be walking them.
-        #
-        # So the engine still sets the PRICE; `GetDraftCost` is read-only and
-        # runs in every arm that survives, and we perform the transfer with the
-        # plain field writes the bisect exonerated. A conscript is, in the
-        # engine's own terms, one 16-byte record moving from the citizen vector
-        # to the military vector with its job id set to 3.
+        # The migration is done by field writes. `ChangeCitizenJobs` runs
+        # CommitPopulation on a remote thread, reallocating both containers
+        # while the main thread may walk them, and crashes the client (§7). A
+        # conscript is one 16-byte record moving from the citizen vector to the
+        # military vector with its job id set to 3.
         recs = self._live_vec(planet, self.CITIZEN_LIST, self.CITIZEN_STRIDE)
         if pick >= len(recs):
             raise ValueError(f"citizen {pick} no longer exists on {planet}")
@@ -1019,12 +798,8 @@ class Actuator:
                   f"citizen end -> {len(recs) - 1}")
         self._append_military(planet, [bytes(moved)])
 
-        # WRITING Owner:8 AT ALL IS A §1.1 EXCEPTION, and a narrow one. The rule
-        # forbids it because inventing money is indistinguishable from earning
-        # it, which is an argument about CREDITING. This only ever debits, and
-        # only by the number the engine itself quoted for this exact draft a few
-        # microseconds earlier. The alternative is not "do it honestly", it is
-        # "take the citizen for free", which is the actual cheat.
+        # A narrow §1.1 exception: Owner:8 is only debited, by the price the
+        # engine quoted for this draft.
         cash = self._live_cash(civ)
         self._u32(civ.addr + 8, cash - cost,
                   f"{civ.civ_name} cash {cash} -> {cash - cost} "
@@ -1036,55 +811,25 @@ class Actuator:
                  f"(migrated by field write, not by ChangeCitizenJobs)")
         return pick
 
-    # Never strip a colony to nothing, however hungry it is: a planet that
-    # cannot work is worse than a ship that cannot fly.
-    MIN_COLONY_POP = 4
+    MIN_COLONY_POP = 4     # citizens a colony keeps when farmers are drafted
 
     def conscript_to_crew(self, planet, ship, count, civ,
                           allow_farmers=False):
-        """Draft citizens straight onto a ship, skipping the planet entirely.
+        """Draft citizens straight onto a ship, bypassing Planet:168.
 
-        THE PLANET'S MILITARY VECTOR IS THE BOTTLENECK, AND NOTHING NEEDS IT.
-        `conscript` moves a citizen into `Planet:168` and `load_crew` moves it
-        out again the moment a ship wants it, so the stationed-military vector is
-        a staging area a crew-bound unit never has to visit. It is also the step
-        that fails: it is engine-owned, it fills up, and `_append_military`
-        rightly refuses to grow it: "military vector is full (0 bytes spare,
-        need 16)" is what left a finished bomber grounded for ~100 turns with
-        18k cash in the bank and nothing else in its way.
-
-        A citizen, a stationed unit and a crew member are the SAME 16-byte
-        record (see `load_crew`), so the move is legal in one hop: rewrite the
-        citizen list without the drafted records, and hand those records to a
-        fresh crew buffer.
-
-        WHY THIS DOES NOT REOPEN THE AUG 2026 CRASH. That crash was
-        `_set_ship_crew` repointing a crew vector the engine already owned, and
-        the rule that came out of it is "fill a crew vector only when it is
-        EMPTY". This fills an empty one, in a single allocation, with the ship's
-        whole complement; the exact path present in every arm of the bisect
-        that survived. It refuses outright if the ship already has crew, rather
-        than topping up.
-
-        WHAT IT COSTS THE CIV, so this is not a free army: the engine's own
-        `GetDraftCost` prices all `count` drafts and the treasury is debited by
-        that number, the same narrow §1.1 exception `conscript` documents; a
-        debit at a price we did not invent. The player-visible outcome matches
-        what a human gets by drafting and then loading; only the staging hop is
-        skipped.
-
-        TRADE-OFF, DELIBERATE: crew taken this way never appears in the planet's
-        garrison, so this cannot conscript for DEFENCE. That is the recruitment
-        slider's job (R-XPL-05), and no rule defends a planet yet anyway.
+        Citizens and crew share one 16-byte record, so the citizen list is
+        rewritten without the drafted records and those records fill a fresh
+        crew buffer. The ship's crew vector must be empty. `GetDraftCost`
+        prices all `count` drafts and the treasury is debited by that number,
+        as in `conscript`. Crew drafted this way never joins the planet's
+        garrison.
         """
         if count <= 0:
             raise ValueError("conscript_to_crew needs a positive count")
         if self.remote is None and not self.dry_run:
             raise RuntimeError("conscription needs a remote.Remote")
 
-        # Empty-only, checked before anything is taken from the planet: a
-        # half-done draft that then cannot deliver its crew would delete
-        # citizens for nothing.
+        # Checked before anything is taken from the planet.
         existing = self._live_ptr(ship, self.SHIP_CREW)
         if gs.is_ptr(existing):
             raise ValueError(
@@ -1094,9 +839,7 @@ class Actuator:
 
         self._require_sane(planet.addr + self.CITIZEN_LIST,
                            f"{planet}'s citizen vector")
-        # Live read, never the snapshot: the engine shifts this vector itself
-        # (CommitPopulation erases and memmoves, and auto-conscripts surplus
-        # population), so an index chosen from a stale list names someone else.
+        # Live read: the engine shifts this vector itself.
         recs = self._live_vec(planet, self.CITIZEN_LIST, self.CITIZEN_STRIDE)
         jobs = [struct.unpack_from("<I", r, 0)[0] for r in recs]
 
@@ -1110,17 +853,9 @@ class Actuator:
             if len(picks) == count:
                 break
 
-        # A FARMER IS DRAFTABLE WHEN THE COLONY HAS NO USE FOR THEM, which is a
-        # judgement about the planet, not about food alone. R-XPL-09 makes it
-        # and passes it down, because only the rule has the population cap and
-        # the food history (STRATEGY.md §2.5) in front of it.
-        #
-        # DO NOT READ `allow_farmers` AS "THE PLANET IS STARVING". The case that
-        # actually matters is a planet at its POPULATION CAP running a food
-        # SURPLUS: growth has stopped, the surplus has nowhere to go, and the
-        # drafted citizen is replaced by growth that was being discarded. A
-        # food-negative colony qualifies too, for the opposite reason. Treating
-        # the flag as a famine signal would invert the common case.
+        # `allow_farmers` is R-XPL-09's judgement that the colony has no use
+        # for a farmer, typically a planet at its population cap with a food
+        # surplus. It is not a famine signal.
         if len(picks) < count and allow_farmers:
             spare = len(jobs) - len(picks) - self.MIN_COLONY_POP
             for i, job in enumerate(jobs):
@@ -1155,23 +890,9 @@ class Actuator:
         if cost is None:
             raise RuntimeError("cannot draft without the engine's price")
 
-        # Both vectors are rewritten from one live read, so no index is used
-        # after the list beneath it has shifted; the hazard that makes
-        # `conscript` strictly one-per-call does not arise here.
-        #
-        # THIS MIGRATION NEVER RUNS `CommitPopulation`, which is the whole point
-        # of doing it by hand (§7), so whatever that call updates besides the two
-        # vectors is left as it stands. One known side effect is that it
-        # auto-conscripts surplus population above `space/10` while it is in
-        # there. The citizen vector's CAPACITY at Planet:144+8 is likewise left
-        # alone, so a drafted planet keeps spare capacity a reloaded one does not
-        # have.
-        #
-        # Measured 2026-09-19: none of that reaches the blob. A galaxy crewed
-        # this way, played 70 turns and compared against the same galaxy saved
-        # and reloaded, was byte-identical once star names were cleared, same
-        # canonical hash. That covers THIS path over that window, not `conscript`
-        # and not the claim that the skipped bookkeeping costs nothing.
+        # Both vectors are rewritten from one live read, so several drafts per
+        # call are safe. CommitPopulation never runs (§7), and the citizen
+        # vector's capacity at Planet:144+8 is left as it stands.
         drafted = []
         for i in picks:
             rec = bytearray(recs[i])
@@ -1187,19 +908,14 @@ class Actuator:
 
         self._set_ship_crew(ship, b"".join(drafted), count)
 
-        # The balance has to be re-read here for the same reason the price is
-        # invalidated below: a caller that crews several ships in one pass holds
-        # ONE snapshot `civ`, and `civ.cash` still reads the balance this pass
-        # opened with. Debiting from that would rewrite Owner:8 to
-        # opening - cost every time, so N drafts would cost the treasury one.
+        # Re-read live: `civ.cash` holds the balance the pass opened with.
         cash = self._live_cash(civ)
         self._u32(civ.addr + 8, cash - cost,
                   f"{civ.civ_name} cash {cash} -> {cash - cost} "
                   f"(the engine's price for {count} draft(s))")
         self.cash_effect -= cost
         self.crewed_ships.add(ship.id)
-        # The draft price is a function of empire-wide military and we just
-        # raised it. A stale price would under-quote the NEXT draft this pass.
+        # The draft price depends on empire-wide military, which just rose.
         if self.remote is not None:
             self.remote.invalidate_draft_cost()
         self.log(f"  drafted {count} citizen(s) on {planet} directly onto "
@@ -1207,51 +923,24 @@ class Actuator:
                  f"involved")
         return picks
 
-    # -- L: set a ship's command, target node included (engine call) -------
-    # Order types that consult Ship:56. 0x004D9880 Ship::HasActiveTargetedOrder
-    # requires the type to be one of these AND Ship:56 to be non-null, so an
-    # order of these types written without a target node is very likely inert.
+    # L: set a ship's command, target node included (engine call).
+    # Order types that consult Ship:56. Ship::HasActiveTargetedOrder
+    # (0x004D9880) requires one of these types and a non-null Ship:56.
     TARGETED_ORDER_TYPES = (1, 4, 7)      # Move, Attack, MoveNear
 
     def set_command(self, ship, order_type, target, civ=None):
-        """Give a ship an order that names a target OBJECT, not just coordinates.
+        """Give a ship an order that names a target object, not just coordinates.
 
-        *** DO NOT USE. THIS KILLS THE CLIENT. ***
+        Do not use: an order set this way crashes the client when the engine
+        resolves the turn. Use `exterminate.send_to` instead (STRATEGY.md §4.4).
+        It is kept because the ShipCommand/SetCommand pair is the only known way
+        to populate `Ship:56`. A route-only order leaves `Ship:56` as the null
+        node and the ship still navigates.
 
-        Measured 2026-08-06 from `client/armed.dat`, one turn boundary per trial:
-        `set_command(4)` and `set_command(1)` BOTH crashed the client while the
-        engine resolved the turn, while `create_order` + `retarget_order(1)`
-        survived and moved the ship exactly `ShipDesign:36` units. The order is
-        written cleanly and the pass completes; the death is at resolution.
-
-        The premise below is also wrong on its own terms: a route-only order
-        leaves `Ship:56` as the static null node and the ship navigates fine, so
-        `Ship::HasActiveTargetedOrder` is not what makes a ship move. Nothing in
-        the AI needs `Ship:56` today; combat triggers on co-location and the
-        battle driver never reads the order type.
-
-        Kept, unused, because the ShipCommand/SetCommand call pair is still the
-        only known way to populate `Ship:56` and the crash is not understood yet.
-        Use `exterminate.send_to` instead. See STRATEGY.md §4.4.
-
-        `retarget_order` writes Ship:52 and the order's coordinate triple, which
-        is right for Colonize (3) and Scout (2); neither consults Ship:56, and
-        both were confirmed to navigate correctly. It is NOT right for Move (1),
-        Attack (4) or MoveNear (7): those are exactly the types
-        Ship::HasActiveTargetedOrder tests, and it also requires Ship:56 to be
-        non-null. Our writer leaves the static null node there.
-
-        So this goes through the engine instead. ShipCommand's constructor turns
-        a target object into the reference node via GetReferenceNode(objectId),
-        and Ship::SetCommand writes Ship:52/56/60/61 as the single value they
-        are. Nothing else we have can populate Ship:56; a hand-made node is not
-        registered anywhere the engine knows about, which is the same reason
-        set_design_owner reuses a node rather than fabricating one.
-
-        The 16-byte ShipCommand comes from the engine's own operator new so the
-        engine may legally free it. It is a plain value type and SetCommand
-        copies out of it, so nothing retains a pointer; it simply leaks, which is
-        the same trade create_order already accepts.
+        ShipCommand's constructor turns the target into a reference node via
+        GetReferenceNode(objectId), and Ship::SetCommand writes Ship:52/56/60/61.
+        The 16-byte ShipCommand comes from the engine's operator new and leaks;
+        SetCommand copies out of it.
         """
         if order_type not in gs.ORDER_TYPES:
             raise ValueError(f"order type {order_type} is not one the UI issues")
@@ -1270,20 +959,10 @@ class Actuator:
         if self.remote is None:
             raise RuntimeError("set_command needs a remote.Remote")
 
-        # ORDER OBJECT AND ROUTE FIRST. SetCommand only writes four fields; it
-        # does NOT build a route. The engine's own callers run Ship::SetOrder
-        # before it (0x004CD090 and 0x004D0FB3 both do), and skipping that step
-        # CRASHED THE CLIENT: a ship under a scout order was given
-        # SetCommand(Move, planet), so Ship:52 and Ship:56 described a move to a
-        # planet while the order object still held the route to a SUN. The write
-        # itself looked perfect (order type 1, a real target node) and the
-        # client died at the next turn boundary with EIP 0.
-        #
-        # retarget_order already builds a correct single-leg route and is
-        # confirmed end to end (a retargeted colonize order moved exactly
-        # ShipDesign:36 units along the new bearing). So establish a consistent
-        # order first, then let SetCommand add the target node the coordinate
-        # writer cannot produce.
+        # Order object and route first. SetCommand writes four fields and builds
+        # no route; the engine's own callers run Ship::SetOrder before it
+        # (0x004CD090, 0x004D0FB3). A route that disagrees with Ship:52/56
+        # crashes the client at the next turn boundary.
         new_ptr = None
         if not gs.is_ptr(ship.order_ptr):
             if civ is None:
@@ -1294,24 +973,13 @@ class Actuator:
             if new_ptr is None:
                 raise RuntimeError(f"could not originate an order for {ship}")
 
-        # ROUTE-FIRST OPENS A TORN WINDOW, SO IT HAS TO BE CLOSABLE.
-        # Between retarget_order and SetCommand the ship's route points at the
-        # NEW target while Ship:52/56 still describe the OLD order. That window
-        # is normally microseconds and harmless. It stopped being harmless when
-        # a remote call failed inside it: the client died with ship #669 holding
-        # a route to the enemy HQ under a stale Scout order; the same
-        # type-disagrees-with-route shape documented above as fatal, just
-        # arrived at from the other side.
-        #
-        # So snapshot every byte retarget_order is about to touch, and put it
-        # back if we cannot finish. A ship left under its old, self-consistent
-        # order is merely disobedient; a ship left torn crashes the game.
+        # Between retarget_order and SetCommand the route names the new target
+        # while Ship:52/56 still describe the old order. The bytes are saved so
+        # a failure in that window can be rolled back.
         saved = self._order_bytes(ship, new_ptr if new_ptr else ship.order_ptr)
         try:
-            # Route and coordinates only. The TYPE is deliberately not written
-            # here; SetCommand writes Ship:52 and Ship:56 as the single value
-            # they are, and any window where the type says Attack while the
-            # target node is null is a window the engine can crash in.
+            # Route and coordinates only. SetCommand writes Ship:52 and Ship:56
+            # together; a targeted type with a null node can crash the engine.
             self.retarget_order(ship, order_type, target.pos, order_ptr=new_ptr,
                                 set_type=False)
 
@@ -1331,11 +999,8 @@ class Actuator:
                     f"ShipCommand resolved to the STATIC NULL NODE, so the "
                     f"target id did not resolve; installing it would give a "
                     f"targeted order the engine treats as untargeted")
-            # LAST CHECK BEFORE THE POINT OF NO RETURN. If the turn rolled over
-            # while we were doing all this, every coordinate we just wrote came
-            # from the previous turn's snapshot: the ship has already moved, so
-            # the route origin is wrong and the progress reset is measured from
-            # a position it no longer holds. Roll back rather than install it.
+            # If the turn rolled over, the coordinates came from the previous
+            # turn's snapshot; roll back rather than install.
             self._require_same_turn(ship)
             self.remote.ship_set_command(ship.addr, block)
         except Exception:
@@ -1349,35 +1014,23 @@ class Actuator:
                             f"SetCommand type {order_type} at {target}"))
         return got_type == order_type and got_node == node
 
-    # -- M: declare war (engine-assisted, symmetric) ----------------------
-    # The relation record is SYMMETRIC: the engine's own applier writes the same
-    # code into BOTH civs' Owner:248 in one call. Writing only our own side
-    # leaves an inconsistent galaxy, and since the battle phases ask *a* civ's
-    # map, which side gets asked would decide whether combat happens at all.
+    # M: declare war (engine-assisted, symmetric).
+    # The engine's applier writes the same relation code into both civs'
+    # Owner:248 in one call, so both sides are always written.
     WAR, NEUTRAL = 1, 0
     RELATION_NAMES = {0: "Neutral", 1: "War", 2: "Cease-Fire", 3: "Peace",
                       4: "Alliance"}
 
-    # Reputation for declaring war. The UI quantifies a figure before confirming
-    # and we have NOT recovered its formula, so this is a placeholder that must
-    # be set deliberately rather than left to default silently. Applying nothing
-    # is not neutral: it is a free war, which in an AI-vs-AI galaxy would be an
-    # advantage shared by whoever uses this code and denied to anyone who does
-    # not. Tracked as a [ ] in STRATEGY.md.
+    # Reputation cost of declaring war. The UI's formula is unknown; None
+    # applies no cost, which makes war free. Tracked in STRATEGY.md.
     WAR_REPUTATION_DELTA = None
 
     def declare_war(self, civ, other, reputation_delta=None):
         """Move two civs to War, both directions, and apply the standing cost.
 
-        Uses the engine for the parts that have invariants (creating the
-        relation record (`first_contact`, which no-ops when one exists) and
-        adjusting the clamped standing score) and writes only the relation code
-        itself, which is a plain int inside a record the engine just built.
-
-        NEWS IS NOT GENERATED. The UI path emits a "Declares War" item and this
-        does not. For an AI-vs-AI galaxy that is acceptable (no human is reading
-        the news tab) but it means the victim gets no notification, so AIs have
-        to learn about wars by reading relations rather than by being told.
+        The engine creates the relation record (`first_contact`, a no-op when
+        one exists) and adjusts the clamped standing score; only the relation
+        code is written directly. No "Declares War" news item is generated.
         """
         if other.addr == civ.addr:
             raise ValueError("a civ cannot declare war on itself")
@@ -1416,19 +1069,11 @@ class Actuator:
         return all(self.snap.rd32(r + remote.RELATION_CODE_OFF) == self.WAR
                    for r in wrote)
 
-    # -- G: set a planet's recruitment rate (Planet:100 byte 3) ---------
-    # The maximum is PER PLANET and depends on military camps. Confirmed in the
-    # UI: a planet with ONE camp offers up to 60%, with the remaining 40% going
-    # to citizen growth. The report's "0-40" was the no-camp base, and each camp
-    # adds 20 (the game's own string says so). We had been capping every planet
-    # at 40, so a planet with a camp was recruiting at two thirds of the rate a
-    # player would have used.
-    #
-    # The engine applies whatever byte is written with NO clamp of its own -- the
-    # getter is `movsx eax, byte ptr [ecx+0xf]` and nothing else -- so respecting
-    # the maximum is entirely our responsibility, and it is a 1.1 obligation
-    # rather than a safety one. The movsx also means the byte must stay under
-    # 128, or the rate reads NEGATIVE and the military store would go DOWN.
+    # G: set a planet's recruitment rate (Planet:100 byte 3).
+    # The UI maximum is per planet: 40% plus 20% per military camp. The engine
+    # does not clamp (the getter is `movsx eax, byte ptr [ecx+0xf]`), so the
+    # cap is enforced here, and the byte must stay under 128 or it reads
+    # negative.
     RECRUITMENT_BASE_MAX = 40     # no military camp
     RECRUITMENT_PER_CAMP = 20     # each camp raises the ceiling by this
     RECRUITMENT_HARD_MAX = 100    # and never above the UI's own 0..100 range
@@ -1442,15 +1087,8 @@ class Actuator:
         """Set the military recruitment rate, a percentage in byte 3 of
         Planet:100.
 
-        Only that one byte moves. Bytes 0-2 read 100/100/100 on every planet
-        including uncolonised ones and are the leading loyalty candidate, so
-        writing the dword wholesale would clobber three fields to change one.
-
-        The UI was observed offering 0 to 40, so this refuses anything outside
-        that: a value the interface could not produce is exactly what the
-        no-cheating rule forbids. A military base is suspected to raise the cap
-        (a planet with one read 60) but that is unproven, so the ceiling stays
-        at what has actually been seen.
+        Only that byte is written; bytes 0-2 are separate fields (likely
+        loyalty). Values above max_recruitment are refused.
         """
         ceiling = self.max_recruitment(planet)
         if not 0 <= percent <= ceiling:
@@ -1469,26 +1107,24 @@ class Actuator:
         return self._write(planet.addr + 100, new,
                            f"Planet:100 byte 3 recruitment -> {percent}%")
 
-    # -- F: set the research topic (Owner:144 and :152 together) --------
+    # F: set the research topic (Owner:144 and :152 together).
     def set_research(self, civ, topic_id):
         ok = self._u32(civ.addr + 144, topic_id, f"{civ.civ_name} topic -> {topic_id}")
         return self._u32(civ.addr + 152, topic_id,
                          f"{civ.civ_name} topic mirror -> {topic_id}") and ok
 
-    # -- E: order a ship ------------------------------------------------
+    # E: order a ship.
     def retarget_order(self, ship, order_type, target_xyz, order_ptr=None,
                        set_type=True):
-        """Point an EXISTING order at a new destination.
+        """Point an existing order at a new destination.
 
-        Writes, in order: the target triple, the route leg (origin = the ship's
-        current position, dest = the target, length = the distance between them),
-        the order type, and the local-civ pending-orders flag. Every one is a
-        plain float or int already inside allocated memory.
+        Writes the target triple, the route leg (origin = the ship's current
+        position, dest = the target, length = the distance), the order type,
+        and the local-civ pending-orders flag. Nothing is allocated.
         """
         if order_type not in gs.ORDERS:
             raise ValueError(f"order type {order_type} is not one the UI issues")
-        # order_ptr lets a caller aim an order it just created, without having
-        # to re-scan the process for the ship's updated Ship:48.
+        # order_ptr lets a caller aim an order it just created, before a rescan.
         ord_ptr = order_ptr if order_ptr is not None else ship.order_ptr
         if not gs.is_ptr(ord_ptr):
             raise NeedsEngineOrder(ship)
@@ -1519,18 +1155,13 @@ class Actuator:
             self.log(f"  [warn] no usable route vector at +{ORD_ROUTE}; "
                      f"the engine may recompute it, or the order may not move")
 
-        # Progress MUST be reset or the ship resumes from however far the order
-        # had already travelled. Transferring a half-flown order without this
-        # made a ship cover 27.0 units in one turn at speed 13.5; its 13.5 of
-        # inherited progress plus one turn; and it looked like a speed bug.
+        # Progress must be reset, or the ship resumes from however far the
+        # order had already travelled.
         self._f32(ord_ptr + ORD_PROGRESS, 0.0, "route progress -> 0")
 
-        # set_type=False leaves Ship:52 ALONE, for callers that will set the
-        # order type and its target node together through Ship::SetCommand.
-        # Writing the type here first is what crashed the client on the very
-        # first attack order: the ship briefly held order type 4 with Ship:56
-        # still the static null node, which is exactly the state
-        # Ship::HasActiveTargetedOrder refuses to accept for types 1, 4 and 7.
+        # set_type=False leaves Ship:52 alone, for callers that set the type
+        # and target node together through Ship::SetCommand. Types 1, 4 and 7
+        # with Ship:56 still the null node crash the client.
         if set_type:
             self._u32(ship.addr + SHIP_ORDER_TYPE, order_type,
                       f"order type -> {name}")
@@ -1538,23 +1169,17 @@ class Actuator:
         return True
 
     def create_order(self, ship, target, civ):
-        """Originate an order object for a ship that has none. CONFIRMED.
+        """Originate an order object for a ship that has none.
 
-        Route 2 of STRATEGY.md §6a, and the answer to the question that blocked
-        both the AI player and multiplayer: the engine will not build an order
-        lazily and one cannot be fabricated, so instead we call the engine's own
-        allocator and its own constructor and let it build the object properly.
+        Route 2 of STRATEGY.md §6a: the engine's own allocator and constructor
+        build the object.
 
             order = operator new(0x60)                       0x0065165A
             order_ctor(ECX=order, ship, target, owner, f, 1, 0)   0x004E8420
 
-        `f` is whatever the ship's own vftable[0x30] getter returns, so the
-        value matches what the engine would have passed itself.
-
-        POINTER FORMS MATTER: origin and target go in as ALLOCATION STARTS
-        (EJBO tag - 8) and the Owner as its tag-52 primary form. Passing the
-        tag-8 owner that the reference-node idiom stores is the easiest way to
-        crash the client here.
+        `f` is what the ship's vftable[0x30] getter returns. Origin and target
+        go in as allocation starts (EJBO tag - 8) and the Owner as its tag-52
+        primary form; the tag-8 owner form crashes the client.
 
         Returns the new order's address, already written into Ship:48.
         """
@@ -1582,15 +1207,8 @@ class Actuator:
     def transfer_order(self, donor, recipient):
         """Move an order object from one ship to another.
 
-        PROVEN end to end: a colony ship handed another ship's order object was
-        retargeted, navigated to a different planet and founded the colony.
-        Nothing is allocated and nothing is freed; the object is simply
-        referenced by a different ship, and the donor is detached FIRST so the
-        two never hold it at once. `Ship:40` (owner) and `Ship:48` (order) are
-        independent, so an order is not bound to the ship that created it.
-
-        This does NOT originate an order. It relocates the one you have, and a
-        completed order goes away with it, so the supply only ever shrinks.
+        Nothing is allocated or freed. `Ship:40` (owner) and `Ship:48` (order)
+        are independent, so an order is not bound to the ship that created it.
         """
         ord_ptr = donor.order_ptr
         if not gs.is_ptr(ord_ptr):
@@ -1622,12 +1240,8 @@ class Actuator:
 
 
 class NeedsEngineOrder(Exception):
-    """Raised when a ship has no order object and none can be made.
-
-    Since Route 2 this is no longer a dead end: create_order() builds one by
-    calling the engine's own allocator and constructor. It is raised only when
-    the Actuator has no remote.Remote to do that with, or in a dry run where
-    nothing may be allocated."""
+    """Raised when a ship has no order object (Ship:48 is null) and none can
+    be made. create_order() needs a remote.Remote."""
 
     def __init__(self, ship):
         super().__init__(
@@ -1640,13 +1254,5 @@ class NeedsEngineOrder(Exception):
 class StaleTurn(Exception):
     """Raised when the turn rolled over in the middle of issuing an order.
 
-    Every coordinate in an order (the route origin, the leg length, the
-    progress reset) is computed from the pass's snapshot. Once the engine
-    resolves a turn, the ship has moved and all three are wrong. Installing the
-    order anyway writes a route from a position the ship no longer occupies.
-
-    This is not hypothetical. Driving turns at 12s while a pass makes ~30 remote
-    calls put the boundary squarely inside the ordering window on the first
-    contact of a 193-turn game. Raise it, roll back, and let the next pass
-    re-decide on fresh numbers; one turn of delay costs nothing next to a
-    corrupt order."""
+    The order's coordinates came from the pass's snapshot and are wrong once
+    the ship has moved. The caller rolls back and the next pass re-decides."""

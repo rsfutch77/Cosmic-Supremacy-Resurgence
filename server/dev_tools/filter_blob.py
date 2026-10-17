@@ -1,20 +1,11 @@
 """
 filter_blob.py: remove galaxy content from a save blob, for fog-of-war tests
-==============================================================================
     python filter_blob.py <capture.b64|.dat> --drop-systems 3 --dat out.dat
     python filter_blob.py <capture.b64|.dat> --list
 
-The question this exists to answer: **can a client load a galaxy with objects
-removed?** If it can, a server can hand each player a state containing only what
-that player knows, and pushing whole states stops being a maphack. If it cannot,
-full-state distribution is a property of the blob-push design and has to be
-accepted knowingly.
-
-A star system is the natural unit. `SOLA` is a child of `GLXY` and contains its
-own `SUN` and `PLNT` records, so dropping one removes a self-contained subtree
-and creates no dangling owner references, as long as the system holds no
-colonised planet. That is also exactly what fog of war would hide: a system the
-player has never explored.
+The unit removed is a star system: `SOLA` is a child of `GLXY` holding its own
+`SUN` and `PLNT` records, so dropping one with no colonised planet leaves no
+dangling owner references.
 
 Two counts have to be corrected or the client rejects the blob:
 
@@ -71,20 +62,10 @@ def droppable_systems(blob, tree=None):
 
 
 def drop_systems(blob: bytes, count: int, log=lambda *a: None) -> bytes:
-    """Remove `count` uncolonised systems, and the rows that named them.
+    """Remove `count` uncolonised systems, and the `EXSY` rows that name them.
 
-    Dropping a `SOLA` subtree is clean for the galaxy tree, because a system is
-    self-contained. It is NOT clean for `EXSY`, which is each civ's record of
-    the systems it has entered and names them by id from outside `GLXY`. Left
-    alone, every dropped system leaves a row pointing at nothing.
-
-    `EXSY` rows are a cache of observations, not a record of decisions; the
-    same planet reads different values in different civs' tables, and renames
-    live on the object at `PLNT`/`SUN ` +24. So a pruned row loses a stale
-    observation and no player's choice, which is what makes this safe.
-
-    `KNPL` is deliberately untouched: its records are keyed by CIV id, not
-    planet id, so dropping systems cannot dangle it.
+    `EXSY` names systems by id from outside `GLXY`, so its rows are pruned too.
+    `KNPL` is keyed by civ id and is left untouched.
     """
     tree = sp.parse_blob(blob)
     save = tree[0]
@@ -95,8 +76,7 @@ def drop_systems(blob: bytes, count: int, log=lambda *a: None) -> bytes:
     if count > len(droppable):
         raise ValueError(f'asked to drop {count} system(s), only '
                          f'{len(droppable)} hold no owned planet')
-    # From the end, so the earliest systems, which a player is likeliest to
-    # have explored, are the ones kept.
+    # From the end, so the earliest systems are the ones kept.
     victims = droppable[-count:] if count else []
     removed_objects = sum(n for _, n, _ in victims)
     victim_starts = {s.start for s, _, _ in victims}
@@ -107,9 +87,8 @@ def drop_systems(blob: bytes, count: int, log=lambda *a: None) -> bytes:
     log(f'dropping {len(victims)} system(s), {removed_objects} object(s), '
         f'ids {sorted(victim_ids)}')
 
-    # Delete the victims' byte ranges rather than rebuilding from the children
-    # we keep: a payload's children are ordered but need not be contiguous, and
-    # anything sitting in a gap we do not understand would be lost.
+    # A payload's children are ordered but need not be contiguous, so only the
+    # victims' byte ranges are cut and any gap bytes are kept.
     out = bytearray()
     pos = glxy.payload
     for c in glxy.children:
@@ -124,7 +103,7 @@ def drop_systems(blob: bytes, count: int, log=lambda *a: None) -> bytes:
     struct.pack_into('<I', new_blob, save.payload, objects - removed_objects)
     new_blob = bytes(new_blob)
 
-    # Now the per-civ tables. Re-parsed, because every offset moved above.
+    # The per-civ tables, re-parsed because every offset moved.
     for _ in range(64):                 # one rewrite per table, bounded
         tree2 = sp.parse_blob(new_blob)
         target = None
@@ -177,18 +156,13 @@ def main():
     if not args.drop_systems:
         return
 
-    # Take them from the end, so the earliest systems (which the player is most
-    # likely to have explored) are the ones kept.
+    # From the end, so the earliest systems are the ones kept.
     victims = droppable[-args.drop_systems:]
     removed_objects = sum(n for _, n, _ in victims)
     victim_starts = {s.start for s, _, _ in victims}
     print(f'dropping {len(victims)} system(s), {removed_objects} object(s)')
 
-    # Rebuild GLXY's payload by copying all of it except the victims' byte
-    # ranges. Copying "prologue, then each kept child, then epilogue" would be
-    # wrong: a payload's children are ordered but need not be contiguous, and
-    # anything sitting in a gap between two of them would be dropped. Deleting
-    # ranges keeps whatever we do not understand.
+    # Cut only the victims' byte ranges; gap bytes between children are kept.
     out = bytearray()
     pos = glxy.payload
     for c in glxy.children:

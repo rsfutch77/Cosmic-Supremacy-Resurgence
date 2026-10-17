@@ -1,6 +1,6 @@
 """
 exterminate.py: the Exterminate rules (STRATEGY.md §4.4)
-=========================================================
+
 R-XTM-01  keep a standing fleet
 R-XTM-03  send the fleet at the weakest reachable enemy planet
 R-XTM-05  pull damaged ships out
@@ -20,10 +20,8 @@ import sensors
 
 WARSHIP_TARGET = 2        # warships to keep once we are at war with anyone
 TROOP_TARGET = 1          # troop hulls to keep while anything is takeable
-GARRISON_WINDOW = 3       # turns after a capture that still count as "newly
-                          # taken"; a captured planet read Planet:92 == the
-                          # turn it changed hands, and the hull arrives in the
-                          # same boundary the capture resolves in
+GARRISON_WINDOW = 3       # turns after a capture (Planet:92) that count as
+                          # newly taken
 RETREAT_AT = 0.30         # Ship:136 below this and the ship goes home
 THREAT_DIST = 120.0       # "near": one sun separation (measured minimum 111.7)
 
@@ -36,11 +34,8 @@ _REL_CACHE = {}
 def clear_relation_cache():
     """Drop the cached relation codes.
 
-    MUST be called after anything changes a relation. The cache is keyed on
-    (turn, civ, other), and a declaration made within a single turn does not
-    change any of those; so a freshly declared war kept reading as peace, and
-    the test of the declare actuator reported failure on a write that had
-    actually worked.
+    Must be called after anything changes a relation: the cache key is
+    (turn, civ, other), which a declaration does not change.
     """
     _REL_CACHE.clear()
 
@@ -50,17 +45,8 @@ def relation_code(snap, civ, other, act=None):
 
     0 Neutral, 1 War, 2 Cease-Fire, 3 Peace, 4 Alliance.
 
-    Asks the engine (GetRelationCode) rather than walking the container. A hand
-    rolled traversal was tried first and was wrong in a way worth recording:
-    Owner:248 is NOT a std::map; it holds four pointers where a map holds
-    {head, size}, so following left/parent/right walked out of the structure
-    into unrelated memory. One "node" it accepted contained the string
-    "IllegalPosition". It reported "not at war" on a galaxy where war had in fact
-    been declared, which is the worst possible failure for this sensor: every
-    Exterminate rule would silently no-op and look like it was working.
-
-    Cached per (turn, civ pair) so a pass costs one call per rival rather than
-    one per rule. Relations change rarely and only through a deliberate act.
+    Asks the engine (GetRelationCode). Owner:248 is not a std::map: it holds
+    four pointers where a map holds {head, size}. Cached per (turn, civ pair).
     """
     if act is None or act.remote is None:
         return None
@@ -84,21 +70,9 @@ def enemies(snap, civ, act=None):
 
 
 def already_heading(ship, target, order_type, tol=1.0):
-    """Is this ship ALREADY under this order, aimed at this target?
+    """Is this ship already under this order, aimed at this target?
 
-    RE-ISSUING AN ORDER RESETS ITS PROGRESS, so a rule that re-orders the same
-    ship at the same planet every turn moves it one turn's worth and then sends
-    it back to the start line. `retarget_order` must zero `+76`; a retarget that
-    inherited stale progress once moved a ship at twice its speed, so the cost
-    is not in the retarget, it is in calling it when nothing has changed.
-
-    Measured in a live log: a troop hull ordered to conquer the same planet on
-    consecutive turns had 21.9 units of travel zeroed each time, and crawled.
-    The user watched it flip between conquer and orbit and never arrive.
-
-    R-XPN-02 has always had this guard ("already en route; leaving the order
-    untouched"); the Exterminate rules never got one, which is why the fault
-    showed up in raids and invasions and not in colonisation.
+    Re-issuing an order resets its progress: `retarget_order` zeroes `+76`.
     """
     if (ship.order_type or 0) != order_type:
         return False
@@ -113,17 +87,10 @@ def already_heading(ship, target, order_type, tol=1.0):
 
 
 def send_to(act, ship, target, civ, order_type=1):
-    """Move `ship` to `target` with a route-only order. NO actuator L.
+    """Move `ship` to `target` with a route-only order, not actuator L.
 
-    **`set_command` KILLS THE CLIENT AT THE NEXT TURN BOUNDARY.** Measured from
-    `client/armed.dat` (turn 38, at war, one crewed `b1`), one turn boundary per
-    trial:
-
-        set_command(4 attack)        -> client dead
-        set_command(1 move)          -> client dead
-        create_order + retarget(1)   -> SURVIVED, and moved 9.5 units, which is
-                                        exactly this hull's ShipDesign:36
-
+    `set_command` kills the client at the next turn boundary for both move and
+    attack; create_order plus retarget_order is safe.
     """
     if already_heading(ship, target, order_type):
         act.log(f"  {ship} is already under order {order_type} for {target}; "
@@ -138,12 +105,7 @@ def send_to(act, ship, target, civ, order_type=1):
 
 
 def _why(snap, civ, act, foes):
-    """'at war with [...]' or 'in contact with [...]', whichever is true.
-
-    R-XTM-01 fires on either, and saying "at war" when we are merely in contact
-    would misreport the galaxy's diplomatic state in the one log line someone
-    reads to find out why the fleet is being built.
-    """
+    """'at war with [...]' or 'in contact with [...]', whichever is true."""
     names = [f.civ_name for f in foes]
     at_war = [f.civ_name for f in foes if at_war_with(snap, civ, f, act)]
     return (f"at war with {at_war}" if at_war
@@ -151,11 +113,7 @@ def _why(snap, civ, act, foes):
 
 
 def contacted(snap, civ, hist):
-    """Rival civs we have MET: a planet of theirs is in our discovery set.
-
-    Contact, not war. This is the trigger R-XTM-01 needs; see the deadlock note
-    in run_xtm01 for why asking `enemies()` there could never work.
-    """
+    """Rival civs we have met: a planet of theirs is in our discovery set."""
     out = []
     for other in snap.civs:
         if other.addr == civ.addr:
@@ -180,22 +138,14 @@ def production_design(snap, planet):
 
 
 def anti_planet(design, act=None):
-    """True when this design's firepower is concentrated in the THIRD slot.
+    """True when this design's firepower is concentrated in the third slot.
 
-    The three firepower values are three independent damage pools, and planetary
-    defence participants land in the third one. Confirmed by the user's own two
-    designs: an anti-ship fighter reads (35, 10, 0) and a planet bomber reads
-    (0, 0, 500). So the third slot is the anti-planet weapon class and the first
-    two are anti-ship, which is what makes "one of each" the right fleet.
+    The three firepower values are independent damage pools: the first two are
+    anti-ship and the third is anti-planet.
     """
     fp = design.firepower
-    # Only warm the cache for a design that HAS weapons. An unarmed hull's
-    # firepower is legitimately (0,0,0), so "all zero means cold" made this call
-    # the getters on every single evaluation, every turn, forever. Those getters
-    # WRITE the lazy stat block, and the ship-design tab does the same work on
-    # the UI thread; the user crashed the client twice by opening that tab while
-    # this was running. Fewer stub calls is not an optimisation here, it is the
-    # mitigation.
+    # The getters write the lazy stat block, as the ship-design tab does on the
+    # UI thread, so only an armed design with a cold cache is warmed.
     if (act is not None and act.remote is not None
             and design.weapons and not any(fp)):
         try:
@@ -212,13 +162,9 @@ def warships(snap, civ):
 def warship_designs(snap, civ, done=None):
     """Our own armed designs, buildable ones only.
 
-    Filtered by OWNER, not by whether the derived stat block is warm. That block
-    is a lazy cache reading -1 until a getter touches it, and filtering on it
-    once had R-XPN-01 selecting the RIVAL's design.
-
-    Also filtered by RESEARCH, which owning the design no longer implies: Single
-    Player seeds `f1` and `b1` into the galaxy at turn 0 and their weapons are
-    not unlocked until Cold Fusion completes. See research.illegal_parts.
+    Filtered by owner and research. The derived stat block is a lazy cache
+    reading -1 until a getter touches it. Single Player seeds `f1` and `b1` at
+    turn 0, before their weapons are unlocked.
     """
     if done is None:
         done = {t for t, _ in civ.completed}
@@ -239,13 +185,7 @@ def warship_designs(snap, civ, done=None):
 
 
 def unresearched_warships(snap, civ):
-    """Armed designs we own but may not build yet, with what each is waiting on.
-
-    Exists so R-XTM-01 can say "b1 is waiting on weapon 10" rather than the
-    flatly wrong "this civ has no armed design"; which is what it would report
-    for a seeded galaxy, and would send whoever read it off to synthesise a
-    design that is already sitting in the list.
-    """
+    """Armed designs we own but may not build yet, with what each is waiting on."""
     import research
     done = {t for t, _ in civ.completed}
     out = []
@@ -262,10 +202,8 @@ def unresearched_warships(snap, civ):
 def target_planets(snap, civ, hist, foes):
     """Enemy planets we can legitimately see, weakest first.
 
-    Weakness is stationed military plus defensive facilities. The facility half
-    is now real rather than a guess: facilities.py carries the definition table,
-    and only types with a non-zero defence class contribute to planetary defence
-    at all; the battle code skips every other type.
+    Weakness is stationed military plus the strength of facilities with a
+    non-zero defence class; the battle code skips every other type.
     """
     import facilities
     foe_addrs = {f.addr for f in foes}
@@ -288,18 +226,8 @@ def target_planets(snap, civ, hist, foes):
 def run_xtm01(snap, civ, act, hist, log=print):
     """R-XTM-01: keep a standing fleet once there is someone to fight.
 
-    THE TRIGGER IS CONTACT, NOT WAR (STRATEGY.md §4.4: threatLevel is "floored
-    at 2 once contact is made"). Asking `enemies()` here instead was a DEADLOCK,
-    and a silent one: every rule logged nothing and looked content:
-
-        R-XTM-01 builds no warship until at war
-        R-XTM-00 declares no war until a crewed warship exists
-
-    so from a neutral start neither could ever fire, and R-XTM-01 is the ONLY
-    rule that queues an armed hull. Measured on a full game: by turn 200 the civ
-    held 9 planets, score 33,362, cash 11,229, both f1 and b1 designs ready and
-    105 of 108 systems explored; and had never once evaluated a target, because
-    R-XTM-03 was never reached. Nothing in the logs indicated a problem.
+    The trigger is contact, not war (STRATEGY.md §4.4): R-XTM-00 declares no
+    war until a crewed warship exists, and this is the only rule that queues one.
     """
     foes = enemies(snap, civ, act) or contacted(snap, civ, hist)
     if not foes:
@@ -308,12 +236,8 @@ def run_xtm01(snap, civ, act, hist, log=print):
     queued_now = [d for d in (production_design(snap, p)
                               for p in snap.owned_planets(civ)) if d is not None]
     fleet = [s.design for s in have if s.design] + queued_now
-    # COMPOSITION, not just a count. The two firepower classes do not substitute
-    # for each other: slots 1-2 hit ships and slot 3 hits planets, so a pair of
-    # fighters cannot touch a planet however many of them there are. A flat
-    # target of two was about to produce exactly that -- two f1 while at war with
-    # a single enemy PLANET -- because the classifier was reading a cold cache
-    # and could not tell the hulls apart.
+    # The fleet needs both firepower classes: slots 1-2 hit ships, slot 3
+    # hits planets.
     have_ap = any(anti_planet(d, act) for d in fleet)
     have_as = any(not anti_planet(d, act) for d in fleet)
     if len(fleet) >= WARSHIP_TARGET and have_ap and have_as:
@@ -328,9 +252,7 @@ def run_xtm01(snap, civ, act, hist, log=print):
         import research
         done = {t for t, _ in civ.completed}
         arms = sorted(research.unlocked(done, research.WEAPON))
-        # A seeded galaxy OWNS armed designs before it may build them, so check
-        # that before claiming there are none; the two states want opposite
-        # actions from whoever reads the log.
+        # A seeded galaxy owns armed designs before it may build them.
         waiting = unresearched_warships(snap, civ)
         if waiting:
             log(f"R-XTM-01: {_why(snap, civ, act, foes)} and "
@@ -356,13 +278,7 @@ def run_xtm01(snap, civ, act, hist, log=print):
         log(f"R-XTM-01: {len(have)}/{WARSHIP_TARGET} warship(s); every shipyard "
             f"is already building")
         return 0
-    # Keep one anti-planet and one anti-ship hull rather than two of whatever
-    # scores highest: the pools do not substitute for each other, so a fleet of
-    # two bombers cannot win a ship fight and two fighters cannot hurt a planet.
-    # Count what is already QUEUED as well as what is flying. Counting only
-    # existing ships made every pass want the same class: with no warships yet,
-    # "we have no bomber" stayed true while two bombers were already on the
-    # slipways, and the fleet came out as two of one kind.
+    # Builds the missing class, counting queued hulls as well as flying ones.
     want_anti_planet = not have_ap
     pool = [d for d in designs
             if anti_planet(d, act) == want_anti_planet] or designs
@@ -382,9 +298,7 @@ def run_xtm03(snap, civ, act, hist, log=print):
     """R-XTM-03: send crewed warships at the weakest visible enemy planet.
 
     A Move order is enough. Combat is positional: arriving inside the 0.8-unit
-    bucket of an enemy-held planet, at war, is what starts a fight. Attack (4) is
-    used rather than Move (1) because both are targeted types requiring Ship:56
-    anyway, and Attack is what a human clicks.
+    bucket of an enemy-held planet, at war, starts a fight.
     """
     foes = enemies(snap, civ, act)
     if not foes:
@@ -410,9 +324,7 @@ def run_xtm03(snap, civ, act, hist, log=print):
                 f"contribute zero firepower; leaving it")
             continue
         try:
-            # Move (1), not Attack (4), and via send_to rather than actuator L:
-            # set_command crashes the client at the next turn boundary for BOTH
-            # types, and combat triggers on co-location regardless. See send_to.
+            # Move (1) via send_to; combat triggers on co-location.
             send_to(act, ship, target, civ, order_type=1)
             act.claim(ship)
             acted += 1
@@ -422,9 +334,7 @@ def run_xtm03(snap, civ, act, hist, log=print):
 
 
 def run_xtm04(snap, civ, act, hist, log=print):
-    """R-XTM-04: land troops on an undefended enemy planet and take it.
-
-    """
+    """R-XTM-04: land troops on an undefended enemy planet and take it."""
     foes = enemies(snap, civ, act)
     if not foes:
         return 0
@@ -443,16 +353,11 @@ def run_xtm04(snap, civ, act, hist, log=print):
     ours = snap.owned_planets(civ)
     acted = 0
     for ship in troopers:
-        # The flight crew is not an invasion force. A hull at exactly
-        # ShipDesign:76 flies to the target and sits there; the failure looks
-        # identical to a refused order, so it is checked here rather than
-        # discovered in orbit.
+        # A hull carrying only its flight crew (ShipDesign:76) cannot invade.
         need = exploit.min_crew(ship, act)
         if len(ship.crew) <= need:
-            # RE-STATION IT. A spent hull is not useless, it is empty, and the
-            # crew rules only load at a planet we own; so a transport left in
-            # orbit of the planet it just took (or just lost) waits there
-            # forever while R-XTM-07 builds a replacement it did not need.
+            # The crew rules load only at a planet we own, so a spent hull
+            # elsewhere goes home.
             here = ship.orbiting
             if here is not None and here.owner is not None \
                     and here.owner.addr == civ.addr:
@@ -489,20 +394,11 @@ def run_xtm04(snap, civ, act, hist, log=print):
 def run_xtm06(snap, civ, act, hist, log=print):
     """R-XTM-06: garrison a freshly taken planet with the troops still aboard.
 
-    A captured planet is DISLOYAL and in civil disorder (the UI warns it may
-    rebel and swaps its corruption readout for a civil-disorder one) and the
-    repair is occupying infantry. The invasion leaves exactly one unit as the
-    garrison, which is the minimum the engine takes, not a sufficient one.
+    A captured planet is disloyal and in civil disorder, and the repair is
+    occupying infantry. The invasion leaves one unit as the garrison.
 
-    [ ] STILL NOT MEASURED, and the one measurable proxy came back NEGATIVE.
-    `Planet:368` looked like the sensor this rule needed (it drops when a planet
-    changes hands and climbs back over turns) but per-turn sampling showed it is
-    exactly `min(8, turn - Planet:92 + 1)`, and that a garrison does not change
-    it: #450 recovered 1..8 carrying two stationed units while #149 recovered
-    1..8 carrying none, +1 per turn each, on the same turns. So that field is a
-    timer, not loyalty, and loyalty itself is still unlocated; `Planet:100`
-    bytes 0-2, the long-standing candidate, were ruled out at the same time.
-
+    Loyalty is not located. `Planet:368` is `min(8, turn - Planet:92 + 1)`,
+    a timer a garrison does not change; `Planet:100` bytes 0-2 are not it.
     """
     acted = 0
     for ship in snap.owned_ships(civ):
@@ -511,15 +407,9 @@ def run_xtm06(snap, civ, act, hist, log=print):
         p = ship.orbiting
         if p is None or p.owner is None or p.owner.addr != civ.addr:
             continue
-        # Only somewhere NEWLY TAKEN. A troop hull over the homeworld is loading
-        # for the next invasion, not unloading from the last one, and dumping
-        # its troops there would have the crew rules and this one undo each
-        # other every turn.
-        #
-        # Planet:92 is the signal: it is rewritten on CAPTURE, not only on
-        # founding; #41 read 222 after changing hands on turn 222. A window
-        # rather than equality, because the capture resolves in the same
-        # boundary the hull arrives in, so by the next pass the turn has moved.
+        # Only a newly taken planet; elsewhere the hull is loading. Planet:92
+        # is rewritten on capture as well as founding, and the capture
+        # resolves in the boundary the hull arrives in, hence a window.
         age = None if p.colonised_turn is None else snap.turn - p.colonised_turn
         if age is None or not (0 <= age <= GARRISON_WINDOW):
             continue
@@ -538,13 +428,7 @@ def run_xtm06(snap, civ, act, hist, log=print):
 
 
 def run_xtm07(snap, civ, act, hist, log=print):
-    """R-XTM-07: keep a troop transport while there is anything to take.
-
-    R-XTM-04 can only spend hulls somebody built, and nothing built them;
-    R-XTM-01 queues warships and stops there, so the first two troop ships in
-    this project were made by hand. A civ that can see an undefended enemy
-    planet and has no way to land on it is not at war, it is watching.
-    """
+    """R-XTM-07: keep a troop transport while there is anything to take."""
     foes = enemies(snap, civ, act)
     if not foes:
         return 0
@@ -555,9 +439,7 @@ def run_xtm07(snap, civ, act, hist, log=print):
     have = [s for s in snap.owned_ships(civ) if s.role == "TROOP"]
     if len(have) >= TROOP_TARGET:
         return 0
-    # A hull built and waiting for crew is not a reason to build another, the
-    # same trap R-XTM-01 fell into: the shipyard fills with hulls nobody can fly
-    # while the crew rules work through them one conscript at a time.
+    # No new hull while a built one is waiting for crew.
     stranded = exploit.awaiting_crew(snap, civ, act, role="TROOP")
     if stranded:
         log(f"R-XTM-07: {len(stranded)} troop ship(s) built and waiting for "
@@ -597,9 +479,8 @@ def run_xtm07(snap, civ, act, hist, log=print):
 def run_xtm05(snap, civ, act, hist, log=print):
     """R-XTM-05: withdraw a badly damaged ship to the nearest owned planet.
 
-    Damage is multiplicative and compounds across turns, and the round loop has
-    no early exit; a losing ship keeps taking hits for up to 200 rounds and its
-    condition never recovers on its own. Nothing pulls it out but this.
+    Damage compounds across turns, the round loop runs up to 200 rounds with no
+    early exit, and condition never recovers on its own.
     """
     ours = snap.owned_planets(civ)
     if not ours:
@@ -620,25 +501,14 @@ def run_xtm05(snap, civ, act, hist, log=print):
     return acted
 
 
-# R-XTM-05 runs FIRST: a ship that should be retreating must not be sent back
-# into the fight by R-XTM-03 in the same pass.
+# R-XTM-05 runs first so R-XTM-03 does not send a retreating ship back into
+# the fight in the same pass.
 def run_xtm00(snap, civ, act, hist, log=print):
     """R-XTM-00: declare war on a civ we can reach and are equipped to fight.
 
-    ON, via ALLOW_DECLARE_WAR below; this docstring said "OFF BY DEFAULT" while
-    the constant read True, and the constant is what runs. Declaring war is
-    outward-facing and effectively irreversible for the rest of a galaxy's life,
-    so which of the two was right is not a detail.
-
-    [ ] **It is now enabled against a HUMAN, which §4.4 flagged in advance as a
-    §1.1 violation.** Declaring through a raw relation write costs no reputation
-    and generates no news item, so the AI pays nothing for a declaration a player
-    is charged for, and the player is never notified. That was tolerable when
-    every civ in the galaxy ran this same code and paid the same nothing. In
-    Single Player it is an advantage taken from the person playing. The fix is
-    the command path (§4.4), not turning the rule off; an opponent that never
-    fights is the bug this rule exists to close.
-
+    Gated by ALLOW_DECLARE_WAR. A raw relation write costs no reputation and
+    generates no news item, which against a human is a §1.1 violation (§4.4);
+    the command path is the fix.
     """
     if not ALLOW_DECLARE_WAR:
         return 0
@@ -665,8 +535,7 @@ def run_xtm00(snap, civ, act, hist, log=print):
     return acted
 
 
-# ON: see run_xtm00, including the fairness caveat now that a human can be the
-# civ being declared on.
+# See run_xtm00 for the fairness caveat against a human.
 ALLOW_DECLARE_WAR = True
 
 RULES = [("R-XTM-05", run_xtm05), ("R-XTM-00", run_xtm00),
@@ -683,9 +552,7 @@ def main():
     print(f"\n=== Exterminate, turn {snap.turn}, {civ.civ_name!r}, "
           f"{'DRY RUN' if dry_run else 'APPLYING'} ===")
     hist = sensors.History().observe(snap, civ)
-    # A remote handle even in dry run: the war sensor is a READ, and without it
-    # every rule here reports "not at war" and does nothing, which looks
-    # identical to peace. Dry run still suppresses every write.
+    # A remote handle even in dry run: the war sensor reads through it.
     rem = remote.Remote(snap.state.pid, log=lambda *a: None)
     act = actions.Actuator(snap, dry_run=dry_run, remote_=rem)
     for c in snap.civs:

@@ -1,7 +1,5 @@
 """
-sensors.py: turn-over-turn observation (STRATEGY.md §2.5)
-==========================================================
-
+sensors.py: turn-over-turn observation (STRATEGY.md §2.5).
 """
 
 
@@ -11,28 +9,19 @@ import os
 
 
 def _dist(a, b):
-    """Local copy so sensors does not import gamestate and create a cycle."""
+    """Local copy to avoid an import cycle with gamestate."""
     return math.sqrt(sum((x - y) ** 2 for x, y in zip(a, b)))
 
 
-# Beside the source in a checkout, which is where every dev run expects it.
-# CS_AI_STATE_DIR overrides it because a FROZEN build has nowhere else to go:
-# PyInstaller unpacks the module into a temp directory that Windows deletes on
-# exit, so the discovery set would be written, lost, and rebuilt from scratch
-# every launch; which is precisely the restart bug §4.4 R-XTM-01 records, only
-# permanent. The launcher points this at its own data directory.
+# Beside the source in a checkout. CS_AI_STATE_DIR overrides it for a frozen
+# build, whose unpack directory is deleted on exit (R-XTM-01); the launcher
+# points it at its own data directory.
 STATE_DIR = (os.environ.get("CS_AI_STATE_DIR")
              or os.path.join(os.path.dirname(os.path.abspath(__file__)), "state"))
 
 
 def _fingerprint(snap):
-    """A stable id for THIS galaxy, so one galaxy's map is never read as another's.
-
-    Sun ids alone are not enough; two galaxies can both number their suns from
-    the same pool. Positions are the galaxy's identity, so this hashes the sorted
-    (id, rounded position) pairs. Rounded because the coordinates are floats we
-    only ever read, and an exact-bit dependency would be fragile for no gain.
-    """
+    """A stable id for this galaxy: a hash of sorted (sun id, rounded position)."""
     key = tuple(sorted((s.id,
                         round(s.pos[0], 1), round(s.pos[1], 1),
                         round(s.pos[2], 1)) for s in snap.suns))
@@ -40,21 +29,10 @@ def _fingerprint(snap):
 
 
 class History:
-    """Turn-over-turn observation, plus the PERSISTENT fog-of-war map.
+    """Turn-over-turn observation, plus the persistent fog-of-war map.
 
-    **Discovery is permanent in the game and must be permanent here.** It used to
-    live only in this object, rebuilt each pass from where our planets and ships
-    are *now* plus scan reports; so it silently reset whenever the controller
-    restarted. Measured: a process restart on an unchanged galaxy took the map
-    from 105 explored systems down to 7, which cost ~170 turns of re-scouting and
-    broke contact with the only rival, disabling every Exterminate rule. A galaxy
-    outlives one process in every real game, and in multiplayer by definition.
-
-    So the set is written to `state/discovered_<galaxy>_<civ>.json` and reloaded
-    on construction. Keyed by galaxy fingerprint AND civ, because one machine
-    plays several galaxies and a map is per player. Persisting our own discoveries
-    is not omniscience; it is the opposite, and it is what stops a restart from
-    quietly handing the AI a fresh fog of war it then re-explores at full speed.
+    Discovery is permanent, as in the game: the set is saved to
+    `state/discovered_<galaxy>_<civ>.json` and reloaded on construction.
     """
 
     def __init__(self, snap=None, civ_name=None, persist=True):
@@ -68,15 +46,10 @@ class History:
         if persist and snap is not None:
             self._bind(snap, civ_name)
 
-    # -- persistence -----------------------------------------------------
     def _bind(self, snap, civ_name):
         """Choose the file for this galaxy+civ and merge whatever is already in it.
 
-        Bound lazily from `observe` when the caller did not pass a snapshot, so
-        every existing `History()` call site (the loop and each standalone rule
-        tool) gets a persistent map without being changed. Binding happens
-        BEFORE `_discover`, so the loaded set and this pass's sightings union
-        rather than one clobbering the other.
+        Must run before `_discover` so the loaded set and new sightings union.
         """
         self._path = os.path.join(
             STATE_DIR,
@@ -90,16 +63,11 @@ class History:
             self.discovered |= {int(i) for i in ids}
             self._persisted = set(self.discovered)
         except (OSError, ValueError, TypeError):
-            # A missing or corrupt file means "we have explored nothing yet",
-            # which is the correct starting state and not worth failing over.
+            # A missing or corrupt file means nothing explored yet.
             pass
 
     def _save(self):
-        """Write the map, but only when it actually grew.
-
-        Discovery never shrinks, so an unchanged set means an unchanged file, and
-        a pass that found nothing new should not touch the disk at all.
-        """
+        """Write the map, only when it grew."""
         if self._path is None or self.discovered == self._persisted:
             return
         try:
@@ -112,7 +80,6 @@ class History:
         except OSError:
             pass                          # never take the loop down over the map
 
-    # -- recording -------------------------------------------------------
     def observe(self, snap, civ):
         """Take the current reading. Call once per pass, before the rules run."""
         cur = {
@@ -120,17 +87,11 @@ class History:
             "planets": {p.id: {"food": p.food or 0,
                                "pop": len(p.population),
                                "progress": p.build_progress or 0,
-                               # Planet:124, the MILITARY FOOD STORE. A unit
-                               # appears when it reaches Planet:128 (the food
-                               # cost, 300 by default). Tracked because a
-                               # recruitment rate can be set, look correct in
-                               # the UI, and move this by nothing at all --
-                               # which is what "No Military Is Recruited"
-                               # means and what wasted a hundred turns.
+                               # Planet:124, the military food store. A unit
+                               # appears when it reaches Planet:128, the cost.
                                "milstore": p.u32(124) or 0,
-                               # Needed to undo the store's WRAP: when a unit
-                               # is recruited the store drops by the cost, and
-                               # a raw difference reads as a large negative.
+                               # The store drops by the cost per recruit;
+                               # these undo that wrap.
                                "military": p.military or 0,
                                "milcost": p.u32(128) or 0}
                         for p in snap.owned_planets(civ)},
@@ -145,20 +106,12 @@ class History:
         self._save()
         return self
 
-    # -- fog of war ------------------------------------------------------
     def _discover(self, snap, civ):
         """Grow the set of systems this civ is entitled to see inside.
 
-        Client memory holds every planet in the galaxy, discovered or not, so an
-        AI that reads it directly is cheating: in the real game a system's
-        planets are only revealed once a ship reaches its SUN, which is why the
-        scout order targets a star rather than a planet. Picking a colony target
-        in a system nobody has visited is exactly that cheat, and the AI did it
-        until this was added.
-
-        A system counts as discovered when we hold a planet in it, when one of
-        our ships is inside it, or when a scan report names it. Nothing here
-        ever forgets; discovery is permanent, as it is in the game.
+        Memory holds every planet, so reading undiscovered ones is cheating. A
+        system is discovered when we hold a planet in it, one of our ships is
+        inside it, or a scan report names it.
         """
         for p in snap.owned_planets(civ):
             s, _r = snap.nearest_sun(p)
@@ -166,8 +119,7 @@ class History:
                 self.discovered.add(s.id)
         for sh in snap.owned_ships(civ):
             s, r = snap.nearest_sun(sh)
-            # Inside the system, not merely closest to it: the widest orbit
-            # measured is 39.6 and the tightest gap between stars is 111.7.
+            # Inside the system: widest orbit 39.6, tightest star gap 111.7.
             if s is not None and r <= 55.0:
                 self.discovered.add(s.id)
         for rep in civ.vec(320, 4):
@@ -188,7 +140,6 @@ class History:
     def mark_acted(self, planet_id):
         self._acted.add(planet_id)
 
-    # -- reporting -------------------------------------------------------
     @property
     def turns(self):
         p = getattr(self, "_prev_for_pass", None)
@@ -220,15 +171,8 @@ class History:
     STALL_TURNS = 4       # consecutive non-advancing turns before believing it
 
     def note_rate_written(self, planet_id, pct):
-        """Remember the recruitment rate we WROTE, to compare next turn.
-
-        The AI writes the rate just after a turn boundary, so every reading it
-        takes is of its own fresh write. If the engine were clearing the byte
-        during the tick, the tick would always see 0 while we always saw 40 --
-        and the store would never advance, which is exactly the unexplained
-        stall. Comparing what we wrote LAST turn against what is there BEFORE we
-        write this turn is the one measurement that separates those cases.
-        """
+        """Remember the recruitment rate we wrote, to check next turn whether
+        the engine kept it."""
         if not hasattr(self, "_rate_written"):
             self._rate_written = {}
         self._rate_written[planet_id] = pct
@@ -241,8 +185,7 @@ class History:
         return wrote, observed == wrote
 
     def note_military_stall(self, planet_id, advancing):
-        """Count consecutive turns a planet's military store failed to advance.
-        """
+        """Count consecutive turns a planet's military store failed to advance."""
         if not hasattr(self, "_mil_stall"):
             self._mil_stall = {}
         self._mil_stall[planet_id] = 0 if advancing else             self._mil_stall.get(planet_id, 0) + 1
@@ -252,8 +195,7 @@ class History:
         return getattr(self, "_mil_stall", {}).get(planet_id, 0) >= self.STALL_TURNS
 
     def military_rate(self, planet_id):
-        """Food per turn flowing into this planet's military store.
-        """
+        """Food per turn flowing into this planet's military store."""
         prev = getattr(self, "_prev_for_pass", None)
         if not prev or not self.turns:
             return None
@@ -265,11 +207,7 @@ class History:
         cost = b["milcost"] or a["milcost"] or 0
         return (b["milstore"] - a["milstore"] + made * cost) / self.turns
 
-    # ── the banker share, a slow controller with a deadband ────────────────
-    # The first attempt was bang-bang: negative income converted every scientist
-    # to a banker, positive income converted them all back, and the empire
-    # oscillated every single turn. The user watched it flip-flopping. A binary
-    # switch cannot express "some bankers", which is the only stable answer.
+    # Banker share: a slow controller with a deadband.
     BANKER_STEP = 0.05      # how fast the share may move per turn
     BANKER_MAX = 0.60       # of the non-farming citizens
     COMFORTABLE_INCOME = 150   # only give bankers back above this, not at zero
@@ -277,10 +215,7 @@ class History:
     def banker_share(self, income):
         """Nudge the empire's banker share toward whatever balances the books.
 
-        The DEADBAND between 0 and COMFORTABLE_INCOME is the point: an income of
-        +10/turn is not a reason to sack the treasury staff, and reacting to it
-        is what produced the oscillation. The share only rises when income is
-        actually negative and only falls when there is real headroom.
+        Rises on negative income, falls above COMFORTABLE_INCOME, holds between.
         """
         cur = getattr(self, "_banker_share", 0.0)
         if income is None:
@@ -293,11 +228,7 @@ class History:
         return cur
 
     def note_cash_effect(self, amount):
-        """Record what our own actions did to the treasury this turn.
-
-        Called by the loop after the rules have run. income_rate() subtracts it
-        back out so the sensor measures the ECONOMY rather than our spending.
-        """
+        """Record what our own actions did to the treasury this turn."""
         self._our_cash_effect = amount
 
     def _civ_delta(self, key):
@@ -308,13 +239,7 @@ class History:
         return (self._cur["civ"][key] - p["civ"][key]) / n
 
     def income_rate(self):
-        """Cash per turn from the economy, excluding our own spending.
-
-        Owner:8 moves for two reasons: the empire earns, and we spend. Only the
-        first is a signal. Hurrying a build is a deliberate purchase, and
-        counting it as lost income made R-XPL-08 oscillate; spend, see
-        "negative income", refuse, recover, spend again.
-        """
+        """Cash per turn from the economy, excluding our own spending (R-XPL-08)."""
         d = self._civ_delta("cash")
         if d is None:
             return None

@@ -2,14 +2,11 @@
 The three things a launcher has to say before a player gets anywhere: that a
 seat was taken back, that a galaxy has been ended, and what the beta is.
 
-Headless and offline. Every galaxy here is a folder made in a temporary
-directory and read through turn_store, which is also the case that must keep
-working with no token, no directory and no network call. No game is started and
-no window is opened.
+Headless and offline. Every galaxy is a folder in a temporary directory read
+through turn_store, which must work with no token, no directory and no network.
 
 Every refusal below is paired with the same call against a healthy galaxy that
-has to go through. A launcher that refused everything would pass a file of
-refusal checks and would be worse than the one that refuses nothing.
+has to go through.
 """
 import inspect
 import json
@@ -233,12 +230,8 @@ check("and no reason not to show it", why, None)
 check("nothing in it is still unfilled", beta_notice.unfilled(body), [])
 check("no marker survives", "SET BEFORE THE BETA OPENS" in (body or ""), False)
 check("it names itself", beta_notice.title(body), "Before you join the beta")
-# The notice states no turn limits and no per-galaxy value, by an editorial
-# decision: those are explained somewhere other than this page. The checks that
-# used to assert both thresholds appeared, that a galaxy's own overrides were
-# the ones shown, and that a build unable to fill them refused the join, went
-# with the markers they were about. What is left is the property that outlived
-# them: the notice exists, it is readable, and nothing in it is a placeholder.
+# The notice states no turn limits and no per-galaxy value. It exists, it is
+# readable, and nothing in it is a placeholder.
 check("no key is left without a marker to fill",
       [k for k in beta_notice.KEYS if k not in beta_notice.markers(body)],
       ["log_upload"])
@@ -296,9 +289,8 @@ class NoModule:
         return None
 
 
-# `abandonment` was in this list, for a build that could not fill the miss
-# thresholds. The notice no longer states them, so such a build has nothing it
-# cannot say and refusing would be wrong.
+# A build without `abandonment` must not refuse: the notice states no miss
+# thresholds.
 for name, expect in (("beta_notice", ["beta_notice"]),):
     hook = NoModule(name)
     saved = sys.modules.pop(name)

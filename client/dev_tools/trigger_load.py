@@ -1,10 +1,9 @@
 """
 trigger_load.py: Make the running client load a save, with no user click
-========================================================================
-Companion to trigger_save.py.  Calls the game's own load routine in a remote
-thread so a server-authored blob can be pushed into a client that nobody is
-sitting at, which is the whole point of the exercise: the server decides the
-galaxy state, including ship orders, and the client adopts it.
+
+Companion to trigger_save.py. Calls the game's own load routine in a remote
+thread so a client adopts a server-authored blob. LoadGame off the main thread
+faults on NULL thread-local state, so a real run needs --i-know-it-crashes.
 
     python trigger_load.py                # load slot 0
     python trigger_load.py --gameid 0
@@ -16,7 +15,7 @@ import sys
 from ctypes import wintypes
 
 # No bytecode for trigger_save: Defender quarantines its .pyc as
-# Exploit:Python/Leivion.C. See game_cycle.import_without_bytecode.
+# Exploit:Python/Leivion.C.
 sys.dont_write_bytecode = True
 from trigger_save import (PROCESS_VM_READ, PROCESS_VM_WRITE, PROCESS_VM_OPERATION,
                           PROCESS_QUERY_INFORMATION, PROCESS_CREATE_THREAD,
@@ -92,10 +91,8 @@ def main():
         kernel32.GetExitCodeThread(th, ctypes.byref(code))
         kernel32.CloseHandle(th)
 
-        # The thread exit code is NOT trustworthy on its own: when the load
-        # faults, the game's own crash handler runs on this thread, writes a
-        # minidump and tears the process down, and the exit code we read back
-        # can still look like success.  Check the process is actually alive.
+        # A faulting load can still leave a success exit code, since the game's
+        # crash handler runs on this thread, so the process must still exist.
         still_there, _ = find_pid()
         if not still_there:
             print(f"  thread exit code was {code.value & 0xFF}, but THE PROCESS IS "

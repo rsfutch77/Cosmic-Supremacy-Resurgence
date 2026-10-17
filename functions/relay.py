@@ -1,111 +1,53 @@
 """
 relay.py: the player's door to a Firebase galaxy
-==================================================
+
     status, headers, body = relay.handle('GET', '/sandbox/state',
                                          {'Authorization': 'Bearer ...'}, b'')
 
-`FirebaseTurnStore` is the referee's transport and can never be a player's: it
-builds `firestore.Client` and `storage.Client`, both of which are Google Cloud
-admin clients, and a player has no Google Cloud credential. Shipping a service
-account key inside a distributed executable is not an alternative, because it is
-project wide, it would let any holder do anything to any galaxy, and it cannot
-be revoked for one player.
+Holds the admin credential so a launcher, which has no Google Cloud credential,
+can reach a Firebase galaxy over `HttpTurnStore`, the protocol `turn_server.py`
+answers on a LAN.
 
-So this holds the admin credential, one copy, on a machine the players do not
-have, and lets a launcher in through a door it already knows how to open. The
-launcher keeps speaking `HttpTurnStore`; what answers is either `turn_server.py`
-on a LAN or this. H7 chose that over a second Firebase transport in the launcher
-for two reasons worth not relitigating: there is no official Firebase *client*
-SDK for Python, only Admin, so a direct-to-Firebase player would mean a
-hand-rolled REST store as a fourth implementation of an interface that already
-costs work to keep three of in step; and ownership becomes an `if` statement
-here rather than a rule Security Rules cannot express, which is the thing H4
-recorded as unsolved.
+A turn blob never passes through: `/turn/<n>` redirects to a signed Cloud
+Storage URL. A submission does: the upload ticket names this relay's own route,
+the body is checked and stored as a Firestore document in one call, and it is
+served back from here with a 304 to a launcher that already holds it.
 
-Turns go through Storage, submissions through here
----------------------------------------------------
-A turn blob never passes through this function: `/turn/<n>` answers with a
-redirect to a signed Cloud Storage URL. A turn is the one blob every launcher
-downloads, and it can grow with the galaxy, so it stays on Storage's egress
-allowance and off the function's memory.
-
-**A submission does pass through**, since H13. It is a few tens of kilobytes
-and capped, and a player uploads it every time their state changes in a turn.
-Written to Cloud Storage each of those was a Class A operation, 5,000 a month
-for the whole project, which capped the beta at about 27 players. So the
-upload ticket names this function's own route, the body is checked and then
-stored as a Firestore document in one call, and the document is served back
-from here, with a 304 and no body to a launcher that already holds it. See
-`_take_submission`.
-
-Builds from before H13 follow that ticket unchanged: they read `url`,
-`method`, `encoding` and `commit` from it, and a relative `url` with no
-`commit` is the shape `turn_server.py` has always answered with.
-
-What it enforces, which is what rules could not
-------------------------------------------------
+What it enforces:
   * the caller holds a verified Firebase ID token, or nothing is answered
   * a caller writes only its own submission, resolved through the seat map
   * only the referee publishes a turn, starts a galaxy, archives, or notes;
-    there is no authenticated path here that does any of those at all
+    no authenticated path here does any of those
   * a submission is accepted only for the turn being played
-  * a submission is size capped, before it is decoded and again before it is
-    stored, and one that would inflate past the store's cap is refused while
-    it inflates
+  * a submission is size capped before it is decoded, again before it is
+    stored, and while it inflates
   * a submission that is not a save of this galaxy's current turn is refused
-    before it is stored, so it never replaces the one it was sent over
-  * a join request is filed under the uid in the token and not the one in the
-    body, and a caller reads back only the request it lodged itself
+    before it is stored, so it never replaces the previous one
+  * a join request is filed under the token's uid, not the body's, and a
+    caller reads back only its own request
   * a launcher's log is capped before and while it is inflated, counted per
-    sign-in and per day, and never served back to anyone; see `_take_log`
+    sign-in and per day, and never served back to anyone
 
-The one caller with no seat
-----------------------------
-Everything above is about a player who holds a seat proving they are the player
-whose seat it is. A join is the request that arrives from somebody who holds
-nothing, and it has to be let in or nobody new ever plays. So `seat_or_refuse`
-is not on that path, and what stands in its place is narrower:
+A join comes from a caller with no seat, so `seat_or_refuse` is not on that
+path. Instead:
+  * the uid is the token's; the body's is discarded
+  * `requested_at` is stamped here, since it decides who gets the last free
+    planet when two joins compete
+  * one waiting request per sign-in per galaxy, keyed by uid
+  * a caller seated on the roster is refused; one whose seat was reclaimed
+    may ask again
+  * nothing is seated here; the worker grants the request at the next boundary
 
-  * **the uid is the token's.** The launcher puts a uid in the body because a
-    folder galaxy has nowhere else to get one; here the body's is discarded. A
-    request filed under another player's uid is that player's next seat taken
-    from them at the boundary, by a caller who only had to read a uid once.
-  * **the clock is the galaxy's.** `requested_at` decides who gets the last
-    free planet when two joins compete for it, so it is stamped here rather
-    than taken from a caller who could send a zero and always win.
-  * **one waiting request per sign-in per galaxy**, because the document is the
-    uid. Pressing Join again replaces, exactly as it does on a folder, and the
-    door cannot be used to fill a collection.
-  * **a caller already seated on the roster is refused**, and one whose seat
-    was reclaimed is not: K4 takes a seat back and leaves the player able to
-    come back, and a check that only asked whether a uid appears in `seats`
-    would lock them out of the galaxy they were reclaimed from.
-  * **nothing is seated here.** The request is a request. The worker grants it
-    at the next boundary, on the authoritative blob, which is J3's whole shape
-    and the reason a player cannot join a galaxy by writing to it.
+The galaxy document's `seats` maps Firebase uid to civ name. A uid with no seat
+is refused every write and every read of a submission or a note, and may read
+the galaxy's public face: the clock, the roster, a published turn, the list of
+who has submitted, and the archive.
 
-Who a uid is
-------------
-The galaxy document carries `seats`, a map from Firebase uid to civ name. A uid
-is safe as a Firestore map key, which is exactly what a civ name is not, so the
-map goes this way round rather than the other; it is H4's option 1 with the
-resolution in code rather than in a rule, which is what B bought.
-
-**A uid with no seat is refused every write and every read of a submission or a
-note, and is allowed the galaxy's public face: the clock, the roster, a
-published turn, the list of who has submitted, and the archive.** That is the
-Games tab's view of a galaxy it has not joined, so a launcher can show a galaxy
-before its player is in it.
-
-**Three things write `seats`.** A granted join binds the new civ to the uid
-that asked, in the same write as the roster (`joins.commit`); the operator
-binds or moves one with `server/dev_tools/seat_tool.py`; and a galaxy with
-`seat_claim: 'first-use'` on its document lets a uid take an unheld civ from
-the roster on its first submission and holds it to that from then on. A
-reclaim leaves the uid's entry in place, so a write from it can be refused
-saying the seat was reclaimed rather than that it never existed. A read never takes a seat, so browsing a galaxy is not joining it.
-First use is a land grab among strangers and is off by default for that reason. Neither is
-identity; Google login is, and H4 says so.
+Three things write `seats`: a granted join (`joins.commit`), the operator with
+`server/dev_tools/seat_tool.py`, and, only on a galaxy with
+`seat_claim: 'first-use'`, a uid's first submission taking an unheld civ. A
+reclaim leaves the uid's entry in place, so a write from it is refused as
+reclaimed. A read never takes a seat.
 """
 import base64
 import datetime
@@ -117,10 +59,8 @@ import urllib.parse
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
-# The store's own modules, copied in by `bundle.py` so that what deploys is what
-# a deploy can carry: a Cloud Functions upload is one directory and cannot reach
-# `server/` beside it. In a checkout the copies are refreshed from `server/` at
-# import, so editing the store and running the relay against it cannot drift.
+# The store's modules, copied in by `bundle.py`. In a checkout they are
+# refreshed from `server/` at import.
 import bundle                                                   # noqa: E402
 
 bundle.ensure()
@@ -130,64 +70,35 @@ if bundle.LIB not in sys.path:
 import firebase_store                                           # noqa: E402
 import turn_store                                               # noqa: E402
 
-# How long a signed URL lives. Long enough for a slow upload of a save, short
-# enough that one copied out of a log is not a standing grant.
+# Lifetime of a signed URL, in seconds.
 URL_SECONDS = int(os.environ.get('CS_RELAY_URL_SECONDS', '600'))
 
-# The ceiling on a submission body, in the base64 wire form a launcher sends.
-# `turn_server.MAX_SUBMISSION_BYTES` is the same number, because a launcher
-# must not be told two different limits by two services that are meant to be
-# interchangeable. Real submissions are about 13 KB in this form, and the
-# largest save this checkout holds, 129,853 bytes decompressed, is well under
-# a tenth of it. A body this size is 768 KiB once out of base64, which is what
-# the store keeps, so it fits `firebase_store.MAX_SUBMISSION_DATA` and a
-# Firestore document's 1 MiB with room to spare.
+# Ceiling on a submission body in its base64 wire form. Must equal
+# `turn_server.MAX_SUBMISSION_BYTES`; decoded, it must fit
+# `firebase_store.MAX_SUBMISSION_DATA` and a 1 MiB Firestore document.
 MAX_BYTES = int(os.environ.get('CS_RELAY_MAX_BYTES', str(1024 * 1024)))
 
-# The ceiling on a join request, which is a name, a build string and two
-# numbers. Three orders of magnitude above what one is and small enough that
-# the door cannot be used to write a document of any size into Firestore.
+# Ceiling on a join request body (a name, a build string and two numbers).
 MAX_JOIN_BYTES = int(os.environ.get('CS_RELAY_MAX_JOIN_BYTES', '4096'))
 
-# The longest build string a request may carry. It is a claim the launcher
-# makes about itself, read by L2's minimum-build gate, so it is kept rather
-# than dropped and capped rather than trusted.
+# Longest build string a join request may carry; read by the minimum-build gate.
 MAX_BUILD_CHARS = 64
 
-# Where the galaxies are. The prefix matches `firebase_store.PREFIX` for the
-# reason that module gives: the same project hosts the public website.
+# Collection prefix for the galaxies; matches `firebase_store.PREFIX`.
 PREFIX = os.environ.get('CS_RELAY_PREFIX', firebase_store.PREFIX)
 
-# Fields of the galaxy document that the store carries and this door does not
-# serve. `joined` is the worker's record of who was seated at which boundary
-# and it holds their uids, so serving it would hand every player the uid to
-# civ mapping that `seats` is kept out of `/state` to protect. The store has to
-# carry it, because `joins.commit` writes it and the acceptance tool reads it
-# back; a player has no use for anybody's record but their own, and
-# `GET /<galaxy>/join` is where they get that.
+# Galaxy document fields this door never serves. `joined` holds uids, which
+# would expose the uid-to-civ mapping that `seats` is kept out of `/state` for.
 PRIVATE_FIELDS = (turn_store.JOINED_KEY,)
 
-# How long a warm instance answers a galaxy's public face, `/state`,
-# `/submissions` and `/turn`, from a galaxy document it has already read. Every
-# launcher following a galaxy polls `/state`, so without this the project's
-# Firestore reads grow with the number of launchers open; with it they grow
-# with the number of galaxies and instances, and a launcher costs a request and
-# no read. A copy is held up to the deadline and then for a twentieth of how
-# overdue the turn is, floored at STATE_FLOOR and capped at STATE_CEILING, so
-# it is shortest exactly where a turn is published. See `hold_for` and the
-# plan's H12.
-#
-# Only those routes. Every route that checks a seat, a closed galaxy or the
-# turn being played reads the document afresh, so what a player may do is
-# never decided from a held copy. CS_RELAY_STATE_CEILING of 0 turns it off.
-STATE_FLOOR = 1.0
-STATE_SHARE = 20.0
-STATE_CEILING = float(os.environ.get('CS_RELAY_STATE_CEILING', '60'))
+# How long a warm instance serves `/state`, `/submissions` and `/turn` from a
+# galaxy document it has already read (see `hold_for`). Routes that check a
+# seat, a closed galaxy or the current turn always read afresh.
+STATE_FLOOR = 1.0       # shortest hold, in seconds
+STATE_SHARE = 20.0      # past the deadline, hold for overdue time / this
+STATE_CEILING = float(os.environ.get('CS_RELAY_STATE_CEILING', '60'))  # 0 = off
 
-# The same for the listing, which streams every galaxy document in the catalog
-# and so costs one read per galaxy per request. A listing is held for the
-# shortest window any galaxy in it would be held for, and never longer than
-# this. CS_RELAY_LISTING_SECONDS of 0 turns it off.
+# Longest hold for the galaxy listing, in seconds; 0 turns it off.
 LISTING_SECONDS = float(os.environ.get('CS_RELAY_LISTING_SECONDS', '60'))
 
 _STORES = {}
@@ -211,13 +122,11 @@ class Refused(Exception):
         self.code = code
 
 
-# ── identity ─────────────────────────────────────────────────────────────────
 def project() -> str:
     """The project this relay serves.
 
-    Cloud Functions sets `GCLOUD_PROJECT`; the emulator sets it too. The
-    explicit name wins so that a test can point a relay at a `demo-` project
-    without the ambient environment deciding otherwise.
+    `CS_RELAY_PROJECT` wins over the runtime's `GCLOUD_PROJECT`, so a test can
+    point a relay at a `demo-` project.
     """
     for key in ('CS_RELAY_PROJECT', 'GCLOUD_PROJECT', 'GOOGLE_CLOUD_PROJECT'):
         value = os.environ.get(key)
@@ -241,18 +150,9 @@ def _jwt_claims(token: str) -> dict:
 def verify(token: str) -> str:
     """The uid this token belongs to, or a refusal.
 
-    Two verifiers, and the choice between them is made by the environment
-    rather than by a flag, so there is no way to ask for the weaker one in
-    production. Against the Auth emulator the tokens are unsigned by design and
-    `firebase_admin` skips the signature itself, so the claims are read here and
-    the same checks applied, which keeps the emulator runs free of the admin
-    library and lets the relay's own tests run in the store's virtualenv.
-
-    Anywhere else the signature is the whole point and `firebase_admin` does it,
-    against Google's rotating public keys. If it is not installed the request is
-    refused rather than admitted: a verifier that is missing must not become a
-    verifier that passes everything, which is how this kind of fallback usually
-    fails.
+    Against the Auth emulator (`FIREBASE_AUTH_EMULATOR_HOST` set) tokens are
+    unsigned, so the claims are checked here. Anywhere else `firebase_admin`
+    verifies the signature, and if it is not installed the request is refused.
     """
     if not token:
         raise Refused(401, 'this galaxy needs a signed-in caller')
@@ -297,13 +197,10 @@ def bearer(headers: dict) -> str:
     return ''
 
 
-# ── the store, and the seat map beside it ────────────────────────────────────
 def store_for(galaxy: str):
     """This galaxy's admin store, kept for the life of the instance.
 
-    Building one is cheap and building its clients is not: the first Firestore
-    call in a process pays for grpc. A warm instance serving a second request
-    for the same galaxy should not pay it again.
+    The first Firestore call in a process pays for grpc.
     """
     if galaxy not in _STORES:
         _STORES[galaxy] = firebase_store.FirebaseTurnStore(
@@ -314,32 +211,19 @@ def store_for(galaxy: str):
     return _STORES[galaxy]
 
 
-# A store is one galaxy, and a listing is about the collection they sit in, so
-# `catalog` borrows a store for its Firestore client and never asks it about a
-# galaxy. The name is a placeholder the constructor accepts; a galaxy that
-# happened to carry it would share the client and nothing else.
+# Placeholder galaxy name for the store `catalog` borrows its Firestore client
+# from. It is never asked about a galaxy.
 CATALOG = '_catalog'
 
 
 def catalog():
-    """The collection every galaxy document sits in.
-
-    Borrowed from a store rather than built from a second client, because the
-    first Firestore call in a process pays for grpc and a cold instance
-    answering a listing should pay it once.
-    """
+    """The collection every galaxy document sits in."""
     store = store_for(CATALOG)
     return store.fs.collection(store.prefix)
 
 
 def catalog_rows() -> list:
-    """Every galaxy, carrying what `/state` serves about it plus which it is.
-
-    The same allowlist and the same private fields as `/state`, so a galaxy
-    says the same about itself in a listing as it does when asked directly.
-    `name` is added to that because it is the directory's field rather than the
-    store's, and a row without it could only be labelled by its id.
-    """
+    """Every galaxy, with the fields `/state` serves plus `id` and `name`."""
     rows = []
     for snap in catalog().stream():
         doc = snap.to_dict() or {}
@@ -354,13 +238,9 @@ def catalog_rows() -> list:
 def hold_for(doc: dict, ceiling: float = None) -> float:
     """How long a copy of this galaxy's public face may be served.
 
-    Before the deadline a copy is held up to the deadline and no further,
-    because the referee publishes at or after it. Past the deadline the turn
-    can change at any moment, so the copy is held for a twentieth of how
-    overdue it is, which is the floor while the referee's tick is due and
-    backs off if the referee is down. Measured on the wall clock, because that
-    is the clock a deadline is written in. A galaxy with no deadline is held
-    for the ceiling, since nothing is due to change in it.
+    Before the deadline, up to the deadline. Past it, overdue time divided by
+    STATE_SHARE, floored at STATE_FLOOR. With no deadline, the ceiling. All
+    capped at the ceiling.
     """
     ceiling = STATE_CEILING if ceiling is None else ceiling
     if ceiling <= 0:
@@ -374,13 +254,9 @@ def hold_for(doc: dict, ceiling: float = None) -> float:
 
 
 def listing() -> list:
-    """`catalog_rows`, held on this instance while no galaxy in it is due.
+    """`catalog_rows`, held for the shortest window of any galaxy in it.
 
-    The rows carry the turn each galaxy is on, and a launcher asks
-    `/submissions` about that turn next. A row held across a publish sends it
-    to a past turn, which is a bucket listing, so the listing takes the
-    shortest window of the galaxies in it: held to the soonest deadline, and
-    for the floor while any galaxy in it is overdue.
+    A row held across a publish would send a launcher to a past turn.
     """
     global _LISTING
     held = _LISTING
@@ -396,13 +272,9 @@ def listing() -> list:
 def galaxy_doc(store) -> dict:
     """The whole galaxy document, seats included, read afresh.
 
-    `FirebaseTurnStore.state` deliberately returns only the five fields the
-    store interface names, so the seat map is invisible above the store seam and
-    stays that way. The relay is below that seam and reads the document itself,
-    once per request.
-
-    A fresh read is also the newest copy this instance has, so it replaces the
-    one `public_doc` holds.
+    `FirebaseTurnStore.state` returns only the store interface's fields, so the
+    relay reads the document itself. The read replaces the copy `public_doc`
+    holds.
     """
     snap = store.doc.get()
     if not snap.exists:
@@ -418,9 +290,9 @@ def galaxy_doc(store) -> dict:
 def public_doc(store) -> dict:
     """The galaxy document for a route that serves only its public face.
 
-    A copy read inside its window is served again rather than read again. Only
-    `/state`, `/submissions` and `/turn` take this, and none of them decides
-    what a caller may do.
+    A copy read inside its window is served again. Only `/state`,
+    `/submissions` and `/turn` use this, and none of them decides what a caller
+    may do.
     """
     held = _HELD.get(store.galaxy)
     if held is not None and _now() - held[0] < held[1]:
@@ -458,16 +330,11 @@ def reclaimed_refusal(store, doc: dict, civ: str) -> Refused:
 
 
 def claim_seat(store, doc: dict, uid: str, civ: str) -> str:
-    """Bind an unheld civ to this uid, when the operator allowed it.
+    """Bind an unheld civ to this uid, when the galaxy allows it.
 
-    Off unless the galaxy document says `seat_claim: 'first-use'`, because
-    among strangers first use is a land grab: the first uid to ask takes
-    whichever civ it names, and the player that name belongs to arrives to find
-    their seat held. It exists because the alternative while J4 is unbuilt is
-    binding every seat by hand before a rehearsal.
-
-    In a transaction, so two launchers claiming the same civ in the same second
-    produce one holder and one refusal rather than two holders.
+    Only with `seat_claim: 'first-use'` on the galaxy document, since the first
+    uid to ask takes whichever civ it names. Runs in a transaction so two
+    launchers claiming one civ produce one holder and one refusal.
     """
     if (doc.get('seat_claim') or '') != 'first-use':
         raise Refused(403, f'no seat in {store.galaxy} is bound to this '
@@ -497,20 +364,12 @@ def seat_or_refuse(store, doc: dict, uid: str, civ: str,
                    claim: bool = False) -> str:
     """Check that this caller is that civ, and say so when it is not.
 
-    The one rule H4 could not write. A Storage rule can test `request.auth.uid`
-    and nothing else about who is asking, and a submission object is named for a
-    username the player typed, so no rule can relate the two. Here they are two
-    strings and a comparison.
-
-    Only the two steps of a submission may `claim`: the upload ticket, which
-    authorises a write, and the commit that closes it. A read never does, even
-    though the ticket is fetched with a GET. A launcher looking at a galaxy has
-    not joined it, and under `first-use` a seat taken by a read would go to
-    whoever browsed first rather than to whoever played.
+    Only the two steps of a submission may `claim`: the upload ticket and the
+    commit. A read never takes a seat, even though the ticket is fetched with a
+    GET.
     """
     held = seat_of(doc, uid)
-    # A write only. A reclaimed player may still read back what they handed in
-    # before the reclaim, and refusing that would explain nothing more.
+    # Writes only: a reclaimed player may still read back earlier submissions.
     if claim and held is not None and held not in (doc.get('civs') or []):
         raise reclaimed_refusal(store, doc, held)
     if held is None and claim:
@@ -524,29 +383,17 @@ def seat_or_refuse(store, doc: dict, uid: str, civ: str,
     return held
 
 
-# ── signed URLs ──────────────────────────────────────────────────────────────
 def signing_identity(store):
     """Whatever this process can sign a Cloud Storage URL with.
 
-    **A Cloud Functions runtime service account has no private key**, so
-    `generate_signed_url` cannot sign locally the way it does from a key file:
-    it raises, naming a missing private key, and nothing about the message says
-    what to do. The supported answer is to sign through the IAM Credentials API,
-    which `generate_signed_url` will do when it is given a service account email
-    and an access token instead of a signer. That needs
-    `iam.serviceAccounts.signBlob` on the runtime account, which is
-    `roles/iam.serviceAccountTokenCreator` granted to the runtime account on
-    itself, and `iamcredentials.googleapis.com` enabled. Both are in the deploy
-    notes in `firebase.json`'s directory.
+    A Cloud Functions runtime service account has no private key, so it signs
+    through the IAM Credentials API with its email and an access token. That
+    needs `roles/iam.serviceAccountTokenCreator` granted to the runtime account
+    on itself and `iamcredentials.googleapis.com` enabled (see deploy.py). A
+    service account key signs by itself.
 
-    A service account key, which is what an operator running this locally has,
-    signs by itself and takes neither. So the credential is asked which it is
-    rather than the environment being guessed at.
-
-    `CS_RELAY_SIGNER` names the identity to sign as, for the case where the two
-    differ: a user credential from `gcloud auth application-default login` can
-    sign through the IAM API as a service account it is allowed to impersonate,
-    and cannot name one on its own.
+    `CS_RELAY_SIGNER` names the identity to sign as, for a user credential that
+    impersonates a service account.
     """
     import google.auth
     import google.auth.credentials
@@ -570,12 +417,8 @@ def signed_url(store, name: str, method: str, content_type: str = None,
                headers: dict = None) -> str:
     """A short-lived URL for one object and one method.
 
-    Against the Firebase emulator there is nothing to sign with and nothing
-    checking signatures, so the emulator's own unauthenticated JSON API endpoint
-    is handed out instead. That is a real difference and not a shim: the
-    emulator is an open bucket by design, and the code path that produces a
-    signed URL is exercised only against a real project. What the emulator does
-    prove is everything around it, which is where the rules live.
+    Against the Storage emulator, which checks no signatures, the emulator's
+    unauthenticated JSON API endpoint is returned instead.
     """
     emulator = os.environ.get('STORAGE_EMULATOR_HOST')
     if emulator:
@@ -595,7 +438,6 @@ def signed_url(store, name: str, method: str, content_type: str = None,
         **signing_identity(store))
 
 
-# ── replies ──────────────────────────────────────────────────────────────────
 def _json(obj, code=200):
     return code, {'Content-Type': 'application/json'}, \
         json.dumps(obj).encode('utf-8')
@@ -606,16 +448,14 @@ def _text(body: bytes, code=200, ctype='application/octet-stream'):
 
 
 def _redirect(url: str):
-    """A 302 to Storage, which is how a blob leaves without passing through.
+    """A 302 to Storage.
 
-    `HttpTurnStore` follows it and drops the Authorization header on the way,
-    because Cloud Storage reads a bearer token it was not given in the signature
-    as a credential and refuses the request over it.
+    `HttpTurnStore` drops the Authorization header when following it, since
+    Cloud Storage refuses a bearer token alongside a signed URL.
     """
     return 302, {'Location': url, 'Cache-Control': 'no-store'}, b''
 
 
-# ── routes ───────────────────────────────────────────────────────────────────
 def _turn_number(text: str) -> int:
     try:
         return int(text)
@@ -631,13 +471,10 @@ def _current_turn(doc: dict) -> int:
 
 
 def refuse_if_closed(store, doc):
-    """A closed galaxy takes no more submissions, enforced here.
+    """A closed galaxy takes no more submissions.
 
-    Every store's `submit` already refuses one, but the relay never calls
-    `submit`: it makes its own checks on the document it has read and writes
-    through `write_submission`. So the store's own guard is not on the door a
-    player actually uses, and a launcher that skipped its client-side check
-    could submit into a galaxy the operator had ended.
+    The relay writes through `write_submission`, not the store's `submit`, so
+    the store's own closed check does not apply.
     """
     if doc.get(turn_store.STATUS_KEY) == turn_store.CLOSED:
         why = doc.get(turn_store.CLOSED_REASON_KEY)
@@ -661,22 +498,13 @@ def _may_submit(store, doc, uid, turn, civ):
 
 
 def _upload_ticket(turn, civ):
-    """Where to put a submission, which is this relay's own route.
+    """Where to put a submission: this relay's own route.
 
-    The shape `turn_server.upload_ticket` answers with, so one launcher speaks
-    to both: `url` relative to the launcher's base, `method`, `encoding`, and
-    no `commit`, because the POST checks and stores the body in one call.
-    Builds from before H13 follow it unchanged; they asked for this ticket
-    when it named a signed Cloud Storage URL, and they read the same four
-    fields out of it now.
-
-    Nothing is read to answer it. A ticket authorises nothing: the POST it
-    names makes every check afresh, so a ticket handed to a caller with no
-    seat, or into a galaxy that has closed, is refused when it is used.
-
-    `b64` because that is the smaller of the two forms a launcher can send,
-    about a third of the decompressed blob, and it is what the store keeps
-    once it is out of base64.
+    The shape `turn_server.upload_ticket` answers with: `url` relative to the
+    launcher's base, `method`, `encoding`, `headers`, `commit` (None, since the
+    POST stores the body in one call) and `max_bytes`. A ticket authorises
+    nothing; the POST makes every check afresh. `b64` is the smaller form a
+    launcher can send.
     """
     quoted = urllib.parse.quote(civ)
     return _json({
@@ -719,12 +547,7 @@ def _take_submission(store, doc, uid, turn, civ, body):
     """Check a submission and store it, in one call.
 
     Every refusal happens before anything is written, so a bad upload leaves
-    the player's previous submission for this turn standing rather than
-    replacing it and then being deleted.
-
-    The cost, from `write_submission`: one Firestore write, and a second only
-    on the civ's first submission of the turn, when the galaxy document does
-    not yet record them. No Cloud Storage operation of either class.
+    the player's previous submission for this turn standing.
     """
     _may_submit(store, doc, uid, turn, civ)
     blob = _submission_body(body, turn)
@@ -737,16 +560,11 @@ def _take_submission(store, doc, uid, turn, civ, body):
 
 
 def _serve_submission(store, doc, turn, civ, headers):
-    """One civ's submission, as a body, or 304 when the caller has it.
+    """One civ's submission in base64 wire form, or 304 when the caller has it.
 
-    The stored bytes are served in the base64 wire form, which is what every
-    launcher already decodes, and the ETag is the blob's `submission_tag`.
-    `HttpTurnStore` sends the tag of the submission it last sent back as
-    `If-None-Match`, and `player_turn` reads its own submission before every
-    upload and after it, so nearly every read is answered with no body.
-
-    A turn from before submissions were documents is served the way it was
-    then, as a redirect to the object.
+    The ETag is the blob's `submission_tag`, which `HttpTurnStore` sends back
+    as `If-None-Match`. A turn whose submissions are Storage objects
+    (`before_documents`) is served as a redirect to the object.
     """
     rec = store.submission_record(civ, turn)
     if rec is not None:
@@ -767,19 +585,15 @@ def _serve_submission(store, doc, turn, civ, headers):
 
 
 def _commit_submission(store, doc, uid, turn, civ):
-    """Bring in an upload made to a Storage ticket from before H13.
+    """Bring in an upload made to a Cloud Storage ticket.
 
-    A launcher holding a ticket this relay handed out before it was redeployed
-    uploads to Cloud Storage and then commits here, for up to `URL_SECONDS`
-    after the redeploy. The object is read back once, checked as a body sent
-    to `_take_submission` is, stored as a document, and deleted either way, so
-    the upload is not lost and does not linger. The current ticket carries no
-    commit, so nothing else arrives here.
+    The object is read once, checked as `_take_submission` checks a body,
+    stored as a document, and deleted either way. The current ticket carries no
+    commit, so only older tickets arrive here.
     """
     _may_submit(store, doc, uid, turn, civ)
     blob = store.bucket.blob(store.submission_object(civ, turn))
-    # One range read rather than a size check and then a read: an object above
-    # the cap must not be downloaded to discover that it is above the cap.
+    # A range read, so an oversized object is never downloaded whole.
     from google.api_core import exceptions
     try:
         data = blob.download_as_bytes(start=0, end=MAX_BYTES)
@@ -791,8 +605,8 @@ def _commit_submission(store, doc, uid, turn, civ):
         decoded = _submission_body(data, turn)
         tag = store.write_submission(civ, turn, decoded, doc=doc)
     except (Refused, turn_store.SubmissionTooLarge) as exc:
-        # The upload replaced whatever object was there, so with no document
-        # either the civ has nothing stored for this turn now.
+        # The upload replaced any earlier object, so without a document the
+        # civ now has nothing stored for this turn.
         blob.delete()
         if store.submission_record(civ, turn) is None:
             store.forget_submitted(civ, turn)
@@ -817,14 +631,9 @@ def _header(headers: dict, name: str):
 def _lodge_join(store, doc, uid, body):
     """Ask this galaxy for a seat. The one write an unseated caller may make.
 
-    What comes back is where it landed and the turn it was lodged during, so a
-    launcher can tell the player which turn their empire appears at without
-    reading the clock again.
-
-    A galaxy with no first turn is refused rather than queued. `joins.apply`
-    runs on the blob a tick produced and a galaxy that has never published one
-    has nothing for a newcomer to be merged into, so a request lodged against
-    it would wait for a boundary that cannot come.
+    Returns where the request landed and the turn it was lodged during. A
+    galaxy with no first turn is refused, since `joins.apply` needs a published
+    blob to merge a newcomer into.
     """
     refuse_if_closed(store, doc)
     if len(body or b'') > MAX_JOIN_BYTES:
@@ -839,9 +648,8 @@ def _lodge_join(store, doc, uid, body):
     name = name.strip() if isinstance(name, str) else ''
     if not name:
         raise Refused(400, 'a join request names the player asking')
-    # The launcher checks the name at the button, but a request does not have
-    # to come from the launcher, and a name the engine cannot hold fails at the
-    # referee on every tick rather than once here.
+    # Checked here too: a request need not come from the launcher, and a name
+    # the engine cannot hold would fail at the referee on every tick.
     problem = turn_store.name_problem(name)
     if problem:
         raise Refused(400, problem)
@@ -850,18 +658,13 @@ def _lodge_join(store, doc, uid, body):
     roster = [str(c) for c in (doc.get('civs') or [])]
     held = seat_of(doc, uid)
     if held and held in roster:
-        # Already playing. Refused here rather than at the boundary, where the
-        # answer would be a second empire refused for a name clash and would
-        # read to the player as the galaxy having lost their seat. A seat that
-        # was reclaimed is not in the roster and falls through, because a
-        # reclaimed player coming back is a join `joins.py` knows how to grant.
+        # Already playing. A reclaimed seat is not in the roster and falls
+        # through, since `joins.py` can grant a returning player.
         raise Refused(409, f'this sign-in already plays {held} in '
                            f'{store.galaxy}')
     if any(c == name or c.lower() == name.lower() for c in roster):
-        # The launcher refuses this at the button and says more about it than
-        # a status code can. It is refused here as well because the launcher is
-        # not a boundary: what stops a second player taking a seat has to be on
-        # this side of the door.
+        # Also refused at the launcher's button, but the launcher is not a
+        # boundary.
         raise Refused(409, f'{store.galaxy} already has a seat called {name}')
 
     build = req.get('build')
@@ -873,11 +676,7 @@ def _lodge_join(store, doc, uid, body):
     try:
         where = store.request_join(clean)
     except ValueError as exc:
-        # The store refuses a request it could not file, and every reason it
-        # has is about the caller. Unreachable as the record is built above,
-        # where the name is checked and the key is a uid; turned into a
-        # refusal rather than left to become a 500, because a caller told
-        # "internal error" has nothing to do about it.
+        # Every reason the store refuses a request is about the caller.
         raise Refused(400, str(exc))
     return _json({'where': where, 'key': uid, 'requested_turn': turn})
 
@@ -885,13 +684,9 @@ def _lodge_join(store, doc, uid, body):
 def _own_key(uid: str, asked: str) -> str:
     """The request key in a path, once it has been shown to be this caller's.
 
-    Through this door a request is filed under the uid in the token, so the
-    only key a caller may name is its own. The comparison is the same one
-    `seat_or_refuse` makes about a civ, one step earlier in a player's life:
-    there they have a seat and here they are asking for one.
-
-    Unquoted first, because `HttpTurnStore` quotes a key whole and a uid that
-    came back with an escape in it would never match.
+    A request is filed under the token's uid, so that is the only key a caller
+    may name. The key is unquoted first, because `HttpTurnStore` quotes it
+    whole.
     """
     key = urllib.parse.unquote(asked or '')
     if key != uid:
@@ -903,25 +698,11 @@ def _own_key(uid: str, asked: str) -> str:
 def _own_join(store, doc, uid):
     """What became of the request this caller lodged, or that it is waiting.
 
-    Keyed by the token's uid and by nothing else, so there is no route here
-    that lists what is waiting on a galaxy. `turn_server.py` has one, because
-    on a LAN the worker is whoever holds the port; through this door the same
-    list would tell a stranger who else is trying to join, which is the
-    enumeration F4 refuses to let a launcher make.
-
-    This is what closes J3's other half: a refused player is on no roster, so
-    `player_turn.follow` never runs for them and the note the worker left is on
-    a path they cannot read. The answer is on a path they can.
-
-    The waiting request is looked for first. Answering a request consumes it,
-    so one that is waiting is always newer than any answer on file, and a
-    player refused once who asks again is waiting on the new request rather
-    than refused by the old one.
-
-    At most two named document reads and no listing, for the reason H6 gives
-    about a submission: this is a path a launcher polls while it waits for a
-    boundary, and reading the whole waiting collection to find one row in it
-    would cost a read per player waiting, per poll.
+    Keyed by the token's uid only; no route here lists what is waiting on a
+    galaxy, which would tell a stranger who else is joining. The waiting
+    request is checked first: answering consumes a request, so a waiting one is
+    always newer than any answer. At most two named document reads, since
+    launchers poll this.
     """
     waiting = store.join_request(uid)
     if waiting is not None:
@@ -932,48 +713,29 @@ def _own_join(store, doc, uid):
     return _json({'state': 'none'})
 
 
-# ── a launcher's log ─────────────────────────────────────────────────────────
-# A player whose turn failed, or who presses Send log, uploads the launcher's
-# redacted log here (plan item M1). It is stored as one Firestore document in
-# a collection of its own, beside the galaxies rather than in theirs, so the
-# listing never streams it. Nothing in this relay reads one back: the operator
-# reads them with administrator credentials through
-# `server/dev_tools/log_tool.py`, and no player can read any log, their own
-# included, through this door.
-#
-# The route is about no galaxy, like the listing, because a failure worth
-# reporting can come before a player is in one. The body names the galaxy,
-# civ and turn it was sent about, as claims the operator reads, and the uid is
-# the token's.
+# A launcher uploads its redacted log here when a turn fails or the player
+# presses Send log. Each is one Firestore document in its own collection beside
+# the galaxies. Nothing here reads one back; the operator uses
+# `server/dev_tools/log_tool.py`. The route is about no galaxy: the body's
+# galaxy, civ and turn are claims, and the uid is the token's.
 LOG_ROUTE = '_logs'
 LOG_COLLECTION = f'{PREFIX}_logs'
 LOG_QUOTA_COLLECTION = f'{PREFIX}_log_quota'
 
-# `launcher.LOG_UPLOAD_CAP`, the size the launcher trims its redacted copy to,
-# plus room for the line that says what the trim dropped. The text arrives
-# zlib-compressed and is inflated under this, so a body built to expand is
-# refused while it is read. A measured 103,780-byte redacted log compresses to
-# 10,094 bytes, so a real upload is a small fraction of a Firestore document's
-# 1 MiB, and one that does not compress at all still fits.
+# `launcher.LOG_UPLOAD_CAP` plus room for the trim notice. The zlib text is
+# inflated under this cap.
 LOG_TEXT_MAX = 256 * 1024 + 1024
 
 # The ceiling on the request body, the compressed text in base64 inside a
 # small JSON object. Checked before anything is decoded.
 LOG_BODY_MAX = 512 * 1024
 
-# How many logs one sign-in may upload in a UTC day, and how many the project
-# takes in a day from everyone. Anonymous sign-up is open, so the per-sign-in
-# limit stops a launcher stuck in a loop and the daily total is what bounds
-# the spend: at 100 a day an upload is one quota read, two writes and one
-# small query, so at most about 200 writes a day of the 20,000 free.
+# Uploads allowed per sign-in, and for the whole project, per UTC day.
 LOG_PER_UID_PER_DAY = int(os.environ.get('CS_RELAY_LOG_PER_UID', '5'))
 LOG_PER_DAY = int(os.environ.get('CS_RELAY_LOG_PER_DAY', '100'))
 
-# How long a log is kept. Each upload deletes up to `LOG_PRUNE_BATCH` logs
-# older than this, so the collection holds at most about 14 days of uploads:
-# 1,400 at the daily cap, about 14 MB at the measured size and under 360 MiB
-# if every one were incompressible. `expire_at` is written as well, for a
-# Firestore TTL policy should the operator set one.
+# Each upload deletes up to LOG_PRUNE_BATCH logs older than LOG_KEEP_DAYS.
+# `expire_at` is also written, for a Firestore TTL policy.
 LOG_KEEP_DAYS = 14
 LOG_PRUNE_BATCH = 5
 
@@ -1033,13 +795,9 @@ def log_day(when: float) -> str:
 def _take_log(uid: str, body: bytes):
     """Store a launcher's redacted log, inside the per-sign-in and daily caps.
 
-    The count and the log are written in one transaction, so two uploads in
-    the same second cannot both take the last place. The text is compressed
-    again here rather than stored as it came, so every stored log is known
-    to inflate.
-
-    After the write, up to `LOG_PRUNE_BATCH` logs past `LOG_KEEP_DAYS` are
-    deleted. That is best effort: a failure there is not the uploader's.
+    The count and the log are written in one transaction. The text is
+    recompressed here, so every stored log is known to inflate. Pruning old
+    logs afterwards is best effort.
     """
     import secrets
     import zlib
@@ -1111,19 +869,11 @@ REFEREE_ONLY = ('only the referee publishes a turn, and it does not come '
 
 
 def _route(method: str, path: str, headers: dict, body: bytes):
-    # A query is dropped rather than parsed. Every route that carries one is a
-    # referee's route, and every referee's route is refused here, so there is
-    # nothing in a query this relay would act on. Cutting it here rather than
-    # trusting the adapter means a caller that passes a whole URL path gets the
-    # same answer as one that passes a path.
+    # A query is dropped: only referee routes carry one, and those are refused.
     path = (path or '').split('?', 1)[0]
     parts = [p for p in path.split('/') if p]
     if not parts:
-        # The one route that is about no galaxy. A player holds no Google
-        # credential and so cannot read the collection the referee reads, and
-        # without this there is no way for them to learn a galaxy exists.
-        # Signed in like every other route: anonymous sign-up is open, so the
-        # gate costs a stranger nothing and keeps one rule rather than two.
+        # The galaxy listing. Signed in like every other route.
         if method in ('GET', 'HEAD'):
             verify(bearer(headers))
             return _json({'galaxies': listing()})
@@ -1146,22 +896,19 @@ def _route(method: str, path: str, headers: dict, body: bytes):
                           if k in doc and k not in PRIVATE_FIELDS})
         if len(parts) == 2 and parts[0] == 'turn':
             turn = _turn_number(parts[1])
-            # `start` and `publish` write the turn's object before the
-            # document names it, so the turn the document is on exists and
-            # asking Storage would be a Class B operation to learn nothing.
+            # The document's current turn always exists: `start` and `publish`
+            # write the object before the document names it.
             doc = public_doc(store)
             if turn != doc.get('turn') and not store.has_turn(turn):
                 raise Refused(404, f'no turn {turn}')
             return _redirect(signed_url(store, store.turn_object(turn), 'GET'))
         if len(parts) == 2 and parts[0] == 'submissions':
-            # A launcher polls this. The store answers the current turn from
-            # the document already read, so the poll costs no Storage
-            # operation; see `FirebaseTurnStore.submitted_civs`.
+            # The store answers the current turn from the document already
+            # read; see `FirebaseTurnStore.submitted_civs`.
             return _json(store.submitted_civs(_turn_number(parts[1]),
                                               doc=public_doc(store)))
         if len(parts) == 4 and parts[:2] == ['upload', 'submission']:
-            # Answered without reading the document, because the POST it
-            # names decides everything on a fresh read of its own.
+            # No document read: the POST it names checks everything afresh.
             return _upload_ticket(_turn_number(parts[2]), parts[3])
 
     doc = galaxy_doc(store)
@@ -1169,15 +916,9 @@ def _route(method: str, path: str, headers: dict, body: bytes):
     if method in ('GET', 'HEAD'):
         if len(parts) == 3 and parts[0] == 'submission':
             turn, civ = _turn_number(parts[1]), parts[2]
-            # A caller holding no seat at all has no submission, because the
-            # only way one gets written is the submission route and that needs
-            # a seat. So 404 is the true answer and 403 was
-            # a wrong one, in the way that mattered most: under `first-use` a
-            # seat binds when a player submits, so before their first
-            # submission every player is seatless, and the turn loop asks this
-            # route whether they have already played before it serves them.
-            # Refusing it made a player's first turn on a galaxy impossible,
-            # which is the whole of the beta path.
+            # A seatless caller has no submission, so the answer is 404. Under
+            # `first-use` every player is seatless before their first
+            # submission, and the turn loop asks this route before serving them.
             if seat_of(doc, uid) is None:
                 raise Refused(404, f'no submission of yours for {turn}')
             seat_or_refuse(store, doc, uid, civ)
@@ -1189,10 +930,7 @@ def _route(method: str, path: str, headers: dict, body: bytes):
             return _json(record)
         if len(parts) == 3 and parts[0] == 'note':
             turn, civ = _turn_number(parts[1]), parts[2]
-            # Seatless is no note, for the reason the submission route gives.
-            # The turn loop survives a refusal here because it catches one, so
-            # this was not what broke a first turn; it is the same untruth and
-            # it is fixed the same way.
+            # A seatless caller has no note, as for submissions.
             if seat_of(doc, uid) is None:
                 raise Refused(404, f'no note for you on turn {turn}')
             seat_or_refuse(store, doc, uid, civ)
@@ -1214,11 +952,9 @@ def _route(method: str, path: str, headers: dict, body: bytes):
                                    'request of yours here')
             return _json(answer)
         if parts and parts[0] == 'joins':
-            # What is waiting on a galaxy is the worker's question.
-            # `turn_server.py` answers it, because on a LAN the worker is
-            # whoever holds the port. Answering it here would tell any stranger
-            # who else is trying to join, which is the enumeration F4 refuses
-            # to let a launcher make.
+            # What is waiting on a galaxy is the worker's question
+            # (`turn_server.py` answers it on a LAN). Here it would tell a
+            # stranger who else is trying to join.
             raise Refused(403, 'what is waiting on this galaxy is the '
                                'worker\'s to read, and this door answers a '
                                'caller only about its own request')
@@ -1245,10 +981,8 @@ def _route(method: str, path: str, headers: dict, body: bytes):
 def handle(method: str, path: str, headers: dict = None, body: bytes = b''):
     """(status, headers, body) for one request.
 
-    Framework free on purpose. `main.py` adapts a Cloud Functions request to
-    this and the relay's tests call it directly, so what the tests exercise is
-    the whole function apart from the adapter, in a virtualenv that does not
-    have the functions runtime in it.
+    Framework free: `main.py` adapts a Cloud Functions request to this, and
+    the relay's tests call it directly.
     """
     try:
         return _route(method, path, headers or {}, body or b'')

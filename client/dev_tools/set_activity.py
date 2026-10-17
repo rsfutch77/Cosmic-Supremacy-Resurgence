@@ -1,6 +1,6 @@
 """
 set_activity.py: stop an offline galaxy decaying from "inactivity"
-===================================================================
+
     python set_activity.py            # show every civ's state
     python set_activity.py --apply    # mark EVERY civ active
 """
@@ -14,7 +14,7 @@ import gamestate as gs
 
 ACTIVE_FLAG = 712      # Owner:712, latched for this turn
 PENDING_FLAG = 720     # Owner:720, the signal we set
-BASELINE = 716         # Owner:716, the engine's own timer, DO NOT WRITE
+BASELINE = 716         # Owner:716, the engine's own timer; never written
 DEFAULT_OFFSET = 72    # GetGameOption(4)->[+0x30] == 0
 DEFAULT_DIVISOR = 100
 

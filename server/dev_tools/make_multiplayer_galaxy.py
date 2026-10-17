@@ -6,25 +6,9 @@ make_multiplayer_galaxy.py: a galaxy with one civ per player and nothing else
         --player Carol --store \\\\HOST\\Sharing\\cosmic\\galaxy2 --turn-seconds 3600
     python make_multiplayer_galaxy.py fresh.b64 --list
 
-A multiplayer galaxy is humans only: no engine opponent, no leftover `BadGuy`,
-exactly as many civs as there are players. The test galaxies on this branch
-break that because they were grown from single-player fixtures, where the
-second civ is scenery that holds a planet and takes up a seat.
-
-That matters beyond tidiness. An unplayed civ is one nobody sends orders for,
-so it sits there occupying a homeworld and a share of the map that a player
-could have had.
-
-What it does not do is act. Eight turns of a three-civ galaxy with nothing
-submitted by anyone left every ship idle, every production queue as it was and
-every research field unset, and the same run stamped as a different civ agreed.
-The one order a galaxy starts with is written at generation, not during a tick;
-`clear_ship_orders` takes it out.
-
-**No civ is removed, because none has to be.** A freshly generated galaxy has
-exactly two, so two players are a rename and more players are additions. There
-is no path here that deletes an empire, which is the operation most likely to
-leave dangling references, and not writing it is the main reason this is short.
+A multiplayer galaxy is humans only: no engine opponent, exactly as many civs
+as there are players. A freshly generated galaxy has two civs, so two players
+are a rename and more are additions; no civ is ever removed.
 
 What it does:
 
@@ -37,12 +21,10 @@ What it does:
     empty every civ's EXSY              an added civ inherits its donor's
     publish, optionally                 to a turn store, with the roster set
 
-It expects a **freshly generated** galaxy. Run on a game in progress it would
+It expects a freshly generated galaxy. Run on a game in progress it would
 strip the ship orders everyone had already given.
 
-`Owner:4` is left alone. It reads 0 on one generated civ and 21 on the other,
-its meaning is unsettled, and `inject_civ` assigns `max + 1` to civs it adds,
-which is enough for them to be distinct. Renaming does not touch it.
+`Owner:4` is left alone; `inject_civ` gives added civs `max + 1`.
 """
 import argparse
 import os
@@ -60,8 +42,8 @@ import merge_orders as mo
 
 NAME_LIMIT = 15          # the engine's name buffer
 
-# The two PLPR bytes homeworld customisation writes, which is the whole of what
-# a generated galaxy hands one civ and not the other. PLPR+4 is Planet:96, the
+# The two PLPR bytes homeworld customisation writes, the only difference
+# between a generated galaxy's two homeworlds. PLPR+4 is Planet:96, the
 # per-unit output rates.
 RATE_OFFSETS = (4, 11)
 
@@ -86,19 +68,9 @@ def rename_civ(blob: bytes, old: str, new: str, log=print) -> bytes:
 def seated(blob):
     """Civs in seat order, which is the object id and not the blob order.
 
-    `owner_records` walks the blob, and the engine's serialiser does not keep
-    civs in the order they were allocated: 171 of the 472 multi-civ galaxies on
-    disk present something other than the lowest object id first, and in the
-    three-civ demo galaxy the civ `inject_civ` appended last comes back first
-    after a tick. Seat one is the lowest object id, the same rule
-    `inject_civ.seat_one` uses to choose a donor, and it is the seat carrying
-    the homeworld customisation that `equalise_homeworlds` levels everyone to.
-
-    Mapping player names by blob order instead levels the galaxy to whichever
-    civ happens to serialise first. On a galaxy grown by injection that is the
-    newcomer, which takes the reference rates down from 62/94 to the engine
-    default 32/44 and hands the real seat one a worse world than it started
-    with.
+    The engine's serialiser does not keep civs in allocation order. Seat one
+    is the lowest object id (as in `inject_civ.seat_one`) and carries the
+    homeworld customisation `equalise_homeworlds` levels everyone to.
     """
     return sorted(icv.owner_records(blob), key=lambda o: o['oid'])
 
@@ -138,8 +110,7 @@ def rename_homeworld(blob: bytes, civ_name: str, log=print) -> bytes:
 def _starting_ships(blob, log=print) -> int:
     """How many ships each existing civ has, if they agree.
 
-    Disagreement is reported and the smallest taken, because handing a new
-    player more than an existing one is the worse mistake of the two.
+    On disagreement, logs it and returns the smallest.
     """
     counts = {}
     tree = sp.parse_blob(blob)
@@ -171,27 +142,13 @@ def _plpr(blob, planet_oid):
 def equalise_homeworlds(blob: bytes, players, log=print) -> bytes:
     """Give every player the same homeworld the first player has.
 
-    The two civs a galaxy is generated with do not get equal worlds. Across
-    five independent generations captured on this machine the second civ's
-    homeworld reads exactly the same two `PLPR` bytes every time, +4 = 32 and
-    +11 = 44, while the first civ's read 62/94 or 42/194: the first civ carries
-    the homeworld customisation the setup screens apply and the second gets the
-    engine's opponent default. `PLPR+4` is `Planet:96`, the per-unit output
-    rates, and the pair is what homeworld customisation writes.
+    The first generated civ carries the homeworld customisation the setup
+    screens apply (e.g. +4/+11 = 62/94); the second gets the engine's opponent
+    default 32/44, which grows more slowly.
 
-    The effect is not cosmetic. Eight turns of a three-civ galaxy with no orders
-    from anyone grew the first civ's world from 7 citizens to 9 and left the
-    other two at 7, and the same run stamped as the second civ gave the same
-    answer, so it is the planets and not who the tick client plays.
-
-    **Only the rate pair is copied, never the head it sits in.** On a fresh
-    galaxy those are the only two bytes that differ, so copying the whole head
-    before the population count looks equivalent, and on a played galaxy it is
-    not: at turn 17 of the live galaxy the two human homeworlds differed at
-    indices 4, 11, 15, 16, 19, 20 and 23, and the other five are seventeen turns
-    of legitimate divergence in stores and production. Copying the head there
-    would hand one player the other's stockpiles. Everything outside the pair is
-    reported and left alone.
+    Only the rate pair `RATE_OFFSETS` is copied. Other differing bytes in the
+    head are stores and production on a played galaxy; they are logged and
+    left alone.
     """
     ref_civ = players[0]
     ref_home = homeworld(blob, ref_civ)
@@ -231,16 +188,9 @@ def equalise_homeworlds(blob: bytes, players, log=print) -> bytes:
 def reset_exsy(blob: bytes, players, log=print) -> bytes:
     """Forget what an added civ inherited from the civ it was cloned from.
 
-    `inject_civ` copies `EXSY` verbatim, so a civ added from a donor starts
-    knowing every system the donor had entered. On a fresh galaxy that is one
-    row, the donor's own home system, which is precisely the thing a new player
-    should not be handed: seat three opens the map and knows where seat two
-    lives.
-
-    Every row is dropped rather than the donor's one, because a civ that has
-    just been created has entered nothing. The engine writes the row for its own
-    system when the galaxy is loaded, which is measured: a civ built this way
-    came back knowing exactly its own system after one turn.
+    `inject_civ` copies `EXSY` verbatim, so an added civ would know the
+    donor's home system. Every row is dropped; the engine writes the row for a
+    civ's own system on load.
     """
     for _ in range(64):                      # one rewrite per table, bounded
         tree = sp.parse_blob(blob)
@@ -275,18 +225,11 @@ def reset_exsy(blob: bytes, players, log=print) -> bytes:
 def clear_ship_orders(blob: bytes, log=print) -> bytes:
     """Start every ship idle, because orders belong to players.
 
-    A freshly generated galaxy is not order-free. Every generation captured on
-    this machine, at turn 0 and before anyone has played, gives the second civ's
-    first ship order type 2, Scout, with an 82-byte `ROUT`, while its other ship and
-    both of the first civ's are idle. In single player that is the engine
-    getting its opponent moving. In a humans-only galaxy it is an order nobody
-    issued, handed to whoever draws seat two, and it also travels into any civ
-    `add_ship` copies from.
-
-    Clearing it is the three edits `inject_order.py` makes, reversed: the `SHCO`
-    order-type byte, the has-orders byte, and the conditional `ROUT` and
-    trailing word. The result is byte-identical to the idle `DYNO` the engine
-    writes itself, which is what makes this safe to do to every ship.
+    Generation gives the second civ's first ship a Scout order (type 2, an
+    82-byte `ROUT`). Clearing is the three edits `inject_order.py` makes,
+    reversed: the `SHCO` order-type byte, the has-orders byte, and the
+    conditional `ROUT` and trailing word. The result is byte-identical to an
+    idle `DYNO` the engine writes.
     """
     cleared = []
     while True:
@@ -327,9 +270,8 @@ def build(blob: bytes, players, log=print) -> bytes:
     if len(set(players)) != len(players):
         raise SystemExit('player names have to be distinct')
 
-    # Rename through a placeholder when a wanted name is already taken by a
-    # civ we have not renamed yet, or the uniqueness check in add_civ and the
-    # engine's own registry both see a collision that is about to disappear.
+    # Rename through a placeholder when a wanted name is still held by a civ
+    # not yet renamed, so names stay unique at every step.
     for i, want in enumerate(players[:len(existing)]):
         current = seated(blob)[i]['name']
         if want == current:
@@ -345,13 +287,7 @@ def build(blob: bytes, players, log=print) -> bytes:
                 blob = rename_civ(blob, o['name'], want, log=log)
                 break
 
-    # How many ships a starting civ has, so added ones start level. `add_civ`
-    # gives a newcomer `inject_civ.STARTING_SHIPS`, which is what a generation
-    # hands a civ measured across the captures in `server/saves`; this galaxy
-    # is in front of us, so its own count is the better answer and is what gets
-    # passed. They agree on every generated galaxy in this repository, and the
-    # one that would not is a galaxy whose civs already disagree, which
-    # `_starting_ships` reports before choosing the smaller.
+    # Added civs get this galaxy's own starting fleet size.
     want_ships = _starting_ships(blob, log=log)
 
     for extra in players[len(existing):]:

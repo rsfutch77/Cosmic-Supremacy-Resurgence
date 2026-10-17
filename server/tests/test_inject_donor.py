@@ -3,33 +3,18 @@ test_inject_donor.py: which civ a join clones, and that a run cannot poison it
 ==============================================================================
     server\\.venv\\Scripts\\python.exe server\\tests\\test_inject_donor.py
 
-`inject_civ.add_civ` hands a new civ a copy of its donor's homeworld, so the
-donor decides what the newcomer starts with. The default used to be the smallest
-`OWNR`, and a fresh clone owns one planet and nothing else, so after the first
-injection the smallest `OWNR` is the civ that was just added: a run naming
-several civs chained each clone off the previous newcomer, and which civ that
-was depended on the order the names were given in.
+`inject_civ.add_civ` hands a new civ a copy of its donor's homeworld. The
+default donor is `inject_civ.seat_one`, the lowest object id. A newcomer takes
+`max_object_id + 1`, so the rule never selects a civ the run itself added, and
+a multi-name run gives the same result in any order.
 
-The default is now `inject_civ.seat_one`, the lowest object id. A newcomer takes
-`max_object_id + 1` and is therefore always the highest id, so the rule cannot
-select a civ the run itself added.
+The fixture is `client/SinglePlayerGalaxy.dat`. Its two civs hold equal
+homeworlds, so seat one's homeworld is given the rate pair a generated galaxy
+gives seat one (at `make_multiplayer_galaxy.RATE_OFFSETS`) before the checks.
 
-`client/SinglePlayerGalaxy.dat` is the fixture for the same reason
-`test_wipe_civ.py` uses it. Its two civs hold equal homeworlds, so the rate pair
-that a generated galaxy splits between seat one and the rest is written into
-seat one's homeworld here before the donor checks run: the galaxies on disk that
-carry a genuine split are all gitignored captures, and a test cannot depend on
-them. The values written are the ones measured on generated galaxies and named
-by `make_multiplayer_galaxy.RATE_OFFSETS`.
-
-On this fixture the old rule and the new one agree on the FIRST injection,
-because its seat one happens to hold the smaller `OWNR` as well as the lower
-object id. What the old rule loses here is the second injection onwards, where
-the donor becomes whichever newcomer was named first, so that is what the
-old-rule checks below look at rather than the transplanted bytes.
-
-What is NOT tested here is that an injected galaxy loads and plays, which is
-K1's second half and needs the game client.
+The smallest-`OWNR` rule is swapped back in to show it picks a newcomer from
+the second injection on. Loading an injected galaxy needs the game client and
+is not tested here.
 """
 import os
 import struct
@@ -76,11 +61,8 @@ def homeworld(blob, civ_name):
 def world(blob, civ_name):
     """A civ's homeworld PLPR, with its own object id normalised out.
 
-    Two civs cannot hold byte-identical `PLPR`s while they are owned by
-    different civs, so every dword reading the owner's id is zeroed before the
-    comparison. Only that id is touched: zeroing anything else, the planet id
-    included, would also hit payload values that happen to equal it and would
-    manufacture differences that are not there.
+    Only dwords equal to the owner's id are zeroed; zeroing anything else
+    would also hit unrelated payload values that happen to match.
     """
     o, h = homeworld(blob, civ_name)
     buf = bytearray(blob[h['plpr_payload']:h['plpr_end']])
@@ -229,13 +211,9 @@ def main():
         check(f'the {label} run reparses section by section', parsed)
 
 
-    # ── make_multiplayer_galaxy.build levels to seat one ─────────────────────
-    # Same root cause as the donor rule: blob order is not seat order. `build`
-    # maps player names onto existing civs positionally and `equalise_homeworlds`
-    # then levels everyone to players[0], so taking them in blob order makes the
-    # reference whichever civ happens to serialise first. On a galaxy grown by
-    # injection that is the newcomer, and the whole galaxy levels DOWN to the
-    # engine default instead of up to the customised seat.
+    # `build` maps player names onto civs in seat order and levels everyone to
+    # players[0], so on a galaxy grown by injection blob order would level
+    # everyone down to a newcomer.
     print('\nmake_multiplayer_galaxy.build levels to seat one')
     demo = os.path.join(ROOT, 'server', 'galaxy_demo', 'turns', '0007.b64')
     if not os.path.exists(demo):
@@ -244,7 +222,6 @@ def main():
         grown = sp.load_any(demo)
         blob_order = [o['name'] for o in icv.owner_records(grown)]
         seat_order = [o['name'] for o in mmg.seated(grown)]
-        # The test is only meaningful on a galaxy where the two disagree.
         check('blob order and seat order disagree on this fixture',
               blob_order != seat_order, True)
         check('seat one is the lowest object id',
@@ -257,8 +234,7 @@ def main():
         check('every player is levelled to the boosted world',
               set(got.values()), {BOOSTED})
 
-        # And the check can fail: with blob order restored, the same call
-        # levels everyone to the engine default instead.
+        # Control: with blob order, everyone is levelled to the default.
         real = mmg.seated
         try:
             mmg.seated = lambda b: icv.owner_records(b)

@@ -1,37 +1,18 @@
 """
 canonical.py: the form of a blob that two honest computations agree on
-=======================================================================
+
     python canonical.py turn0009.b64
     python canonical.py runA.b64 runB.b64        # compare two runs
 
     from canonical import canonical_hash
     canonical_hash(blob)
 
-A turn is a pure function of state plus orders, so recomputing one must produce
-the same answer. It does, except for one field, and hashing the raw bytes would
-therefore report honest agreement as disagreement. That is the opposite of what
-a hash is for: the point is to notice a referee that computed something
-different, and a check that cries wolf gets switched off.
-
-What is masked, and why
------------------------
-**The trailing `u32` of every `KNPL` payload.** Measured across six captures:
-the low three bytes survive a save and load faithfully, but the top byte reads
-`0x00` or `0x09` in a client that played and `0xFF` in one that loaded, whatever
-the blob held, and an AI civ's low bytes differ between otherwise identical
-runs. It is the only nondeterminism found anywhere in the format, and both ends
-of the dword move, so the whole dword goes.
-
-An empty `KNPL` is four bytes, which is exactly this field, so such a section is
-masked entirely. That is the same rule, not a special case.
-
-Masking is deliberately narrow. Every byte not named here is compared, so a
-divergence anywhere else is a real one and shows up as a differing hash rather
-than being quietly forgiven. Passing two blobs compares them **after** masking
-and prints where they still differ, which is how a second volatile field would
-be found: the report notes that sweeping for the same signature is worth doing,
-a field that changes between two otherwise identical runs or whose top byte
-becomes `0xFF` after a load.
+Recomputing a turn gives the same bytes except for the trailing `u32` of every
+`KNPL` payload, which is nondeterministic (its top byte reads 0xFF after a load,
+and an AI civ's low bytes vary between runs). The canonical form zeroes that
+dword and compares every other byte. An empty `KNPL` is exactly that dword, so
+it is masked entirely. Given two blobs, the tool prints where they still differ
+after masking.
 """
 import argparse
 import hashlib

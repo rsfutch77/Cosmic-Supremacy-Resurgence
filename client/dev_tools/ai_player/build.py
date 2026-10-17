@@ -1,8 +1,7 @@
 """
-build.py: Ship designs and ship production (actuators D, D′ and I)
-===================================================================
-The production half of the AI: what a civ can build, and telling a planet to
-build it. Rules R-EXP-01, R-XPN-01 and R-XTM-01 all end up here.
+build.py: ship designs and ship production (actuators D, D′ and I).
+
+Rules R-EXP-01, R-XPN-01 and R-XTM-01 end up here.
 
     python build.py                                    # what we have
     python build.py --new-design aiscout --fit engines=0,0,0 --apply
@@ -78,8 +77,7 @@ def main():
             sys.exit(f"we do not own planet {i}")
         return p
 
-    # The elevated handle is only needed to CREATE a design; queueing is a
-    # plain write and must not require it.
+    # Only design creation needs the elevated handle.
     rem = None
     if (new_name or fit) and not dry_run:
         rem = remote.Remote(snap.state.pid)
@@ -108,8 +106,7 @@ def main():
                 print(f"    queue it with:  --queue {new_name} --planet <id> --apply")
 
         if fit:
-            # --fit alongside --new-design targets what was just created, so a
-            # whole design is one command: create, own, fit.
+            # --fit alongside --new-design targets the design just created.
             design_name = design_name or new_name
             if not design_name:
                 sys.exit("--fit needs --design <name>")
@@ -119,8 +116,7 @@ def main():
             ids = [int(x) for x in raw.split(",") if x != ""]
             snap.refresh()
             if dry_run and design_name == new_name:
-                # The design does not exist yet in a dry run, so there is
-                # nothing to look up; say what would happen and move on.
+                # In a dry run the new design does not exist yet.
                 print(f"\n  [WOULD FIT] {cat}={ids} to the design that "
                       f"--new-design would have created")
                 d = None

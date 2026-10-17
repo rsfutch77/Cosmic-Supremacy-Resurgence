@@ -1,13 +1,10 @@
 """
-The Galaxies page re-lists on a timer only while it can be seen (plan J9).
+The Galaxies page re-lists on a timer only while it can be seen.
 
     python release/tests/test_minimised_poll.py
 
-`Launcher._games_tick` runs every GAMES_POLL_MS whatever the window does. A
-listing is one directory request and one `/submissions` request per joined
-galaxy, so a launcher parked on the Galaxies page and minimised spent them for
-rows nobody could see. It now skips the listing while the window is minimised,
-and `Launcher.on_restored` lists at once when the window comes back.
+`Launcher._games_tick` runs every GAMES_POLL_MS and skips the listing while the
+window is minimised; `Launcher.on_restored` lists at once when it comes back.
 
 Checks:
   1. the tick lists on the Galaxies page with the window up, and not off it
@@ -70,7 +67,6 @@ print("\n2. the tick does not list while the window is minimised")
 app = make_app(minimized=True)
 app._games_tick()
 app._games_tick()
-# Fails if a minimised window still lists, which is the request J9 removes.
 check("minimised on the Galaxies page, no listing over two ticks",
       app.listed, 0)
 check("and the timer is kept, so listing resumes once it is restored",
@@ -81,7 +77,6 @@ app = make_app(minimized=True)
 app._games_tick()
 app.view.minimized = False
 app.on_restored()
-# Fails if a restored page waits up to GAMES_POLL_MS for its next tick.
 check("restored on the Galaxies page, one listing straight away",
       app.listed, 1)
 app = make_app(page="home")

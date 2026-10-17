@@ -5,22 +5,14 @@ test_relay_costs.py: what a relay request costs, counted at the client library
     (set the three variables it prints)
     server\\.venv\\Scripts\\python.exe server\\tests\\test_relay_costs.py
 
-docs\\Public_Beta_Plan.md H12. Hundreds of launchers left open all month each
-poll `/state` while they follow a galaxy and the listing while the Galaxies
-page is on screen. Read afresh, every one of those is a Firestore document
-read, and the listing is one per galaxy in the catalog, so the project's reads
-grew with the number of launchers open. A warm instance now serves a galaxy's
-public face from a copy it read inside a window shaped like the launcher's own
-poll gap, and the listing the same way.
+A warm relay instance serves a galaxy's `/state` and the listing from copies
+held for a window shaped like the launcher's poll gap. Firestore reads are
+counted at `DocumentReference.get` and `Query.stream`, Storage existence checks
+at `Blob.exists`. A route that decides what a caller may do still reads the
+document afresh, so a galaxy closed or a seat moved while a copy is held is
+refused at once.
 
-What has to be true of that is counted here rather than argued: Firestore
-reads at `DocumentReference.get` and `Query.stream`, Storage existence checks
-at `Blob.exists`. And beside every saving, the thing it must not cost: a route
-that decides what a caller may do still reads the document afresh, so a galaxy
-closed or a seat moved while a copy is held is refused at once.
-
-The relay's clock for its held copies is replaced with one this test moves, so
-a window can be waited out without waiting.
+The relay's clock for its held copies is replaced with one this test moves.
 """
 import json
 import os
@@ -40,8 +32,7 @@ for d in (os.path.join(ROOT, 'server'), os.path.join(ROOT, 'functions'), HERE):
 PROJECT = os.environ.get('CS_RELAY_PROJECT') or 'demo-cs-resurgence'
 BUCKET = os.environ.get('CS_RELAY_BUCKET') or f'{PROJECT}.firebasestorage.app'
 AUTH_HOST = os.environ.get('FIREBASE_AUTH_EMULATOR_HOST') or '127.0.0.1:9099'
-# A collection of its own, so galaxies other runs left behind are not in the
-# listing this counts.
+# A collection of its own, so galaxies left by other runs are not listed.
 PREFIX = f'relaycost_{int(time.time())}'
 os.environ['CS_RELAY_PROJECT'] = PROJECT
 os.environ['CS_RELAY_BUCKET'] = BUCKET
@@ -78,7 +69,6 @@ def check(name, got, want):
         print(f'          wanted {want!r}')
 
 
-# ── counting at the client libraries ─────────────────────────────────────────
 def _count_get(orig):
     def get(self, *a, **k):
         COUNT['reads'] += 1
@@ -87,7 +77,7 @@ def _count_get(orig):
 
 
 def _count_stream(orig):
-    # A query is billed a read per document it returns, and one when it
+    # A query counts one read per document returned, and one when it
     # returns none.
     def stream(self, *a, **k):
         n = 0
@@ -106,8 +96,8 @@ def _count_exists(orig):
 
 
 def _count_commit(orig):
-    # A batch is billed a write per operation in it, and a lone `set` is a
-    # batch of one inside the client library, so this sees both.
+    # One write per operation in a batch. A lone `set` is a batch of one
+    # inside the client library, so this sees both.
     def commit(self, *a, **k):
         COUNT['writes'] += len(getattr(self, '_write_pbs', []) or [])
         return orig(self, *a, **k)
@@ -195,15 +185,8 @@ def fresh():
     relay._LISTING = None
 
 
-# ── the cases ────────────────────────────────────────────────────────────────
 def test_the_window(stores):
-    """The window's shape, which every count below comes out of.
-
-    Fails if it stops following the deadline: a constant would hold a copy
-    across the moment a turn is published, and a window that ignored which
-    side of the deadline it is on would either hold a copy past it or read
-    every few seconds through the hours before it, when nothing can change.
-    """
+    """The hold window follows the distance to the deadline on both sides."""
     print('the window')
     now = time.time()
     h = relay.hold_for
@@ -225,8 +208,7 @@ def test_the_window(stores):
 def test_the_listing(stores, token):
     """Three galaxies, listed again and again inside and outside the window.
 
-    Fails if the listing streams the catalog per request, which is one read
-    per galaxy per request: the cost that grows with the galaxy count.
+    Inside the window a listing reads nothing.
     """
     print('the listing')
     fresh()
@@ -247,9 +229,8 @@ def test_the_listing(stores, token):
     check('a caller with no token is still refused inside the window',
           relay.handle('GET', '/', {}, b'')[0], 401)
 
-    # One galaxy nearly due holds the whole listing to its deadline, and one
-    # overdue holds it to the floor, because a row held across a publish sends
-    # the Games page to a past turn.
+    # A galaxy nearly due holds the whole listing only to its deadline, and
+    # one overdue holds it for the floor, so no row is held across a publish.
     stores[2].doc.set({'deadline': time.time() + 5}, merge=True)
     CLOCK.move(relay.LISTING_SECONDS + 1)
     costs(listed)
@@ -272,11 +253,8 @@ def test_the_listing(stores, token):
 
 
 def test_the_public_face(stores, token):
-    """`/state` polled by many launchers, and what a held copy may cost.
-
-    Fails if `/state` reads the document per request, and in the second half if
-    a copy is held past its window.
-    """
+    """`/state` is served from a held copy inside its window and read again
+    after it."""
     print('the public face')
     fresh()
     g = stores[0]
@@ -306,11 +284,9 @@ def test_the_public_face(stores, token):
 
 
 def test_decisions_are_read_fresh(stores, uid, token):
-    """A held copy says the galaxy is open. The door still reads it closed.
+    """Routes that decide what a caller may do read the document afresh.
 
-    Fails if any route that decides what a caller may do took the held copy:
-    a submission would be stored into a closed galaxy, and a seat moved to
-    another civ would still read its old submission.
+    A galaxy closed, or a seat moved, while a copy is held is refused at once.
     """
     print('what a caller may do is never decided from a held copy')
     fresh()
@@ -339,12 +315,7 @@ def test_decisions_are_read_fresh(stores, uid, token):
 
 
 def test_own_commit_is_read_at_once(stores, token, base):
-    """A player submits through this instance and asks who has submitted.
-
-    Fails if the commit leaves the held copy standing: the Games page and the
-    turn loop on this machine would be told the submission is not there for
-    a whole window.
-    """
+    """A submission through this instance replaces its held copy at once."""
     print('a commit through this instance')
     fresh()
     g = stores[1]
@@ -361,12 +332,8 @@ def test_own_commit_is_read_at_once(stores, token, base):
 
 
 def test_storage_is_not_asked_what_the_document_says(stores, token):
-    """The turn the document is on, and a submission stored as a document.
-
-    Fails if either asks the bucket whether an object exists, which is one
-    Class B operation per launcher per turn for each. The control beside the
-    turn is a case the document cannot answer, which still asks.
-    """
+    """The current turn and a stored submission need no Storage existence
+    check. A turn the document cannot answer for still asks."""
     print('what the document already says')
     fresh()
     g = stores[1]
@@ -396,14 +363,10 @@ def test_storage_is_not_asked_what_the_document_says(stores, token):
 
 
 def test_a_submission_costs(stores, token, base):
-    """What one upload costs at the relay, since submissions are documents.
+    """What one upload costs at the relay.
 
-    H13. Every upload was a Cloud Storage Class A operation, and Class A is
-    5,000 a month for the whole project. Counted here at the client
-    libraries: Firestore reads and writes, and every Storage call a
-    submission could make. Fails if an upload reaches Storage at all, if a
-    player's second upload in a turn still writes the galaxy document, or if
-    the ticket reads anything.
+    An upload makes no Storage call, a second upload in a turn does not write
+    the galaxy document, and the ticket reads nothing.
     """
     print('what a submission costs')
     fresh()
@@ -431,8 +394,8 @@ def test_a_submission_costs(stores, token, base):
           (out[0], cost[0], COUNT['writes'], COUNT['storage']),
           (200, 1, 1, 0))
 
-    # The same through a store, the way a launcher does it: ticket, POST, and
-    # the read back `player_turn` makes, answered 304 with no body.
+    # The same through a store, as a launcher does it: ticket, POST, and a
+    # read back answered 304 with no body.
     player = HttpTurnStore(f'{base}/{g.galaxy}', token=lambda: token,
                            state_seconds=0)
     mine = make_blob(turn, b'3')
@@ -452,12 +415,10 @@ def test_a_submission_costs(stores, token, base):
 
 
 def test_before_documents(stores, token):
-    """A galaxy started before H13, whose current turn has Storage objects.
+    """A galaxy whose current turn has submissions stored as Storage objects.
 
-    The relay and the worker change over within a turn, and a submission
-    uploaded before that is an object. Fails if it went missing: the player's
-    launcher skips an upload identical to the last, so the object would be
-    their turn.
+    The object is still read, since the launcher skips an upload identical to
+    the last.
     """
     print('a turn from before submissions were documents')
     fresh()

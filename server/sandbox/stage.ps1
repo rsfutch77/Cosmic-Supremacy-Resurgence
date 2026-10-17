@@ -33,20 +33,16 @@
     there.
 
 .PARAMETER Bucket
-    The galaxy's Storage bucket. The worker otherwise finds it by asking the
-    project which default bucket name it has, which a service account limited
-    to objects in one bucket is not allowed to ask.
+    The galaxy's Storage bucket. Required for a service account limited to one
+    bucket's objects, which cannot look up the project's default bucket.
 
 .PARAMETER Once
     The worker makes one pass and the sandbox stays open for inspection.
 
 .PARAMETER Unsigned
-    Stage the client as the checkout holds it. Windows Sandbox runs with Smart
-    App Control on, which refuses an unsigned client (WinError 4551), so by
-    default the staged patched clients are signed with the signer that
-    release\build.ps1 uses, configured by the same CS_SIGN_* environment
-    variables. With -Unsigned nothing is signed and a referee in a sandbox
-    with Smart App Control on cannot tick.
+    Stage the client unsigned. By default the staged patched clients are signed
+    with release\build.ps1's signer and CS_SIGN_* variables, because Smart App
+    Control in the sandbox refuses an unsigned client (WinError 4551).
 
 .EXAMPLE
     .\server\sandbox\stage.ps1 -Store firebase://cs-resurgence/h3check -Bucket cs-resurgence.firebasestorage.app -KeyFile C:\keys\referee.json
@@ -111,8 +107,7 @@ $StagedClients = @('CosmicSupremacy_Resurgence.exe', 'CosmicSupremacy_Player.exe
 if ($Unsigned) {
     Write-Host 'Client staged unsigned: Smart App Control in the sandbox refuses it.' -ForegroundColor Yellow
 } else {
-    # The signing functions are release\build.ps1's own, so the stage and a
-    # release are signed by one implementation and one configuration.
+    # Loads the signing functions from release\build.ps1.
     $BuildScript = Join-Path $Repo 'release\build.ps1'
     $BuildAst = [System.Management.Automation.Language.Parser]::ParseFile($BuildScript, [ref]$null, [ref]$null)
     foreach ($fn in $BuildAst.FindAll({ param($a) $a -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $false)) {

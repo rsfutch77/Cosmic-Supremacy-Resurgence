@@ -1,37 +1,21 @@
 """
 project_blob.py: the galaxy as one civ is entitled to see it
-=============================================================
     python project_blob.py <blob> --civ Alice --dat alice.dat
     python project_blob.py <blob> --report
 
-D1 asks that a player's copy omit what that player has not discovered, rather
-than relying on the client to decline to draw it. This builds that copy.
-
-**This is projection (1) of the two: the map is hidden, beliefs are not.**
-Systems the civ has not entered are removed outright. Systems that are kept
-show *current truth*, not what the civ last saw, so a planet they explored
-once and never revisited still shows its real owner. Presenting stale belief
-means writing `PLNT` records from `EXSY` rows instead of deleting subtrees, and
-that is a much larger job, recorded and not attempted here. Anyone reading this
-as "fog of war is done" is reading it wrong.
+Builds a player's copy with the systems that civ has not entered removed. Kept
+systems show current truth, not what the civ last saw: the map is hidden, stale
+beliefs are not modelled.
 
 What is kept, per civ:
 
 - every system the civ owns a planet in
-- every system named in the civ's `EXSY`, which is the engine's own record of
-  where that civ has been
+- every system named in the civ's `EXSY`, the engine's record of where that
+  civ has been. Rows appear when a hull passes near a system, not only when it
+  stops there.
 
-`EXSY` is the input rather than a guess, which is the point: the engine already
-maintains per-civ knowledge, so "what has this civ entered" is a question the
-blob already answers. **Rows appear as a hull flies near a system, not when an
-order completes**: machine A measured a scout registering a system it passed
-at 58 units and never stopped at, so this is knowledge by proximity, which is
-what a player would expect to see on their map.
-
-Ships are safe by construction: `SHIP` sections are children of `GLXY`, not of
-`SOLA`, so dropping a system can never drop a ship, including one in flight
-through the space a dropped system occupies. Verified on the fixture rather
-than assumed, because it was the case most likely to be got wrong.
+`SHIP` sections are children of `GLXY`, not of `SOLA`, so dropping a system
+never drops a ship.
 """
 import argparse
 import os
@@ -80,11 +64,9 @@ def knowledge(blob, civ):
     entered = set()
     for ownr in save.find('OWNR'):
         if struct.unpack_from('<I', blob, ownr.payload)[0] != oid:
-            # OWNR's own object id is not the civ id; match on the civ record
-            # the name lookup gave us by checking EXSY under the right OWNR.
+            # OWNR's leading payload field is not the civ id.
             pass
-    # OWNR sections are ordered as owner_records reports them, so pair them up
-    # rather than trusting a field whose meaning is not settled.
+    # OWNR sections are in the order owner_records reports them.
     order = [o['name'] for o in icv.owner_records(blob)]
     ownrs = list(save.find('OWNR'))
     for name, ownr in zip(order, ownrs):
@@ -132,8 +114,7 @@ def project(blob: bytes, civ: str, log=lambda *a: None) -> bytes:
     struct.pack_into('<I', new_blob, save.payload, objects - removed)
     new_blob = bytes(new_blob)
 
-    # Every civ's EXSY, not just this one's: another civ's table naming a
-    # system this copy no longer holds is just as dangling.
+    # Prune every civ's EXSY of the dropped systems.
     for _ in range(64):
         tree2 = sp.parse_blob(new_blob)
         target = None

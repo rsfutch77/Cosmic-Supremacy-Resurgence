@@ -5,20 +5,12 @@ test_wipe_civ.py: what a wipe removes, and what it must leave alone
 
 `wipe_civ.wipe` takes a civ off the board: its planets go back to uncolonised
 and its ships are deleted, while its `OWNR`, the `GLXY` civ count and the
-high-water object id at `SAVE+0` stay exactly as they were. The last three are
-the point. Deleting from the middle of the contiguous object id space is the
-shape of the thing that made every fog projection fail to load (D1), so a wipe
-that quietly renumbered or compacted anything would be reintroducing that risk
-with no warning.
+high-water object id at `SAVE+0` stay exactly as they were. Nothing in the
+object id space may be renumbered or compacted, or the galaxy may fail to load.
 
-`client/SinglePlayerGalaxy.dat` is the fixture because it is the only galaxy
-blob a checkout is guaranteed to have: every capture under `server/saves`,
-`server/galaxy_*/` and `client/*.dat` is gitignored game state. It holds two
-civs at turn 0 with two ships each, so wiping one exercises both halves.
-
-What is NOT tested here is that the result loads and ticks, which is what K4
-actually asks and which nothing offline can answer. That is
-`server/dev_tools/wipe_acceptance.py`, and it needs the game client.
+The fixture is `client/SinglePlayerGalaxy.dat`, the only galaxy blob a checkout
+is guaranteed to have: two civs at turn 0 with two ships each. Loading the
+result in the client is `server/dev_tools/wipe_acceptance.py`.
 """
 import os
 import struct
@@ -172,11 +164,8 @@ def main():
           struct.unpack_from('<I', dropped, idg.HIGH_WATER_ID)[0],
           struct.unpack_from('<I', before, idg.HIGH_WATER_ID)[0])
 
-    # The refusal is what matters and the fixture cannot show it on its own:
-    # neither civ has met the other at turn 0, which is exactly the easy case
-    # the one measured delete-owner run was also in. So the reference is
-    # written in, over the surviving civ's own Owner:4, which nothing here
-    # loads or reads back.
+    # Neither civ has met the other at turn 0, so a reference is written in
+    # over the surviving civ's Owner:4 to show the refusal.
     other = next(o for o in icv.owner_records(before) if o['name'] != VICTIM)
     planted = bytearray(before)
     struct.pack_into('<I', planted, other['end'] - 4, civ['oid'])
@@ -207,10 +196,7 @@ def main():
         check('wiping the last civ standing is refused', True)
 
 
-    # ── a galaxy with nothing left free ──────────────────────────────────────
-    # The late state of a permanent sandbox, and the one an abandonment has to
-    # be processed in. No blob in the archive has reached it, 0 of 475, which
-    # is why this went unnoticed until it was pointed out.
+    # A galaxy with nothing left free, as a long-running sandbox reaches.
     print('\n10. every planet colonised')
     BASE = sp.load_any(GALAXY)
     full = bytearray(BASE)
@@ -240,9 +226,8 @@ def main():
           all(got[i]['owner'] == 0 for i in planets), True)
     check('and carry a 137-byte blank record',
           {got[i]['plpr_ln'] for i in planets}, {137})
-    # 90..105 is galaxy-wide, so a template from this galaxy reproduces it
-    # exactly. One from a different galaxy would not, which is why a single
-    # canonical record cannot be shipped in the tree as a fallback.
+    # Bytes 90..105 are galaxy-wide, so the template must come from this
+    # galaxy.
     blanks = [q for q in icv.planet_records(BASE)
               if not q['owner'] and not q['nlen']]
     want = bytes(BASE[blanks[0]['plpr_payload']:blanks[0]['plpr_end']])[90:106]
@@ -253,11 +238,8 @@ def main():
           [s for s in ish.ship_records(out) if s['id'] in ships], [])
 
 
-    # ── the shell keeps its score row ────────────────────────────────────────
-    # Deliberate, and documented in wipe_civ's header: the score list keys on
-    # Owner:4, the u32 ending the OWNR payload, and a shell wipe never touches
-    # OWNR. If that ever stops being true the row disappears silently, which is
-    # a behaviour change nobody would see in a passing blob check.
+    # The score list keys on Owner:4, the u32 ending the OWNR payload, so a
+    # shell wipe leaves OWNR untouched and the civ keeps its score row.
     print('\n11. a wiped civ keeps its OWNR, and so its score row')
     before = sp.load_any(GALAXY)
     after, _p, _s = wipe_civ.wipe(before, VICTIM, log=lambda *a: None)
@@ -275,11 +257,8 @@ def main():
     check('and still distinct from every survivor', uid_after not in others, True)
 
 
-    # ── the remembered map is cleared too ────────────────────────────────────
-    # EXSY carries a last-known owner and the planet's name as each civ last
-    # saw it, and the client draws the hover label and the system's 3D name
-    # from there rather than from the live record. Without this a wiped civ
-    # keeps its name on a planet that reads as unowned.
+    # EXSY carries each civ's last-known owner and planet name, which the
+    # client draws labels from, so the wipe clears the wiped civ from it.
     print('\n12. every civ forgets the wiped civ')
     import exsy, inject_design as _idg
     src = sp.load_any(GALAXY)
@@ -297,10 +276,7 @@ def main():
                 total += sum(1 for q in sysrec['planets'] if q['owner'] == oid)
         return total
 
-    # SinglePlayerGalaxy is fresh, so nobody remembers anything yet and the
-    # check below would pass for the wrong reason. The precondition is built
-    # rather than borrowed: the galaxy that has it naturally lives in
-    # referee_work, which is not tracked.
+    # SinglePlayerGalaxy is fresh, so a remembered planet is planted first.
     def remember(blob, oid):
         o = next(x for x in icv.owner_records(blob) if x['name'] != VICTIM)
         off = next(i for i in _idg.find_all(blob, b'EXSY')
@@ -321,8 +297,7 @@ def main():
           remembered(src, victim['oid']) > 0, True)
     gone, _p, _s = wipe_civ.wipe(src, VICTIM, log=lambda *a: None)
     check('and nobody does afterwards', remembered(gone, victim['oid']), 0)
-    # the tables must still be walkable, which is what proves the rewrite is
-    # a rewrite and not a truncation
+    # the tables must still be walkable end to end
     walked = 0
     for o in icv.owner_records(gone):
         off = next((i for i in _idg.find_all(gone, b'EXSY')

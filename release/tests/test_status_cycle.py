@@ -4,8 +4,7 @@ Integration test for the launcher's game-exit detection.
 Drives the real Launcher against the real client: clicks a mode, confirms the
 status line reports it running, kills the game, and confirms the status returns
 to the ready state on its own. The window is the real web_view.WebView with a
-recording stand-in for the page, and its controller loop is run here for a set
-time instead of under pywebview, so the test stays in control.
+recording stand-in for the page; its controller loop runs here for a set time.
 """
 import json
 import os

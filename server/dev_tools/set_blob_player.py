@@ -1,47 +1,26 @@
 """
 set_blob_player.py: stamp a save blob with the civ its recipient plays
-=======================================================================
     python set_blob_player.py turn3.b64 --show
     python set_blob_player.py turn3.b64 --civ DemoPlayer --dat playerA.dat
     python set_blob_player.py turn3.b64 --civ BadGuy     --dat playerB.dat
 
-Two clients sharing one galaxy have to control different civs. The blob decides
-it: `GLOB` holds the object id of the civ the loading client will play, and it
-is the only byte range in the blob that changes when the local player changes.
-
-Measured by capturing the same galaxy twice from one client, once as each civ.
-The two captures were 37,954 bytes each, 419 sections each, and differed in
-exactly one dword, reading 202 against 198, the two civs' object ids.
-
-**The field is not at a fixed offset.** `GLOB` carries a variable-length list of
-the players this galaxy knows about, each entry holding a user id and a name, so
-the id sits further along once any civ has met another. A blob whose civs have
-never met puts it at `+40`; after first contact it moves. Writing the fixed
-offset into a blob with one known player lands on the length prefix of a name
-and produces a save the client rejects with an exception dialog.
-
-What is stable is the tag that follows it: the payload runs
+`GLOB` holds the object id of the civ the loading client will play; it is the
+only field that differs between captures of one galaxy taken as different civs.
+It is not at a fixed offset: `GLOB` carries a variable-length list of known
+players (user id and name each), so the id moves once civs have met. The tag
+after it is stable:
 
     ... u32 contentVersion ; u32 localPlayerObjectId ; 'TMGX' ...
 
-in both layouts, so the id is located by finding `TMGX` and stepping back four
-bytes. The result is checked against the civs the blob actually contains before
-anything is written.
+so the id is found by locating `TMGX` and stepping back four bytes, and is
+checked against the blob's civs before anything is written.
 
-The dword before the id is the galaxy's **content version**, which the engine
-loads into `[0x0080AA00]` and uses to pick its stat tables. It reads 99999 in
-every blob captured from a TestBed client, and 99999 selects stat tables that were
-never released. See `set_content_version` below and
-docs/CosmicSupremacy_Stat_Tables.md section 4a.
+The dword before the id is the content version, which the engine loads into
+`[0x0080AA00]` to pick its stat tables. TestBed captures carry 99999, which
+selects unreleased tables. See docs/CosmicSupremacy_Stat_Tables.md section 4a.
 
-This is what makes per-player distribution a data operation. The server holds one
-authoritative state and writes each player a copy stamped with their own civ, so
-nothing about a player's identity depends on patching a running process.
-`client/dev_tools/set_local_player.py` does the same thing to a client that is
-already up, which is useful while testing and is not how a turn should be served.
-
-The stamp says who you PLAY, not what you can SEE. Hiding what a player has not
-explored is a separate job; see `filter_blob.py`.
+`client/dev_tools/set_local_player.py` does the same to a running client. The
+stamp sets who a player plays, not what they see; see `filter_blob.py`.
 """
 import argparse
 import os
@@ -54,13 +33,10 @@ import inject_civ as icv
 
 ANCHOR = b'TMGX'               # the tag that follows the local-player id
 
-# The engine picks its facility and ship-component stat tables by the content
-# version it loads out of a blob, and every table ladder switches at 639: below
-# it the released stats, at or above it a set that never shipped. 565 is what the
-# binary's own .data image carries and what a .csgalaxy galaxy runs at, so it is
-# what a served blob should say. See docs/CosmicSupremacy_Stat_Tables.md 4a.
-RELEASED_CONTENT_VERSION = 565
-CONTENT_VERSION_CEILING = 639
+# Content versions select the facility and ship-component stat tables.
+# See docs/CosmicSupremacy_Stat_Tables.md 4a.
+RELEASED_CONTENT_VERSION = 565   # the binary's own .data value; .csgalaxy galaxies run at it
+CONTENT_VERSION_CEILING = 639    # at or above this, the unreleased tables
 
 
 def player_field(blob):
@@ -103,9 +79,7 @@ def set_content_version(blob: bytes, version=RELEASED_CONTENT_VERSION,
                         log=print) -> bytes:
     """Stamp the content version that decides which stat tables the client uses.
 
-    Every blob captured from a TestBed client carries 99999, which selects tables
-    that were never released, so a blob served to a player has to be stamped or it
-    silently plays different balance from the rest of the game.
+    TestBed captures carry 99999, so a served blob must be stamped.
     """
     if version >= CONTENT_VERSION_CEILING:
         raise SystemExit(f'content version {version} is at or above '

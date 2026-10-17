@@ -1,140 +1,36 @@
 """
 wipe_civ.py: remove a civ's presence from a save blob
-======================================================
 Returns every planet a civ owns to uncolonised and deletes every ship it owns.
 The civ's `OWNR` record is left in place, so no object id is freed, the `GLXY`
-civ count is unchanged and `SAVE+0` is unchanged. To every player the empire is
-gone; structurally nothing was removed.
+civ count is unchanged and `SAVE+0` is unchanged.
 
     python wipe_civ.py ../galaxy_demo/turns/0011.b64 --list
     python wipe_civ.py ../galaxy_demo/turns/0011.b64 --civ Neighbor \
         -o wiped.b64 --dat ../../client/wiped.dat
 
-This is what K4 of the public beta plan needs: a player who misses too many
-turns has their civ taken off the board, and the galaxy carries on.
+Ships are deleted outright. The engine does the same when a ship dies or a
+colony ship founds a colony: the `SHIP` section and everything in it vanish,
+higher ids are not renumbered, `SAVE+0` is not lowered, and the client loads
+the result.
 
-What the engine itself does to the id space
--------------------------------------------
-Measured before any surgery was attempted, because the fog projection work (D1)
-found that deleting a `SOLA` from the middle of the contiguous id space makes
-the client bail four seconds into a load, and ships sit in that same space.
+A wiped civ keeps its row in the overview score list. The list holds one row per
+distinct `Owner:4`, the `u32` ending the `OWNR` payload, and this tool leaves
+`OWNR` untouched unless `--delete-owner` is passed.
 
-`client/war_fork.dat` at turn 110 carries ships 662, 663, 669, 670, 672, 677 and
-678. `server/referee_work/war.L1.dat`, the same galaxy 70 turns later after a
-two-sided battle, carries 662, 663, 672, 677 and 678. GoodGuy's 669 and 670 are
-**gone**: their `SHIP`, `DYNO`, `SHCO`, `SHPR` and `ROUT` sections are absent and
-no dword anywhere in the blob still reads 669 or 670. The surviving higher ids
-are untouched, so nothing was renumbered or compacted, and `SAVE+0` still reads
-678 rather than being lowered to the largest id in use.
+Returning a planet: the owner is a `u32` at `PLNT` payload `+16`. The whole
+`PLPR` is replaced by one from a never-colonised planet in the same galaxy, and
+the name is cleared. The `PLNT` fields (object id, position, the float at `+20`,
+the six bytes behind the name) are kept. The template's per-unit output rates at
+`PLPR+4` replace the planet's own, which flattens a homeworld's customisation
+boost.
 
-So the engine punches holes in the id space itself, every time a ship dies, and
-it does not tidy up afterwards.
+Not touched: the `OWNR` record, including its designs, research, treasury,
+`KNPL` and `NEWS`, so every other civ's `KNPL` naming the wiped civ still
+resolves. Only the `EXSY` entries remembering the wiped civ's planets change.
 
-**It is not a property of combat.** The same thing happens when a colony ship
-arrives. `server/referee_work/serve_Neighbor.dat` is the demo galaxy at turn 3
-with ships 200, 201, 204, 205, 208 and 209 and three civs holding one planet
-each. `server/galaxy_demo/turns/0007.b64` is that galaxy four turns later with
-DemoPlayer holding 136 as well and Neighbor holding 138, and ships 201, 204, 205
-and 208: the two colony ships were consumed founding those colonies, 200 from
-the bottom of the ship range and 209 from the top, and `SAVE+0` still reads 209.
-
-**And the client loads such blobs.** `referee.tick` writes the blob it is about
-to tick to `server/referee_work/tick_<epoch>.dat` and hands that file to a fresh
-client on its command line, so every tick input is a blob the client loaded.
-`tick_1789882262.dat` and `tick_1789882347.dat` are that galaxy at turn 180 with
-669 and 670 missing from the middle of the ship range; `tick_1789856007.dat` is a
-32-system galaxy at turn 17 holding ship 206 alone after 200 and 205 were
-destroyed, with `SAVE+0` still reading 206.
-
-That is why this tool deletes `SHIP` sections outright rather than emptying them:
-it is the operation the engine performs on itself several times a galaxy.
-
-A wiped civ keeps its row in the overview score list
-----------------------------------------------------
-This is kept deliberately. A wiped empire holds nothing and builds nothing, so
-its standing stops moving, but the row stays and records where the player got
-to before they stopped. In a permanent sandbox that is the only trace a departed
-player leaves, and it is worth more than a tidy list.
-
-It follows from the shell rather than being arranged. The score list holds one
-row per distinct `Owner:4`, the `u32` ending the `OWNR` payload, established in
-`CosmicSupremacy_Reconstruction_Report.md` by an A/B of two blobs differing in
-those four bytes alone. This tool never touches `OWNR` unless `--delete-owner`
-is passed, so that field, and everything else per-civ living in that record,
-survives untouched. Measured on the demo galaxy: wiping `Neighbor` leaves all
-three `OWNR` records byte-identical at 673, 719 and 866 bytes, with `Owner:4`
-still 21, 0 and 22.
-
-`--delete-owner` is the switch that removes the row, and in a galaxy anybody has
-played it is not usable: its guard refuses while another civ still names the
-victim's object id, which after any contact is always, and the forced result does
-not load. The client starts and exits without opening the galaxy. So the row is
-not a choice that was made, it is a consequence of the only wipe that works.
-
-What the shell still shows, and does not
-----------------------------------------
-Compared on screen, before and after, on the turn-180 war galaxy where the two
-civs had met and fought. Gone and correct: the planet's ownership icon, recon.
-Kept and correct: the news history, which is historical, and the score row above.
-
-**Still wrong: the victim's capital system marker is still drawn, and hovering
-their former planet still names them as its owner.** The blob is right and the
-client is reading something else: the planet carries `owner = 0`, an empty name
-and a blank `PLPR`. Those draws come from per-civ state inside the `OWNR` this
-tool deliberately keeps. The victim's own home system id is still in that record,
-at three offsets, and which one the client uses is not established. Clearing just
-those, rather than the record, is the fix and is not attempted here: scanning for
-small integers cannot tell a system id from a count, and `OWPR` is not a colony
-list, since one and two colonies both give 138 bytes.
-
-Not evidence for any of this: a score shown for a civ that was not wiped. Two
-of the three civs in a wiped demo galaxy are untouched and living, and their
-rows say nothing about the shell.
-
-What returning a planet costs
------------------------------
-A planet's owner is a `u32` at `PLNT` payload `+16`, so un-owning it is a write.
-That on its own leaves a planet carrying the wiped civ's population, stores,
-facilities and production queue, which is not an uncolonised planet and is not
-what the next player to arrive should inherit.
-
-So the whole `PLPR` is replaced by one taken from a planet in the same galaxy
-that nobody has ever colonised, and the planet's name is cleared. The rock keeps
-its own `PLNT` fields: object id, position, the float at `+20` and the six bytes
-behind the name, all of which vary independently of ownership.
-
-**The cost is the per-unit output rates at `PLPR+4`, which the template's own
-values replace.** Those are the rock's and survive colonisation unchanged on an
-ordinary colony, so a wiped colony comes back as a slightly different rock than
-it was. Carrying them across instead would be faithful there and wrong on a
-homeworld, where the customisation allowance has raised them: measured on
-`client/custom_full_t2.dat`, a homeworld reads 62 where no uncolonised planet in
-that galaxy reads above 55. Keeping that would leave a boosted rock lying in
-space for whoever colonises it next, which is a worse outcome than a flattened
-one, so the template wins and this is the trade.
-
-What is NOT touched
--------------------
-The `OWNR` record, including its designs, research, treasury, `EXSY`, `KNPL` and
-`NEWS`, and the object ids those designs hold. Every other civ's `KNPL` record
-naming the wiped civ therefore still resolves, which is the reason the shell is
-the safe form: nothing in the blob is left pointing at something that is no
-longer there.
-
-Removing the `OWNR` as well is `--delete-owner`, and it is the weaker claim of
-the two. There is no engine-authored precedent for it: the archive shows the
-engine deleting `SHIP` sections routinely and never an `OWNR`, and a civ left
-with no planets and no ships kept its `OWNR` through 20 ticks rather than being
-cleaned up. What it has is one measurement, on the demo galaxy at turn 11, where
-it loaded and ticked 20 turns twice to the same canonical hash. That galaxy is
-the easy case, because no other civ's records named the wiped one, so
-`delete_owner` refuses any galaxy where they do. See it for what that leaves
-open.
-
-What it buys over the shell is the `OWNR` itself, 866 bytes in that galaxy, and
-a row that stops appearing in the diplomacy and score lists. The operator has
-accepted the dead row and resets the galaxy before they accumulate, so the shell
-is the default and this is not a decision anything is waiting on.
+`--delete-owner` also removes the `OWNR`. It has loaded and ticked only on a
+galaxy where no other civ's records named the wiped one, so `delete_owner`
+refuses any galaxy where they do.
 """
 import argparse
 import os
@@ -153,29 +49,18 @@ PLNT_OWNER_OFF = 16          # PLNT payload +16, the owning civ's object id
 def pristine_planet(blob, planets=None):
     """A planet nobody has colonised, to take a blank `PLPR` from.
 
-    Uncolonised planets are uniform in a way colonised ones are not. Measured
-    across 475 blobs and 110,399 free planets, **every** blank `PLPR` is 137
-    bytes, and 24 of those bytes vary. Which 24 is what decides where a
-    template may legitimately come from:
+    A blank `PLPR` is 137 bytes, of which 24 vary:
 
         +4, +5, +6, +11, +12, +120, +121   differ between planets in one galaxy
         +90 .. +105                        same for every planet in a galaxy,
                                            different between galaxies
         +106                               changes from turn to turn
 
-    So a template taken from **the same galaxy** is safe in the 90..105 run and
-    carries that galaxy's current +106, and the only thing it imposes on the
-    wiped planet is the seven per-planet bytes, of which `+4` and `+11` are the
-    homeworld customisation pair. That is the trade this tool already documents.
+    The template must come from the same galaxy, since +90..+105 are
+    galaxy-wide. `+4` and `+11` are the homeworld customisation pair.
 
-    A template from a **different galaxy** is not safe, because 90..105 would be
-    the wrong galaxy's. That rules out shipping one canonical blank record in
-    the tree as a fallback, which is the obvious fix and the wrong one.
-
-    The modal length is taken rather than the first record found, so a galaxy
-    holding one odd free planet cannot decide what a blank planet looks like,
-    and the lowest object id among those breaks the tie, so two runs of this
-    tool choose the same template.
+    The modal length is taken, and the lowest object id among those breaks the
+    tie, so the choice is deterministic.
     """
     planets = icv.planet_records(blob) if planets is None else planets
     free = [p for p in planets if not p["owner"] and p["nlen"] == 0]
@@ -196,14 +81,7 @@ def blank_plpr(blob, template_blob=None, log=print) -> bytes:
     """The blank `PLPR` to write over a wiped planet.
 
     From this galaxy when anything is still free, otherwise from an earlier
-    state of it supplied by the caller. A permanent sandbox is the case that
-    needs the second: every planet colonised is the ordinary late state of a
-    galaxy that has been played for months, and it is exactly when an
-    abandonment has to be processed.
-
-    No galaxy in the archive has reached it yet, 0 of 475 blobs, which is why
-    nothing caught this earlier. The tool failed loudly rather than writing
-    something wrong, so nothing is in the tree to repair.
+    state of it supplied by the caller (needed once every planet is colonised).
     """
     source, where = blob, "this galaxy"
     if not [p for p in icv.planet_records(blob)
@@ -220,11 +98,9 @@ def blank_plpr(blob, template_blob=None, log=print) -> bytes:
 def uncolonise(blob, planet_id, template_plpr, log=print):
     """Return one planet to the state a colony ship would find it in.
 
-    Three edits, each re-reading the record because the one before it moved the
-    offsets behind it: the `PLPR` is replaced, the name is emptied, and the
-    owner is zeroed. The owner goes last so a run that fails part way leaves a
-    planet that is still visibly owned rather than one that reads as free and is
-    not blank.
+    Three edits, each re-reading the record since the one before moved its
+    offsets: the `PLPR` is replaced, the name is emptied, and the owner is
+    zeroed last, so a partial failure leaves the planet visibly owned.
     """
     rec = next(p for p in icv.planet_records(blob) if p["id"] == planet_id)
     was_owner, was_name, was_ln = rec["owner"], rec["name"], rec["plpr_ln"]
@@ -247,24 +123,12 @@ def uncolonise(blob, planet_id, template_plpr, log=print):
 def forget_civ(blob, oid, log=print):
     """Clear the wiped civ out of every civ's remembered map.
 
-    `EXSY` is not just which systems a civ has entered. Per planet it holds a
-    last-known owner and the planet's name as that civ last saw it, which is
-    where a wiped empire keeps showing up after every live field is correct.
-    Measured on the turn-180 war galaxy: the planet reads `owner = 0` with an
-    empty name, and both civs' tables still carry `BadGuy's HQ` against
-    last-known-owner 660, so the client draws the name and the capital marker
-    from here while taking the ownership icon from the live record. Half the
-    display live and half remembered is the actual defect, not staleness.
+    Per planet, `EXSY` holds a last-known owner and name, from which the client
+    draws the planet name and the capital marker. Every table is rewritten, the
+    victim's own included. `exsy.parse` refuses a table it cannot walk exactly,
+    so an unrecognised table stops the wipe.
 
-    Every table is rewritten, the victim's own included. `exsy.parse` refuses a
-    table it cannot walk exactly, and `build(parse(x)) == x` byte for byte, so a
-    table this does not understand stops the wipe rather than being flattened.
-
-    This is deliberately not fog-correct. A civ that has not looked again would,
-    strictly, go on remembering what it last saw. The alternative is a planet
-    anybody may now colonise carrying another empire's name and a capital marker
-    for an empire that no longer exists, which misleads a player about the board
-    rather than about history.
+    Deliberately not fog-correct: other civs forget the wiped civ's planets.
     """
     import exsy
     changed = 0
@@ -296,15 +160,8 @@ def forget_civ(blob, oid, log=print):
 def cut_section(blob, start, end, log=print, what=""):
     """Remove a whole section, narrowing the sections that enclose it.
 
-    `inject_civ.splice` cannot do this. It looks for the enclosing sections from
-    a point one byte inside the range it is replacing, which for a whole section
-    finds that section itself and tries to take its own length off its own
-    header. The first attempt at deleting a `SHIP` failed there, on a 104-byte
-    payload asked to shrink by the 112 bytes of the section including its header.
-
-    Searching from the section's first byte instead excludes it, because
-    `containing_sections` wants `off < at < end` and a section's own offset is
-    not strictly less than itself, while every real ancestor starts earlier.
+    Ancestors are found from the section's first byte: `containing_sections`
+    wants `off < at < end`, which excludes the section itself.
     """
     delta = -(end - start)
     out = bytearray(blob)
@@ -319,23 +176,17 @@ def cut_section(blob, start, end, log=print, what=""):
 def delete_ship(blob, ship_id, log=print):
     """Cut one `SHIP` section out, the way the engine does when a hull dies.
 
-    The section carries its `DYNO`, `SHCO`, `SHPR` and any `ROUT` inside it, and
-    the crew with them, so removing the range removes the ship entirely. The
-    enclosing sections, `GLXY` and `SAVE`, are narrowed to match.
+    The section carries its `DYNO`, `SHCO`, `SHPR`, any `ROUT` and the crew.
+    The enclosing `GLXY` and `SAVE` are narrowed to match.
     """
     rec = next((s for s in ish.ship_records(blob) if s["id"] == ship_id), None)
     if rec is None:
         raise SystemExit(f"no SHIP with object id {ship_id}")
     log(f"  ship {ship_id}: removing {rec['ln'] + 8} bytes at {rec['off']}")
 
-    # A destroyed ship's id appears nowhere in a blob the engine produced, so
-    # anything outside the section that reads it is a reference this tool does
-    # not know about and is worth understanding before the blob is served.
-    #
-    # Counted against the blob going in rather than the blob coming out. The
-    # format is packed and unaligned, so four bytes of unrelated payload spell
-    # an id regularly: this galaxy's ship 208 also reads out of a planet's
-    # `PLPR+11`, which is one byte of that rock and two of its neighbours.
+    # Dwords outside the section that read the ship id may be unknown
+    # references. The format is packed and unaligned, so unrelated bytes can
+    # also spell an id.
     outside = [i for i in idg.find_all(blob, struct.pack("<I", ship_id))
                if not rec["off"] <= i < rec["end"]]
     blob = cut_section(blob, rec["off"], rec["end"], log=log, what="ship")
@@ -348,11 +199,8 @@ def delete_ship(blob, ship_id, log=print):
 def referenced_by(blob, oid, exclude):
     """Civs whose own `OWNR` range holds a dword reading `oid`.
 
-    A civ another has met is named by object id inside that civ's records, so
-    this is what says whether removing an `OWNR` would leave a reference behind.
-    It over-reports: the format is packed and four unrelated bytes can spell an
-    id. Over-reporting is the right direction for a guard on an unproven path,
-    and every hit is printed so the operator can see which it is.
+    A civ another has met is named by object id inside that civ's records. May
+    over-report, since four unrelated packed bytes can spell an id.
     """
     needle = struct.pack("<I", oid)
     out = {}
@@ -369,19 +217,8 @@ def referenced_by(blob, oid, exclude):
 def delete_owner(blob, name, force=False, log=print):
     """Remove a civ's `OWNR` and decrement the `GLXY` civ count.
 
-    This is the form K4 called the stretch, and what is known about it is
-    narrower than the shell. It loaded and ticked 20 turns twice, reproducibly,
-    on the demo galaxy at turn 11, and that galaxy is the easy case: no other
-    civ's records named the wiped one anywhere, so the reference that would
-    dangle was not there to dangle. An abandoned player in a live beta has been
-    met, which is the case that has not been run.
-
-    `GLOB`'s own player list keeps naming the civ either way, since it holds a
-    name and an `Owner:4` rather than an object id and nothing here rewrites it.
-    That blob loaded, so the list tolerates a name with no `OWNR` behind it, but
-    it is one more thing the shell never creates.
-
-    So a civ another civ knows about is refused rather than guessed at.
+    Refused when another civ's records name this one, unless forced.
+    `GLOB`'s player list (name and `Owner:4`) still names the civ afterwards.
     """
     rec = next((o for o in icv.owner_records(blob) if o["name"] == name), None)
     if rec is None:
@@ -437,9 +274,8 @@ def wipe(blob, name, remove_owner=False, force_owner=False, log=print,
     for sid in ships:
         blob = delete_ship(blob, sid, log=log)
 
-    # The two counters inject_civ maintains are deliberately left alone. Holding
-    # SAVE+0 above every id in use is what the engine itself does after a ship
-    # dies, and the civ count still matches the OWNR records present.
+    # SAVE+0 and the civ count are left alone, as the engine does after a ship
+    # dies; the civ count still matches the OWNR records present.
     hi = struct.unpack_from("<I", blob, idg.HIGH_WATER_ID)[0]
     civs = struct.unpack_from("<I", blob, icv.civ_count_at(blob))[0]
     if remove_owner:
@@ -452,9 +288,7 @@ def wipe(blob, name, remove_owner=False, force_owner=False, log=print,
 def check(blob, name, planets, ships, log=print):
     """Report whether the wipe holds in the blob that came out.
 
-    Written as a report rather than an assertion so a partial result is visible:
-    a planet that kept its population is a different fault from a ship that is
-    still there, and both are worth naming.
+    Each failure is logged separately. Returns True when the wipe holds.
     """
     ok = True
     owners = icv.owner_records(blob)

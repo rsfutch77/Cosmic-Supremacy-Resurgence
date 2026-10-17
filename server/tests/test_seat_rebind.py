@@ -1,6 +1,6 @@
 """
-test_seat_rebind.py: the operator moves a seat to a new install (J4)
-=====================================================================
+test_seat_rebind.py: the operator moves a seat to a new install
+================================================================
     python functions/emulators.py --only firestore,storage,auth
 
     set FIRESTORE_EMULATOR_HOST=127.0.0.1:8080
@@ -8,16 +8,14 @@ test_seat_rebind.py: the operator moves a seat to a new install (J4)
     set FIREBASE_AUTH_EMULATOR_HOST=127.0.0.1:9099
     server\\.venv\\Scripts\\python.exe server\\tests\\test_seat_rebind.py
 
-J4's third half. A seat is bound to the anonymous uid that claimed it, and a
-player on a new install has a new uid. The run is the story the plan asks for,
-with two real sign-ins from the Auth emulator and the relay in process behind
-a socket, the way `test_relay_function.py` runs it: A holds `DemoPlayer`, B is
-refused it, the operator rebinds it to B with `seat_tool.py`, B plays it, and A
-is refused it from then on.
+A seat is bound to the anonymous uid that claimed it, and a player on a new
+install has a new uid. With real Auth emulator sign-ins and the relay in
+process (as in `test_relay_function.py`): A holds `DemoPlayer`, B is refused
+it, the operator rebinds it to B with `seat_tool.py`, B plays it, and A is
+refused it from then on.
 
-Every refusal checks the seat map afterwards as well as the answer, because a
-tool that printed "refused" after writing half a move would otherwise pass. The
-referee's own store is the oracle for what a player's submission did.
+Every refusal also checks the seat map afterwards. The referee's own store is
+the oracle for what a player's submission did.
 """
 import io
 import os
@@ -80,8 +78,7 @@ def main():
     uid_d, _ = rf.sign_up()
     uid_a, token_a = rf.sign_up()
     uid_b, token_b = rf.sign_up()
-    # First use on, which is how the two measured halves ran: B is refused
-    # because A holds the civ, not because B may not claim anything.
+    # First use on, so B is refused because A holds the civ.
     referee.doc.set({'seat_claim': 'first-use',
                      'seats': {uid_a: 'DemoPlayer', uid_c: 'Neighbor',
                                uid_d: 'Player.One'}}, merge=True)
@@ -126,8 +123,7 @@ def run(referee, galaxy, spec, player_a, player_b,
     check('and the seat map did not move', seat_map(referee), before)
 
     print('what the operator is refused')
-    # Each of these fails if the tool wrote before deciding. The seat map is
-    # compared whole after every one.
+    # The seat map is compared whole after every one.
     cases = [
         ('a civ not on the roster', ('Nobody', uid_b), 'not a civ'),
         ('a civ spelled in the wrong case, with the right name offered',
@@ -160,8 +156,7 @@ def run(referee, galaxy, spec, player_a, player_b,
     code, text = tool(spec, 'candidates', '--limit', '500')
     rows = seat_tool.candidates(seat_tool.open_galaxy(spec))
     uids = [r['uid'] for r in rows]
-    # B signed up last, so it is the newest unseated sign-in. Fails if the
-    # listing were not ordered by activity or left seated uids in.
+    # B signed up last, so it is the newest unseated sign-in.
     check('B is the most recently active unseated sign-in',
           uids[:1], [uid_b])
     check('and no seated sign-in is offered',
@@ -173,8 +168,8 @@ def run(referee, galaxy, spec, player_a, player_b,
     print('by the player code the player reads out')
     code = uid_b[:8]
     got, text = tool(spec, 'candidates', '--code', code)
-    # Fails if the filter were dropped, since every other unseated sign-in in
-    # the emulator would then be listed beside B.
+    # Other unseated sign-ins exist in the emulator, so only the filter
+    # leaves B alone.
     check('the code finds B, and only B',
           (got, uid_b in text, text.count('created ')), (0, True, 1))
     got, text = tool(spec, 'candidates', '--code', code.swapcase())
@@ -237,8 +232,8 @@ def run(referee, galaxy, spec, player_a, player_b,
     check('and the map is as it was', seat_map(referee), after)
 
     print('a civ whose name holds a dot')
-    # Fails if the name were joined into a field path, which would write
-    # `seats_rebound.Player` and a nested `One` rather than the civ's record.
+    # The name must not be joined into a Firestore field path, which would
+    # write a nested `One` under `seats_rebound.Player`.
     code, text = tool(spec, 'rebind', 'Player.One', uid_a)
     check('the rebind succeeds', code, 0)
     doc = referee.doc.get().to_dict() or {}

@@ -3,9 +3,7 @@ This install's Firebase identity: sign-up, what survives a restart, refresh
 ahead of expiry, and what an offline launcher gets instead of a crash.
 
 Headless and offline by default. The Identity Toolkit is replaced at
-`fb_auth.post_json`, the module's one network seam, so every decision above it
-runs in a temporary directory in about a second. No game, no window, and
-nothing here signs a real user up.
+`fb_auth.post_json`, the module's one network seam.
 
 Set CS_FB_LIVE=1 to also run section 8 against the live project, which creates
 one anonymous user and deletes it again before exiting.
@@ -45,12 +43,10 @@ def fresh_dir():
 
 
 class FakeToolkit:
-    """The two endpoints, answering the way the real ones were measured to.
+    """The two endpoints, answering the way the real ones do.
 
-    signUp answers in camel case and the secure token service in snake case,
-    which is the difference the identity has to absorb. `calls` records what
-    was asked for, because "did it refresh" and "did it sign up again" are
-    questions about calls rather than about return values.
+    signUp answers in camel case and the secure token service in snake case.
+    `calls` records what was asked for.
     """
 
     def __init__(self):
