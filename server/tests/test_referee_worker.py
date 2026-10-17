@@ -205,6 +205,40 @@ def test_loop():
         undo()
 
 
+def test_poll():
+    print('the clock reads')
+    check('near the deadline the gap is the floor', rw.poll_gap(30.0), rw.POLL)
+    check('far from it, the ceiling', rw.poll_gap(4 * 3600.0), rw.POLL_CEILING)
+    check('in between, a share of the distance', rw.poll_gap(1000.0),
+          1000.0 / rw.POLL_SHARE)
+
+    # One idle four-hour turn, read by read, as `run` sleeps through it.
+    reads, left = 0, 4 * 3600.0
+    while left > 0:
+        reads += 1
+        left -= min(rw.poll_gap(left), left)
+    while -left < rw.GRACE:
+        reads += 1
+        left -= min(rw.POLL, rw.GRACE + left)
+    per_day = (reads + 1) * 6
+    check('an idle four-hour galaxy reads under 2,000 times a day',
+          per_day < 2000, True)
+
+    s = fresh_store(seconds_left=3600)
+    s.close('testing')
+    slept = []
+    rw.run(s, log=lambda *a: None, sleeper=slept.append,
+           stop=lambda: len(slept) >= 1)
+    check('a closed galaxy is read once per ceiling', slept, [rw.POLL_CEILING])
+
+    s = fresh_store(seconds_left=3600)
+    slept = []
+    rw.run(s, log=lambda *a: None, sleeper=slept.append,
+           stop=lambda: len(slept) >= 1)
+    check('an hour out, the worker waits the ceiling, not the floor', slept,
+          [rw.POLL_CEILING])
+
+
 def start_worker(store_root, work_dir, *extra):
     """A real worker process over a galaxy whose turn is not due.
 
@@ -790,6 +824,7 @@ def test_operator_page():
 if __name__ == '__main__':
     test_overdue()
     test_loop()
+    test_poll()
     test_second_copy()
     test_stub_server()
     test_sleep()

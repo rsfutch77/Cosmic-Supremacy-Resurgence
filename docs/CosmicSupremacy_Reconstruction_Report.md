@@ -1566,15 +1566,13 @@ snapshot.
 
 What is left for after the beta is kept here.
 
-- [ ] **The referee polls toward the deadline.** `referee_worker.py` reads the galaxy every 5
-  seconds (`POLL`) for the whole turn, about 16,800 Firestore reads a day per galaxy, measured on
-  `h3check` on 5 October 2026 with no launcher open. That is 34% of the 50,000 free daily reads for
-  one galaxy, so five galaxies spend 84,000 a day before any player asks anything. A gap that
-  shrinks toward the deadline, the way the launchers' `player_turn.poll_gap` does, would bring it
-  near the 888 a day a launcher spends. The cost is that an operator's change to the deadline, or a
-  reopen, is noticed later. Kept at 5 seconds for the beta, decided 7 October 2026; due before a
-  second live galaxy is started or after the beta, whichever comes first. Done when the worker's
-  poll follows the deadline and a measured day of one idle galaxy reads under 2,000 documents.
+- [ ] **Measure the referee's reads after the poll change.** `referee_worker.py` read the galaxy
+  every 5 seconds for the whole turn, about 16,800 Firestore reads a day per galaxy, measured on
+  `h3check` on 5 October 2026 with no launcher open. Its gap now follows the deadline
+  (`poll_gap`: a twentieth of the distance, between `POLL` 5 s and `POLL_CEILING` 120 s, and the
+  ceiling while closed), which works out near 1,100 reads a day for an idle four-hour galaxy. An
+  earlier deadline or a reopen is noticed up to 120 s late. Done when a measured day of one idle
+  galaxy reads under 2,000 documents.
 
 - [ ] **Citizens a player owns on someone else's planet cannot be managed.** `merge_orders.py`
   only considers planets the submitter owns, so a player with population on a rival's colony

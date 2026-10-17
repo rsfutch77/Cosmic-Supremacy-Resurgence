@@ -52,6 +52,7 @@ def worker_number(name: str) -> float:
 
 GRACE = worker_number("GRACE")
 POLL = worker_number("POLL")
+POLL_CEILING = worker_number("POLL_CEILING")
 BACKOFF_MAX = worker_number("BACKOFF_MAX")
 
 fails = []
@@ -105,6 +106,8 @@ check("the floor covers the longest gap a live worker leaves between tries",
       L.STALL_FLOOR >= BACKOFF_MAX, True)
 check("and the ordinary lateness of a turn that closes normally",
       L.STALL_FLOOR > ordinary, True)
+check("and a deadline an operator brought forward, noticed a ceiling late",
+      L.STALL_FLOOR > POLL_CEILING + GRACE + 10.0, True)
 check("a four-hour galaxy is given an hour", L.stall_after(FOUR_HOURS), HOUR)
 check("a one-hour galaxy a quarter of it", L.stall_after(HOUR), HOUR / 4)
 check("a fifteen-minute galaxy gets the floor, not a quarter of 900s",
