@@ -30,27 +30,10 @@ report. It sends nothing until you press it.
 launcher says so, links this page, and tells you how to keep your empire
 when you update.
 
-## Before you join
-
-- The game is for players aged 13 and up.
-- There is no account. You choose a player name, and the launcher signs in
-  with an anonymous identifier kept in its `data` folder. That folder is your
-  empire: keep it when you update (see below).
-- Turns are every 4 hours. Miss 6 in a row (about a day) and you are warned;
-  miss 24 in a row (about four days) and your empire is removed from the
-  galaxy.
-- Every player's launcher holds the whole galaxy, so a modified client could
-  see more than it should. Cheating is possible, and this beta accepts that.
-
 ## Updating from v0.1
 
 Saved games from v0.1 are not supported in v0.2.0. Unzip v0.2.0 into a new
 folder, start a new game, and delete the old folder when you are done with it.
-
-From v0.2.0 onwards, keep your `data` folder when you update: copy it from the
-old folder into the new one before you start the new launcher. It holds the
-sign-in your multiplayer empire belongs to, and a launcher started without it
-joins as a new player.
 
 ## Install
 
