@@ -21,7 +21,6 @@ for d in (os.path.join(ROOT, 'server'),
 import beta_notice
 
 LAUNCHER = os.path.join(ROOT, 'release', 'launcher.py')
-PLAN = os.path.join(ROOT, 'docs', 'Public_Beta_Plan.md')
 
 PASS, FAIL = [], []
 

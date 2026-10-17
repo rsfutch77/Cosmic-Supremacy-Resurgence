@@ -57,7 +57,7 @@ FB = {
     'FB-KYPP-3': ('apply', 'Noted: alerts are not caps.', []),
     'FB-KYPP-4': ('apply', None, ['[x] The auto-stop-billing extension is installed (its functions are listed in the project, 7 October 2026).', 'Confirm its threshold and test what it disables: stopping billing takes the live website down with the relay.']),
     'FB-KYPP-5': ('apply', None, ['[x] The relay caps itself at 10 instances (`functions/main.py`).', 'Set a spend cap for Cloud Functions if the console offers one for this project.']),
-    'FB-KYPP-6': ('apply', None, ['Record a measured day of usage against the estimates (plan items H12, H13).']),
+    'FB-KYPP-6': ('apply', None, ['Record a measured day of usage against the estimates.']),
     'FB-MSYF-1': ('deviation', 'One project, `cs-resurgence`, serves the live website and the galaxies, and tests run against emulators rather than a second project. A separate development project is the fix; until then deploys are scoped (`functions/deploy.py`, rules by hand).', []),
     'FB-MSYF-2': ('apply', 'As FB-MSYF-3 to FB-MSYF-10.', []),
     'FB-MSYF-3': ('done', 'A lien blocks deleting `cs-resurgence` (resourcemanager.projects.delete, origin operator, created 8 October 2026). Remove it deliberately before any deletion.', []),
@@ -90,11 +90,11 @@ FB.update({
     'FB-PM-1': NA('No Performance Monitoring.'), 'FB-PM-2': NA('No Performance Monitoring.'),
     'FB-RD-1': NA('No Realtime Database.'), 'FB-RD-2': NA('No Realtime Database.'), 'FB-RD-3': NA('No Realtime Database.'),
     'FB-RC-1': NA('No Remote Config.'),
-    'FB-RC-2': ('done', 'The equivalent exists without Remote Config: a galaxy\'s `min_build` refuses an older launcher and says how to update (plan item L3).', []),
+    'FB-RC-2': ('done', 'The equivalent exists without Remote Config: a galaxy\'s `min_build` refuses an older launcher and says how to update.', []),
 })
 
 # The Update Framework: attacks on software update
-NO_UPDATER = 'The launcher does not update itself: the player downloads a new zip from the release page (one-click update was removed, plan item L3).'
+NO_UPDATER = 'The launcher does not update itself: the player downloads a new zip from the release page (one-click update was removed).'
 TUF = {
     'TUF-1': ('apply', NO_UPDATER, ['The download page publishes the SHA-256 of each zip and explains how to check it (Website_Checklist R8).', 'Signed builds (M3) make a replaced file detectable by Windows itself.']),
     'TUF-2': ('apply', 'The launcher does download turns and notes from the relay and Storage.', ['The launcher caps the size of a turn, note or answer it will read, and stops reading past it.']),
@@ -111,7 +111,7 @@ TUF = {
 # Microsoft: minimising SmartScreen warnings
 SS = {
     'SS-1': ('deviation', 'Not listing in the Microsoft Store (decided 8 October 2026). SmartScreen reputation comes from signing every release with one identity (SS-2, SS-5). Without a storefront there is no IARC rating, since IARC is reached only through a participating store; the age floor (PRIV-1) is stated by the project instead.', []),
-    'SS-2': ('apply', None, ['Sign the launcher and the client on every release (plan item M3). Unsigned, Smart App Control can block the client outright (seen in Windows Sandbox, 5 October 2026).']),
+    'SS-2': ('apply', None, ['Sign the launcher and the client on every release. Unsigned, Smart App Control can block the client outright (seen in Windows Sandbox, 5 October 2026).']),
     'SS-3': ('apply', None, ['Release order: build, sign, then zip, then compute the SHA-256. Nothing is patched after signing; the client\'s binary patches happen before.']),
     'SS-4': ('apply', None, ['The launcher behaves like an ordinary program: no bundled extras, no autostart, no elevation, nothing written outside its folder (REL-1).']),
     'SS-5': ('apply', None, ['One signing identity for every release; record it here once chosen.']),
@@ -210,7 +210,7 @@ OPS = [
       'Postmortems: the 29 September turn-23 stall and the 5 October Smart App Control block each get a short written review.']),
     ('OPS-2', 'Every live galaxy can be restored from what Firebase holds, and the restore has been tried.',
      'Google Cloud Well-Architected Framework, Reliability pillar, principle 8 (test data-loss recovery)',
-     ['[x] The referee survives a reboot with its local files deleted, because the galaxy is in Firebase (plan item H3).',
+     ['[x] The referee survives a reboot with its local files deleted, because the galaxy is in Firebase.',
       'Restore a galaxy to an earlier turn from its archive on a copy, and record the steps.',
       'Decide whether Firestore and Storage need backups beyond the archive (a deleted project loses both; FB-MSYF-3).']),
     ('OPS-3', 'Recovery is tested, not assumed: the referee is stopped, killed and restarted on purpose and the galaxy carries on.',
@@ -219,7 +219,7 @@ OPS = [
       'A failure that repeats identically N times alerts the operator instead of retrying for hours (Security_Checklist ASVS V16.5.3).']),
     ('OPS-4', 'The operator learns of a stalled galaxy without having to look.',
      'This project; no source covers a home PC acting as the referee',
-     ['[x] The operator page marks itself stale (plan item N3).',
+     ['[x] The operator page marks itself stale.',
       'A push alert (email or phone) when a turn is overdue by more than one turn length.']),
     ('OPS-5', 'The referee\'s machine is a known single point of failure, and its failure modes have a plan: power loss, ISP loss, Windows Update reboots, the operator travelling.',
      'This project; no source covers a home PC acting as the referee',
@@ -227,9 +227,9 @@ OPS = [
       'Move the referee to a cloud VM (the next phase) or to the Windows Sandbox once the client is signed.']),
     ('OPS-6', 'The project does not depend on one person\'s memory: the runbook is written and someone else could follow it.',
      'Firebase launch checklist FB-MSYF-6 (more than one owner), extended to knowledge',
-     ['`docs/Public_Beta_Plan.md` "Operating it" is the runbook; check it covers starting, closing and restoring a galaxy, rebinding a seat, and deploying the relay.']),
+     ['Write the runbook: starting, closing and restoring a galaxy, rebinding a seat, and deploying the relay.']),
     ('OPS-7', 'Cost stays inside the budget at the target scale, with headroom.',
-     'Firebase launch checklist FB-KYPP; plan items H9, H12, H13',
+     'Firebase launch checklist FB-KYPP',
      ['A measured day at beta scale, against the free-tier allowances and the budget.']),
 ]
 
@@ -260,7 +260,7 @@ REL = [
     ('REL-6', 'A signing option is chosen that the operator can actually enrol in.',
      'Microsoft Learn, "Code signing options for Windows app developers" (29 August 2026)',
      ['Azure Artifact Signing (about $9.99 a month) accepts individuals in the USA and Canada only; check the operator\'s eligibility.',
-      'Record the choice in plan item M3.']),
+      'Record the choice in `docs/DEVELOPMENT.md` under Building a release.']),
 ]
 
 PRIV = [
