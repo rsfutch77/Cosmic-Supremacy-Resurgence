@@ -1,6 +1,6 @@
 """
 bypass_check.py: does a client that goes around the relay reach anything?
-    python bypass_check.py                         # cs-resurgence, h3check
+    python bypass_check.py                         # cs-resurgence, sandbox
     python bypass_check.py --galaxy verify
     python bypass_check.py --project P --bucket B --galaxy G
 
@@ -352,7 +352,7 @@ def main(argv=None, out=None):
     ap = argparse.ArgumentParser(description=__doc__.split('\n')[1])
     ap.add_argument('--project', default=fb_auth.PROJECT)
     ap.add_argument('--bucket', help='default <project>.firebasestorage.app')
-    ap.add_argument('--galaxy', default='h3check',
+    ap.add_argument('--galaxy', default='sandbox',
                     help='a real galaxy; read probes only')
     args = ap.parse_args(argv)
     project = args.project
