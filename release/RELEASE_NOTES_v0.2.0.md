@@ -36,9 +36,9 @@ when you update.
 - There is no account. You choose a player name, and the launcher signs in
   with an anonymous identifier kept in its `data` folder. That folder is your
   empire: keep it when you update (see below).
-- Turns are every 4 hours. <<FILL: what happens after missed turns on the
-  new galaxy, from its --warn and --reclaim values, or delete this item if
-  neither is set.>>
+- Turns are every 4 hours. Miss 6 in a row (about a day) and you are warned;
+  miss 24 in a row (about four days) and your empire is removed from the
+  galaxy.
 - Every player's launcher holds the whole galaxy, so a modified client could
   see more than it should. Cheating is possible, and this beta accepts that.
 
