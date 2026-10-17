@@ -1471,8 +1471,7 @@ What bounds it:
 The work left is the stub plus a window-procedure hook that routes the registered message to it,
 written as a `patch_*.py` in the existing client patch step and signed with the rest. A resident
 stub and a window-procedure hook are themselves a pattern antivirus heuristics watch for, so this
-moves the sensitive act into a signed static binary rather than removing it. See plan item M3 in
-`docs/Public_Beta_Plan.md`.
+moves the sensitive act into a signed static binary rather than removing it.
 
 ### One game process per machine, and what the lock does not know
 
@@ -1565,8 +1564,7 @@ snapshot.
 
 ## 14. Operating the multiplayer backend (October 2026)
 
-The relay, the referee worker and their costs are planned and measured in
-`docs/Public_Beta_Plan.md`, items H5, H12 and H13. What is left for after the beta is kept here.
+What is left for after the beta is kept here.
 
 - [ ] **The referee polls toward the deadline.** `referee_worker.py` reads the galaxy every 5
   seconds (`POLL`) for the whole turn, about 16,800 Firestore reads a day per galaxy, measured on
