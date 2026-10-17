@@ -7,7 +7,7 @@ abandonment.py: the seat a player stopped using
     store.publish(new_turn, blob)
 
     python abandonment.py ../galaxies/sandbox            # what it would do
-    python abandonment.py ../galaxies/sandbox --warn 6 --reclaim 12 --set
+    python abandonment.py ../galaxies/sandbox --warn 6 --reclaim 24 --set
 
 A player who misses too many turns in a row is warned through `put_note` every
 turn, and past a second threshold their civ is wiped and their seat taken. The
@@ -34,7 +34,7 @@ import turn_store
 
 # Thresholds in consecutive missed turns, and the state keys that override them per galaxy.
 WARN_KEY, RECLAIM_KEY = 'warn_after_misses', 'reclaim_after_misses'
-WARN_AFTER, RECLAIM_AFTER = 6, 12
+WARN_AFTER, RECLAIM_AFTER = 6, 24
 
 # What a civ's turn was, as the archive can tell it apart.
 PLAYED, MISSED, UNSEATED = 'played', 'missed', 'unseated'
