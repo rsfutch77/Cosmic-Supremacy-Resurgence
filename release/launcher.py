@@ -3583,8 +3583,7 @@ class Launcher:
                         "read what you would be joining, and join from "
                         "there.")
             elif any(awaiting_answer(g, view.recs) for g in rows):
-                text = ("Your join is with the galaxy. A seat appears at the "
-                        "next turn boundary, and Play appears with it.")
+                text = ("Your join request is pending until the next turn.")
         # Called once a second; the view repaints only on a change.
         self.view.set_hint(text)
 

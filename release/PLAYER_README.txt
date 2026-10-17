@@ -25,7 +25,7 @@ server, and closing it will stop the game from saving.
 "WINDOWS PROTECTED YOUR PC"
 --------------------------
 
-The launcher is code-signed, and the publisher is Robert Futch. Windows may
+The launcher is code-signed. Windows may
 still show a blue warning box the first time you run it, because a new
 signature takes time to earn Windows' trust.
 
