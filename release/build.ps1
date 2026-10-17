@@ -829,12 +829,22 @@ if (Test-Path $License) {
 
 # patch_launch_messages.py writes each client into the stage with its setup
 # message pointing at the launcher and its renderer failure message pointing at
-# the issue tracker. The tracked binary is only read.
+# the issue tracker. The tracked binary is only read. patch_window_size.py then
+# opens each client's main window 10% larger by default, and patch_tutorial.py
+# fixes the Tutorial's panel, step checks and texts in the client that runs it.
 $PatchMessages = Join-Path $ClientDir 'dev_tools\patch_launch_messages.py'
+$PatchWindow   = Join-Path $ClientDir 'dev_tools\patch_window_size.py'
+$PatchTutorial = Join-Path $ClientDir 'dev_tools\patch_tutorial.py'
 function Copy-Client {
     param($src, $dst)
     & $VenvPy $PatchMessages --source $src --out $dst | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "patch_launch_messages failed for $(Split-Path -Leaf $src)" }
+    & $VenvPy $PatchWindow --source $dst --out $dst | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "patch_window_size failed for $(Split-Path -Leaf $src)" }
+    if ((Split-Path -Leaf $src) -eq 'CosmicSupremacy.exe') {
+        & $VenvPy $PatchTutorial --source $dst --out $dst | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "patch_tutorial failed for $(Split-Path -Leaf $src)" }
+    }
 }
 
 # Several modes share one EXE.
