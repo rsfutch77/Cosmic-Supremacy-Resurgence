@@ -87,6 +87,12 @@ class Recorder:
             if loop is not None:
                 hist = loop.history
                 row["discovered"] = len(hist.discovered)
+                rally = exterminate.staging_planet(snap, civ, hist)
+                row["staging"] = rally.id if rally is not None else None
+                row["warships_staged"] = (
+                    sum(1 for s in warships if s.crewed
+                        and exterminate.at_planet(s, rally))
+                    if rally is not None else 0)
                 row["contacted"] = [c.civ_name for c in
                                     exterminate.contacted(snap, civ, hist)]
                 act = SimpleNamespace(remote=loop.remote)
@@ -119,7 +125,8 @@ def summarise(rows):
             "battle_turns": 0, "damaged": 0, "lost": 0, "lost_warships": 0,
             "colony_spent": 0, "first_contact": None, "first_war": None,
             "first_battle": None, "scouting_warship_turns": 0,
-            "discovered": None})
+            "discovered": None, "staged_at_contact": None,
+            "staged_at_war": None})
         s["turns"] += 1
         s["last_turn"] = r["turn"]
         s["missed"] += r.get("gap", 0)
@@ -138,15 +145,22 @@ def summarise(rows):
                 s["first_battle"] = r["turn"]
         if r.get("contacted") and s["first_contact"] is None:
             s["first_contact"] = r["turn"]
+            if "warships_staged" in r:
+                s["staged_at_contact"] = (f"{r['warships_staged']}/"
+                                          f"{r['warships_crewed']}")
         if r.get("at_war") and s["first_war"] is None:
             s["first_war"] = r["turn"]
+            if "warships_staged" in r:
+                s["staged_at_war"] = (f"{r['warships_staged']}/"
+                                      f"{r['warships_crewed']}")
         if r.get("discovered") is not None:
             s["discovered"] = r["discovered"]
     return out
 
 
 MEASURES = ["turns", "first_turn", "last_turn", "missed", "planets", "score",
-            "discovered", "max_warships", "first_contact", "first_war",
+            "discovered", "max_warships", "first_contact", "staged_at_contact",
+            "first_war", "staged_at_war",
             "first_battle", "battle_turns", "damaged", "lost",
             "lost_warships", "colony_spent", "scouting_warship_turns"]
 

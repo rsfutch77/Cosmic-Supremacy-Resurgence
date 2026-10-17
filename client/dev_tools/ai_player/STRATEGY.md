@@ -527,32 +527,9 @@ NOTE   scout targets a SUN, not a planet, this is the one order that does
 USES   E
 ```
 
-**[ ] R-EXP-02 CONSCRIPTS WARSHIPS, AND THAT LOSES THE OPENING BATTLE.**
-It selects any ship free to scout. Early on the only free ships ARE the warships,
-so the standing fleet gets dispersed across the galaxy one system at a time,
-and it is dispersed precisely when exploration is most urgent, which is also
-precisely when contact is most likely.
-
-Measured, first-contact run, turn 193: the two warships R-XTM-03 committed were
-**367 and 618 units** from BadGuy's HQ; 58 and 184 turns of travel. Ship #669
-would have arrived on turn 377. There is no version of that fight we win; the
-fleet was not beaten, it was out of position before the war started.
-
-Two things follow, and they are separable:
-
-1. **Never scout with a ship that has weapons.** A warship costs several times a
-   scout and is the one asset whose position at contact decides the war. Restrict
-   R-EXP-02's pool to designs with no weapons fitted, and let R-EXP-01 build more
-   scouts if the pool is empty; scouts are cheap and that is the whole point of
-   the design.
-2. **Warships need a rally point.** Even undispersed, ships park where they were
-   built. A fleet spread over five home systems is nearly as slow to concentrate
-   as one spread over the galaxy. R-XTM-01 should gather idle warships at a
-   single staging planet; the owned planet closest to the nearest known enemy,
-   falling back to the highest-population planet before contact.
-
-Until both exist, R-XTM-03 is committing whatever happens to be nearest, and the
-raid threshold in §5 is measuring a fleet that cannot actually assemble.
+**Armed and troop hulls never scout.** `explore.scoutable` drops both roles, so the
+standing fleet is not dispersed across the galaxy before contact, and R-EXP-01 builds
+dedicated scouts. Idle warships gather at a staging planet instead, see §4.4 R-XTM-08.
 
 **R-EXP-03, Record arrivals**, SUBSUMED by `sensors.History._discover`
 ```
@@ -1220,6 +1197,18 @@ above.
 they arrive one at a time and are defeated one at a time. Ships travel at very different speeds
 (bomber ~10/turn); a rendezvous or a wait-for-N-ships gate is the obvious fix and does not
 exist.
+
+**R-XTM-08, Rally idle warships**, IMPLEMENTED in `exterminate.run_xtm08`
+```
+WHEN   a crewed warship is not claimed by an earlier rule, has order 0, 1 or 2,
+       and is not at or heading to the staging planet
+THEN   order it to move (1) to the staging planet
+STAGE  the owned planet nearest any rival planet in our discovery set;
+       before contact, the most populous owned planet
+USES   M
+```
+Runs after R-XTM-03, so ships committed to a raid are already claimed, and after R-XTM-05,
+so a withdrawing ship is never redirected.
 
 **R-XTM-04, Conquer**, IMPLEMENTED in `exterminate.run_xtm04`, and it has taken a planet
 

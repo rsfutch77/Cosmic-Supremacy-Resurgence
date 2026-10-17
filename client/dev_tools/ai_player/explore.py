@@ -30,14 +30,14 @@ def scoutable(snap, civ, hist, act):
     """Ships we may send scouting.
 
     A ship busy with a purposeful order is left alone. A COLONIZE order whose
-    target we cannot legitimately see is not purposeful.
+    target we cannot legitimately see is not purposeful. Troop and armed hulls
+    never scout: R-XTM-08 keeps warships at the staging planet.
     """
     out = []
     for s in snap.owned_ships(civ):
         if not act.is_crewed(s):
             continue
-        # A troop hull never scouts.
-        if s.role == "TROOP":
+        if s.role in ("TROOP", "WARSHIP"):
             continue
         ot = s.order_type or 0
         if ot in (0, 1):
@@ -88,8 +88,7 @@ def run_exp02(snap, civ, act, hist, log=print):
     if not ships:
         return 0
 
-    # With enough known targets only colony ships are held back; warships keep
-    # looking for the enemy.
+    # With enough known targets colony ships are held back.
     if len(known_free) >= ENOUGH_KNOWN_TARGETS:
         ships = [s for s in ships if s.role != "COLONY"]
         if not ships:

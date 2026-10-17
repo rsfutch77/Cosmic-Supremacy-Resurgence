@@ -4,6 +4,7 @@ exterminate.py: the Exterminate rules (STRATEGY.md §4.4)
 R-XTM-01  keep a standing fleet
 R-XTM-03  send the fleet at the weakest reachable enemy planet
 R-XTM-05  pull damaged ships out
+R-XTM-08  gather idle warships at the staging planet
 
     python exterminate.py            # dry run, one pass
     python exterminate.py --apply
@@ -24,6 +25,7 @@ GARRISON_WINDOW = 3       # turns after a capture (Planet:92) that count as
                           # newly taken
 RETREAT_AT = 0.30         # Ship:136 below this and the ship goes home
 THREAT_DIST = 120.0       # "near": one sun separation (measured minimum 111.7)
+AT_PLANET = 1.0           # a ship within this distance of a planet is at it
 
 WAR = 1                   # Owner:248 relation code
 
@@ -501,6 +503,62 @@ def run_xtm05(snap, civ, act, hist, log=print):
     return acted
 
 
+def rival_planets(snap, civ, hist):
+    """Planets of other civs inside our discovery set."""
+    return [p for p in snap.planets
+            if p.owner is not None and p.owner.addr != civ.addr
+            and hist.can_see(snap, p)]
+
+
+def staging_planet(snap, civ, hist):
+    """Where idle warships gather.
+
+    The owned planet nearest any rival planet we can see; before contact, the
+    most populous owned planet.
+    """
+    ours = snap.owned_planets(civ)
+    if not ours:
+        return None
+    rivals = rival_planets(snap, civ, hist)
+    if not rivals:
+        return max(ours, key=lambda p: (len(p.population), -p.id))
+    return min(ours, key=lambda p: (min(gs.dist(p.pos, r.pos) for r in rivals),
+                                    p.id))
+
+
+def at_planet(ship, planet):
+    return gs.dist(ship.pos, planet.pos) <= AT_PLANET
+
+
+def run_xtm08(snap, civ, act, hist, log=print):
+    """R-XTM-08: send every idle crewed warship to the staging planet.
+
+    Runs after R-XTM-03, so a warship committed to a raid is already claimed.
+    Idle covers no order, a move order and a leftover scout order.
+    """
+    rally = staging_planet(snap, civ, hist)
+    if rally is None:
+        return 0
+    fleet = [s for s in warships(snap, civ)
+             if act.is_crewed(s) and not act.is_claimed(s)
+             and (s.order_type or 0) in (0, 1, 2)]
+    away = [s for s in fleet
+            if not at_planet(s, rally) and not already_heading(s, rally, 1)]
+    if not away:
+        return 0
+    log(f"R-XTM-08: staging at {rally}; {len(away)} of {len(fleet)} idle "
+        f"warship(s) are elsewhere")
+    acted = 0
+    for ship in away:
+        try:
+            send_to(act, ship, rally, civ, order_type=1)
+            act.claim(ship)
+            acted += 1
+        except (ValueError, RuntimeError) as e:
+            log(f"  could not send {ship}: {e}")
+    return acted
+
+
 # R-XTM-05 runs first so R-XTM-03 does not send a retreating ship back into
 # the fight in the same pass.
 def run_xtm00(snap, civ, act, hist, log=print):
@@ -539,7 +597,8 @@ def run_xtm00(snap, civ, act, hist, log=print):
 ALLOW_DECLARE_WAR = True
 
 RULES = [("R-XTM-05", run_xtm05), ("R-XTM-00", run_xtm00),
-         ("R-XTM-01", run_xtm01), ("R-XTM-03", run_xtm03)]
+         ("R-XTM-01", run_xtm01), ("R-XTM-03", run_xtm03),
+         ("R-XTM-08", run_xtm08)]
 
 
 def main():
