@@ -37,10 +37,6 @@ cosmicresurgence.com.
 The launcher is open source. You can read its code and build it yourself
 from the project repository.
 
-The Tutorial and the Demo run the original 2006 game client, which is not
-signed. On a Windows 11 PC with Smart App Control turned on, Windows may
-block those two modes. Single Player and Multiplayer run signed clients.
-
 If Windows says it needs Microsoft's WebView2 Runtime, the launcher asks
 before installing it. Windows 11 already has it.
 
