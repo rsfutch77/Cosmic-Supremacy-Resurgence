@@ -69,7 +69,7 @@ page.
 
 ## Verifying the download
 
-    SHA-256  <<FILL: the SHA-256 build.ps1 prints>>
+    SHA-256  195ccf167e4f2a93ea3d2fc862d3a4ccaeb4ddd028d2637eb683d8b6eb7bcd0a
 
     Get-FileHash CosmicSupremacy-Resurgence-v0.2.0.zip -Algorithm SHA256
 

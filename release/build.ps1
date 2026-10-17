@@ -64,9 +64,8 @@
     build fails rather than opening a browser.
 
 .PARAMETER SkipGameExecutables
-    Leave the patched game clients named in $PatchedGameExecutables unsigned.
-    When a signer is configured they are signed with it by default.
-    CosmicSupremacy.exe, the original client, is never signed.
+    Leave the game clients named in $GameExecutables unsigned. When a signer
+    is configured they are signed with it by default.
 
 .PARAMETER SignAllowUntrusted
     Accept a signature whose chain does not end in a trusted root. For trying
@@ -214,9 +213,9 @@ function Wait-FilesReleased {
 #                    file naming the endpoint, account and certificate profile.
 #                    The dlib authenticates as the signed-in Azure identity.
 
-# Signed with the rest unless -SkipGameExecutables. CosmicSupremacy.exe, the
-# original client, is never signed.
-$PatchedGameExecutables = @('CosmicSupremacy_Resurgence.exe', 'CosmicSupremacy_Player.exe')
+# Signed with the rest unless -SkipGameExecutables. CosmicSupremacy.exe runs
+# the Tutorial and the Demo.
+$GameExecutables = @('CosmicSupremacy.exe', 'CosmicSupremacy_Resurgence.exe', 'CosmicSupremacy_Player.exe')
 
 # Microsoft's documented requirements for signtool with the Artifact Signing
 # dlib: Windows SDK signtool 10.0.2261.755 or later, and not the 20348 SDK.
@@ -914,13 +913,13 @@ Write-Step "Checking for loose bytecode"
 Assert-NoLooseBytecode $Stage
 Write-Ok "no .pyc and no __pycache__ in $StageName"
 
-# ── 7d. The patched game executables ──────────────────────────────────────────
+# ── 7d. The game executables ──────────────────────────────────────────────────
 # Signed whenever a signer is configured, unless -SkipGameExecutables.
 if ($Signing -and -not $SkipGameExecutables) {
-    Write-Step "Signing the patched game executables"
-    $gameSign = @($PatchedGameExecutables | ForEach-Object { Join-Path $GameDir $_ } |
+    Write-Step "Signing the game executables"
+    $gameSign = @($GameExecutables | ForEach-Object { Join-Path $GameDir $_ } |
                   Where-Object { Test-Path -LiteralPath $_ })
-    if ($gameSign.Count -eq 0) { throw 'no patched game executable in the release folder to sign' }
+    if ($gameSign.Count -eq 0) { throw 'no game executable in the release folder to sign' }
     Invoke-ReleaseSigning -Config $Signing -Path $gameSign
 }
 

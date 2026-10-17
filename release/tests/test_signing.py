@@ -98,12 +98,11 @@ check("everything is signed before the archive step",
       BUILD_TEXT.index("Invoke-ReleaseSigning -Config $Signing -Path $gameSign")
       < BUILD_TEXT.index("# ── 8. Zip"), True)
 
-listed = re.search(r"\$PatchedGameExecutables\s*=\s*@\(([^)]*)\)", BUILD_TEXT)
-patched = re.findall(r"'([^']+)'", listed.group(1)) if listed else None
-check("the signed game set is the patched pair and nothing else", patched,
-      ["CosmicSupremacy_Resurgence.exe", "CosmicSupremacy_Player.exe"])
-check("the original client is not in it", "CosmicSupremacy.exe" in (patched or []),
-      False)
+listed = re.search(r"\$GameExecutables\s*=\s*@\(([^)]*)\)", BUILD_TEXT)
+game_exes = re.findall(r"'([^']+)'", listed.group(1)) if listed else None
+check("the signed game set is the three clients and nothing else", game_exes,
+      ["CosmicSupremacy.exe", "CosmicSupremacy_Resurgence.exe",
+       "CosmicSupremacy_Player.exe"])
 check("the game executables are signed whenever a signer is configured",
       "if ($Signing -and -not $SkipGameExecutables) {" in region("# ── 7d.", "# ── 8. Zip")
       and "Invoke-ReleaseSigning" in region("if ($Signing -and -not $SkipGameExecutables) {",
@@ -115,8 +114,8 @@ signing_code = region("# ── Code signing", "Write-Host \"Cosmic Supremacy - 
 signing_code = "\n".join(l for l in signing_code.splitlines()
                          if not l.lstrip().startswith("#"))
 bare_names = re.findall(r"CosmicSupremacy(?:_\w+)?\.exe", signing_code)
-check("the signing functions name no game executable but the patched pair",
-      sorted(set(bare_names)), sorted(patched or []))
+check("the signing functions name no game executable but those three",
+      sorted(set(bare_names)), sorted(game_exes or []))
 
 rc, out = run_ps("$c = Resolve-SigningConfig -Thumbprint '' "
                  "-TimestampUrl 'http://t.example'; "
