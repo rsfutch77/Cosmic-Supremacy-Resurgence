@@ -9,8 +9,9 @@ system. For a civ holding a system's majority, that would overwrite the name
 with `Unnamed` every turn.
 
 The rule: compare the submitted name against what was served. An empty name
-served and `Unnamed` submitted is the engine filling in a default; only a name
-that differs from the served one and is not the default is a rename.
+served and `Unnamed` submitted is the engine filling in a default, and the
+default never replaces a name; only a name that differs from the served one and
+is not the default is a rename. The fixture is the tracked Single Player galaxy.
 `canonical.py` does not mask star names, since masking would also forgive a
 real change.
 """
@@ -73,10 +74,10 @@ def set_sun_name(blob, system_id, name: bytes):
 
 
 def main():
-    fixture = os.path.join(ROOT, 'server', 'fog_work', 'fix80.dat')
+    fixture = os.path.join(ROOT, 'client', 'SinglePlayerGalaxy.dat')
     if not os.path.exists(fixture):
-        print(f'no fixture at {fixture}; run against any multi-civ blob')
-        return 0
+        print(f'no fixture at {fixture}')
+        return 1
     blob = sp.load_any(fixture)
     civ = next(o['name'] for o in icv.owner_records(blob))
     target = sorted(systems(blob))[0]
@@ -108,9 +109,6 @@ def main():
           merged == named, True)
 
     print(f'\n{len(PASS)} passed, {len(FAIL)} failed')
-    if FAIL:
-        print('\nFailures here are the KNOWN BUG, not a broken test. See the')
-        print('module docstring and the 19 September rehearsal notes.')
     return 1 if FAIL else 0
 
 

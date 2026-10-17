@@ -1589,9 +1589,3 @@ What is left for after the beta is kept here.
 - [ ] **Order types nobody has measured are not merged:** facility selection outside the queue,
   governors, admirals and diplomacy proposals. Done when each is measured against a change made
   in the UI and is either accepted or refused with a note.
-
-- [ ] **A running client's default star names read as renames.** A client writes `Unnamed`
-  wherever the blob holds an empty name, and `merge_orders.py` sees each one as an attempted
-  system rename every turn. `server/tests/test_rename_materialisation.py` states the wanted
-  behaviour; it skips without its `fog_work/fix80.dat` fixture. Done when that test passes
-  against a multi-civ blob.

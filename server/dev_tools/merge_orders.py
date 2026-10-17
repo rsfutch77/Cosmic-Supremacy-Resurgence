@@ -1325,9 +1325,10 @@ def merge(blob, submissions, log=print, notes=None):
                     continue
                 if name == name_served:
                     continue
-                if name_served[0] == 0 and name[1] == DEFAULT_SUN_NAME:
-                    # Not a rename: a running client writes `Unnamed` into
-                    # every SUN the blob left empty. Skipped without a note.
+                if name[1] == DEFAULT_SUN_NAME:
+                    # Never a rename: a running client writes `Unnamed` into
+                    # every SUN the blob left empty, and the default must not
+                    # erase a name a player set. Skipped without a note.
                     continue
                 # The majority is of the settled planets only, as the client
                 # allows: the only settled planet in a system may name it.
