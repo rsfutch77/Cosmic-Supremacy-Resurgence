@@ -114,6 +114,19 @@ check("index.json written", os.path.exists(idx), True)
 cs_server_index = cs_server._read_index()
 check("three slots recorded", len(cs_server_index), 3)
 
+print("\n10. the civ name survives a server restart")
+check("an unnamed civ is the default",
+      post("listcivnames", userid=1), "DemoEmpire#SPC#0#NEXT#DONE")
+post("uploadcivname", userid=1, passhash="'abcdef'", civname="'Vega Union'")
+check("the new name is listed",
+      post("listcivnames", userid=1), "Vega Union#SPC#0#NEXT#DONE")
+check("civs.json written", os.path.exists(os.path.join(DATA, "civs.json")), True)
+cs_server._civ_state = None             # what a fresh process starts with
+check("and read back after a restart",
+      post("listcivnames", userid=1), "Vega Union#SPC#0#NEXT#DONE")
+check("another user still gets the default",
+      post("listcivnames", userid=2), "DemoEmpire#SPC#0#NEXT#DONE")
+
 srv.shutdown()
 shutil.rmtree(DATA, ignore_errors=True)
 print("\n" + ("ALL PASSED" if not fails else f"FAILURES: {fails}"))

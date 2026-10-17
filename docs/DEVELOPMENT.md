@@ -103,12 +103,11 @@ the release's `data\` when the launcher sets it:
 | Save blobs | `saves\`, a `.b64` and a `.json` sidecar per save, listed in `saves\index.json` |
 | Governor blobs | `save_gov_<id>.dat` |
 | Request log | `cs_server.log` |
+| Civ names | `civs.json`, per userid |
 
 Both blob kinds are stored and returned verbatim, the server never parses one.
-Civ names live in memory for the life of the process, and coat-of-arms uploads
-are accepted and discarded, `getcoa` answers with a 1x1 placeholder PNG. Neither
-survives a restart, which is enough for local play and is a gap for a hosted
-galaxy.
+Coat-of-arms uploads are accepted and discarded, and `getcoa` answers with a 1x1
+placeholder PNG.
 
 Multiplayer state is separate. `server/turn_store.py` holds a galaxy's turn blobs
 and player submissions behind one interface with three implementations, a

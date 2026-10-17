@@ -67,14 +67,38 @@ DEMO_USERID   = 1
 DEMO_PASSHASH = 'abcdef'   # from DemoGalaxy_local.csgalaxy token
 DEMO_GALAXY_ID = 0
 
-# Civ state for this server session: { userid_str: {'civname': str, 'coaid': str} }
-_civ_state: dict = {}
+# Civ name and coat of arms per user, { userid_str: {'civname': str, 'coaid': str} },
+# kept in DATA_DIR so a name chosen in one session is there in the next.
+CIV_FILE = os.path.join(DATA_DIR, 'civs.json')
+_civ_state: 'dict | None' = None
 
 def _default_civ() -> dict:
     return {'civname': 'DemoEmpire', 'coaid': '0'}
 
+def _civs() -> dict:
+    global _civ_state
+    if _civ_state is None:
+        try:
+            import json as _json
+            with open(CIV_FILE, 'r', encoding='utf-8') as f:
+                got = _json.load(f)
+            _civ_state = got if isinstance(got, dict) else {}
+        except (OSError, ValueError):
+            # Absent or corrupt reads as no civs, which serves the default.
+            _civ_state = {}
+    return _civ_state
+
 def _get_civ(userid: str) -> dict:
-    return _civ_state.get(userid, _default_civ())
+    return dict(_default_civ(), **_civs().get(userid, {}))
+
+def _set_civ(userid: str, **fields):
+    import json as _json
+    civs = _civs()
+    civs[userid] = dict(_get_civ(userid), **fields)
+    tmp = CIV_FILE + '.tmp'
+    with open(tmp, 'w', encoding='utf-8') as f:
+        _json.dump(civs, f, indent=2, sort_keys=True)
+    os.replace(tmp, CIV_FILE)
 
 # Every savegame POST is written to saves/ verbatim (base64 as sent) with a .json
 # sidecar of the other fields. Each save gets its own sequence number and none is
@@ -222,11 +246,16 @@ def handle_action(action: str, params: dict, raw_body: str = '') -> tuple[int, s
         # Request: action=uploadcivname&userid=<n>&passhash='<h>'&civname='<name>'
         # The game does not check the response body.
         userid  = params.get('userid', ['1'])[0]
-        civname = params.get('civname', [''])[0].strip("'")
+        civname = _clean_field(params.get('civname', [''])[0].strip("'"))
         if civname:
-            civ = _civ_state.setdefault(userid, _default_civ())
-            civ['civname'] = civname
-            log(f'  -> uploadcivname: userid={userid} civname={civname!r} (persisted)')
+            try:
+                _set_civ(userid, civname=civname)
+                log(f'  -> uploadcivname: userid={userid} civname={civname!r} (persisted)')
+            except OSError as e:
+                # Still answered OK: the game does not check, and the name holds
+                # for this session.
+                _civs()[userid] = dict(_get_civ(userid), civname=civname)
+                log(f'  !! uploadcivname: userid={userid} civname={civname!r} not written: {e}')
         else:
             log(f'  -> uploadcivname: userid={userid} (no civname param, ignored)')
         return 200, 'text/plain', 'OK'
