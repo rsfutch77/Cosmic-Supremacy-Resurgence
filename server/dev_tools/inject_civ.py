@@ -794,7 +794,55 @@ def add_civ(blob, new_name, donor_name=None, home_id=None, taken=(),
             blob, new_name, target["id"], kit_design,
             ships=STARTING_SHIPS if ships is None else ships,
             template=template, log=log)
+
+    donor_rows = (score_rows(source) or (0, {}, 0))[1]
+    blob = add_score_row(blob, uid, new_name, donor_rows.get(donor_uid), log=log)
     return blob, target["id"]
+
+
+# The highscore list is saved in GLOB (version 17) at payload +13 as a count,
+# then one row per Owner:4: u32 Owner:4, u32 name length, the name, u32 score
+# (Owner:28), f32 Owner:32, u8 flag. Load reads it back as saved; only a turn
+# boundary rebuilds it, so a civ added between boundaries needs its own row.
+SCORE_GLOB_VERSION = 17
+SCORE_COUNT_AT = 9
+SCORE_TAIL = 9
+
+
+def score_rows(blob):
+    """(GLOB payload offset, {Owner:4: row tail}, offset past the last row),
+    or None for a GLOB this layout was not measured on."""
+    glob = next(sp.parse_blob(blob)[0].find("GLOB"), None)
+    if glob is None or glob.version != SCORE_GLOB_VERSION:
+        return None
+    p = glob.payload
+    n = struct.unpack_from("<I", blob, p + SCORE_COUNT_AT)[0]
+    at, rows = p + SCORE_COUNT_AT + 4, {}
+    for _ in range(n):
+        uid, ln = struct.unpack_from("<II", blob, at)
+        rows[uid] = blob[at + 8 + ln:at + 8 + ln + SCORE_TAIL]
+        at += 8 + ln + SCORE_TAIL
+    return p, rows, at
+
+
+def add_score_row(blob, uid, name, donor_tail, log=print):
+    """`blob` with a highscore row for `uid`, carrying the donor's score, which
+    the clone's OWNR also carries. A list with no rows yet (turn 0) is left for
+    the first boundary to fill."""
+    got = score_rows(blob)
+    if got is None:
+        log("  score list: GLOB is not the measured version, left alone")
+        return blob
+    p, rows, end = got
+    if not rows or uid in rows:
+        return blob
+    nb = name.encode("ascii")
+    tail = donor_tail or struct.pack("<IfB", 0, 0.0, 0)
+    out = bytearray(splice(blob, end, end,
+                           struct.pack("<II", uid, len(nb)) + nb + tail))
+    struct.pack_into("<I", out, p + SCORE_COUNT_AT, len(rows) + 1)
+    log(f"  score list: row {uid} {name!r} added, {len(rows)} -> {len(rows) + 1}")
+    return bytes(out)
 
 
 def describe(blob, log=print):
