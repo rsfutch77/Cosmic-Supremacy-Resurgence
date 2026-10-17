@@ -1,11 +1,11 @@
 """
-set_population.py , Set a planet's population, growing past capacity if needed
-==============================================================================
+set_population.py: Set a planet's population, growing past capacity if needed
+
 Population is a std::vector of 16-byte citizen records at Planet:144, with
 begin/end/cap at +144/+148/+152 and the current count mirrored in the low half of
 Planet:352.
 
-Three cases, in increasing risk:
+Three cases:
 
   reduce            shrink `end`. Capacity is retained, nothing leaks.
   grow in capacity  write records into spare capacity, advance `end`.
@@ -17,8 +17,7 @@ Three cases, in increasing risk:
 
 Job ids: 0 farmer, 1 worker, 2 scientist, 5 miner, 6 banker.
 
-The planet's original buffer leaks, one leak per beyond-capacity write. Harmless
-within a session.
+Each beyond-capacity write leaks the planet's original buffer.
 """
 import ctypes
 import struct

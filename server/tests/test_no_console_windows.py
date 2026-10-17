@@ -1,0 +1,354 @@
+"""
+test_no_console_windows.py: the dev tools stop flashing cmd windows
+=====================================================================
+    server\\.venv\\Scripts\\python.exe server\\tests\\test_no_console_windows.py
+
+A console child started from a windowed parent without `CREATE_NO_WINDOW`
+opens a cmd window. Each call a turn makes is invoked with `subprocess.run`
+replaced by a recorder, and the flag is read off the recorded call. The
+recorder returns the output the real command would, so parsed results are
+shown to still parse.
+
+The sweep at the end reads the source of every tool covered and fails if any
+subprocess call has no `creationflags`.
+
+Nothing here launches or closes a client, and `CLIENT_LOCK` is repointed at a
+temporary path. Whether a window still appears on screen has to be checked by
+a person.
+"""
+import ast
+import os
+import subprocess
+import sys
+import tempfile
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(os.path.dirname(HERE))
+for d in (os.path.join(ROOT, 'client', 'dev_tools'),
+          os.path.join(ROOT, 'server', 'dev_tools'),
+          os.path.join(ROOT, 'server')):
+    if d not in sys.path:
+        sys.path.insert(0, d)
+
+import check_store
+import game_cycle
+import make_single_player_galaxy as msp
+import referee
+
+PASS, FAIL = [], []
+
+CREATE_NO_WINDOW = 0x08000000
+
+# The tools swept for a missing flag: `client/dev_tools`, `check_store.py`,
+# and the referee and its worker.
+SWEPT = ([os.path.join(ROOT, 'client', 'dev_tools', n)
+          for n in sorted(os.listdir(os.path.join(ROOT, 'client', 'dev_tools')))
+          if n.endswith('.py')] +
+         [os.path.join(ROOT, 'server', 'dev_tools', 'check_store.py')] +
+         [os.path.join(ROOT, 'server', n)
+          for n in ('referee.py', 'referee_worker.py')])
+
+SPAWNERS = {'run', 'Popen', 'call', 'check_call', 'check_output'}
+
+
+def check(name, got, want=True):
+    ok = got == want
+    (PASS if ok else FAIL).append(name)
+    print(f'  {"ok  " if ok else "FAIL"}  {name}')
+    if not ok:
+        print(f'          wanted {want!r}, got {got!r}')
+
+
+class Recorder:
+    """Stands in for `subprocess.run` and remembers how it was called.
+
+    `answers` maps a word in the command line to the stdout returned. Anything
+    not named gets empty output.
+    """
+
+    def __init__(self, answers=None):
+        self.calls = []
+        self.answers = answers or {}
+
+    def __call__(self, args, **kw):
+        self.calls.append((list(args), kw))
+        text = ' '.join(str(a) for a in args)
+        out = ''
+        for word, answer in self.answers.items():
+            if word in text:
+                out = answer
+                break
+        return subprocess.CompletedProcess(args, 0, stdout=out, stderr='')
+
+    def flagged(self):
+        """Every recorded call's creationflags, or None where there were none.
+        """
+        return [kw.get('creationflags') for _args, kw in self.calls]
+
+    def hidden(self):
+        """Whether every recorded call asked for no window."""
+        flags = self.flagged()
+        return bool(flags) and all(f == CREATE_NO_WINDOW for f in flags)
+
+
+def with_recorder(module, answers, body):
+    """Run `body` with `module.subprocess.run` recorded, and give the record
+    back. The real `run` is always restored."""
+    rec = Recorder(answers)
+    kept = module.subprocess.run
+    module.subprocess.run = rec
+    try:
+        body()
+    finally:
+        module.subprocess.run = kept
+    return rec
+
+
+def test_client_pids():
+    """The one that runs per poll, on both tools that have a copy of it."""
+    print('client_pids, the call a turn makes many times')
+    for label, module in (('game_cycle', game_cycle),
+                          ('make_single_player_galaxy', msp)):
+        got = []
+        rec = with_recorder(module, {'Get-Process': '4120\n 8864 \n'},
+                            lambda: got.append(module.client_pids()))
+        check(f'{label}: client_pids asks for one PowerShell',
+              len(rec.calls), 1)
+        check(f'{label}: and asks for it without a window',
+              rec.flagged(), [CREATE_NO_WINDOW])
+        check(f'{label}: and the pids still parse out of the output',
+              got[0], [4120, 8864])
+
+    # The output shapes the real command produces.
+    for out, want in (('', []), ('\r\n', []), ('4120\r\n', [4120]),
+                      ('4120\r\n8864\r\n', [4120, 8864])):
+        got = []
+        with_recorder(game_cycle, {'Get-Process': out},
+                      lambda: got.append(game_cycle.client_pids()))
+        check(f'client_pids parses {out!r} as {want}', got[0], want)
+
+
+def test_pid_alive():
+    """The lock's liveness check, which runs whenever a tool takes the client.
+    """
+    print('_pid_alive, the tasklist behind the lock')
+    got = []
+    rec = with_recorder(
+        game_cycle, {'tasklist': 'CosmicSupremacy.exe  4120 Console  1  90 K\n'},
+        lambda: got.append(game_cycle._pid_alive(4120)))
+    check('_pid_alive runs tasklist without a window',
+          rec.flagged(), [CREATE_NO_WINDOW])
+    check('and still reads the pid out of the listing', got[0], True)
+    with_recorder(game_cycle, {'tasklist': 'INFO: No tasks are running.\n'},
+                  lambda: got.append(game_cycle._pid_alive(4120)))
+    check('and still says no when the listing does not hold it', got[1], False)
+    check('the timeout is kept, so a hung tasklist is still not forever',
+          rec.calls[0][1].get('timeout'), 15)
+
+
+def test_close_client():
+    """The Stop-Process call, once per turn.
+
+    `CLIENT_LOCK` is repointed first, since `close_client` may remove the lock
+    and another session may hold the real one.
+    """
+    print('close_client, the Stop-Process call')
+    for label, module in (('game_cycle', game_cycle),
+                          ('make_single_player_galaxy', msp)):
+        kept_lock = getattr(module, 'CLIENT_LOCK', None)
+        kept_pids = module.client_pids
+        if kept_lock is not None:
+            module.CLIENT_LOCK = os.path.join(
+                tempfile.mkdtemp(prefix='nowin_'), 'not_the_real_lock')
+        answers = iter([[4120], []])
+        module.client_pids = lambda: next(answers, [])
+        try:
+            rec = with_recorder(module, {}, lambda: module.close_client())
+        finally:
+            module.client_pids = kept_pids
+            if kept_lock is not None:
+                module.CLIENT_LOCK = kept_lock
+        check(f'{label}: close_client stops the pid it found',
+              any('Stop-Process -Id 4120' in ' '.join(a)
+                  for a, _kw in rec.calls), True)
+        check(f'{label}: and does it without a window', rec.hidden(), True)
+        check(f'{label}: the real lock file was never touched',
+              kept_lock is None or module.CLIENT_LOCK == kept_lock, True)
+
+
+def test_capture_save():
+    """The trigger_save child, once per capture, so several times a turn."""
+    print('capture_save, the trigger_save child')
+    rec = Recorder({'trigger_save': 'SaveGame saved spseed\n'})
+    kept_run, kept_newest = msp.subprocess.run, msp.newest_capture
+    msp.subprocess.run = rec
+    msp.newest_capture = lambda _since: os.path.join('saves', 'spseed.b64')
+    try:
+        where = msp.capture_save('spseed')
+    finally:
+        msp.subprocess.run, msp.newest_capture = kept_run, kept_newest
+    check('capture_save runs trigger_save without a window',
+          rec.flagged(), [CREATE_NO_WINDOW])
+    check('and still reads success out of its stdout',
+          where.endswith('spseed.b64'), True)
+    check('and still runs it in the tools directory',
+          rec.calls[0][1].get('cwd'), msp.HERE)
+
+
+def test_check_store_sessions():
+    """`net use`, on the tool an operator runs when a share will not open."""
+    print('check_store.sessions, the net use call')
+    listing = ('Status       Local     Remote\n'
+               'OK           Z:        \\\\POWERHOUSE1\\galaxies\n')
+    rec = Recorder({'net': listing})
+    kept = check_store.subprocess.run
+    check_store.subprocess.run = rec
+    try:
+        rows = check_store.sessions()
+    finally:
+        check_store.subprocess.run = kept
+    check('sessions runs net use without a window',
+          rec.flagged(), [CREATE_NO_WINDOW])
+    check('and still finds the UNC row in the output', len(rows), 1)
+    check('and still returns it whole',
+          rows[0].endswith('\\\\POWERHOUSE1\\galaxies'), True)
+
+
+def test_referee_tick():
+    """The `advance_turns` child, once per tick on an unattended machine.
+
+    `game_cycle` and `player_turn` are replaced in `sys.modules` for the call,
+    so nothing is launched, closed or locked, and the capture is a file
+    written here.
+    """
+    print('referee.tick, the advance_turns child')
+    tmp = tempfile.mkdtemp(prefix='nowin_tick_')
+    capture = os.path.join(tmp, 'capture.raw')
+    blob = b'SAVE' + bytes(8)
+    with open(capture, 'wb') as f:
+        f.write(blob)
+
+    class Snap:
+        turn = 7
+
+    class FakeClient:
+        closed = []
+
+        @staticmethod
+        def restart(dat, purpose=None, wait_for_lock=None):
+            return Snap()
+
+        @staticmethod
+        def close_client():
+            FakeClient.closed.append(True)
+
+    class FakePlayerTurn:
+        @staticmethod
+        def collect(who, save_dir=None, log=None):
+            return capture
+
+    kept = {n: sys.modules.get(n) for n in ('game_cycle', 'player_turn')}
+    sys.modules['game_cycle'] = FakeClient
+    sys.modules['player_turn'] = FakePlayerTurn
+    got = []
+    try:
+        rec = with_recorder(referee, {}, lambda: got.append(referee.tick(
+            blob, turns=1, secs=10, work_dir=tmp, log=lambda *_: None,
+            check_save_path=False)))
+    finally:
+        for n, m in kept.items():
+            if m is None:
+                sys.modules.pop(n, None)
+            else:
+                sys.modules[n] = m
+    check('a tick makes one subprocess call', len(rec.calls), 1)
+    check('and it is advance_turns',
+          any(str(a).endswith('advance_turns.py') for a in rec.calls[0][0]),
+          True)
+    check('and it asks for no window', rec.flagged(), [CREATE_NO_WINDOW])
+    check('and its output is still captured, so a failure is still logged',
+          rec.calls[0][1].get('capture_output'), True)
+    check('and the tick still returns the capture it read', got, [blob])
+    check('and the stand-in client was closed, not the real one',
+          FakeClient.closed, [True])
+
+
+def test_the_client_launches_are_left_detached():
+    """`launch` starts the game with `DETACHED_PROCESS`, never combined with
+    `CREATE_NO_WINDOW`.
+
+    The two are console-creation flags that cannot be combined, and the client
+    has no console to hide.
+    """
+    print('the client launches keep DETACHED_PROCESS')
+    for label, path in (('game_cycle',
+                         os.path.join(ROOT, 'client', 'dev_tools',
+                                      'game_cycle.py')),
+                        ('make_single_player_galaxy',
+                         os.path.join(ROOT, 'client', 'dev_tools',
+                                      'make_single_player_galaxy.py'))):
+        src = read(path)
+        check(f'{label}: the client Popen still asks for DETACHED_PROCESS',
+              'DETACHED_PROCESS' in src, True)
+        check(f'{label}: and does not ask for both at once',
+              'DETACHED_PROCESS | ' in src or 'CREATE_NO_WINDOW |' in src,
+              False)
+
+
+def read(path) -> str:
+    with open(path, encoding='utf-8') as f:
+        return f.read()
+
+
+def spawns(path):
+    """Every `subprocess.<spawner>(...)` in a file, as (line, has_flags)."""
+    out = []
+    for node in ast.walk(ast.parse(read(path))):
+        if not isinstance(node, ast.Call):
+            continue
+        fn = node.func
+        name = fn.attr if isinstance(fn, ast.Attribute) else getattr(
+            fn, 'id', None)
+        if name not in SPAWNERS:
+            continue
+        if isinstance(fn, ast.Attribute) and getattr(
+                fn.value, 'id', None) != 'subprocess':
+            continue
+        if not isinstance(fn, ast.Attribute):
+            continue
+        flagged = any(k.arg == 'creationflags' for k in node.keywords)
+        out.append((node.lineno, flagged))
+    return out
+
+
+def test_sweep():
+    """No subprocess call in these tools is written without `creationflags`.
+
+    A failure names the file and line.
+    """
+    print('the sweep: every spawner in these tools names creationflags')
+    bare, total = [], 0
+    for path in SWEPT:
+        for line, flagged in spawns(path):
+            total += 1
+            if not flagged:
+                bare.append(f'{os.path.relpath(path, ROOT)}:{line}')
+    check('at least the calls this file exercises were found', total >= 7, True)
+    check('and none of them is written without creationflags', bare, [])
+    print(f'         {total} subprocess call(s) across {len(SWEPT)} file(s)')
+
+
+if __name__ == '__main__':
+    test_client_pids()
+    test_pid_alive()
+    test_close_client()
+    test_capture_save()
+    test_check_store_sessions()
+    test_referee_tick()
+    test_the_client_launches_are_left_detached()
+    test_sweep()
+    print(f'\n{len(PASS)} passed, {len(FAIL)} failed')
+    if FAIL:
+        for name in FAIL:
+            print(f'  failed: {name}')
+    sys.exit(1 if FAIL else 0)

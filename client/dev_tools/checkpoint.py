@@ -1,14 +1,13 @@
 """
-checkpoint.py , named restore points, so a test does not cost a whole game
-==========================================================================
+checkpoint.py: named restore points for the running game
+
     python checkpoint.py save t41        # capture the running game
     python checkpoint.py list
     python checkpoint.py restore t41     # close the client, bring it up on t41
 
-A checkpoint is just the engine's own save blob written where it can be found by
-name: `client/checkpoints/<name>.dat`, in the raw form the client accepts on its
-command line. Nothing here invents a format , `game_cycle.py` already does the
-capture and the relaunch, and this is the naming and the index around them.
+A checkpoint is the engine's raw save blob at `client/checkpoints/<name>.dat`,
+in the form the client accepts on its command line. `game_cycle.py` does the
+capture and the relaunch.
 """
 import argparse
 import os
@@ -30,7 +29,7 @@ def path_for(name):
 
 
 def turn_of(capture):
-    """The turn the capture was taken on , the server names it `..._t<turn>.b64`."""
+    """The turn the capture was taken on, the server names it `..._t<turn>.b64`."""
     stem = os.path.basename(capture).rsplit(".", 1)[0]
     tail = stem.rsplit("_t", 1)[-1]
     return int(tail) if tail.isdigit() else None
@@ -41,9 +40,8 @@ def do_save(name=None):
     import save_parser as sp
 
     os.makedirs(CHECKPOINTS, exist_ok=True)
-    # Capture FIRST when the name is to be derived: the turn counter can move
-    # between deciding to save and the save landing, and a checkpoint called t41
-    # that actually holds turn 42 is a trap for whoever restores it later.
+    # The derived name comes from the captured turn, since the turn counter can
+    # move before the save lands.
     capture = gc.capture_save((name or "chk")[:15])
     turn = turn_of(capture)
     if name is None:
@@ -54,7 +52,7 @@ def do_save(name=None):
 
     dest = path_for(name)
     if os.path.exists(dest):
-        raise SystemExit(f"{dest} exists; pick another name or delete it , "
+        raise SystemExit(f"{dest} exists; pick another name or delete it, "
                          f"overwriting a restore point is not something to do "
                          f"by accident")
     blob = sp.decode_save(open(capture).read())

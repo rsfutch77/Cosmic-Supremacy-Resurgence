@@ -1,0 +1,19 @@
+// beta_firestore.rules: the Firestore rules for the beta, as deployed to cs-resurgence.
+// Clients never touch Firestore directly. The relay (functions/relay.py) and the
+// referee use admin credentials, which bypass rules, so every client read and
+// write is denied. Field-level access (relay.PRIVATE_FIELDS) is enforced in the relay.
+//
+// No firebase.json sits beside this file, so deploy by hand from a directory
+// whose firebase.json names nothing else:
+//
+//     firebase deploy --only firestore:rules
+
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

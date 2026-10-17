@@ -33,7 +33,6 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-# ── Paths ─────────────────────────────────────────────────────────────────────
 $RepoRoot   = Split-Path -Parent $MyInvocation.MyCommand.Definition
 $ServerDir  = Join-Path $RepoRoot 'server'
 $VenvDir    = Join-Path $ServerDir '.venv'
@@ -48,7 +47,7 @@ function Write-Warn2{ param($m) Write-Host "    !   $m" -ForegroundColor Yellow 
 Write-Host "Cosmic Supremacy - Resurgence : environment setup" -ForegroundColor White
 Write-Host "Repo: $RepoRoot"
 
-# ── 0. Resolve the target Python version ──────────────────────────────────────
+# The target Python version.
 if (-not $PythonVersion) {
     if (Test-Path $PinFile) {
         $PythonVersion = (Get-Content $PinFile -Raw).Trim()
@@ -58,7 +57,6 @@ if (-not $PythonVersion) {
 }
 Write-Host "Target Python: $PythonVersion"
 
-# ── 1. Ensure uv is available ─────────────────────────────────────────────────
 Write-Step "Checking for uv"
 
 # The uv installer drops the binary here and edits the *user* PATH, which does
@@ -93,14 +91,12 @@ Install uv manually with either of these, then re-run this script:
 }
 Write-Ok "uv $(& uv --version)"
 
-# ── 2. Install the pinned interpreter ─────────────────────────────────────────
 Write-Step "Installing CPython $PythonVersion (uv-managed)"
 & uv python install $PythonVersion
 if ($LASTEXITCODE -ne 0) { throw "uv python install $PythonVersion failed" }
 Write-Ok "CPython $PythonVersion available"
 Write-Host "    (list all versions any time with: uv python list)"
 
-# ── 3. Virtual environment ────────────────────────────────────────────────────
 Write-Step "Preparing virtual environment at server\.venv"
 if ($Recreate -and (Test-Path $VenvDir)) {
     Write-Warn2 "-Recreate specified, removing existing .venv"
@@ -114,7 +110,6 @@ if (-not (Test-Path $VenvPython)) {
     Write-Ok "already exists (use -Recreate to rebuild)"
 }
 
-# ── 4. Dependencies ───────────────────────────────────────────────────────────
 Write-Step "Installing dependencies from server\requirements.txt"
 if (Test-Path $Reqs) {
     & uv pip install --python $VenvPython -r $Reqs
@@ -124,7 +119,6 @@ if (Test-Path $Reqs) {
     Write-Warn2 "requirements.txt not found - skipping"
 }
 
-# ── 5. Verify ─────────────────────────────────────────────────────────────────
 Write-Step "Verifying"
 $ver = & $VenvPython -c "import sys; print('.'.join(map(str, sys.version_info[:3])))"
 Write-Ok "venv interpreter reports $ver"
@@ -136,7 +130,6 @@ if ($LASTEXITCODE -ne 0) { throw "import check failed" }
 if ($LASTEXITCODE -ne 0) { throw "cs_server.py failed to compile" }
 Write-Ok "cs_server.py compiles"
 
-# ── Done ──────────────────────────────────────────────────────────────────────
 Write-Host @"
 
 ------------------------------------------------------------------

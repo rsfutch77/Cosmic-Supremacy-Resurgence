@@ -1,5 +1,5 @@
 """
-inject_order.py , Push a ship order into a save blob
+inject_order.py: Push a ship order into a save blob
 ====================================================
 Takes a captured savegame blob, gives a chosen ship an order it never had, and
 writes the result where `cs_server.py`'s `loadgame` will serve it. 
@@ -20,12 +20,9 @@ DYNO layout, from the writer at 0x004DA310
     ROUT  section
     u32                                             [ship+0x6c]  Ship:100
 
-That conditional tail is what makes an unordered ship's DYNO 30 bytes and an
-ordered one's 30 + (8 + ROUT payload) + 4, which is exactly what captures show.
-
-Giving a ship an order therefore means three coordinated edits, not one:
-the SHCO order-type byte, the has-orders byte, and the appended ROUT + u32.
-Writing only the ROUT leaves the order type at 0 and the UI with nothing to say.
+An unordered ship's DYNO is 30 bytes and an ordered one's 30 + (8 + ROUT
+payload) + 4. Giving a ship an order takes three edits: the SHCO order-type
+byte, the has-orders byte, and the appended ROUT + u32.
 """
 
 import argparse
@@ -40,11 +37,8 @@ SHCO_HDR = 8
 
 
 def server_dir() -> str:
-    """
-    The directory holding cs_server.py, which is where relative output paths are
-    resolved. The default `loadgame_blob.b64` has to land where cs_server.py looks for
-    it, not merely beside this file.
-    """
+    """The directory holding cs_server.py, against which relative output paths
+    are resolved."""
     here = os.path.dirname(os.path.abspath(__file__))
     for cand in (here, os.path.dirname(here)):
         if os.path.exists(os.path.join(cand, 'cs_server.py')):
@@ -135,7 +129,7 @@ def main():
                          'exists, then 0x0056DAD0 feeds it to the loader. That '
                          'path does NOT base64-decode or inflate '
                          '(0x005E53E0 only reads the file), so the .dat holds the '
-                         "raw blob starting with 'SAVE' , not the wire format.")
+                         "raw blob starting with 'SAVE', not the wire format.")
     args = ap.parse_args()
 
     blob = sp.load_any(args.blob)
@@ -173,8 +167,8 @@ def main():
     print(f"  leg: {tuple(round(v, 4) for v in pos)} -> "
           f"{tuple(round(v, 4) for v in target)} length={leg['length']:.4f}")
 
-    # ref_id 0 is the safe choice: both captured orders carried the static null
-    # reference node 0x00857C54, so 0 is a value the loader is known to accept.
+    # ref_id 0: captured orders carry the static null reference node
+    # 0x00857C54, and the loader accepts 0.
     rout_payload = sp.build_rout({
         'order_kind': 1,               # non-zero or Ship::SetOrder frees the order
         'flag_1': 0,
@@ -200,15 +194,15 @@ def main():
 
     out_blob = sp.replace_payload(blob, tree, dyno, new_dyno)
 
-    # re-parse the result and prove the edit survived a full round trip
+    # Re-parse and confirm the order survived the round trip.
     check_tree  = sp.parse_blob(out_blob)
     check_ships = ship_sections(out_blob, check_tree)
     got = [t for t in check_ships if t[0] == args.ship]
     if not got:
-        sys.exit("re-parse lost the ship , refusing to write")
+        sys.exit("re-parse lost the ship: refusing to write")
     cd = parse_dyno(out_blob, got[0][4])
     if not cd['rout'] or cd['shco'][0] != args.order_type or cd['has_orders'] != 1:
-        sys.exit("re-parse did not see the injected order , refusing to write")
+        sys.exit("re-parse did not see the injected order: refusing to write")
     routs = [s for s in sp.flatten(check_tree) if s.tag == b'ROUT']
     print(f"  re-parse: {len(routs)} ROUT sections "
           f"(was {len([s for s in sp.flatten(tree) if s.tag == b'ROUT'])}), "

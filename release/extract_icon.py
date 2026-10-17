@@ -1,5 +1,5 @@
 """
-extract_icon.py , lift the application icon out of a Win32 PE into a .ico file
+extract_icon.py: lift the application icon out of a Win32 PE into a .ico file
 ==============================================================================
     python extract_icon.py client\\CosmicSupremacy.exe release\\build\\cosmic.ico
 """
@@ -47,9 +47,7 @@ def parse_sections(data: bytes):
 
 def rva_to_off(sections, rva: int) -> int:
     for va, vsize, rawsize, rawptr in sections:
-        # Compare against the larger of the two sizes: a section can be padded on
-        # disk (rawsize > vsize) or zero-filled in memory (vsize > rawsize), and
-        # resource data legitimately lives in either overhang.
+        # The larger of the two sizes: resource data can live in either overhang.
         if va <= rva < va + max(vsize, rawsize):
             return rawptr + (rva - va)
     raise ValueError(f"RVA 0x{rva:08x} is not inside any section")
@@ -60,8 +58,7 @@ def dir_entries(data: bytes, off: int):
     n_named, n_id = struct.unpack_from("<HH", data, off + 12)
     for i in range(n_named + n_id):
         name, child = struct.unpack_from("<II", data, off + 16 + i * 8)
-        # High bit on the name means a string identifier; icons are numbered, so
-        # those are not ours and are skipped rather than guessed at.
+        # High bit on the name means a string identifier; icons are numbered.
         ident = None if name & 0x80000000 else name
         yield ident, child & 0x7FFFFFFF, bool(child & 0x80000000)
 
@@ -97,9 +94,7 @@ def collect(data: bytes, sections, res_off: int, want_type: int) -> dict:
 
 
 def build_ico(group: bytes, images: dict) -> bytes:
-    """
-    Turn a GRPICONDIR plus its RT_ICON images into a .ico file.
-    """
+    """Turn a GRPICONDIR plus its RT_ICON images into a .ico file."""
     reserved, kind, count = struct.unpack_from("<HHH", group, 0)
     if reserved != 0 or kind != 1:
         raise ValueError("not an icon group resource")
@@ -118,7 +113,7 @@ def build_ico(group: bytes, images: dict) -> bytes:
 
     if not entries:
         raise ValueError("icon group referenced no images present in the image")
-    # count is rewritten because entries whose image was missing are dropped.
+    # Entries whose image is missing are dropped, so count is rewritten.
     return (struct.pack("<HHH", 0, 1, len(entries))
             + b"".join(entries) + b"".join(blobs))
 
@@ -139,8 +134,7 @@ def main(argv) -> int:
     if not groups:
         raise ValueError("no RT_GROUP_ICON resources")
 
-    # Windows shows the numerically lowest group as the application icon, which
-    # is the one Explorer draws for this EXE and therefore the one to match.
+    # Windows shows the numerically lowest group as the application icon.
     gid = min(groups)
     ico = build_ico(groups[gid], images)
 

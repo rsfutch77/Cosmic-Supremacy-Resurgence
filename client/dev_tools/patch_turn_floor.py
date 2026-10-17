@@ -1,6 +1,6 @@
 """
-patch_turn_floor.py , lower the engine's 60-second minimum turn length
-======================================================================
+patch_turn_floor.py: lower the engine's 60-second minimum turn length
+
     python patch_turn_floor.py --status
     python patch_turn_floor.py --apply         # floor becomes 1 second
     python patch_turn_floor.py --revert        # back to the stock 60
@@ -19,14 +19,9 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 EXE = os.path.join(os.path.dirname(HERE), "CosmicSupremacy_Resurgence.exe")
 BAK = EXE + ".preturnfloor.bak"
 
-# file offset, VA, what it is. VA - file = 0x400C00 in this image.
-#
-# TEN SITES, NOT TWO. The first attempt patched only the two that write the
-# immediate directly (`mov [turnlength], 60`) and the live value still came up
-# 60 on a verified-patched process , because most of the clamps load 60 into a
-# REGISTER first (`mov ecx, 60 ; mov [turnlength], ecx`), which looks nothing
-# like the pattern the first search matched. The floor is applied all over one
-# function, presumably once per way the turn length can be arrived at.
+# file offset, VA, what it is. VA - file = 0x400C00 in this image. Each site's
+# immediate byte is 60 (stock) or 1 (patched); most clamps load 60 into a
+# register before storing it, so all ten must be patched.
 SITES = [
     (0x12C743, 0x0052D343, "mov edx, N   (then max against it)"),
     (0x12C78B, 0x0052D38B, "cmp esi, N"),
@@ -77,11 +72,8 @@ def main():
         return
 
     want_from, want_to = (STOCK, PATCHED) if a.apply else (PATCHED, STOCK)
-    # Every site must read one of the two values we know about. A site reading
-    # anything else means the offsets are wrong for this binary, and writing to
-    # it would corrupt an instruction rather than an immediate. Sites already at
-    # the target are left alone, so the tool can be re-run after new sites are
-    # added without reverting the ones it patched last time.
+    # A site reading neither known value means the offsets are wrong for this
+    # binary. Sites already at the target are left alone.
     unknown = [(off, va, w, v) for (off, va, w), v in zip(SITES, vals)
                if v not in (STOCK, PATCHED)]
     if unknown:
@@ -106,8 +98,8 @@ def main():
     status(read(EXE))
     if a.apply:
         print("\nThe engine still re-applies GSET.turnlength every boundary, so "
-              "set the galaxy's own turnlength to the rate you want , "
-              "server/dev_tools/set_turnlength.py , rather than driving it.")
+              "set the galaxy's own turnlength to the rate you want ("
+              "server/dev_tools/set_turnlength.py) rather than driving it.")
 
 
 if __name__ == "__main__":

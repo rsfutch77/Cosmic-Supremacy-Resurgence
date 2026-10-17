@@ -1,10 +1,9 @@
 """
-advance_turns.py , Advance the game N turns unattended
-======================================================
+advance_turns.py: Advance the game N turns unattended
+
 Shortens the turn length, watches the turn counter until it has advanced N
-times, then restores the original turn length. Unlike fast_turns.py this reads
-the turn counter, so it reports actual progress and detects a stalled pipeline
-instead of leaving you guessing.
+times, then restores the original turn length. Reports progress and detects a
+stalled turn pipeline.
 
     python advance_turns.py 50            # 50 turns, 10s each
     python advance_turns.py 50 --secs 5   # faster, if the machine keeps up
@@ -12,15 +11,14 @@ instead of leaving you guessing.
 
 Addresses (both .data, stable across launches):
     0x0080AA08  turn length in seconds; writing it collapses the current turn
-    0x008578E8  turn counter, located by capturing every address holding the
-                UI's turn number and keeping those that incremented together
-
+    0x008578E8  turn counter
 """
 import ctypes
 from ctypes import wintypes
 import struct
 import sys
 import time
+from client_proc import find_pid, NOT_THE_CLIENT
 
 PROCESS_VM_READ           = 0x0010
 PROCESS_VM_WRITE          = 0x0020
@@ -35,26 +33,7 @@ psapi    = ctypes.WinDLL("psapi", use_last_error=True)
 kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
 
 
-def find_pid(exe_substr="CosmicSupremacy"):
-    arr = (wintypes.DWORD * 4096)()
-    cb  = ctypes.c_ulong()
-    if not psapi.EnumProcesses(ctypes.byref(arr), ctypes.sizeof(arr), ctypes.byref(cb)):
-        raise OSError("EnumProcesses failed")
-    for i in range(cb.value // ctypes.sizeof(wintypes.DWORD)):
-        pid = arr[i]
-        if not pid:
-            continue
-        h = kernel32.OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, False, pid)
-        if not h:
-            continue
-        try:
-            buf = ctypes.create_unicode_buffer(260)
-            if psapi.GetModuleBaseNameW(h, None, buf, 260) and \
-               exe_substr.lower() in buf.value.lower():
-                return pid, buf.value
-        finally:
-            kernel32.CloseHandle(h)
-    return None, None
+
 
 
 def rd32(h, addr):
@@ -93,7 +72,7 @@ def main():
     original = rd32(h, TURNLENGTH_ADDR)
     if original == 0xFFFFFFFF:
         kernel32.CloseHandle(h)
-        sys.exit("turn length is uninitialised , load a galaxy first")
+        sys.exit("turn length is uninitialised, load a galaxy first")
 
     if restore_only:
         wr32(h, TURNLENGTH_ADDR, DEFAULT_LENGTH)
@@ -108,8 +87,7 @@ def main():
 
     target = start + want
     last, stalled_since = start, time.time()
-    # generous per-turn allowance: the engine resolves a turn in well under the
-    # turn length, but a slow machine or a modal prompt can hold it up
+    # A slow machine or a modal prompt can hold a turn past its length.
     stall_limit = max(secs * 6, 60)
     try:
         while True:
@@ -129,7 +107,7 @@ def main():
                 print(f"reached turn {now}")
                 break
             if time.time() - stalled_since > stall_limit:
-                print(f"STALLED at turn {now} for {stall_limit}s , the turn "
+                print(f"STALLED at turn {now} for {stall_limit}s, the turn "
                       f"pipeline is not firing unattended.")
                 print("  If the game is showing a dialog, dismiss it and re-run.")
                 break

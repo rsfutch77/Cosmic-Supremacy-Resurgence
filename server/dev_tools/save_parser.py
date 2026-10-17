@@ -1,7 +1,5 @@
 """
-save_parser.py , Cosmic Supremacy save blob decoder
-====================================================
-Decodes the binary save format used by CosmicSupremacy.exe.
+save_parser.py: Cosmic Supremacy save blob decoder
 
 Usage:
     python save_parser.py save.b64                 # summary
@@ -16,23 +14,19 @@ Wire format
 
 Section framing
 ---------------
-Every section , from the outermost SAVE down to the smallest leaf , carries the
+Every section (from the outermost SAVE down to the smallest leaf) carries the
 same 8-byte header:
 
     +0  char[4]  tag, e.g. 'ROUT'   (an MSVC multi-char constant, byte-swapped
-                                     on write, which is why it reads as ASCII)
-    +4  uint32   bits 0..25 = payload size in bytes, EXCLUDING this header
+                                     on write, so it reads as ASCII)
+    +4  uint32   bits 0..25 = payload size in bytes, excluding this header
                  bits 26..31 = section version
 
-`Archive::BeginSection(tag, version)` at 0x005e6260 writes the tag byte-swapped,
-then a dword whose low 26 bits are a 0x3ffffff placeholder and whose top 6 bits
-are the version.  `Archive::EndSection` at 0x005e6320 seeks back and patches the
-low 26 bits with `current_offset - section_start - 8`.
-
-Everything inside a section is a flat byte append: `Archive::WriteRaw` at
-0x005e5e10 is a plain memcpy into the growing buffer with no per-field framing.
-A payload is exactly the concatenation of the fields its writer emits.
-
+`Archive::BeginSection(tag, version)` at 0x005e6260 writes the tag and a
+placeholder size; `Archive::EndSection` at 0x005e6320 patches the low 26 bits
+with `current_offset - section_start - 8`. `Archive::WriteRaw` at 0x005e5e10
+appends with no per-field framing, so a payload is exactly the concatenation of
+the fields its writer emits.
 """
 
 import base64
@@ -42,8 +36,7 @@ import sys
 import zlib
 from collections import Counter
 
-# Tags seen in the wild.  Used to decide whether a payload is a container of
-# sub-sections; the framing itself does not depend on the list.
+# Known tags, used to decide whether a payload contains sub-sections.
 KNOWN_TAGS = {
     b'SAVE', b'GSET', b'GLOB', b'TMGX', b'RSMA', b'NWDB', b'GLXY', b'OWNR',
     b'DATA', b'OWPR', b'KNPL', b'EXSY', b'HQAS', b'CVTR', b'SERV', b'DSGN',
@@ -55,8 +48,6 @@ KNOWN_TAGS = {
 SIZE_MASK     = 0x03FFFFFF
 VERSION_SHIFT = 26
 
-
-# ── Wire codec ────────────────────────────────────────────────────────────────
 
 def decode_save(raw) -> bytes:
     """Decode a save payload from wire format to the decompressed blob."""
@@ -74,8 +65,6 @@ def encode_save(blob: bytes) -> bytes:
     """Encode a decompressed blob back to the wire format (base64 bytes)."""
     return base64.b64encode(struct.pack('<I', len(blob)) + zlib.compress(blob))
 
-
-# ── Section tree ──────────────────────────────────────────────────────────────
 
 class Section:
     __slots__ = ('tag', 'version', 'start', 'payload', 'size', 'children',
@@ -118,17 +107,14 @@ def read_header(blob: bytes, off: int):
     return tag, word >> VERSION_SHIFT, word & SIZE_MASK
 
 
-# A container's payload does not necessarily start with its first child: SAVE
-# opens with a uint32 object count, and other sections carry their own fields
-# ahead of any sub-sections.  Rather than hardcode every prologue, the walker
-# searches a short window for the offset where a contiguous run of sections
-# begins.  PROLOGUE_WINDOW bounds that search; anything skipped is recorded on
-# the parent as `prologue`/`epilogue` so it is visibly unparsed rather than lost.
-PROLOGUE_WINDOW = 256
+# A container's payload need not start with its first child: SAVE opens with a
+# uint32 object count, and other sections carry their own fields ahead of any
+# sub-sections (a developed `PLPR` runs hundreds of bytes before `PROD`). The
+# walker searches the whole payload for where a run of sections begins and
+# records skipped bytes on the parent as `prologue`/`epilogue`.
 
-# A candidate run has to tile most of the payload to be believed, which is what
-# keeps four bytes of float data that happen to spell a tag from being accepted.
-MIN_COVERAGE = 0.5
+GAP_WINDOW = 64       # bytes past one run's end to search for the next
+MIN_COVERAGE = 0.5    # fraction of a payload a run must tile, so float data that spells a tag is rejected
 
 
 def _scan_run(blob: bytes, off: int, end: int):
@@ -146,39 +132,90 @@ def _scan_run(blob: bytes, off: int, end: int):
     return out
 
 
-def _best_run(blob: bytes, start: int, end: int):
-    """
-    Find where the sub-section run inside blob[start:end] begins.
+def _tag_offsets(blob: bytes, start: int, end: int):
+    """Offsets in blob[start:end] that spell a known tag, in order.
 
-    Returns (run_start, sections) for the candidate covering the most bytes, or
-    (None, []) when nothing in the window yields a believable run.
+    These are the only candidate starts for a run.
+    """
+    hits = []
+    for tag in KNOWN_TAGS:
+        at = blob.find(tag, start, end)
+        while at >= 0:
+            hits.append(at)
+            at = blob.find(tag, at + 1, end)
+    hits.sort()
+    return hits
+
+
+def _chain(blob: bytes, first: int, end: int):
+    """
+    Runs of sections starting at `first`, following on through small gaps.
+
+    The first run begins exactly at `first`; each later one is searched for
+    within `GAP_WINDOW` bytes of where the previous ended.
+    """
+    runs = []
+    pos, anchored = first, True
+    while pos < end:
+        run = None
+        if anchored:
+            run = _scan_run(blob, pos, end)
+            anchored = False
+        else:
+            for off in range(pos, min(pos + GAP_WINDOW, end - 7)):
+                run = _scan_run(blob, off, end)
+                if run:
+                    break
+                run = None
+        if not run:
+            break
+        runs.append(run)
+        pos = run[-1].end
+    return runs
+
+
+def _all_runs(blob: bytes, start: int, end: int):
+    """
+    Every believable section in blob[start:end], in order, across all runs.
+
+    A payload may hold more than one run. `DYNO` writes an orbit id, a `SHCO`
+    section, three own fields, and, only when the ship has an order, a `ROUT`
+    section and a trailing word. Each candidate start is scored by everything it
+    can chain, judged over the whole span, and the earliest best-scoring wins.
     """
     span = end - start
     if span < 8:
-        return None, []
-    best, best_cov = (None, []), 0
-    limit = min(start + PROLOGUE_WINDOW, end - 7)
-    for off in range(start, limit):
-        run = _scan_run(blob, off, end)
-        if not run:
+        return []
+    best, best_cov = [], 0
+    for off in _tag_offsets(blob, start, end - 7):
+        runs = _chain(blob, off, end)
+        if not runs:
             continue
-        cov = sum(s.size + 8 for s in run)
+        cov = sum(s.size + 8 for run in runs for s in run)
         if cov > best_cov:
-            best, best_cov = (off, run), cov
-    if best_cov < span * MIN_COVERAGE:
-        return None, []
-    return best
+            best, best_cov = runs, cov
+    if not best:
+        return []
+    flat = [s for run in best for s in run]
+    if best_cov >= span * MIN_COVERAGE:
+        return flat
+    # A payload that is mostly its own fields with sections at the tail (`PLPR`
+    # then `PROD` and `ENLI`) misses the coverage bar. A chain of two or more
+    # sections ending exactly on the payload boundary is accepted instead.
+    if len(flat) >= 2 and flat[-1].end == end:
+        return flat
+    return []
 
 
 def parse_sections(blob: bytes, start: int, end: int, depth: int = 0) -> list:
     """
     Parse the sections occupying blob[start:end], recursing into each payload.
 
-    A payload with no believable run of sections in it is left as a leaf, so a
-    partly-understood region degrades to unparsed bytes rather than to garbage.
+    A payload with no believable run of sections is left as a leaf. Children are
+    in order but not necessarily contiguous; `own_ranges` gives the gaps.
     """
-    run_start, run = _best_run(blob, start, end)
-    if run_start is None:
+    run = _all_runs(blob, start, end)
+    if not run:
         return []
     for sec in run:
         if depth < 12:
@@ -193,6 +230,28 @@ def parse_sections(blob: bytes, start: int, end: int, depth: int = 0) -> list:
 def parse_blob(blob: bytes) -> list:
     """Parse a whole decompressed blob into a list of top-level sections."""
     return parse_sections(blob, 0, len(blob))
+
+
+def own_ranges(blob: bytes, sec: 'Section'):
+    """
+    [(start, end)] of a section's own bytes, the parts no child covers.
+
+    Includes gaps between children; for a `DYNO` those hold the has-orders byte
+    and the admiral id.
+    """
+    out, pos = [], sec.payload
+    for c in sec.children:
+        if c.start > pos:
+            out.append((pos, c.start))
+        pos = c.end
+    if pos < sec.end:
+        out.append((pos, sec.end))
+    return out
+
+
+def own_bytes(blob: bytes, sec: 'Section') -> bytes:
+    """A section's own bytes, with every child cut out and the gaps kept."""
+    return b''.join(bytes(blob[a:b]) for a, b in own_ranges(blob, sec))
 
 
 def flatten(sections):
@@ -238,9 +297,8 @@ def replace_payload(blob: bytes, tree, target: 'Section',
     Return a new blob with target's payload replaced, and every enclosing
     section's size field corrected.
 
-    Sizes are stored, so a naive splice produces a blob the client rejects.
-    Every ancestor's size grows by the same delta; each ancestor starts before
-    the splice point, so their header offsets are unaffected by it.
+    Every ancestor's size grows by the same delta. Ancestors start before the
+    splice point, so their header offsets do not move.
     """
     path = find_path(tree, target)
     if path is None:
@@ -266,21 +324,19 @@ def build_section(tag: bytes, version: int, payload: bytes) -> bytes:
     return tag + struct.pack('<I', (version << VERSION_SHIFT) | len(payload)) + payload
 
 
-# ── ROUT , the ship order / route record ──────────────────────────────────────
+# ROUT: the ship order / route record.
 #
 # Writer  Route::Write       0x004e5310, called from the ship writer at 0x0056ecc0
 # Reader  Route::ReadFields  0x004e6d40, via the factory at 0x004e6e90
 # Attach  Ship::SetOrder     0x004da450, stores the order at ship_base + 0x38
 #
-# The order object is a plain `operator new(0x60)` allocation , 96 bytes, with no
-# EJBO tag and no object id of its own , so these are raw offsets from the object
-# base, not the tag-relative offsets the annotations use for EJBO classes.
+# The order object is a plain `operator new(0x60)` allocation with no EJBO tag or
+# object id, so the offsets below are raw offsets from the object base.
 #
 # ROUT is optional: the ship writer emits it only when the order pointer is
-# non-null (`test ebx, ebx / je` at 0x0056ecb9), and the reader only builds one
-# when the next tag actually is ROUT.
+# non-null (0x0056ecb9), and the reader builds one only when the next tag is ROUT.
 #
-# On-wire order is the same as the writer's emission order:
+# On-wire order:
 #
 #   u8   order_kind        obj+0    non-zero or the order is freed on attach
 #   u8   flag_1            obj+1    version >= 1 only
@@ -335,8 +391,7 @@ def parse_rout(blob: bytes, sec: 'Section') -> dict:
 def build_rout(r: dict, version: int = 1) -> bytes:
     """
     Encode a ROUT section, header included, from a dict shaped like parse_rout's
-    output.  This is the injection path: what the server writes so that a freshly
-    loaded client comes up with the order already attached to the ship.
+    output.
     """
     body = bytearray()
     body.append(r['order_kind'] & 0xFF)
@@ -364,8 +419,6 @@ def make_leg(origin, dest):
     length = ((dx - ox) ** 2 + (dy - oy) ** 2 + (dz - oz) ** 2) ** 0.5
     return dict(zip(LEG_FIELDS, (ox, oy, oz, dx, dy, dz, length)))
 
-
-# ── GSET , galaxy settings key/value block ────────────────────────────────────
 
 def parse_gset(blob: bytes, sec: 'Section') -> dict:
     """Parse a GSET payload. Returns {name: {type, value, custom}}."""
@@ -406,8 +459,6 @@ def parse_gset(blob: bytes, sec: 'Section') -> dict:
 
     return settings
 
-
-# ── Reporting ─────────────────────────────────────────────────────────────────
 
 def summarize(blob: bytes):
     top    = parse_blob(blob)

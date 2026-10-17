@@ -287,9 +287,31 @@ def rewrite_links(text, page_rel, staged):
 NOTICE_MARK = "property of their original creator"
 _ANY_ROBOTS_RE = re.compile(r"\s*<meta[^>]+name=[\"']robots[\"'][^>]*>", re.I)
 
+# An archived form (registration, password reset) posts to a server that no
+# longer exists, and some ask for a password. Every field is disabled through a
+# disabled fieldset, so nothing can be typed or sent, and a line says why.
+FORM_MARK = "data-archived-form"
+FORM_OPEN_RE = re.compile(r"(<form\b[^>]*>)", re.I)
+FORM_CLOSE_RE = re.compile(r"(</form\s*>)", re.I)
+FORM_NOTE = ("<p class='archived-form-note'><b>This form is from the original "
+             "site and no longer works.</b> Its fields are disabled and nothing "
+             "is sent anywhere.</p>")
+
+
+def disable_forms(html):
+    """Make every form inert. Idempotent through FORM_MARK."""
+    if FORM_MARK in html or not FORM_OPEN_RE.search(html):
+        return html
+    html = FORM_OPEN_RE.sub(
+        lambda m: (FORM_NOTE + m.group(1)[:-1] + " " + FORM_MARK
+                   + " onsubmit='return false'><fieldset disabled "
+                   "style='border:0;margin:0;padding:0'>"), html)
+    return FORM_CLOSE_RE.sub(lambda m: "</fieldset>" + m.group(1), html)
+
 
 def inject(html):
-    """Strip stale robots tags and add the attribution before </body>.
+    """Strip stale robots tags, make archived forms inert, and add the attribution
+    before </body>.
 
     Must be idempotent. Overrides are made by copying a file out of public/,
     which already carries the notice, and re-running the build would otherwise
@@ -300,6 +322,7 @@ def inject(html):
     is governed by firebase.json and robots.txt in one place.
     """
     html = _ANY_ROBOTS_RE.sub("", html)
+    html = disable_forms(html)
 
     if NOTICE_MARK not in html:
         m = re.search(r"</body>", html, re.I)

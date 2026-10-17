@@ -1,6 +1,6 @@
 {
   "product": "Cosmic Supremacy: Resurgence",
-  "version": "0.1.1",
+  "version": "0.2.0",
   "server": {
     "host": "127.0.0.1",
     "port": 8888
@@ -48,15 +48,18 @@
       "id": "multiplayer",
       "title": "Multiplayer",
       "short": "Multiplayer",
-      "blurb": "Persistent galaxies against other players, the way the original was played.",
-      "enabled": false,
-      "show": true
+      "blurb": "Battle or ally with other players in the main game mode.",
+      "enabled": true,
+      "show": true,
+      "needs_server": true,
+      "controls": true,
+      "session": "multiplayer"
     },
     {
       "id": "sandbox",
       "title": "Sandbox",
       "short": "Sandbox",
-      "blurb": "Development galaxy , 16 seats, used by the AI harness. Not part of this release.",
+      "blurb": "Development galaxy: 16 seats, used by the AI harness. Not part of this release.",
       "exe": "CosmicSupremacy_Resurgence.exe",
       "galaxy": "SandboxGalaxy_local.csgalaxy",
       "needs_server": true,

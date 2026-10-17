@@ -1,6 +1,5 @@
 """
-research.py , the technology table, and what a player is allowed to select
-==========================================================================
+research.py: the technology table, and what a player is allowed to select.
 """
 
 # id: (name, costFactor, prerequisites (satisfy ANY), excluded-by ids)
@@ -86,10 +85,7 @@ TECHS = {
 
 STUBS = (73, 74, 75, 76)
 
-# ── What each research actually GRANTS ────────────────────────────────────────
-# Effect kinds, from the 13-way jump table at 0x0054ACBC. Each case writes a
-# distinctive vftable constant, which is what pins the type. Kinds 7 and 8 have
-# no case and fall through to the default.
+# Grant effect kinds, from the jump table at 0x0054ACBC. Kinds 7 and 8 have no case.
 FACILITY, CHASSIS, MODULE, WEAPON, ENGINE, SHIELD, SCANNER = 0, 1, 2, 3, 4, 5, 6
 SCAN, PLANDEF, TRAIT, HYPENERGY = 9, 10, 11, 12
 
@@ -100,12 +96,11 @@ KIND_NAME = {
     TRAIT: "Trait", HYPENERGY: "HyperspaceEnergy",
 }
 
-# The id spaces these land in are the ones already annotated:
+# Where each kind's ids land:
 #   Facility -> Owner:172 / Planet:204 / Planet:284      Chassis -> ShipDesign:128
 #   Module   -> ShipDesign:224                           Weapon  -> ShipDesign:200
 #   Engine   -> ShipDesign:176                           Scanner -> ShipDesign:152
 #   Scan     -> Owner:200                                Trait   -> Owner:932+4*id
-#
 # tid: ((kind, object id, value), ...)   value is only meaningful for TRAIT.
 GRANTS = {
      0: ((6, 0, 0), (4, 0, 0)),
@@ -186,17 +181,18 @@ GRANTS = {
     79: ((9, 7, 0),),
 }
 
-# The only two trait slots pinned to a meaning so far. Both pin themselves by
-# agreeing with the doctrine that grants them, which is decent evidence:
-# GetSpeed (0x005480A0) applies traits 6 and 18, and Doctrine: Mobility grants
-# trait 18 +20; the PlanetProperties space getter (0x004F1140) applies trait 38,
-# and Doctrine: Habitat grants trait 38 +20.
+# Trait 18 is applied by GetSpeed (0x005480A0), trait 38 by the
+# PlanetProperties space getter (0x004F1140).
 TRAIT_NAME = {18: "ship speed %", 38: "planet space %"}
 
-# Facility ids we have confirmed by observation. The rest of the space (up to
-# 20) is granted by the table but not yet identified in the UI.
-FACILITY_NAME = {0: "farm", 2: "shipyard", 4: "university", 6: "military camp",
-                 8: "defence agency", 9: "light turret"}
+# Facility names, the full id space; same map as facilities.NAMES.
+FACILITY_NAME = {0: "farm", 1: "factory", 2: "shipyard", 3: "automated factory",
+    4: "university", 5: "science lab", 6: "military camp",
+    7: "military academy", 8: "defence agency", 9: "light turret",
+    10: "heavy turret", 11: "shield generator", 12: "propaganda office",
+    13: "mine", 14: "robo mine", 15: "bunker", 16: "banking center",
+    17: "planetary fortress", 18: "hyperspace transmitter",
+    19: "hyperspace receiver", 20: "command center"}
 
 # A doctrine choice is permanent and locks out its whole tier. Off by default.
 ALLOW_DOCTRINES = False
@@ -212,19 +208,13 @@ def is_doctrine(tid):
 
 
 def is_doctrine_record(tid):
-    """The engine's own test: a record with exclusions is a doctrine.
-
-    0x0054B9E0 branches on `cmp dword [rec+0xF8], 0` -- the exclusion count --
-    and runs two different predicates. That, not the name, is the real class
-    marker, so this uses the same signal rather than matching on "Doctrine:".
-    """
+    """The engine's own test (0x0054B9E0): a record with exclusions is a doctrine."""
     rec = TECHS.get(tid)
     return bool(rec) and bool(rec[3])
 
 
 def prereqs_met(tid, done):
-    """AND for technologies, OR for doctrines.
-    """
+    """AND for technologies, OR for doctrines."""
     rec = TECHS.get(tid)
     if rec is None:
         return False
@@ -277,22 +267,12 @@ def describe_grants(tid):
 
 
 def unlocked(done, kind):
-    """The object ids of a given kind this civ has actually unlocked.
-
-    A part can only be fitted to a design once some completed research grants
-    it, so this is what decides whether an armed design is even legal. A fresh
-    civ holds chassis 0, scanner 0, engine 0 and module 0 from the two granted
-    starting techs and NO weapon at all , the first weapon comes with Cold
-    Fusion (id 3).
-    """
+    """The object ids of a given kind this civ has unlocked."""
     return {oid for t in done for k, oid, _v in grants(t) if k == kind}
 
 
-# Which ShipDesign parts vector answers to which research kind. Shields are
-# absent deliberately: the design object exposes a shield STAT (ShipDesign:72)
-# but gamestate reads no fitted-shield vector, so there is nothing to check
-# against. No design this AI builds fits one, and inventing a check for a list
-# we do not read would be a gate that silently passes everything.
+# ShipDesign parts vector per research kind. Shields are absent: gamestate
+# reads no fitted-shield vector.
 DESIGN_PART_KINDS = (
     ("chassis",  CHASSIS),
     ("scanners", SCANNER),
@@ -303,11 +283,7 @@ DESIGN_PART_KINDS = (
 
 
 def illegal_parts(design, done):
-    """The fitted parts this civ has not researched , empty means buildable.
-
-    Returns a list of (part list name, object id) so a caller can say WHICH part
-    is missing rather than only that something is.
-    """
+    """[(part list name, object id)] not yet researched; empty means buildable."""
     missing = []
     for attr, kind in DESIGN_PART_KINDS:
         have = unlocked(done, kind)
@@ -323,7 +299,7 @@ def design_legal(design, done):
 
 
 def explain_illegal(design, done):
-    """'weapon 10' , the missing parts, for a log line that names the blocker."""
+    """'weapon 10': the missing parts, for a log line that names the blocker."""
     kinds = dict(DESIGN_PART_KINDS)
     return ", ".join(
         f"{KIND_NAME.get(kinds[attr], attr).lower()} {oid}"
@@ -341,20 +317,14 @@ def value(tid, boost=None):
 
 
 def unlocked_by(kind, obj_id):
-    """Which research grants a given object , 'how do I get a better engine'."""
+    """Which research grants a given object: 'how do I get a better engine'."""
     return [t for t in sorted(TECHS)
             if any(k == kind and o == obj_id for k, o, _v in grants(t))]
 
 
 def available(done, allow_doctrines=ALLOW_DOCTRINES, by_value=True,
               boost=None):
-    """Every legal pick, best first.
-
-    Ordered by what the tech GRANTS, then by price as a tiebreak, then by id so
-    the choice is deterministic. Price is the live costFactor, but the COST
-    MODEL is unsolved (see the header), which is why price is only a
-    tiebreak rather than driving the choice as it used to.
-    """
+    """Every legal pick, best first: by grant value, then costFactor, then id."""
     ok = [t for t in sorted(TECHS) if selectable(t, done, allow_doctrines)]
     if not by_value:
         return sorted(ok, key=lambda t: (TECHS[t][1], t))
@@ -362,7 +332,7 @@ def available(done, allow_doctrines=ALLOW_DOCTRINES, by_value=True,
 
 
 def explain(tid, done):
-    """Why a topic is not selectable , for logging a correction."""
+    """Why a topic is not selectable: for logging a correction."""
     if tid in STUBS:
         return f"id {tid} is an unused stub"
     if tid not in TECHS:
@@ -381,20 +351,13 @@ def explain(tid, done):
         return f"{name(tid)} needs ALL of {[name(p) for p in req]}; missing {missing}"
     return f"{name(tid)} is selectable"
 
-# GetScale() 0x0054A6F0 on this game. It is a per-game config value
-# (0x004D4320(0x15)->[+0x28] on a modern client), so a different galaxy may use a
-# different number -- re-read it rather than assuming 800 holds everywhere.
+# GetScale() 0x0054A6F0, a per-game config value (0x004D4320(0x15)->[+0x28]);
+# other galaxies may differ.
 COST_SCALE = 800
 
 
 def cost(tid, completed_count):
-    """What this research costs RIGHT NOW.
-
-    cost = round(SCALE * costFactor) * completed_count. The multiplier is the
-    number of researches already completed, so every tech gets more expensive as
-    the game goes on and the price depends on WHEN it is bought, not just what
-    it is.
-    """
+    """What this research costs now: round(COST_SCALE * costFactor) * completed_count."""
     rec = TECHS.get(tid)
     if rec is None:
         return None

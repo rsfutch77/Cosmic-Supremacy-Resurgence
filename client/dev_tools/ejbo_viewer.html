@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>EJBO Viewer , Cosmic Supremacy</title>
+<title>EJBO Viewer: Cosmic Supremacy</title>
 <style>
   * { box-sizing: border-box; margin: 0; padding: 0; }
   body { font-family: 'Consolas', 'Courier New', monospace; font-size: 13px;
@@ -156,12 +156,8 @@ let activeType = null;
 let displayFmt = 'hex';
 let refreshTimer = null;
 
-// ── Tab model ──
-// Tabs are not simply the RTTI class groups: Planet is split by ownership.
-// Roughly 500 of ~525 planets are uncolonised, and rebuilding that whole table
-// every refresh is what makes the tab crawl , the owned handful are the ones
-// being annotated, so they get a tab that stays fast. Annotations stay keyed by
-// the underlying class name, so both halves share one set of Planet:offset keys.
+// Planet is split into owned and unowned tabs. Annotations stay keyed by the
+// class name, so both tabs share one set of Planet:offset keys.
 let tabGroups = {};   // tab key -> { cls, objs }
 
 function buildTabGroups() {
@@ -176,7 +172,7 @@ function buildTabGroups() {
   }
 }
 
-// Which tab holds a given object , a class name alone no longer identifies one
+// Which tab holds a given object
 function tabKeyFor(cls, addr) {
   for (const [key, g] of Object.entries(tabGroups)) {
     if (g.cls === cls && g.objs.some(o => o.addr === addr)) return key;
@@ -197,10 +193,9 @@ function activeCls() {
 
 // Sticky change tracking: keys like "addr:offset" stay highlighted until clicked
 let stickyChanged = new Set();
-// Keys the user has dismissed , prevents re-adding until the server stops reporting changed
+// Keys the user has dismissed: prevents re-adding until the server stops reporting changed
 let dismissedKeys = new Set();
 
-// ── Format toggle ──
 document.querySelectorAll('input[name="fmt"]').forEach(r => {
   r.addEventListener('change', () => { displayFmt = r.value; render(); });
 });
@@ -229,7 +224,6 @@ function cellTitle(f) {
        + (f.ptr ? `\n${f.ptr}` : '');
 }
 
-// ── Fetch data ──
 async function fetchData() {
   try {
     const resp = await fetch('/api/data');
@@ -244,7 +238,7 @@ async function fetchData() {
               stickyChanged.add(key);
             }
           } else {
-            // Change event ended , clear dismissed state so future changes highlight again
+            // Change event ended: clear dismissed state so future changes highlight again
             dismissedKeys.delete(key);
           }
         }
@@ -255,7 +249,7 @@ async function fetchData() {
     updateTabs();
     render();
   } catch(e) {
-    document.getElementById('info').textContent = 'Connection lost , retrying...';
+    document.getElementById('info').textContent = 'Connection lost, retrying...';
   }
 }
 
@@ -268,7 +262,7 @@ async function rescan() {
 function updateInfo() {
   const el = document.getElementById('info');
   const t  = new Date(data.last_update * 1000).toLocaleTimeString();
-  el.textContent = `PID ${data.pid} (${data.proc}) , ${data.scan_count} objects , ${t}`;
+  el.textContent = `PID ${data.pid} (${data.proc}), ${data.scan_count} objects, ${t}`;
 }
 
 function updateTabs() {
@@ -307,7 +301,7 @@ function updateTabs() {
 
 function setTab(t) { activeType = t; updateTabs(); render(); }
 
-// ── Detect template objects (many 0xFFFFFFFF fields in the stat area) ──
+// Template objects have many 0xFFFFFFFF fields in the stat area
 function isTemplate(obj) {
   let ffCount = 0;
   for (const f of obj.fields) {
@@ -316,7 +310,7 @@ function isTemplate(obj) {
   return ffCount >= 4;
 }
 
-// ── Update data cells in-place (preserves focused input) ──
+// Update data cells in place, preserving a focused input
 function updateCellsInPlace() {
   if (!data || !activeType) return;
   const objs = activeObjs();
@@ -340,7 +334,7 @@ function updateCellsInPlace() {
   });
 }
 
-// ── Poke (write to game memory) ──
+// Poke: write a value into game memory
 let pokeOverlay = null; // currently active poke input element
 
 function startPoke(cell, ejboAddr, offset) {
@@ -393,7 +387,6 @@ async function submitPoke(cell, value, ejboAddr, offset, old) {
   }
 }
 
-// ── Render comparison table ──
 function render() {
   if (!data) return;
   // If searching, show search results instead of the tab table
@@ -441,7 +434,7 @@ function render() {
     const annKey = annType + ':' + offset;
     const annVal = data.annotations[annKey] || '';
     html += `<tr onclick="dismissRow(this, ${offset})" style="cursor:pointer">`;
-    // Offset column , highlight EJBO tag row
+    // Offset column: highlight EJBO tag row
     const offLabel = offset >= 0 ? `+${offset}` : `${offset}`;
     const isEjbo = (offset === 0);
     html += `<td class="offset-col" ${isEjbo ? 'style="color:#6fc3ff;font-weight:bold"' : ''}>${offLabel}</td>`;
@@ -464,9 +457,9 @@ function render() {
   document.getElementById('table-area').innerHTML = html;
   const ext = data.extents && data.extents[annType];
   const extNote = ext !== undefined
-    ? ` , object extent ${ext} bytes after tag (measured from stride)` : '';
+    ? `, object extent ${ext} bytes after tag (measured from stride)` : '';
   document.getElementById('status').textContent =
-    `${objs.length} objects , ${nFields} fields each${extNote} , double-click a value to poke`;
+    `${objs.length} objects, ${nFields} fields each${extNote}, double-click a value to poke`;
 }
 
 function annotate(type, offset, text) {
@@ -496,7 +489,6 @@ function dismissRow(trEl, offset) {
   }
 }
 
-// ── Changes tab ──
 function renderChanges() {
   const area = document.getElementById('table-area');
   if (stickyChanged.size === 0) {
@@ -585,7 +577,6 @@ function jumpToChanged(typeName, addr, offset) {
   setTab(tabKeyFor(typeName, addr));
 }
 
-// ── Search ──
 let searchQuery = '';
 let searchTimeout = null;
 
@@ -663,7 +654,6 @@ function renderSearch() {
   document.getElementById('table-area').innerHTML = html;
 }
 
-// ── Auto-refresh ──
 const REFRESH_MS = %%REFRESH_MS%%;
 fetchData();
 refreshTimer = setInterval(fetchData, REFRESH_MS);

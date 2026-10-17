@@ -1,6 +1,6 @@
 """
-game_cycle.py , save, close, edit the blob, relaunch, without a human
-=====================================================================
+game_cycle.py: save, close, edit the blob, relaunch, without a human
+
     # add two designs to the running game and come back up on the result
     python game_cycle.py --design "f1:chassis=0,scanner=0,engine=0,weapon=0" \
                          --design "b1:chassis=0,scanner=0,engine=0,weapon=10"
@@ -8,14 +8,9 @@ game_cycle.py , save, close, edit the blob, relaunch, without a human
     python game_cycle.py --save-only          # just capture a blob
     python game_cycle.py --relaunch <file>    # bring a .dat back up
 
-Ship designs cannot be created in memory: the object gets built and fitted, but
-nothing registers it with the civ and nothing computes its stat block, so it
-never reaches the UI. The blob route works because the engine's own deserialiser
-does the registration on load , confirmed live, an injected design appears in the
-design list and can be selected for building, the client has to save, exit, and be
-relaunched on the edited file. This automates that so an experiment does not need
-a human at the keyboard between each step.
-
+Ship designs cannot be created in memory: nothing registers the object with the
+civ or computes its stat block. The engine's deserialiser does both on load, so
+the client saves, exits, and is relaunched on the edited blob.
 """
 import argparse
 import os
@@ -33,35 +28,54 @@ PARSER = os.path.join(REPO, "server", "dev_tools", "save_parser.py")
 
 sys.path.insert(0, os.path.join(HERE, "ai_player"))
 
+# Keeps a console child of a windowed parent from opening its own window.
+# Redirected output still arrives.
+CREATE_NO_WINDOW = 0x08000000
+
+
+def no_window() -> int:
+    """`creationflags` that hide a console child, and zero off Windows."""
+    return CREATE_NO_WINDOW if os.name == "nt" else 0
+
 
 def log(msg):
     print(msg, flush=True)
 
 
-# ── process control ───────────────────────────────────────────────────────────
 def client_pids():
-    # The 'CosmicSupremacy*' wildcard also matches CosmicSupremacyLauncher.exe,
-    # the player-facing launcher added in release/. close_client() force-kills
-    # everything this returns, so without the exclusion a harness run with the
-    # launcher open would take the launcher , and the stub server living inside
-    # it , down with the client, mid-game.
+    # The wildcard also matches CosmicSupremacyLauncher.exe, which hosts the stub
+    # server and must never be returned: close_client() kills every pid here.
     out = subprocess.run(
         ["powershell", "-NoProfile", "-Command",
          "Get-Process -Name 'CosmicSupremacy*' -ErrorAction SilentlyContinue "
          "| Where-Object { $_.ProcessName -ne 'CosmicSupremacyLauncher' } "
          "| Select-Object -ExpandProperty Id"],
-        capture_output=True, text=True).stdout
+        capture_output=True, text=True, creationflags=no_window()).stdout
     return [int(x) for x in out.split() if x.strip().isdigit()]
 
 
-def close_client(timeout=20):
+def close_client(timeout=20, force=False):
+    """Stop the machine's client. Refuses to kill one somebody else holds.
+
+    `force` skips the check, for a caller that knows the holder is gone in a way
+    `_pid_alive` cannot see.
+    """
+    held = lock_holder()
+    if (held and not force and held[0] != os.getpid()
+            and _pid_alive(held[0]) and client_pids()):
+        raise SystemExit(
+            f"the client is held by pid {held[0]} ({held[1]}). Closing it now "
+            f"would destroy whatever that is doing, which if it is a player's "
+            f"turn leaves no trace. Wait for it, or stop that process.")
+    release_client_lock()
     pids = client_pids()
     if not pids:
         log("  client is not running")
         return True
     for pid in pids:
         subprocess.run(["powershell", "-NoProfile", "-Command",
-                        f"Stop-Process -Id {pid} -Force"], capture_output=True)
+                        f"Stop-Process -Id {pid} -Force"],
+                       capture_output=True, creationflags=no_window())
     deadline = time.time() + timeout
     while time.time() < deadline:
         if not client_pids():
@@ -72,31 +86,178 @@ def close_client(timeout=20):
     return False
 
 
-def launch(dat, timeout=90):
+import tempfile
+
+# Advisory lock on the machine's one game process: a file holding
+# "<pid> <purpose>", taken by launch() and checked by close_client(). A lock
+# whose pid is no longer alive is stale; a legitimate hold can last a whole turn.
+CLIENT_LOCK = os.path.join(tempfile.gettempdir(), "cosmic_client.lock")
+
+TESTBED_EXE = os.path.join(CLIENT_DIR, "CosmicSupremacy_TestBed.exe")
+PLAYER_EXE = os.path.join(CLIENT_DIR, "CosmicSupremacy_Player.exe")
+
+BUILDS = {"resurgence": EXE, "testbed": TESTBED_EXE, "player": PLAYER_EXE}
+
+
+def _pid_alive(pid):
+    try:
+        out = subprocess.run(["tasklist", "/FI", f"PID eq {int(pid)}", "/NH"],
+                             capture_output=True, text=True, timeout=15,
+                             creationflags=no_window())
+        return str(pid) in (out.stdout or "")
+    except Exception:
+        return True          # cannot tell, so assume the holder is alive
+
+
+def lock_holder():
+    """(pid, purpose) currently holding the client, or None."""
+    try:
+        raw = open(CLIENT_LOCK, encoding="utf-8").read().strip()
+        pid, _, purpose = raw.partition(" ")
+        return int(pid), purpose
+    except (OSError, ValueError):
+        return None
+
+
+def take_client_lock(purpose, wait=0.0, poll=2.0):
+    """Claim the machine's one game process. Returns True when held.
+
+    `wait` is how long to wait for a current holder to finish; zero refuses at
+    once.
+    """
+    deadline = time.time() + wait
+    while True:
+        held = lock_holder()
+        if held is None or not _pid_alive(held[0]):
+            if held is not None:
+                log(f"  clearing a stale client lock from pid {held[0]} "
+                    f"({held[1]})")
+            try:
+                fd = os.open(CLIENT_LOCK, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            except FileExistsError:
+                try:
+                    os.remove(CLIENT_LOCK)
+                except OSError:
+                    pass
+                continue
+            with os.fdopen(fd, "w") as f:
+                f.write(f"{os.getpid()} {purpose}")
+            return True
+        if held[0] == os.getpid():
+            return True                      # already ours, reentrant
+        if time.time() >= deadline:
+            raise SystemExit(
+                f"the game client is held by pid {held[0]} ({held[1]}). "
+                f"Starting one now would close theirs, which if it is a "
+                f"player's turn destroys it. Wait, or stop that process.")
+        time.sleep(poll)
+
+
+def release_client_lock():
+    held = lock_holder()
+    if held and held[0] == os.getpid():
+        try:
+            os.remove(CLIENT_LOCK)
+        except OSError:
+            pass
+
+
+def resolve_exe(which=None):
+    """Pick a client build.
+
+    Resurgence and TestBed differ by 22 bytes at six sites, the turn pipeline
+    bypasses that let a client advance a turn with no server. Two of them also
+    NOP the guards on the homeworld setup prompts.
+
+        resurgence   ticks without a server, offers the setup prompts always
+        testbed      waits for a server tick, gates the prompts as shipped
+        player       testbed, plus one byte that silences the coat-of-arms
+                     prompt; built by patch_hide_setup_prompts.py --build
+                     and gitignored
+
+    A player's client must never compute a turn, so it uses player or testbed.
+    The referee uses resurgence.
+    """
+    if which is None:
+        which = "resurgence"
+    if which == "player" and not os.path.exists(PLAYER_EXE):
+        log("  no CosmicSupremacy_Player.exe; falling back to testbed. Run "
+            "patch_hide_setup_prompts.py --build to silence the last prompt.")
+        return TESTBED_EXE
+    if which in BUILDS:
+        return BUILDS[which]
+    if os.path.exists(which):
+        return os.path.abspath(which)
+    raise SystemExit(f"unknown client build {which!r}; want one of "
+                     f"{sorted(BUILDS)}, or a path to an exe")
+
+
+def restart(dat, purpose, wait_for_lock=0.0, timeout=180, exe=None,
+            min_suns=11):
+    """Take the client, close whatever is on it, and launch on `dat`.
+
+    The lock is taken before closing, so a caller that cannot have the client is
+    refused before it kills anybody's session.
+    """
+    take_client_lock(purpose, wait=wait_for_lock)
+    try:
+        close_client()
+        return launch(dat, timeout=timeout, exe=exe, purpose=purpose,
+                      wait_for_lock=wait_for_lock, min_suns=min_suns)
+    except BaseException:
+        release_client_lock()
+        raise
+
+
+def launch(dat, timeout=180, exe=None, purpose=None, wait_for_lock=0.0,
+           min_suns=11):
     """Start the client on a .dat and wait until its state is readable.
 
-    Waiting on the STATE rather than on a timer is the point: a load that takes
-    40 seconds and a load that crashed look identical for the first 39.
+    Takes the machine's client lock first. `purpose` is what another tool is
+    told is holding it, so make it something a person can act on.
+    `wait_for_lock` of zero refuses immediately when somebody else holds it.
+    The timeout is generous: giving up on a slow load fails a turn.
     """
     if client_pids():
-        raise SystemExit("a client is already running; close it first , "
+        raise SystemExit("a client is already running; close it first; "
                          "launching a second silently kills the first")
     dat = os.path.abspath(dat)
     if not os.path.exists(dat):
         raise SystemExit(f"no such file: {dat}")
-    log(f"  launching on {dat}")
-    subprocess.Popen([EXE, dat], cwd=CLIENT_DIR,
+    take_client_lock(purpose or f"launch {os.path.basename(dat)}",
+                     wait=wait_for_lock)
+    exe_path = resolve_exe(exe)
+    if not os.path.exists(exe_path):
+        release_client_lock()
+        raise SystemExit(f"no such client: {exe_path}")
+    log(f"  launching {os.path.basename(exe_path)} on {dat}")
+    subprocess.Popen([exe_path, dat], cwd=CLIENT_DIR,
                      creationflags=getattr(subprocess, "DETACHED_PROCESS", 0))
     import gamestate as gs
     deadline = time.time() + timeout
+    seen_alive = False
     while time.time() < deadline:
         if not client_pids():
+            # A client that started and exited has refused the galaxy; it writes
+            # a minidump with no exception stream.
+            if seen_alive:
+                release_client_lock()
+                raise SystemExit(
+                    "the client started and exited without opening the "
+                    "galaxy. That is the engine refusing the blob, not a slow "
+                    "load; read the newest .dmp beside the EXE with "
+                    "dump_threads.py")
             time.sleep(0.5)
             continue
+        seen_alive = True
         try:
             snap = gs.Snapshot()
-            civ = gs.resolve_civ(snap, None)
-            if civ is not None and snap.owned_planets(civ) and len(snap.suns) > 50:
+            # quiet: the read fails a few times while the player slot populates.
+            civ = gs.resolve_civ(snap, None, quiet=True)
+            # `min_suns` guards against reading a half-loaded galaxy, whose suns
+            # arrive progressively. A caller serving a small galaxy lowers it.
+            if (civ is not None and snap.owned_planets(civ)
+                    and len(snap.suns) >= min_suns):
                 log(f"  up: turn {snap.turn}, {civ.civ_name!r}, "
                     f"{len(snap.owned_planets(civ))} planet(s), "
                     f"{len(snap.designs)} design(s)")
@@ -107,19 +268,77 @@ def launch(dat, timeout=90):
     raise SystemExit(f"client did not become readable within {timeout}s")
 
 
-# ── the pieces ────────────────────────────────────────────────────────────────
+def import_without_bytecode(name):
+    """Import a module without writing its compiled bytecode to __pycache__.
+
+    Windows Defender quarantines trigger_save's .pyc as Exploit:Python/Leivion.C
+    and leaves the .py alone. An existing .pyc is still read.
+    """
+    import importlib
+    previous = sys.dont_write_bytecode
+    sys.dont_write_bytecode = True
+    try:
+        return importlib.import_module(name)
+    finally:
+        sys.dont_write_bytecode = previous
+
+
+def save_via_message() -> bool:
+    """Whether the save path posts a window message instead of injecting.
+
+    Set by CS_SAVE_VIA_MESSAGE. The message path saves only on a client carrying
+    a resident handler that calls SaveGame on the posted message.
+    """
+    return os.environ.get("CS_SAVE_VIA_MESSAGE", "").strip().lower() in (
+        "1", "true", "yes", "on")
+
+
+def trigger_save(name, gameid=0, timeout=30):
+    """Make the running client save. Returns (exit code, the tool's output).
+
+    The default calls SaveGame in a remote thread inside the client. With
+    CS_SAVE_VIA_MESSAGE set it posts a window message instead (see
+    trigger_save_message). trigger_save runs in process, because in the frozen
+    launcher sys.executable is the launcher itself; its arguments go in through
+    sys.argv.
+    """
+    if save_via_message():
+        import trigger_save_message as tsm
+        ok, detail = tsm.post_save(gameid)
+        return (0 if ok else 1), detail + "\n"
+
+    import contextlib
+    import io
+    ts = import_without_bytecode("trigger_save")
+
+    out = io.StringIO()
+    argv = sys.argv
+    sys.argv = ["trigger_save.py", "--name", name[:15],
+                "--gameid", str(gameid), "--timeout", str(timeout)]
+    try:
+        with contextlib.redirect_stdout(out):
+            rc = ts.main()
+    except SystemExit as exc:
+        # trigger_save reports a missing client or a refused handle by exiting
+        # with a message. It is kept as output so the caller logs the reason.
+        rc = exc.code if isinstance(exc.code, int) else 1
+        if exc.code and not isinstance(exc.code, int):
+            print(exc.code, file=out)
+    finally:
+        sys.argv = argv
+    return rc, out.getvalue()
+
+
 def capture_save(name="cycle"):
     before = set(os.listdir(SAVES)) if os.path.isdir(SAVES) else set()
-    r = subprocess.run([sys.executable, os.path.join(HERE, "trigger_save.py"),
-                        "--name", name[:15]],
-                       capture_output=True, text=True, cwd=HERE)
-    if "saved" not in r.stdout:
-        log(r.stdout + r.stderr)
+    rc, out = trigger_save(name)
+    if rc != 0:
+        log(out)
         raise SystemExit("SaveGame did not report success")
     new = [f for f in os.listdir(SAVES) if f.endswith(".b64") and f not in before]
     if not new:
         raise SystemExit("SaveGame succeeded but no new capture appeared in "
-                         "server/saves , is cs_server.py running?")
+                         "server/saves, is cs_server.py running?")
     path = os.path.join(SAVES, sorted(new)[-1])
     log(f"  captured {os.path.basename(path)}")
     return path
@@ -148,10 +367,7 @@ def parse_design(spec):
 def civ_template_ids(blob):
     """One template design id per civ: the first DSGN inside each OWNR.
 
-    This is what makes --all-civs possible without the running client. The
-    single-civ path needs memory only to disambiguate two identically named
-    'Colony Ship' designs; when every civ is getting the design there is nothing
-    to disambiguate, and the blob says which designs belong to whom by nesting.
+    Needs no running client: the blob nests each civ's designs in its OWNR.
     """
     sys.path.insert(0, os.path.join(REPO, "server", "dev_tools"))
     import inject_civ as icv
@@ -186,8 +402,7 @@ def inject_designs(capture, designs, out_b64, like_id=None, all_civs=False):
         targets = [(None, like_id)]
 
     for civ_name, tid in targets:
-        # Re-resolve per civ: every injection shifts the offsets behind it, but
-        # object IDS are stable, and that is what inject_design keys on.
+        # inject_design keys on object ids, which injection does not shift.
         for name, parts in designs:
             parts = dict(parts)
             parts.setdefault("list6", [])
@@ -207,7 +422,7 @@ def main():
                          "from the running client when omitted")
     ap.add_argument("--all-civs", action="store_true",
                     help="give every design to EVERY civ in the galaxy, not "
-                         "just the local player , an AI-vs-AI galaxy needs both "
+                         "just the local player, an AI-vs-AI galaxy needs both "
                          "sides able to build the same things")
     ap.add_argument("--name", default="cycle", help="save name (<=15 chars)")
     ap.add_argument("--dat", default=None, help="where to write the .dat")
@@ -221,8 +436,8 @@ def main():
         launch(a.relaunch)
         return
 
-    # Resolve the local civ BEFORE closing: only the running client can say
-    # which of the two identically named starting designs is ours.
+    # Resolved before closing: only the running client can say which of the two
+    # identically named starting designs is ours.
     like_id = a.like_id
     if like_id is None and not a.save_only and not a.all_civs:
         import gamestate as gs

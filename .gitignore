@@ -22,25 +22,38 @@ __pycache__/
 
 # ── Dev tool output ───────────────────────────────────────────────────────────
 client/dev_tools/snapshots/
-# the AI's persistent fog-of-war map: per machine, per galaxy, per civ , game
+# the AI's persistent fog-of-war map: per machine, per galaxy, per civ: game
 # state rather than source, and meaningless in another checkout
 client/dev_tools/ai_player/state/
 *.exe.bak
+# patch-script backups, which name the patch they precede
+*.exe.*.bak
+# the player client: CosmicSupremacy_TestBed.exe with the coat-of-arms prompt
+# patched out, built by client/dev_tools/patch_hide_setup_prompts.py --build.
+# A patched binary belongs beside the tracked one, never in place of it.
+client/CosmicSupremacy_Player.exe
 tools
 
 # named restore points (raw save blobs, big and regenerable)
 client/checkpoints/
+
+# a live galaxy's turn store: every turn's blob, every submission, the clock.
+# Game state rather than source, it grows with every turn, and a checkout is
+# not where a running galaxy belongs. server/turn_store.py describes the layout.
+server/galaxy_*/
 .vscode
 
 # ── Release build output ──────────────────────────────────────────────────────
 # The staged release folder duplicates the 8 MB client binaries that are already
-# tracked in client/ , it is an artifact of release/build.ps1, regenerable from
+# tracked in client/; it is an artifact of release/build.ps1, regenerable from
 # the manifest, and belongs on a GitHub release rather than in the history.
 dist/
 release/build/
 release/.venv-build/
 # written by launcher.py when it is run from a checkout rather than a release
 release/data/
+# the game's own UI art, extracted from the client EXE by release/extract_ui_art.py
+release/webui/art/
 
 # ── Claude Code local config ──────────────────────────────────────────────────
 # per-developer tool permissions and agent settings; not project source
@@ -54,3 +67,20 @@ release/data/
 site/public/
 site/.firebase/
 site/*.log
+referee_work/
+# What the unattended worker keeps about itself on one machine: its log, the
+# status file naming the process that holds a galaxy, and the stub server's
+# output. One machine's account of a run, not source.
+server/worker_work/
+server/fog_work/
+server/wipe_work/
+server/join_work/
+server/join_turn_work/
+# Galaxies built for looking at the launcher, per machine and throwaway.
+server/uidemo/
+# A scheduled task written for one machine and one galaxy path.
+referee_task.xml
+
+# Tailored verification checklists that are not published: security lists that
+# map the attack surface, and adaptations of no-derivatives sources.
+docs/verification/private/

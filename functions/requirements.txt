@@ -1,0 +1,9 @@
+# The relay's runtime. Pinned loosely for the same reason server/requirements.txt
+# is: these libraries move together and a floor is what matters.
+firebase-functions>=0.4.2
+# The token verifier, and the only reason this is here rather than the two
+# client libraries alone. relay.verify refuses every request when it is missing
+# rather than admitting them unverified, so this line is load bearing.
+firebase-admin>=6.5.0
+google-cloud-firestore>=2.16.0
+google-cloud-storage>=2.16.0

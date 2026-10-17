@@ -1,0 +1,140 @@
+/* The launcher's skin: the game's own chrome, read from art/ (see extract_ui_art.py).
+   The button and scrollbar knob images are 9-slice sets in the game; app.js joins
+   each set into one image at load and publishes it as a custom property, which is
+   what border-image needs. */
+
+html, body { margin: 0; height: 100%; background: #001428; overflow: hidden; }
+[hidden] { display: none !important; }
+body { font-family: Tahoma, Verdana, "Segoe UI", sans-serif; font-size: 12px; color: #d6dee6; user-select: none; cursor: default; }
+button { font-family: inherit; }
+
+.win { position: relative; width: 100%; height: 100%; display: flex; flex-direction: column; }
+.win img { display: block; }
+
+/* Title row: 80px of pipework holding the title and, lower down, the tab bar. */
+.top { display: flex; flex: 0 0 80px; height: 80px; }
+.ttl { height: 80px; padding: 0 16px 0 2px; background: url(art/MAINWINDOWBORDERUPPERTITLE.png) repeat-x; }
+.ttl-text { margin-top: 8px; line-height: 22px; font-weight: bold; font-size: 13px; color: #0a1a33; white-space: nowrap; }
+.tstretch { flex: 1; background: url(art/MAINWINDOWBORDERUPPERSTRETCHM.png) repeat-x; }
+.tright { width: 222px; height: 80px; background: url(art/MAINWINDOWBORDERUPPERRIGHT.png) no-repeat; }
+
+/* Title-bar buttons sit on the round sockets in the upper-right piece. They are
+   outside the drag region so a click is a click and not the start of a move.
+   Each image is a square that repeats the socket around its ball. At a display
+   scale where the button lands between device pixels, its square edge resamples
+   differently from the frame beneath and shows as a box, so only the round part
+   is drawn. */
+.tb { position: absolute; top: 8px; width: 24px; height: 23px; border: 0; padding: 0; background: transparent no-repeat; cursor: pointer;
+      clip-path: circle(11px at 12px 11.5px); }
+.tb-min { right: 57px; background-image: url(art/TITLEBARBUTTONMINIMIZENORMAL.png); }
+.tb-min:hover { background-image: url(art/TITLEBARBUTTONMINIMIZEHOT.png); }
+.tb-min:active { background-image: url(art/TITLEBARBUTTONMINIMIZESELECTED.png); }
+.tb-close { right: 24px; background-image: url(art/TITLEBARBUTTONCLOSENORMAL.png); }
+.tb-close:hover { background-image: url(art/TITLEBARBUTTONCLOSEHOT.png); }
+.tb-close:active { background-image: url(art/TITLEBARBUTTONCLOSESELECTED.png); }
+
+.tabs { position: absolute; top: 45px; left: 60px; right: 60px; display: flex; gap: 2px; align-items: center; }
+
+/* The game's button: one 9-slice image per state. */
+.gbtn { box-sizing: border-box; display: inline-flex; align-items: center; justify-content: center; height: 22px; min-width: 84px; padding: 0 12px;
+        border-style: solid; border-width: 0; border-image: var(--btn-normal) 11 fill / 11px stretch;
+        background: transparent; font-size: 12px; color: #10202c; white-space: nowrap; cursor: pointer; }
+.gbtn:hover { border-image-source: var(--btn-hover); }
+.gbtn:active, .gbtn.sel { border-image-source: var(--btn-pressed); color: #2a1800; }
+.gbtn:disabled { border-image-source: var(--btn-disabled); color: #5d6973; cursor: default; }
+.gbtn.small { min-width: 62px; height: 20px; font-size: 11px; padding: 0 8px; }
+.gbtn.wide { width: 150px; flex: 0 0 auto; }
+
+.mid { flex: 1; display: flex; min-height: 0; }
+.side { width: 12px; display: flex; flex-direction: column; }
+.side .lm { flex: 1; background: url(art/MAINWINDOWBORDERLEFTMIDDLE.png) repeat-y; }
+.side .rm { flex: 1; background: url(art/MAINWINDOWBORDERRIGHTMIDDLE.png) repeat-y; }
+main { flex: 1; min-width: 0; padding: 10px 8px; display: flex; flex-direction: column; gap: 10px; }
+.page { display: none; flex: 1; min-height: 0; flex-direction: column; gap: 10px; }
+.page.on { display: flex; }
+
+.bottom { position: relative; display: flex; flex: 0 0 41px; height: 41px; }
+.bottom .bm { flex: 1; background: url(art/MAINWINDOWBORDERLOWERMIDDLE.png) repeat-x; }
+.status { position: absolute; left: 120px; right: 120px; top: 9px; line-height: 14px; display: flex; justify-content: center; align-items: center; gap: 18px;
+          color: #0a1a33; font-size: 11px; white-space: nowrap; }
+.status { overflow: hidden; }
+.dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 5px; vertical-align: -1px; }
+
+/* Section header: the game's light-blue bar with grilles at both ends. Its light
+   band is rows 4 to 11 of 21, too short for a line of text, so the header is one
+   9-slice image (app.js) that stretches the band and nothing else. */
+.hdr { box-sizing: border-box; height: 27px; padding: 4px 32px 9px; border-style: solid; border-width: 0;
+       border-image: var(--hdr) 4 32 9 32 fill / 4px 32px 9px 32px stretch;
+       text-align: center; line-height: 14px; font-size: 11px; font-weight: bold; color: #0a1a33; }
+
+.row { display: flex; align-items: center; gap: 16px; padding: 9px 12px; background: #2c3640; }
+.row:nth-child(even) { background: #222c36; }
+.row:hover { background: #34475a; }
+.blurb { color: #b9c6d2; line-height: 16px; }
+.hint { margin-top: auto; color: #8ea2b3; font-size: 11px; }
+
+.turn { font-weight: bold; color: #e8eef2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.btnrow { display: flex; gap: 6px; flex: 0 0 auto; }
+.toolbar { display: flex; align-items: center; gap: 6px; min-height: 20px; }
+.source { font-size: 11px; color: #93a6b5; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.tablebox { flex: 1; min-height: 0; overflow-y: auto; background: #222c36; }
+.warnline { color: #ffb020; font-size: 11px; line-height: 15px; }
+.note { padding: 8px; color: #93a6b5; }
+
+/* Column widths follow launcher.GALAXY_COLUMNS: the name stretches, the rest
+   are as wide as their heading needs, then the action button. */
+.grid { display: grid; grid-template-columns: minmax(0,1fr) 66px 44px 92px 56px 128px 78px; align-items: center; }
+.colhead > div.sorted { color: #ffffff; }
+.colhead { background: #5a7381; color: #eef3f6; font-weight: bold; font-size: 11px; }
+.colhead > div { padding: 4px 8px; border-right: 1px solid #435a68; cursor: pointer; }
+.colhead > div:hover { background: #67839c; }
+.grow { background: #2c3640; height: 32px; }
+.grow:nth-child(even) { background: #222c36; }
+.grow:hover { background: #34475a; }
+.grow > div { padding: 0 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+.logbox { flex: 1; min-height: 0; overflow-y: auto; margin: 0; padding: 6px 8px; background: #0a1018; border: 1px solid #435a68;
+          font-family: Consolas, "Lucida Console", monospace; font-size: 11px; line-height: 15px; color: #9fb4c6; white-space: pre; user-select: text; }
+
+/* The game's vertical scrollbar, for every scrolling box. */
+::-webkit-scrollbar { width: 17px; }
+::-webkit-scrollbar-track { background: url(art/SCROLLBARVERTBODY.png) repeat-y; }
+::-webkit-scrollbar-thumb { border-style: solid; border-width: 0; border-image: var(--knob-normal) 2 fill / 2px stretch; }
+::-webkit-scrollbar-thumb:hover { border-image-source: var(--knob-hover); }
+::-webkit-scrollbar-thumb:active { border-image-source: var(--knob-pressed); }
+::-webkit-scrollbar-button:single-button:vertical:decrement { height: 17px; background: url(art/SCROLLBARVERTUP.png); }
+::-webkit-scrollbar-button:single-button:vertical:decrement:hover { background-image: url(art/SCROLLBARVERTUPHIGHLIGHTED.png); }
+::-webkit-scrollbar-button:single-button:vertical:increment { height: 17px; background: url(art/SCROLLBARVERTDOWN.png); }
+::-webkit-scrollbar-button:single-button:vertical:increment:hover { background-image: url(art/SCROLLBARVERTDOWNHIGHLIGHTED.png); }
+
+/* Prompts: the game's dialog frame over a dimmed window. One at a time. */
+.scrim { position: absolute; inset: 0; display: none; align-items: center; justify-content: center; background: rgba(0, 8, 20, 0.55); }
+.scrim.on { display: flex; }
+.dlg { width: 440px; min-height: 200px; display: flex; flex-direction: column; background: #222c36; box-shadow: 0 8px 30px rgba(0,0,0,.6); }
+.dlg-top { display: flex; height: 39px; flex: 0 0 39px; }
+.dlg-title { flex: 1; background: url(art/WINDOWBORDERUPPERTITLE.png) repeat-x; }
+.dlg-title div { margin-top: 8px; line-height: 22px; font-weight: bold; color: #0a1a33; padding-left: 2px; }
+.dlg-sock { position: relative; display: flex; }
+.dlg-sock .tb-close { right: auto; left: 27px; top: 8px; }
+.dlg-mid { flex: 1; display: flex; }
+.dlg-side { width: 12px; display: flex; flex-direction: column; }
+.dlg-side .lm { flex: 1; background: url(art/WINDOWBORDERLEFTMIDDLE.png) repeat-y; }
+.dlg-side .rm { flex: 1; background: url(art/WINDOWBORDERRIGHTMIDDLE.png) repeat-y; }
+.dlg-body { flex: 1; min-width: 0; padding: 14px 16px 12px; display: flex; flex-direction: column; gap: 10px; }
+.dlg-text { color: #b9c6d2; line-height: 17px; white-space: pre-line; user-select: text; }
+.dlg.wide { width: 640px; }
+.dlg-scroll { margin: 0; max-height: 300px; overflow-y: auto; padding: 8px 10px; background: #0a1018; border: 1px solid #435a68;
+              font-family: Consolas, "Lucida Console", monospace; font-size: 11px; line-height: 15px; color: #d6dee6; white-space: pre-wrap; user-select: text; }
+.dlg-refs { display: grid; grid-template-columns: auto auto auto; gap: 4px 8px; align-items: center; justify-content: start; }
+.dlg-refs input { box-sizing: border-box; width: 250px; height: 22px; padding: 0 6px; background: #0a1018; border: 1px solid #5a7381; color: #e8eef2;
+                  font-family: Consolas, "Lucida Console", monospace; font-size: 11px; }
+.dlg-refs span { color: #93a6b5; font-size: 11px; }
+.dlg-error { color: #ff7a6e; font-weight: bold; }
+.dlg-note {color: #8ea2b3; font-size: 11px; line-height: 15px; }
+.dlg-field { display: flex; align-items: center; gap: 10px; }
+.dlg-field span { color: #e8eef2; font-weight: bold; }
+.dlg-field input { box-sizing: border-box; width: 220px; height: 22px; padding: 0 6px; background: #0a1018; border: 1px solid #5a7381; color: #e8eef2; font-family: inherit; font-size: 12px; outline: none; }
+.dlg-field input:focus { border-color: #a3d8fe; }
+.dlg-btns { margin-top: auto; display: flex; justify-content: flex-end; gap: 6px; }
+.dlg-bot { display: flex; height: 12px; flex: 0 0 12px; }
+.dlg-bot .bm { flex: 1; background: url(art/WINDOWBORDERLOWERMIDDLE.png) repeat-x; }

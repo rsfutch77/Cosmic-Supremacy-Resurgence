@@ -1,16 +1,13 @@
 """
-cs_server.py , Cosmic Supremacy local stub server
-==================================================
-Replaces the original cosmicsupremacy.com backend so the patched EXE can run
-locally.  Keeps the game open and responsive to its HTTP protocol so that the
-external memory-reader tools (ejbo_viewer.py) can inspect live game state.
+cs_server.py: Cosmic Supremacy local stub server.
 
-Usage (Windows, run as Administrator OR use port > 1024 and set CSPORT):
+Answers the game client's HTTP protocol in place of the original
+cosmicsupremacy.com backend. The patched EXE connects to 127.0.0.1:8888.
+
+Usage (set CSPORT to change the port):
     python cs_server.py
 
-The patched EXE connects to 127.0.0.1:8888 for everything.
-
-Protocol notes (from binary analysis):
+Protocol:
   • HTTP/1.0 POST to /clientinterface.php?
   • Content-Type: application/x-cosmicsupremacy
   • Body:  action=<name>&userid=<int>&passhash='<hash>'&...
@@ -25,17 +22,13 @@ import sys
 
 PORT = int(os.environ.get('CSPORT', 8888))
 
-# Where runtime artifacts live: the log, captured save blobs, governor blobs, and
-# the opt-in loadgame injection file.  Defaults to this file's own directory, so
-# `python cs_server.py` from a checkout behaves exactly as it always has.  The
-# release launcher overrides it because the frozen build imports this module out
-# of a temporary extraction directory that Windows deletes when the app exits ,
-# saves written relative to __file__ there would vanish with it.
+# Directory for the log, save captures, governor blobs and the loadgame injection
+# file. Defaults to this file's directory. A frozen build must set it, because its
+# module directory is a temporary extraction that is deleted on exit.
 DATA_DIR = os.environ.get('CS_DATA_DIR') or os.path.dirname(os.path.abspath(__file__))
 os.makedirs(DATA_DIR, exist_ok=True)
 LOGFILE = os.path.join(DATA_DIR, 'cs_server.log')
 
-# ── Web UI served at GET / (the game opens a browser here on first run) ───────
 WEB_INDEX = """<!DOCTYPE html>
 <html>
 <head>
@@ -70,17 +63,11 @@ WEB_INDEX = """<!DOCTYPE html>
 </html>
 """
 
-# ── Hard-coded stub responses ─────────────────────────────────────────────────
-# These are best-guess responses based on known endpoint names.
-# Edit these as you discover what the game actually expects from the logs.
-
 DEMO_USERID   = 1
 DEMO_PASSHASH = 'abcdef'   # from DemoGalaxy_local.csgalaxy token
 DEMO_GALAXY_ID = 0
 
-# ── In-memory civ state (persists across ticks within a server session) ────────
-# Populated by uploadcivname; queried by listcivnames and listcoa.
-# Format: { userid_str: {'civname': str, 'coaid': str} }
+# Civ state for this server session: { userid_str: {'civname': str, 'coaid': str} }
 _civ_state: dict = {}
 
 def _default_civ() -> dict:
@@ -89,11 +76,9 @@ def _default_civ() -> dict:
 def _get_civ(userid: str) -> dict:
     return _civ_state.get(userid, _default_civ())
 
-# ── Save-blob persistence ─────────────────────────────────────────────────────
-# Every savegame POST is written to server/saves/ verbatim (the base64 text
-# exactly as it came off the wire, no decoding) plus a small .json sidecar with
-# the other POST fields.  Nothing is ever overwritten: each save gets its own
-# sequence number so a series of saves can be diffed against each other.
+# Every savegame POST is written to saves/ verbatim (base64 as sent) with a .json
+# sidecar of the other fields. Each save gets its own sequence number and none is
+# overwritten.
 SAVE_DIR    = os.path.join(DATA_DIR, 'saves')
 INJECT_BLOB = os.path.join(DATA_DIR, 'loadgame_blob.b64')
 
@@ -103,13 +88,8 @@ def _raw_data_field(raw_body: str) -> 'str | None':
     Pull data= out of the unparsed POST body and percent-decode it.
 
     The request format is  ...&version=%d&data=%s  with data last, so everything
-    after the first '&data=' is the field.
-
-    Why not parse_qs: form decoding also turns '+' into a space, and base64 uses
-    '+'.  Measured on a real 38,960-char capture, the client percent-encodes and
-    emits '%2B' (748 of them) with no literal '+', so parse_qs would in fact have
-    survived this client , but unquote is correct either way, since it decodes
-    the escapes without touching a literal '+' should some path ever emit one.
+    after the first '&data=' is the field. unquote leaves a literal '+' intact,
+    which base64 needs.
     """
     marker = '&data='
     i = raw_body.find(marker)
@@ -134,8 +114,7 @@ def _persist_save(gameid: str, gamename: str, turn: str, version: str,
     payload  = raw_data if raw_data is not None else data_str
     with open(path, 'w', encoding='ascii', errors='replace') as f:
         f.write(payload)
-    # the whole request body as well, so nothing is lost if the data= slice
-    # above turns out to be wrong for some request shape
+    # The whole request body is kept as well.
     with open(os.path.join(SAVE_DIR, base + '.body'), 'w',
               encoding='latin-1') as f:
         f.write(raw_body)
@@ -158,13 +137,8 @@ def _load_injection_blob() -> 'str | None':
         return f.read().strip()
 
 
-# ── Save slots ────────────────────────────────────────────────────────────────
-# The capture files above are an append-only forensic record: one per POST,
-# never overwritten, so a series of saves can be diffed. They are the wrong
-# thing to answer savegamelist with, because the client thinks in *slots* , a
-# slot is saved over repeatedly and must appear once, under the name the player
-# typed. The index maps slot -> the most recent capture for that slot, which
-# keeps both properties: nothing is destroyed, and the list is accurate.
+# The client lists saves by slot, each once under the name the player typed. The
+# index maps slot -> the most recent capture for that slot.
 SAVE_INDEX = os.path.join(SAVE_DIR, 'index.json')
 
 
@@ -175,8 +149,7 @@ def _read_index() -> dict:
             idx = _json.load(f)
         return idx if isinstance(idx, dict) else {}
     except (OSError, ValueError):
-        # A corrupt or absent index must not take savegamelist down with it:
-        # an empty list is a valid response, a 500 is not.
+        # A corrupt or absent index reads as empty, which is a valid list.
         return {}
 
 
@@ -193,10 +166,8 @@ def _allocate_gameid(idx: dict) -> int:
     """
     Lowest unused slot number, counting from 1.
 
-    gameid=-1 is the client's "give me a new slot" sentinel, and it treats
-    negative IDs from savegamelist as invalid , so a save left under -1 is
-    stored but unloadable, which is precisely the reported symptom of a save
-    that appears to work and then is not in the list.
+    gameid=-1 is the client's new-slot sentinel, and the client treats negative
+    IDs from savegamelist as invalid, so a save must not be stored under -1.
     """
     used = set()
     for k in idx:
@@ -211,52 +182,33 @@ def _allocate_gameid(idx: dict) -> int:
 
 
 def _clean_field(text: str) -> str:
-    """
-    Strip the protocol's own delimiters out of a player-supplied name.
-
-    The client splits list responses on #SPC# and #NEXT#, so a save called
-    "a#NEXT#b" would arrive back as two malformed records. Dropping the '#'
-    is enough to make any name safe, since both delimiters require it.
-    """
+    """Drop '#' from a player-supplied name, so it cannot form the #SPC# or
+    #NEXT# list delimiters."""
     return text.replace('#', '').strip()
 
 
 def handle_action(action: str, params: dict, raw_body: str = '') -> tuple[int, str, str]:
     """
     Returns (http_status, content_type, body).
-    Add real response formats here as you discover them from cs_server.log.
 
-    raw_body is the undecoded POST body; savegame needs it because form
-    decoding mangles base64 (see _raw_data_field).
+    raw_body is the undecoded POST body, which savegame reads (see _raw_data_field).
     """
 
-    # ── Connection health check ───────────────────────────────────────────────
     if action == 'testconnection':
         return 200, 'text/plain', 'READY'
 
-    # ── Login / auth ──────────────────────────────────────────────────────────
-    # Game sends: userid=<int>&pass=<password>
-    # Expected response: likely the passhash string the game uses for future requests
+    # Request: userid=<int>&pass=<password>. Any login is accepted and answered
+    # with the passhash the game sends on later requests.
     if action == 'login':
-        # Accept any login; return the demo passhash
         return 200, 'text/plain', DEMO_PASSHASH
 
-    # ── Player fame ───────────────────────────────────────────────────────────
     if action == 'getplayerfame':
         return 200, 'text/plain', '0'
 
-    # ── Civ names ─────────────────────────────────────────────────────────────
-    # Binary analysis (FUN_0x497f93 / FUN_0x496830):
-    #   - FUN_0x496830 checks [esi+0x4988] each tick; if ≥ 0 and in range it
-    #     shows the "Customize Your Home World" popup.
-    #   - FUN_0x497f93 sends listcivnames, then parses the response with
-    #     0x5e3de0 using "#SPC#" as the field delimiter.
-    #   - Each parsed record is a 0x20-byte entry; [entry+0x14] is the coaid
-    #     field pointer.  If [entry+0x14] == 0 (null/empty), the game never
-    #     marks the civ "configured" → popup re-appears every tick.
-    #   - Correct format (mirrors savegamelist): civname#SPC#coaid#NEXT#DONE
-    #     With a non-empty coaid the game marks the civ configured and
-    #     clears the popup trigger.
+    # Response: civname#SPC#coaid#NEXT#DONE. FUN_0x497f93 parses it with
+    # 0x5e3de0 into 0x20-byte records; [entry+0x14] is the coaid. An empty coaid
+    # leaves the civ unconfigured, and FUN_0x496830 ([esi+0x4988]) then shows the
+    # "Customize Your Home World" popup every tick.
     if action == 'listcivnames':
         userid = params.get('userid', ['1'])[0]
         civ = _get_civ(userid)
@@ -267,9 +219,8 @@ def handle_action(action: str, params: dict, raw_body: str = '') -> tuple[int, s
         return 200, 'text/plain', body
 
     if action == 'uploadcivname':
-        # Game sends: action=uploadcivname&userid=<n>&passhash='<h>'&civname='<name>'
-        # No response-body check in the game (it cleans up and returns after sending).
-        # We persist the civname so listcivnames returns it correctly next tick.
+        # Request: action=uploadcivname&userid=<n>&passhash='<h>'&civname='<name>'
+        # The game does not check the response body.
         userid  = params.get('userid', ['1'])[0]
         civname = params.get('civname', [''])[0].strip("'")
         if civname:
@@ -280,12 +231,8 @@ def handle_action(action: str, params: dict, raw_body: str = '') -> tuple[int, s
             log(f'  -> uploadcivname: userid={userid} (no civname param, ignored)')
         return 200, 'text/plain', 'OK'
 
-    # ── Coat of arms ─────────────────────────────────────────────────────────
-    # Binary analysis: listcoa is parsed in parallel with listcivnames.
-    # Format mirrors listcivnames: coaid#NEXT#DONE  (one coaid per line).
-    # An empty response means no COA is registered → getcoa is never called
-    # → the default COA (coaid=0) is never fetched → some UI elements may be
-    # missing.  Return the player's coaid so the game can fetch it via getcoa.
+    # Response: coaid#NEXT#DONE, one coaid per record. The game calls getcoa only
+    # for coaids listed here.
     if action == 'listcoa':
         userid = params.get('userid', ['1'])[0]
         coaid  = _get_civ(userid)['coaid']
@@ -294,7 +241,7 @@ def handle_action(action: str, params: dict, raw_body: str = '') -> tuple[int, s
         return 200, 'text/plain', body
 
     if action == 'getcoa':
-        # Return empty 1x1 PNG as placeholder
+        # A 1x1 placeholder PNG.
         import base64
         empty_png = base64.b64decode(
             'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=='
@@ -304,10 +251,7 @@ def handle_action(action: str, params: dict, raw_body: str = '') -> tuple[int, s
     if action == 'uploadcoa':
         return 200, 'text/plain', 'OK'
 
-    # ── Save / load game ────────────────────────────────────────────────────
-    # savegame now PERSISTS the raw data= field so the blob format (ROUT in
-    # particular) can be reverse engineered.  The response is unchanged: the
-    # client does strncmp(response, "DONE", 4) at 0x0048b350 and puts up
+    # The client does strncmp(response, "DONE", 4) at 0x0048b350 and shows
     # "Failed to save the Save-Game" for anything else.
     if action == 'savegame':
         raw_id   = params.get('gameid',   ['-1'])[0]
@@ -342,7 +286,7 @@ def handle_action(action: str, params: dict, raw_body: str = '') -> tuple[int, s
 
     if action == 'savegamelist':
         # <gameid>#SPC#<name>#SPC#<turn>#NEXT#...#NEXT#DONE
-        # A bare DONE is a valid empty list; an empty body is not, and puts up
+        # A bare DONE is an empty list. An empty body shows
         # "Failed to retrieve list of saved games".
         idx = _read_index()
         if not idx:
@@ -359,15 +303,11 @@ def handle_action(action: str, params: dict, raw_body: str = '') -> tuple[int, s
         return 200, 'text/plain', body
 
     if action == 'loadgame':
-        # Opt-in injection: if server/loadgame_blob.b64 exists, its contents are
-        # served as the DATA payload.  Absent that file the behaviour is the
-        # original stub (empty blob → client generates its own galaxy), so a
-        # session that is not testing blob injection is unaffected.
+        # Response: DONE#VER#000000#DATA#<base64>. INJECT_BLOB, when present, is
+        # served ahead of any saved slot. An empty DATA makes the client generate
+        # its own galaxy.
         gameid = params.get('gameid', ['0'])[0]
 
-        # The injection file stays the highest priority: it is an explicit
-        # opt-in for blob-format work, and a session testing it should not have
-        # a real save served instead.
         blob = _load_injection_blob()
         if blob is not None:
             log(f'  -> loadgame: gameid={gameid} serving {INJECT_BLOB} '
@@ -385,15 +325,19 @@ def handle_action(action: str, params: dict, raw_body: str = '') -> tuple[int, s
                     f'({len(blob)} chars)')
                 return 200, 'text/plain', 'DONE#VER#000000#DATA#' + blob
             except OSError as exc:
-                # Indexed but unreadable. Returning the empty blob lets the
-                # client build its own galaxy rather than hang on a load.
+                # Indexed but unreadable: fall through to the empty blob.
                 log(f'  !! loadgame: slot {gameid} indexed as {entry["file"]} '
                     f'but unreadable: {exc}')
 
         log(f'  -> loadgame: gameid={gameid} not in the save index, returning empty')
         return 200, 'text/plain', 'DONE#VER#000000#DATA#'
 
-    # ── Governor settings ─────────────────────────────────────────────────────
+    # A governor id is part of a file name, so it must be digits only.
+    govid = params.get('govid', ['0'])[0]
+    if action in ('savegov', 'loadgov') and not (govid.isascii() and govid.isdigit()):
+        log(f'  !! {action}: govid {govid!r} is not a number, refused')
+        return 400, 'text/plain', 'ERROR'
+
     if action == 'savegov':
         govid    = params.get('govid',   ['0'])[0]
         govname  = params.get('govname', [''])[0].strip("'")
@@ -402,7 +346,7 @@ def handle_action(action: str, params: dict, raw_body: str = '') -> tuple[int, s
         with open(gov_path, 'wb') as f:
             f.write(data_str.encode('latin-1'))
         log(f'  -> savegov: govid={govid} name={govname} {len(data_str)} bytes')
-        # Same DONE check pattern as savegame (confirmed by binary analysis at 0x4a0c3f)
+        # The client checks for DONE, as for savegame (0x4a0c3f).
         return 200, 'text/plain', 'DONE'
 
     if action == 'govlist':
@@ -413,56 +357,22 @@ def handle_action(action: str, params: dict, raw_body: str = '') -> tuple[int, s
         gov_path = os.path.join(DATA_DIR, f'save_gov_{govid}.dat')
         if os.path.exists(gov_path):
             gov_data = open(gov_path, 'rb').read().decode('latin-1')
-            # Governor load likely uses same DONE#VER#<6>DATA# format as loadgame
+            # Assumed to use the loadgame format, DONE#VER#<6>#DATA#.
             return 200, 'text/plain', 'DONE#VER#000000#DATA#' + gov_data
         return 200, 'text/plain', 'DONE#VER#000000#DATA#'
 
-    # ── Tutorial / test-bed ───────────────────────────────────────────────────
     if action == 'passedtutorial':
         return 200, 'text/plain', 'OK'
 
     if action == 'entertestbedgalaxy':
         # Called when loading a TEBE-type galaxy pass file.
         # POST body: userid=<int>&pass=<16× base64-encoded credential tokens>
+        # Each token decodes to "TEBE <server_ip> <playerid> <hexpass> <playername>",
+        # one per player slot in the testbed galaxy.
         #
-        # Each token decodes to: "TEBE <server_ip> <playerid> <hexpass> <playername>"
-        # The 16 tokens correspond to the 16 player slots in the testbed galaxy.
-        #
-        # ── Why the response format matters (binary analysis) ────────────────────
-        # The game's entertestbedgalaxy handler (0x577c00+) consumes the response:
-        #   • strstr(response, "OK|") must be non-NULL , else response string is shown
-        #     as an error dialog and galaxy join fails.
-        #   • 0x576230 dequeues entries from the global pending-response queue at
-        #     0x8714b8 (vector of 32-byte entries placed there by the HTTP thread).
-        #   • For each entry, it extracts bytes starting at position 9 via 0x5e3a80
-        #     and compares them with the credential stored at [0x86f148] (derived from
-        #     the TEBE token during pass-file loading).  A credential match increments
-        #     the processed-player count.
-        #   • If count > 0 → normal testbed init: 0x577160 calls 0x537bf0(slot) to
-        #     insert galaxy-slot entries into the map at 0x857c7c; 0x56e7f0 fires;
-        #     [0x86f1a0] = 1 (testbed flag set); TLS tree populated.
-        #   • If count == 0 → fallback path at 0x577e26: reads [0x86f190] which
-        #     0x576230 set to -1 on empty/error response → calls 0x57e7b0 → sets
-        #     [0x86f1a0] = 1 WITHOUT populating the TLS tree.
-        #   • loadgame (0x56d700) then checks [0x86f1a0]: if set → testbed path →
-        #     calls 0x542850 → traverses (empty) TLS RB-tree → throws
-        #     "invalid vector<T> argument" → "Failed to load Save-Game".
-        #
-        # ── Fix: binary patch to CosmicSupremacy_patched.exe ────────────────────
-        # File offset 0x16ccfa (VA 0x56d8fa):
-        #   BEFORE: E8 51 4F FD FF   call 0x542850  (testbed TLS-tree init)
-        #   AFTER:  90 90 90 90 90   nop × 5
-        #
-        # The patch makes the testbed load-game path skip 0x542850 entirely and
-        # proceed directly to 0x541240 (the standard save loader), which works
-        # correctly regardless of TLS-tree state , matching the normal-mode path.
-        # With this patch, 'OK|0' is sufficient: the galaxy join succeeds and
-        # loadgame no longer throws.
-        #
-        # Without the binary patch, a correct server response would need to supply
-        # credential bytes matching [0x86f148] at offset 9+ of each queue entry so
-        # 0x576230 returns count > 0 , the full testbed session-setup protocol has
-        # not yet been reversed.
+        # The client treats a response without "OK|" as an error. The patched exe
+        # nops the testbed TLS-tree init in loadgame (file offset 0x16ccfa, call
+        # 0x542850), so the standard save loader runs and 'OK|0' is enough to join.
         import base64 as _b64
         userid   = params.get('userid', ['?'])[0]
         pass_raw = params.get('pass', [''])[0]
@@ -477,24 +387,15 @@ def handle_action(action: str, params: dict, raw_body: str = '') -> tuple[int, s
         log(f'     one-token decoded ({len(one_decoded)} chars): {repr(one_decoded[:120])}')
         return 200, 'text/plain', 'OK|0'
 
-    # ── Unknown action: log prominently and return empty OK ──────────────────
     _log_unknown_action(action, params)
     return 200, 'text/plain', 'OK'
 
 
-# ── Unknown-action highlighter ────────────────────────────────────────────────
 def _log_unknown_action(action: str, params: dict):
-    """
-    Log an unrecognised action with a highly visible separator so it stands out
-    in the console / log file when scanning for new server interactions.
-
-    The separator line is a row of '!' characters , easy to grep for:
-        grep '!!!' cs_server.log
-    """
+    """Log an unrecognised action between rows of '!' (grep '!!!' cs_server.log)."""
     sep = '!' * 60
     log(sep)
     log(f'  [NEW ACTION?]  action={action!r}')
-    # Log any non-trivial parameters (skip userid / passhash noise)
     interesting = {k: v for k, v in params.items()
                    if k not in ('userid', 'passhash', 'action')}
     if interesting:
@@ -506,7 +407,6 @@ def _log_unknown_action(action: str, params: dict):
 
 
 
-# ── Logging ───────────────────────────────────────────────────────────────────
 _log_fh = None
 
 def log(msg: str):
@@ -515,9 +415,7 @@ def log(msg: str):
         _log_fh = open(LOGFILE, 'a', buffering=1, encoding='utf-8')
     ts = datetime.datetime.now().strftime('%H:%M:%S.%f')[:-3]
     line = f'[{ts}] {msg}'
-    # A windowed (console-less) frozen build has sys.stdout == None, and a bare
-    # print() there raises inside the serving thread and kills the request.  The
-    # file is the log that matters; the console is a convenience.
+    # A windowed frozen build has sys.stdout == None.
     if sys.stdout is not None:
         try:
             print(line)
@@ -526,34 +424,75 @@ def log(msg: str):
     _log_fh.write(line + '\n')
 
 
-# ── HTTP handler ──────────────────────────────────────────────────────────────
+# A request is refused when it carries a foreign page's marks: a Host that is not
+# a loopback name (DNS rebinding), an Origin that is not this server, or a
+# Sec-Fetch-Site other than same-origin or none. The client and tools pass all three.
+LOOPBACK_NAMES = frozenset({'localhost', '127.0.0.1', '[::1]'})
+
+# A non-loopback CSHOST is the LAN setup: the Host check is off, the other checks apply.
+_LAN = os.environ.get('CSHOST', '127.0.0.1') not in ('127.0.0.1', 'localhost', '::1')
+
+
+def _host_name(value: str) -> str:
+    """The name part of a Host header or an Origin's authority, lower-cased."""
+    value = value.strip().lower()
+    if value.startswith('['):
+        return value[:value.find(']') + 1]
+    return value.split(':', 1)[0]
+
+
+def foreign_reason(headers) -> 'str | None':
+    """Why a request comes from a foreign page, or None when it may be served."""
+    host = headers.get('Host')
+    if host is not None and not _LAN and _host_name(host) not in LOOPBACK_NAMES:
+        return f'Host {host!r} is not a loopback name'
+    origin = headers.get('Origin')
+    if origin is not None:
+        authority = urllib.parse.urlsplit(origin).netloc
+        if _host_name(authority) not in LOOPBACK_NAMES:
+            return f'Origin {origin!r} is not this server'
+    site = headers.get('Sec-Fetch-Site')
+    if site is not None and site.lower() not in ('same-origin', 'none'):
+        return f'Sec-Fetch-Site {site!r}'
+    return None
+
+
 class CSHandler(http.server.BaseHTTPRequestHandler):
     server_version = 'CosmicSupremacy/1.0'
     protocol_version = 'HTTP/1.0'
 
     def log_message(self, fmt, *args):
-        pass  # suppress default logging; we do our own
+        pass  # replaced by log()
+
+    def _refused(self) -> bool:
+        """Answer 403 to a request from a foreign page. True when it was refused."""
+        reason = foreign_reason(self.headers)
+        if reason is None:
+            return False
+        log(f'{self.command} {self.path} refused: {reason}')
+        self._send(403, 'text/plain', b'FORBIDDEN')
+        return True
 
     def do_POST(self):
+        if self._refused():
+            return
         length = int(self.headers.get('Content-Length', 0))
         body   = self.rfile.read(length).decode('latin-1') if length else ''
         params = urllib.parse.parse_qs(body, keep_blank_values=True)
 
-        # Action can be in URL query string OR POST body , check both.
-        # The game puts action= in the URL query string for most POST calls.
+        # action= is usually in the URL query string, sometimes in the body.
         url_qs = {}
         if '?' in self.path:
             url_qs = urllib.parse.parse_qs(self.path.split('?', 1)[1], keep_blank_values=True)
         action = (url_qs.get('action') or params.get('action') or ['<none>'])[0]
-        # Merge URL params into body params (body wins on collision)
+        # Body wins on collision.
         merged_params = {**url_qs, **params}
 
         log(f'POST {self.path}')
         log(f'  Content-Type={self.headers.get("Content-Type","")}  Content-Length={length}')
         log(f'  action={action}')
-        # Log body in 400-char chunks so nothing is lost (params can be large
-        # blobs).  Save blobs are the exception: they run to hundreds of KB and
-        # are written to server/saves/ in full, so the log only keeps a head.
+        # Body is logged in 400-char chunks. Save blobs are written to saves/ in
+        # full, so only their head is logged.
         CHUNK = 400
         LOG_CAP = 4000 if action in ('savegame', 'savegov') else len(body)
         shown = body[:LOG_CAP]
@@ -577,9 +516,10 @@ class CSHandler(http.server.BaseHTTPRequestHandler):
         self._send(status, ctype, resp_bytes)
 
     def do_GET(self):
+        if self._refused():
+            return
         log(f'GET {self.path}')
 
-        # ── Web UI routes (browser opened by the game on first run) ──────────
         path = self.path.split('?')[0].rstrip('/')
 
         if path in ('', '/index.html', '/index.htm'):
@@ -588,10 +528,8 @@ class CSHandler(http.server.BaseHTTPRequestHandler):
             return
 
         if path == '/enter-demo':
-            # Serve DemoGalaxy_local.csgalaxy as a file download
-            # The galaxy pass files live with the client, not the server, so look
-            # in CS_GALAXY_DIR first (the launcher points this at the release's
-            # galaxies folder) and fall back to the data dir.
+            # DemoGalaxy_local.csgalaxy as a download, from CS_GALAXY_DIR (the
+            # release's galaxies folder) or else DATA_DIR.
             resp_bytes = b''
             for base in (os.environ.get('CS_GALAXY_DIR'), DATA_DIR):
                 if not base:
@@ -613,7 +551,6 @@ class CSHandler(http.server.BaseHTTPRequestHandler):
             self._send(204, 'text/plain', b'')
             return
 
-        # ── Game API GET requests (action= parameter) ─────────────────────────
         params = {}
         if '?' in self.path:
             qs     = self.path.split('?', 1)[1]
@@ -637,10 +574,12 @@ class CSHandler(http.server.BaseHTTPRequestHandler):
         self.wfile.write(body_bytes)
 
 
-# ── Entry point ───────────────────────────────────────────────────────────────
 if __name__ == '__main__':
-    server = http.server.HTTPServer(('0.0.0.0', PORT), CSHandler)
-    log(f'Cosmic Supremacy stub server listening on port {PORT}')
+    # Binds loopback only, which avoids a Windows Firewall prompt. Set CSHOST to
+    # serve a client on another machine.
+    HOST = os.environ.get('CSHOST', '127.0.0.1')
+    server = http.server.HTTPServer((HOST, PORT), CSHandler)
+    log(f'Cosmic Supremacy stub server listening on {HOST}:{PORT}')
     log(f'All traffic logged to: {LOGFILE}')
     log(f'Start: double-click DemoGalaxy_local.csgalaxy (after starting patched EXE)')
     log('-' * 60)

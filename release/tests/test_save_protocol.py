@@ -1,8 +1,7 @@
 """
 Protocol test for the save/load slot handling in cs_server.
 
-Speaks the wire format directly, so it checks the server against the contract in
-the reconstruction report (section 10) without needing the game running:
+Speaks the wire format directly, without the game:
 
     savegame      -> DONE
     savegamelist  -> <gameid>#SPC#<name>#SPC#<turn>#NEXT#...#NEXT#DONE

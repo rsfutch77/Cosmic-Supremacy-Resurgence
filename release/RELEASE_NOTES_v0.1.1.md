@@ -1,9 +1,9 @@
-Cosmic Supremacy: Resurgence v0.1.1 , a bug-fix release for the two faults
+Cosmic Supremacy: Resurgence v0.1.1: a bug-fix release for the two faults
 players reported against v0.1.0. Both were in Single Player, and the first one
 made the game unwinnable.
 
 If you have v0.1.0, replace it with this. Saved games from v0.1.0 still load,
-but a save made before the fix carries the fault with it , see below.
+but a save made before the fix carries the fault with it; see below.
 
 ## Fixed
 
@@ -11,9 +11,8 @@ but a save made before the fix carries the fault with it , see below.
 research points, for the whole game, so the technology tree was unreachable and
 the computer opponent eventually out-teched you by default. Your treasury kept
 growing the entire time, which is what made it look like the game was working.
-
 The cause was four bytes in the shipped galaxy file marking your empire as one
-the game should not simulate , a leftover from how the galaxy was generated.
+the game should not simulate, a leftover from how the galaxy was generated.
 Your research, your score and your empire statistics were all being skipped.
 Fixed in the galaxy this release ships.
 
@@ -21,25 +20,18 @@ Fixed in the galaxy this release ships.
 explored, keyed to the galaxy rather than to the game, and Single Player always
 starts the same galaxy. So from your second game onward it began already
 knowing where everything was, including your home system, and could send a
-colony ship straight at you on turn one without ever having scouted. It also
-stopped the launcher from waiting for the opponent to take its turn.
-
+colony ship straight at you on turn one without ever having scouted.
 Starting a new game now clears what the opponent learned. Loading a save keeps
-it, which is correct , that is the same galaxy it explored.
+it, which is correct; that is the same galaxy it explored.
 
 ## Not fixed yet
-
 **The opponent stays peaceful for the first hour or so.** It cannot build an
 armed ship until it has researched its first weapon, and at the starting rate
-that takes a while, after which the ship still has to be built, crewed and
-flown to you. This is working as built rather than broken, but it makes the
-early game quiet. It is on the list.
+that takes a while.
 
 ## If you were already playing a v0.1.0 game
-
 A save made under v0.1.0 has the fault baked into it, so loading it into v0.1.1
-will not bring your research back. Starting a new game will. Nothing is wrong
-with the old save otherwise , it just will not research.
+will not bring your research back.
 
 ## Install
 
@@ -77,7 +69,7 @@ Click **show log** at the bottom of the launcher, then attach that pane plus
 `data\launcher.log` and `data\cs_server.log` to an
 [issue](https://github.com/rsfutch77/Cosmic-Supremacy-Resurgence/issues).
 
-Thanks to the players who reported these , both came from the first round of
+Thanks to the players who reported these; both came from the first round of
 feedback after v0.1.0.
 
 The restored site, with the full manual and wiki, is at

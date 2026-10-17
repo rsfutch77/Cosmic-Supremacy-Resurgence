@@ -4,21 +4,27 @@
     Pre-release smoke tests. Run before tagging.
 
 .DESCRIPTION
-    Four checks, in rising cost. Each is here because it caught a real bug:
+    The checks, in rising cost:
 
-      test_ai_state_reset  File handling only, no game and no server. Covers
-                           the opponent's fog-of-war map and pass marker being
-                           cleared when a new game starts and kept when a save
-                           is loaded.
-      test_save_protocol   Speaks the wire protocol to cs_server directly. No
-                           game needed, ~2 seconds. Covers slot allocation from
-                           the gameid=-1 sentinel, the savegamelist format, and
-                           the blob round-trip.
-      test_status_cycle    Drives the real launcher window and the real client
-                           for each playable mode: click, confirm it reports the
-                           game running, kill it, confirm the status recovers.
-      test_external_status Same, for a client started OUTSIDE the launcher,
-                           which has no child handle to watch.
+      test_identity        The player's name: validation, storage, migration
+                           of an older multiplayer.json. No game, no window.
+      test_packaging       The multiplayer path survives freezing. No game,
+                           no window.
+      test_signing         The signing step in build.ps1. Signs a copy of a
+                           small executable with a throwaway self-signed
+                           certificate when signtool is installed. No game.
+      test_ai_state_reset  The opponent's fog-of-war map and pass marker are
+                           cleared on a new game and kept on a load. No game.
+      test_save_protocol   The wire protocol to cs_server: slot allocation,
+                           savegamelist format, blob round-trip. No game.
+      test_save_message_path
+                           The message save path names no injection
+                           primitive and is off by default. No game.
+      test_minimised_poll  The Galaxies page skips its timed listing while
+                           minimised. No game, no network.
+      test_status_cycle    Drives the real launcher and client for each
+                           playable mode: launch, kill, status recovers.
+      test_external_status Same, for a client started outside the launcher.
 
     The last two start and kill the actual game, so windows will open and close
     while they run. Do not use the machine during them.
@@ -37,8 +43,8 @@ $Py       = Join-Path $RepoRoot 'server\.venv\Scripts\python.exe'
 
 if (-not (Test-Path $Py)) { throw "no venv at $Py - run .\setup.ps1 first" }
 
-# A launcher already running owns port 8888, so the tests would silently take
-# the "reusing the existing server" path instead of exercising their own.
+# A running launcher owns port 8888, and the tests would silently reuse its
+# server.
 $live = Get-Process CosmicSupremacyLauncher -ErrorAction SilentlyContinue
 if ($live) { throw 'close the launcher before running the tests' }
 
@@ -58,8 +64,14 @@ function Invoke-Test {
     Start-Sleep -Seconds 2
 }
 
+Invoke-Test 'test_identity.py'
+Invoke-Test 'test_packaging.py'
+Invoke-Test 'test_signing.py'
+Invoke-Test 'test_build_and_log.py'
 Invoke-Test 'test_ai_state_reset.py'
 Invoke-Test 'test_save_protocol.py'
+Invoke-Test 'test_save_message_path.py'
+Invoke-Test 'test_minimised_poll.py'
 foreach ($mode in @('tutorial', 'demo', 'testbed')) {
     Invoke-Test 'test_status_cycle.py' @($mode)
 }

@@ -1,10 +1,8 @@
 """
-trigger_save.py , Make the running client POST a savegame, with no user click
-============================================================================
-Calls the game's own save routine in a remote thread.  The point is to capture
-real save blobs (`server/cs_server.py` now persists them to `server/saves/`) so
-the blob format , `ROUT` in particular , can be checked against bytes the engine
-actually produced instead of against a layout read out of the disassembly.
+trigger_save.py: Make the running client POST a savegame, with no user click
+
+Calls the game's own save routine in a remote thread. `server/cs_server.py`
+stores the posted blob in `server/saves/`.
 
     python trigger_save.py                      # save into slot 0
     python trigger_save.py --name "rout probe"
@@ -16,6 +14,7 @@ import ctypes
 import struct
 import sys
 from ctypes import wintypes
+from client_proc import find_pid, NOT_THE_CLIENT
 
 PROCESS_VM_READ           = 0x0010
 PROCESS_VM_WRITE          = 0x0020
@@ -39,35 +38,7 @@ kernel32.VirtualAllocEx.restype  = ctypes.c_void_p
 kernel32.CreateRemoteThread.restype = wintypes.HANDLE
 
 
-# Names that contain the substring below but are not the game client. The
-# player-facing launcher (release/) is CosmicSupremacyLauncher.exe and is a
-# 64-bit process: attaching to it and injecting this 32-bit stub gets as far as
-# VirtualAllocEx returning an address above 4 GB, which then fails to pack into
-# a `push imm32` , a confusing way to discover you are in the wrong process.
-NOT_THE_CLIENT = ("launcher",)
 
-
-def find_pid(exe_substr="CosmicSupremacy"):
-    arr = (wintypes.DWORD * 4096)()
-    cb  = ctypes.c_ulong()
-    if not psapi.EnumProcesses(ctypes.byref(arr), ctypes.sizeof(arr), ctypes.byref(cb)):
-        raise OSError("EnumProcesses failed")
-    for i in range(cb.value // ctypes.sizeof(wintypes.DWORD)):
-        pid = arr[i]
-        if not pid:
-            continue
-        h = kernel32.OpenProcess(PROCESS_QUERY_INFORMATION | PROCESS_VM_READ, False, pid)
-        if not h:
-            continue
-        try:
-            buf = ctypes.create_unicode_buffer(260)
-            name = buf.value if psapi.GetModuleBaseNameW(h, None, buf, 260) else ""
-            low = name.lower()
-            if exe_substr.lower() in low and not any(x in low for x in NOT_THE_CLIENT):
-                return pid, name
-        finally:
-            kernel32.CloseHandle(h)
-    return None, None
 
 
 def build_string(name: str) -> bytes:
@@ -95,11 +66,8 @@ def build_call_stub(fn_addr: int, args, this_ptr: int) -> bytes:
     """
     code = b""
     for a in reversed(args):
-        # Two's complement, not "<i". The argument list mixes a small signed
-        # gameid (-1 is the new-slot sentinel) with a VirtualAllocEx address,
-        # and an allocation above 0x7FFFFFFF overflows a signed pack and raises.
-        # `push imm32` stores four raw bytes either way; signedness is the
-        # callee's interpretation, not the encoding's.
+        # Packed as unsigned two's complement: arguments mix a signed gameid
+        # (-1 is the new-slot sentinel) with addresses that may exceed 0x7FFFFFFF.
         code += b"\x68" + struct.pack("<I", a & 0xFFFFFFFF)
     code += b"\xB9" + struct.pack("<I", this_ptr)
     code += b"\xB8" + struct.pack("<I", fn_addr)
@@ -182,7 +150,7 @@ def main():
 
         rc = kernel32.WaitForSingleObject(th, args.timeout * 1000)
         if rc != 0:
-            print(f"  WARNING: wait returned {rc} , the thread has not finished. "
+            print(f"  WARNING: wait returned {rc}, the thread has not finished. "
                   f"Leaving its page allocated so it cannot execute freed memory.")
             kernel32.CloseHandle(th)
             kernel32.CloseHandle(h)
@@ -193,7 +161,7 @@ def main():
         kernel32.CloseHandle(th)
         ok = code.value & 0xFF
         print(f"  SaveGame returned {ok} "
-              f"({'saved' if ok else 'FAILED , client will have shown a dialog'})")
+              f"({'saved' if ok else 'FAILED, client will have shown a dialog'})")
         print("  check server/saves/ for the captured blob")
         kernel32.VirtualFreeEx(h, ctypes.c_void_p(remote), 0, MEM_RELEASE)
         return 0 if ok else 1

@@ -1,0 +1,666 @@
+"""
+test_operator_view.py: the operator page says what is true and writes nothing
+==============================================================================
+    server\\.venv\\Scripts\\python.exe server\\tests\\test_operator_view.py
+    ... test_operator_view.py --demo server\\galaxy_demo
+
+Runs against a copy of a real archived galaxy, by default `server\\galaxy_demo`
+(turns 7 to 11 of a three-civ galaxy with four archive records). The original
+is never opened for writing.
+
+The overdue, refusal and write-protection checks each have a CONTROL case that
+must come out the other way.
+
+The HTTP half runs `turn_server.py` on loopback, so the view reads through
+`open_store`. The view's one Firebase read outside the store interface, a
+`get` of the galaxy document, is checked against a stand-in document here and
+against the emulator by `test_seat_rebind.py`.
+"""
+import argparse
+import hashlib
+import json
+import os
+import shutil
+import sys
+import tempfile
+import threading
+import time
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(os.path.dirname(HERE))
+for d in (os.path.join(ROOT, 'server'),
+          os.path.join(ROOT, 'server', 'dev_tools')):
+    if d not in sys.path:
+        sys.path.insert(0, d)
+
+import operator_view as ov
+import turn_store
+
+PASS, FAIL = [], []
+
+
+def check(name, got, want=True):
+    ok = got == want
+    (PASS if ok else FAIL).append(name)
+    print(f'  {"ok  " if ok else "FAIL"}  {name}')
+    if not ok:
+        print(f'          wanted {want!r}, got {got!r}')
+
+
+def fingerprint(root: str) -> dict:
+    """Every file under a store, by content hash."""
+    out = {}
+    for base, _dirs, files in os.walk(root):
+        for name in sorted(files):
+            path = os.path.join(base, name)
+            with open(path, 'rb') as fh:
+                out[os.path.relpath(path, root)] = hashlib.sha256(
+                    fh.read()).hexdigest()
+    return out
+
+
+class CountingStore:
+    """A store that records which store methods the view reached for.
+
+    Calling `submissions(turn)` would give the same page while downloading
+    every blob, so the calls are what is checked.
+    """
+
+    def __init__(self, inner):
+        self.inner = inner
+        self.calls = {}
+
+    def __getattr__(self, name):
+        attr = getattr(self.inner, name)
+        if not callable(attr):
+            return attr
+
+        def counted(*a, **kw):
+            self.calls[name] = self.calls.get(name, 0) + 1
+            return attr(*a, **kw)
+
+        return counted
+
+
+def prepare(demo: str, tmp: str, gid: str = 'sandbox') -> str:
+    """Copy the demo galaxy, and give the current turn one real submission.
+
+    The first civ submits the turn's own blob, leaving the others waiting.
+    """
+    root = os.path.join(tmp, 'galaxies', gid)
+    shutil.copytree(demo, root)
+    store = turn_store.TurnStore(root)
+    turn, _ = store.current()
+    store.submit(store.civs()[0], turn, store.turn_blob(turn))
+    return root
+
+
+def set_deadline(root: str, deadline: float) -> None:
+    """Move a copied galaxy's clock. Never called on anything but the copy."""
+    store = turn_store.TurnStore(root)
+    state = store.state()
+    state['deadline'] = deadline
+    store._put_state(state)
+
+
+def check_read_only(root: str):
+    print('read-only: the store cannot be written through this view')
+    store = ov.read_only(turn_store.TurnStore(root))
+    for name in ('start', 'publish', 'submit', 'archive', 'put_note',
+                 '_put_state', '_atomic_write', 'delete_everything'):
+        try:
+            getattr(store, name)
+            blocked = False
+        except ov.ReadOnlyError:
+            blocked = True
+        check(f'read-only: {name}() is not reachable', blocked)
+    # Control: the reads stay reachable.
+    for name in ('state', 'civs', 'has_submitted', 'archive_record'):
+        try:
+            getattr(store, name)
+            reachable = True
+        except ov.ReadOnlyError:
+            reachable = False
+        check(f'read-only CONTROL: {name}() is still reachable', reachable)
+
+    try:
+        store.root = 'somewhere else'
+        settable = True
+    except ov.ReadOnlyError:
+        settable = False
+    check('read-only: an attribute cannot be assigned either', settable, False)
+
+    print('read-only: a full report leaves the store byte for byte unchanged')
+    before = fingerprint(root)
+    ov.galaxy_report(turn_store.TurnStore(root))
+    ov.render_html(ov.reports(root))
+    after = fingerprint(root)
+    check('read-only: no file changed', after, before)
+    check('read-only: no file appeared or vanished',
+          sorted(after), sorted(before))
+
+
+def check_no_bulk_download(root: str):
+    print('efficiency: who has submitted is one names-only call')
+    inner = turn_store.TurnStore(root)
+    counting = CountingStore(inner)
+    report = ov.galaxy_report(counting)
+    check('efficiency: submitted_civs called once for the whole roster',
+          counting.calls.get('submitted_civs'), 1)
+    check('efficiency: has_submitted is not asked per civ as well',
+          'has_submitted' in counting.calls, False)
+    check('efficiency: submissions() was never called',
+          'submissions' in counting.calls, False)
+    check('efficiency: turn_blob() was never called, the page needs no blob',
+          'turn_blob' in counting.calls, False)
+    check('efficiency CONTROL: the page still knows who submitted',
+          bool(report['submitted']))
+    # The read-only proxy blocks `submissions` outright.
+    proxied = ov.read_only(inner)
+    try:
+        proxied.submissions
+        blocked = False
+    except ov.ReadOnlyError:
+        blocked = True
+    check('efficiency: submissions() is off the proxy, so reaching for it '
+          'fails loudly', blocked)
+
+
+def check_contents(root: str):
+    print('content: the page matches what is actually in the store')
+    store = turn_store.TurnStore(root)
+    turn, deadline = store.current()
+    r = ov.galaxy_report(store, gid='sandbox')
+
+    check('content: the turn is the store\'s turn', r['turn'], turn)
+    check('content: the deadline is the store\'s deadline', r['deadline'],
+          deadline)
+    check('content: the roster is the store\'s roster',
+          [c['name'] for c in r['civs']], store.civs())
+    check('content: one civ has submitted', r['submitted'],
+          [store.civs()[0]])
+    check('content: the rest are waiting', r['waiting'], store.civs()[1:])
+    check('content: submitted and waiting together are the whole roster',
+          sorted(r['submitted'] + r['waiting']), sorted(store.civs()))
+
+    rec = store.archive_record(turn - 1)
+    check('content: the last tick is the newest archive record',
+          r['last_tick']['turn'], turn - 1)
+    check('content: it reports the recorded close time',
+          r['last_tick']['closed_at'], rec['closed_at'])
+    check('content: it reports the turn that tick published',
+          r['last_tick']['published'], rec['published'])
+    check('content: and the civs that tick was missing',
+          r['last_tick']['missing'], rec['missing'])
+    check('content: every archived turn the demo holds is shown',
+          [h['turn'] for h in r['history']],
+          [turn - 1, turn - 2, turn - 3, turn - 4])
+    check('content: no duration is claimed, because none is recorded',
+          r['last_tick']['measured_seconds'], None)
+    check('content: the derived lateness is present instead',
+          isinstance(r['last_tick']['late_by'], float))
+    check('content: and the oldest row has none, having nothing before it',
+          r['history'][-1]['late_by'], None)
+    check('content: the reading is JSON, for anything else that wants it',
+          isinstance(json.dumps(r), str))
+
+
+def check_overdue(root: str, tmp: str):
+    print('overdue: a turn past its deadline is called out, and one that is '
+          'not is not')
+    late = os.path.join(tmp, 'late')
+    shutil.copytree(root, late)
+    set_deadline(late, time.time() - 7200)
+    r = ov.galaxy_report(turn_store.TurnStore(late))
+    check('overdue: seconds_left is negative', r['seconds_left'] < 0)
+    check('overdue: it is reported as a problem',
+          any('overdue' in p for p in r['problems']))
+    check('overdue: and the text says so rather than printing a minus sign',
+          'OVERDUE' in ov.render_text([r]))
+
+    # Control: a turn with time left.
+    early = os.path.join(tmp, 'early')
+    shutil.copytree(root, early)
+    set_deadline(early, time.time() + 7200)
+    r2 = ov.galaxy_report(turn_store.TurnStore(early))
+    check('overdue CONTROL: a turn with time left is not overdue',
+          any('overdue' in p for p in r2['problems']), False)
+    check('overdue CONTROL: and the text says how long is left',
+          'left' in ov.render_text([r2]))
+
+
+def check_refusals(root: str, tmp: str):
+    print('refusals: what the referee dropped reaches the page')
+    with_notes = os.path.join(tmp, 'refused')
+    shutil.copytree(root, with_notes)
+    store = turn_store.TurnStore(with_notes)
+    turn, _ = store.current()
+    rec = store.archive_record(turn - 1)
+    rec['refused'] = {'Neighbor': ['rename of system 12 is not this civ\'s',
+                                   'conscription on a planet it does not own']}
+    rec['ignored'] = ['Stranger']
+    store.archive(turn - 1, rec)
+
+    r = ov.galaxy_report(store)
+    check('refusals: the count and the first reason are shown',
+          any('2 order(s) refused from Neighbor' in p for p in r['problems']))
+    check('refusals: a submission from outside the roster is called out',
+          any('Stranger' in p and 'ignored' in p for p in r['problems']))
+    # Control: the same galaxy without those fields.
+    clean = ov.galaxy_report(turn_store.TurnStore(root))
+    check('refusals CONTROL: an untouched galaxy reports neither',
+          any('refused' in p or 'ignored' in p for p in clean['problems']),
+          False)
+
+
+def check_closed_and_reclaimed(root: str, tmp: str):
+    """A galaxy the operator ended, and a seat the referee took back.
+
+    Both are read from the galaxy's own state.
+    """
+    print('operator state: a closed galaxy and a reclaimed seat')
+    ended = os.path.join(tmp, 'ended')
+    shutil.copytree(root, ended)
+    store = turn_store.TurnStore(ended)
+    if not hasattr(store, 'close'):
+        print('  SKIPPED, this store has no close(); K5 is not in the tree')
+        return
+    store.close('the beta finished on 1 November')
+    store.update_state({turn_store.RECLAIMED_KEY: {
+        'Neighbor': {'turn': 9, 'missed': 12, 'at': time.time()}}})
+
+    r = ov.galaxy_report(store)
+    check('operator state: the galaxy reads as closed', r['status'],
+          turn_store.CLOSED)
+    check('operator state: with the reason the operator gave',
+          r['closed_reason'], 'the beta finished on 1 November')
+    check('operator state: the reclaimed seat is listed',
+          sorted(r['reclaimed']), ['Neighbor'])
+    text = ov.render_text([r])
+    check('operator state: the text says the galaxy is closed and why',
+          'closed' in text and '1 November' in text)
+    check('operator state: and names the seat and the misses behind it',
+          'Neighbor, seat taken back at turn 9 after 12 missed turn(s)' in text)
+    page = ov.render_html([r])
+    check('operator state: the page says the same', '1 November' in page
+          and 'seats taken back' in page)
+
+    # Control: an untouched galaxy reads as open with nobody removed.
+    clean = ov.galaxy_report(turn_store.TurnStore(root))
+    check('operator state CONTROL: an untouched galaxy is open',
+          clean['status'], turn_store.OPEN)
+    check('operator state CONTROL: and has no reason and nobody removed',
+          (clean['closed_reason'], clean['reclaimed']), (None, {}))
+    check('operator state CONTROL: and its text carries neither line',
+          'seat taken back' in ov.render_text([clean]), False)
+
+
+def check_worker(root: str, tmp: str):
+    """The heartbeat `referee_worker` writes tells a failing worker from a
+    stopped one, each checked against the other."""
+    print('worker: a failing referee and a stopped one are told apart')
+    import referee_worker
+    check('worker: the view reads the names the worker writes',
+          (ov.WORKER_SEEN_KEY, ov.WORKER_FAILURES_KEY),
+          (referee_worker.WORKER_SEEN_KEY,
+           referee_worker.WORKER_FAILURES_KEY))
+
+    failing = os.path.join(tmp, 'failing')
+    shutil.copytree(root, failing)
+    set_deadline(failing, time.time() - 900)
+    store = turn_store.TurnStore(failing)
+    store.update_state({ov.WORKER_SEEN_KEY: time.time() - 30,
+                        ov.WORKER_FAILURES_KEY: 3})
+    r = ov.galaxy_report(store)
+    check('worker: three failures are a problem that says so',
+          any('failed 3 time(s) in a row' in p for p in r['problems']))
+    check('worker: and a failing worker is not called stopped',
+          any('stopped' in p for p in r['problems']), False)
+    text = ov.render_text([r])
+    check('worker: the text carries the heartbeat',
+          '3 failure(s) in a row' in text and 'last heard from' in text)
+    check('worker: and so does the page',
+          '3 failure(s) in a row' in ov.render_html([r]))
+
+    stopped = os.path.join(tmp, 'stopped')
+    shutil.copytree(root, stopped)
+    deadline = time.time() - 900
+    set_deadline(stopped, deadline)
+    store = turn_store.TurnStore(stopped)
+    store.update_state({ov.WORKER_SEEN_KEY: deadline - 3600,
+                        ov.WORKER_FAILURES_KEY: 0})
+    r = ov.galaxy_report(store)
+    check('worker: silence since before the deadline is a stopped worker',
+          any('stopped rather than retrying' in p for p in r['problems']))
+    check('worker: and is not reported as failures',
+          any('failed' in p for p in r['problems']), False)
+    store.update_state({ov.WORKER_SEEN_KEY: deadline + 60})
+    r = ov.galaxy_report(store)
+    check('worker CONTROL: a worker heard from after the deadline is not '
+          'called stopped',
+          any('stopped' in p for p in r['problems']), False)
+
+    healthy = os.path.join(tmp, 'healthy')
+    shutil.copytree(root, healthy)
+    set_deadline(healthy, time.time() + 3600)
+    store = turn_store.TurnStore(healthy)
+    store.update_state({ov.WORKER_SEEN_KEY: time.time() - 600,
+                        ov.WORKER_FAILURES_KEY: 0})
+    r = ov.galaxy_report(store)
+    check('worker CONTROL: a healthy worker with time left is no problem',
+          any('worker' in p for p in r['problems']), False)
+    check('worker CONTROL: an untouched galaxy says it has no heartbeat',
+          'no heartbeat recorded' in ov.render_text(
+              [ov.galaxy_report(turn_store.TurnStore(root))]))
+
+
+def check_seats(root: str, tmp: str):
+    """Who holds which seat, and a civ nobody can play."""
+    print('seats: the seat map, and a civ nobody holds')
+    seated = os.path.join(tmp, 'seated')
+    shutil.copytree(root, seated)
+    store = turn_store.TurnStore(seated)
+    civs = store.civs()
+    first, second = civs[0], civs[1]
+    store.update_state({
+        ov.SEATS_KEY: {'AAAAaaaa1111bbbb2222cccc3333': first},
+        ov.REBOUND_KEY: {first: {'from': 'OLDuid', 'to': 'AAAA',
+                                 'at': time.time() - 60}},
+        turn_store.JOINED_KEY: {second: {'uid': 'JOINERuid00000000000000000000',
+                                         'turn': 9}}})
+    r = ov.galaxy_report(store)
+    rows = {row['civ']: row for row in r['seats'] or []}
+    check('seats: every civ on the roster has a row', sorted(rows),
+          sorted(civs))
+    check('seats: the held one names its uid',
+          rows[first]['uid'], 'AAAAaaaa1111bbbb2222cccc3333')
+    check('seats: an unheld civ with first-use off is a problem',
+          any(p.startswith(f'{second} is on the roster and no sign-in holds')
+              for p in r['problems']))
+    check('seats: and the problem names the uid it joined as',
+          any('joined as JOINERui' in p for p in r['problems']))
+    check('seats: and a held one is not',
+          any(p.startswith(f'{first} is on the roster') for p in
+              r['problems']), False)
+    text = ov.render_text([r])
+    check('seats: the text shows a uid by its first eight characters only',
+          'AAAAaaaa' in text and 'AAAAaaaa1' not in text)
+    check('seats: and when the seat last moved', 'moved ' in text)
+    check('seats: and the page shows the same map',
+          'AAAAaaaa' in ov.render_html([r])
+          and 'AAAAaaaa1' not in ov.render_html([r]))
+
+    store.update_state({ov.SEAT_CLAIM_KEY: 'first-use'})
+    r = ov.galaxy_report(store)
+    check('seats CONTROL: with first-use on, an unheld civ is claimable and '
+          'not a problem',
+          any('no sign-in holds' in p for p in r['problems']), False)
+    clean = ov.galaxy_report(turn_store.TurnStore(root))
+    check('seats CONTROL: a folder galaxy with no seat map shows none',
+          (clean['seats'], 'seats' in ov.render_text([clean])), (None, False))
+
+
+def check_firebase_document(tmp: str):
+    """A Firebase galaxy costs the view one document `get` and nothing else.
+
+    Uses a `FirebaseTurnStore` whose document reference records what is done
+    to it and whose clients cannot be built.
+    """
+    print('firebase: the galaxy document is read once, and only read')
+    import firebase_store
+
+    class Snap:
+        exists = True
+
+        def __init__(self, data):
+            self._data = data
+
+        def to_dict(self):
+            return dict(self._data)
+
+    class Ref:
+        def __init__(self, data):
+            self.data, self.calls = data, []
+
+        def get(self, *a, **kw):
+            self.calls.append('get')
+            return Snap(self.data)
+
+        def __getattr__(self, name):
+            self.calls.append(name)
+            raise AssertionError(f'the view reached for {name} on the document')
+
+    class Fake(firebase_store.FirebaseTurnStore):
+        ref = None
+
+        @property
+        def doc(self):
+            return Fake.ref
+
+        @property
+        def fs(self):
+            raise AssertionError('the view built a Firestore client')
+
+    data = {'turn': 4, 'deadline': time.time() + 600, 'turn_seconds': 1800,
+            'civs': ['Alpha', 'Beta'],
+            ov.WORKER_SEEN_KEY: time.time() - 5, ov.WORKER_FAILURES_KEY: 1,
+            ov.SEATS_KEY: {'UIDalpha0000000000000000000': 'Alpha'},
+            'unrelated_private_field': 'x'}
+    Fake.ref = Ref(data)
+    got = ov._document_fields(ov.read_only(Fake('demo-x', 'g')))
+    check('firebase: the document was read with one get and nothing else',
+          Fake.ref.calls, ['get'])
+    check('firebase: and only the fields the view names came back',
+          sorted(got), sorted(k for k in ov.DOCUMENT_FIELDS if k in data))
+    check('firebase CONTROL: a folder store costs no document read',
+          ov._document_fields(ov.read_only(turn_store.TurnStore(tmp))), {})
+
+
+def check_unreadable(tmp: str):
+    print('failure: a store that cannot be read is a row, not a crash')
+    empty = os.path.join(tmp, 'empty')
+    os.makedirs(empty, exist_ok=True)
+    r = ov.galaxy_report(turn_store.TurnStore(empty))
+    check('failure: an empty folder reports no galaxy rather than raising',
+          r['error'], 'no galaxy here yet')
+    check('failure: and says which of the two causes it could be',
+          any('wrong spec' in p for p in r['problems']))
+
+    missing = os.path.join(tmp, 'not-there-at-all')
+    r2 = ov.galaxy_report(turn_store.TurnStore(missing))
+    check('failure: a path that does not exist is also a row',
+          r2['error'] is not None)
+    check('failure: main() exits 2 on a galaxy it cannot read',
+          ov.main([missing]), 2)
+
+    # A spec that open_store refuses, as a Firebase spec does on a machine with
+    # no Google credentials.
+    real = turn_store.open_store
+
+    def refuse(spec, **kw):
+        raise RuntimeError('no credentials on this machine')
+
+    try:
+        turn_store.open_store = refuse
+        rows = ov.reports('firebase://nowhere/sandbox')
+    finally:
+        turn_store.open_store = real
+    check('failure: a spec open_store refuses is a row, not a traceback',
+          len(rows), 1)
+    check('failure: and the row says why',
+          'no credentials' in (rows[0]['error'] or ''))
+    check('failure: the page still renders from it',
+          'no credentials' in ov.render_html(rows))
+
+
+def check_never_ticked(tmp: str):
+    print('fresh: a galaxy that has never ticked says so')
+    root = os.path.join(tmp, 'fresh')
+    demo = turn_store.TurnStore(os.path.join(tmp, 'galaxies', 'sandbox'))
+    turn_store.TurnStore(root).start(demo.turn_blob(demo.current()[0]),
+                                     ['DemoPlayer'], turn_seconds=14400)
+    r = ov.galaxy_report(turn_store.TurnStore(root))
+    check('fresh: no archive record is found', r['last_tick'], None)
+    check('fresh: and that is reported as a problem',
+          any('nothing here has been through the referee'
+              in p for p in r['problems']))
+    check('fresh: nobody has submitted yet', r['submitted'], [])
+    check('fresh: the whole roster is waiting', r['waiting'], ['DemoPlayer'])
+
+
+def check_html(root: str):
+    print('page: the html is self-contained and holds what the text holds')
+    rows = ov.reports(root)
+    page = ov.render_html(rows, refresh=60)
+    store = turn_store.TurnStore(root)
+    for civ in store.civs():
+        check(f'page: {civ} appears', civ in page)
+    check('page: the turn number appears', f'>{rows[0]["turn"]}<' in page)
+    check('page: it refreshes itself', 'http-equiv="refresh"' in page)
+    for forbidden in ('src=', '@import', 'http://', 'https://'):
+        check(f'page: nothing external, no {forbidden}',
+              forbidden in page, False)
+    check('page: it is a complete document',
+          page.startswith('<!doctype html>') and page.endswith('</html>'))
+
+
+def check_http(root: str):
+    """The same galaxy read over HTTP gives the same report."""
+    print('seam: the same galaxy through open_store over HTTP')
+    import turn_server
+    turn_server.VERBOSE = False
+    httpd = turn_server.serve(root, '127.0.0.1', 0)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    base = f'http://127.0.0.1:{httpd.server_address[1]}'
+    try:
+        direct = ov.galaxy_report(turn_store.TurnStore(root))
+        over_http = ov.reports(base)[0]
+        check('seam: the store resolved to the HTTP one',
+              over_http['kind'], 'HttpTurnStore')
+        for key in ('turn', 'deadline', 'submitted', 'waiting'):
+            check(f'seam: {key} agrees between the folder and HTTP',
+                  over_http[key], direct[key])
+        check('seam: the last tick agrees',
+              over_http['last_tick']['closed_at'],
+              direct['last_tick']['closed_at'])
+        # Compared by count and opening phrase, since the full text carries a
+        # countdown read at slightly different times.
+        check('seam: the same number of problems',
+              len(over_http['problems']), len(direct['problems']))
+        check('seam: and the same problems',
+              [p[:24] for p in over_http['problems']],
+              [p[:24] for p in direct['problems']])
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+
+
+def check_served_page(root: str):
+    print('serve: the page comes back over loopback and writes nothing')
+    import urllib.request
+    before = fingerprint(root)
+    httpd = ov.serve(root, port=0)
+    check('serve: it binds the loopback address only',
+          httpd.server_address[0], '127.0.0.1')
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    try:
+        with urllib.request.urlopen(
+                f'http://127.0.0.1:{httpd.server_address[1]}/',
+                timeout=10) as resp:
+            body = resp.read().decode('utf-8')
+            code = resp.status
+        check('serve: it answers 200', code, 200)
+        check('serve: with the galaxy in it',
+              turn_store.TurnStore(root).civs()[0] in body)
+    finally:
+        httpd.shutdown()
+        httpd.server_close()
+    check('serve: the store is unchanged after being served',
+          fingerprint(root), before)
+
+
+def check_directory(tmp: str):
+    print('directory: every galaxy a directory lists gets a row')
+    root = os.path.join(tmp, 'galaxies')
+    rows = ov.reports(root, directory=True)
+    check('directory: the sandbox is listed',
+          [r['id'] for r in rows], ['sandbox'])
+    check('directory: the row carries the galaxy status', rows[0]['status'],
+          'open')
+
+    import galaxy_directory
+    d = galaxy_directory.open_directory(root)
+    d.register('gone', name='Unreachable', store=os.path.join(tmp, 'nowhere'))
+    rows = ov.reports(root, directory=True)
+    check('directory: a galaxy whose store is missing is still a row',
+          sorted(r['id'] for r in rows), ['gone', 'sandbox'])
+    gone = [r for r in rows if r['id'] == 'gone'][0]
+    check('directory: and it carries the error rather than dropping out',
+          gone['error'] is not None)
+    sandbox = turn_store.TurnStore(os.path.join(root, 'sandbox'))
+    check('directory CONTROL: the healthy galaxy still reads beside it',
+          [r for r in rows if r['id'] == 'sandbox'][0]['turn'],
+          sandbox.current()[0])
+
+    print('directory: it cannot be written through either')
+    ro = ov.read_only_directory(d)
+    for name in ('register', 'set_status'):
+        try:
+            getattr(ro, name)
+            blocked = False
+        except ov.ReadOnlyError:
+            blocked = True
+        check(f'directory: {name}() is not reachable', blocked)
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__.split('\n')[1])
+    ap.add_argument('--demo',
+                    default=os.path.join(ROOT, 'server', 'galaxy_demo'),
+                    help='a real archived galaxy to copy')
+    ap.add_argument('--keep', action='store_true',
+                    help='leave the temporary copy behind')
+    a = ap.parse_args()
+
+    if not os.path.exists(os.path.join(a.demo, 'state.json')):
+        print(f'no galaxy at {a.demo}. This run proves nothing; point --demo '
+              f'at a store with real archived turns.')
+        return 1
+
+    tmp = tempfile.mkdtemp(prefix='opview_')
+    print(f'copy of {a.demo} at {tmp}\n')
+    try:
+        root = prepare(a.demo, tmp)
+        check_read_only(root)
+        check_no_bulk_download(root)
+        check_contents(root)
+        check_overdue(root, tmp)
+        check_refusals(root, tmp)
+        check_closed_and_reclaimed(root, tmp)
+        check_worker(root, tmp)
+        check_seats(root, tmp)
+        check_firebase_document(tmp)
+        check_unreadable(tmp)
+        check_never_ticked(tmp)
+        check_html(root)
+        check_http(root)
+        check_served_page(root)
+        check_directory(tmp)
+
+        print('\noriginal: the galaxy this was copied from was not touched')
+        check('original: still where it was',
+              os.path.exists(os.path.join(a.demo, 'state.json')))
+    finally:
+        if not a.keep:
+            shutil.rmtree(tmp, ignore_errors=True)
+        else:
+            print(f'\nkept {tmp}')
+
+    print(f'\n{len(PASS)} passed, {len(FAIL)} failed')
+    for name in FAIL:
+        print(f'  failed: {name}')
+    return 1 if FAIL else 0
+
+
+if __name__ == '__main__':
+    sys.exit(main())

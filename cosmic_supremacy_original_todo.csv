@@ -138,6 +138,7 @@ Earendel’s always outnumbered -> http://cosmicsupremacy.com/forum/thread.php?p
 Ideas for team galaxies -> http://cosmicsupremacy.com/forum/thread.php?postid=45813#post45813,Major Gameplay Suggestions
 Persistent galaxies -> http://cosmicsupremacy.com/forum/thread.php?threadid=4840,Major Gameplay Suggestions
 Earendel’s Corruption Reputation Morale Loyalty -> http://cosmicsupremacy.com/forum/thread.php?postid=48328#post48328,Major Gameplay Suggestions
+"teach new players through mentored team galaxies: the experienced player takes the supply-provider and strategy-leader role while the new players run their own empires, and leaders are scored on whether the faction they taught wins",Major Gameplay Suggestions
 "when game starts for the first time, bring up a welcome screen, as well as a quick explanation how the game works (tick wise) -> http://www.spaceciv.com/forum/thread.php?postid=9364#post9364","Webpage, Game Startup, and Tutorial Galaxy"
 "manual: governor rules more detailed info (food-surplus, base food, food output, etc)","Webpage, Game Startup, and Tutorial Galaxy"
 "manual: more experienced steps: try (shared) prod-queues for production, use govs to manage your population (examples)","Webpage, Game Startup, and Tutorial Galaxy"
@@ -160,3 +161,8 @@ Extended Hall of Fame stats. (http://cosmicsupremacy.com/forum/thread.php?thread
 Expanded ranking (http://cosmicsupremacy.com/forum/thread.php?threadid=3769&page=4),Profile
 Split production so more than 1 thing can be produce per turn.,Planetry
 Diplomacy Scans (http://cosmicsupremacy.com/forum/thread.php?threadid=5799),Scans / Tech
+"AI players: scope whether the probe harness in client/dev_tools/ai_player/ can hold a seat for a full game, the bar every AI Players item depends on",AI Players
+"AI players: on-demand AI galaxies, a player asks the server for a new galaxy filled with bots (single-player / practice mode)",AI Players
+"AI players: local play, a bot-filled galaxy running entirely on the player machine, no server dependency and no waiting",AI Players
+"AI players: lobby seat filling, offer a waiting multiplayer galaxy the option to start early with bots in the remaining seats",AI Players
+"AI players: keep at least one AI civ seated in a galaxy while any human is, so a galaxy is never a human alone and abandonment never empties it under a player who returns",AI Players

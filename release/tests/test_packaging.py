@@ -1,0 +1,330 @@
+"""
+The multiplayer path has to survive being frozen.
+
+Each check covers a failure that is silent in a build: a misspelled
+`--hidden-import`, a path computed from `__file__` inside the unpack directory,
+and a `sys.executable` subprocess, which in a frozen build starts a second
+launcher.
+
+No game and no window.
+"""
+import ast
+import os
+import pathlib
+import re
+import sys
+
+REPO = str(pathlib.Path(__file__).resolve().parents[2])
+RELEASE = os.path.join(REPO, "release")
+BUILD_PS1 = os.path.join(RELEASE, "build.ps1")
+
+sys.path.insert(0, RELEASE)
+import launcher as L                                            # noqa: E402
+
+fails = []
+
+
+def check(label, got, want):
+    ok = want(got) if callable(want) else got == want
+    print(f"  [{'PASS' if ok else 'FAIL'}] {label}: {got!r}")
+    if not ok:
+        fails.append(label)
+
+
+def build_flags(flag):
+    """Every value build.ps1 passes to a PyInstaller flag.
+
+    Read out of the script, so the list is the one the build runs.
+    """
+    text = open(BUILD_PS1, encoding="utf-8-sig").read()
+    return re.findall(rf"'{flag}',\s*(?:'([^']+)'|\$(\w+))", text)
+
+
+def ps_variable(name):
+    """A path variable's definition in build.ps1, resolved against the repo."""
+    text = open(BUILD_PS1, encoding="utf-8-sig").read()
+    m = re.search(rf"^\s*\${name}\s*=\s*Join-Path \$(\w+) '([^']+)'", text, re.M)
+    if not m:
+        return None
+    parent, leaf = m.group(1), m.group(2)
+    base = REPO if parent == "RepoRoot" else ps_variable(parent)
+    return None if base is None else os.path.join(base, leaf.replace("\\", os.sep))
+
+
+# The analysis path, resolved the way build.ps1 resolves it.
+paths = []
+for literal, var in build_flags("--paths"):
+    p = literal or ps_variable(var)
+    check(f"--paths {literal or '$' + var} resolves", p is not None, True)
+    if p:
+        check(f"--paths {os.path.relpath(p, REPO)} exists", os.path.isdir(p), True)
+        paths.append(p)
+
+# Every hidden import is a module that exists. They are imported inside
+# functions, so nothing else would notice one missing.
+import importlib.util                                           # noqa: E402
+
+probe = list(paths) + sys.path
+for literal, var in build_flags("--hidden-import"):
+    name = literal or var
+    try:
+        spec = importlib.util.find_spec(name) if name in sys.modules else None
+    except (ImportError, ValueError):
+        spec = None
+    if spec is None:
+        found = any(os.path.exists(os.path.join(d, name + ".py")) for d in probe)
+    else:
+        found = True
+    check(f"--hidden-import {name} exists", found, True)
+
+# Nothing in the player's path re-runs sys.executable, which works from a
+# checkout and not from a frozen build. referee.py is not in the release.
+PLAYER_PATH = [
+    os.path.join(REPO, "server", "player_turn.py"),
+    os.path.join(REPO, "client", "dev_tools", "game_cycle.py"),
+]
+for src in PLAYER_PATH:
+    tree = ast.parse(open(src, encoding="utf-8").read())
+    hits = [n.lineno for n in ast.walk(tree)
+            if isinstance(n, ast.Attribute) and n.attr == "executable"
+            and isinstance(n.value, ast.Name) and n.value.id == "sys"]
+    check(f"{os.path.basename(src)} does not re-exec sys.executable", hits, [])
+
+# The turn machinery can be pointed somewhere else
+mods = L.multiplayer_modules()
+check("multiplayer_modules() finds the machinery", mods is not None, True)
+
+if mods:
+    player_turn, _turn_store = mods
+    import game_cycle as gc
+
+    game_root, data_dir = os.path.join(REPO, "nowhere", "game"), os.path.join(
+        REPO, "nowhere", "data")
+    L.bind_multiplayer_paths(game_root, data_dir)
+
+    check("client dir follows the game folder", gc.CLIENT_DIR, game_root)
+    check("player build follows the game folder",
+          os.path.dirname(gc.PLAYER_EXE), game_root)
+    check("resolve_exe('player') stays inside the game folder",
+          os.path.dirname(gc.resolve_exe("player")), game_root)
+    check("saves follow the data directory", gc.SAVES,
+          os.path.join(data_dir, "saves"))
+    check("player_turn works below the data directory", player_turn.HERE, data_dir)
+    check("game_cycle.trigger_save is callable",
+          callable(getattr(gc, "trigger_save", None)), True)
+
+    # The launcher refuses to start a turn without one of these, and build.ps1
+    # puts one there. The two lists must agree.
+    shipped = set(re.findall(r"'(CosmicSupremacy_\w+\.exe)'",
+                             open(BUILD_PS1, encoding="utf-8-sig").read()))
+    check("build.ps1 ships a client the launcher will accept",
+          shipped & set(L.MP_CLIENTS), lambda got: bool(got))
+
+# The checkout writes no bytecode for trigger_save. Defender quarantines
+# trigger_save's .pyc as Exploit:Python/Leivion.C, never the .py. Harmless
+# probe modules test the mechanism.
+import tempfile                                                 # noqa: E402
+
+sys.path.insert(0, os.path.join(REPO, "client", "dev_tools"))
+import game_cycle as gc_mod                                     # noqa: E402
+
+if sys.dont_write_bytecode:
+    print("  [SKIP] bytecode writing is already off in this interpreter")
+else:
+    probe_dir = tempfile.mkdtemp(prefix="nobytecode_")
+    stamp = str(os.getpid())
+    quiet, loud = f"probe_quiet_{stamp}", f"probe_loud_{stamp}"
+    for mod in (quiet, loud):
+        with open(os.path.join(probe_dir, mod + ".py"), "w") as fh:
+            fh.write("VALUE = 1\n")
+    sys.path.insert(0, probe_dir)
+    cache = os.path.join(probe_dir, "__pycache__")
+
+    def cached(mod):
+        return os.path.isdir(cache) and any(
+            f.startswith(mod + ".") for f in os.listdir(cache))
+
+    got = gc_mod.import_without_bytecode(quiet)
+    check("import_without_bytecode returns the module", got.VALUE, 1)
+    check("and writes no .pyc for it", cached(quiet), False)
+    check("and leaves bytecode writing as it found it",
+          sys.dont_write_bytecode, False)
+    __import__(loud)
+    check("while a plain import here does write one", cached(loud), True)
+    sys.path.remove(probe_dir)
+    import shutil                                               # noqa: E402
+    shutil.rmtree(probe_dir, ignore_errors=True)
+
+
+def trigger_save_imports(tree):
+    """Line numbers of every import statement that loads trigger_save."""
+    lines = []
+    for n in ast.walk(tree):
+        if isinstance(n, ast.Import) and any(
+                a.name == "trigger_save" for a in n.names):
+            lines.append(n.lineno)
+        elif isinstance(n, ast.ImportFrom) and n.module == "trigger_save":
+            lines.append(n.lineno)
+    return lines
+
+
+def bytecode_off_line(tree):
+    """First module-level `sys.dont_write_bytecode = True`, or None."""
+    for n in tree.body:
+        if (isinstance(n, ast.Assign) and len(n.targets) == 1
+                and isinstance(n.targets[0], ast.Attribute)
+                and n.targets[0].attr == "dont_write_bytecode"
+                and isinstance(n.value, ast.Constant) and n.value.value is True):
+            return n.lineno
+    return None
+
+
+# Every file in the checkout that imports trigger_save turns bytecode off
+# first. game_cycle goes through a helper, not an import statement.
+SKIP_DIRS = {".git", ".claude", "dist", "build", "__pycache__", "wayback",
+             "node_modules"}
+importers = []
+for root, dirs, files in os.walk(REPO):
+    # Dot directories hold other worktrees and tool state.
+    dirs[:] = [d for d in dirs if d not in SKIP_DIRS and not d.startswith(".")]
+    for f in files:
+        if not f.endswith(".py") or f == "trigger_save.py":
+            continue
+        src = os.path.join(root, f)
+        try:
+            tree = ast.parse(open(src, encoding="utf-8").read())
+        except (SyntaxError, UnicodeDecodeError):
+            continue
+        hits = trigger_save_imports(tree)
+        if hits:
+            importers.append(f)
+            off = bytecode_off_line(tree)
+            check(f"{f} turns bytecode off before importing trigger_save",
+                  off is not None and off < min(hits), True)
+check("the dev tools that import trigger_save were found",
+      sorted(importers), lambda got: "trigger_load.py" in got)
+
+gc_tree = ast.parse(open(gc_mod.__file__, encoding="utf-8").read())
+check("game_cycle has no import statement for trigger_save",
+      trigger_save_imports(gc_tree), [])
+ts_fn = next(n for n in gc_tree.body
+             if isinstance(n, ast.FunctionDef) and n.name == "trigger_save")
+helper_calls = [c for c in ast.walk(ts_fn)
+                if isinstance(c, ast.Call) and isinstance(c.func, ast.Name)
+                and c.func.id == "import_without_bytecode"
+                and c.args and isinstance(c.args[0], ast.Constant)
+                and c.args[0].value == "trigger_save"]
+check("game_cycle.trigger_save imports it through import_without_bytecode",
+      len(helper_calls), 1)
+
+# build.ps1 keeps loose bytecode out and names what holds a file. The functions
+# are taken out of build.ps1 by PowerShell's own parser.
+import subprocess                                               # noqa: E402
+
+
+def build_functions_command(command):
+    """A powershell command line running `command` with build.ps1's functions."""
+    script = (
+        "$ErrorActionPreference = 'Stop'\n"
+        "$ast = [System.Management.Automation.Language.Parser]::ParseFile("
+        f"'{BUILD_PS1}', [ref]$null, [ref]$null)\n"
+        "$ast.FindAll({ param($a) $a -is "
+        "[System.Management.Automation.Language.FunctionDefinitionAst] }, $false)"
+        " | ForEach-Object { . ([scriptblock]::Create($_.Extent.Text)) }\n"
+        + command)
+    return ["powershell", "-NoProfile", "-NonInteractive",
+            "-ExecutionPolicy", "Bypass", "-Command", script]
+
+
+NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+
+
+def run_build_functions(command):
+    """Run `command` with build.ps1's functions defined. Returns (rc, output)."""
+    p = subprocess.run(build_functions_command(command), capture_output=True,
+                       text=True, timeout=120, creationflags=NO_WINDOW)
+    return p.returncode, p.stdout + p.stderr
+
+
+def ps_quote(path):
+    return "'" + path.replace("'", "''") + "'"
+
+
+import shutil                                                   # noqa: E402
+
+stage = tempfile.mkdtemp(prefix="stage_")
+os.makedirs(os.path.join(stage, "game"))
+open(os.path.join(stage, "game", "readme.txt"), "w").close()
+rc, _ = run_build_functions(f"Assert-NoLooseBytecode {ps_quote(stage)}")
+check("a release folder with no bytecode passes the guard", rc, 0)
+
+os.makedirs(os.path.join(stage, "game", "__pycache__"))
+rc, out = run_build_functions(f"Assert-NoLooseBytecode {ps_quote(stage)}")
+check("a __pycache__ folder fails it", rc != 0 and "__pycache__" in out, True)
+shutil.rmtree(os.path.join(stage, "game", "__pycache__"))
+
+open(os.path.join(stage, "stray.pyc"), "wb").close()
+rc, out = run_build_functions(f"Assert-NoLooseBytecode {ps_quote(stage)}")
+check("a stray .pyc fails it", rc != 0 and "stray.pyc" in out, True)
+shutil.rmtree(stage, ignore_errors=True)
+
+held_dir = tempfile.mkdtemp(prefix="held_")
+held = os.path.join(held_dir, "held.exe")
+with open(held, "wb") as fh:
+    fh.write(b"MZ")
+    fh.flush()
+    rc, out = run_build_functions(f"Get-FileHolders {ps_quote(held)}")
+    check("Get-FileHolders names this process while it holds the file",
+          f"({os.getpid()})" in out, True)
+rc, out = run_build_functions(f"Get-FileHolders {ps_quote(held)}")
+check("and not once it has let go", f"({os.getpid()})" in out, False)
+
+WAIT_REPORT = ("; \"released=$($r.Released) seconds=$($r.Seconds) "
+               "holders=$($r.Holders -join '|')\"")
+rc, out = run_build_functions(
+    f"$r = Wait-FilesReleased @({ps_quote(held)}) 5" + WAIT_REPORT)
+check("Wait-FilesReleased returns at once for a file nobody holds",
+      "released=True" in out and f"({os.getpid()})" not in out, True)
+
+with open(held, "rb"):
+    rc, out = run_build_functions(
+        f"$r = Wait-FilesReleased @({ps_quote(held)}) 1" + WAIT_REPORT)
+check("and gives up at its timeout on one that stays held",
+      "released=False" in out, True)
+check("and names the holder it waited on", f"({os.getpid()})" in out, True)
+
+# Let go part way through the wait, the way a scan finishes.
+import time                                                     # noqa: E402
+fh = open(held, "rb")
+proc = subprocess.Popen(
+    build_functions_command(
+        f"$r = Wait-FilesReleased @({ps_quote(held)}) 30" + WAIT_REPORT),
+    stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+    creationflags=NO_WINDOW)
+time.sleep(8)
+fh.close()
+out = proc.communicate(timeout=60)[0]
+m = re.search(r"seconds=([\d.]+)", out)
+check("and returns once a holder lets go mid-wait",
+      "released=True" in out and f"({os.getpid()})" in out, True)
+check("well before its timeout", m is not None and float(m.group(1)) < 25, True)
+shutil.rmtree(held_dir, ignore_errors=True)
+
+build_text = open(BUILD_PS1, encoding="utf-8-sig").read()
+guard_at = build_text.find("Assert-NoLooseBytecode $Stage")
+zip_at = build_text.find("Compress-Archive -Path $Stage")
+check("build.ps1 checks the release folder for bytecode before zipping it",
+      0 < guard_at < zip_at, True)
+wait_at = build_text.find("Wait-FilesReleased $staged")
+check("and waits for the staged executables to be released before that",
+      0 < guard_at < wait_at < zip_at, True)
+catch_at = build_text.find("catch", zip_at)
+check("and names the holders when the archive step is refused",
+      catch_at > 0 and "Get-FileHolders" in build_text[catch_at:catch_at + 600],
+      True)
+
+print()
+if fails:
+    print("FAILED: " + ", ".join(fails))
+    sys.exit(1)
+print("packaging checks passed")
