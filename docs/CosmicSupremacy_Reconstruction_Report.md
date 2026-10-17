@@ -1309,7 +1309,7 @@ Key observations from running the patched EXE with a `TEBE` type `.csgalaxy` tok
 
 **Testbed game loop**
 - After entering, the client immediately requests `savegamelist` to enumerate existing saves.
-- Saves are named `TestBed Save 1`, `TestBed Save -1`, etc. with `gameid=-1` as the client's "allocate new slot" sentinel.
+- A new save arrives with `gameid=-1`, the client's "allocate new slot" sentinel, and the name typed in the Save dialog (`Unnamed` by default). The `TestBed Save N` names seen early on were made up by the prototype server.
 - The server should allocate the next available positive integer ID when it receives `gameid=-1`, since the client treats negative IDs as invalid when loading from `savegamelist`.
 - Save/load cycle works identically to other galaxy types, the server stores and returns the binary blob opaquely.
 - Ticks advance client-side (same as tutorial), allowing immediate gameplay without server-driven tick scheduling.

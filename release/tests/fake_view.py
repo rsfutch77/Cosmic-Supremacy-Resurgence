@@ -177,7 +177,7 @@ class FakeView:
         self.prompts.append(("open_file", (title, initialdir, filetypes)))
         return self._answer("open_file", "")
 
-    def ask_name(self, text, current, rules, validate):
+    def ask_name(self, text, current, rules, validate, title="Your name"):
         self.prompts.append(("name", (text, current, rules)))
         raw = self._answer("name", None)
         if raw is None:

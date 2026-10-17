@@ -207,9 +207,9 @@ windows.
 
 | | Test | Do | Expect |
 |---|---|---|---|
-| M1  | Save | Click **Save** in the launcher | Buttons grey out briefly, then the log says it saved, and names the file |
+| M1  | Save | Click **Save** in the launcher, type a name, click **Save** | A dialog asks for the save's name, offering `singleplayer` the first time. Buttons grey out briefly, then the log says it saved, and names the file |
 | M2  | No error in game | Watch the game window during the save | No "Failed to save the Save-Game" dialog appears |
-| M3  | Save file exists | Open `data\games` next to the launcher | A file named `savegame_turn<N>.dat` with the turn you saved at |
+| M3  | Save file exists | Open `data\games` next to the launcher | A file named `<name>_turn<N>.dat`, with the name you typed and the turn you saved at |
 | M4  | Load dialog | Click **Load** | A file picker opens in `data\games`, then a confirmation warns that loading restarts the game and unsaved progress is lost |
 | M5  | Cancel is safe | Cancel at the confirmation | Nothing happens. The running game is untouched |
 | M6  | Load restores | Load the save from M1 | The game closes and reopens on the saved galaxy, at the saved turn, with your planets, ships, research and orders as they were |
@@ -232,8 +232,6 @@ These are understood and already recorded. They are not bugs to file.
 3. **Fame is always 0.** The server returns a fixed value.
 4. **Every new game is the same galaxy.** Single Player ships one pre-built
    galaxy. Per-session generation is a known open item.
-5. **Saves are always named `singleplayer`.** Only the turn number tells two
-   saves apart. A name prompt is a known open item.
 
 ## Reporting
 

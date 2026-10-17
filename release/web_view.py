@@ -436,13 +436,14 @@ class WebView:
             webview.OPEN_DIALOG, directory=initialdir, file_types=types)
         return picked[0] if picked else ""
 
-    def ask_name(self, text: str, current: str, rules: str, validate):
+    def ask_name(self, text: str, current: str, rules: str, validate,
+                 title: str = "Your name"):
         """Ask until `validate` takes a name or the player cancels. A refusal
         comes back in the same dialog, above the rules."""
         problem = ""
         while True:
             value, raw = self._prompt({
-                "title": "Your name", "text": text, "note": rules,
+                "title": title, "text": text, "note": rules,
                 "error": problem,
                 "input": {"label": "Name", "value": current,
                           "maxlength": L.NAME_LIMIT},

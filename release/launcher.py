@@ -634,7 +634,8 @@ NAME_RULES = (f"Up to {NAME_LIMIT} characters. Letters, digits and ordinary "
               f"punctuation, but not {' '.join(NAME_FORBIDDEN)}")
 
 
-def validate_player_name(raw):
+def validate_player_name(raw, forbidden=NAME_FORBIDDEN,
+                         holder="The game's civilisation name"):
     """(name, None) for a name that can be used, or (None, why not).
 
     The reason is shown to the player next to the field. Surrounding spaces
@@ -644,11 +645,11 @@ def validate_player_name(raw):
     if not name:
         return None, "Enter a name."
     if len(name) > NAME_LIMIT:
-        return None, (f"That is {len(name)} characters. The game's civilisation "
-                      f"name holds {NAME_LIMIT}.")
+        return None, (f"That is {len(name)} characters. {holder} "
+                      f"holds {NAME_LIMIT}.")
     # The engine's name field is ASCII, and a civ name is also a file name, so
     # both rules refuse characters. The player is told which ones, not why.
-    bad = sorted({c for c in name if c in NAME_FORBIDDEN or not " " <= c <= "~"})
+    bad = sorted({c for c in name if c in forbidden or not " " <= c <= "~"})
     if bad:
         shown = [c for c in bad if c.isprintable() and not c.isspace()]
         if not shown:
@@ -659,6 +660,17 @@ def validate_player_name(raw):
     if name.endswith("."):
         return None, "A name cannot end in a full stop."
     return name, None
+
+
+# The server drops # and ' from a save's name, and the name is also the .dat's.
+SAVE_NAME_FORBIDDEN = NAME_FORBIDDEN + "#'"
+
+SAVE_NAME_RULES = (f"Up to {NAME_LIMIT} characters. Letters, digits and ordinary "
+                   f"punctuation, but not {' '.join(SAVE_NAME_FORBIDDEN)}")
+
+
+def validate_save_name(raw):
+    return validate_player_name(raw, SAVE_NAME_FORBIDDEN, "A save name")
 
 
 def identity_path(data_dir: str) -> str:
@@ -2553,6 +2565,7 @@ class Launcher:
         self._waiting_since = None
         self._last_seen_turn = None
         self._ctl_busy = False
+        self._save_name = "singleplayer"   # offered again by the next Save
         self.running_mode = None
         # The multiplayer session: the turn loop's worker thread, the store it
         # follows, and a flag asking it to stop between turns.
@@ -4102,6 +4115,15 @@ class Launcher:
             self.say("multiplayer: sending your turn now")
             return
 
+        name = self.view.ask_name(
+            "Name this save. The turn number is added to the file name, so "
+            "saving under the same name on a later turn keeps both.",
+            self._save_name, SAVE_NAME_RULES, validate_save_name,
+            title="Save game")
+        if not name:
+            return
+        self._save_name = name
+
         import gamectl
         save_dir = os.path.join(self.data_dir, "saves")
         dat_dir = os.path.join(self.data_dir, "games")
@@ -4111,7 +4133,7 @@ class Launcher:
             started = time.time() - 1
             with self._client() as c:
                 turn = c.turn()
-                if not c.save_game("singleplayer"):
+                if not c.save_game(name):
                     raise gamectl.GameError(
                         "the game refused to save. This usually means the "
                         "launcher's server is not reachable; keep this window "
@@ -4119,7 +4141,7 @@ class Launcher:
             # The engine's save goes out over HTTP; give the server a moment to
             # finish writing the capture before looking for it.
             time.sleep(1.5)
-            out = os.path.join(dat_dir, f"savegame_turn{turn}.dat")
+            out = os.path.join(dat_dir, f"{name}_turn{turn}.dat")
             return gamectl.capture_to_dat(save_dir, out, since=started)
 
         self._in_background("saving", work)

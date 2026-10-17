@@ -165,13 +165,6 @@ differ from each other on the local server, measured rather than assumed:
 
 Single-player work. Multiplayer is tracked separately.
 
-### [ ] Let the player name a save
-
-Save writes `data\games\savegame_turn<N>.dat` and the name the engine records is
-always `singleplayer`. A player with several games in flight has only the turn
-number to tell them apart. Wants a name prompt, passed through to
-`gamectl.Client.save_game` (which already takes one) and used for the filename.
-
 ### [ ] Per-session galaxy generation, for replayability
 
 Single Player ships one pre-seeded `.dat`, so **every new game is the same
