@@ -33,7 +33,7 @@ for _d in (HERE, os.path.join(HERE, 'dev_tools'),
 import turn_store
 
 # Thresholds in consecutive missed turns, and the state keys that override them per galaxy.
-WARN_KEY, RECLAIM_KEY = 'warn_after_misses', 'reclaim_after_misses'
+WARN_KEY, RECLAIM_KEY = turn_store.WARN_KEY, turn_store.RECLAIM_KEY
 WARN_AFTER, RECLAIM_AFTER = 6, 24
 
 # What a civ's turn was, as the archive can tell it apart.

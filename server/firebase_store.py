@@ -68,7 +68,8 @@ PREFIX = 'beta'   # root of everything this module writes, in both services
 STATE_FIELDS = ('turn', 'deadline', 'turn_seconds', 'civs', 'hash',
                 turn_store.STATUS_KEY, turn_store.CLOSED_REASON_KEY,
                 turn_store.RECLAIMED_KEY, turn_store.JOINED_KEY,
-                turn_store.MIN_BUILD_KEY)
+                turn_store.MIN_BUILD_KEY, turn_store.WARN_KEY,
+                turn_store.RECLAIM_KEY)
 
 # Who has submitted, as `{"<turn>": [civ, ...]}` on the galaxy document. Keyed
 # by turn so a commit racing a publish lands under its own turn; `publish`

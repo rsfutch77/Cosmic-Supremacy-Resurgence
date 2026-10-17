@@ -77,11 +77,13 @@ CLOSED_REASON_KEY = 'closed_reason'
 RECLAIMED_KEY = 'reclaimed'
 
 # Optional state fields: who was seated at a boundary (written by
-# `joins.commit`), and the oldest build allowed to play. Defined here so
+# `joins.commit`), the oldest build allowed to play, and the missed-turn
+# thresholds `abandonment` reads. Defined here so
 # `firebase_store.STATE_FIELDS` can list them.
 # `release/launcher.py` holds its own `MIN_BUILD_KEY`; the two must agree.
 JOINED_KEY = 'joined'
 MIN_BUILD_KEY = 'min_build'
+WARN_KEY, RECLAIM_KEY = 'warn_after_misses', 'reclaim_after_misses'
 
 # Player name rules: the engine's civ name is a 15-character ASCII buffer, and a
 # folder store names files for the civ, so Windows-forbidden characters and a

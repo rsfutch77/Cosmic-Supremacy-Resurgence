@@ -266,12 +266,16 @@ def run_state_fields(store, label, writer):
     seated = {'Ada': {'turn': TURN + 1, 'uid': 'uid-ada', 'planet': 6,
                       'system': 'Tau Ceti', 'build': '0.1.0+dev', 'at': 1.0}}
     writer.update_state({turn_store.JOINED_KEY: seated,
-                         turn_store.MIN_BUILD_KEY: '0.2.0'})
+                         turn_store.MIN_BUILD_KEY: '0.2.0',
+                         turn_store.WARN_KEY: 6, turn_store.RECLAIM_KEY: 24})
     state = store.state()
     check(f'{label}: the record of who was seated reads back',
           state.get(turn_store.JOINED_KEY), seated)
     check(f'{label}: and the minimum build L2 gates on',
           state.get(turn_store.MIN_BUILD_KEY), '0.2.0')
+    check(f'{label}: and the missed-turn thresholds abandonment reads',
+          (state.get(turn_store.WARN_KEY), state.get(turn_store.RECLAIM_KEY)),
+          (6, 24))
     check(f'{label}: and the clock is where it was',
           state['turn'], store.current()[0])
 
