@@ -1251,9 +1251,7 @@ Dialog 225, "Pick your Civilization Name and Coat of Arms", is a modeless single
 |---|---|---|---|---|
 | 41 | `0x96905` | `0x00497505` | `jne 0x004975F7` (`0F 85 EC 00 00 00`) | six `nop` |
 
-**CONFIRMED:** a name typed in the dialog lands in the save's `OWPR`, and Play now continues the newest save.
-
-[ ] **Confirm patch 41 on screen:** with the patched client, a name typed in dialog 225 arrives as `uploadcivname` in `cs_server.log`, lands in `civs.json`, and is preselected on the next New Game.
+**CONFIRMED:** a name typed in the dialog lands in the save's `OWPR`, and with the patch it also arrives as `uploadcivname`, is kept in `civs.json`, and is offered first on the next New Game.
 
 [ ] **`getcoa` answers raw PNG bytes and the client base64-decodes the answer** (`0x005F5F10`), so the coat-of-arms list is always empty and `uploadcoa` is never reached. Fix with the coat of arms work.
 
