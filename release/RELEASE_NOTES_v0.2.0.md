@@ -20,7 +20,7 @@ a turn every 4 hours whether or not you have played it.
 Windows dialog.
 
 **Code-signed.** The launcher, the AI opponent and the two Resurgence game
-clients are signed by Robert Futch.
+clients are signed.
 
 **Reporting a problem from the launcher.** Press **Send Log** on the Log tab and
 the launcher uploads its log and shows you a log reference to quote in your
@@ -46,10 +46,7 @@ Leave the launcher open while you play. It runs the local game server, and
 for Multiplayer it is what sends your turn.
 
 Windows may still show "Windows protected your PC" the first time, because a
-new signature takes time to earn Windows' trust. Click **More info**, check
-that the publisher reads **Robert Futch**, then click **Run anyway**. If it
-reads "Unknown publisher", do not run it, and download it again from this
-page.
+new signature takes time to earn Windows' trust. Click **More info**, then click **Run anyway**.
 
 ## What you can play
 

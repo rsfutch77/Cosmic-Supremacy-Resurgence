@@ -1098,7 +1098,16 @@ def warning_text(galaxy: str, lines) -> str:
 
 # The relay refuses a request with a status and a JSON body holding one
 # sentence, `{"error": ...}`. `urllib`'s HTTPError text is only the status line.
+# A seat is refused in one of two sentences: SEAT_HELD where the galaxy lets a
+# sign-in claim a seat on first use, NOT_SEATED where it does not.
 SEAT_HELD = "already held by another sign-in"
+NOT_SEATED = "is bound to this sign-in"
+
+
+def seat_refused(text) -> bool:
+    """Whether a refusal's text says this sign-in holds no seat to play."""
+    text = str(text or "")
+    return SEAT_HELD in text or NOT_SEATED in text
 
 
 def relay_refusal(exc):
@@ -4103,7 +4112,7 @@ class Launcher:
                 why = said[1] if said else str(exc)
                 self.say_threadsafe(f"multiplayer stopped: {why}")
                 self._mp_state("failed", error=why)
-                if (said and SEAT_HELD in said[1]
+                if (said and seat_refused(said[1])
                         and not getattr(self, "mp_seat_refused", False)):
                     self.mp_seat_refused = True
                     self.msgs.put(("__mp_refused__", seat_held_text(
@@ -4131,7 +4140,7 @@ class Launcher:
         # carries on, so a rebind by the operator takes effect without a
         # restart. The box saying what to do is shown once per followed galaxy.
         if (kind in ("send_failed", "lost")
-                and SEAT_HELD in str(facts.get("error") or "")
+                and seat_refused(facts.get("error"))
                 and not getattr(self, "mp_seat_refused", False)):
             self.mp_seat_refused = True
             self.msgs.put(("__mp_refused__", seat_held_text(
@@ -4179,7 +4188,7 @@ class Launcher:
             self._mp_probe_closed(self.mp_store)
         if (kind in LOG_OFFER_KINDS
                 and not getattr(self, "mp_log_offered", False)
-                and SEAT_HELD not in str(facts.get("error") or "")):
+                and not seat_refused(facts.get("error"))):
             # Once per followed galaxy. Queued behind the probe above, so a
             # galaxy found closed is not offered. A seat held by another
             # sign-in has its own box.
