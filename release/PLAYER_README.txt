@@ -29,10 +29,7 @@ The launcher is code-signed. Windows may
 still show a blue warning box the first time you run it, because a new
 signature takes time to earn Windows' trust.
 
-To continue: click "More info", check that the publisher reads
-Robert Futch, then click "Run anyway". If the publisher reads "Unknown
-publisher", do not run it; download the game again from
-cosmicresurgence.com.
+To continue: click "More info", then click "Run anyway".
 
 The launcher is open source. You can read its code and build it yourself
 from the project repository.

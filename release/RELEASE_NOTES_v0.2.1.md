@@ -9,7 +9,7 @@ saved games carry over; see "Updating from v0.2.0" below.
 **The Tutorial and the Demo are signed.** In v0.2.0 they ran an unsigned copy
 of the original 2006 client, and on a Windows 11 PC with Smart App Control
 turned on, Windows could block those two modes. Every game client in the
-download is now signed by Robert Futch.
+download is now signed.
 
 **The Galaxies page shows your turn as played as soon as it is sent.** Sending
 your turn used to leave the row reading "your turn" until the page was next
@@ -38,10 +38,7 @@ Leave the launcher open while you play. It runs the local game server, and
 for Multiplayer it is what sends your turn.
 
 Windows may still show "Windows protected your PC" the first time, because a
-new signature takes time to earn Windows' trust. Click **More info**, check
-that the publisher reads **Robert Futch**, then click **Run anyway**. If it
-reads "Unknown publisher", do not run it, and download it again from this
-page.
+new signature takes time to earn Windows' trust. Click **More info**, then click **Run anyway**.
 
 ## What you can play
 

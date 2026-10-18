@@ -254,8 +254,7 @@ and merge `main` in first if it is not.
    launcher's title line names the commit; one ending in `+` was built from a
    dirty tree.
 4. Read the signatures back with `Get-AuthenticodeSignature`: the launcher,
-   `CosmicSupremacyAI.exe` and the two patched clients read Valid, signed by
-   Robert Futch, timestamped. `CosmicSupremacy.exe` reads NotSigned.
+   `CosmicSupremacyAI.exe` and the two patched clients read Valid.
 5. Run `release\tests\run_all.ps1`, all green.
 6. Run the staged launcher, click through every visible mode, and confirm
    `data/` is created next to the launcher and both logs appear.
