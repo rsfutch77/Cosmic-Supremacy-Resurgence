@@ -28,6 +28,7 @@ PAGE_READWRITE     = 0x04
 INFINITE           = 0xFFFFFFFF
 
 OPERATOR_NEW = 0x0065165A
+OPERATOR_DELETE = 0x00651689    # __cdecl(void*), frees what OPERATOR_NEW returned
 SELL_FACILITY = 0x004F8580      # PlanetProperties::SellFacility
 HURRY_PRODUCTION = 0x004EFFF0   # PlanetProperties::HurryProduction
 SHIPCOMMAND_CTOR = 0x004E9BA0   # __thiscall(int orderType, EJBO* target), ret 8
@@ -47,6 +48,27 @@ PP_TOTAL_SLOT    = 0x74         # PP vftable slot -> total production needed
 HURRY_MIN_FRACTION = 0.5        # [0x00750360]; below this the engine refuses
 PLANET_PROPERTIES = 88          # PlanetProperties lives at planet_tag + 88
 OFFLINE_FLAG = 0x0086F1A0       # the local-apply path runs only when this byte is set
+
+# Declaring war the way the declare-war button does (0x00442A70): a Treaty
+# proposal of kind 1, applied by the engine. The apply copies it into a
+# registered Treaty, makes first contact and writes War into both relation
+# records.
+TREATY_SIZE      = 0x5C
+TREATY_CTOR      = 0x00559A60   # __thiscall(), the default constructor
+TREATY_SET_KIND  = 0x0055AD90   # __thiscall(int kind), ret 4; 1 declares war
+TREATY_APPLY     = 0x0055C3E0   # __thiscall(), returns the registered Treaty
+TREATY_DTOR      = 0x00559B00   # __thiscall(); the proposal is destroyed after apply
+TREATY_PARTY_1   = 0x0C         # reference node, the declaring civ
+TREATY_PARTY_2   = 0x10         # reference node, the other civ
+TREATY_KIND_WAR  = 1
+REF_NODE_FOR_ID  = 0x00537BF0   # __cdecl(int objectId) -> reference node
+# Build-up protection, as checked by the declare-war validator 0x004BDE50.
+GET_GAME_OPTION  = 0x004D4320   # __cdecl(int index) -> option record
+TURNS_PLAYED     = 0x0052AC40   # __cdecl(int turn, Owner* primary) -> turns
+PROTECT_OPTION   = 4            # option record whose byte at +0x30 enables it
+PROTECT_FLAG_OFF = 0x30
+PROTECT_TURNS    = 0x0076F378   # int, turns a new player is protected for
+TURN_COUNTER     = 0x008578E8
 ORDER_CTOR   = 0x004E8420
 ORDER_SIZE   = 0x60
 
@@ -114,6 +136,7 @@ FSTP_ESP   = b"\xD9\x1C\x24"      # fstp dword ptr [esp]
 POP_EAX    = b"\x58"
 SUB_ESP_4  = b"\x83\xEC\x04"
 ADD_ESP_4  = b"\x83\xC4\x04"      # __cdecl callees leave their args to us
+ADD_ESP_8  = b"\x83\xC4\x08"      # two of them
 ADD_ESP_16 = b"\x83\xC4\x10"      # four of them
 
 
@@ -431,6 +454,57 @@ class Remote:
                 mov_ecx_imm(civ_tag + OWNER_RELATIONS) +
                 mov_eax_imm(REPUTATION_ADD) + CALL_EAX + RET_4)
         return self.run_stub(code, f"reputation {delta:+d} vs 0x{other_tag:08X}")
+
+    def declare_war(self, civ_tag, civ_id, other_tag, other_id):
+        """Declare war from `civ` on `other` through the engine's own path.
+
+        Returns the registered Treaty. The proposal is an engine-heap copy
+        that is destroyed and freed once applied, as the UI's stack one is.
+        """
+        block = self.operator_new(TREATY_SIZE)
+        self.run_stub(mov_ecx_imm(block) + mov_eax_imm(TREATY_CTOR) +
+                      CALL_EAX + RET_4, "Treaty ctor")
+        for off, oid in ((TREATY_PARTY_1, civ_id), (TREATY_PARTY_2, other_id)):
+            node = self.run_stub(push_imm(oid) + mov_eax_imm(REF_NODE_FOR_ID) +
+                                 CALL_EAX + ADD_ESP_4 + RET_4,
+                                 f"reference node for object {oid}")
+            if not node:
+                raise RemoteCallError(f"no reference node for object {oid}")
+            self.write(block + off, struct.pack("<I", node))
+        self.run_stub(push_imm(TREATY_KIND_WAR) + mov_ecx_imm(block) +
+                      mov_eax_imm(TREATY_SET_KIND) + CALL_EAX + RET_4,
+                      "Treaty kind -> declaration of war")
+        treaty = self.run_stub(mov_ecx_imm(block) + mov_eax_imm(TREATY_APPLY) +
+                               CALL_EAX + RET_4, "apply the war treaty")
+        self.run_stub(mov_ecx_imm(block) + mov_eax_imm(TREATY_DTOR) +
+                      CALL_EAX + RET_4, "Treaty dtor on the proposal")
+        self.run_stub(push_imm(block) + mov_eax_imm(OPERATOR_DELETE) +
+                      CALL_EAX + ADD_ESP_4 + RET_4, "free the proposal")
+        if not treaty:
+            raise RemoteCallError("the treaty apply returned NULL")
+        return treaty
+
+    def war_protection(self, other_tag):
+        """(protected, turns played, turns protected) for a war on `other`.
+
+        The declare-war validator refuses while build-up protection is on and
+        the target has played fewer than PROTECT_TURNS turns.
+        """
+        opt = self.run_stub(push_imm(PROTECT_OPTION) +
+                            mov_eax_imm(GET_GAME_OPTION) + CALL_EAX +
+                            ADD_ESP_4 + RET_4, "game option 4")
+        raw = self.read(opt + PROTECT_FLAG_OFF, 1) if opt else None
+        need_raw = self.read(PROTECT_TURNS, 4)
+        need = struct.unpack("<i", need_raw)[0] if need_raw else 0
+        if not raw or raw[0] == 0:
+            return False, None, need
+        turn = struct.unpack("<I", self.read(TURN_COUNTER, 4))[0]
+        played = self.run_stub(push_imm(other_tag + OWNER_PRIMARY_FROM_TAG) +
+                               push_imm(turn) + mov_eax_imm(TURNS_PLAYED) +
+                               CALL_EAX + ADD_ESP_8 + RET_4,
+                               "turns the target has played")
+        played = struct.unpack("<i", struct.pack("<I", played or 0))[0]
+        return played < need, played, need
 
     def design_min_crew(self, design_tag):
         """ShipDesign:76: the minimum crew a design needs to function."""

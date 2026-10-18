@@ -38,7 +38,6 @@ TROOP_TARGET = 1          # troop hulls to keep while anything is takeable
 GARRISON_WINDOW = 3       # turns after a capture (Planet:92) that count as
                           # newly taken
 RETREAT_AT = 0.30         # Ship:136 below this and the ship goes home
-THREAT_DIST = 120.0       # "near": one sun separation (measured minimum 111.7)
 AT_PLANET = 1.0           # a ship within this distance of a planet is at it
 
 WAR = 1                   # Owner:248 relation code
@@ -512,7 +511,8 @@ def run_xtm03(snap, civ, act, hist, log=print):
     staged = [s for s in ready if not act.is_claimed(s) and at_planet(s, rally)]
 
     # A raid departs in stages so every ship arrives on the same turn:
-    # hist.raid = {"target": planet id, "arrive": turn}.
+    # hist.raid = {"target": planet id, "arrive": turn, "members": ship ids}.
+    # A ship staged after the raid was planned waits for the next one.
     plan = hist.raid
     by_id = {p.id: p for p in targets}
     if plan is not None and ((snap.turn or 0) >= plan["arrive"]
@@ -526,10 +526,23 @@ def run_xtm03(snap, civ, act, hist, log=print):
             return acted
         etas = [_eta(s, target, act) for s in staged]
         plan = hist.raid = {"target": target.id,
-                            "arrive": (snap.turn or 0) + max(e or 0 for e in etas)}
+                            "arrive": (snap.turn or 0) + max(e or 0 for e in etas),
+                            "members": [s.id for s in staged]}
     target = by_id[plan["target"]]
+    # A ship in flight can run later than its ETA said; the waiting ships
+    # follow the slowest one's arrival as it stands now.
+    for s in en_route:
+        if s.id in plan["members"] and already_heading(s, target, 1):
+            eta = _eta(s, target, act)
+            if eta is not None and (snap.turn or 0) + eta > plan["arrive"]:
+                log(f"R-XTM-03: {s} now reaches {target} on turn "
+                    f"{(snap.turn or 0) + eta}, not {plan['arrive']}; the "
+                    f"rest wait for it")
+                plan["arrive"] = (snap.turn or 0) + eta
     waiting = 0
     for ship in staged:
+        if ship.id not in plan["members"]:
+            continue
         need = exploit.min_crew(ship, act)
         if len(ship.crew) < need:
             log(f"  {ship} has {len(ship.crew)}/{need} crew and would "
@@ -967,9 +980,9 @@ def run_xtm08(snap, civ, act, hist, log=print):
 def run_xtm00(snap, civ, act, hist, log=print):
     """R-XTM-00: declare war on a civ we can reach and are equipped to fight.
 
-    Gated by ALLOW_DECLARE_WAR. A raw relation write costs no reputation and
-    generates no news item, which against a human is a §1.1 violation (§4.4);
-    the command path is the fix.
+    Through the engine's own declaration (actions.declare_war). A civ still in
+    its build-up protection is left alone, as the declare-war validator
+    refuses it. Gated by ALLOW_DECLARE_WAR.
     """
     if not ALLOW_DECLARE_WAR:
         return 0
@@ -987,6 +1000,17 @@ def run_xtm00(snap, civ, act, hist, log=print):
                 and hist.can_see(snap, p)]
         if not seen:
             continue
+        if act.remote is not None:
+            try:
+                protected, played, need = act.remote.war_protection(other.addr)
+            except (RuntimeError, OSError) as e:
+                log(f"R-XTM-00: cannot read {other.civ_name!r}'s build-up "
+                    f"protection ({e}); not declaring")
+                continue
+            if protected:
+                log(f"R-XTM-00: {other.civ_name!r} is in its build-up phase "
+                    f"({played} of {need} turns played); war is refused")
+                continue
         log(f"R-XTM-00: {len(seen)} visible planet(s) of {other.civ_name!r} and "
             f"{len(ready)} warship(s) staged at {rally}; declaring war")
         try:
@@ -998,8 +1022,7 @@ def run_xtm00(snap, civ, act, hist, log=print):
     return acted
 
 
-# See run_xtm00 for the fairness caveat against a human.
-ALLOW_DECLARE_WAR = True
+ALLOW_DECLARE_WAR = True     # off leaves war to the other side to declare
 
 RULES = [("R-XTM-05", run_xtm05), ("R-XTM-00", run_xtm00),
          ("R-XTM-01", run_xtm01), ("R-XTM-03", run_xtm03),

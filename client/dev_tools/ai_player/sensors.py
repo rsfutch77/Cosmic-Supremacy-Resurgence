@@ -47,7 +47,7 @@ class History:
         self.intel = {}
         # Enemy planet id -> turn one of our ships sat there at war unfired on.
         self.quiet = {}
-        # The raid in progress, {"target": planet id, "arrive": turn}, or None.
+        # The raid in progress, {"target", "arrive" turn, "members" ship ids}, or None.
         self.raid = None
         self._path = None
         self._persisted = None    # what is already on disk, to avoid rewriting
