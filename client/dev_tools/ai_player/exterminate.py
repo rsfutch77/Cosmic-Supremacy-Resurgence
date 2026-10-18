@@ -332,6 +332,48 @@ def undefended_planets(snap, civ, hist, act, foes):
     return out
 
 
+def fleet_designs(snap, civ):
+    """Designs of our warships, built and in production."""
+    queued = [d for d in (production_design(snap, p)
+                          for p in snap.owned_planets(civ))
+              if d is not None and d.role == "WARSHIP"]
+    return [s.design for s in warships(snap, civ) if s.design] + queued
+
+
+def fleet_wants_ships(snap, civ, hist, act):
+    """(wants, goal): whether R-XTM-01 wants another warship, and the target.
+
+    Wanted once contact is made, until there are WARSHIP_TARGET hulls of both
+    firepower classes and they beat a known defence or reach FLEET_CAP. `goal`
+    is _fleet_goal's tuple when a target drives the build, else None.
+    """
+    if not (enemies(snap, civ, act) or contacted(snap, civ, hist)):
+        return False, None
+    fleet = fleet_designs(snap, civ)
+    # The fleet needs both firepower classes: slots 1-2 hit ships, slot 3
+    # hits planets.
+    have_ap = any(anti_planet(d, act) for d in fleet)
+    have_as = any(not anti_planet(d, act) for d in fleet)
+    if len(fleet) >= WARSHIP_TARGET and have_ap and have_as:
+        goal = _fleet_goal(snap, civ, hist, act, fleet)
+        return goal is not None, goal
+    return True, None
+
+
+def war_yard(snap, civ, hist, act):
+    """The shipyard kept for warships while the fleet wants them, or None.
+
+    It is the staging planet, where R-XTM-01 builds when it can. Expansion,
+    scouting and facilities leave it alone so a long build there cannot
+    hold up the fleet.
+    """
+    rally = staging_planet(snap, civ, hist)
+    if rally is None or exploit.SHIPYARD not in rally.facilities:
+        return None
+    wants, _goal = fleet_wants_ships(snap, civ, hist, act)
+    return rally if wants else None
+
+
 def _fleet_goal(snap, civ, hist, act, fleet):
     """(margin, planet, defence) of the easiest known target `fleet` cannot beat.
 
@@ -361,18 +403,11 @@ def run_xtm01(snap, civ, act, hist, log=print):
     if not foes:
         return 0
     have = warships(snap, civ)
-    queued_now = [d for d in (production_design(snap, p)
-                              for p in snap.owned_planets(civ)) if d is not None]
-    fleet = [s.design for s in have if s.design] + queued_now
-    # The fleet needs both firepower classes: slots 1-2 hit ships, slot 3
-    # hits planets.
+    fleet = fleet_designs(snap, civ)
+    wants, goal = fleet_wants_ships(snap, civ, hist, act)
+    if not wants:
+        return 0
     have_ap = any(anti_planet(d, act) for d in fleet)
-    have_as = any(not anti_planet(d, act) for d in fleet)
-    goal = None
-    if len(fleet) >= WARSHIP_TARGET and have_ap and have_as:
-        goal = _fleet_goal(snap, civ, hist, act, fleet)
-        if goal is None:
-            return 0
     stranded = exploit.awaiting_crew(snap, civ, act, role="WARSHIP")
     if stranded:
         log(f"R-XTM-01: {len(stranded)} warship(s) built and waiting for "
@@ -409,7 +444,10 @@ def run_xtm01(snap, civ, act, hist, log=print):
         log(f"R-XTM-01: {len(have)}/{WARSHIP_TARGET} warship(s); every shipyard "
             f"is already building")
         return 0
-    planet = max(yards, key=lambda p: len(p.population))
+    # Ships are born at the staging yard when it is free.
+    rally = staging_planet(snap, civ, hist)
+    planet = (rally if rally in yards
+              else max(yards, key=lambda p: len(p.population)))
     if goal is not None:
         # The design that most improves the margin against the easiest target.
         m, target, info = goal

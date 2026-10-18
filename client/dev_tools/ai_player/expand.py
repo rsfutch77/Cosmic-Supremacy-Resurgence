@@ -146,11 +146,15 @@ def run_xpn01(snap, civ, act, hist=None, log=print):
     if not yards:
         log("R-XPN-01: no planet has a shipyard")
         return 0
+    # R-XPN-04: the war yard builds warships, not colony ships.
+    import exterminate
+    reserved = exterminate.war_yard(snap, civ, hist, act) if hist else None
     idle = [p for p in yards
-            if not p.building_now and not act.production_claimed(p)]
+            if not p.building_now and not act.production_claimed(p)
+            and p is not reserved]
     if not idle:
-        log(f"R-XPN-01: all {len(yards)} shipyard planet(s) are already "
-            f"building; leaving them alone")
+        log(f"R-XPN-01: all {len(yards)} shipyard planet(s) are building or "
+            f"kept for warships; leaving them alone")
         return 0
 
     # Population stands in for production rate (STRATEGY.md §2.5).

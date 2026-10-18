@@ -172,9 +172,11 @@ def run_exp01(snap, civ, act, hist, log=print):
             f"engines-only design exists. Synthesise one: game_cycle.py "
             f"--design 'scout:chassis=0,engine=<fastest unlocked>'")
         return 0
+    import exterminate
+    reserved = exterminate.war_yard(snap, civ, hist, act)
     yards = [p for p in snap.owned_planets(civ)
              if exploit.SHIPYARD in p.facilities and not p.building_now
-             and not act.production_claimed(p)]
+             and not act.production_claimed(p) and p is not reserved]
     if not yards:
         return 0
     # Fastest design. speed is a lazy stat and reads None until warmed, so

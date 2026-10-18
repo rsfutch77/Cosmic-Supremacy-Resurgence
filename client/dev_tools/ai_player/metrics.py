@@ -31,6 +31,7 @@ class Recorder:
         self.log = log
         self.prev_ships = {}       # ship id -> (civ name, role, condition)
         self.prev_turn = None
+        self.life = {}             # warship id -> {"seen", "crewed", "staged"} turns
         # Truncated at start so one file holds one run.
         open(self.path, "w", encoding="utf-8").close()
 
@@ -93,6 +94,19 @@ class Recorder:
                     sum(1 for s in warships if s.crewed
                         and exterminate.at_planet(s, rally))
                     if rally is not None else 0)
+                # Turns from a warship's first appearance to crew and staging.
+                crew_lags, stage_lags = [], []
+                for s in warships:
+                    life = self.life.setdefault(s.id, {"seen": snap.turn})
+                    if s.crewed and "crewed" not in life:
+                        life["crewed"] = snap.turn
+                        crew_lags.append(snap.turn - life["seen"])
+                    if (rally is not None and "staged" not in life
+                            and s.crewed and exterminate.at_planet(s, rally)):
+                        life["staged"] = snap.turn
+                        stage_lags.append(snap.turn - life["seen"])
+                row["crew_lags"] = crew_lags
+                row["stage_lags"] = stage_lags
                 row["contacted"] = [c.civ_name for c in
                                     exterminate.contacted(snap, civ, hist)]
                 act = SimpleNamespace(remote=loop.remote)
@@ -126,7 +140,7 @@ def summarise(rows):
             "colony_spent": 0, "first_contact": None, "first_war": None,
             "first_battle": None, "scouting_warship_turns": 0,
             "discovered": None, "staged_at_contact": None,
-            "staged_at_war": None})
+            "staged_at_war": None, "_crew": [], "_stage": []})
         s["turns"] += 1
         s["last_turn"] = r["turn"]
         s["missed"] += r.get("gap", 0)
@@ -155,6 +169,13 @@ def summarise(rows):
                                       f"{r['warships_crewed']}")
         if r.get("discovered") is not None:
             s["discovered"] = r["discovered"]
+        s["_crew"] += r.get("crew_lags", [])
+        s["_stage"] += r.get("stage_lags", [])
+    for s in out.values():
+        crew, stage = s.pop("_crew"), s.pop("_stage")
+        s["warships_crewed_n"] = len(crew)
+        s["turns_to_crew"] = round(sum(crew) / len(crew), 1) if crew else None
+        s["turns_to_stage"] = round(sum(stage) / len(stage), 1) if stage else None
     return out
 
 
@@ -162,7 +183,8 @@ MEASURES = ["turns", "first_turn", "last_turn", "missed", "planets", "score",
             "discovered", "max_warships", "first_contact", "staged_at_contact",
             "first_war", "staged_at_war",
             "first_battle", "battle_turns", "damaged", "lost",
-            "lost_warships", "colony_spent", "scouting_warship_turns"]
+            "lost_warships", "colony_spent", "scouting_warship_turns",
+            "warships_crewed_n", "turns_to_crew", "turns_to_stage"]
 
 
 def print_table(columns):

@@ -30,7 +30,7 @@ built and crewed a bomber, sent it 624 units and fought at turn 114, losing both
 single turn boundary. Every X now runs unattended; none of them is finished.
 
 [ ] **Still specification, none of these has a `run_*` function:** S-04 insolvency,
-R-EXP-04 recall damaged scouts, R-XPN-04 over-expansion, R-XPL-03 wealth mode, R-XPL-07
+R-EXP-04 recall damaged scouts, R-XPL-03 wealth mode, R-XPL-07
 liquidation. Each is marked at its own rule below. R-EXP-03 is covered by
 `sensors.History._discover`.
 
@@ -707,19 +707,24 @@ USES   A, B
 No governor is assigned, the AI does all planet management itself, so `Planet:496` is
 left unset everywhere and actuator H is not used.
 
-**R-XPN-04, Do not over-expand**, [ ] NOT BUILT
+**R-XPN-04, Do not over-expand**, IMPLEMENTED as `exterminate.war_yard`
 ```
-WHEN   count(owned planets) * COLONY_UPKEEP_EST > incomeRate
-THEN   suppress R-XPN-01 until income recovers
+WHEN   R-XTM-01 wants another warship (exterminate.fleet_wants_ships)
+THEN   the staging shipyard is kept for warships: R-XPN-01 colony ships,
+       R-EXP-01 scouts and R-XPL-02 facilities use the other yards
 ```
-[ ] **This is the rule that starves Exterminate, and the mechanism is not income.** With
+R-XTM-01 builds at the staging yard whenever it is free, so new warships start where the
+fleet gathers. Light turrets are not built on shipyard planets at all: a turret occupies the
+yard for many turns, and the fleet defends the yard.
+
+[x] **This is the rule that starves Exterminate, and the mechanism is not income.** With
 531 unowned planets in the galaxy R-XPN-01 always has a target, so colony ships are queued
 forever and compete for the one shipyard. Ships get first refusal over facilities in the
 rule order, but *within* ships the order is warships → colony → scouts, so expansion
 outranks scouting indefinitely. The trigger above (income) never fires because income stays
 strongly positive; the real constraint is SHIPYARD TIME and crew, not cash. Either add a
 second shipyard target, or cap concurrent colony ships, or charge expansion against the
-fleet the AI is trying to build.
+fleet the AI is trying to build. Done as the war yard above; income plays no part.
 
 ### 4.3 Exploit
 
@@ -834,10 +839,11 @@ USES   load_crew
 [ ] **Written in code before it was written here**, it, and R-XPL-08 below, were never
 specified. Both now exist; this entry is the spec catching up.
 
-[ ] **No priority between competing ships.** `run_crew_load` walks `owned_ships` in scan
+[x] **No priority between competing ships.** `run_crew_load` walks `owned_ships` in scan
 order, so a colony ship wanting 2 crew and a scout wanting 1 compete on iteration order
 rather than on what the empire needs. With recruitment at ~1 unit per 10 turns this decided
-which rule made progress, and nothing chose it deliberately.
+which rule made progress, and nothing chose it deliberately. Done: R-XPL-06 and R-XPL-09
+walk ships in `exploit.CREW_PRIORITY` order, warships, troop ships, colony ships, scouts.
 
 **R-XPL-08, Hurry a build with surplus cash**, IMPLEMENTED in `exploit.run_hurry`
 ```
@@ -896,7 +902,10 @@ ship that cannot fly.
 
 [ ] **The loader still waits a turn.** R-XPL-09 runs before R-XPL-06, but the pass's
 snapshot was taken before the draft, so the new unit is invisible until the next pass and
-crew loads one turn later. Re-reading the planet after a draft would close it.
+crew loads one turn later. Re-reading the planet after a draft would close it. A hull with
+an empty crew vector no longer waits: R-XPL-09 drafts straight onto it (N′). Only a partly
+crewed hull still goes through the garrison, and a second write to that vector in one pass
+reads stale bytes (`gamestate` vectors have snapshot extents), so it is left a turn behind.
 
 [ ] **`DRAFT_CASH_FLOOR` (500) is invented**, like R-XPL-08's budget. It is there so
 drafting cannot empty the treasury the build rules also spend from, and nothing has tuned it.
@@ -1798,7 +1807,7 @@ Steps 1-5 are **DONE**. The AI plays all four X's unattended and has fought a ba
    went from roughly one new system per ten turns to five in four. The engine call it needed
    was also the first mutating one attempted since `SetCommand` killed the client, so it was
    built getter-first and tested one draft at a time from a checkpoint.
-3. [ ] **Stop expansion starving the shipyard**, R-XPN-04, which is about shipyard time
+3. [x] **Stop expansion starving the shipyard**, R-XPN-04, which is about shipyard time
    and crew rather than the income trigger currently specified.
 4. [ ] **Read the live research table** (§7), retires a table known to be for the wrong
    content version, and it is read-only, so it is the safest engine call available.
