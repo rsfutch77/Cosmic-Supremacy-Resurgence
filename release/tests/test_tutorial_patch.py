@@ -120,5 +120,18 @@ W.patch(both)
 check("the tutorial and window patches do not overlap",
       (P.state(both)["panel"], W.state(both)), ("patched", "patched"))
 
+print("\n7. Single Player's civ name dialog always sends the name")
+import patch_civ_name as C                                      # noqa: E402
+with open(os.path.join(REPO, "client", "CosmicSupremacy_Resurgence.exe"), "rb") as f:
+    sp_client = bytearray(f.read())
+check("the tracked client skips the upload when an entry is selected",
+      C.state(sp_client), "original")
+check("one site is patched", C.patch(sp_client), 1)
+check("and the branch is gone", bytes(sp_client[C.SITE:C.SITE + 6]), b"\x90" * 6)
+check("a second run changes nothing", C.patch(sp_client), 0)
+W.patch(sp_client)
+check("and the window patch still applies beside it",
+      (C.state(sp_client), W.state(sp_client)), ("patched", "patched"))
+
 print("\n" + ("ALL PASSED" if not fails else f"FAILURES: {fails}"))
 sys.exit(1 if fails else 0)

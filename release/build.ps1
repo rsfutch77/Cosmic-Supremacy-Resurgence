@@ -830,11 +830,13 @@ if (Test-Path $License) {
 # patch_launch_messages.py writes each client into the stage with its setup
 # message pointing at the launcher and its renderer failure message pointing at
 # the issue tracker. The tracked binary is only read. patch_window_size.py then
-# opens each client's main window 10% larger by default, and patch_tutorial.py
-# fixes the Tutorial's panel, step checks and texts in the client that runs it.
+# opens each client's main window 10% larger by default, patch_tutorial.py
+# fixes the Tutorial's panel, step checks and texts in the client that runs it,
+# and patch_civ_name.py makes Single Player send a chosen civ name every time.
 $PatchMessages = Join-Path $ClientDir 'dev_tools\patch_launch_messages.py'
 $PatchWindow   = Join-Path $ClientDir 'dev_tools\patch_window_size.py'
 $PatchTutorial = Join-Path $ClientDir 'dev_tools\patch_tutorial.py'
+$PatchCivName  = Join-Path $ClientDir 'dev_tools\patch_civ_name.py'
 function Copy-Client {
     param($src, $dst)
     & $VenvPy $PatchMessages --source $src --out $dst | Out-Null
@@ -844,6 +846,10 @@ function Copy-Client {
     if ((Split-Path -Leaf $src) -eq 'CosmicSupremacy.exe') {
         & $VenvPy $PatchTutorial --source $dst --out $dst | Out-Null
         if ($LASTEXITCODE -ne 0) { throw "patch_tutorial failed for $(Split-Path -Leaf $src)" }
+    }
+    if ((Split-Path -Leaf $src) -eq 'CosmicSupremacy_Resurgence.exe') {
+        & $VenvPy $PatchCivName --source $dst --out $dst | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "patch_civ_name failed for $(Split-Path -Leaf $src)" }
     }
 }
 
