@@ -625,18 +625,38 @@ NEW_GAME_FILE = "New Game_turn0.dat"
 GENERATE_TIMEOUT = 120.0   # seconds for the client to build a galaxy
 
 
-def generate_galaxy(mode, game_root, galaxy_root, pass_file, save_dir, out,
-                    log=print, timeout=GENERATE_TIMEOUT) -> str:
-    """Build a fresh galaxy with the mode's client and write it, seeded for
-    the AI, to `out`. The client is closed again either way."""
+def galaxy_builder(game_root: str) -> "str | None":
+    """The client New Game builds a galaxy with: a TestBed-based one, whose
+    galaxies are the shipped Single Player galaxy's size (32 suns). The Single
+    Player client builds them three times larger from the same pass file."""
+    dirs = [game_root]
+    if not getattr(sys, "frozen", False):
+        dirs.append(os.path.join(_repo_root(), "client"))
+    for d in dirs:
+        for exe in MP_CLIENTS:
+            if os.path.exists(os.path.join(d, exe)):
+                return os.path.join(d, exe)
+    return None
+
+
+def generate_galaxy(game_root, pass_file, save_dir, out, log=print,
+                    timeout=GENERATE_TIMEOUT) -> str:
+    """Build a fresh galaxy and write it, seeded for the AI, to `out`. The
+    building client is closed again either way."""
     import gamectl
     if multiplayer_modules() is None:
         raise gamectl.GameError("this build has no galaxy tools")
+    builder = galaxy_builder(game_root)
+    if builder is None:
+        raise gamectl.GameError(f"none of {', '.join(MP_CLIENTS)} to build "
+                                f"a galaxy with")
+    if not os.path.exists(pass_file):
+        raise FileNotFoundError(pass_file)
     import gamestate as gs
     import make_single_player_galaxy as msg
 
     started = time.time() - 1
-    child = launch_mode(mode, game_root, galaxy_root, galaxy=pass_file)
+    child = subprocess.Popen([builder, pass_file], cwd=os.path.dirname(builder))
     try:
         deadline = time.time() + timeout
         while True:
@@ -2943,9 +2963,8 @@ class Launcher:
 
         def work():
             try:
-                return generate_galaxy(mode, self.game_root, self.galaxy_root,
-                                       pass_file, save_dir, out,
-                                       log=self.say_threadsafe)
+                return generate_galaxy(self.game_root, pass_file, save_dir,
+                                       out, log=self.say_threadsafe)
             except Exception as exc:          # any failure falls back
                 self.say_threadsafe(f"new galaxy failed ({exc}); playing the "
                                     f"shipped one")

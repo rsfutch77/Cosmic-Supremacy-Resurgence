@@ -67,8 +67,7 @@ def bare():
 generated = []
 
 
-def fake_generate(mode, game_root, galaxy_root, pass_file, save_dir, out,
-                  log=print, timeout=None):
+def fake_generate(game_root, pass_file, save_dir, out, log=print, timeout=None):
     generated.append(pass_file)
     with open(out, "wb") as f:
         f.write(b"FRESH")
@@ -118,6 +117,18 @@ check("the other saves are left alone", sorted(os.listdir(games)),
               L.NEW_GAME_FILE]))
 check("and Play continues the new game next time",
       L.latest_save(games), fresh_dat)
+
+print("\n4a. the galaxy is built with a TestBed-based client, the shipped size")
+builders = os.path.join(data, "builders")
+os.makedirs(builders)
+check("from a checkout, the tracked TestBed when the game folder has none",
+      os.path.basename(L.galaxy_builder(builders) or ""),
+      "CosmicSupremacy_TestBed.exe")
+for exe in ("CosmicSupremacy_TestBed.exe", "CosmicSupremacy_Player.exe"):
+    open(os.path.join(builders, exe), "wb").close()
+check("the player client first, as a release has it",
+      L.galaxy_builder(builders),
+      os.path.join(builders, "CosmicSupremacy_Player.exe"))
 
 print("\n4b. a galaxy that cannot be built falls back to the shipped one")
 L.generate_galaxy = failing_generate
