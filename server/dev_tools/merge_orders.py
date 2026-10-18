@@ -23,8 +23,12 @@ byte, and an appended `ROUT` plus `u32`. Taking the order is copying the
 written to both. Copied field by field: the rest of `OWPR` is the civ's
 property block (coat-of-arms count, flags).
 
-**Production queue**, `PLNT > PLPR > PROD`: the queue's own fields and a nested
-section naming what is queued (`FCLT` for a facility). Copied whole.
+**Current production**, `PLNT > PLPR > PROD`: what the planet is building, its
+own fields and a nested section naming it (`WLTH` for nothing, `FCLT` with the
+facility type at `+13`, `SCAN`, or `SHIP` with a design id). Copied whole,
+unless the served item was hurried, which the UI does not let be swapped, or
+it names any other kind. The production queues proper are
+`OWNR > SPQS > SPRQ > PRQU` and have never been seen in a capture.
 
 **Ship designs**, `OWNR > DATA > DSGN`. A new design arrives as a second
 `DSGN`/`SDPR` pair, the civ's design count raised by one and `SAVE+0` raised to
@@ -33,7 +37,9 @@ count, so two players designing on the same turn claim the same id; whoever is
 merged second is renumbered, along with the id in the `DSGN` payload and in
 any production queue that names it. A queue naming a design the galaxy does
 not hold makes the engine refuse the whole galaxy, so such a queue is refused.
-Editing or deleting a design is refused and named.
+Deactivating or reactivating one of the civ's own designs is carried: the
+design's last byte (`ShipDesign+0x114`), 1 inactive. Any other edit, and
+deleting a design, are refused and named.
 
 `OWPR` `+49`, `+77`, `+78`, `+100` and `+110` also move in a design submission
 and are not carried: they move without a design too and differ between
@@ -75,8 +81,8 @@ excluded.
 
 What is refused
 ---------------
-Everything not listed above (facility selection outside the queue, governors,
-admirals, diplomacy) is not accepted. Every refusal is logged and recorded
+Everything not listed above (fleets, governors, admirals, diplomacy) is not
+accepted. Every refusal is logged and recorded
 against the civ in the optional `notes` argument to `merge`; `referee.py`
 writes it beside the turn and `player_turn.follow` prints it. A submission
 that cannot be read is dropped whole and named, with anything already taken
@@ -642,13 +648,15 @@ def add_design(blob, civ_oid, record):
 
 
 def design_orders(served, submitted, civ_oid):
-    """([(objectId, design)], [refusals]) for one civ's ship designs.
+    """([(objectId, design)], [(objectId, inactive)], [refusals]) for one civ's
+    ship designs.
 
     `served` and `submitted` are `design_index` results. A design is new when
-    the submission holds one the served state does not. Editing, deleting and
-    touching another civ's design are refused and named.
+    the submission holds one the served state does not. A design whose record
+    differs only in its last byte was deactivated or reactivated. Other edits,
+    deleting, and touching another civ's design are refused and named.
     """
-    new, refused = [], []
+    new, toggled, refused = [], [], []
 
     for oid in sorted(set(served) - set(submitted)):
         whose = 'its own' if served[oid]['civ'] == civ_oid else "another civ's"
@@ -657,7 +665,16 @@ def design_orders(served, submitted, civ_oid):
                        f'a design is not carried yet')
 
     for oid in sorted(set(served) & set(submitted)):
-        if submitted[oid]['record'] == served[oid]['record']:
+        was, now = served[oid]['record'], submitted[oid]['record']
+        if now == was:
+            continue
+        if (len(now) == len(was) and now[:-1] == was[:-1]
+                and now[-1] in (0, 1)):
+            if served[oid]['civ'] != civ_oid:
+                refused.append(f'design {oid} ({served[oid]["name"]!r}) '
+                               f"(de)activation DROPPED, it is another civ's")
+            else:
+                toggled.append((oid, bool(now[-1])))
             continue
         refused.append(f'design {oid} ({served[oid]["name"]!r}) DROPPED, it '
                        f'came back changed; editing a design is not carried '
@@ -686,7 +703,31 @@ def design_orders(served, submitted, civ_oid):
                            f'name to be unique within a civ')
             continue
         new.append((oid, d))
-    return new, refused
+    return new, toggled, refused
+
+
+def set_design_inactive(blob, design_oid, inactive):
+    """`blob` with a design's last byte, `ShipDesign+0x114`, set: 1 inactive,
+    0 active. The design's own section ends with it."""
+    for _civ, _data, designs in design_sections(blob)[0]:
+        for d in designs:
+            if struct.unpack_from('<I', blob, d.payload)[0] == design_oid:
+                out = bytearray(blob)
+                out[d.end - 1] = 1 if inactive else 0
+                return bytes(out)
+    raise KeyError(design_oid)
+
+
+# What a PROD can name in its nested section: nothing (piling up wealth), a
+# facility, a scan, or a ship by design id.
+PROD_KINDS = (b'WLTH', b'FCLT', b'SCAN', b'SHIP')
+
+
+def prod_kind(prod):
+    """The four-byte tag of what a PROD builds, or None."""
+    if prod is None or len(prod) < 8 + 25:
+        return None
+    return bytes(prod[8 + 21:8 + 25])
 
 
 def prod_builds(prod):
@@ -1150,10 +1191,15 @@ def merge(blob, submissions, log=print, notes=None):
             # Ship designs, before the production queues that may name them.
             # Judged against `served_designs`, the state as it was served.
             remap = {}
-            new_designs, refusals = design_orders(served_designs,
-                                                  design_index(sub), mine)
+            new_designs, toggled, refusals = design_orders(
+                served_designs, design_index(sub), mine)
             for why in refusals:
                 drop(why)
+            for oid, inactive in toggled:
+                blob = set_design_inactive(blob, oid, inactive)
+                log(f"    design {oid}: "
+                    f"{'deactivated' if inactive else 'reactivated'}")
+                accepted += 1
             for was, d in new_designs:
                 oid = was
                 if oid in design_index(blob):
@@ -1229,6 +1275,16 @@ def merge(blob, submissions, log=print, notes=None):
                     elif prod is None or prod_served is None:
                         drop(f"planet {planet_oid}: production DROPPED, no "
                              f"PROD section on one side")
+                    elif is_hurried(prod_served):
+                        # Paid off and finishing at the tick; the UI does not
+                        # let it be swapped.
+                        drop(f"planet {planet_oid}: production DROPPED, the "
+                             f"item being built was hurried and cannot be "
+                             f"changed")
+                    elif prod_kind(prod) not in PROD_KINDS:
+                        drop(f"planet {planet_oid}: production DROPPED, it "
+                             f"builds {prod_kind(prod)!r}, which is not a "
+                             f"facility, a ship, a scan or wealth")
                     elif (prod_builds(prod) is not None
                           and prod_builds(prod) not in mine_designs):
                         # A queue naming a design the galaxy does not hold makes
@@ -1258,7 +1314,7 @@ def merge(blob, submissions, log=print, notes=None):
                             accepted += 1
                     else:
                         blob = replace_prod(blob, planet_oid, prod)
-                        log(f"    planet {planet_oid}: production queue taken")
+                        log(f"    planet {planet_oid}: production taken")
                         accepted += 1
 
                 if plpr is None or plpr_served is None:
