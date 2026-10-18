@@ -101,7 +101,7 @@ the release's `data\` when the launcher sets it:
 | What | Where |
 |------|-------|
 | Save blobs | `saves\`, a `.b64` and a `.json` sidecar per save, listed in `saves\index.json` |
-| Governor blobs | `save_gov_<id>.dat` |
+| Governor library | `governors`, a `<id>.b64` per saved governor, listed in `governorsindex.json` |
 | Request log | `cs_server.log` |
 | Civ names | `civs.json`, per userid |
 | Tutorial completed | `tutorial.json`, written on `passedtutorial`; the launcher marks the Tutorial row |
