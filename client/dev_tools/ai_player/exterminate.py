@@ -6,6 +6,7 @@ R-XTM-03  send the fleet at the weakest reachable enemy planet
 R-XTM-05  pull damaged ships out
 R-XTM-08  gather idle warships at the staging planet
 R-XTM-09  probe an enemy planet we know nothing about
+R-XTM-02  hold a planet an enemy ship or fleet is in scan range of
 
 Enemy strength comes only from this civ's battle reports (intel.py).
 
@@ -29,6 +30,10 @@ WARSHIP_TARGET = 2        # staged warships before declaring war or raiding
 FLEET_CAP = 8             # warships R-XTM-01 builds toward a target it cannot beat
 STRENGTH_MARGIN = 1.5     # a target must take this many times longer to clear us
 PROBES_IN_FLIGHT = 1      # unarmed hulls sent for a battle report at once
+PLANET_SCAN_RANGE = 30.0  # a planet sees other civs' ships this close (stock client)
+SHIP_SCAN_RANGE = 30.0    # a ship whose scanner range cannot be read
+DEFEND_REACH = 12         # turns; defenders farther out than this stay home
+ARRIVE_WITHIN = 0.8       # a ship this close to its target has arrived (battle bucket)
 TROOP_TARGET = 1          # troop hulls to keep while anything is takeable
 GARRISON_WINDOW = 3       # turns after a capture (Planet:92) that count as
                           # newly taken
@@ -509,9 +514,13 @@ def run_xtm03(snap, civ, act, hist, log=print):
 
 
 def _eta(ship, target, act):
-    """Turns for `ship` to reach `target`, or None when its speed is unknown."""
+    """Turns for `ship` to arrive at `target`, or None when its speed is unknown."""
+    import math
     speed = expand.ship_speed(ship, act)
-    return expand.eta_turns(ship, target, speed) if speed else None
+    if not speed:
+        return None
+    left = max(0.0, gs.dist(ship.pos, target.pos) - ARRIVE_WITHIN)
+    return math.ceil(left / speed)
 
 
 def _choose_raid(snap, civ, hist, act, foes, rally, staged, log):
@@ -533,6 +542,116 @@ def _choose_raid(snap, civ, hist, act, foes, rally, staged, log):
     log(f"R-XTM-03: {len(staged)} warship(s) from {rally} -> {target} "
         f"({m:.2f}x, from the battle report)")
     return target
+
+
+def _scan_range(design):
+    """A design's scan range: its best scanner's, from the component table."""
+    import components
+    if design is None or not design.scanners:
+        return SHIP_SCAN_RANGE
+    table = _PART_TABLES.get("scanners")
+    if table is None:
+        table = components.read_table(design.snap, "scanners")
+    return max((table.get(i, {}).get("range") or SHIP_SCAN_RANGE)
+               for i in design.scanners)
+
+
+def contacts(snap, civ, foes):
+    """Enemy ships and fleets inside our scan range, as the map shows them.
+
+    [(pos, hull class ids, is_fleet)]. A player sees only a ship's class, and
+    for a fleet every class in it but no count.
+    """
+    eyes = [(p.pos, PLANET_SCAN_RANGE) for p in snap.owned_planets(civ)]
+    eyes += [(s.pos, _scan_range(s.design)) for s in snap.owned_ships(civ)
+             if None not in s.pos]
+    foe_addrs = {f.addr for f in foes}
+
+    def seen(pos):
+        return None not in pos and any(gs.dist(pos, at) <= r for at, r in eyes)
+
+    out = []
+    for s in snap.ships:
+        if s.owner is None or s.owner.addr not in foe_addrs or not seen(s.pos):
+            continue
+        out.append((s.pos, set(s.design.chassis) if s.design else set(), False))
+    for f in snap.fleets:
+        if f.owner is None or f.owner.addr not in foe_addrs or not seen(f.pos):
+            continue
+        classes = {c for d in f.member_designs for c in (d.chassis or [])}
+        out.append((f.pos, classes, True))
+    return out
+
+
+def _is_threat(group):
+    """A fleet, two or more ships, or any hull above shuttle class.
+
+    A lone shuttle may be a probe or a decoy; the map cannot tell.
+    """
+    return (len(group) >= 2
+            or any(is_fleet for _pos, _cls, is_fleet in group)
+            or any(c >= 1 for _pos, cls, _f in group for c in cls))
+
+
+def run_xtm02(snap, civ, act, hist, log=print):
+    """R-XTM-02: hold a planet that enemy ships are in scan range of.
+
+    Ships meeting in open space fight only under an Attack order, which the
+    AI cannot give, so defence means being in orbit when the enemy arrives:
+    the planet's owner always defends. Defenders come from the staging planet
+    and from idle warships; a raid in flight is not recalled.
+    """
+    foes = enemies(snap, civ, act)
+    if not foes:
+        return 0
+    ours = snap.owned_planets(civ)
+    groups = {}
+    for c in contacts(snap, civ, foes):
+        p = min(ours, key=lambda q: gs.dist(q.pos, c[0]))
+        groups.setdefault(p.id, (p, []))[1].append(c)
+    threats = [(p, g) for p, g in groups.values() if _is_threat(g)]
+    if not threats:
+        return 0
+    rally = staging_planet(snap, civ, hist)
+    pool = [s for s in warships(snap, civ)
+            if act.is_crewed(s) and not act.is_claimed(s)
+            and (s.condition is None or s.condition >= RETREAT_AT)
+            and ((s.order_type or 0) == 0
+                 or (rally is not None and already_heading(s, rally, 1)))]
+    acted = 0
+    # The nearest threat to the staging planet first.
+    if rally is not None:
+        threats.sort(key=lambda t: gs.dist(t[0].pos, rally.pos))
+    for planet, group in threats:
+        seen = ", ".join(sorted({"fleet" if f else "ship" for _p, _c, f in group}))
+        classes = sorted({gs.CHASSIS.get(c, c) for _p, cls, _f in group
+                          for c in cls})
+        here = [s for s in pool if at_planet(s, planet)]
+        going = []
+        for s in pool:
+            if s in here or act.is_claimed(s):
+                continue
+            eta = _eta(s, planet, act)
+            if eta is not None and eta <= DEFEND_REACH:
+                going.append(s)
+        if not here and not going:
+            log(f"R-XTM-02: enemy {seen} ({', '.join(map(str, classes))}) in "
+                f"scan range of {planet}; no warship can reach it within "
+                f"{DEFEND_REACH} turns")
+            continue
+        log(f"R-XTM-02: enemy {seen} ({', '.join(map(str, classes))}) in scan "
+            f"range of {planet}; holding {len(here)}, sending {len(going)}")
+        for s in here:
+            act.claim(s)
+            acted += 1
+        for s in going:
+            try:
+                send_to(act, s, planet, civ, order_type=1)
+                act.claim(s)
+                acted += 1
+            except (ValueError, RuntimeError) as e:
+                log(f"  could not send {s}: {e}")
+    return acted
 
 
 def run_xtm09(snap, civ, act, hist, log=print):
@@ -846,7 +965,8 @@ ALLOW_DECLARE_WAR = True
 
 RULES = [("R-XTM-05", run_xtm05), ("R-XTM-00", run_xtm00),
          ("R-XTM-01", run_xtm01), ("R-XTM-03", run_xtm03),
-         ("R-XTM-08", run_xtm08), ("R-XTM-09", run_xtm09)]
+         ("R-XTM-02", run_xtm02), ("R-XTM-08", run_xtm08),
+         ("R-XTM-09", run_xtm09)]
 
 
 def main():

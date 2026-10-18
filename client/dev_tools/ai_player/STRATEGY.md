@@ -31,7 +31,7 @@ single turn boundary. Every X now runs unattended; none of them is finished.
 
 [ ] **Still specification, none of these has a `run_*` function:** S-04 insolvency,
 R-EXP-04 recall damaged scouts, R-XPN-04 over-expansion, R-XPL-03 wealth mode, R-XPL-07
-liquidation, R-XTM-02 defend. Each is marked at its own rule below. R-EXP-03 is covered by
+liquidation. Each is marked at its own rule below. R-EXP-03 is covered by
 `sensors.History._discover`.
 
 **Open questions about the game itself belong in
@@ -494,11 +494,12 @@ fighter f1 (1× engine 0, mass driver) **6.43**, and the bomber b1 (1× engine 0
 bomb) **3.38**. The `f1`/`b1` now in use carry **engine 1** instead and make about **10**,
 measured from the bomber's actual per-turn movement.
 
-[ ] **A warship at 10/turn is a 62-turn trip across this galaxy**, which is most of what
+[x] **A warship at 10/turn is a 62-turn trip across this galaxy**, which is most of what
 made Exterminate slow: war was declared around turn 100 and the fleet did not arrive until
 turn 114, by which time the rest of the empire had moved on. Warship designs should spend
 more hull on engines than the current one-engine minimum, and the §4.4 strength test should
-account for the fact that a slow fleet arrives piecemeal.
+account for the fact that a slow fleet arrives piecemeal. Done in v0.3: `cf1` and `cb1` carry
+two Fusion Drives, and R-XTM-03 staggers departures so the fleet arrives together.
 
 Three things fall out, and they change how the AI should play:
 
@@ -741,25 +742,19 @@ USES   A
 
 **R-XPL-02, Facility build order**
 ```
-priority, first unbuilt/under-target that is unlocked in Owner:172 wins:
-  farm 0          if farms < ceil(pop / 4)
-  shipyard 2      if the civ has no shipyard anywhere
-  university 4    if universities < 1 and phase == Growth
-  military camp 6 if phase == War and camps < 1
-  light turret 9  if this planet is a border planet (nearest enemy < THREAT_DIST)
-  defence agency 8 if scan types in Owner:200 is empty
+priority, first match among types research has unlocked (`exploit.buildable_types`):
+  farm 0          if there is none, the store is under 25%, or the surplus is
+                  below GROWTH_MARGIN_PER_POP per citizen
+  military camp 6 if there is none and pop >= 6
+  light turret 9  if turrets < BORDER_TURRETS and a visible rival planet is
+                  within BORDER_DIST
+  shipyard 2      if there is none here, the civ has < MAX_SHIPYARDS, and
+                  pop >= SHIPYARD_POP
+  university 4    if there is none and pop >= 8
 THEN   Planet:284[P] = that id, Planet:344[P] = 1
 USES   B, C
 ```
-[ ] **The priority list above is not what the code does.** `exploit.run_facilities` gates
-on `buildable_types` (research-unlocked) and builds farms and shipyards; the university,
-military-camp, light-turret and defence-agency clauses are not all implemented, and the
-border-planet test that light turret needs (`nearest enemy < THREAT_DIST`) has no
-implementation at all. Reconcile the list with the code, or trim the list to what is real.
-
-[ ] **`MAX_SHIPYARDS = 2` exists in the code but not in this spec**, and the spec's
-"shipyard 2 if the civ has no shipyard anywhere" says one. Two shipyards were in fact built
-in the last game, which is the code winning. §5 should carry the constant.
+`exploit.wanted_facility` is the authority. The defence agency is not built.
 
 **R-XPL-03, Wealth mode when there is nothing worth building**, [ ] NOT WIRED
 ```
@@ -1134,15 +1129,28 @@ from somewhere, and `Ship:56` is populated by the UI path, so both exist for a r
 not found. Worth knowing before assuming a null `Ship:56` is harmless in every situation
 rather than just the ones tested (Move and Attack toward an enemy planet).
 
-**R-XTM-02, Defend**, [ ] NOT BUILT
+**R-XTM-02, Defend**, IMPLEMENTED in `exterminate.run_xtm02`
 ```
-WHEN   an enemy ship is within THREAT_DIST of owned planet P
-THEN   order every idle WARSHIP within reach to move (1) to P's XYZ
+WHEN   at war, and enemy ships or fleets are in scan range of our planets or ships,
+       grouped by the owned planet nearest each, and a group is a fleet, two or
+       more ships, or any hull above shuttle class
+THEN   hold idle warships already at that planet, and send idle or staged
+       warships that can reach it within DEFEND_REACH turns
 USES   M
 ```
-[ ] Still not built, but testable: `duel.py` (§6.6) supplies an AI opponent, and in the
-Single Player galaxy the human is the attacker. An AI opponent attacks only if its civ owns an
-armed design (§6.6). The rule needs no "order attack (4)" step: arriving is the whole action.
+**Only what the map shows is used.** A player sees another civ's ships only within scan range,
+about 30 units for a planet (`PLANET_SCAN_RANGE`, measured on the stock client) and the
+scanner's range for a ship (30 to 100, from the component table). The map shows a ship's hull
+class, and for a fleet every class in it but no count. A ship that joins a fleet stops existing
+as a `Ship` object, so `gamestate.Fleet` reads the fleet's members at `Fleet:116`.
+
+**A lone shuttle is ignored** because it may be a probe or a decoy, and a rule that answered
+every shuttle could be led around by one. Arriving is the whole action: the owner's ships at a
+planet always defend, and ships meeting in open space never fight without an Attack order.
+
+[ ] **Defence does not weigh the threat yet.** It sends whatever can arrive, whatever the
+attacker's strength. Remembered battle reports could say a fleet is too strong to meet, but a
+report is about a battle, not a fleet, and goes stale when the enemy adds or splits ships.
 
 **Enemy strength comes only from battle reports** (`intel.py`). A player sees no enemy
 firepower, hitpoints, planetary defence or stationed troops by selecting a ship, fleet or
@@ -1187,9 +1195,8 @@ turn, `f1` about 6.4); sent together, an `f1` fought alone for three turns befor
 arrived. The raid fixes an arrival turn from the slowest ship's ETA, `sensors.History.raid`,
 and each faster ship waits at the staging planet until its own ETA lands it on that turn.
 
-[ ] **The two fleets passed each other.** Each civ raided the other's colony simultaneously
-and neither intercepted. Ships meeting in open space fight only when one side has an Attack
-order, which the AI cannot give, so defence has to hold the planet (R-XTM-02).
+**Two fleets at war pass each other in open space.** Ships fight there only when one side
+has an Attack order, which the AI cannot give, so R-XTM-02 defends by holding the planet.
 
 **R-XTM-09, Probe**, IMPLEMENTED in `exterminate.run_xtm09`
 ```
@@ -1412,11 +1419,12 @@ new galaxy rather than inherited.
    `Owner:1196` are the candidates to look at first, both read 1 on the local player and 0 on
    the engine's civ, and neither has been identified.
 
-   [ ] **Seeded designs differ by galaxy builder.** A civ scouts and fights only with designs
+   [x] **Seeded designs differ by galaxy builder.** A civ scouts and fights only with designs
    seeded into the save blob (`game_cycle.py --design`, which needs `--like-id <that civ's
    design>` because it otherwise resolves the local player's). `make_single_player_galaxy.py`
    gives the AI civ `probe1`, `f1` and `b1`; `new_duel_galaxy.py` gives every civ a scout only,
-   so a duel on that galaxy has no armed side.
+   so a duel on that galaxy has no armed side. `make_single_player_galaxy.py --every-civ` seeds
+   the full design list into every civ, which is the armed duel fixture.
 
    **THE GALAXY IS NO LONGER LIMITED TO TWO CIVS.** `server/dev_tools/inject_civ.py` adds a whole
    player to a save blob, an `OWNR` clone under a new name plus a homeworld built by transplanting
@@ -1431,11 +1439,12 @@ new galaxy rather than inherited.
    **One memory scan per turn serves every civ.** `duel.settled_snapshot` takes a single
    snapshot and each controller's pass reads it; fog of war is applied per civ on top of it.
 
-   [ ] **A torn read got through with three civs.** On turn 166 `GoodGuy` read 1 planet when it
+   [x] **A torn read got through with three civs.** On turn 166 `GoodGuy` read 1 planet when it
    held 7, and acted on that. `_snapshot_settled` only re-reads when a civ reads ZERO planets, so a
    partial read of a seven-planet empire passes the guard. With more civs each pass starts later
    after the boundary, so this gets more likely, not less. The check should compare against the
-   previous turn's count rather than against zero.
+   previous turn's count rather than against zero. Done: `ai.looks_torn` re-reads a civ below
+   half of last turn's planets, in `ai.py` and `duel.py`.
 
 7. [ ] **The client must be relaunched to pick up a code change**, and doing so re-offers
    the customisation popups and (before persistence) discarded the discovery map. Worth
@@ -1755,12 +1764,10 @@ did exactly that to each other for fifty turns.
 That makes exactly two items critical for a prototype claim, and both are already
 specified above:
 
-1. [ ] **R-XTM-03 must rank by "can I beat it", not "is it weakest"** (§4.4).
-   Without it a raid never produces a fight, which is the observable most people
-   would ask for first.
-2. [ ] **R-XTM-02 defend is NOT BUILT** (§4.4). Nothing responds to an incoming
-   fleet, so an attacked civ has no behaviour at all, the half of Exterminate
-   that makes the other half meaningful.
+1. ~~**R-XTM-03 must rank by "can I beat it", not "is it weakest"**~~, **DONE** (§4.4).
+   Raids go only at defences a battle report shows the fleet can beat.
+2. ~~**R-XTM-02 defend is NOT BUILT**~~, **DONE** (§4.4). Idle and staged warships
+   hold a planet that enemy ships come into scan range of.
 
 Everything else outstanding is tuning or economics, not capability: S-04, R-EXP-04,
 R-XPN-04, R-XPL-03, R-XPL-07. Each is a [ ] on its own rule with a reason.
@@ -1781,10 +1788,11 @@ Steps 1-5 are **DONE**. The AI plays all four X's unattended and has fought a ba
 
 ### What comes next, in the order I would do it
 
-1. [ ] **Make the fleet survivable.** R-XTM-03's missing strength test plus real hulls
+1. [x] **Make the fleet survivable.** R-XTM-03's missing strength test plus real hulls
    (corvette chassis, shields, several weapons) via `game_cycle.py --design`. Everything else
    in Exterminate is downstream of not losing every ship on arrival. Test from a saved
    armed fixture (`checkpoint.py`) with `combat_watch.py` alongside, not from a fresh game.
+   Done in v0.3: R-XTM-03's margin from battle reports, corvette designs, staged arrival.
 2. ~~**Conscription**~~, **DONE**, actuator N and R-XPL-09. Running unattended on the fresh
    galaxy: a grounded scout was drafted for, crewed the next turn and flew, and exploration
    went from roughly one new system per ten turns to five in four. The engine call it needed
@@ -1795,8 +1803,9 @@ Steps 1-5 are **DONE**. The AI plays all four X's unattended and has fought a ba
 4. [ ] **Read the live research table** (§7), retires a table known to be for the wrong
    content version, and it is read-only, so it is the safest engine call available.
 5. ~~**A second AI-driven civ**~~, **DONE**, `duel.py` drives both civs on one turn clock
-   (§6.6). [ ] What remains before a duel is a real test: synthesised designs for the second
+   (§6.6). [x] What remains before a duel is a real test: synthesised designs for the second
    civ, and a FRESH galaxy, the demonstration ran on a turn-154 game the first civ had already
-   won 21,591 to 3,644, which measures nothing about the strategy.
+   won 21,591 to 3,644, which measures nothing about the strategy. Done: `client/duel_fixture2.dat`
+   is a fresh turn-0 galaxy with both civs armed, and `metrics.py` compares runs on it.
 6. [ ] **Tune §5 over many fast games**, `--drive` makes this possible and nothing has
    used it for that yet.

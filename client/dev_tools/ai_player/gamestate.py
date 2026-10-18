@@ -364,8 +364,49 @@ class Sun(Obj):
     def system_name(self): return self.sso(52)
 
 
+class Fleet(Obj):
+    """Fleet. A ship that joins a fleet stops existing as a Ship object; each
+    member is a 44-byte record at Fleet:116, with its ShipDesign reference node
+    at +4. Fields are read directly: the measured extent can stop short."""
+
+    MEMBER = 44
+
+    def _u32(self, off):
+        raw = self.snap.read(self.addr + off, 4)
+        return struct.unpack("<I", raw)[0] if raw and len(raw) == 4 else None
+
+    def _target(self, node):
+        if not is_ptr(node) or node == NULL_NODE:
+            return None
+        t = self.snap.rd32(node)
+        return t if is_ptr(t) else None
+
+    @property
+    def pos(self):
+        raw = self.snap.read(self.addr + 4, 12)
+        return (struct.unpack("<fff", raw) if raw and len(raw) == 12
+                else (None, None, None))
+
+    @property
+    def owner(self):
+        return self.snap.civ_of(self._target(self._u32(40)))
+
+    @property
+    def member_designs(self):
+        b, e = self._u32(116), self._u32(120)
+        if not is_ptr(b) or e is None or e <= b or (e - b) % self.MEMBER:
+            return []
+        out = []
+        for at in range(b, e, self.MEMBER):
+            node = self.snap.rd32(at + 4)
+            d = self.snap.design_of(self._target(node))
+            if d is not None:
+                out.append(d)
+        return out
+
+
 WRAPPERS = {"Owner": Civ, "Planet": Planet, "Ship": Ship,
-            "ShipDesign": Design, "Sun": Sun}
+            "ShipDesign": Design, "Sun": Sun, "Fleet": Fleet}
 
 
 def resolve_civ(snap, name=None, quiet=False):
@@ -423,6 +464,7 @@ class Snapshot:
         self.ships   = by["Ship"]
         self.designs = by["ShipDesign"]
         self.suns    = by["Sun"]
+        self.fleets  = by["Fleet"]
 
         # Allocation start -> entity, for every pointer form a node may carry.
         self._civ_by_start = {}

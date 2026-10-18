@@ -82,13 +82,15 @@ RULES = [
     ("R-XPL-06", exploit.run_crew_load),
     ("R-XPL-04", exploit.run_research),
 
-    # 4. Orders: garrison, conquer, raid, rally, probe, colonise, scout.
+    # 4. Orders: garrison, conquer, defend, raid, rally, probe, colonise, scout.
     #    A hull that just took a planet lands its troops before R-XTM-04 sends
     #    it on, or the planet rebels. Invasions claim undefended targets before
-    #    raids pick defended ones. Warships no raid claimed go to the staging
-    #    planet. A probe claims its scout before Explore can.
+    #    raids pick defended ones. Defence takes staged warships before a raid
+    #    can. Warships nothing claimed go to the staging planet. A probe claims
+    #    its scout before Explore can.
     ("R-XTM-06", exterminate.run_xtm06),
     ("R-XTM-04", exterminate.run_xtm04),
+    ("R-XTM-02", exterminate.run_xtm02),
     ("R-XTM-03", exterminate.run_xtm03),
     ("R-XTM-08", exterminate.run_xtm08),
     ("R-XTM-09", exterminate.run_xtm09),
@@ -293,6 +295,7 @@ class Loop:
                             explore.run_exp01,
                             expand.run_xpn01,
                             exterminate.run_xtm00,
+                            exterminate.run_xtm02,
                             exterminate.run_xtm01,
                             exterminate.run_xtm03,
                             exterminate.run_xtm04,
