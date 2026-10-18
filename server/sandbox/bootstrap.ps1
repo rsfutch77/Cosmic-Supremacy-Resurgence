@@ -7,7 +7,6 @@
     libraries at the key in C:\key when one is there, and runs the worker with
     its log, status file and operator page in C:\out, which the host can read.
     The worker is restarted after it exits, unless the stage was made with -Once.
-    The operator page opens in the sandbox's Edge once the worker writes it.
 #>
 $ErrorActionPreference = 'Stop'
 
@@ -68,29 +67,6 @@ try {
     # Windows PowerShell turns each stderr line of a native program into an
     # error record, which 'Stop' would make fatal to the loop.
     $ErrorActionPreference = 'Continue'
-
-    # The operator page opens in the sandbox's Edge once this start has written
-    # it, or after PageWait with whatever page is there, which then shows its
-    # own STALE banner. The meta refresh keeps it current. Edge renders without
-    # the GPU: with it, the sandbox bugchecks (0x3B) about three minutes after
-    # the page opens.
-    $Page = Join-Path $Out 'operator.html'
-    $PageWait = 180   # seconds to wait for the worker's startup page
-    $EdgePolicy = 'HKLM:\SOFTWARE\Policies\Microsoft\Edge'
-    New-Item -Path $EdgePolicy -Force | Out-Null
-    Set-ItemProperty -Path $EdgePolicy -Name HideFirstRunExperience -Value 1 -Type DWord
-    Set-ItemProperty -Path $EdgePolicy -Name HardwareAccelerationModeEnabled -Value 0 -Type DWord
-    Set-ItemProperty -Path $EdgePolicy -Name StartupBoostEnabled -Value 0 -Type DWord
-    Start-Job -ArgumentList $Page, (Get-Date), $PageWait -ScriptBlock {
-        param($Page, $Since, $Wait)
-        $deadline = (Get-Date).AddSeconds($Wait)
-        while ((Get-Date) -lt $deadline -and
-               -not ((Test-Path $Page) -and (Get-Item $Page).LastWriteTime -ge $Since)) {
-            Start-Sleep -Seconds 2
-        }
-        if (Test-Path $Page) { Start-Process msedge.exe -ArgumentList '--no-first-run', '--disable-gpu', $Page }
-    } | Out-Null
-    Say "operator page: opens in Edge when written, at most ${PageWait}s"
 
     Say 'preflight'
     & $Python (Join-Path $Code 'server\sandbox\preflight.py') $Store 2>&1 |
