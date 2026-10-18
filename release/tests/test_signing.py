@@ -316,6 +316,29 @@ want = os.path.join(pkg_home, ".nuget", "packages",
 check("the dlib is found in the NuGet cache, newest version, matching "
       "architecture", out.strip().lower(), want.lower())
 
+# Then in the Client Tools install, which holds one x64 copy.
+tools_home = os.path.join(AS, "localappdata")
+tools_dir = os.path.join(tools_home, "Microsoft", "MicrosoftArtifactSigningClientTools")
+os.makedirs(tools_dir)
+tools_dlib = os.path.join(tools_dir, "Azure.CodeSigning.Dlib.dll")
+open(tools_dlib, "wb").close()
+empty_home = os.path.join(AS, "empty_home")
+os.makedirs(empty_home)
+tools_env = dict(os.environ, USERPROFILE=empty_home, LOCALAPPDATA=tools_home)
+rc, out = run_ps("Find-ArtifactSigningDlib '' 'x64'", env=tools_env)
+check("with no NuGet copy, the Client Tools dlib is found for x64",
+      out.strip().lower(), tools_dlib.lower())
+rc, out = run_ps("Find-ArtifactSigningDlib '' 'x86'", env=tools_env)
+check("and is not offered for x86", out.strip(), "")
+both_env = dict(os.environ, USERPROFILE=pkg_home, LOCALAPPDATA=tools_home)
+rc, out = run_ps("Find-ArtifactSigningDlib '' 'x64'", env=both_env)
+check("the NuGet cache still comes first when both are present",
+      out.strip().lower(), want.replace("\\x86\\", "\\x64\\").lower())
+none_env = dict(os.environ, USERPROFILE=empty_home,
+                LOCALAPPDATA=os.path.join(AS, "empty_localappdata"))
+rc, out = run_ps("Find-ArtifactSigningDlib '' 'x64'", env=none_env)
+check("with neither, nothing is found", out.strip(), "")
+
 # The command line and the metadata file, from the real function.
 env = dict(os.environ, STUB_EXIT="0")
 open(as_log, "w").close()

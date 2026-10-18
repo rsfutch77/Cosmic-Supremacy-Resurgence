@@ -55,7 +55,8 @@
 .PARAMETER SignArtifactDlib
     Full path to Azure.CodeSigning.Dlib.dll, from the same architecture folder
     as signtool. Defaults to CS_SIGN_AS_DLIB, then the newest
-    Microsoft.ArtifactSigning.Client package in the NuGet cache.
+    Microsoft.ArtifactSigning.Client package in the NuGet cache, then the
+    Artifact Signing Client Tools install in %LOCALAPPDATA%.
 
 .PARAMETER SignArtifactAuthExclude
     Credential types the dlib must not try, written into the metadata file as
@@ -267,21 +268,29 @@ function Find-SignTool {
 
 # Azure.CodeSigning.Dlib.dll: the explicit path, then the newest copy for the
 # given architecture in the NuGet cache of the Microsoft.ArtifactSigning.Client
-# package (bin\<arch>\ inside the package). Returns $null when none is found.
+# package (bin\<arch>\ inside the package), then the Artifact Signing Client
+# Tools install. Returns $null when none is found.
 function Find-ArtifactSigningDlib {
     param([string]$Override, [string]$Arch)
     $d = Get-SigningDefaults
     if ($Override) { return $Override }
-    if (-not $env:USERPROFILE) { return $null }
-    $root = Join-Path $env:USERPROFILE '.nuget\packages\microsoft.artifactsigning.client'
-    if (-not (Test-Path -LiteralPath $root)) { return $null }
-    $found = @(Get-ChildItem -LiteralPath $root -Filter $d.DlibName -Recurse -Depth 3 -ErrorAction SilentlyContinue |
-               Where-Object { $_.DirectoryName -like "*\bin\$Arch" })
-    if ($found.Count -eq 0) { return $null }
-    $newest = $found | Sort-Object {
-        if ($_.FullName -match 'microsoft\.artifactsigning\.client\\([\d.]+)\\') { [version]$Matches[1] } else { [version]'0.0' }
-    } -Descending | Select-Object -First 1
-    return $newest.FullName
+    if ($env:USERPROFILE) {
+        $root = Join-Path $env:USERPROFILE '.nuget\packages\microsoft.artifactsigning.client'
+        $found = @(Get-ChildItem -LiteralPath $root -Filter $d.DlibName -Recurse -Depth 3 -ErrorAction SilentlyContinue |
+                   Where-Object { $_.DirectoryName -like "*\bin\$Arch" })
+        if ($found.Count -gt 0) {
+            $newest = $found | Sort-Object {
+                if ($_.FullName -match 'microsoft\.artifactsigning\.client\\([\d.]+)\\') { [version]$Matches[1] } else { [version]'0.0' }
+            } -Descending | Select-Object -First 1
+            return $newest.FullName
+        }
+    }
+    # The Client Tools installer puts one x64 copy in a flat folder.
+    if ($Arch -eq 'x64' -and $env:LOCALAPPDATA) {
+        $tools = Join-Path $env:LOCALAPPDATA "Microsoft\MicrosoftArtifactSigningClientTools\$($d.DlibName)"
+        if (Test-Path -LiteralPath $tools) { return $tools }
+    }
+    return $null
 }
 
 # The reason a signtool version cannot be used with the Artifact Signing dlib,
@@ -395,8 +404,9 @@ function Resolve-ArtifactSigning {
 
     $dlibPath = Find-ArtifactSigningDlib $Dlib $toolArch
     if (-not $dlibPath) {
-        throw ("$($d.DlibName) not found for $toolArch. Install the Microsoft.ArtifactSigning.Client " +
-               'NuGet package, or pass -SignArtifactDlib or set CS_SIGN_AS_DLIB')
+        throw ("$($d.DlibName) not found for $toolArch. Install the Artifact Signing Client Tools " +
+               'or the Microsoft.ArtifactSigning.Client NuGet package, or pass -SignArtifactDlib ' +
+               'or set CS_SIGN_AS_DLIB')
     }
     if (-not (Test-Path -LiteralPath $dlibPath -PathType Leaf)) { throw "Artifact Signing dlib not found at $dlibPath" }
     $dlibPath = (Resolve-Path -LiteralPath $dlibPath).Path
