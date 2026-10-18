@@ -27,8 +27,11 @@ property block (coat-of-arms count, flags).
 **Current production**, `PLNT > PLPR > PROD`: what the planet is building, its
 own fields and a nested section naming it (`WLTH` for nothing, `FCLT` with the
 facility type at `+13`, `SCAN`, or `SHIP` with a design id). Copied whole,
-unless the served item was hurried, which the UI does not let be swapped, or
-it names any other kind. The production queues proper are
+unless the served item was hurried, which the UI does not let be swapped, it
+names any other kind, or it starts a facility the client would not allow
+(`facility_rules.can_build`: researched, fits the free space, the hyperspace
+pair, the per-planet limit), judged on the served planet and research. The
+production queues proper are
 `OWNR > SPQS > SPRQ > PRQU` and have never been seen in a capture.
 
 **Ship designs**, `OWNR > DATA > DSGN`. A new design arrives as a second
@@ -98,6 +101,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import save_parser as sp
 import inject_civ as icv
 import inject_design as idg
+import facility_rules
 
 # The research topic is written twice in a civ's OWPR, 8 bytes apart, after a
 # map (u32 count at +8, 8-byte pairs) and the completed technologies (u32 count,
@@ -759,13 +763,42 @@ def set_design_inactive(blob, design_oid, inactive):
 # What a PROD can name in its nested section: nothing (piling up wealth), a
 # facility, a scan, or a ship by design id.
 PROD_KINDS = (b'WLTH', b'FCLT', b'SCAN', b'SHIP')
+PROD_LIST_OFF = 9           # u32 count of four-byte pairs
+PROD_FACILITY_OFF = 13      # u32 facility type, after an empty list
+PROD_KIND_OFF = 21          # the nested section, after an empty list
+
+
+def _prod_list_len(prod):
+    """Bytes taken by PROD's list at +9: a u32 count of four-byte pairs. It
+    has been empty in every capture, but what follows it moves with it."""
+    return 4 * struct.unpack_from('<I', prod, 8 + PROD_LIST_OFF)[0]
 
 
 def prod_kind(prod):
     """The four-byte tag of what a PROD builds, or None."""
-    if prod is None or len(prod) < 8 + 25:
+    if prod is None or len(prod) < 8 + PROD_LIST_OFF + 4:
         return None
-    return bytes(prod[8 + 21:8 + 25])
+    at = 8 + PROD_KIND_OFF + _prod_list_len(prod)
+    if len(prod) < at + 4:
+        return None
+    return bytes(prod[at:at + 4])
+
+
+def prod_facility(prod):
+    """The facility type a PROD builds, or None when it builds no facility."""
+    if prod_kind(prod) != b'FCLT':
+        return None
+    return struct.unpack_from('<I', prod, 8 + PROD_FACILITY_OFF
+                              + _prod_list_len(prod))[0]
+
+
+def facility_refusal(blob, completed, plpr, facility_type):
+    """Why a facility may not be started on a planet, or '' when it may."""
+    if plpr is None:
+        return 'the planet has no PLPR'
+    ok, why = facility_rules.can_build(blob, completed, plpr,
+                                       facilities_of(plpr) or [], facility_type)
+    return '' if ok else why
 
 
 def prod_builds(prod):
@@ -1203,6 +1236,8 @@ def merge(blob, submissions, log=print, notes=None):
     # submission is compared against the state served, not the merged blob.
     served_research = {o['oid']: research_of(blob, o['oid'])
                        for o in icv.owner_records(blob)}
+    served_completed = {o['oid']: completed_research(blob, o['oid']) or []
+                        for o in icv.owner_records(blob)}
     names = {o['oid']: o['name'] for o in icv.owner_records(blob)}
     accepted = dropped = 0
 
@@ -1323,6 +1358,14 @@ def merge(blob, submissions, log=print, notes=None):
                         drop(f"planet {planet_oid}: production DROPPED, it "
                              f"builds {prod_kind(prod)!r}, which is not a "
                              f"facility, a ship, a scan or wealth")
+                    elif (prod_facility(prod) is not None
+                          and prod_facility(prod) != prod_facility(prod_served)
+                          and (why := facility_refusal(
+                              blob, served_completed.get(mine, []),
+                              plpr_served, prod_facility(prod)))):
+                        drop(f"planet {planet_oid}: production DROPPED, "
+                             f"facility {prod_facility(prod)} cannot be built: "
+                             f"{why}")
                     elif (prod_builds(prod) is not None
                           and prod_builds(prod) not in mine_designs):
                         # A queue naming a design the galaxy does not hold makes

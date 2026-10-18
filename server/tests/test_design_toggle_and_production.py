@@ -133,6 +133,31 @@ def main():
     check('and the planet keeps what it was building',
           mo.planet_index(out)[planet][1], planets[planet][1])
 
+    print('whether the facility may be built')
+    done = mo.completed_research(served, owners['DemoPlayer'])
+    locked = next(t for t in range(len(mo.facility_rules.SPACE_CURRENT))
+                  if t not in mo.facility_rules.unlocked(done)[0])
+
+    def to_type(t):
+        def edit(prod):
+            to_farm(prod)
+            struct.pack_into('<I', prod, 8 + 13, t)
+        return edit
+
+    out, notes = merged(served, 'DemoPlayer', with_prod(served, planet, to_type(locked)))
+    check(f'facility {locked}, not researched, is refused',
+          any('not yet researched' in n for n in notes))
+    check('and the planet keeps what it was building',
+          mo.planet_index(out)[planet][1], planets[planet][1])
+
+    _tree, plpr = mo._planet_plpr(served, planet)
+    cramped = bytearray(served)
+    struct.pack_into('<H', cramped, plpr.payload + mo.facility_rules.PLPR_BASE_SPACE_OFF, 0)
+    cramped = bytes(cramped)
+    out, notes = merged(cramped, 'DemoPlayer', with_prod(cramped, planet, to_farm))
+    check('a farm on a planet with no free space is refused',
+          any('space' in n for n in notes))
+
     print(f'\n{len(PASS)} passed, {len(FAIL)} failed')
     return 1 if FAIL else 0
 

@@ -746,6 +746,8 @@ $piArgs = @(
     '--hidden-import', 'canonical',
     '--hidden-import', 'order_diff',
     '--hidden-import', 'merge_orders',
+    '--hidden-import', 'facility_rules',
+    '--hidden-import', 'research',
     '--hidden-import', 'game_cycle',
     '--hidden-import', 'gamestate',
     '--hidden-import', 'ejbo_viewer',
