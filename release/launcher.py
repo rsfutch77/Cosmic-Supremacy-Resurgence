@@ -3049,6 +3049,27 @@ class Launcher:
             self.say(f"games   {err}")
         self._draw_galaxies()
 
+    def _on_mp_played(self, gid, turn):
+        """The followed galaxy holds this player's turn. Runs on the UI thread.
+
+        The row reads "turn played" now rather than at the next listing. A
+        listing from another turn is listed again instead.
+        """
+        row = next((g for g in self.games_rows or [] if g.id == gid), None)
+        if row is None or turn is None:
+            return
+        if row.turn != turn:
+            if self.page == "galaxies":
+                self.refresh_games()
+            return
+        submitted = dict(self.games_extra.get("submitted") or {})
+        if submitted.get(gid) is True:
+            return
+        submitted[gid] = True
+        self.games_extra = dict(self.games_extra, submitted=submitted)
+        if self.page == "galaxies":
+            self._draw_galaxies()
+
     def _cell_colour(self, col, g, view, near: bool) -> str:
         """What colour one cell is drawn in.
 
@@ -3737,6 +3758,9 @@ class Launcher:
             self.mp_capture = (SENT, time.time())
             if facts.get("final"):
                 self.mp_sending = False
+            playing = getattr(self, "mp_playing", None)
+            if playing:
+                self.msgs.put(("__mp_played__", playing["id"], turn))
         elif kind in ("waiting", "overtaken", "lost", "done",
                       "stopped", "failed"):
             # The turn is over, however it ended, so nothing is still on its
@@ -4518,6 +4542,9 @@ class Launcher:
                 elif isinstance(msg, tuple) and msg and msg[0] == "__mp_warning__":
                     _tag, store, lines = msg
                     self._on_mp_warning(store, lines)
+                elif isinstance(msg, tuple) and msg and msg[0] == "__mp_played__":
+                    _tag, gid, turn = msg
+                    self._on_mp_played(gid, turn)
                 elif isinstance(msg, tuple) and msg and msg[0] == "__mp_refused__":
                     self.warn(msg[1])
                 elif isinstance(msg, tuple) and msg and msg[0] == "__log_offer__":
