@@ -92,6 +92,11 @@ function drawModes(modes) {
     b.disabled = !m.ready || modesDisabled;
     b.dataset.ready = m.ready ? "1" : "";
     row.append(b, el("div", "blurb", m.blurb));
+    if (m.continues) {
+      const fresh = gbtn("New Game", () => call("new_game", m.id), "small newgame");
+      fresh.disabled = b.disabled;
+      row.append(fresh);
+    }
     box.appendChild(row);
   }
 }

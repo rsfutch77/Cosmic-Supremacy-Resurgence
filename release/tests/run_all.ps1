@@ -24,6 +24,8 @@
                            minimised. No game, no network.
       test_tutorial_patch  The Tutorial and main-window-size patches the
                            build applies to the clients. No game.
+      test_continue        Single Player Play continues the newest save and
+                           New Game starts over. No game.
       test_status_cycle    Drives the real launcher and client for each
                            playable mode: launch, kill, status recovers.
       test_external_status Same, for a client started outside the launcher.
@@ -75,6 +77,7 @@ Invoke-Test 'test_save_protocol.py'
 Invoke-Test 'test_save_message_path.py'
 Invoke-Test 'test_minimised_poll.py'
 Invoke-Test 'test_tutorial_patch.py'
+Invoke-Test 'test_continue.py'
 foreach ($mode in @('tutorial', 'demo', 'testbed')) {
     Invoke-Test 'test_status_cycle.py' @($mode)
 }

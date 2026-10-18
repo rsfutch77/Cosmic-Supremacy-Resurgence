@@ -74,12 +74,15 @@ class Bridge:
     def ready(self):
         self._view._page_ready.set()
 
-    def play(self, mode_id):
+    def play(self, mode_id, fresh=False):
         def act(app):
             mode = next((m for m in app.modes if m.get("id") == mode_id), None)
             if mode is not None:
-                app.on_play(mode)
+                app.on_play(mode, fresh=fresh)
         self._post(act)
+
+    def new_game(self, mode_id):
+        self.play(mode_id, fresh=True)
 
     def page(self, name):
         if name == "galaxies":
@@ -278,7 +281,8 @@ class WebView:
         self._set(
             product=app.cfg["product"],
             modes=[{"id": m.get("id"), "title": m["title"], "blurb": m["blurb"],
-                    "ready": L.is_playable(m)} for m in app.modes],
+                    "ready": L.is_playable(m),
+                    "continues": bool(m.get("continues"))} for m in app.modes],
             columns=[{"key": c.key, "heading": c.heading}
                      for c in L.GALAXY_COLUMNS],
             controls=[{"key": k, "label": label} for k, label in L.CONTROLS],

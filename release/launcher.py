@@ -608,9 +608,21 @@ def launch_ai(mode, data_dir: str) -> "subprocess.Popen | None":
         bufsize=1, env=env, creationflags=CREATE_NO_WINDOW)
 
 
-def launch_mode(mode, game_root: str, galaxy_root: str) -> subprocess.Popen:
+def latest_save(dat_dir: str) -> "str | None":
+    """The most recently written .dat in `dat_dir`, or None."""
+    try:
+        dats = [os.path.join(dat_dir, n) for n in os.listdir(dat_dir)
+                if n.lower().endswith(".dat")]
+    except OSError:
+        return None
+    return max(dats, key=os.path.getmtime, default=None)
+
+
+def launch_mode(mode, game_root: str, galaxy_root: str,
+                galaxy: "str | None" = None) -> subprocess.Popen:
+    """Start a mode's client on its galaxy, or on `galaxy` when given."""
     exe = os.path.join(game_root, mode["exe"])
-    galaxy = os.path.join(galaxy_root, mode["galaxy"])
+    galaxy = galaxy or os.path.join(galaxy_root, mode["galaxy"])
     if not os.path.exists(exe):
         raise FileNotFoundError(exe)
     if not os.path.exists(galaxy):
@@ -2801,7 +2813,9 @@ class Launcher:
         self.say(f"server listening on {listening}")
         self.say(f"log     {logfile}")
 
-    def on_play(self, mode):
+    def on_play(self, mode, fresh=False):
+        """Start a mode. A mode that `continues` starts on its newest save
+        unless `fresh`, which is New Game."""
         if not is_playable(mode):
             return
         if mode.get("id") == "multiplayer":
@@ -2816,8 +2830,12 @@ class Launcher:
                       "close the first without saving. Quit the running game "
                       "first, then try again.")
             return
+        save = None
+        if mode.get("continues") and not fresh:
+            save = latest_save(os.path.join(self.data_dir, "games"))
         try:
-            self.child = launch_mode(mode, self.game_root, self.galaxy_root)
+            self.child = launch_mode(mode, self.game_root, self.galaxy_root,
+                                     galaxy=save)
         except FileNotFoundError as exc:
             self.warn(f"Missing file:\n\n{exc}\n\nThe release folder looks "
                       "incomplete; try downloading it again.")
@@ -2826,11 +2844,15 @@ class Launcher:
             self.warn(f"Could not start the game:\n\n{exc}")
             return
         self.running_mode = mode
-        self.say(f"launched {mode['id']}: {mode['exe']} {mode['galaxy']}")
+        if save:
+            self.say(f"launched {mode['id']}: {mode['exe']}, continuing "
+                     f"{os.path.basename(save)}")
+        else:
+            self.say(f"launched {mode['id']}: {mode['exe']} {mode['galaxy']}")
         # "short", not "title": the button titles are imperative.
         self.set_status(f"{_short(mode)} is running", OK)
         if mode.get("ai"):
-            self.start_ai(mode)
+            self.start_ai(mode, fresh_galaxy=save is None)
 
     def _show_identity(self):
         self.view.show_identity(self.player)
