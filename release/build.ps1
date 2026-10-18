@@ -751,6 +751,8 @@ $piArgs = @(
     '--hidden-import', 'ejbo_viewer',
     '--hidden-import', 'advance_turns',
     '--hidden-import', 'trigger_save',
+    # Single Player's New Game seeds a freshly built galaxy with it.
+    '--hidden-import', 'make_single_player_galaxy',
     # This install's Firebase identity, imported by player_token(). Missing, it
     # fails silently as "no token".
     '--hidden-import', 'fb_auth',
@@ -865,6 +867,12 @@ foreach ($m in $playable) {
         Copy-Item (Join-Path $ClientDir $m.galaxy) (Join-Path $GalaxyDir $m.galaxy)
         $copied[$m.galaxy] = $true
         Write-Ok "game\galaxies\$($m.galaxy)"
+    }
+    # The pass file New Game builds a fresh galaxy from.
+    if ($m.generate -and -not $copied.ContainsKey($m.generate)) {
+        Copy-Item (Join-Path $ClientDir $m.generate) (Join-Path $GalaxyDir $m.generate)
+        $copied[$m.generate] = $true
+        Write-Ok "game\galaxies\$($m.generate)"
     }
 }
 

@@ -620,6 +620,65 @@ def mode_done(mode, data_dir: str) -> bool:
     return os.path.exists(os.path.join(data_dir, TUTORIAL_FILE))
 
 
+# New Game's galaxy, among the saves so that Play continues it.
+NEW_GAME_FILE = "New Game_turn0.dat"
+GENERATE_TIMEOUT = 120.0   # seconds for the client to build a galaxy
+
+
+def generate_galaxy(mode, game_root, galaxy_root, pass_file, save_dir, out,
+                    log=print, timeout=GENERATE_TIMEOUT) -> str:
+    """Build a fresh galaxy with the mode's client and write it, seeded for
+    the AI, to `out`. The client is closed again either way."""
+    import gamectl
+    if multiplayer_modules() is None:
+        raise gamectl.GameError("this build has no galaxy tools")
+    import gamestate as gs
+    import make_single_player_galaxy as msg
+
+    started = time.time() - 1
+    child = launch_mode(mode, game_root, galaxy_root, galaxy=pass_file)
+    try:
+        deadline = time.time() + timeout
+        while True:
+            if child.poll() is not None:
+                raise gamectl.GameError("the game exited while building the galaxy")
+            try:
+                snap = gs.Snapshot()
+                if snap.civs and len(snap.suns) > 10:
+                    break
+            except Exception:
+                pass            # still loading
+            if time.time() > deadline:
+                raise gamectl.GameError("the galaxy was not built in time")
+            time.sleep(1.0)
+        log(f"new galaxy: {len(snap.suns)} suns, civs "
+            f"{[c.civ_name for c in snap.civs]}")
+        pid, _name = gamectl.find_client()
+        with gamectl.Client(pid) as c:
+            if not c.save_game("newgalaxy"):
+                raise gamectl.GameError("the game refused to save the galaxy")
+        time.sleep(1.5)
+        cap = gamectl.newest_capture(save_dir, started)
+        if cap is None:
+            raise gamectl.GameError("the galaxy's save never reached the server")
+        with open(cap, "r", encoding="ascii") as fh:
+            blob = gamectl.decode_blob(fh.read())
+    finally:
+        child.terminate()
+        try:
+            child.wait(timeout=10)
+        except Exception:
+            pass
+    blob = msg.seeded(blob, log=lambda _m: None)
+    os.makedirs(os.path.dirname(out), exist_ok=True)
+    tmp = out + ".tmp"
+    with open(tmp, "wb") as fh:
+        fh.write(blob)
+    os.replace(tmp, out)
+    log(f"new galaxy written to {os.path.basename(out)}")
+    return out
+
+
 def latest_save(dat_dir: str) -> "str | None":
     """The most recently written .dat in `dat_dir`, or None."""
     try:
@@ -2842,12 +2901,19 @@ class Launcher:
                       "close the first without saving. Quit the running game "
                       "first, then try again.")
             return
+        if fresh and mode.get("generate"):
+            self.new_galaxy(mode)
+            return
         save = None
         if mode.get("continues") and not fresh:
             save = latest_save(os.path.join(self.data_dir, "games"))
+        self._start(mode, save, fresh_ai=save is None)
+
+    def _start(self, mode, galaxy, fresh_ai):
+        """Launch a mode's client on `galaxy`, or on its own when None."""
         try:
             self.child = launch_mode(mode, self.game_root, self.galaxy_root,
-                                     galaxy=save)
+                                     galaxy=galaxy)
         except FileNotFoundError as exc:
             self.warn(f"Missing file:\n\n{exc}\n\nThe release folder looks "
                       "incomplete; try downloading it again.")
@@ -2856,15 +2922,39 @@ class Launcher:
             self.warn(f"Could not start the game:\n\n{exc}")
             return
         self.running_mode = mode
-        if save:
-            self.say(f"launched {mode['id']}: {mode['exe']}, continuing "
-                     f"{os.path.basename(save)}")
+        if galaxy:
+            self.say(f"launched {mode['id']}: {mode['exe']}, on "
+                     f"{os.path.basename(galaxy)}")
         else:
             self.say(f"launched {mode['id']}: {mode['exe']} {mode['galaxy']}")
         # "short", not "title": the button titles are imperative.
         self.set_status(f"{_short(mode)} is running", OK)
         if mode.get("ai"):
-            self.start_ai(mode, fresh_galaxy=save is None)
+            self.start_ai(mode, fresh_galaxy=fresh_ai)
+
+    def new_galaxy(self, mode):
+        """New Game for a mode that `generate`s: the client builds a galaxy
+        from the pass file, the launcher saves and seeds it for the AI, then
+        plays it. Falls back to the mode's own galaxy if any step fails."""
+        pass_file = os.path.join(self.galaxy_root, mode["generate"])
+        save_dir = os.path.join(self.data_dir, "saves")
+        out = os.path.join(self.data_dir, "games", NEW_GAME_FILE)
+        self.set_status("preparing a new galaxy", WARN)
+
+        def work():
+            try:
+                return generate_galaxy(mode, self.game_root, self.galaxy_root,
+                                       pass_file, save_dir, out,
+                                       log=self.say_threadsafe)
+            except Exception as exc:          # any failure falls back
+                self.say_threadsafe(f"new galaxy failed ({exc}); playing the "
+                                    f"shipped one")
+                return None
+
+        def done(path):
+            self._start(mode, path, fresh_ai=True)
+
+        self._in_background("preparing a new galaxy", work, done)
 
     def _show_identity(self):
         self.view.show_identity(self.player)

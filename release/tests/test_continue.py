@@ -57,7 +57,26 @@ def bare():
     app.say = app.said.append
     app.set_status = lambda *a: None
     app.start_ai = lambda mode, fresh_galaxy=True: ai.append(fresh_galaxy)
+    app.say_threadsafe = app.said.append
+    # The background thread runs inline, and its result reaches `done` as the
+    # message queue would deliver it.
+    app._in_background = lambda label, work, done=None: done(work())
     return app
+
+
+generated = []
+
+
+def fake_generate(mode, game_root, galaxy_root, pass_file, save_dir, out,
+                  log=print, timeout=None):
+    generated.append(pass_file)
+    with open(out, "wb") as f:
+        f.write(b"FRESH")
+    return out
+
+
+def failing_generate(*a, **k):
+    raise RuntimeError("the client never came up")
 
 
 print("\n1. the manifest marks Single Player, and only it, as continuing")
@@ -86,12 +105,27 @@ check("and the opponent keeps what it knew", ai[-1], False)
 check("the log says which save", any("after war_turn12.dat" in s for s in app.said),
       True)
 
-print("\n4. New Game starts over even with saves")
+print("\n4. New Game builds a fresh galaxy even with saves")
+L.generate_galaxy = fake_generate
 bare().on_play(MODE, fresh=True)
-check("no save is passed", launched[-1], None)
-check("and the opponent starts fresh", ai[-1], True)
-check("and the saves are left alone", sorted(os.listdir(games)),
-      ["after war_turn12.dat", "before war_turn8.dat", "notes.txt"])
+fresh_dat = os.path.join(games, L.NEW_GAME_FILE)
+check("from the mode's pass file", [os.path.basename(p) for p in generated],
+      [MODE["generate"]])
+check("and plays the galaxy it built", launched[-1], fresh_dat)
+check("with the opponent starting fresh", ai[-1], True)
+check("the other saves are left alone", sorted(os.listdir(games)),
+      sorted(["after war_turn12.dat", "before war_turn8.dat", "notes.txt",
+              L.NEW_GAME_FILE]))
+check("and Play continues the new game next time",
+      L.latest_save(games), fresh_dat)
+
+print("\n4b. a galaxy that cannot be built falls back to the shipped one")
+L.generate_galaxy = failing_generate
+app = bare()
+app.on_play(MODE, fresh=True)
+check("the mode's own galaxy is played", launched[-1], None)
+check("with the opponent starting fresh", ai[-1], True)
+check("and the log says why", any("never came up" in s for s in app.said), True)
 
 print("\n5. the page offers New Game beside a continuing mode")
 js = open(os.path.join(REPO, "release", "webui", "app.js"), encoding="utf-8").read()

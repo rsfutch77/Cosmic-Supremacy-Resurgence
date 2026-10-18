@@ -43,6 +43,7 @@
       "show": true,
       "controls": true,
       "continues": true,
+      "generate": "TestBedGalaxy_local.csgalaxy",
       "ai": { "civ": "BadGuy" }
     },
     {

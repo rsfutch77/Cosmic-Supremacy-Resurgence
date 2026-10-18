@@ -166,10 +166,20 @@ def capture_save(name="spseed"):
 
 def seed(capture, out_dat, every_civ=False):
     import save_parser as sp
+
+    blob = seeded(sp.decode_save(open(capture).read()), every_civ=every_civ)
+    with open(out_dat, "wb") as fh:
+        fh.write(blob)
+    log(f"  wrote {out_dat} ({len(blob)} bytes)")
+
+
+def seeded(blob, every_civ=False, log=log):
+    """A freshly generated galaxy made playable against the AI: the AI civ's
+    designs, and a non-zero Owner:4 for every civ. The launcher's New Game
+    calls this too."""
     import inject_design as idg
     import game_cycle as gc
 
-    blob = sp.decode_save(open(capture).read())
     targets = dict((n, i) for n, i in gc.civ_template_ids(blob))
     log(f"  civs in the blob: {sorted(targets)}")
     if AI_CIV not in targets:
@@ -188,14 +198,10 @@ def seed(capture, out_dat, every_civ=False):
             blob = idg.make(blob, tid, name, parts, None, log=lambda m: None)
             log(f"  seeded {name!r} for {civ!r}")
 
-    blob = fix_player_civ_id(blob)
-
-    with open(out_dat, "wb") as fh:
-        fh.write(blob)
-    log(f"  wrote {out_dat} ({len(blob)} bytes)")
+    return fix_player_civ_id(blob, log=log)
 
 
-def fix_player_civ_id(blob):
+def fix_player_civ_id(blob, log=log):
     """Give the human civ a non-zero Owner:4, or it is never empire-ticked.
 
     Owner:4 is the last u32 of an OWNR payload. Zero means "not simulated on
