@@ -25,21 +25,14 @@ server, and closing it will stop the game from saving.
 "WINDOWS PROTECTED YOUR PC"
 --------------------------
 
-The launcher is code-signed, and the publisher is Robert Futch. Windows may
+The launcher is code-signed. Windows may
 still show a blue warning box the first time you run it, because a new
 signature takes time to earn Windows' trust.
 
-To continue: click "More info", check that the publisher reads
-Robert Futch, then click "Run anyway". If the publisher reads "Unknown
-publisher", do not run it; download the game again from
-cosmicresurgence.com.
+To continue: click "More info", then click "Run anyway".
 
 The launcher is open source. You can read its code and build it yourself
 from the project repository.
-
-The Tutorial and the Demo run the original 2006 game client, which is not
-signed. On a Windows 11 PC with Smart App Control turned on, Windows may
-block those two modes. Single Player and Multiplayer run signed clients.
 
 If Windows says it needs Microsoft's WebView2 Runtime, the launcher asks
 before installing it. Windows 11 already has it.

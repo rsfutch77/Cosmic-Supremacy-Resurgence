@@ -98,12 +98,11 @@ check("everything is signed before the archive step",
       BUILD_TEXT.index("Invoke-ReleaseSigning -Config $Signing -Path $gameSign")
       < BUILD_TEXT.index("# ── 8. Zip"), True)
 
-listed = re.search(r"\$PatchedGameExecutables\s*=\s*@\(([^)]*)\)", BUILD_TEXT)
-patched = re.findall(r"'([^']+)'", listed.group(1)) if listed else None
-check("the signed game set is the patched pair and nothing else", patched,
-      ["CosmicSupremacy_Resurgence.exe", "CosmicSupremacy_Player.exe"])
-check("the original client is not in it", "CosmicSupremacy.exe" in (patched or []),
-      False)
+listed = re.search(r"\$GameExecutables\s*=\s*@\(([^)]*)\)", BUILD_TEXT)
+game_exes = re.findall(r"'([^']+)'", listed.group(1)) if listed else None
+check("the signed game set is the three clients and nothing else", game_exes,
+      ["CosmicSupremacy.exe", "CosmicSupremacy_Resurgence.exe",
+       "CosmicSupremacy_Player.exe"])
 check("the game executables are signed whenever a signer is configured",
       "if ($Signing -and -not $SkipGameExecutables) {" in region("# ── 7d.", "# ── 8. Zip")
       and "Invoke-ReleaseSigning" in region("if ($Signing -and -not $SkipGameExecutables) {",
@@ -115,8 +114,8 @@ signing_code = region("# ── Code signing", "Write-Host \"Cosmic Supremacy - 
 signing_code = "\n".join(l for l in signing_code.splitlines()
                          if not l.lstrip().startswith("#"))
 bare_names = re.findall(r"CosmicSupremacy(?:_\w+)?\.exe", signing_code)
-check("the signing functions name no game executable but the patched pair",
-      sorted(set(bare_names)), sorted(patched or []))
+check("the signing functions name no game executable but those three",
+      sorted(set(bare_names)), sorted(game_exes or []))
 
 rc, out = run_ps("$c = Resolve-SigningConfig -Thumbprint '' "
                  "-TimestampUrl 'http://t.example'; "
@@ -316,6 +315,29 @@ want = os.path.join(pkg_home, ".nuget", "packages",
                     "Azure.CodeSigning.Dlib.dll")
 check("the dlib is found in the NuGet cache, newest version, matching "
       "architecture", out.strip().lower(), want.lower())
+
+# Then in the Client Tools install, which holds one x64 copy.
+tools_home = os.path.join(AS, "localappdata")
+tools_dir = os.path.join(tools_home, "Microsoft", "MicrosoftArtifactSigningClientTools")
+os.makedirs(tools_dir)
+tools_dlib = os.path.join(tools_dir, "Azure.CodeSigning.Dlib.dll")
+open(tools_dlib, "wb").close()
+empty_home = os.path.join(AS, "empty_home")
+os.makedirs(empty_home)
+tools_env = dict(os.environ, USERPROFILE=empty_home, LOCALAPPDATA=tools_home)
+rc, out = run_ps("Find-ArtifactSigningDlib '' 'x64'", env=tools_env)
+check("with no NuGet copy, the Client Tools dlib is found for x64",
+      out.strip().lower(), tools_dlib.lower())
+rc, out = run_ps("Find-ArtifactSigningDlib '' 'x86'", env=tools_env)
+check("and is not offered for x86", out.strip(), "")
+both_env = dict(os.environ, USERPROFILE=pkg_home, LOCALAPPDATA=tools_home)
+rc, out = run_ps("Find-ArtifactSigningDlib '' 'x64'", env=both_env)
+check("the NuGet cache still comes first when both are present",
+      out.strip().lower(), want.replace("\\x86\\", "\\x64\\").lower())
+none_env = dict(os.environ, USERPROFILE=empty_home,
+                LOCALAPPDATA=os.path.join(AS, "empty_localappdata"))
+rc, out = run_ps("Find-ArtifactSigningDlib '' 'x64'", env=none_env)
+check("with neither, nothing is found", out.strip(), "")
 
 # The command line and the metadata file, from the real function.
 env = dict(os.environ, STUB_EXIT="0")

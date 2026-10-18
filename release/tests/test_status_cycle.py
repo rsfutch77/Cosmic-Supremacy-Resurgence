@@ -53,7 +53,7 @@ def check(label, got, want):
 print("1. after boot, before launching")
 pump(1.5)
 ready = status()
-check("status mentions the server", ready, lambda s: "server" in (s or "").lower())
+check("idle status reads ready", ready, "ready")
 
 print("\n2. click the Tutorial button")
 app.on_play(mode)

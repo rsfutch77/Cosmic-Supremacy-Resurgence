@@ -98,8 +98,8 @@ Copy-Tree (Join-Path $Repo 'client\dev_tools') (Join-Path $Code 'client\dev_tool
 Get-ChildItem (Join-Path $Repo 'client') -Filter '*.exe' |
     Copy-Item -Destination (New-Item -ItemType Directory -Force (Join-Path $Code 'client'))
 
-# The patched clients the worker can launch. CosmicSupremacy.exe is the
-# original client and is never signed with this project's certificate.
+# The clients the worker can launch. CosmicSupremacy.exe runs only the
+# Tutorial and the Demo, which the worker never launches.
 $StagedClients = @('CosmicSupremacy_Resurgence.exe', 'CosmicSupremacy_Player.exe',
                    'CosmicSupremacy_TestBed.exe') |
     ForEach-Object { Join-Path $Code "client\$_" } |
