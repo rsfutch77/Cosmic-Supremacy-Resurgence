@@ -35,7 +35,8 @@ Your empire is **DemoPlayer** unless you rename it. The computer opponent is
 | A1 | Window opens | Double-click the launcher | The window appears, four modes listed: Tutorial, Demo, Single Player, Multiplayer. Status dot turns green and says the server is up |
 | A2 | Mode text reads correctly | Read the Single Player card | Title and blurb are spelled correctly, no placeholder text, no cut-off words at the edge of the card |
 | A3 | Hover feedback | Move the mouse over the Single Player button | The button lightens. It goes back when you move away |
-| A4  | Game starts | Click **Play Single Player** | The game window opens within a few seconds. Launcher status reads "Single Player is running" in green |
+| A4  | Game starts | Click **Play Single Player** | The game window opens within a few seconds, on your newest save if there is one and on a fresh galaxy if not. Launcher status reads "Single Player is running" in green |
+| A4a | New Game | Quit the game, click **New Game** on the Single Player row | A fresh galaxy at turn 0, even with saves in `data\games`, and the saves are still there |
 | A5  | Controls appear | Look at the launcher after the game window opens | A bar appears with **Next Turn**, **Save**, **Load**, and a turn readout on the left |
 | A6 | Turn readout | Read the left of the control bar | It shows the same turn number the game is showing |
 | A7 | Second game refused | With the game running, click **Play Single Player** again | A dialog explains a game is already running and nothing new starts. The running game is untouched |
@@ -49,7 +50,7 @@ Your empire is **DemoPlayer** unless you rename it. The computer opponent is
 | B1  | Galaxy loads | Wait for the game to finish loading | You are looking at a galaxy map with your homeworld, no error dialog, no "Failed to load Save-Game" |
 | B2 | Home world prompt | Watch the first few seconds | The "Customize Your Home World" prompt appears. This is expected in this build, see Known limitations |
 | B3  | Civ name accepted | Type a new civilisation name and confirm | The name is accepted, and appears afterwards wherever your empire is named (status bar, Diplomacy, Overview highscores) |
-| B4 | Civ name survives a restart | Quit, relaunch Single Player | The name you chose is still there, not back to DemoPlayer |
+| B4 | Civ name survives a restart | Save, quit, click **Play Single Player** | The game continues your save with the name you chose. On **New Game**, the name dialog offers that name first, not DemoEmpire |
 | B5 | Coat of arms dialog | Open the coat of arms prompt if offered | The dialog opens and closes without an error. The image itself is blank, see Known limitations |
 | B6 | Window behaviour | Alt-Tab away and back. Move the window | The game redraws correctly, no black or frozen areas |
 

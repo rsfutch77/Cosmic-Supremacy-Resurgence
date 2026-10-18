@@ -1208,6 +1208,55 @@ Each replacement is written into its original's slot and the remainder is NUL-fi
 
 [ ] Patch 31 is verified by byte comparison and by formatting the patched string, not yet on screen. It needs a client whose `CreateDevice` fails.
 
+### Patches 32–35, Main window opens 10% larger (16 bytes, October 2026)
+
+**Release only**, like 28–31: `client/dev_tools/patch_window_size.py` patches each client `release/build.ps1` stages. The bytes are at the same offsets in all four clients.
+
+The main window's `OnCreate` (`0x00404CA0`) first restores the `MainWindowPos` value from `HKCU\Software\CosmicSupremacy` through a `WindowPosition` helper (`0x0062CB30`). The value is 24 bytes, `x, y, w, h`, their sum, and a Jenkins one-at-a-time hash of `"%d%d%d%d"` over the four, and it is applied only if both checks pass, the centre and top-centre lie in a monitor's work area, Ctrl is not held, and the byte at `0x0081A843` is set. The Tutorial clears that byte at `0x0057E96C`. Otherwise the default comes from `0x00403CB0`, a fixed 950 by 609 placed 40 pixels in from the right and bottom of the screen, floored at 60. The Tutorial's layout (`0x0057E597`) calls the same function.
+
+| # | file | VA | original | patched |
+|---|---|---|---|---|
+| 32 | `0x30C4` | `0x00403CC4` | `lea ecx, [edi-0x3DE]`, screen width − 990 | − 1,085 |
+| 33 | `0x30D6` | `0x00403CD6` | `lea edx, [eax-0x289]`, screen height − 649 | − 710 |
+| 34 | `0x30EF` | `0x00403CEF` | `add ecx, 0x3B6`, width 950 | 1,045 |
+| 35 | `0x30F5` | `0x00403CF5` | `add edx, 0x261`, height 609 | 670 |
+
+A saved `MainWindowPos` still wins outside the Tutorial, so an existing player sees the change only after holding Ctrl at startup or in the Tutorial. **CONFIRMED** on screen in the Tutorial.
+
+### Patches 36–40, The Tutorial (October 2026)
+
+**Release only**: `client/dev_tools/patch_tutorial.py`, applied to `CosmicSupremacy.exe`, which runs the Tutorial and the Demo. They fix GitHub issues #1 to #4.
+
+The steps are a `char*[27]` at `0x00819688` (`.data`), indexed by step id. ShowNext (`0x0057E3A0`) sets the current step at `0x0086F4F4` from the next one at `0x0086F504`, or shows a pending popup (ids 25 and 26, state 1 in `int[27]` at `0x0086F488`) first. Event(id) (`0x0057DF60`, cdecl) unlocks Next through `TutorialDlg::Unlock` (`0x004C1C60`, thiscall, `ret 4`) only when `id` is the current step. Every step's condition is hard-coded at its Event call site; step 6 has none. The text renderer takes `\x08` as a bold toggle, `\x0C<Icon>` for an icon, and `\r<rrggbb>` / `\r<default>` for colour.
+
+| # | where | what |
+|---|---|---|
+| 36 | dialog 206 template, file `0x7D3836`–`0x7D38A2` | the panel and its text area 24 dialog units wider and 48 taller (219 by 295 → 243 by 343, text 211 by 272 → 235 by 320), and the Next button moved with them. The text area neither scrolls nor wraps, so the longest steps had lost their last lines and the widest lines their last word |
+| 37 | call `0x004C1D04` → stub `0x006D30A0` (106 bytes in `int3` padding) | the Next handler's call to Unlock goes through a stub that calls Unlock, then for step 14 or 17 walks the `Ship` registry (`0x00854628`) and raises the step's Event when a local ship already holds a Colonize (type 3, `ship+0x3C`) or Move (type 1) order. Step 17 accepts any Move order, not only one to the nearest sun |
+| 38 | `0x004FA6ED` (`mov edx,[esi]; mov eax,[edx+0x74]`) → call stub `0x006D3110` (73 bytes) | in `PlanetProperties::Tick` (`0x004FA490`), where the current item's cost is fetched: on step 21, for a local planet whose item (`+0xD0`) is a `ShipDesign` (vftable `0x00771DF8`), storage (`+0x20`) is raised to the cost, so the Scout Ship is finished on the next tick. Facilities are never matched |
+| 39 | `0x004FA7E6` (`call Event` after `push 21`) → stub `0x006D3170` (98 bytes) | raises Event(21) as before, then on steps 20 to 22 adds one Stationed Military to a local planet with none, the way recruitment does (`0x004F4E00`): `Citizen::Citizen(3, owner)` (`0x005134D0`) and `push_back` on the military list (`PlanetProperties+0x44`, `0x004CB560`), then Event(26), the Stationed Military popup |
+| 40 | new section `.tutor` (23,040 bytes raw), and 22 entries of the step table | the steps' tasks drawn in `ffcc33`, step 11 telling the player to select both Colony Ships (a double-click selects one), step 20 and 21 saying the ship takes one turn, step 22 offering a draft for Credits. The edited texts no longer fit their `.rdata` slots |
+
+Section 40 needs room for one more header: `.text` starts at file `0x400` and the five headers end at `0x2E0`. The image has no relocations, no certificate and no overlay, so the section is appended at the end of the file at the next section-aligned VA, `0x00C2D000`, and `SizeOfImage` grows to match. A patched client maps with `LoadLibraryExW(LOAD_LIBRARY_AS_IMAGE_RESOURCE)`.
+
+**CONFIRMED** on screen by a play-through: the panel holds every step, the tasks are coloured, orders given early count, the Scout Ship comes one turn after step 21 with a soldier.
+
+### Patch 41, Single Player sends a chosen civ name (6 bytes, October 2026)
+
+**Release only**: `client/dev_tools/patch_civ_name.py`, applied to `CosmicSupremacy_Resurgence.exe`.
+
+Dialog 225, "Pick your Civilization Name and Coat of Arms", is a modeless singleton (`0x00496B00`) whose OK handler is `0x00496F20`. It reads the name from combo 1010, writes it into the local civ through `0x00579230` (offline: `Owner+0x1A0`, the coat of arms at `+0x1C0`, the reveal flag at `+0x19D`, all saved in `OWPR`), and sends `uploadcivname` only when `CB_GETCURSEL` is −1. The server lists the stored name, the dropdown selects it, and typing over the selection leaves it selected, so the name was never sent and each session offered `DemoEmpire` again.
+
+| # | file | VA | original | patched |
+|---|---|---|---|---|
+| 41 | `0x96905` | `0x00497505` | `jne 0x004975F7` (`0F 85 EC 00 00 00`) | six `nop` |
+
+**CONFIRMED:** a name typed in the dialog lands in the save's `OWPR`, and Play now continues the newest save.
+
+[ ] **Confirm patch 41 on screen:** with the patched client, a name typed in dialog 225 arrives as `uploadcivname` in `cs_server.log`, lands in `civs.json`, and is preselected on the next New Game.
+
+[ ] **`getcoa` answers raw PNG bytes and the client base64-decodes the answer** (`0x005F5F10`), so the coat-of-arms list is always empty and `uploadcoa` is never reached. Fix with the coat of arms work.
+
 ### Summary
 
 Patches 1–4 (54 bytes) redirect all network traffic from the dead production servers (`www.cosmicsupremacy.com`, `cosmicsupremacy.com`, and a hardcoded IP) to `127.0.0.1:8888`, where the local stub server (`cs_server.py`) listens. Patch 1 converts a conditional branch (JZ) to an unconditional jump (JMP), forcing the client to always take the "success" path past a connection-validation check.
@@ -1217,6 +1266,12 @@ Patches 5–11 (13 bytes) bypass save/load validation checks in the game’s per
 Patches 12–17 (22 bytes, T1–T5) bypass turn-pipeline sync checks, enabling external turn control. Applied only to the Resurgence EXE.
 
 Patches 28–31 (1,571 bytes) rewrite the setup and login messages to send a player to the launcher, and the renderer failure message to send a report to the issue tracker instead of an email address at the host. Applied only to the clients a release ships.
+
+Patches 32–35 (16 bytes) open the main window 10% larger by default. Applied to every client a release ships.
+
+Patches 36–40 fix the Tutorial: a larger panel, early orders that count, a one-turn Scout Ship with a free soldier, and coloured tasks in a new `.tutor` section. Applied only to `CosmicSupremacy.exe` in a release.
+
+Patch 41 (6 bytes) makes Single Player's civ name dialog send the name on every OK. Applied only to `CosmicSupremacy_Resurgence.exe` in a release.
 
 ### EXE Variants
 
