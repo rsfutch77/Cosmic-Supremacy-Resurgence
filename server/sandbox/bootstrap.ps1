@@ -71,12 +71,16 @@ try {
 
     # The operator page opens in the sandbox's Edge once this start has written
     # it, or after PageWait with whatever page is there, which then shows its
-    # own STALE banner. The meta refresh keeps it current.
+    # own STALE banner. The meta refresh keeps it current. Edge renders without
+    # the GPU: with it, the sandbox bugchecks (0x3B) about three minutes after
+    # the page opens.
     $Page = Join-Path $Out 'operator.html'
     $PageWait = 180   # seconds to wait for the worker's startup page
     $EdgePolicy = 'HKLM:\SOFTWARE\Policies\Microsoft\Edge'
     New-Item -Path $EdgePolicy -Force | Out-Null
     Set-ItemProperty -Path $EdgePolicy -Name HideFirstRunExperience -Value 1 -Type DWord
+    Set-ItemProperty -Path $EdgePolicy -Name HardwareAccelerationModeEnabled -Value 0 -Type DWord
+    Set-ItemProperty -Path $EdgePolicy -Name StartupBoostEnabled -Value 0 -Type DWord
     Start-Job -ArgumentList $Page, (Get-Date), $PageWait -ScriptBlock {
         param($Page, $Since, $Wait)
         $deadline = (Get-Date).AddSeconds($Wait)
@@ -84,7 +88,7 @@ try {
                -not ((Test-Path $Page) -and (Get-Item $Page).LastWriteTime -ge $Since)) {
             Start-Sleep -Seconds 2
         }
-        if (Test-Path $Page) { Start-Process msedge.exe -ArgumentList '--no-first-run', $Page }
+        if (Test-Path $Page) { Start-Process msedge.exe -ArgumentList '--no-first-run', '--disable-gpu', $Page }
     } | Out-Null
     Say "operator page: opens in Edge when written, at most ${PageWait}s"
 
