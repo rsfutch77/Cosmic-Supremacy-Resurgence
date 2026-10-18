@@ -1253,7 +1253,9 @@ Dialog 225, "Pick your Civilization Name and Coat of Arms", is a modeless single
 
 **CONFIRMED:** a name typed in the dialog lands in the save's `OWPR`, and with the patch it also arrives as `uploadcivname`, is kept in `civs.json`, and is offered first on the next New Game.
 
-[ ] **`getcoa` answers raw PNG bytes and the client base64-decodes the answer** (`0x005F5F10`), so the coat-of-arms list is always empty and `uploadcoa` is never reached. Fix with the coat of arms work.
+**Coats of arms.** `listcoa` is read with `operator>>` until a read fails (`0x00497B90`), so its answer is space-separated ids. `getcoa`, and `getapprovedcoa` for another civ's id (`0x00517260`), are base64-decoded (`0x005F5F10`), with `FAIL` for none. An image dragged into the dialog (`0x004981A0`) is scaled to 56 by 66 through GDI+ (`0x004977A0`), saved as PNG and sent with `uploadcoa`, whose answer is the new id. The client caches each id's texture and never refetches it, so ids are not reused.
+
+[ ] **Confirm the coat of arms on screen:** a dragged image survives OK, is listed next session, and is drawn beside the civ's planets.
 
 ### Summary
 

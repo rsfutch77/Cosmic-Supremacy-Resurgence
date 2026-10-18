@@ -174,6 +174,27 @@ check("and the list keeps only the other",
 check("a deleted governor does not load",
       post("loadgov", userid=1, govid=1).startswith("DONE#VER#"), False)
 
+print("\n13. coats of arms")
+import base64                                                   # noqa: E402
+PNG = base64.b64encode(
+    b"\x89PNG\r\n\x1a\n" + b"\x00\x00\x00\rIHDR" + bytes(range(256)) * 3).decode()
+check("a user with none lists nothing", post("listcoa", userid=7), "")
+check("an unknown id is FAIL", post("getcoa", coaid=0), "FAIL")
+check("an upload answers the new id",
+      raw_post("uploadcoa", f"userid=7&passhash='abcdef'&version=1&data={PNG}"), "1")
+check("which is listed", post("listcoa", userid=7), "1")
+check("and served back as the same base64", post("getcoa", coaid=1), PNG)
+check("to other civs too", post("getapprovedcoa", coaid=1), PNG)
+check("a file that is not a PNG is refused with -1",
+      raw_post("uploadcoa", "userid=7&passhash='abcdef'&version=1&data=bm90IGEgcG5n"),
+      "-1")
+check("a second upload gets the next id",
+      raw_post("uploadcoa", f"userid=7&passhash='abcdef'&version=1&data={PNG}"), "2")
+check("and both are listed, space separated", post("listcoa", userid=7), "1 2")
+check("the civ's coaid is the newest",
+      json.load(open(os.path.join(DATA, "civs.json"), encoding="utf-8"))["7"]["coaid"],
+      "2")
+
 srv.shutdown()
 shutil.rmtree(DATA, ignore_errors=True)
 print("\n" + ("ALL PASSED" if not fails else f"FAILURES: {fails}"))

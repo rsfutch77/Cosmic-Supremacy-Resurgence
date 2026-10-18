@@ -105,10 +105,11 @@ the release's `data\` when the launcher sets it:
 | Request log | `cs_server.log` |
 | Civ names | `civs.json`, per userid |
 | Tutorial completed | `tutorial.json`, written on `passedtutorial`; the launcher marks the Tutorial row |
+| Coats of arms | `coa\<id>.png`, ids in each civ's `coas` in `civs.json` |
 
 Both blob kinds are stored and returned verbatim, the server never parses one.
-Coat-of-arms uploads are accepted and discarded, and `getcoa` answers with a 1x1
-placeholder PNG.
+A coat of arms is an image dragged into the civ name dialog; the server keeps
+the PNG the client uploads and serves it back as base64.
 
 Multiplayer state is separate. `server/turn_store.py` holds a galaxy's turn blobs
 and player submissions behind one interface with three implementations, a
@@ -160,25 +161,6 @@ differ from each other on the local server, measured rather than assumed:
 |------|----------------------------|
 | Tutorial | Yes, `testconnection` at startup, one of the checks this EXE was modified to take |
 | Demo | No, zero requests and zero connection attempts across a 45-second run with both loopback listeners up |
-
-## Backlog
-
-Single-player work. Multiplayer is tracked separately.
-
-### [ ] Per-session galaxy generation, for replayability
-
-Single Player ships one pre-seeded `.dat`, so **every new game is the same
-galaxy**. That is a regression against the pass-file path, which generates a
-fresh galaxy on every launch, measured, two launches gave 170 vs 159 planets
-with different sun layouts and different homeworld positions.
-
-The fix reuses pieces that all already work: launch on the pass file to generate
-a fresh galaxy, trigger `SaveGame`, inject the AI's designs into the blob
-(`make_single_player_galaxy.py` does exactly this), then relaunch on the result.
-Roughly a minute of "preparing your galaxy" at the start of a new game.
-
-Deferred deliberately, the fixed galaxy is playable, and the buttons and the
-seeding were worth proving first.
 
 ## Building a release
 

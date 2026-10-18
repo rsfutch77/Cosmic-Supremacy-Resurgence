@@ -71,6 +71,21 @@ DEMO_GALAXY_ID = 0
 # kept in DATA_DIR so a name chosen in one session is there in the next.
 CIV_FILE = os.path.join(DATA_DIR, 'civs.json')
 TUTORIAL_FILE = os.path.join(DATA_DIR, 'tutorial.json')
+
+# Uploaded coats of arms, <id>.png. Ids count up from 1 and are never reused,
+# since the client caches each id's texture for good.
+COA_DIR = os.path.join(DATA_DIR, 'coa')
+COA_MAX_BYTES = 256 * 1024
+PNG_SIGNATURE = b'\x89PNG\r\n\x1a\n'
+
+
+def _next_coa_id() -> int:
+    try:
+        used = [int(n[:-4]) for n in os.listdir(COA_DIR)
+                if n.endswith('.png') and n[:-4].isdigit()]
+    except OSError:
+        used = []
+    return max(used, default=0) + 1
 _civ_state: 'dict | None' = None
 
 def _default_civ() -> dict:
@@ -355,25 +370,55 @@ def handle_action(action: str, params: dict, raw_body: str = '') -> tuple[int, s
             log(f'  -> uploadcivname: userid={userid} (no civname param, ignored)')
         return 200, 'text/plain', 'OK'
 
-    # Response: coaid#NEXT#DONE, one coaid per record. The game calls getcoa only
-    # for coaids listed here.
+    # Response: the user's coat-of-arms ids, separated by spaces, read with
+    # operator>> until one fails (0x497b90). Empty for none. The dialog then
+    # calls getcoa for each.
     if action == 'listcoa':
         userid = params.get('userid', ['1'])[0]
-        coaid  = _get_civ(userid)['coaid']
-        body   = f'{coaid}#NEXT#DONE'
-        log(f'  -> listcoa: userid={userid} coaid={coaid} ({len(body)} bytes)')
+        ids = _get_civ(userid).get('coas', [])
+        log(f'  -> listcoa: userid={userid} ids={ids}')
+        return 200, 'text/plain', ' '.join(str(i) for i in ids)
+
+    # Response: the image as plain base64, no line breaks (0x5f5f10), or FAIL.
+    # getapprovedcoa is the same fetch for another civ's coaid (0x517260).
+    if action in ('getcoa', 'getapprovedcoa'):
+        try:
+            coaid = int(params.get('coaid', ['0'])[0])
+        except ValueError:
+            coaid = 0
+        path = os.path.join(COA_DIR, f'{coaid}.png')
+        if coaid <= 0 or not os.path.exists(path):
+            log(f'  -> {action}: coaid={coaid} unknown')
+            return 200, 'text/plain', 'FAIL'
+        import base64
+        with open(path, 'rb') as f:
+            body = base64.b64encode(f.read()).decode('ascii')
+        log(f'  -> {action}: coaid={coaid} ({len(body)} chars)')
         return 200, 'text/plain', body
 
-    if action == 'getcoa':
-        # A 1x1 placeholder PNG.
-        import base64
-        empty_png = base64.b64decode(
-            'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=='
-        )
-        return 200, 'image/png', empty_png
-
+    # Request: version=1&data=<base64 PNG, not URL-encoded>, the image dragged
+    # into the dialog at 56x66. Response: the new coaid in decimal, -1 refused.
     if action == 'uploadcoa':
-        return 200, 'text/plain', 'OK'
+        import base64
+        userid = params.get('userid', ['1'])[0]
+        raw = _raw_data_field(raw_body) if raw_body else None
+        try:
+            png = base64.b64decode(raw if raw is not None
+                                   else params.get('data', [''])[0])
+        except ValueError:
+            png = b''
+        if not png.startswith(PNG_SIGNATURE) or len(png) > COA_MAX_BYTES:
+            log(f'  !! uploadcoa: userid={userid} not a PNG within '
+                f'{COA_MAX_BYTES} bytes ({len(png)} bytes), refused')
+            return 200, 'text/plain', '-1'
+        coaid = _next_coa_id()
+        os.makedirs(COA_DIR, exist_ok=True)
+        with open(os.path.join(COA_DIR, f'{coaid}.png'), 'wb') as f:
+            f.write(png)
+        civ = _get_civ(userid)
+        _set_civ(userid, coaid=str(coaid), coas=civ.get('coas', []) + [coaid])
+        log(f'  -> uploadcoa: userid={userid} coaid={coaid} ({len(png)} bytes)')
+        return 200, 'text/plain', str(coaid)
 
     # The client does strncmp(response, "DONE", 4) at 0x0048b350 and shows
     # "Failed to save the Save-Game" for anything else.
