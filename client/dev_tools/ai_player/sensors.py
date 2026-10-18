@@ -29,10 +29,12 @@ def _fingerprint(snap):
 
 
 class History:
-    """Turn-over-turn observation, plus the persistent fog-of-war map.
+    """Turn-over-turn observation, plus the persistent fog-of-war map and intel.
 
     Discovery is permanent, as in the game: the set is saved to
-    `state/discovered_<galaxy>_<civ>.json` and reloaded on construction.
+    `state/discovered_<galaxy>_<civ>.json` and reloaded on construction, with
+    the intel this civ has gathered. The game empties a battle report's text
+    a few turns after the battle, so intel is kept here once read.
     """
 
     def __init__(self, snap=None, civ_name=None, persist=True):
@@ -40,8 +42,15 @@ class History:
         self._acted = set()       # planet ids touched since the last observation
         self._stale = set()       # planet ids whose next delta is untrustworthy
         self.discovered = set()   # sun ids whose planets we are allowed to see
+        # Planet id -> the newest battle report read there:
+        # {"turn", "planet_name", "sides": {name: {...}}}.
+        self.intel = {}
+        # Enemy planet id -> turn one of our ships sat there at war unfired on.
+        self.quiet = {}
+        # The raid in progress, {"target": planet id, "arrive": turn}, or None.
+        self.raid = None
         self._path = None
-        self._persisted = set()   # what is already on disk, to avoid rewriting
+        self._persisted = None    # what is already on disk, to avoid rewriting
         self._want_persist = persist
         if persist and snap is not None:
             self._bind(snap, civ_name)
@@ -59,24 +68,34 @@ class History:
     def _load(self):
         try:
             with open(self._path) as f:
-                ids = json.load(f).get("discovered", [])
-            self.discovered |= {int(i) for i in ids}
-            self._persisted = set(self.discovered)
+                data = json.load(f)
+            self.discovered |= {int(i) for i in data.get("discovered", [])}
+            for k, v in data.get("intel", {}).items():
+                self.intel.setdefault(int(k), v)
+            for k, v in data.get("quiet", {}).items():
+                self.quiet.setdefault(int(k), v)
+            self._persisted = self._state()
         except (OSError, ValueError, TypeError):
             # A missing or corrupt file means nothing explored yet.
             pass
 
-    def _save(self):
-        """Write the map, only when it grew."""
-        if self._path is None or self.discovered == self._persisted:
+    def _state(self):
+        return {"discovered": sorted(self.discovered),
+                "intel": {str(k): v for k, v in sorted(self.intel.items())},
+                "quiet": {str(k): v for k, v in sorted(self.quiet.items())}}
+
+    def save(self):
+        """Write the map and intel, only when they changed."""
+        state = self._state()
+        if self._path is None or state == self._persisted:
             return
         try:
             os.makedirs(STATE_DIR, exist_ok=True)
             tmp = self._path + ".tmp"
             with open(tmp, "w") as f:
-                json.dump({"discovered": sorted(self.discovered)}, f)
+                json.dump(state, f)
             os.replace(tmp, self._path)   # atomic; a killed loop cannot truncate it
-            self._persisted = set(self.discovered)
+            self._persisted = state
         except OSError:
             pass                          # never take the loop down over the map
 
@@ -103,7 +122,7 @@ class History:
         if self._path is None and self._want_persist:
             self._bind(snap, civ.civ_name)
         self._discover(snap, civ)
-        self._save()
+        self.save()
         return self
 
     def _discover(self, snap, civ):

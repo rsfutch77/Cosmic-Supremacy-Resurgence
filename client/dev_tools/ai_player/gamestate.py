@@ -178,6 +178,8 @@ class Design(Obj):
     @property
     def upkeep(self):      return self._n(self.i32(48))
     @property
+    def units(self):       return self._n(self.i32(52))   # base hitpoints
+    @property
     def hp(self):          return self._n(self.i32(56))   # effective, shield in
     @property
     def shield(self):      return self._n(self.i32(72))

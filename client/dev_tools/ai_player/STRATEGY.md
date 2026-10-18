@@ -942,10 +942,11 @@ something better) or strictly as a solvency backstop. Only the latter is specifi
 precondition. Confirmed live: the relation went Neutral → War in *both* civs' records and
 R-XTM-03 then engaged. Gated behind `ALLOW_DECLARE_WAR`, which is on for AI-vs-AI galaxies.
 ```
-WHEN   any R-XTM rule wants to attack (4), conquer (5) or bio-bomb (6) civ C
+WHEN   at least WARSHIP_TARGET crewed warships are at the staging planet (R-XTM-08)
+AND    a planet of civ C is in our discovery set
 AND    relation code for C in Owner:248 != 1 (War)
-THEN   declare war on C before issuing the order
-USES   a diplomacy actuator that does not exist yet
+THEN   declare war on C
+USES   actions.declare_war
 ```
 **War is checked in two independent places**, so an Attack order without it accomplishes
 nothing: at order-issue time by `0x00477D90` (which refuses Conquer and Bio-bomb outright),
@@ -985,14 +986,16 @@ protection, and the confirmations.
 
 **R-XTM-01, Maintain a standing fleet**
 ```
-WHEN   sum(our WARSHIP count) < threatLevel
-       where threatLevel = count of known enemy warships within THREAT_DIST
-                           of any owned planet, floored at 2 once contact is made
-THEN   queue the best WARSHIP design affordable in Owner:8 and Owner:1128
-       (rank by max(:60,:64,:68) / :44, filter by metal :92 and radioactives :100
-       against stock)
+WHEN   in contact or at war, and fewer than WARSHIP_TARGET warships (built or
+       queued) or no anti-planet or no anti-ship class among them
+THEN   queue the missing class
+WHEN   the fleet beats no known defended target (R-XTM-03's margin) and is
+       below FLEET_CAP
+THEN   queue the design that most raises the margin against the easiest one
 USES   D
 ```
+Design stats are read from the design, and from the component tables (`components.py`)
+while a design's own stat block is still uncomputed, which it is until a ship of it is built.
 
 **FIXED, the trigger is CONTACT, and gating it on WAR was a silent deadlock.** The
 implementation opened with `if not enemies(): return 0`, which is narrower than the rule
@@ -1141,72 +1144,75 @@ USES   M
 Single Player galaxy the human is the attacker. An AI opponent attacks only if its civ owns an
 armed design (§6.6). The rule needs no "order attack (4)" step: arriving is the whole action.
 
+**Enemy strength comes only from battle reports** (`intel.py`). A player sees no enemy
+firepower, hitpoints, planetary defence or stationed troops by selecting a ship, fleet or
+planet; only a scan or a battle report reveals them. Battle reports are news items in the
+civ's own `Owner:344` vector, 120-byte records with the turn, the position and a marked-up
+body that gives each side's light, heavy and bombing firepower, ship hitpoints, planet
+hitpoints and damage. Each side receives its own copy. Stationed troops are not in it.
+
+**The game empties a report's text a few turns after the battle**, leaving the turn and the
+position: both string pointers read null. Each pass copies every still-readable report into
+`sensors.History.intel`, which is saved with the discovery set, so a probe's sacrifice is not
+lost when its report is.
+
+A planet one of our ships sits at, undamaged, at war, with no report that turn, is recorded as
+quiet in `sensors.History.quiet`: turrets fire at any hostile ship in orbit. Intel older than
+`intel.MAX_AGE` turns counts as unknown.
+
+[ ] **Switch to scan reports once scans are built.** Probing is how players learned enemy
+strength before scans; once the AI can run a planetary or fleet scan, intel should come from
+`Owner:320` where a scan is available and R-XTM-09 should stop sacrificing hulls there.
+
+[ ] **Sacrificial probing is a legitimate but gamey source of intel.** A civ that throws many
+cheap hulls at every target never needs a scan. `PROBES_IN_FLIGHT` limits the AI to one at a
+time; decide later whether the game itself wants a limit.
+
 **R-XTM-03, Raid**, IMPLEMENTED in `exterminate.run_xtm03`
 ```
-WHEN   our WARSHIP count >= threatLevel + RAID_MARGIN
-THEN   pick the weakest visible enemy planet
-       weakness = stationed military (Planet:168 span / 16)
-                + defensive facilities, from facilities.read_table
-       send the fleet with M (Move); co-location at war starts the fight
+WHEN   at war, and at least WARSHIP_TARGET crewed warships are at the staging planet
+THEN   for each visible enemy planet with a known defence (a battle report),
+       margin = (time for the defence to clear our fleet) / (time for us to clear it)
+       send every staged warship at the nearest planet with margin >= STRENGTH_MARGIN
+HOLD   warships at an enemy planet that fought there this turn or last stay
 USES   M
 ```
-[ ] **"WEAKEST" SELECTS THE ONE TARGET THAT CANNOT PRODUCE A BATTLE, measured Aug 2026 on
-the AI-vs-AI galaxy.** Both civs reached war with crewed warships, both fleets flew, both
-ARRIVED, and nothing happened for fifty turns:
+The margin follows the manual's battle rules: bombs are the only damage to planetary defence,
+light and heavy firepower hit ships at half against the other class, and our hulls are light
+classes, so enemy heavy firepower hits them at half. A planet with nothing on it produces no
+battle, so only defended targets are raided; an undefended one is R-XTM-04's to take.
 
-| ship | owner | in orbit of | planet's owner | defences |
-|---|---|---|---|---|
-| #690, #691 | GoodGuy | #41 | BadGuy | military 0, no turret |
-| #689 | BadGuy | #43 | GoodGuy | military 0, no turret |
-
-The rule ranks by `weakness = stationed military + defensive facilities` and takes the
-minimum, so on any civ that has expanded it picks a bare colony, weakness 0, nothing aboard
-to fight. The fleet parks in orbit permanently, the order completes, and the next pass
-re-issues an order whose origin already equals its target.
-
-**This also corrects the doctrine above.** "Co-location at war starts the fight" is not
-enough: there must be something to fight. The one battle this project has ever seen was
-against a homeworld of weakness 500, and it happened only because the rival held exactly ONE
-planet, so weakest and strongest were the same object. That made a broken heuristic look
-correct.
-
-Two fixes, and they are different rules rather than alternatives:
-* **An undefended enemy planet should be CONQUERED, not stared at**, that is R-XTM-04, which
-  is not built and needs a TROOP design plus order type 5. Arriving and doing nothing is the
-  *correct* behaviour for a Move order; the gap is that the AI has no way to take a planet.
-* **A battle needs a defended target or an enemy fleet.** If the goal is combat, rank by
-  "can I beat it" rather than by "is it weak", which is the same strength test the [ ] below
-  asks for from the other direction.
+**A raid departs in stages so the fleet arrives together.** Speeds differ (`b1` about 3.4 a
+turn, `f1` about 6.4); sent together, an `f1` fought alone for three turns before its `b1`
+arrived. The raid fixes an arrival turn from the slowest ship's ETA, `sensors.History.raid`,
+and each faster ship waits at the staging planet until its own ETA lands it on that turn.
 
 [ ] **The two fleets passed each other.** Each civ raided the other's colony simultaneously
-and neither intercepted, because nothing looks at where the enemy's ships are going. R-XTM-02
-(defend) is the missing half.
+and neither intercepted. Ships meeting in open space fight only when one side has an Attack
+order, which the AI cannot give, so defence has to hold the planet (R-XTM-02).
 
-[ ] **There is no "too strong to attack" test, and it fed hulls into a meat grinder.**
-The rule picks the WEAKEST visible enemy planet, but with one enemy planet in view the weakest
-is also the only one. It sent a shuttle-chassis bomber at a homeworld of weakness 500, lost it,
-queued a replacement, and sent that too. It needs to compare its own firepower against the
-target's defence and decline, a raid it cannot win is worse than no raid, because it also
-feeds the enemy score.
-
-[ ] **`RAID_MARGIN` is in §5 but not in the code**, which uses `WARSHIP_TARGET = 2` and
-attacks as soon as anything is crewed. The margin was meant to stop exactly the trickle-feed
-above.
-
-[ ] **The fleet is dispatched piecemeal.** Each warship is sent the moment it is crewed, so
-they arrive one at a time and are defeated one at a time. Ships travel at very different speeds
-(bomber ~10/turn); a rendezvous or a wait-for-N-ships gate is the obvious fix and does not
-exist.
+**R-XTM-09, Probe**, IMPLEMENTED in `exterminate.run_xtm09`
+```
+WHEN   at war, a visible enemy planet has no fresh intel, and fewer than
+       PROBES_IN_FLIGHT scouts are heading to one
+THEN   send the nearest free SCOUT hull to it with M
+NOTE   a probe in flight is claimed each pass so R-EXP-02 does not retask it
+USES   M
+```
+Its battle report is the intel. If nothing fires on it, the planet is quiet.
 
 **R-XTM-08, Rally idle warships**, IMPLEMENTED in `exterminate.run_xtm08`
 ```
 WHEN   a crewed warship is not claimed by an earlier rule, has order 0, 1 or 2,
        and is not at or heading to the staging planet
 THEN   order it to move (1) to the staging planet
-STAGE  the owned planet nearest any rival planet in our discovery set;
-       before contact, the most populous owned planet
+STAGE  the shipyard planet nearest any rival planet in our discovery set;
+       before contact, the most populous shipyard planet
 USES   M
 ```
+Staging is a shipyard because warships are built there and repaired there (8% of the damage
+a turn for heavy hulls, 15% for light, per the manual). A frontier colony far from the yards
+keeps the fleet in transit: a `b1` makes 3.4 a turn, so 350 units is a hundred turns.
 Runs after R-XTM-03, so ships committed to a raid are already claimed, and after R-XTM-05,
 so a withdrawing ship is never redirected.
 

@@ -45,12 +45,19 @@ AI_CIV = "BadGuy"
 
 # probe1 uses only parts from the two starting techs, so it is buildable on
 # turn 0. f1 and b1 carry weapons, which stay locked until Cold Fusion (id 3).
+# cf1 and cb1 are Corvettes (Astro Engineering) with Fusion Drives (Cold
+# Fusion), within the chassis's 210 space. No design carries a shield, which
+# research.design_legal does not check.
 # Every design needs a scanner: a hull without one crashes the client at the
 # turn boundary when the build completes.
 DESIGNS = [
     ("probe1", {"chassis": [0], "scanners": [0], "engines": [0, 0]}),
     ("f1",     {"chassis": [0], "scanners": [0], "engines": [0], "weapons": [0]}),
     ("b1",     {"chassis": [0], "scanners": [0], "engines": [0], "weapons": [10]}),
+    ("cf1",    {"chassis": [1], "scanners": [0], "engines": [1, 1],
+                "weapons": [0] * 8}),
+    ("cb1",    {"chassis": [1], "scanners": [0], "engines": [1, 1],
+                "weapons": [10] * 3}),
 ]
 
 

@@ -753,6 +753,31 @@ There is also a **`Log`** class, and the game's log buffer is already known to t
 what overwrote `Admiral`'s tail past `+88` and forced that class's extent down from a stride of 288.
 If news is backed by that buffer, the same allocation is already partly characterised.
 
+### News items located: `Owner:344` (October 2026)
+
+**`Owner:344/348/352` is the news vector**, a `std::vector` of 120-byte records, one per item,
+each civ holding its own. Located by the method above: one probe sent at a defended homeworld,
+`Owner` windows recorded every turn, and the only list that changed on the battle turn and no
+other grew by exactly 120 bytes in both civs.
+
+| Offset | Field |
+|---|---|
+| `+0` | kind: 2 for a battle report; the older items read `0x42` |
+| `+8` | turn the event resolved |
+| `+16` | title text pointer, size at `+36` ("Battle at Planet 'X' (...): A vs B") |
+| `+48` | body text pointer, size at `+68` |
+| `+76`, `+80` | small ascending per-civ numbers, the save blob's `NEWS +20/+24` |
+| `+108/+112/+116` | position, float |
+
+The body is marked-up text, lines ending in CR, one block per side and topic: fire-power
+(light, heavy, bombing), ship hitpoints, planet hitpoints, damage, ships destroyed, and for the
+defender the score and reputation gained. The attacker's copy names the defender's turrets and
+their strength, which is what a player learned by sacrificing a ship. Stationed troops are not
+in it. `client/dev_tools/ai_player/intel.py` parses it.
+
+[ ] The `0x42` kind on the other items is not identified, and whether research and doctrine
+completions are the items that doubled the vector earlier is not confirmed.
+
 ### The Overview tab (August 2026)
 
 Two buttons plus the civilisation traits.

@@ -82,15 +82,16 @@ RULES = [
     ("R-XPL-06", exploit.run_crew_load),
     ("R-XPL-04", exploit.run_research),
 
-    # 4. Orders: garrison, conquer, raid, rally, colonise, scout.
+    # 4. Orders: garrison, conquer, raid, rally, probe, colonise, scout.
     #    A hull that just took a planet lands its troops before R-XTM-04 sends
     #    it on, or the planet rebels. Invasions claim undefended targets before
     #    raids pick defended ones. Warships no raid claimed go to the staging
-    #    planet.
+    #    planet. A probe claims its scout before Explore can.
     ("R-XTM-06", exterminate.run_xtm06),
     ("R-XTM-04", exterminate.run_xtm04),
     ("R-XTM-03", exterminate.run_xtm03),
     ("R-XTM-08", exterminate.run_xtm08),
+    ("R-XTM-09", exterminate.run_xtm09),
     ("R-XPN-02", expand.run_xpn02),
     ("R-EXP-02", explore.run_exp02),
 ]
@@ -298,7 +299,8 @@ class Loop:
                             exterminate.run_xtm05,
                             exterminate.run_xtm06,
                             exterminate.run_xtm07,
-                            exterminate.run_xtm08):
+                            exterminate.run_xtm08,
+                            exterminate.run_xtm09):
                     fn(snap, civ, act, self.history, log=self.log)
                 else:
                     fn(snap, civ, act, log=self.log)
@@ -309,6 +311,8 @@ class Loop:
                 rule_times[name] = time.time() - rule_started
         # Record this pass's spending so next turn's income reading excludes it.
         self.history.note_cash_effect(act.cash_effect)
+        # Intel read by the rules this pass.
+        self.history.save()
         self.passes += 1
         self.log(f"    {act.summary()}")
         if self.remote is not None:
@@ -363,16 +367,14 @@ class Loop:
             foes = exterminate.enemies(snap, civ, act)
             if not foes:
                 return
-            ranked = exterminate.target_planets(snap, civ, self.history, foes)
+            seen = exterminate.enemy_planets(snap, civ, self.history, foes)
         except Exception as e:
             self.log(f"[loop] contact check raised {type(e).__name__}: {e}")
             return
-        if not ranked:
+        if not seen:
             return
-        weakness, target = ranked[0]
-        self.halt_reason = (
-            f"CONTACT on turn {snap.turn}: {len(ranked)} enemy planet(s) "
-            f"visible, weakest is {target} (weakness {weakness})")
+        self.halt_reason = (f"CONTACT on turn {snap.turn}: {len(seen)} enemy "
+                            f"planet(s) visible")
 
     def run(self, follow=False, max_turns=None, drive=None, stall=None):
         original = None
