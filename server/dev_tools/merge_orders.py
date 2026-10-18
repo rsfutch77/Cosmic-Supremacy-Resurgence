@@ -19,8 +19,9 @@ ship's `DYNO`: the `SHCO` order-type byte (1 move, 3 colonise), the has-orders
 byte, and an appended `ROUT` plus `u32`. Taking the order is copying the
 `DYNO`.
 
-**Research topic**, `OWNR > DATA > OWPR` at `+32` and `+40`, the technology id
-written to both. Copied field by field: the rest of `OWPR` is the civ's
+**Research topic**, `OWNR > DATA > OWPR`, the technology id written twice, 8
+bytes apart, after the completed technologies (`research_offsets`): at `+32`
+and `+40` only while a civ has its two starting technologies. Copied field by field: the rest of `OWPR` is the civ's
 property block (coat-of-arms count, flags).
 
 **Current production**, `PLNT > PLPR > PROD`: what the planet is building, its
