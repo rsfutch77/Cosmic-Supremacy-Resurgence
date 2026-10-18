@@ -1645,6 +1645,32 @@ What is left for after the beta is kept here.
   technology the civ cannot research, or a queue entry it cannot afford, is copied as given. Done
   when the merge applies the rule the UI enforces for each order type it accepts.
 
-- [ ] **Order types nobody has measured are not merged:** facility selection outside the queue,
-  governors, admirals and diplomacy proposals. Done when each is measured against a change made
-  in the UI and is either accepted or refused with a note.
+- [ ] **Order types nobody has measured are not merged:** governors, admirals and diplomacy
+  proposals. Done when each is measured against a change made in the UI and is either accepted
+  or refused with a note.
+
+**Measured in one Single Player session at turn 0 (October 2026,
+`server/tests/fixtures/tier4`):**
+
+- **Deactivating a design** flips only its `DSGN`'s last byte, `0` active and `1` inactive. Carried.
+- **Choosing what a planet builds** writes `PROD`: `+1` build-active, the facility type at `+13`,
+  and the nested kind (`WLTH`, `FCLT`, `SCAN`, or `SHIP` with a design id). Carried when the
+  client's `CanBuildFacility` would allow it (`facility_rules.py`).
+- **Adding a planet to a production queue** creates a queue object under the civ,
+  `OWNR > DATA > SPQS` (a `u32` count, then `SPRQ` holding the object id and a `PRQU` of entries),
+  and links the planet's `PROD` to it at `+2` (flag), `+3` (the queue's object id) and `+7`.
+  Refused with a note.
+- **A fleet** is `GLXY > FLET`: the 20-byte object header (a new object id, raising `SAVE+0`),
+  a `DYNO` with the fleet's orders, and `FLDT`: a `u32`-length name (default `Battle Fleet`, cut
+  to 32 characters), a `u32` member count and one `SHPR` per member. Members leave `GLXY` as
+  `SHIP`s while in the fleet; a ship taken out comes back as a `SHIP` with its own id, and a
+  one-ship fleet survives until disbanded. `SHPR+30` holds the id of the last fleet a ship was
+  in, and keeps it after the ship leaves. Refused with a note: the merge turns the fleet back into
+  its member ships and judges the rest of the submission as usual.
+- **Individual ships cannot be renamed**; only fleets can.
+
+- [ ] **Carry fleets:** forming, joining, leaving, disbanding, renaming, and fleet orders. Needs a
+  fleet id allocated without colliding across players, as designs are, and every member checked:
+  the submitter's, at one position, in no other fleet.
+
+- [ ] **Carry production queues:** the `SPQS` queue objects and the planets' links to them.

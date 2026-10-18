@@ -85,8 +85,10 @@ excluded.
 
 What is refused
 ---------------
-Everything not listed above (fleets, governors, admirals, diplomacy) is not
-accepted. Every refusal is logged and recorded
+Everything not listed above (governors, admirals, diplomacy) is not accepted.
+A fleet (`GLXY > FLET`) is turned back into its member ships before the
+submission is judged, so its other orders still count; a planet joining or
+leaving a production queue keeps what it was building. Every refusal is logged and recorded
 against the civ in the optional `notes` argument to `merge`; `referee.py`
 writes it beside the turn and `player_turn.follow` prints it. A submission
 that cannot be read is dropped whole and named, with anything already taken
@@ -221,6 +223,73 @@ def ship_index(blob):
         if dyno is not None:
             out[oid] = (owner, bytes(blob[dyno.start:dyno.end]))
     return out
+
+
+# A fleet, GLXY > FLET: the SpaceObject header (object id, x, z, y, owner), a
+# DYNO with the fleet's orders, then FLDT: a u32-length name, a u32 member count
+# and one SHPR per member. Member ships leave GLXY as SHIPs while in a fleet. A
+# ship's SHPR keeps the id of the last fleet it was in at +30.
+SHPR_FLEET_OFF = 30
+SHPR_SHIP_OFF = 34
+
+
+def _section_bytes(tag, version, payload):
+    return tag + struct.pack('<I', (version << sp.VERSION_SHIFT) | len(payload)) + payload
+
+
+def without_fleets(sub, served):
+    """(submission, [refusals]) with each fleet the served state does not hold
+    turned back into its member ships.
+
+    Fleets are not carried. Each member is rebuilt from its served SHIP with
+    the SHPR the fleet carried, so crew moved inside the fleet is still judged,
+    and the served fleet field. A member the served state does not hold as a
+    ship is left out.
+    """
+    tree = sp.parse_blob(sub)
+    glxy = next(tree[0].find('GLXY'))
+    fleets = [c for c in glxy.children if c.tag == b'FLET']
+    if not fleets:
+        return sub, []
+    served_tree = sp.parse_blob(served)
+    served_glxy = next(served_tree[0].find('GLXY'))
+    served_fleets = {struct.unpack_from('<I', served, f.payload)[0]
+                     for f in served_glxy.children if f.tag == b'FLET'}
+    ships = {}
+    for sec in served_glxy.find('SHIP'):
+        ships[struct.unpack_from('<I', served, sec.payload)[0]] = sec
+
+    refusals = []
+    body = bytearray(sub[glxy.payload:glxy.end])
+    for fleet in reversed(fleets):
+        fid = struct.unpack_from('<I', sub, fleet.payload)[0]
+        if fid in served_fleets:
+            continue
+        fldt = next(fleet.find('FLDT'), None)
+        n = struct.unpack_from('<I', sub, fldt.payload)[0] if fldt else 0
+        name = bytes(sub[fldt.payload + 4:fldt.payload + 4 + n]) if fldt else b''
+        rebuilt = b''
+        for member in (fleet.find('SHPR') if fldt else ()):
+            shpr = bytearray(sub[member.payload:member.end])
+            oid = struct.unpack_from('<I', shpr, SHPR_SHIP_OFF)[0]
+            ship = ships.get(oid)
+            if ship is None:
+                refusals.append(f'fleet {fid}: member ship {oid} DROPPED, not '
+                                f'a ship in the state served')
+                continue
+            old = next(ship.find('SHPR'))
+            shpr[SHPR_FLEET_OFF:SHPR_FLEET_OFF + 4] = \
+                served[old.payload + SHPR_FLEET_OFF:old.payload + SHPR_FLEET_OFF + 4]
+            payload = (served[ship.payload:old.start]
+                       + _section_bytes(b'SHPR', member.version, bytes(shpr))
+                       + served[old.end:ship.end])
+            rebuilt += _section_bytes(b'SHIP', ship.version, payload)
+        refusals.append(f"fleet {fid} ({name.decode('latin1')!r}) DROPPED, "
+                        f"fleets and their orders are not carried yet; its "
+                        f"ships stay single ships")
+        at, end = fleet.start - glxy.payload, fleet.end - glxy.payload
+        body[at:end] = rebuilt
+    return sp.replace_payload(sub, tree, glxy, bytes(body)), refusals
 
 
 def planet_index(blob):
@@ -763,6 +832,7 @@ def set_design_inactive(blob, design_oid, inactive):
 # What a PROD can name in its nested section: nothing (piling up wealth), a
 # facility, a scan, or a ship by design id.
 PROD_KINDS = (b'WLTH', b'FCLT', b'SCAN', b'SHIP')
+PROD_QUEUE_OFF = 2          # queue flag, queue object id, u16
 PROD_LIST_OFF = 9           # u32 count of four-byte pairs
 PROD_FACILITY_OFF = 13      # u32 facility type, after an empty list
 PROD_KIND_OFF = 21          # the nested section, after an empty list
@@ -782,6 +852,14 @@ def prod_kind(prod):
     if len(prod) < at + 4:
         return None
     return bytes(prod[at:at + 4])
+
+
+def prod_queue(prod):
+    """The production-queue link in a PROD: the flag at +2, the queue's object
+    id at +3 and the u16 at +7. All zero on a planet in no queue."""
+    if prod is None or len(prod) < 8 + PROD_LIST_OFF:
+        return None
+    return bytes(prod[8 + PROD_QUEUE_OFF:8 + PROD_LIST_OFF])
 
 
 def prod_facility(prod):
@@ -1239,6 +1317,7 @@ def merge(blob, submissions, log=print, notes=None):
     served_completed = {o['oid']: completed_research(blob, o['oid']) or []
                         for o in icv.owner_records(blob)}
     names = {o['oid']: o['name'] for o in icv.owner_records(blob)}
+    served = blob
     accepted = dropped = 0
 
     for civ_name, sub in submissions:
@@ -1259,6 +1338,9 @@ def merge(blob, submissions, log=print, notes=None):
         try:
             civ = civ_by_name(blob, civ_name)
             mine = civ['oid']
+            sub, refusals = without_fleets(sub, served)
+            for why in refusals:
+                drop(why)
             log(f"{civ_name} (object {mine}):")
 
             # Ship designs, before the production queues that may name them.
@@ -1358,6 +1440,13 @@ def merge(blob, submissions, log=print, notes=None):
                         drop(f"planet {planet_oid}: production DROPPED, it "
                              f"builds {prod_kind(prod)!r}, which is not a "
                              f"facility, a ship, a scan or wealth")
+                    elif prod_queue(prod) != prod_queue(prod_served):
+                        # The queue is an object under the civ's SPQS, which
+                        # is not carried; a planet naming one the merged galaxy
+                        # lacks would point at nothing.
+                        drop(f"planet {planet_oid}: production DROPPED, it "
+                             f"joins or leaves a production queue, and queues "
+                             f"are not carried yet")
                     elif (prod_facility(prod) is not None
                           and prod_facility(prod) != prod_facility(prod_served)
                           and (why := facility_refusal(
