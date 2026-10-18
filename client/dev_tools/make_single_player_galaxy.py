@@ -5,6 +5,10 @@ mode ships
     python make_single_player_galaxy.py                 # writes client\\SinglePlayerGalaxy.dat
     python make_single_player_galaxy.py --out other.dat
     python make_single_player_galaxy.py --keep-open     # leave the result running
+    python make_single_player_galaxy.py --every-civ --out duel_fixture.dat
+
+`--every-civ` seeds the designs into every civ, for an AI-vs-AI test galaxy that
+`duel.py` drives. The shipped galaxy seeds the AI civ only.
 
 Generates a fresh TestBed galaxy, saves it at turn 0, gives the AI civ the ship
 designs it cannot create for itself, and writes the result as a `.dat` the
@@ -41,12 +45,19 @@ AI_CIV = "BadGuy"
 
 # probe1 uses only parts from the two starting techs, so it is buildable on
 # turn 0. f1 and b1 carry weapons, which stay locked until Cold Fusion (id 3).
+# cf1 and cb1 are Corvettes (Astro Engineering) with Fusion Drives (Cold
+# Fusion), within the chassis's 210 space. No design carries a shield, which
+# research.design_legal does not check.
 # Every design needs a scanner: a hull without one crashes the client at the
 # turn boundary when the build completes.
 DESIGNS = [
     ("probe1", {"chassis": [0], "scanners": [0], "engines": [0, 0]}),
     ("f1",     {"chassis": [0], "scanners": [0], "engines": [0], "weapons": [0]}),
     ("b1",     {"chassis": [0], "scanners": [0], "engines": [0], "weapons": [10]}),
+    ("cf1",    {"chassis": [1], "scanners": [0], "engines": [1, 1],
+                "weapons": [0] * 8}),
+    ("cb1",    {"chassis": [1], "scanners": [0], "engines": [1, 1],
+                "weapons": [10] * 3}),
 ]
 
 
@@ -153,7 +164,7 @@ def capture_save(name="spseed"):
     return path
 
 
-def seed(capture, out_dat):
+def seed(capture, out_dat, every_civ=False):
     import save_parser as sp
     import inject_design as idg
     import game_cycle as gc
@@ -169,12 +180,13 @@ def seed(capture, out_dat):
             f"manifest entry changed to match.")
 
     # inject_design keys on object ids, which injection does not shift.
-    tid = targets[AI_CIV]
-    for name, parts in DESIGNS:
-        parts = dict(parts)
-        parts.setdefault("list6", [])
-        blob = idg.make(blob, tid, name, parts, None, log=lambda m: None)
-        log(f"  seeded {name!r} for {AI_CIV!r}")
+    for civ in (sorted(targets) if every_civ else [AI_CIV]):
+        tid = targets[civ]
+        for name, parts in DESIGNS:
+            parts = dict(parts)
+            parts.setdefault("list6", [])
+            blob = idg.make(blob, tid, name, parts, None, log=lambda m: None)
+            log(f"  seeded {name!r} for {civ!r}")
 
     blob = fix_player_civ_id(blob)
 
@@ -216,8 +228,11 @@ def fix_player_civ_id(blob):
     return bytes(buf)
 
 
-def verify(snap):
-    """Both halves of the contract: the AI has the designs, the player does not."""
+def verify(snap, every_civ=False):
+    """Both halves of the contract: the AI has the designs, the player does not.
+
+    With `every_civ`, every civ must have them.
+    """
     import research
     ok = True
     for civ in snap.civs:
@@ -226,10 +241,10 @@ def verify(snap):
         log(f"  {civ.civ_name!r}: {mine}")
         seeded = {n for n, _ in DESIGNS}
         have = seeded & set(mine)
-        if civ.civ_name == AI_CIV and have != seeded:
+        if (every_civ or civ.civ_name == AI_CIV) and have != seeded:
             log(f"    [!] missing {sorted(seeded - have)}")
             ok = False
-        if civ.civ_name != AI_CIV and have:
+        if not every_civ and civ.civ_name != AI_CIV and have:
             log(f"    [!] the human civ was seeded with {sorted(have)}, "
                 f"it should own only what the engine gave it")
             ok = False
@@ -272,6 +287,8 @@ def main():
     ap.add_argument("--out", default=DEFAULT_OUT)
     ap.add_argument("--keep-open", action="store_true",
                     help="leave the verified galaxy running")
+    ap.add_argument("--every-civ", action="store_true",
+                    help="seed the designs into every civ, not just the AI's")
     a = ap.parse_args()
 
     for path in (EXE, PASS_FILE):
@@ -290,11 +307,11 @@ def main():
 
     log("3. seeding the AI's designs")
     close_client()
-    seed(capture, a.out)
+    seed(capture, a.out, every_civ=a.every_civ)
 
     log("4. verifying the result loads")
     snap = launch(a.out)
-    ok = verify(snap)
+    ok = verify(snap, every_civ=a.every_civ)
 
     if not a.keep_open:
         close_client()

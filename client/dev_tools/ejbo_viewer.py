@@ -267,8 +267,12 @@ def read_std_string(raw, pos):
     return chunk.decode("ascii")
 
 def scan_for_ejbo(h, regions):
-    """Scan all writable regions for the EJBO tag. Returns list of absolute
-    addresses where the tag starts."""
+    """Scan all writable regions for the EJBO tag. Returns the sorted, distinct
+    absolute addresses where the tag starts.
+
+    Regions can overlap: a warm scan sweeps a grown region at its old and new
+    size.
+    """
     found = []
     for base, size in regions:
         data = read_bytes(h, base, size)
@@ -281,7 +285,7 @@ def scan_for_ejbo(h, regions):
                 break
             found.append(base + idx)
             off = idx + 4
-    return sorted(found)
+    return sorted(set(found))
 
 def classify_object(h, ejbo_addr, rtti_cache=None):
     """Classify an object from its vftable.

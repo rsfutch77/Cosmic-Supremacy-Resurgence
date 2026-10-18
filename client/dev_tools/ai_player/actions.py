@@ -1014,60 +1014,35 @@ class Actuator:
                             f"SetCommand type {order_type} at {target}"))
         return got_type == order_type and got_node == node
 
-    # M: declare war (engine-assisted, symmetric).
-    # The engine's applier writes the same relation code into both civs'
-    # Owner:248 in one call, so both sides are always written.
+    # M: declare war through the engine, as the declare-war button does.
     WAR, NEUTRAL = 1, 0
     RELATION_NAMES = {0: "Neutral", 1: "War", 2: "Cease-Fire", 3: "Peace",
                       4: "Alliance"}
 
-    # Reputation cost of declaring war. The UI's formula is unknown; None
-    # applies no cost, which makes war free. Tracked in STRATEGY.md.
-    WAR_REPUTATION_DELTA = None
+    def declare_war(self, civ, other):
+        """Declare war from `civ` on `other`; True when both records read War.
 
-    def declare_war(self, civ, other, reputation_delta=None):
-        """Move two civs to War, both directions, and apply the standing cost.
-
-        The engine creates the relation record (`first_contact`, a no-op when
-        one exists) and adjusts the clamped standing score; only the relation
-        code is written directly. No "Declares War" news item is generated.
+        The engine registers a war Treaty naming `civ` as the declarer, makes
+        first contact and writes War into both civs' relation records. Callers
+        check `remote.war_protection` first, as the UI's validator does.
         """
         if other.addr == civ.addr:
             raise ValueError("a civ cannot declare war on itself")
         if self.dry_run:
             self.log(f"  [WOULD DECLARE WAR] {civ.civ_name!r} -> "
-                     f"{other.civ_name!r}, both directions")
+                     f"{other.civ_name!r}, through the engine")
             return None
         if self.remote is None:
             raise RuntimeError("declare_war needs a remote.Remote")
-
-        for a, b in ((civ, other), (other, civ)):
-            self.remote.first_contact(a.addr, b.addr)
-        wrote = []
+        treaty = self.remote.declare_war(civ.addr, civ.id, other.addr, other.id)
+        self.log(f"  war treaty 0x{treaty:08X}: {civ.civ_name!r} declares war "
+                 f"on {other.civ_name!r}")
+        codes = []
         for a, b in ((civ, other), (other, civ)):
             rec = self.remote.relation_record(a.addr, b.addr)
-            if rec is None:
-                raise RuntimeError(
-                    f"no relation record for {a.civ_name!r} -> {b.civ_name!r} "
-                    f"even after first contact; refusing to half-declare")
-            before = self.snap.rd32(rec + remote.RELATION_CODE_OFF)
-            self._u32(rec + remote.RELATION_CODE_OFF, self.WAR,
-                      f"{a.civ_name!r} -> {b.civ_name!r}: "
-                      f"{self.RELATION_NAMES.get(before, before)} -> War")
-            wrote.append(rec)
-
-        delta = (self.WAR_REPUTATION_DELTA if reputation_delta is None
-                 else reputation_delta)
-        if delta:
-            for a, b in ((civ, other), (other, civ)):
-                self.remote.add_reputation(a.addr, b.addr, delta)
-            self.log(f"  applied {delta:+d} reputation both ways")
-        else:
-            self.log("  [!] NO reputation change applied; the UI's figure is "
-                     "not known, so declaring war is currently FREE. Fine while "
-                     "every civ runs this code; not fine against a human.")
-        return all(self.snap.rd32(r + remote.RELATION_CODE_OFF) == self.WAR
-                   for r in wrote)
+            codes.append(self.snap.rd32(rec + remote.RELATION_CODE_OFF)
+                         if rec else None)
+        return all(c == self.WAR for c in codes)
 
     # G: set a planet's recruitment rate (Planet:100 byte 3).
     # The UI maximum is per planet: 40% plus 20% per military camp. The engine
