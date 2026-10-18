@@ -13,3 +13,7 @@ google-cloud-storage>=2.16.0
 # The launcher's window (release/web_view.py), run from a checkout with this
 # environment. build.ps1 installs it into the build environment on its own.
 pywebview>=5.0
+
+# Runs server/tests and release/tests for the VS Code Test Explorer through the
+# root conftest.py. The scripts still run on their own without it.
+pytest>=8.0
