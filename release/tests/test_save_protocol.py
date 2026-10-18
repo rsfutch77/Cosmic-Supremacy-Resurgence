@@ -9,6 +9,7 @@ Speaks the wire format directly, without the game:
     loadgame      -> DONE#VER#<6>#DATA#<blob>
 """
 import http.client
+import json
 import os
 import shutil
 import sys
@@ -126,6 +127,14 @@ check("and read back after a restart",
       post("listcivnames", userid=1), "Vega Union#SPC#0#NEXT#DONE")
 check("another user still gets the default",
       post("listcivnames", userid=2), "DemoEmpire#SPC#0#NEXT#DONE")
+
+print("\n11. a finished Tutorial is recorded")
+done_file = os.path.join(DATA, "tutorial.json")
+check("nothing is recorded before it", os.path.exists(done_file), False)
+check("the client is answered OK",
+      post("passedtutorial", userid=0, passhash="'abcdef'"), "OK")
+check("tutorial.json says so",
+      json.load(open(done_file, encoding="utf-8")).get("passed"), True)
 
 srv.shutdown()
 shutil.rmtree(DATA, ignore_errors=True)

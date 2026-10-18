@@ -104,6 +104,7 @@ the release's `data\` when the launcher sets it:
 | Governor blobs | `save_gov_<id>.dat` |
 | Request log | `cs_server.log` |
 | Civ names | `civs.json`, per userid |
+| Tutorial completed | `tutorial.json`, written on `passedtutorial`; the launcher marks the Tutorial row |
 
 Both blob kinds are stored and returned verbatim, the server never parses one.
 Coat-of-arms uploads are accepted and discarded, and `getcoa` answers with a 1x1

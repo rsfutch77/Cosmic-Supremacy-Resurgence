@@ -97,6 +97,19 @@ print("\n5. the page offers New Game beside a continuing mode")
 js = open(os.path.join(REPO, "release", "webui", "app.js"), encoding="utf-8").read()
 check("the button calls new_game", 'call("new_game", m.id)' in js, True)
 
+print("\n6. a finished Tutorial is marked on its row")
+tutorial = next(m for m in MODES if m.get("id") == "tutorial")
+check("not before it is passed", L.mode_done(tutorial, data), False)
+with open(os.path.join(data, L.TUTORIAL_FILE), "w") as f:
+    f.write('{"passed": true}')
+check("and once it is", L.mode_done(tutorial, data), True)
+check("no other mode is marked", L.mode_done(MODE, data), False)
+check("the page draws the mark", 'el("div", "done", "Completed")' in js, True)
+import inspect                                                  # noqa: E402
+check("the rows are redrawn when a game exits",
+      "self.view.show_modes(self)" in inspect.getsource(L.Launcher._watch_game),
+      True)
+
 shutil.rmtree(data, ignore_errors=True)
 print("\n" + ("ALL PASSED" if not fails else f"FAILURES: {fails}"))
 sys.exit(1 if fails else 0)

@@ -45,6 +45,7 @@ button { font-family: inherit; }
 .gbtn.small { min-width: 62px; height: 20px; font-size: 11px; padding: 0 8px; }
 .gbtn.wide { width: 150px; flex: 0 0 auto; }
 .gbtn.newgame { margin-left: auto; flex: 0 0 auto; }
+.row .done { margin-left: auto; flex: 0 0 auto; color: #3ddc84; font-size: 11px; }
 
 .mid { flex: 1; display: flex; min-height: 0; }
 .side { width: 12px; display: flex; flex-direction: column; }

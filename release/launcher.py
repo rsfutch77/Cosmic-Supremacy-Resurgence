@@ -608,6 +608,18 @@ def launch_ai(mode, data_dir: str) -> "subprocess.Popen | None":
         bufsize=1, env=env, creationflags=CREATE_NO_WINDOW)
 
 
+# Written by cs_server when the client reports the Tutorial finished.
+TUTORIAL_FILE = "tutorial.json"
+
+
+def mode_done(mode, data_dir: str) -> bool:
+    """Whether a mode is one the player has finished: the Tutorial, once
+    passed."""
+    if mode.get("id") != "tutorial" or not data_dir:
+        return False
+    return os.path.exists(os.path.join(data_dir, TUTORIAL_FILE))
+
+
 def latest_save(dat_dir: str) -> "str | None":
     """The most recently written .dat in `dat_dir`, or None."""
     try:
@@ -4443,6 +4455,7 @@ class Launcher:
             self.say(f"{name} exited (code {code})")
             self.stop_ai("the game exited")
             self._close_ctl_client()
+            self.view.show_modes(self)
 
         if self.ai_child is not None and self.ai_child.poll() is not None:
             code = self.ai_child.returncode

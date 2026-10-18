@@ -70,6 +70,7 @@ DEMO_GALAXY_ID = 0
 # Civ name and coat of arms per user, { userid_str: {'civname': str, 'coaid': str} },
 # kept in DATA_DIR so a name chosen in one session is there in the next.
 CIV_FILE = os.path.join(DATA_DIR, 'civs.json')
+TUTORIAL_FILE = os.path.join(DATA_DIR, 'tutorial.json')
 _civ_state: 'dict | None' = None
 
 def _default_civ() -> dict:
@@ -390,7 +391,21 @@ def handle_action(action: str, params: dict, raw_body: str = '') -> tuple[int, s
             return 200, 'text/plain', 'DONE#VER#000000#DATA#' + gov_data
         return 200, 'text/plain', 'DONE#VER#000000#DATA#'
 
+    # Sent once, when the last Tutorial step is shown. The launcher reads the
+    # file to mark the Tutorial completed.
     if action == 'passedtutorial':
+        userid = params.get('userid', ['0'])[0]
+        import json as _json
+        try:
+            tmp = TUTORIAL_FILE + '.tmp'
+            with open(tmp, 'w', encoding='utf-8') as f:
+                _json.dump({'passed': True, 'userid': userid,
+                            'at': datetime.datetime.now().isoformat(timespec='seconds')},
+                           f, indent=2)
+            os.replace(tmp, TUTORIAL_FILE)
+            log(f'  -> passedtutorial: userid={userid} (recorded)')
+        except OSError as e:
+            log(f'  !! passedtutorial: userid={userid} not recorded: {e}')
         return 200, 'text/plain', 'OK'
 
     if action == 'entertestbedgalaxy':

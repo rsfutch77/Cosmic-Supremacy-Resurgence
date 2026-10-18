@@ -112,6 +112,9 @@ class FakeView:
     def disable_modes(self):
         self.modes_disabled = True
 
+    def show_modes(self, app):
+        self.modes_shown = [m.get("id") for m in app.modes]
+
     # controls
     def show_controls(self, show):
         self.controls_shown = bool(show)

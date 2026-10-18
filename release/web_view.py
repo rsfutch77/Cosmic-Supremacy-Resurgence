@@ -280,14 +280,23 @@ class WebView:
         self.app = app
         self._set(
             product=app.cfg["product"],
-            modes=[{"id": m.get("id"), "title": m["title"], "blurb": m["blurb"],
-                    "ready": L.is_playable(m),
-                    "continues": bool(m.get("continues"))} for m in app.modes],
+            modes=self._modes(app),
             columns=[{"key": c.key, "heading": c.heading}
                      for c in L.GALAXY_COLUMNS],
             controls=[{"key": k, "label": label} for k, label in L.CONTROLS],
             page="home")
         self.show_sort(app.sort_key, app.sort_desc)
+
+    def _modes(self, app) -> list:
+        return [{"id": m.get("id"), "title": m["title"], "blurb": m["blurb"],
+                 "ready": L.is_playable(m),
+                 "continues": bool(m.get("continues")),
+                 "done": L.mode_done(m, getattr(app, "data_dir", None))}
+                for m in app.modes]
+
+    def show_modes(self, app) -> None:
+        """Redraw the mode rows, for a change such as a finished Tutorial."""
+        self._set(modes=self._modes(app))
 
     def after(self, ms: int, fn) -> None:
         heapq.heappush(self._timers,

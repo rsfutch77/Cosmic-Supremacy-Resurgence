@@ -97,6 +97,7 @@ function drawModes(modes) {
       fresh.disabled = b.disabled;
       row.append(fresh);
     }
+    if (m.done) row.append(el("div", "done", "Completed"));
     box.appendChild(row);
   }
 }
