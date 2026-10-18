@@ -98,8 +98,14 @@ import save_parser as sp
 import inject_civ as icv
 import inject_design as idg
 
-# Fields inside a civ's OWPR that carry the research topic, as (offset, length).
-RESEARCH_FIELDS = ((32, 4), (40, 4))
+# The research topic is written twice in a civ's OWPR, 8 bytes apart, after a
+# map (u32 count at +8, 8-byte pairs) and the completed technologies (u32 count,
+# [id, cost] records). They sit at +32 only while the civ has its two starting
+# technologies and an empty map.
+OWPR_MAP_COUNT_OFF = 8
+OWPR_RECORD = 8
+RESEARCH_FIELD_COUNT = 2
+RESEARCH_FIELD_LEN = 4
 
 # A planet's name, in PLNT's own payload: a u32 length then the characters.
 PLANET_NAME_OFF = 24
@@ -443,13 +449,44 @@ def set_planet_name(blob, planet_oid, name: bytes):
     raise SystemExit(f'planet {planet_oid} not found')
 
 
+def research_offsets(blob, owpr):
+    """Offsets within OWPR's payload of the research fields, or None when
+    the lists before them do not fit the section."""
+    p, size = owpr.payload, owpr.size
+    if size < OWPR_MAP_COUNT_OFF + 4:
+        return None
+    m = struct.unpack_from('<I', blob, p + OWPR_MAP_COUNT_OFF)[0]
+    n_at = OWPR_MAP_COUNT_OFF + 4 + m * OWPR_RECORD
+    if n_at + 4 > size:
+        return None
+    n = struct.unpack_from('<I', blob, p + n_at)[0]
+    first = n_at + 4 + n * OWPR_RECORD
+    offs = tuple(first + i * OWPR_RECORD for i in range(RESEARCH_FIELD_COUNT))
+    if offs[-1] + RESEARCH_FIELD_LEN > size:
+        return None
+    return offs
+
+
+def completed_research(blob, civ_oid):
+    """The technology ids a civ has completed, in order, or None."""
+    owpr = _owpr(blob, civ_oid)
+    if owpr is None:
+        return None
+    p = owpr.payload
+    m = struct.unpack_from('<I', blob, p + OWPR_MAP_COUNT_OFF)[0]
+    n_at = p + OWPR_MAP_COUNT_OFF + 4 + m * OWPR_RECORD
+    n = struct.unpack_from('<I', blob, n_at)[0]
+    return [struct.unpack_from('<I', blob, n_at + 4 + i * OWPR_RECORD)[0]
+            for i in range(n)]
+
+
 def research_of(blob, civ_oid):
     """The bytes of a civ's research fields, or None when OWPR is unreadable."""
     owpr = _owpr(blob, civ_oid)
     if owpr is None:
         return None
-    return tuple(bytes(blob[owpr.payload + off:owpr.payload + off + n])
-                 for off, n in RESEARCH_FIELDS)
+    return tuple(bytes(blob[owpr.payload + off:owpr.payload + off + RESEARCH_FIELD_LEN])
+                 for off in research_offsets(blob, owpr))
 
 
 def _owpr(blob, civ_oid):
@@ -462,7 +499,7 @@ def _owpr(blob, civ_oid):
         if struct.unpack_from('<I', blob, o.payload + 4 + n)[0] != civ_oid:
             continue
         owpr = next(o.find('OWPR'), None)
-        if owpr is None or owpr.size < max(off + n2 for off, n2 in RESEARCH_FIELDS):
+        if owpr is None or research_offsets(blob, owpr) is None:
             return None
         return owpr
     return None
@@ -1126,8 +1163,8 @@ def set_research(blob, civ_oid, values):
     if owpr is None:
         raise SystemExit(f'civ {civ_oid} has no readable OWPR')
     out = bytearray(blob)
-    for (off, n), value in zip(RESEARCH_FIELDS, values):
-        out[owpr.payload + off:owpr.payload + off + n] = value
+    for off, value in zip(research_offsets(blob, owpr), values):
+        out[owpr.payload + off:owpr.payload + off + RESEARCH_FIELD_LEN] = value
     return bytes(out)
 
 

@@ -542,7 +542,7 @@ def starting_kit(blob, name, home_id, design_id, ships=STARTING_SHIPS,
 
     def research(b):
         before = mo.research_of(b, oid)
-        want = tuple(RESEARCH_UNSET for _ in mo.RESEARCH_FIELDS)
+        want = tuple(RESEARCH_UNSET for _ in range(mo.RESEARCH_FIELD_COUNT))
         if before == want:
             return b
         log(f"  research topic {before} -> unset")
