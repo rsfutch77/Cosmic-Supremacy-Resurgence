@@ -36,7 +36,7 @@
       "id": "testbed",
       "title": "Play Single Player",
       "short": "Single Player",
-      "blurb": "A full single-player galaxy against the new Resurgence AI. Turns run locally, on your machine, at your own pace. Play picks up your latest save; New Game starts over.",
+      "blurb": "A full single-player galaxy against the new Resurgence AI. Turns run locally, on your machine, at your own pace.",
       "exe": "CosmicSupremacy_Resurgence.exe",
       "galaxy": "SinglePlayerGalaxy.dat",
       "needs_server": true,
