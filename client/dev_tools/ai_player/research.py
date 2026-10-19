@@ -323,12 +323,18 @@ def unlocked_by(kind, obj_id):
 
 
 def available(done, allow_doctrines=ALLOW_DOCTRINES, by_value=True,
-              boost=None):
-    """Every legal pick, best first: by grant value, then costFactor, then id."""
+              boost=None, costly_first=False):
+    """Every legal pick, best first: by grant value, then costFactor, then id.
+
+    `costly_first` reverses the costFactor tiebreak. A tech's price is its
+    costFactor times the techs completed before it, so a fixed set of techs
+    costs least bought highest-factor first.
+    """
     ok = [t for t in sorted(TECHS) if selectable(t, done, allow_doctrines)]
+    sign = -1 if costly_first else 1
     if not by_value:
-        return sorted(ok, key=lambda t: (TECHS[t][1], t))
-    return sorted(ok, key=lambda t: (-value(t, boost), TECHS[t][1], t))
+        return sorted(ok, key=lambda t: (sign * TECHS[t][1], t))
+    return sorted(ok, key=lambda t: (-value(t, boost), sign * TECHS[t][1], t))
 
 
 def explain(tid, done):

@@ -273,6 +273,11 @@ class Ship(Obj):
     @property
     def crewed(self):     return len(self.crew) > 0
 
+    @property
+    def crew_allocated(self):
+        """Ship:124 already holds a buffer. Nothing we have can add to it."""
+        return is_ptr(self.u32(124))
+
 
 class Planet(Obj):
     @property

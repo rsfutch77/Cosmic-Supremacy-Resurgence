@@ -60,7 +60,7 @@ def planet_count(hist):
 RULES = [
     # 1. Preserve what exists. A wreck must not be claimed by anything else,
     #    and a starving colony undoes any amount of expansion.
-    ("R-XTM-05", exterminate.run_xtm05),      # withdraw damaged ships
+    ("R-XTM-05", exterminate.run_xtm05),      # withdraw damaged ships (and R-EXP-04)
     ("R-XTM-00", exterminate.run_xtm00),      # declare war (off by default)
     ("S-food",   exploit.run_food),           # famine / surplus farmers
     ("R-XPL-01", exploit.run_jobs),           # the rest of the job mix
@@ -75,8 +75,8 @@ RULES = [
     ("R-XPL-08", exploit.run_hurry),          # spend surplus cash on all of it
 
     # 3. Crew, then research. Crew gates every order rule below.
-    #    Conscription runs before the loader; a unit drafted this turn is
-    #    loaded next turn, since this pass's snapshot predates the draft.
+    #    Conscription runs before the loader, which reads the garrison live,
+    #    so a unit drafted this pass is loaded in the same pass.
     ("R-XPL-05", exploit.run_crew_supply),
     ("R-XPL-09", exploit.run_conscript),
     ("R-XPL-06", exploit.run_crew_load),

@@ -3,7 +3,7 @@ exterminate.py: the Exterminate rules (STRATEGY.md §4.4)
 
 R-XTM-01  keep a standing fleet
 R-XTM-03  send the fleet at the weakest reachable enemy planet
-R-XTM-05  pull damaged ships out
+R-XTM-05  pull damaged ships out, scouts included (R-EXP-04)
 R-XTM-08  gather idle warships at the staging planet
 R-XTM-09  probe an enemy planet we know nothing about
 R-XTM-02  hold a planet an enemy ship or fleet is in scan range of
@@ -38,6 +38,8 @@ TROOP_TARGET = 1          # troop hulls to keep while anything is takeable
 GARRISON_WINDOW = 3       # turns after a capture (Planet:92) that count as
                           # newly taken
 RETREAT_AT = 0.30         # Ship:136 below this and the ship goes home
+SCOUT_RETREAT_AT = 0.50   # a scout is worth more alive than at its target
+REPAIRED_AT = 0.90        # a withdrawn ship stays at the shipyard until this
 AT_PLANET = 1.0           # a ship within this distance of a planet is at it
 
 WAR = 1                   # Owner:248 relation code
@@ -772,19 +774,21 @@ def run_xtm04(snap, civ, act, hist, log=print):
         # A hull carrying only its flight crew (ShipDesign:76) cannot invade.
         need = exploit.min_crew(ship, act)
         if len(ship.crew) <= need:
-            # The crew rules load only at a planet we own, so a spent hull
-            # elsewhere goes home.
+            if exploit.crew_gap(ship, act):
+                log(f"R-XTM-04: {ship} is waiting for its first crew")
+                continue
+            # A spent hull cannot be topped up (exploit.crew_gap), so it is
+            # parked at home and R-XTM-07 builds a replacement.
             here = ship.orbiting
             if here is not None and here.owner is not None \
                     and here.owner.addr == civ.addr:
-                log(f"R-XTM-04: {ship} is empty at {here}, where R-XPL-06 can "
-                    f"reload it")
+                log(f"R-XTM-04: {ship} is spent and parked at {here}")
                 continue
             if not ours:
                 continue
             home = min(ours, key=lambda p: gs.dist(ship.pos, p.pos))
             log(f"R-XTM-04: {ship} carries {len(ship.crew)} and cannot land "
-                f"anyone; sending it home to {home} to re-arm "
+                f"anyone; parking it at {home} "
                 f"({gs.dist(ship.pos, home.pos):.0f} units)")
             try:
                 send_to(act, ship, home, civ, order_type=1)
@@ -850,7 +854,11 @@ def run_xtm07(snap, civ, act, hist, log=print):
     if not undefended_planets(snap, civ, hist, act, foes):
         return 0                       # nothing takeable; build warships instead
 
-    have = [s for s in snap.owned_ships(civ) if s.role == "TROOP"]
+    # A hull that has landed its troops cannot be refilled, so it no longer
+    # counts as a transport.
+    have = [s for s in snap.owned_ships(civ) if s.role == "TROOP"
+            and (len(s.crew) > exploit.min_crew(s, act)
+                 or exploit.crew_gap(s, act))]
     if len(have) >= TROOP_TARGET:
         return 0
     # No new hull while a built one is waiting for crew.
@@ -890,22 +898,40 @@ def run_xtm07(snap, civ, act, hist, log=print):
         return 0
 
 
+def retreat_threshold(ship):
+    """Condition below which this ship withdraws. R-EXP-04 is the scout case."""
+    return SCOUT_RETREAT_AT if ship.role == "SCOUT" else RETREAT_AT
+
+
 def run_xtm05(snap, civ, act, hist, log=print):
-    """R-XTM-05: withdraw a badly damaged ship to the nearest owned planet.
+    """R-XTM-05 and R-EXP-04: withdraw a damaged ship to a shipyard and hold it.
 
     Damage compounds across turns, the round loop runs up to 200 rounds with no
-    early exit, and condition never recovers on its own.
+    early exit, and condition never recovers on its own. Shipyards repair, so
+    a ship goes to the nearest one, or the nearest owned planet when the civ
+    has none, and is held there until REPAIRED_AT. Without the hold, the next
+    pass would send a ship at RETREAT_AT + 0.01 straight back out.
     """
     ours = snap.owned_planets(civ)
     if not ours:
         return 0
+    yards = [p for p in ours if exploit.SHIPYARD in p.facilities] or ours
     acted = 0
     for ship in snap.owned_ships(civ):
         c = ship.condition
-        if c is None or c >= RETREAT_AT or act.is_claimed(ship):
+        if c is None or act.is_claimed(ship):
             continue
-        home = min(ours, key=lambda p: gs.dist(ship.pos, p.pos))
-        log(f"R-XTM-05: {ship} at condition {c:.2f}; withdrawing to {home}")
+        home = min(yards, key=lambda p: gs.dist(ship.pos, p.pos))
+        if at_planet(ship, home):
+            if c < REPAIRED_AT:
+                log(f"R-XTM-05: {ship} ({ship.role}) at condition {c:.2f}; "
+                    f"holding at {home} until {REPAIRED_AT:.2f}")
+                act.claim(ship)
+            continue
+        if c >= retreat_threshold(ship):
+            continue
+        log(f"R-XTM-05: {ship} ({ship.role}) at condition {c:.2f}, below "
+            f"{retreat_threshold(ship):.2f}; withdrawing to {home}")
         try:
             send_to(act, ship, home, civ, order_type=1)   # not actuator L
             act.claim(ship)

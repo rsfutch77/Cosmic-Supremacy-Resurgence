@@ -30,8 +30,7 @@ built and crewed a bomber, sent it 624 units and fought at turn 114, losing both
 single turn boundary. Every X now runs unattended; none of them is finished.
 
 [ ] **Still specification, none of these has a `run_*` function:** S-04 insolvency,
-R-EXP-04 recall damaged scouts, R-XPL-03 wealth mode, R-XPL-07
-liquidation. Each is marked at its own rule below. R-EXP-03 is covered by
+R-XPL-03 wealth mode, R-XPL-07 liquidation. (R-EXP-04 is now part of R-XTM-05.) Each is marked at its own rule below. R-EXP-03 is covered by
 `sensors.History._discover`.
 
 **Open questions about the game itself belong in
@@ -547,17 +546,16 @@ having been there. Nothing has been seen to go wrong, but with fast scouts (61.5
 against a 39.6 orbit radius) it is arithmetically possible to skip a system entirely.
 Recording the swept SEGMENT rather than the sampled point would close it.
 
-**R-EXP-04, Recall damaged scouts**, [ ] NOT BUILT
+**R-EXP-04, Recall damaged scouts**, IMPLEMENTED as part of R-XTM-05 (§4.4)
 ```
-WHEN   Ship:136 < 0.5
-THEN   order 1 (move) to the nearest owned planet's XYZ
+WHEN   Ship:136 < SCOUT_RETREAT_AT (0.5) on a SCOUT
+THEN   as R-XTM-05: withdraw to the nearest shipyard and hold there until repaired
 USES   M
 ```
-[ ] Now cheap to write, `exterminate.send_to` is exactly this actuator and R-XTM-05 is
-the same rule with a different threshold. The two should probably be one rule parameterised
-by threshold and role rather than two near-copies. Note the caveat on R-XTM-05: a ship that
-dies inside one turn boundary is never observed damaged, so this only helps against
-attrition, not against being caught.
+One rule, `exterminate.run_xtm05`, with the threshold chosen by role
+(`exterminate.retreat_threshold`). The caveat on R-XTM-05 applies: a ship that dies inside
+one turn boundary is never observed damaged, so this only helps against attrition, not
+against being caught.
 
 ### 4.2 Expand
 
@@ -792,10 +790,15 @@ Research-Cost = costFactor * (researches already completed) * 800
 Confirmed three ways: derived from the engine (`GetScale` `0x0054A6F0` = 800, `GetCost`
 `0x0054B140`), matched against four live observations, and stated verbatim in the manual.
 
-[ ] **The cheapest-first tiebreak is the wrong direction.** Because the multiplier is
-the completed count *at the moment of purchase*, a fixed set of techs costs least when the
-HIGHEST-factor ones are bought FIRST. `available()` still orders by value then cheapest.
-Changing it is a strategy decision, not a bug fix, so it is left explicit.
+[ ] **The cheapest-first tiebreak is the wrong direction, for a fixed set.** Because the
+multiplier is the completed count *at the moment of purchase*, a fixed set of techs costs
+least when the HIGHEST-factor ones are bought FIRST. But the tiebreak does not act on a
+fixed set: it changes which prerequisites complete and so which branches open. Simulated
+over this table with no boosts (Oct 2026), costly-first paid **+59% for the first 10
+picks**, -4% at 20, -5% at 30 and **+12% at 45**, and bought a different set at 10, 20 and
+45. So the switch, `exploit.RESEARCH_COSTLY_FIRST`, exists and is OFF. A real test is a
+`metrics.py` comparison on `duel_fixture2.dat`, since total price ignores how soon each
+capability arrives, which is what actually matters.
 
 [ ] **One cost reading does not fit**, Quantum Fields (factor 2.8, 4 completed) should
 show 8960 and was reported as 3200, which is exactly `800 * 1.0 * 4`, the price of
@@ -900,12 +903,28 @@ three spare citizens.
 `MIN_COLONY_POP = 4` still floors it, because a planet that cannot work is worse than a
 ship that cannot fly.
 
-[ ] **The loader still waits a turn.** R-XPL-09 runs before R-XPL-06, but the pass's
-snapshot was taken before the draft, so the new unit is invisible until the next pass and
-crew loads one turn later. Re-reading the planet after a draft would close it. A hull with
-an empty crew vector no longer waits: R-XPL-09 drafts straight onto it (N′). Only a partly
-crewed hull still goes through the garrison, and a second write to that vector in one pass
-reads stale bytes (`gamestate` vectors have snapshot extents), so it is left a turn behind.
+[x] **The loader waited a turn.** R-XPL-09 runs before R-XPL-06, but the pass's snapshot
+was taken before the draft, so the new unit was invisible until the next pass. Done: the
+loader reads the garrison live (`Actuator.live_military`). The gap was narrower than this
+item said, since a hull with an empty crew vector already took its crew straight from the
+draft (N′); only an empty hull whose N′ draft failed went through the garrison.
+
+[x] **A partly crewed hull was drafted for and never loaded.** Both ways crew gets aboard
+(`load_crew`, `conscript_to_crew`) refuse a ship whose crew vector is already allocated, so
+a crew gap on such a ship is permanent. R-XPL-05, -06 and -09 still counted it, which meant
+a troop hull that had landed its troops made R-XPL-09 buy conscripts into the garrison
+every pass for a load that always failed, and made R-XTM-07 refuse to build a replacement
+because a troop hull was "waiting for crew". Done: `exploit.crew_gap` is zero for an
+allocated crew vector and every crew rule and `awaiting_crew` uses it; R-XTM-07 does not
+count a spent troop hull toward `TROOP_TARGET`, so each invasion now costs a new hull and
+the spent one is parked at home by R-XTM-04. Confirmed live on the turn-214 fixture: a
+`t1` took planet #120, and for the ten turns after it no conscript was bought for it and
+R-XTM-07 wanted a replacement.
+
+[ ] **The invasion landed all three troops, not one.** The hull arrived with 5 aboard, 2
+to fly, and left with 2, so R-XTM-06 had nothing to garrison. `INVASION_TROOPS` assumes
+one record is spent and two are kept for the garrison; that is not what the engine did
+here.
 
 [ ] **`DRAFT_CASH_FLOOR` (500) is invented**, like R-XPL-08's budget. It is there so
 drafting cannot empty the treasury the build rules also spend from, and nothing has tuned it.
@@ -1294,7 +1313,9 @@ refuses when `Ship:124` is already a pointer, by design, growing the engine-owne
 would mean freeing memory we did not allocate. That is not a blocker now that the requirement
 is known, because it allocates the whole buffer in one call: R-XPL-06 just has to ask for
 `ShipDesign:76 + troops` on a TROOP hull instead of `ShipDesign:76`. Topping up a hull that has
-already spent its troops still needs solving, and that is what a second invasion needs.
+already spent its troops still needs solving. Until it is, a second invasion uses a second hull:
+a spent hull no longer counts toward `TROOP_TARGET` and no crew rule tries to fill it (§4.3,
+R-XPL-09).
 
 ```
 WHEN   a TROOP ship exists and its target planet's weakness == 0
@@ -1332,13 +1353,29 @@ USES   D
 R-XTM-04 can only spend hulls somebody built, and R-XTM-01 queues warships only,
 the first two troop ships in this project were made by hand.
 
-**R-XTM-05, Retreat**, IMPLEMENTED in `exterminate.run_xtm05`
+**R-XTM-05, Retreat**, IMPLEMENTED in `exterminate.run_xtm05`, and covers R-EXP-04
 ```
-WHEN   Ship:136 < 0.3
-THEN   send it to the nearest owned planet with M; ships are deleted on death,
-       not marked, so a ship that vanishes from the scan was destroyed
+WHEN   Ship:136 < RETREAT_AT (0.3), or SCOUT_RETREAT_AT (0.5) for a scout
+THEN   send it with M to the nearest owned shipyard planet (any owned planet when
+       there is none); ships are deleted on death, not marked, so a ship that
+       vanishes from the scan was destroyed
+HOLD   a ship at that planet below REPAIRED_AT (0.9) is claimed every pass, so
+       nothing sends it out again until the yard has repaired it
 USES   M
 ```
+The hold is what makes the withdrawal mean anything: without it a ship repaired to 0.31
+was free for R-XTM-03 the next pass. It also holds a ship that was never withdrawn, e.g.
+a warship staged at the yard at 0.85, for the turn or two its repair takes.
+
+[x] **Shipyards repair, measured (Oct 2026).** Damage was staged on the turn-214 fixture
+(`Ship:136` written to 0.45 on a `probe1` and 0.25 on an `f1`). The scout reached the HQ
+yard and went 0.45, 0.60, 0.75, 0.90, exactly the manual's 15% a turn for a light hull, and
+R-EXP-02 sent it scouting again the pass it reached 0.90.
+
+[ ] **A slow warship's withdrawal is long.** The `f1` makes 6.4 a turn and its nearest yard
+was about 260 units off, so it was still 57 out after 40 turns, at 0.25 the whole way. That
+is the price of going to a yard rather than the nearest planet; whether a nearer planet to
+shelter at first is better is a tuning question, not yet answered.
 [ ] **It cannot fire against a one-boundary wipe, and that is how ships have actually
 died.** Damage is multiplicative over up to 200 rounds with no early exit, all inside a single
 turn resolution, so both warships went from condition 1.0 to deleted between two samples and
@@ -1393,6 +1430,8 @@ Generated by `constants.py --write`; edit the code, not this table.
 | `TROOP_TARGET` | 1 | `exterminate.py` | troop hulls to keep while anything is takeable |
 | `GARRISON_WINDOW` | 3 | `exterminate.py` | turns after a capture (Planet:92) that count as newly taken |
 | `RETREAT_AT` | 0.30 | `exterminate.py` | Ship:136 below this and the ship goes home |
+| `SCOUT_RETREAT_AT` | 0.50 | `exterminate.py` | a scout is worth more alive than at its target |
+| `REPAIRED_AT` | 0.90 | `exterminate.py` | a withdrawn ship stays at the shipyard until this |
 | `AT_PLANET` | 1.0 | `exterminate.py` | a ship within this distance of a planet is at it |
 | `AT_PLANET` | 1.0 | `intel.py` | a report this close to a planet is about it |
 | `MAX_AGE` | 40 | `intel.py` | turns; older intel is treated as unknown |
@@ -1831,8 +1870,9 @@ specified above:
 2. ~~**R-XTM-02 defend is NOT BUILT**~~, **DONE** (§4.4). Idle and staged warships
    hold a planet that enemy ships come into scan range of.
 
-Everything else outstanding is tuning or economics, not capability: S-04, R-EXP-04,
-R-XPN-04, R-XPL-03, R-XPL-07. Each is a [ ] on its own rule with a reason.
+Everything else outstanding is tuning or economics, not capability: S-04,
+R-XPN-04, R-XPL-03, R-XPL-07. Each is a [ ] on its own rule with a reason. (R-EXP-04
+is built, as part of R-XTM-05.)
 
 **R-XPL-09 conscription is ON and working**, it buys crew for cash instead of
 waiting ten turns per recruit, and the client survives it now that no vector the
@@ -1862,7 +1902,11 @@ Steps 1-5 are **DONE**. The AI plays all four X's unattended and has fought a ba
    built getter-first and tested one draft at a time from a checkpoint.
 3. [x] **Stop expansion starving the shipyard**, R-XPN-04, which is about shipyard time
    and crew rather than the income trigger currently specified.
-4. [ ] **Read the live research table** (§7), retires a table known to be for the wrong
+4. [x] **Read the live research table** (§7). Already done: `research.py` was emitted
+   from the live table. `research_dump.py --diff` on the turn-214 fixture (Oct 2026) differs
+   only in trait values of four doctrine records (54, 59, 62, 67), which the AI never picks.
+   The client reported content version 99999, not the 565 this item assumed. Original item:
+   retires a table known to be for the wrong
    content version, and it is read-only, so it is the safest engine call available.
 5. ~~**A second AI-driven civ**~~, **DONE**, `duel.py` drives both civs on one turn clock
    (§6.6). [x] What remains before a duel is a real test: synthesised designs for the second

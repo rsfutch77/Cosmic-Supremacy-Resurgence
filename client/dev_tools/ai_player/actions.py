@@ -133,6 +133,11 @@ class Actuator:
         return [] if data is None else [data[i:i + stride]
                                         for i in range(0, span, stride)]
 
+    def live_military(self, planet):
+        """Stationed units on `planet` now, including any drafted this pass."""
+        return len(self._live_vec(planet, self.PLANET_MILITARY,
+                                  self.CITIZEN_STRIDE))
+
     def _live_ptr(self, obj, off):
         """One of a vector's three pointers as it stands now in the process."""
         return self.snap.rd32(obj.addr + off)
