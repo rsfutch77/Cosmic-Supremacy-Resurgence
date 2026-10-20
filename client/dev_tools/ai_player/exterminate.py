@@ -241,19 +241,24 @@ def pass_intel(snap, civ, hist, act):
 _PART_TABLES = {}          # part list name -> {id: component record}, per process
 
 
-def _parts_total(design):
-    """(light, heavy, bomb, units) summed from the component tables.
-
-    A design's own stat block stays uncomputed until a ship of it is built.
-    """
+def part_tables(snap):
+    """{part list name: {id: component record}}, read once per process."""
     import components
     if not _PART_TABLES:
         for attr, cat in (("chassis", "chassis"), ("scanners", "scanners"),
                           ("engines", "engines"), ("weapons", "weapons"),
                           ("modules", "modules")):
-            _PART_TABLES[attr] = components.read_table(design.snap, cat)
+            _PART_TABLES[attr] = components.read_table(snap, cat)
+    return _PART_TABLES
+
+
+def _parts_total(design):
+    """(light, heavy, bomb, units) summed from the component tables.
+
+    A design's own stat block stays uncomputed until a ship of it is built.
+    """
     l = h = b = units = 0
-    for attr, table in _PART_TABLES.items():
+    for attr, table in part_tables(design.snap).items():
         for pid in getattr(design, attr) or []:
             rec = table.get(pid, {})
             units += rec.get("units", 0)

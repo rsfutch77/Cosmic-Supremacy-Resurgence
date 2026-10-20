@@ -20,6 +20,16 @@ STATE_DIR = (os.environ.get("CS_AI_STATE_DIR")
              or os.path.join(os.path.dirname(os.path.abspath(__file__)), "state"))
 
 
+def _seg_dist(a, b, p):
+    """Distance from point p to the segment a-b."""
+    ab = [y - x for x, y in zip(a, b)]
+    n = sum(c * c for c in ab)
+    if n == 0:
+        return _dist(a, p)
+    t = max(0.0, min(1.0, sum((q - x) * c for x, q, c in zip(a, p, ab)) / n))
+    return _dist([x + t * c for x, c in zip(a, ab)], p)
+
+
 def _fingerprint(snap):
     """A stable id for this galaxy: a hash of sorted (sun id, rounded position)."""
     key = tuple(sorted((s.id,
@@ -49,6 +59,8 @@ class History:
         self.quiet = {}
         # The raid in progress, {"target", "arrive" turn, "members" ship ids}, or None.
         self.raid = None
+        # Ship id -> (turn, position) at the last pass, for the swept segment.
+        self._ship_seen = {}
         self._path = None
         self._persisted = None    # what is already on disk, to avoid rewriting
         self._want_persist = persist
@@ -136,11 +148,23 @@ class History:
             s, _r = snap.nearest_sun(p)
             if s is not None:
                 self.discovered.add(s.id)
+        seen, self._ship_seen = self._ship_seen, {}
+        suns = [x for x in snap.suns if None not in x.pos]
         for sh in snap.owned_ships(civ):
-            s, r = snap.nearest_sun(sh)
+            pos = sh.pos
+            if None in pos:
+                continue
+            self._ship_seen[sh.id] = (snap.turn, pos)
             # Inside the system: widest orbit 39.6, tightest star gap 111.7.
-            if s is not None and r <= 55.0:
-                self.discovered.add(s.id)
+            # A ship sampled once a turn can fly through a system between two
+            # samples, so the line it swept since the last turn counts. Only
+            # one turn's travel: over several, the route may have turned.
+            turn, start = seen.get(sh.id, (None, pos))
+            if turn is None or snap.turn - turn != 1:
+                start = pos
+            for x in suns:
+                if _seg_dist(start, pos, x.pos) <= 55.0:
+                    self.discovered.add(x.id)
         for rep in civ.vec(320, 4):
             import struct as _s
             ptr = _s.unpack("<I", rep)[0]

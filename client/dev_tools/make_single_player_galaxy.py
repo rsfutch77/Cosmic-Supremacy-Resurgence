@@ -50,8 +50,17 @@ AI_CIV = "BadGuy"
 # research.design_legal does not check.
 # Every design needs a scanner: a hull without one crashes the client at the
 # turn boundary when the build completes.
+# probe2..probe6 are the same Shuttle scout with each later engine, two where
+# the Shuttle's 120 space takes them. Each stays locked until its engine is
+# researched, and R-EXP-01 builds the fastest one unlocked. Speed is thrust over
+# hull units: 15.4, 36.4, 68.5, 96.8, 98.5 and 144.0.
 DESIGNS = [
     ("probe1", {"chassis": [0], "scanners": [0], "engines": [0, 0]}),
+    ("probe2", {"chassis": [0], "scanners": [0], "engines": [1, 1]}),
+    ("probe3", {"chassis": [0], "scanners": [0], "engines": [2]}),
+    ("probe4", {"chassis": [0], "scanners": [0], "engines": [3]}),
+    ("probe5", {"chassis": [0], "scanners": [0], "engines": [4, 4]}),
+    ("probe6", {"chassis": [0], "scanners": [0], "engines": [5, 5]}),
     ("f1",     {"chassis": [0], "scanners": [0], "engines": [0], "weapons": [0]}),
     ("b1",     {"chassis": [0], "scanners": [0], "engines": [0], "weapons": [10]}),
     ("cf1",    {"chassis": [1], "scanners": [0], "engines": [1, 1],
