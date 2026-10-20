@@ -1541,10 +1541,6 @@ all exist in code and not here, while `RAID_MARGIN` is here and used nowhere. A 
 appears in only one of the two places is a constant nobody is tuning. Done: the table above is
 generated from every numeric constant in the rule modules.
 
-[ ] **None of these has actually been tuned.** They are still the initial guesses, apart
-from `TURN_WEIGHT`, which was recalibrated once against a real galaxy. Tuning needs many fast
-games, which `--drive` now makes possible and nothing has yet used.
-
 Units: distances are in the same space as `Planet:4/8/12`; a scout's ETA is
 `ceil(distance / ShipDesign:36)`, which is how the game derives it (ETA is not stored).
 Measured galaxy scale, for calibration: coordinates 0..~1130, 108 suns, 538 planets, 4-6
@@ -1584,8 +1580,7 @@ new galaxy rather than inherited.
 5. ~~**Turn acceleration.**~~ **RESOLVED, `ai.py --drive N`** writes the turn length at
    `0x0080AA08`, re-asserts it whenever the engine resets it (which it does, often), and
    restores the original on exit including on Ctrl-C. Games run at 8-15s per turn; a
-   400-turn game takes about an hour. [ ] Nothing has yet used it for its actual purpose,
-   which was tuning §5 over many games.
+   400-turn game takes about an hour.
 
 6. ~~**Two AI civs, or one AI against the engine's own?**~~ **RESOLVED, two AI civs, both
    driven from one client by `duel.py`.** The engine plays `BadGuy` passively: over 154 turns
@@ -2010,8 +2005,6 @@ Steps 1-5 are **DONE**. The AI plays all four X's unattended and has fought a ba
    civ, and a FRESH galaxy, the demonstration ran on a turn-154 game the first civ had already
    won 21,591 to 3,644, which measures nothing about the strategy. Done: `client/duel_fixture2.dat`
    is a fresh turn-0 galaxy with both civs armed, and `metrics.py` compares runs on it.
-6. [ ] **Tune §5 over many fast games**, `--drive` makes this possible and nothing has
-   used it for that yet.
-7. [ ] **Buy resources on the market** when no planet of ours produces one (§4.3, Cash
+6. [ ] **Buy resources on the market** when no planet of ours produces one (§4.3, Cash
    policy). Not tasked yet. Stocks (`Owner:1128`) and prices (`Owner:916`) are readable; the
    purchase has to be located first, by watching a human buy at the client.
