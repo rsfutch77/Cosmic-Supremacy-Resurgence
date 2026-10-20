@@ -24,8 +24,9 @@ PLANET_PROPERTIES = 88
 ORDER_TYPES = {0: "none", 1: "move", 2: "scout", 3: "colonize", 4: "attack",
                5: "conquer", 6: "bio bomb", 7: "move near"}
 
-# Order types that also require Ship:56, the target-object reference node
-# (Ship::HasActiveTargetedOrder, 0x004D9880). Colonize and Scout use coordinates.
+# Order types that become an escort of Ship:56, the target-object reference node,
+# when it is live (Ship::HasActiveTargetedOrder, 0x004D9880). With the null node
+# they follow the route like any other order. Colonize and Scout use coordinates.
 TARGETED_ORDER_TYPES = (1, 4, 7)
 NULL_NODE        = ev.NULL_REF_NODE      # 0x00857C54
 PILING_UP_WEALTH = 0x0080B540            # shared "generating wealth" singleton
@@ -275,8 +276,20 @@ class Ship(Obj):
 
     @property
     def crew_allocated(self):
-        """Ship:124 already holds a buffer. Nothing we have can add to it."""
+        """Ship:124 already holds a buffer; only its spare capacity can be added to."""
         return is_ptr(self.u32(124))
+
+    @property
+    def crew_spare(self):
+        """Records the crew buffer can still take without reallocating.
+
+        A troop hull that has landed its troops keeps its capacity: landing
+        walks `end` back and frees nothing.
+        """
+        end, cap = self.u32(128), self.u32(132)
+        if not self.crew_allocated or end is None or cap is None or cap < end:
+            return 0
+        return (cap - end) // 16
 
 
 class Planet(Obj):

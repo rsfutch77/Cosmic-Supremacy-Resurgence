@@ -69,6 +69,31 @@ Consequences, both learned the hard way:
   the `Planet:368` traces were trustworthy precisely because their turn numbers
   ran 285..312 with no holes.
 
+**In Single Player launched from the launcher, the clock is held** (Oct 2026). The Next
+Turn button never resolved a turn itself, it shortens the turn length and waits, so the
+engine's own timer was still live underneath: an hour idle resolved a turn unasked, and
+a suspended host owed several on waking, all of them bypassing the opponent's readiness
+gate. The launcher now writes `gamectl.HOLD_LENGTH` (a week) to `0x0080AA08` and puts it
+back on its once-a-second tick whenever a boundary re-applies the galaxy's 3600, and
+`advance_turn` restores the hold rather than whatever it found. Multiplayer already did
+the same through `player_turn.hold_clock`. `release/tests/test_turn_clock_hold.py`
+covers the logic against a stand-in for process memory.
+
+What remains:
+* **A gap between a boundary and the next tick.** For up to a second the galaxy's own
+  length is back; a suspend that starts inside it and lasts an hour still owes a turn.
+* **A slow opponent is still skipped, by design.** After `AI_READY_TIMEOUT` the button
+  comes back ("BadGuy not responding") so the player is never trapped, and a click then
+  resolves a turn the AI never decided.
+* **Every test driver now fights the launcher.** `ai.py --drive`, `advance_turns.py` and
+  `fast_turns.py` all write a short length that the launcher overwrites within a second,
+  so turns fire erratically. Drive a game the launcher did not start.
+* [ ] **Not yet confirmed on a live client.** That the engine keeps a week-long length
+  without clamping it, and that an idle hour and a suspended hour each leave the turn
+  counter where it was until Next Turn is clicked.
+
+Everything above still applies to any driven or test run.
+
 **Identity.** "Our civ" is the `Owner` whose name at `Owner:-44` matches a configured
 string. Remember `Owner` is multiple-inheritance: the allocation starts at **tag-52**,
 reference nodes store **tag-8**, and the known-players vector stores **tag-52**. Any
@@ -211,11 +236,11 @@ consecutive turn snapshots and are the honest substitute:
 |---|---|
 | `foodDelta[planet]` | Δ`Planet:112` per turn, **the** signal for the food rules |
 | `productionRate[planet]` | Δ`Planet:120` per turn while `Planet:344 == 1` |
-| `researchRate` | Δ`Owner:12` per turn, **net of science wastage**, see below |
+| `scienceRate` | Δ(`Owner:12` + Σ cost in `Owner:108`) per turn, **net of science wastage**, see below. The cost term undoes a completion, which subtracts the topic's cost from `Owner:12` |
 | `incomeRate` | Δ`Owner:8` per turn |
 | `popGrowth[planet]` | Δ population count per turn |
 
-**Science wastage caps the value of scientists, and we do not model it.** From the
+**Science wastage caps the value of scientists.** From the
 official manual (`cosmicsupremacy.com/wiki/manual/research-screen`):
 
 ```
@@ -226,11 +251,29 @@ Science-Wastage = Output - Science-Surplus
 Wastage is invisible below ~1,000 points/turn, reaches 15% at 10,000, 27% at 30,000 and
 is hard-capped at 30%. Corruption is applied per planet first, then wastage on the total.
 
-[ ] **R-XPL-01 has no scientist ceiling.** The job mix assigns scientists by a flat
-percentage, so a large empire keeps adding them into a 30% loss. The marginal value of a
-scientist falls continuously above 1,000 output; the rule should stop well before the cap
-and put those citizens somewhere with linear returns. Not implemented, the trigger needs
-per-planet science output, which we do not read yet.
+[x] **R-XPL-01 has a scientist ceiling** (Oct 2026), `exploit.scientist_share`. It needed
+no per-planet reading: wastage is taken on the empire total, and the total can be recovered
+from `scienceRate` by inverting the formula, which is one-to-one since its slope never falls
+below 0.66. The formula in code reproduces the manual's 15% at 10,000 and 27% at 30,000.
+What the ceiling is set on is the **margin**, the points banked by one more point of
+output: 0.99 at 1,000, 0.70 at 10,000, a minimum of about 0.66 at 17,300, then back toward
+0.70 from below. So past 10,000 every extra point banks roughly 0.7 of a point, not zero,
+and the question is only whether a worker does better. At the default homeworld rates a
+scientist makes 40 and a worker 30, so they break even at a margin of 0.75
+(`SCIENCE_MARGIN_FLOOR`), reached at 7,633 output with 11% wasted. Above that the
+scientist share falls by `SCIENCE_STEP` a pass and the citizens go back to work, linear
+production that becomes wealth when there is nothing to build; it climbs back toward
+`SCIENTIST_SHARE` below `SCIENCE_RELEASE` of the ceiling. Checked against stubs, not yet
+in a game: no AI empire has come near 7,600 output.
+[ ] **The break-even assumes default rates and a point of science worth a point of
+production.** A homeworld customised toward science (55 against 45, say) breaks even at a
+margin of 0.82, near 5,600 output; one customised toward production sooner still. The
+rates are on `Planet:96` and could set the floor per civ; the exchange rate between the
+two is a judgment, not a measurement.
+[ ] **Scientists are cut evenly across planets.** The best ones to cut are on the most
+corrupt planets, since corruption is taken first, but corruption has not been located.
+[ ] **`Owner:904`, the science wastage modifier trait, is not applied.** It is 0 on the AI
+civ, and how a non-zero percent changes the formula is unknown.
 
 Deltas are only meaningful when nothing else changed that turn, so the AI records the
 snapshot pair alongside the actions it took, and treats a delta as stale for one turn
@@ -249,7 +292,7 @@ One module per UI action. Grade is how confident we are it works today.
 | C | **Start constructing / switch to wealth** | wealth: point `Planet:296` at the singleton `0x0080B540` and set `Planet:344 = 0`. Build: point `Planet:296` at the planet's own embedded `Facility` | **READY**, both directions. The build direction never needed an allocation: the `Facility` object is embedded in the planet, so `actions.build_facility` points at it rather than making one |
 | D | **Queue a ship** | write a `ShipDesign*` (`tag-12`) to `Planet:296`, set `Planet:344` | **READY**, `actions.queue_ship`. Ship builds point at the shared design; no per-build object exists and the engine registers the finished `Ship` itself |
 | D′ | **Stop building / generate wealth** | `Planet:296` → `PilingUpWealth` `0x0080B540`, clear `Planet:344` | **READY**, `actions.set_wealth_mode` |
-| I | **Design a ship** | `operator new(0x118)` + default ctor `0x00546EC0`, `fit_parts`, `set_design_owner` | **PARKED, but the save path is now located**, see below. The object is created, tagged, owned and parts fit, and is never REGISTERED (zero `tag-12` refs vs three per UI design) |
+| I | **Design a ship** | `operator new(0x118)` + default ctor `0x00546EC0`, `fit_parts`, `set_design_owner`, `register_design` | **REGISTERED, not yet built from**, see below. The object is created, tagged, owned, parts fit, and entered in the civ's design list `Owner:84` by the engine's own calls. Not yet queued, built or saved |
 | E | **Retarget an existing order** | rewrite `Ship:48+16/20/24`, the route leg, progress, then `Ship:52`/`Ship:76` | **READY**, `actions.retarget_order` |
 | E′ | **Originate an order** | engine's own `operator new` + order constructor, via `remote.py` | **READY**, `actions.create_order`; see §6a Route 2 |
 | E″ | **Move an order between ships** | detach donor, attach recipient | **READY**, `actions.transfer_order` |
@@ -258,7 +301,7 @@ One module per UI action. Grade is how confident we are it works today.
 | H | ~~Assign a governor~~ |, | **DROPPED**, the AI manages planets itself and leaves `Planet:496` unset |
 | J | **Sell a facility** | call `PlanetProperties::SellFacility` `0x004F8580` (`__thiscall`, `ret 8`, ECX = `planet_tag + 88`) | **READY**, `actions.sell_facility`. Confirmed live twice: a military camp paid exactly **75** and was removed. `price = round(facilityValue * 0.05) * count`; the 0.05 is the double at `0x753CF8` |
 | K | **Hurry the current build** | call `PlanetProperties::HurryProduction` `0x004EFFF0` (`__thiscall`, ECX = `planet_tag + 88`) | **READY**, `actions.hurry_production`. `cost = 4 * (total - progress)`; needs `progress/total >= 0.5`, `cost <= Owner:8`, production kind != 7 and `Planet:300 == 0`. Confirmed live: cash moved by exactly the quoted price and progress jumped to its total |
-| L | **Order a ship at a TARGET OBJECT** | engine `ShipCommand` ctor `0x004E9BA0` + `Ship::SetCommand` `0x004D9DC0` | **DO NOT USE, KILLS THE CLIENT.** `actions.set_command` crashes the game at the NEXT TURN BOUNDARY, for Move (1) as well as Attack (4), even with the route built first. Reproduced from a restore point; see §4.4. Nothing uses it. Kept only because it is still the one known way to populate `Ship:56` |
+| L | **Order a ship at a TARGET OBJECT** | engine `ShipCommand` ctor `0x004E9BA0` + `Ship::SetCommand` `0x004D9DC0` | **WORKS, unused.** The old crash was our stub: it pushed one argument to a `ret 8` function and returned to address 0. Fixed and verified over five boundaries (§4.4). It makes a ship ESCORT one of our own ships turn after turn; aimed at an enemy or a planet the engine drops the target after one turn, so it is no pursuit tool |
 | M | **Move a ship to a target, route only** | `create_order` + `retarget_order`, and nothing else | **READY**, `exterminate.send_to`. The replacement for L. Reuses `Ship:48` when the ship has one, so it allocates nothing per turn. `Ship:56` stays the null node and the ship navigates correctly anyway |
 | N | **Conscript a citizen** | `ChangeCitizenJobs` `0x00574180` (`__cdecl`, 4 args) with job id 3, priced by `GetDraftCost` `0x00516060` | **READY**, `actions.conscript`. Confirmed live: citizen count −1, stationed military +1, and cash down by exactly the quoted 115. The cost getter was validated first against a formula derived from the disassembly, six readings across two civs, all exact |
 | N′ | **Conscript straight onto a ship** | rewrite the citizen list without the drafted records; hand those records to a fresh crew buffer; debit `GetDraftCost` | **READY**, `actions.conscript_to_crew`. Confirmed live twice, and it is what finally unblocked Exterminate. See below |
@@ -282,54 +325,67 @@ N documents: a debit at a number we did not invent. The trade-off is deliberate,
 taken this way never appears in the garrison, so N′ cannot conscript for DEFENCE. That
 stays R-XPL-05's slider, and no rule defends a planet yet.
 
-### Actuator I, the design-editor save path, located but not yet called (Aug 2026)
+### Actuator I, registration found by measurement and called (Oct 2026)
 
-Found statically with `client/dev_tools/xrefs.py`, which was validated first by
-rediscovering `SellFacility`'s documented call site `0x0056EF91` before being pointed at
-anything unknown. **Every address below is a candidate to confirm, not a fact**: the tool
-decodes only `E8 rel32` and 32-bit absolute operands, so it is blind to virtual dispatch,
-and nothing here has been executed yet.
+**A design belongs to a civ when the civ's design list holds a reference node to it.**
+That list is `Owner:84/88/92`, a vector of reference nodes (vector object at `Owner:72`).
+Measured on `SinglePlayerGalaxy.dat`: DemoPlayer's holds [192], BadGuy's [196, 199, 200,
+201], each civ's designs in id order. A design from actuator I was in neither.
 
-**The `ShipDesign` constructor `0x00546EC0` has exactly TWO callers**, and both are
-preceded by `operator new`, which is what makes them real construction sites rather than
-byte sequences that decode like one:
+**Reference nodes live in a global map, and construction only fills the other one.** The
+engine keeps two `std::map<int id, Object*>` side by side in `.data`:
 
-| Caller | Enclosing fn | Reached from | Also calls | Reading |
+| Map | Container | Head / size | Holds | Filled by |
 |---|---|---|---|---|
-| `0x00546855` | **`0x00546430`** | `0x004CE890`, itself called twice from `0x004D06F0` | `0x00537BF0` ×3 | **the design editor's save path** |
-| `0x00576C97` | `0x00576B80` | `0x004A5D40`, which has **no direct callers** | `0x0054A410`, the speed getter `0x005480A0` | deserialisation, reached by virtual dispatch, which is what a response/load handler looks like |
+| objects | `0x00857C5C` | `0x00857C74` / `0x00857C78` | every EJBO object (202 at turn 0) | construction; the default ctor already inserts a new design |
+| references | `0x00857C7C` | `0x00857C94` / `0x00857C98` | only objects something holds a reference to (13 at turn 0) | `reference_node_for` on a miss |
 
-**`0x00546430` calls `0x00537BF0` exactly three times, with the constructor between the
-first and second, against the three `tag-12` references a UI design carries and a
-synthesised one does not.** That numerical agreement is the reason to believe this is the
-registration, and it is also exactly the kind of "two things agree so they must be the
-same thing" reasoning the memory report warns cost it two wrong conclusions. It wants
-confirming by execution, not by counting.
+A node is `[left, parent, right, id, Object* (tag-8), colour]`, and a **reference node is
+the address of a references-map node's value slot**, so the id sits 4 bytes before it.
+That is why `ShipDesign:260` and `Ship:108` dereference to a tag-8 pointer.
 
-**`0x00537BF0` is `reference_node_for(EJBO*)`**, hand-decoded from its first bytes:
+**`0x00537BF0` is `reference_node_for(int id)`, not `(EJBO*)`.** `__cdecl`, one argument.
+0 gives the null node `0x00857C54`. Otherwise it looks the id up in the references map,
+and on a miss inserts a node whose value comes from `lookup_object(id)` `0x00537A80`
+(objects map). It returns the slot. Its neighbour `0x00537AE0` overwrites an existing
+slot's value.
 
-```
-83 EC 08        sub  esp, 8
-57              push edi
-8B 7C 24 10     mov  edi, [esp+0x10]     ; one stack argument
-85 FF           test edi, edi
-75 0A           jnz  ...
-B8 54 7C 85 00  mov  eax, 0x00857C54     ; the null node, already documented in §2.2
-5F 83 C4 08 C3  pop/add/ret              ; cdecl, caller cleans up
-```
+**`0x00546430` is the Owner initialiser, not the design-editor save path.** It is the
+only constructor caller besides the deserialiser, and it builds the new civ's default
+Colony Ship (three nuclear engines, one colony module). Its three `reference_node_for`
+calls were never "the three slots of a registration": one is a loop filling ten null
+nodes at Owner alloc + `0x524`, one is the design's owner node `ShipDesign:260`
+(reproduced by `set_design_owner`), and one, `push_back` `0x00442D40` onto `Owner:72`,
+is the registration. The old "three `tag-12` refs per UI design" count was usage (ships,
+build orders, owners pointing at the design) and is 0 to 5 across loaded designs.
 
-It has **419 call sites**, so it is a general "give me the reference node for this object"
-helper rather than anything design-specific, which is why the three calls inside
-`0x00546430` are interesting and the function itself is not.
+**`actions.register_design` makes those two engine calls** (`remote.register_design`),
+and `create_design` now calls it after attaching the owner. `push_back` reallocates the
+full vector through the engine's own allocator, so nothing is written by hand. It refuses
+a second registration. Confirmed live: three designs registered, the list read
+[192, 202, 203, 204], the references map grew by one each, and the client survived three
+turn boundaries with them in it.
 
-[ ] **Next step, and it is a measurement, not more reading.** `find_refs.py --designs`
-already reports where a registered design's references live; run it against a design built
-by actuator I and diff the two. The difference IS the registration, and it names the three
-slots `0x00546430` writes without having to trust the static reading at all.
+How this was found is the reusable part: `find_refs.py --designs` on loaded designs
+against one from actuator I. Every loaded design has exactly two tag-8 referrers, a node
+in each map. The new one had one. `find_refs.py` had been hiding half of this: it dropped
+any hit within 1400 bytes after the target as "its own header", so DemoPlayer's Colony
+Ship showed no references at all. It now uses the class's extent.
 
-[ ] The editor path does **not** call the speed getter while the load path does, so where
-the stat block gets computed on the editor path is still unknown. `remote.design_speed`
-already warms that cache on demand, so this may not need solving at all.
+[x] **Registration located and called.** See above.
+
+[x] **The stat block is lazy on every path, not computed on one of them.** The question
+assumed `0x00546430` was the editor path. It is not, and the load path does not compute
+stats either: three loaded designs still read speed -1 two turns after load. Each getter
+fills its cache on first call. `remote.design_speed` on an actuator I design with three
+nuclear engines returned 20.25, against 13.5 for the Colony Ship with the same engines
+plus a colony module.
+
+[ ] **A registered actuator I design has not been queued, built or saved yet.** Cost
+stays -1 after the speed getter runs, so cost has its own getter or is computed at queue
+time. Until one is built from and survives a save and reload, `game_cycle.py`'s blob
+injection remains the proven way to give a civ a design, and its docstring's claim that
+nothing registers an in-memory design is out of date.
 
 **Actuator J is the first actuator that is a whole engine TRANSACTION rather than a field
 write, and the reason matters beyond this one button.** Selling pays cash, and §1.1
@@ -756,6 +812,8 @@ THEN   reassign the smallest number of citizens to close the gap
 LIMIT  ceil(pop/4) reassignments per planet per turn
 USES   A
 ```
+The scientist share is held under the science wastage ceiling, §2.5: above about 7,600
+total output it steps down and the surplus scientists become workers.
 
 **R-XPL-02, Facility build order**
 ```
@@ -1024,6 +1082,8 @@ count a spent troop hull toward `TROOP_TARGET`, so each invasion now costs a new
 the spent one is parked at home by R-XTM-04. Confirmed live on the turn-214 fixture: a
 `t1` took planet #120, and for the ten turns after it no conscript was bought for it and
 R-XTM-07 wanted a replacement.
+Superseded (Oct 2026): a spent hull is now refilled into its buffer's spare capacity at a
+shipyard, see §4.4.
 
 [x] **The invasion landed all three troops, not one.** The hull arrived with 5 aboard, 2
 to fly, and left with 2, so R-XTM-06 had nothing to garrison. Resolved: it is the earlier
@@ -1247,7 +1307,7 @@ conscript, because within a pass we are the thing changing the price.
 **Nothing that writes is cached.** A cache on a mutating call is not a speed-up, it is a
 silently skipped action.
 
-[ ] **A dead engine handle looks exactly like an idle AI**, and it fooled two rounds of
+[x] **A dead engine handle looks exactly like an idle AI**, and it fooled two rounds of
 analysis here. A bad edit left `Remote.__init__` never opening its handle; every engine call
 then raised, every rule caught its own exception and moved on, and the loop reported clean
 fast passes while doing nothing at all. The logs showed 0% cache hits and "rules 0.0s",
@@ -1258,6 +1318,8 @@ the failure is loud instead of silent.
 
 **`set_command` kills the client at the NEXT TURN BOUNDARY, for Move as well as Attack.**
 The order is written cleanly and the pass completes; the engine dies resolving the turn.
+(Oct 2026: the cause was the stub, not the order or the boundary, see the resolved items
+below. The measurements stand; the conclusion drawn from them does not.)
 Measured from `client/armed.dat` (turn 38, at war, one crewed `b1`), one boundary per trial:
 
 | what was issued | survived the boundary |
@@ -1278,12 +1340,37 @@ Both rules now go through `exterminate.send_to`, which reuses `Ship:48` when the
 has one, verified over 8 turns as **zero** order allocations and **zero** ShipCommand
 allocations, with the bomber closing 624.3 → 544.2 on BadGuy's HQ.
 
-[ ] **Why SetCommand is fatal is still unknown**, and it is the only known way to populate
-`Ship:56`, so the function is kept and marked do-not-use rather than deleted. Two unreconciled
-observations for whoever picks it up: in the harness SetCommand appears to be a NO-OP (the ship
-still read type 1 with a null `Ship:56` afterwards), while in the 400-turn run at turn 405 it
-DID apply, type 4, real node, and crashed anyway. The difference was that order object had
-been created a turn earlier rather than in the same pass.
+[x] **Why SetCommand was fatal: our stub, not the engine (Oct 2026).** `Ship::SetCommand`
+ends `ret 8`: it takes `(ShipCommand*, bool)`. `remote.ship_set_command` pushed only the
+ShipCommand, and its comment said `ret 4`. The extra pop took the thread's return address into
+`BaseThreadInitThunk`, so the stub's own `ret 4` returned to `lpParameter`, which is 0. The
+remote thread faulted at EIP 0 and the game's crash filter (`0x005F0180`) wrote a dump and
+called TerminateProcess. SetCommand had already finished its writes, which is why the turn-405
+run read type 4 and a real node and died anyway.
+
+The bool sets `Ship:76`, which is the pending-orders flag `retarget_order` already writes to 1
+on every order, so its value does not matter to us. Eight of the ten engine call sites pass 0;
+the two in the player-order apply path `0x0056EBC0` pass 1. The stub passes 0.
+
+Two smaller defects went with it. The ShipCommand is 0x14 bytes, not 16: the ctor `0x004E9BA0`
+writes `+0x10` and SetCommand reads it, so each call overran its heap block by one byte. And
+the `ret N` audit of every other address `remote.py` calls, vftable slots included, found no
+other mismatch.
+
+Evidence: `resurgence/client/CosmicSupremacy_Resurgence_2026-08-05_23-27-17.dmp` faults at
+EIP 0 on a bare remote thread with ESP exactly one dword past where a balanced stub returns,
+EAX = the target's object id and EDX = a heap node, which is SetCommand's exit state. The
+`08-48-26` dump that morning also faults at EIP 0, but its EDX is the stub page, so it is not
+attributed. "Dies at the next turn boundary" was most likely the first time anyone looked: the
+reads after the call failed, the rule caught the exception, and the client was already gone
+when Next Turn was pressed. The harness NO-OP reading is likewise a read after termination.
+That part is inference, not measured.
+
+Fixed in `remote.py` (pushes the 0, allocates 0x14). **Verified live, Oct 2026**, on a fresh
+`SinglePlayerGalaxy.dat` game, turns 5 to 10: three `set_command` calls (Move at an unowned
+planet, Move at a moving BadGuy ship, Move at our own moving ship) and five turn boundaries,
+with the client alive throughout. The planet order arrived, completed and was freed by the
+engine as normal. See the next item for what the target node actually buys.
 
 **~~ATTACK ORDERS NEED `Ship:56`~~, WRONG, and it was the premise for actuator L.** The
 claim was that `Ship::HasActiveTargetedOrder` (`0x004D9880`) requires order type 1/4/7 **and**
@@ -1293,10 +1380,28 @@ correctly regardless. Whatever that function gates, it is not movement, and it i
 the battle driver `0x00523AC0` buckets by position and never reads the order type. Superseded
 by the actuator-L section above; kept here only so the old reasoning is not re-derived.
 
-[ ] **What `Ship::HasActiveTargetedOrder` actually gates is still unknown.** It is called
-from somewhere, and `Ship:56` is populated by the UI path, so both exist for a reason we have
-not found. Worth knowing before assuming a null `Ship:56` is harmless in every situation
-rather than just the ones tested (Move and Attack toward an enemy planet).
+[x] **`Ship::HasActiveTargetedOrder` gates ESCORTING (Oct 2026).** It returns true for type
+1, 4 or 7 with `Ship:56` pointing at a live object (`[node] != 0`). Its seven call sites:
+
+| where | what it decides |
+|---|---|
+| `0x004CDEB0`, the movement phase of turn resolution `0x0056D130`, run just before the battle driver `0x00523AC0` | ships WITHOUT a targeted order run vftable `+0x24` (`0x004DC070`), which executes their own `Ship:48` order along its route. Ships WITH one go to `0x004CCAC0` |
+| `0x004CCAC0` (2 sites) | moves the targeted ships in target order. Each turn it builds a FRESH order toward the target's current position (operator new + `0x004E8420`), installs it with `Ship::SetOrder` `0x004DA450`, and if that fails clears the command with `SetCommand(0, null)` |
+| `0x004DCBE4` (3 sites) | builds text from `<CommandMoveTo><Escorting>` (Move) and `<Escorting near>` (MoveNear). Not seen in the UI: a live escort followed its leader on screen with no "Escorting" text shown, so where this text appears is unknown |
+| `0x0045853F` | UI side: compares the ship's target id (`0x004D9870`) against an object and clears a flag on it |
+
+So a null `Ship:56` is harmless in general, not only in the cases tested: the ship simply
+takes the ordinary route path, which is what `send_to` wants for planets, which never move.
+
+**Measured, escort holds only on our OWN ships.** Escorting our own moving ship, `Ship:56`
+stayed live across two boundaries, the escort's order was re-aimed at the leader's current
+position each turn, and it joined the leader (distance 0) and stayed with it. Targeting an
+unowned planet or a BadGuy ship, the engine nulled `Ship:56` at the FIRST boundary; that turn
+moved the ship toward the target's then-position, and after that the order stayed frozen on
+it. So `set_command` gives no **pursuit** of enemies: a one-turn head start, after which it is
+a route order. `send_to` re-aiming every pass is the pursuit tool. What `set_command` does buy
+is **fleet forming**, one ship following another of ours. Which step nulls the node for a
+non-own target was not traced.
 
 **R-XTM-02, Defend**, IMPLEMENTED in `exterminate.run_xtm02`
 ```
@@ -1441,14 +1546,32 @@ client. Crewing and loading troops are the same thing, which is why they share t
 `Ship:124` container. So no engine call has to be found for this: the AI only has to load
 MORE than the minimum.
 
-[ ] **`load_crew` cannot top up a crewed ship, so the extra must go in at FIRST load.** It
-refuses when `Ship:124` is already a pointer, by design, growing the engine-owned buffer
-would mean freeing memory we did not allocate. That is not a blocker now that the requirement
-is known, because it allocates the whole buffer in one call: R-XPL-06 just has to ask for
-`ShipDesign:76 + troops` on a TROOP hull instead of `ShipDesign:76`. Topping up a hull that has
-already spent its troops still needs solving. Until it is, a second invasion uses a second hull:
-a spent hull no longer counts toward `TROOP_TARGET` and no crew rule tries to fill it (§4.3,
-R-XPL-09).
+[x] **A spent troop hull is refilled into its buffer's spare capacity**, confirmed live from
+`t214_troop` (Oct 2026). A crew buffer is never repointed once allocated, since that crashed
+the client, so the first load allocates `ShipDesign:76 + troops` in one call. The engine's
+capture walks `end` back and frees nothing: after #242 took #184, the three records past `end`
+were still the three troops it had landed, and `cap - end` was exactly 3. `load_crew` and
+`conscript_to_crew` write into that room (`actions._add_ship_crew`), and `exploit.crew_gap`
+counts a crewed hull's gap up to its spare. Measured: #242 took #184, flew to the yard at #136,
+took 3 trained units there (2 -> 5), flew out and took #166; #246 refilled the same way after
+taking #159. Every captured planet kept its garrison of 3.
+
+A spent hull refills **only at one of our shipyards not taken within `GARRISON_WINDOW`**
+(`exploit.refills_at`). The first live run refilled anywhere we owned, and R-XPL-06 took the
+three troops #242 had just landed back off #184; R-XTM-06 landed them again the next pass,
+every turn, so the planet sat ungarrisoned across each boundary. A spent hull counts toward
+`TROOP_TARGET` while it has room (`exploit.refillable`), including on the way to a yard
+(R-XTM-04 sends it); one with no room is parked and replaced as before.
+
+[ ] **A garrisoned planet reads as "undefended" to R-XTM-04.** BadGuy's #241 and #244 sat on
+DemoPlayer's yard #136 under conquer orders for many turns without taking it; #136 had trained
+units stationed. Undefended is judged from planetary defence (battle reports), not from
+`Planet:168`, which a player cannot see either; whether a failed landing produces a report that
+could stand in for it is not known.
+
+[ ] **Three troops did not hold #184.** It was taken on turn 232 with a garrison of 3 and
+BadGuy took it back on turn 264. `INVASION_TROOPS` may need to scale with the target's
+population (43 here), or a recapture is simply what a frontline planet costs.
 
 ```
 WHEN   a TROOP ship exists and its target planet's weakness == 0
@@ -1541,6 +1664,9 @@ Generated by `constants.py --write`; edit the code, not this table.
 | `SCIENTIST_SHARE` | 0.5 | `exploit.py` | of non-farmers, in the Growth phase |
 | `REASSIGN_CAP_DIV` | 4 | `exploit.py` | at most ceil(pop / 4) job changes per planet per turn |
 | `BANKER_POP_SHARE` | 0.75 | `exploit.py` | of its population cap a planet must hold to take bankers |
+| `SCIENCE_MARGIN_FLOOR` | 0.75 | `exploit.py` | A scientist is kept while one more point of science output still banks at least this much of a point after wastage. 0.75 is where a scientist stops out-producing a worker at the default homeworld rates, 40 science to 30 production, and is reached at about 7,600 output, 11% wastage. |
+| `SCIENCE_STEP` | 0.05 | `exploit.py` | how fast the scientist share may move per turn |
+| `SCIENCE_RELEASE` | 0.8 | `exploit.py` | of the ceiling; below it the share climbs back |
 | `CASH_THIN` | 1000 | `exploit.py` | a reserve this small deserves a decent income behind it |
 | `THIN_INCOME` | 20 | `exploit.py` | ...and "decent" means at least this per turn |
 | `WORKER_FLOOR` | 2 | `exploit.py` | never strip a planet below this many workers |
@@ -1822,7 +1948,7 @@ than an allocator, a constructor or a getter. That is the pattern worth extendin
 | Candidate | Address | Why it matters |
 |---|---|---|
 | **Read the live research table** | `0x0054AA70` id→record, `0x0054B140` cost, `0x0054B200` prereq-at-index, `0x0054B7D0` exclusion test | `research.py` currently carries a table extracted for content version **≥688** while this client runs **565**, and the two demonstrably differ (see the cost-ratio argument in that file). These calls read the table the client is *actually* using. Read-only, so the safest possible first target, and it retires a known-wrong data source |
-| ~~**`Ship::SetCommand`**~~ | `0x004D9DC0` | **WITHDRAWN, this candidate was tried and it kills the client** at the next turn boundary, for Move as well as Attack (§4.4). Writing `Ship:52` alone turns out to be fine: the ship navigates correctly with `Ship:56` null. [ ] The order-type-8 / `Ship:61 = 0x0B` observation is still unexplained and still unused |
+| ~~**`Ship::SetCommand`**~~ | `0x004D9DC0` | **DONE; the crash was our stub, fixed and verified live** (§4.4). Writing `Ship:52` alone is fine: with `Ship:56` null the ship follows its route. [ ] The order-type-8 / `Ship:61 = 0x0B` observation: the ShipCommand ctor `0x004E9BA0` sets `+9 = 0x0B` when the type is 8, and SetCommand copies `+9` to `Ship:61`. That is where the value comes from; what it means is still unknown |
 | ~~**`ChangeCitizenJobs`**~~ | `0x00574180` | **DONE, actuator N.** Conscription works and R-XPL-09 uses it. Note it is still *not* used to replace actuator A: setting an ordinary job id by field write remains cheaper than a remote thread, and only job 3 goes through the engine, because only job 3 costs money |
 | **`GetTrait`** | `0x00516180` | Real civ-modifier values (trait 18 = ship speed %, trait 38 = planet space %) rather than assuming 0. Feeds any speed or max-pop calculation |
 | **available space** | `0x004F1140` (PP vftable slot 6) | `max_pop` with the trait bonus applied, instead of our `space/10` approximation |
@@ -1859,9 +1985,11 @@ Fill a crew or military vector only when it is EMPTY. The code that predated
 this session refused to do otherwise and said why; overriding that comment cost
 a day, and the comment was the most valuable thing in the file.
 
-[ ] **`Ship::SetCommand` is marked DO-NOT-USE on the same style of reasoning
+[x] **`Ship::SetCommand` is marked DO-NOT-USE on the same style of reasoning
 that failed here**, "the client died after we called it", and deserves
 re-testing rather than inheriting this mistake. It may never have been the call.
+**It was not the call, and not the thread either:** our stub pushed one argument to a
+`ret 8` function and returned to address 0 (§4.4). Fixed and verified over five boundaries.
 
 The original text follows because the experiment shape was right even though the
 conclusion was not, and because the arms below are still the evidence that our
@@ -1956,6 +2084,8 @@ suspect**, including `Ship::SetCommand`. That one was blamed for a crash at the
 next turn boundary and marked DO-NOT-USE on that basis. It is a mutating engine
 call on a remote thread, so it belongs to this class, and the same experiment
 would settle whether the call is fatal or merely the thread it ran on.
+SetCommand is now settled, and it was neither (§4.4). Before blaming the thread for the
+others, check each stub's pushes against its callee's `ret N`.
 
 ### The standing hazard
 

@@ -203,6 +203,8 @@ windows.
 | L8  | Screens refresh | Sit on the Planet View when the turn lands, then use the mouse wheel and sorting | Values update in place. Note if sorting or the mouse wheel misbehaves until you switch screens, this was an original bug and we want to know if it survived |
 | L9  | Opponent is really playing | Over ten turns, watch BadGuy in the Overview highscores and on the map | Their score rises, their planet count rises, their ships move. A flat line means the opponent is not running |
 | L10 | Ten turns in a row | Click Next Turn ten times, a few seconds apart | Every one lands. No dialog, no freeze, no turn skipped or doubled |
+| L11 | Clock held | Note the turn number, then leave the game open and untouched for over an hour | The launcher log says "turn clock held" once. The turn number has not moved; it moves only when you click Next Turn |
+| L12 | Sleep does not take turns | Note the turn number, put the PC to sleep with the game open for over an hour, then wake it | The turn number has not moved, and the next Next Turn advances it by exactly one |
 
 ## M. Save, load and shutdown
 

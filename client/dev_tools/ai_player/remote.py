@@ -39,8 +39,10 @@ REPUTATION_ADD    = 0x00534D50  # __thiscall(Owner* other, short delta), ret 8
 RELATION_CODE_OFF = 4           # within the record Find returns
 OWNER_RELATIONS = 248           # Owner:248, the diplomacy container
 OWNER_PRIMARY_FROM_TAG = -52    # Owner allocation starts at tag - 52
-SHIP_SETCOMMAND  = 0x004D9DC0   # __thiscall(ShipCommand*), ret 4
-SHIPCOMMAND_SIZE = 16           # +0 type, +4 target node, +8/+9 two bytes
+SHIP_SETCOMMAND  = 0x004D9DC0   # __thiscall(ShipCommand*, bool), ret 8
+# +0 type, +4 target node, +8/+9 two bytes, +0xA word, +0xC float, +0x10 byte.
+# The ctor writes +0x10, so 16 bytes overflowed the block by one.
+SHIPCOMMAND_SIZE = 0x14
 SHIP_ALLOC_FROM_TAG = -8        # Ship:N == ship_allocation + (N + 8)
 HURRY_COST       = 0x00555660   # __cdecl(PlanetProperties*) -> cost, or -1
 PRODUCTION_DONE  = 0x004F0260   # __thiscall(PP) -> production accumulated
@@ -88,6 +90,12 @@ DESIGN_SIZE = 0x118           # 280 bytes
 DESIGN_CTOR = 0x00546EC0      # __thiscall, no stack arguments
 
 DESIGN_STREAM_CTOR = 0x005470A0
+
+# A civ's designs are a vector of reference nodes, begin at Owner:84. The vector
+# object starts 12 bytes before that, which is what push_back takes as ECX.
+REFERENCE_NODE_FOR = 0x00537BF0  # __cdecl(int objectId) -> node, inserts on miss
+VECTOR_PUSH_BACK   = 0x00442D40  # __thiscall(const T&), ret 4, 4-byte elements
+OWNER_DESIGNS      = 84 - CONTAINER_VECTOR
 
 # ShipDesignData lives at EJBO tag + 4. Derived stats are lazy caches reset
 # to -1 when parts change; each getter computes, caches and returns.
@@ -296,6 +304,27 @@ class Remote:
                 RET_4)
         return self.run_stub(code, f"ShipDesign default ctor -> 0x{block:08X}")
 
+    def register_design(self, design_id, civ_tag):
+        """Append a design to a civ's design list, the way the engine does.
+
+        The Owner initialiser at 0x00546430 registers a civ's default design
+        with these two calls. Both allocate through the engine, so the vector
+        can reallocate itself. Returns the design's reference node.
+        """
+        code = (push_imm(design_id) +
+                mov_eax_imm(REFERENCE_NODE_FOR) +
+                CALL_EAX +
+                ADD_ESP_4 +
+                b"\x50" +                  # push eax      the node, as the T
+                b"\x54" +                  # push esp      and a const T& to it
+                mov_ecx_imm(civ_tag + OWNER_DESIGNS) +
+                mov_eax_imm(VECTOR_PUSH_BACK) +
+                CALL_EAX +
+                POP_EAX +                  # the node again, as the result
+                RET_4)
+        return self.run_stub(code, f"register design #{design_id} with civ "
+                                   f"0x{civ_tag:08X}")
+
     def verify_design(self, block):
         """Check that a block really is a constructed ShipDesign."""
         raw = self.read(block, 16)
@@ -387,9 +416,15 @@ class Remote:
     def ship_set_command(self, ship_tag, cmd_block):
         """Ship::SetCommand: writes Ship:52/56/60/61 from the ShipCommand.
 
-        ECX is the ship's allocation start (tag - 8).
+        ECX is the ship's allocation start (tag - 8). The second argument is a
+        bool that, when set, also writes Ship:76 = 1. The player-order path
+        (0x0056EBC0) passes 1 and engine-internal callers pass 0; 0 is used
+        here (STRATEGY.md §4.4). Pushing only the ShipCommand let `ret 8` pop
+        the thread's return address, so the stub returned to lpParameter (0)
+        and the client died.
         """
-        code = (push_imm(cmd_block) +
+        code = (push_imm(0) +
+                push_imm(cmd_block) +
                 mov_ecx_imm(ship_tag + SHIP_ALLOC_FROM_TAG) +
                 mov_eax_imm(SHIP_SETCOMMAND) +
                 CALL_EAX +

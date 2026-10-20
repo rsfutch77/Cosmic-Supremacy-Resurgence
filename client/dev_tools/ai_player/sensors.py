@@ -61,6 +61,9 @@ class History:
         self.raid = None
         # Ship id -> (turn, position) at the last pass, for the swept segment.
         self._ship_seen = {}
+        # R-XPL-01's scientist share under the wastage ceiling; None until
+        # the rule first runs.
+        self.scientist_share = None
         self._path = None
         self._persisted = None    # what is already on disk, to avoid rewriting
         self._want_persist = persist
@@ -126,7 +129,12 @@ class History:
                                "military": p.military or 0,
                                "milcost": p.u32(128) or 0}
                         for p in snap.owned_planets(civ)},
-            "civ": {"cash": civ.cash or 0, "research": civ.research or 0},
+            # A completion subtracts the topic's cost from Owner:12 and
+            # records that cost in Owner:108, so adding the costs back gives
+            # every point the civ has ever banked, unbroken by completions.
+            "civ": {"cash": civ.cash or 0, "research": civ.research or 0,
+                    "science": (civ.research or 0)
+                               + sum(cost for _tid, cost in civ.completed)},
         }
         self._stale, self._acted = self._acted, set()
         self._cur, self._prev_for_pass = cur, self.prev
@@ -289,13 +297,16 @@ class History:
         ours = getattr(self, "_our_cash_effect", 0) or 0
         n = self.turns or 1
         return d - ours / n
-    def research_rate(self): return self._civ_delta("research")
+    def science_rate(self):
+        """Research banked per turn, net of science wastage. Unlike the raw
+        Owner:12 delta it does not dip by a topic's cost when one completes."""
+        return self._civ_delta("science")
 
     def summary(self):
         n = self.turns
         if not n:
             return "no previous observation yet; deltas available next turn"
-        inc, res = self.income_rate(), self.research_rate()
+        inc, res = self.income_rate(), self.science_rate()
         bits = [f"over {n} turn(s): income {inc:+.0f}/turn, "
                 f"research {res:+.0f}/turn"]
         for pid in sorted(self._cur["planets"]):

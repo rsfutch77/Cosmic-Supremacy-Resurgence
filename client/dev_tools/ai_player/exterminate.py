@@ -107,8 +107,9 @@ def already_heading(ship, target, order_type, tol=1.0):
 def send_to(act, ship, target, civ, order_type=1):
     """Move `ship` to `target` with a route-only order, not actuator L.
 
-    `set_command` kills the client at the next turn boundary for both move and
-    attack; create_order plus retarget_order is safe.
+    A planet never moves, so the target node `set_command` adds (an escort
+    that follows its target) buys nothing here; create_order plus
+    retarget_order is enough. STRATEGY.md §4.4.
     """
     if already_heading(ship, target, order_type):
         act.log(f"  {ship} is already under order {order_type} for {target}; "
@@ -797,21 +798,31 @@ def run_xtm04(snap, civ, act, hist, log=print):
         # A hull carrying only its flight crew (ShipDesign:76) cannot invade.
         need = exploit.min_crew(ship, act)
         if len(ship.crew) <= need:
-            if exploit.crew_gap(ship, act):
-                log(f"R-XTM-04: {ship} is waiting for its first crew")
-                continue
-            # A spent hull cannot be topped up (exploit.crew_gap), so it is
-            # parked at home and R-XTM-07 builds a replacement.
+            # An empty or spent hull is crewed only at one of our planets
+            # (R-XPL-06, R-XPL-09), and a spent one only at a shipyard not
+            # just taken (exploit.refills_at).
             here = ship.orbiting
-            if here is not None and here.owner is not None \
-                    and here.owner.addr == civ.addr:
-                log(f"R-XTM-04: {ship} is spent and parked at {here}")
+            at_ours = here is not None and here.owner is not None \
+                and here.owner.addr == civ.addr
+            if at_ours and ship.id in act.crewed_ships:
+                log(f"R-XTM-04: {ship} took on crew this pass at {here}")
                 continue
-            if not ours:
+            if at_ours and exploit.crew_gap(ship, act):
+                log(f"R-XTM-04: {ship} is waiting for troops at {here}")
                 continue
-            home = min(ours, key=lambda p: gs.dist(ship.pos, p.pos))
+            docks = ([p for p in ours if exploit.refills_at(ship, p)]
+                     if exploit.refillable(ship) else [])
+            if not docks:
+                if at_ours:
+                    log(f"R-XTM-04: {ship} is spent, has nowhere to refill, "
+                        f"and is parked at {here}")
+                    continue
+                docks = ours
+            if not docks:
+                continue
+            home = min(docks, key=lambda p: gs.dist(ship.pos, p.pos))
             log(f"R-XTM-04: {ship} carries {len(ship.crew)} and cannot land "
-                f"anyone; parking it at {home} "
+                f"anyone; sending it to {home} "
                 f"({gs.dist(ship.pos, home.pos):.0f} units)")
             try:
                 send_to(act, ship, home, civ, order_type=1)
@@ -833,6 +844,15 @@ def run_xtm04(snap, civ, act, hist, log=print):
     return acted
 
 
+def newly_taken(snap, planet):
+    """Taken within GARRISON_WINDOW turns. Planet:92 is rewritten on capture
+    as well as founding, and the capture resolves in the boundary the hull
+    arrives in, hence a window."""
+    if planet.colonised_turn is None:
+        return False
+    return 0 <= snap.turn - planet.colonised_turn <= GARRISON_WINDOW
+
+
 def run_xtm06(snap, civ, act, hist, log=print):
     """R-XTM-06: garrison a freshly taken planet with the troops still aboard.
 
@@ -851,11 +871,8 @@ def run_xtm06(snap, civ, act, hist, log=print):
         p = ship.orbiting
         if p is None or p.owner is None or p.owner.addr != civ.addr:
             continue
-        # Only a newly taken planet; elsewhere the hull is loading. Planet:92
-        # is rewritten on capture as well as founding, and the capture
-        # resolves in the boundary the hull arrives in, hence a window.
-        age = None if p.colonised_turn is None else snap.turn - p.colonised_turn
-        if age is None or not (0 <= age <= GARRISON_WINDOW):
+        # Only a newly taken planet; elsewhere the hull is loading.
+        if not newly_taken(snap, p):
             continue
         keep = exploit.min_crew(ship, act)
         spare = len(ship.crew) - keep
@@ -879,11 +896,11 @@ def run_xtm07(snap, civ, act, hist, log=print):
     if not undefended_planets(snap, civ, hist, act, foes):
         return 0                       # nothing takeable; build warships instead
 
-    # A hull that has landed its troops cannot be refilled, so it no longer
-    # counts as a transport.
+    # A hull that has landed its troops counts while its buffer has room to
+    # refill, including on its way to a yard; one with no room no longer does.
     have = [s for s in snap.owned_ships(civ) if s.role == "TROOP"
             and (len(s.crew) > exploit.min_crew(s, act)
-                 or exploit.crew_gap(s, act))]
+                 or exploit.crew_gap(s, act) or exploit.refillable(s))]
     if len(have) >= TROOP_TARGET:
         return 0
     # No new hull while a built one is waiting for crew.

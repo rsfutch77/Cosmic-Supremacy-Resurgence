@@ -156,12 +156,18 @@ def main():
             values[addr + delta] = (label, form)
     hits = find_dwords(handle, regions, list(values))
 
+    # The object's own span, so a hit just past it is not discarded with its
+    # header. A fixed 1400-byte window hid every reference stored in the 1100
+    # bytes after a 280-byte design.
+    own_span = {base: (lo, hi) for lo, hi, _label, base in spans}
+
     for label, addr in targets:
         print(f"\n{label}  tag 0x{addr:08X}")
+        lo, hi = own_span.get(addr, (addr - CLASS_FRONT, addr + 1400))
         for form, delta in REF_FORMS.items():
             got = hits.get(addr + delta, [])
             # The object's own header holds its vftables; that is not a referrer.
-            external = [h for h in got if not (addr - 64 <= h < addr + 1400)]
+            external = [h for h in got if not (lo <= h < hi)]
             print(f"  {form:7} (0x{addr + delta:08X}): {len(external)} external "
                   f"reference(s)")
             for h in external[:a.max_hits]:

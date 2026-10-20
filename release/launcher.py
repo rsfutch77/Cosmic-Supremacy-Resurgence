@@ -2668,6 +2668,9 @@ class Launcher:
         self._waiting_since = None
         self._last_seen_turn = None
         self._ctl_busy = False
+        # The game whose turn clock the log has already said is held, so the
+        # hold is announced once per game, not at every boundary.
+        self._held_pid = None
         self._save_name = "singleplayer"   # offered again by the next Save
         self.running_mode = None
         # The multiplayer session: the turn loop's worker thread, the store it
@@ -4241,9 +4244,11 @@ class Launcher:
         return gamectl.Client(pid)
 
     def on_next_turn(self):
+        import gamectl
+
         def work():
             with self._client() as c:
-                return c.advance_turn()
+                return c.advance_turn(restore=gamectl.HOLD_LENGTH)
         self._in_background("ending the turn", work)
 
     def on_save(self):
@@ -4476,6 +4481,17 @@ class Launcher:
             # clock.
             if not self._ctl_busy:
                 self.view.set_control("turn", enabled=ready)
+                # A turn happens only on Next Turn. Left alone, the engine
+                # resolves one every hour of wall clock, and on waking from
+                # sleep catches up on all it owes, none of them seen by the
+                # opponent. It re-applies its own length at each boundary, so
+                # this runs every tick, and not while Next Turn is driving it.
+                was = self._ctl_client.hold_clock()
+                pid = self._ctl_client.pid
+                if was is not None and self._held_pid != pid:
+                    self._held_pid = pid
+                    self.say(f"turn clock held: the game advances only on "
+                             f"Next Turn (its own length was {was}s)")
         except Exception:
             self._close_ctl_client()    # a readout is not worth an error path
 

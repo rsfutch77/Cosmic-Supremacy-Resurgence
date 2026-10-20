@@ -364,7 +364,9 @@ class Actuator:
 
     # I: create a ship design.
     def create_design(self, name, civ=None):
-        """Default-construct a new ShipDesign. Untested.
+        """Default-construct a new ShipDesign and register it with `civ`.
+
+        Created, owned and registered live; never yet queued or built from.
 
         The engine allocates 280 bytes and its no-argument constructor at
         0x00546EC0 initialises them, reaching the EJBO-tagging base class. The
@@ -425,7 +427,43 @@ class Actuator:
                 except ValueError as e:
                     # Not fatal: the design exists and can be inspected unowned.
                     self.log(f"  [warn] could not set the owner: {e}")
+                else:
+                    self.register_design(fresh, civ)
         return block
+
+    def civ_design_ids(self, civ):
+        """Ids in a civ's design list, Owner:84, a vector of reference nodes.
+
+        Each node is the value slot of a node in the reference map, so the id
+        is the key 4 bytes before it. Read live: registering reallocates the
+        vector, so the snapshot's copy of Owner:84 goes stale.
+        """
+        rd = self.snap.rd32
+        begin, end = rd(civ.addr + 84), rd(civ.addr + 88)
+        nodes = [rd(begin + 4 * i) for i in range((end - begin) // 4)]
+        return [rd(n - 4) for n in nodes]
+
+    # I''': register a design with its civ.
+    def register_design(self, design, civ):
+        """Put a design in its civ's design list.
+
+        Constructing a design enters it in the global object map only. A civ's
+        designs are the ones its Owner:84 vector holds a reference node to;
+        a design missing from it has no reference node at all.
+        """
+        if design.id in self.civ_design_ids(civ):
+            self.log(f"  {design} is already in {civ.civ_name!r}'s design list")
+            return True
+        if self.dry_run:
+            self.log(f"  [WOULD REGISTER] {design} with {civ.civ_name!r}")
+            return True
+        node = self.remote.register_design(design.id, civ.addr)
+        ok = design.id in self.civ_design_ids(civ)
+        self.log(f"  registered {design} with {civ.civ_name!r}, node "
+                 f"0x{node:08X}" if ok else
+                 f"  [warn] {design} is not in {civ.civ_name!r}'s design list "
+                 f"after registering it")
+        return ok
 
     def set_wealth_mode(self, planet):
         """Stop building and generate wealth instead.
@@ -472,9 +510,8 @@ class Actuator:
             raise RuntimeError("load_crew needs a remote.Remote to allocate")
 
         # Take from the end so the surviving records stay contiguous from begin.
-        taken = b"".join(mil[-count:])
-        buf = self._set_ship_crew(ship, b"".join(aboard) + taken,
-                                  len(aboard) + count)
+        taken = mil[-count:]
+        buf = self._add_ship_crew(ship, taken)
 
         mb = self._live_ptr(planet, self.PLANET_MILITARY)
         new_end = mb + (len(mil) - count) * self.CITIZEN_STRIDE
@@ -547,6 +584,31 @@ class Actuator:
             self.log(f"  [leak] abandoned the old crew buffer 0x{old:08X}; "
                      f"freeing an engine allocation is not something we do")
         return buf
+
+    def _add_ship_crew(self, ship, records):
+        """Add 16-byte crew records to a ship, never repointing a live buffer.
+
+        An empty crew vector gets a fresh engine buffer. An allocated one is
+        written only into its spare capacity, which is how a troop hull that
+        has landed its troops is refilled. Returns the buffer's begin.
+        """
+        begin = self._live_ptr(ship, self.SHIP_CREW)
+        if not gs.is_ptr(begin):
+            return self._set_ship_crew(ship, b"".join(records), len(records))
+        end = self._live_ptr(ship, self.SHIP_CREW + 4)
+        cap = self._live_ptr(ship, self.SHIP_CREW + 8)
+        blob = b"".join(records)
+        if end is None or cap is None or cap - end < len(blob):
+            raise ValueError(
+                f"{ship}'s crew buffer has "
+                f"{((cap or 0) - (end or 0)) // self.CITIZEN_STRIDE} spare "
+                f"record(s), need {len(records)}; repointing one the engine "
+                f"owns is what crashed the client")
+        aboard = (end - begin) // self.CITIZEN_STRIDE
+        self._write(end, blob, f"{len(records)} crew record(s) into spare capacity")
+        self._u32(ship.addr + self.SHIP_CREW + 4, end + len(blob),
+                  f"crew end -> {aboard + len(records)} aboard")
+        return begin
 
     def _append_military(self, planet, records):
         """Add 16-byte units to a planet's stationed-military vector.
@@ -836,7 +898,8 @@ class Actuator:
 
         Citizens and crew share one 16-byte record, so the citizen list is
         rewritten without the drafted records and those records fill a fresh
-        crew buffer. The ship's crew vector must be empty. `GetDraftCost`
+        crew buffer, or the spare capacity of the ship's existing one.
+        `GetDraftCost`
         prices all `count` drafts and the treasury is debited by that number,
         as in `conscript`. Crew drafted this way never joins the planet's
         garrison.
@@ -849,10 +912,15 @@ class Actuator:
         # Checked before anything is taken from the planet.
         existing = self._live_ptr(ship, self.SHIP_CREW)
         if gs.is_ptr(existing):
-            raise ValueError(
-                f"{ship} already has a crew vector (0x{existing:08X}); this "
-                f"path only ever fills an empty one, because repointing a "
-                f"vector the engine owns is what crashed the client")
+            end = self._live_ptr(ship, self.SHIP_CREW + 4)
+            cap = self._live_ptr(ship, self.SHIP_CREW + 8)
+            spare = ((cap - end) // self.CITIZEN_STRIDE
+                     if end is not None and cap is not None else 0)
+            if spare < count:
+                raise ValueError(
+                    f"{ship} already has a crew vector (0x{existing:08X}) with "
+                    f"room for {spare} more, need {count}; repointing a vector "
+                    f"the engine owns is what crashed the client")
 
         self._require_sane(planet.addr + self.CITIZEN_LIST,
                            f"{planet}'s citizen vector")
@@ -923,7 +991,7 @@ class Actuator:
         self._u32(planet.addr + self.CITIZEN_LIST + 4, cbegin + len(kept),
                   f"citizen end -> {len(keep)}")
 
-        self._set_ship_crew(ship, b"".join(drafted), count)
+        self._add_ship_crew(ship, drafted)
 
         # Re-read live: `civ.cash` holds the balance the pass opened with.
         cash = self._live_cash(civ)
@@ -942,17 +1010,19 @@ class Actuator:
 
     # L: set a ship's command, target node included (engine call).
     # Order types that consult Ship:56. Ship::HasActiveTargetedOrder
-    # (0x004D9880) requires one of these types and a non-null Ship:56.
+    # (0x004D9880) requires one of these types and a live Ship:56, and a ship
+    # that has one is moved as an escort of its target (STRATEGY.md §4.4).
     TARGETED_ORDER_TYPES = (1, 4, 7)      # Move, Attack, MoveNear
 
     def set_command(self, ship, order_type, target, civ=None):
         """Give a ship an order that names a target object, not just coordinates.
 
-        Do not use: an order set this way crashes the client when the engine
-        resolves the turn. Use `exterminate.send_to` instead (STRATEGY.md §4.4).
-        It is kept because the ShipCommand/SetCommand pair is the only known way
-        to populate `Ship:56`. A route-only order leaves `Ship:56` as the null
-        node and the ship still navigates.
+Aimed at one of our own ships it is an escort: the engine re-aims the
+        order at the leader every turn. Aimed at a planet or an enemy ship the
+        engine drops the target node at the first turn boundary, so it is not
+        a pursuit tool; `exterminate.send_to` re-aiming each pass is
+        (STRATEGY.md §4.4). Verified live over five boundaries since the stub
+        fix that ended its crash.
 
         ShipCommand's constructor turns the target into a reference node via
         GetReferenceNode(objectId), and Ship::SetCommand writes Ship:52/56/60/61.
@@ -1152,8 +1222,9 @@ class Actuator:
         self._f32(ord_ptr + ORD_PROGRESS, 0.0, "route progress -> 0")
 
         # set_type=False leaves Ship:52 alone, for callers that set the type
-        # and target node together through Ship::SetCommand. Types 1, 4 and 7
-        # with Ship:56 still the null node crash the client.
+        # and target node together through Ship::SetCommand. With Ship:56 the
+        # null node the type is harmless: HasActiveTargetedOrder reads false
+        # and the ship follows the route written here.
         if set_type:
             self._u32(ship.addr + SHIP_ORDER_TYPE, order_type,
                       f"order type -> {name}")
