@@ -108,16 +108,23 @@ COLONY_SHIP_TARGET = 1     # colony ships to keep in existence
 def run_xpn01(snap, civ, act, hist=None, log=print):
     """Build a colony ship when we have none and somewhere to send it.
 
-    Uses only actuator D (plain pointer writes), so it needs no elevated
-    handle. Builds only below the target count, only if a target exists
-    (R-XPN-04), and only on an idle planet.
+    Queues through exploit.queue_ship, which buys any resource shortfall
+    (R-XPL-10) and calls the engine's SetProduction. Builds only below the
+    target count, only if a target exists (R-XPN-04), and only on an idle
+    planet.
     """
     colony_ships = [s for s in snap.owned_ships(civ) if s.role == "COLONY"]
     # Count only ships able to settle: a starting colony ship can hold an
     # unfinished scout order for dozens of turns.
     settlers = [s for s in colony_ships
                 if (s.order_type or 0) != 2 or scout_finished(snap, s, hist)]
-    if len(settlers) >= COLONY_SHIP_TARGET:
+    # A colony ship already in production counts: each one queued pays its
+    # resources up front.
+    import exterminate
+    building = [p for p in snap.owned_planets(civ)
+                if (d := exterminate.production_design(snap, p)) is not None
+                and d.is_colony]
+    if len(settlers) + len(building) >= COLONY_SHIP_TARGET:
         return 0
     if colony_ships and not settlers:
         log(f"R-XPN-01: {len(colony_ships)} colony ship(s), but every one is "
@@ -147,7 +154,6 @@ def run_xpn01(snap, civ, act, hist=None, log=print):
         log("R-XPN-01: no planet has a shipyard")
         return 0
     # R-XPN-04: the war yard builds warships, not colony ships.
-    import exterminate
     reserved = exterminate.war_yard(snap, civ, hist, act) if hist else None
     idle = [p for p in yards
             if not p.building_now and not act.production_claimed(p)
@@ -162,8 +168,8 @@ def run_xpn01(snap, civ, act, hist=None, log=print):
     log(f"R-XPN-01: {len(settlers)}/{COLONY_SHIP_TARGET} colony ships able to "
         f"settle ({len(colony_ships)} owned); queueing "
         f"{design.design_name!r} (cost {design.cost}) at {planet}")
-    act.queue_ship(planet, design)
-    return 1
+    import exploit
+    return exploit.queue_ship(snap, civ, act, planet, design, log)
 
 
 def run_xpn02(snap, civ, act, vision="known", top=10, forced=None,

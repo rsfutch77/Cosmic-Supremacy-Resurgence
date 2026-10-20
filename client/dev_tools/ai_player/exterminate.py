@@ -518,12 +518,7 @@ def run_xtm01(snap, civ, act, hist, log=print):
         design = max(pool, key=lambda d: max(unit_stats(d, act)[:3]))
         log(f"R-XTM-01: {len(have)}/{WARSHIP_TARGET} warship(s); queueing "
             f"{design.design_name!r} at {planet}")
-    try:
-        act.queue_ship(planet, design)
-        return 1
-    except (ValueError, RuntimeError) as e:
-        log(f"  could not queue: {e}")
-        return 0
+    return exploit.queue_ship(snap, civ, act, planet, design, log)
 
 
 def run_xtm03(snap, civ, act, hist, log=print):
@@ -988,12 +983,7 @@ def run_xtm07(snap, civ, act, hist, log=print):
     planet = max(yards, key=lambda p: len(p.population))
     log(f"R-XTM-07: {len(have)}/{TROOP_TARGET} troop ship(s); queueing "
         f"{design.design_name!r} at {planet}")
-    try:
-        act.queue_ship(planet, design)
-        return 1
-    except (ValueError, RuntimeError) as e:
-        log(f"  could not queue: {e}")
-        return 0
+    return exploit.queue_ship(snap, civ, act, planet, design, log)
 
 
 def retreat_threshold(ship):

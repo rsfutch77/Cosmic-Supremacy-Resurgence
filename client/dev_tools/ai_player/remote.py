@@ -51,6 +51,29 @@ HURRY_MIN_FRACTION = 0.5        # [0x00750360]; below this the engine refuses
 PLANET_PROPERTIES = 88          # PlanetProperties lives at planet_tag + 88
 OFFLINE_FLAG = 0x0086F1A0       # the local-apply path runs only when this byte is set
 
+# The resource market. Buy and sell are __thiscall(int index, int qty), ret 8,
+# on the civ's resource object at Owner tag + 1116 (the UI passes
+# Owner primary + 0x490, at 0x0057601D), whose +0xC is the Owner:1128 stock
+# vector and +0x38 the Owner primary. Neither checks qty > 0 or the index, and
+# neither returns anything usable: diff cash or stock. The price is shared by
+# every civ. A wrong `this` reads a null owner and kills the client in GetTrait.
+MARKET_THIS  = 1116
+MARKET_OWNER_BACKPTR = 0x38
+MARKET_BUY   = 0x005125D0
+MARKET_SELL  = 0x00512560
+# Quotes, __thiscall(int qty, Owner* primary), ret 8, on the stock record
+# (*Owner:1128 + 8 * index); the total price for qty units, trait 42 applied.
+QUOTE_BUY    = 0x00512090
+QUOTE_SELL   = 0x00511EF0
+DESIGN_RESOURCE_COST = 0x00548990   # __thiscall(int resId), ret 4, on tag + 4
+# PlanetProperties::SetProduction, __thiscall(Production* item, bool resetOnFail)
+# on planet tag + 88, ret 8, al = accepted. The ONLY place a ship's resource
+# cost is checked and taken (0x00512E80), and the place it is refunded when
+# production changes away from a ship. Every production change goes through
+# it: a raw Planet:296 write skips the charge, and a later engine call then
+# refunds a charge that was never made.
+SET_PRODUCTION = 0x004F8290
+
 # Declaring war the way the declare-war button does (0x00442A70): a Treaty
 # proposal of kind 1, applied by the engine. The apply copies it into a
 # registered Treaty, makes first contact and writes War into both relation
@@ -139,6 +162,7 @@ def push_imm(v):     return b"\x68" + struct.pack("<I", v & 0xFFFFFFFF)
 def mov_ecx_imm(v):  return b"\xB9" + struct.pack("<I", v & 0xFFFFFFFF)
 def mov_eax_imm(v):  return b"\xB8" + struct.pack("<I", v & 0xFFFFFFFF)
 CALL_EAX   = b"\xFF\xD0"
+MOVZX_EAX_AL = b"\x0F\xB6\xC0"   # movzx eax, al
 RET_4      = b"\xC2\x04\x00"
 PUSH_ECX   = b"\x51"
 FSTP_ESP   = b"\xD9\x1C\x24"      # fstp dword ptr [esp]
@@ -541,6 +565,63 @@ class Remote:
                                "turns the target has played")
         played = struct.unpack("<i", struct.pack("<I", played or 0))[0]
         return played < need, played, need
+
+    def design_resource_cost(self, design_tag, res_id):
+        """ShipDesign:(92 + 4 * res_id): units of a resource one build uses."""
+        def call():
+            code = (push_imm(res_id) +
+                    mov_ecx_imm(design_tag + DESIGN_DATA_OFFSET) +
+                    mov_eax_imm(DESIGN_RESOURCE_COST) +
+                    CALL_EAX +
+                    RET_4)
+            return self.run_stub(code, f"design resource {res_id} on 0x{design_tag:08X}")
+        return self._cached(self._design_cache, ("resource", design_tag, res_id), call)
+
+    def set_production(self, planet_tag, item, reset_on_fail=False):
+        """SetProduction(item): True when the engine accepted it.
+
+        `item` is a ShipDesign at its allocation start, the planet's embedded
+        Facility (tag + 280) or Scan (tag + 288), or the PilingUpWealth
+        singleton. With reset_on_fail a refusal drops the planet to wealth,
+        as the UI's handler does; without it production is left alone.
+        """
+        code = (push_imm(1 if reset_on_fail else 0) +
+                push_imm(item) +
+                mov_ecx_imm(planet_tag + PLANET_PROPERTIES) +
+                mov_eax_imm(SET_PRODUCTION) +
+                CALL_EAX +
+                MOVZX_EAX_AL +
+                RET_4)
+        got = self.run_stub(code, f"SetProduction(0x{item:08X}) on 0x{planet_tag:08X}")
+        return got == 1
+
+    def market_quote(self, civ_tag, record_addr, qty, buy=True):
+        """The engine's total price for qty units (read-only)."""
+        code = (push_imm(civ_tag + OWNER_PRIMARY_FROM_TAG) +
+                push_imm(qty) +
+                mov_ecx_imm(record_addr) +
+                mov_eax_imm(QUOTE_BUY if buy else QUOTE_SELL) +
+                CALL_EAX +
+                RET_4)
+        return self.run_stub(code, f"{'buy' if buy else 'sell'} quote for {qty}")
+
+    def market_trade(self, civ_tag, index, qty, buy=True):
+        """Buy or sell qty units of the resource at stock index `index`."""
+        if qty <= 0:
+            raise RemoteCallError(f"refusing a market trade of {qty}: the engine "
+                                  f"does not check the sign")
+        back = self.read(civ_tag + MARKET_THIS + MARKET_OWNER_BACKPTR, 4)
+        if not back or struct.unpack("<I", back)[0] != civ_tag + OWNER_PRIMARY_FROM_TAG:
+            raise RemoteCallError(
+                f"the market object at civ tag + {MARKET_THIS} does not point back "
+                f"at its Owner; calling it would fault on a null owner")
+        code = (push_imm(qty) +
+                push_imm(index) +
+                mov_ecx_imm(civ_tag + MARKET_THIS) +
+                mov_eax_imm(MARKET_BUY if buy else MARKET_SELL) +
+                CALL_EAX +
+                RET_4)
+        self.run_stub(code, f"market {'buy' if buy else 'sell'} {qty} of index {index}")
 
     def design_min_crew(self, design_tag):
         """ShipDesign:76: the minimum crew a design needs to function."""

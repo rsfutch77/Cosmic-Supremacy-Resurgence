@@ -209,12 +209,7 @@ def run_exp01(snap, civ, act, hist, log=print):
     log(f"R-EXP-01: {len(have)}/{SCOUT_TARGET} current scout(s); queueing "
         f"{best.design_name!r} (speed {speed and round(speed, 1)}, "
         f"{len(best.engines)} engine(s)) at {planet}")
-    try:
-        act.queue_ship(planet, best)
-        return 1
-    except (ValueError, RuntimeError) as e:
-        log(f"  could not queue: {e}")
-        return 0
+    return exploit.queue_ship(snap, civ, act, planet, best, log)
 
 
 def _obsolete(ship, fastest):

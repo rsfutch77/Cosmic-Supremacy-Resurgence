@@ -47,6 +47,9 @@ class Actuator:
         # Signed effect of this pass's actions on the treasury (negative when
         # spending), so the income sensor can exclude it.
         self.cash_effect = 0
+        # (civ addr, resource id) -> units bought, less units a queued ship
+        # took, this pass; the snapshot's Owner:1128 shows neither yet.
+        self.bought = {}
 
     @property
     def remote(self):
@@ -238,9 +241,11 @@ class Actuator:
                              f"queue a ship there")
         self.log(f"  queue {design.design_name!r} at {planet}")
         self._claim_production(planet, f"queueing {design.design_name!r}")
-        ok = self._u32(planet.addr + 296, design.addr - 12,
-                       f"Planet:296 -> ShipDesign {design.design_name!r} (tag-12)")
-        return self._u32(planet.addr + 344, 1, "Planet:344 build-active -> 1") and ok
+        # Through the engine, which takes the design's resource cost from
+        # Owner:1128 and refuses when the stock is short, as the UI would.
+        self._set_production(planet, design.addr - 12,
+                             f"ShipDesign {design.design_name!r}")
+        return self._u32(planet.addr + 344, 1, "Planet:344 build-active -> 1")
 
     # C: start a facility build (three plain writes).
     PLANET_EMBEDDED_FACILITY = 280   # Facility{vftable, typeId} lives here
@@ -269,12 +274,13 @@ class Actuator:
                              f"discard {planet.build_progress} progress")
         name = gs.FACILITIES[type_id]
         self.log(f"  build {name} at {planet}")
-        ok = self._u32(planet.addr + 284, type_id, f"Planet:284 -> {name}")
         self._claim_production(planet, f"building facility type {type_id}")
-        ok = self._u32(planet.addr + 296,
-                       planet.addr + self.PLANET_EMBEDDED_FACILITY,
-                       "Planet:296 -> the planet's embedded Facility") and ok
-        return self._u32(planet.addr + 344, 1, "Planet:344 build-active -> 1") and ok
+        # The type is the embedded Facility's own id field; SetProduction then
+        # runs the engine's facility checks.
+        self._u32(planet.addr + 284, type_id, f"Planet:284 -> {name}")
+        self._set_production(planet, planet.addr + self.PLANET_EMBEDDED_FACILITY,
+                             f"the embedded Facility ({name})")
+        return self._u32(planet.addr + 344, 1, "Planet:344 build-active -> 1")
 
     # I': fit parts to a design.
     # The five part categories sit at a 24-byte stride, each a std::vector of
@@ -473,9 +479,24 @@ class Actuator:
         """
         self._claim_production(planet, "generating wealth")
         self.log(f"  {planet} -> generating wealth")
-        ok = self._u32(planet.addr + 296, gs.PILING_UP_WEALTH,
-                       "Planet:296 -> PilingUpWealth singleton")
-        return self._u32(planet.addr + 344, 0, "Planet:344 build-active -> 0") and ok
+        # Through the engine, which refunds a ship's reserved resources.
+        self._set_production(planet, gs.PILING_UP_WEALTH, "PilingUpWealth",
+                             reset_on_fail=True)
+        return self._u32(planet.addr + 344, 0, "Planet:344 build-active -> 0")
+
+    def _set_production(self, planet, item, what, reset_on_fail=False):
+        """Point a planet's production at `item` the way the UI does."""
+        if self.dry_run:
+            self.log(f"  [WOULD SET PRODUCTION] {planet} -> {what}")
+            return True
+        if self.remote is None:
+            raise RuntimeError("production changes need a remote.Remote: a raw "
+                               "Planet:296 write skips the resource charge")
+        if not self.remote.set_production(planet.addr, item, reset_on_fail):
+            raise ValueError(f"the engine refused {what} at {planet} (short of "
+                             f"resources, or a facility check failed)")
+        self.log(f"  SetProduction: {planet} -> {what}")
+        return True
 
     # J: move a trained unit from a planet onto a ship as crew.
     SHIP_CREW      = 124      # begin/end/cap at 124/128/132
@@ -702,6 +723,60 @@ class Actuator:
                   f"crew end -> {len(aboard) - count} aboard")
         self.log(f"  garrisoned {count} unit(s) from {ship} onto {planet}")
         return count
+
+    # O: buy or sell a resource on the market (engine call).
+    MARKET_LOT = 100              # the UI's spinner step, and its minimum
+
+    def market_buy(self, civ, res_id, qty):
+        """Buy qty units through the engine's own BuyResource; returns the price."""
+        return self.market_trade(civ, res_id, qty, buy=True)
+
+    def market_sell(self, civ, res_id, qty):
+        """Sell qty units through the engine's own SellResource; returns the takings."""
+        return self.market_trade(civ, res_id, qty, buy=False)
+
+    def market_trade(self, civ, res_id, qty, buy=True):
+        """Trade qty units of a resource at the engine's quote, which every
+        civ's trading moves. Returns the cash moved, read back from the
+        treasury (positive either way)."""
+        if qty <= 0 or qty % self.MARKET_LOT:
+            raise ValueError(f"buy {qty}: the UI trades in positive lots of "
+                             f"{self.MARKET_LOT}")
+        stock_vec = self.snap.rd32(civ.addr + 1128)
+        n = (self.snap.rd32(civ.addr + 1132) - stock_vec) // 8 if stock_vec else 0
+        index = next((i for i in range(n)
+                      if self.snap.rd32(stock_vec + 8 * i) == res_id), None)
+        if index is None:
+            raise ValueError(f"{civ.civ_name} has no stock record for resource "
+                             f"{res_id}")
+        name = gs.RESOURCES.get(res_id, res_id)
+        if self.remote is None:
+            raise RuntimeError("market_buy needs a remote.Remote for the price")
+        price = self.remote.market_quote(civ.addr, stock_vec + 8 * index, qty,
+                                         buy=buy)
+        cash = self._live_cash(civ)
+        before = self.snap.rd32(stock_vec + 8 * index + 4)
+        if price is None or cash is None:
+            raise RuntimeError(f"no quote or cash reading for {qty} {name}")
+        if buy and price > cash:
+            raise ValueError(f"{qty} {name} costs {price}, cash is {cash}")
+        if not buy and (before is None or before < qty):
+            raise ValueError(f"selling {qty} {name}, only {before} in stock")
+        verb = "buy" if buy else "sell"
+        if self.dry_run:
+            self.log(f"  [WOULD {verb.upper()}] {qty} {name} for {price}")
+            return None
+        self.remote.market_trade(civ.addr, index, qty, buy=buy)
+        moved = abs(self._live_cash(civ) - cash)
+        after = self.snap.rd32(stock_vec + 8 * index + 4)
+        if after != before + (qty if buy else -qty) or moved != price:
+            raise RuntimeError(f"market {verb} of {qty} {name} did not land as "
+                               f"quoted: stock {before} -> {after}, cash moved "
+                               f"{moved} against {price}")
+        self.cash_effect += -moved if buy else moved
+        self.log(f"  {'bought' if buy else 'sold'} {qty} {name} for {moved} "
+                 f"({before} -> {after})")
+        return moved
 
     # J: sell a facility (engine call).
     def sell_facility(self, planet, type_id, count=1):

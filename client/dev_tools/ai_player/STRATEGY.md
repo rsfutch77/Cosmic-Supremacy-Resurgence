@@ -145,9 +145,9 @@ One module per UI action. Grade is how confident we are it works today.
 |---|---|---|---|
 | A | **Set a citizen's job** | write job id to `Planet:144` element `+0` | **READY**, plain int, no allocation, same field `set_population.py` already writes |
 | B | **Select the next building** | write type id to `Planet:284` | **READY**, paired with C in `actions.build_facility`; farms and shipyards were built repeatedly over a full game |
-| C | **Start constructing / switch to wealth** | wealth: point `Planet:296` at the singleton `0x0080B540` and set `Planet:344 = 0`. Build: point `Planet:296` at the planet's own embedded `Facility` | **READY**, both directions. The build direction never needed an allocation: the `Facility` object is embedded in the planet, so `actions.build_facility` points at it rather than making one |
-| D | **Queue a ship** | write a `ShipDesign*` (`tag-12`) to `Planet:296`, set `Planet:344` | **READY**, `actions.queue_ship`. Ship builds point at the shared design; no per-build object exists and the engine registers the finished `Ship` itself |
-| D′ | **Stop building / generate wealth** | `Planet:296` → `PilingUpWealth` `0x0080B540`, clear `Planet:344` | **READY**, `actions.set_wealth_mode` |
+| C | **Start constructing / switch to wealth** | engine `SetProduction` `0x004F8290`, `__thiscall(item, resetOnFail)` `ret 8` on planet tag + 88, with the planet's embedded `Facility` (tag + 280) or the `PilingUpWealth` singleton `0x0080B540`; then `Planet:344` | **READY**, `actions.build_facility` / `set_wealth_mode`, through the engine since Oct 2026 (see D). Confirmed live: a farm build accepted and pointed at the embedded `Facility` |
+| D | **Queue a ship** | engine `SetProduction` with the `ShipDesign*` (tag - 12), reset-on-fail 0; then `Planet:344 = 1` | **READY**, `actions.queue_ship`. **Until Oct 2026 this was a raw `Planet:296` write, which skipped the ship's resource cost**: `SetProduction` is the only place the cost is checked and taken (`0x00512E80`), and where it is refunded when production changes away. Every AI ship until then was built without paying resources, and any later engine production change refunded a charge never made. Confirmed live after the fix: with 30 metal a `t1` (162) was refused; after buying 200 it was accepted and charged 162 metal and 30 deuterium; switching to wealth refunded both exactly |
+| D′ | **Stop building / generate wealth** | `SetProduction(PilingUpWealth, 1)`, clear `Planet:344` | **READY**, `actions.set_wealth_mode`; refunds a ship's reserved resources, which a raw write lost |
 | I | **Design a ship** | `operator new(0x118)` + default ctor `0x00546EC0`, `fit_parts`, `set_design_owner`, `register_design` | **REGISTERED, not yet built from**, see below. The object is created, tagged, owned, parts fit, and entered in the civ's design list `Owner:84` by the engine's own calls. Not yet queued, built or saved |
 | E | **Retarget an existing order** | rewrite `Ship:48+16/20/24`, the route leg, progress, then `Ship:52`/`Ship:76` | **READY**, `actions.retarget_order` |
 | E′ | **Originate an order** | engine's own `operator new` + order constructor, via `remote.py` | **READY**, `actions.create_order`; see §6a Route 2 |
@@ -161,6 +161,7 @@ One module per UI action. Grade is how confident we are it works today.
 | M | **Move a ship to a target, route only** | `create_order` + `retarget_order`, and nothing else | **READY**, `exterminate.send_to`. The replacement for L. Reuses `Ship:48` when the ship has one, so it allocates nothing per turn. `Ship:56` stays the null node and the ship navigates correctly anyway |
 | N | **Conscript a citizen** | `ChangeCitizenJobs` `0x00574180` (`__cdecl`, 4 args) with job id 3, priced by `GetDraftCost` `0x00516060` | **READY**, `actions.conscript`. Confirmed live: citizen count −1, stationed military +1, and cash down by exactly the quoted 115. The cost getter was validated first against a formula derived from the disassembly, six readings across two civs, all exact |
 | N′ | **Conscript straight onto a ship** | rewrite the citizen list without the drafted records; hand those records to a fresh crew buffer; debit `GetDraftCost` | **READY**, `actions.conscript_to_crew`. Confirmed live twice, and it is what finally unblocked Exterminate. See below |
+| O | **Buy or sell a resource** | engine `BuyResource` `0x005125D0` / `SellResource` `0x00512560`, `__thiscall(index, qty)` `ret 8` on Owner tag + 1116; quotes from `0x00512090` / `0x00511EF0` | **READY**, `actions.market_buy` / `market_sell`. Confirmed live: 100 deuterium cost exactly the quoted 1,200 and moved the next quote to 1,208; 600 metal sold for 585. Tag + 1104, one static reading's off-by-12, crashed the client in `GetTrait`; `remote.market_trade` now checks the owner back-pointer first |
 
 ---
 
@@ -329,10 +330,24 @@ USES   B, C
 banking center were added with the cash policy: "scaled correctly, there is always something
 worth building", and a planet that had built a farm, camp and university otherwise sat idle.
 
-* [ ] **Buying resources on the market** when no planet of ours produces one. The sensors
-  exist (`Owner:1128` stocks, prices from `Owner:916`, memory report "Cash and the resource
-  market"); the purchase itself has not been located, so this needs a new actuator first,
-  found by watching a human buy at the client.
+**R-XPL-10, Buy what a ship lacks**, IMPLEMENTED as `exploit.provision`, called by every ship-queueing rule through `exploit.queue_ship`
+```
+WHEN   a rule is about to queue design D and Owner:1128 holds less of some
+       resource than D's cost (ShipDesign:92 + 4 * resId, getter 0x00548990)
+THEN   buy each shortfall, rounded up to the UI's 100-unit lot, with actuator O,
+       if the engine's quotes fit in cash above cash.reserve(); else skip
+USES   O, then D
+```
+A ship's cost is taken once, at queue time, by the engine (actuator D). Prices are one market
+shared by every civ: each 100 bought raises that resource's price by 1 per lot for everyone,
+permanently (only a net-sold position decays, by 1,000 units a turn), and selling lowers it
+toward a third of base. Facilities and scans cost no resources.
+
+[ ] **Nothing here produces resources.** Once ships paid for them, both civs' metal fell to
+single digits within 40 turns from `t214_troop` and every further hull's metal is bought at a
+price that only rises. No stock rose in 60 earlier turns either, miners included. Find what
+yields resources (mine / robo mine facilities 13/14, planet deposits, the mining output trait)
+before the AI's ship output is limited by the market.
 
 **R-XPL-03, Wealth mode**, IMPLEMENTED in `exploit.run_wealth`
 ```
@@ -447,9 +462,15 @@ THEN   hold idle warships already at that planet, and send idle or staged
 USES   M
 ```
 
-[ ] **Switch to scan reports once scans are built.** Probing is how players learned enemy
-strength before scans; once the AI can run a planetary or fleet scan, intel should come from
-`Owner:320` where a scan is available and R-XTM-09 should stop sacrificing hulls there.
+[ ] **Scans for what a probe cannot learn; probes stay the battle intel (decided Oct 2026).**
+A probe is a 565-credit hull and its battle report is all R-XTM-03 needs. A scan costs far more:
+the planet needs a Central Defence Agency (facility 8, 6,000 production, from Basic Scanning),
+which is why no civ here has ever scanned, and a route scan is 3,500 production more. Scans are
+still worth having for fleet composition and routes. Known so far, from a route scan queued in
+the UI: queueing is three writes, `Planet:292` = scan type (2 route, 3 fleet), `Planet:296` = the
+embedded `Scan` at planet tag + 288, `Planet:344` = 1, with no target stored at queue time.
+Reports land in `Owner:320` (layout in the annotations). Still to find: where a finished scan is
+held, how it is aimed at a target (watch the UI do it), and what types 0 and 5 are.
 
 **R-XTM-03, Raid**, IMPLEMENTED in `exterminate.run_xtm03`
 ```
