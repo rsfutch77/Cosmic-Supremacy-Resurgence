@@ -669,8 +669,15 @@ class Actuator:
                 "the offline flag at 0x0086F1A0 is clear, so this client is on "
                 "the networked path; the server owns the sale and applying it "
                 "locally would desync")
+        civ = planet.owner
+        before = self._live_cash(civ) if civ else None
         ok = self.remote.sell_facility(planet.addr, type_id, count)
-        self.log(f"  sold {count} x {name} on {planet} (engine returned {ok})")
+        after = self._live_cash(civ) if civ else None
+        # The proceeds are ours, not income: next turn's reading excludes them.
+        paid = (after - before) if None not in (before, after) else 0
+        self.cash_effect += paid
+        self.log(f"  sold {count} x {name} on {planet} for {paid} "
+                 f"(engine returned {ok})")
         self.writes.append((planet.addr, b"", b"", f"sold {count} x {name}"))
         return ok
 

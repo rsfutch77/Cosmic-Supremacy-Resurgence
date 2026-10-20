@@ -29,9 +29,9 @@ the rival 33k to 3.5k, explored 105 of 108 systems with three self-built scouts,
 built and crewed a bomber, sent it 624 units and fought at turn 114, losing both warships in a
 single turn boundary. Every X now runs unattended; none of them is finished.
 
-[ ] **Still specification, none of these has a `run_*` function:** R-XPL-07
-liquidation. S-04 insolvency is covered by R-XPL-03's stopgap, and R-EXP-04 by R-XTM-05.
-R-EXP-03 is covered by `sensors.History._discover`.
+[x] **Every rule now has a `run_*` function.** R-XPL-07 liquidation was the last
+(`exploit.run_liquidate`). S-04 insolvency is covered by R-XPL-03's stopgap, R-EXP-04 by
+R-XTM-05, and R-EXP-03 by `sensors.History._discover`.
 
 **Open questions about the game itself belong in
 `CosmicSupremacy_Reconstruction_Report.md` as [ ] items**, not here, this document
@@ -349,11 +349,10 @@ reproducing it. See §8.
 **Sequencing is no longer a constraint.** D, B and C are all READY, so ship production and
 facility building both work; that paragraph described a blocked state that no longer exists.
 
-[ ] **Two actuators are built but unused, and one of them matters.** `sell_facility` (J)
-is called by nothing because R-XPL-07 was never built, and `transfer_order` (E″) is
-superseded by `create_order`. J is the more interesting of the two, it works, it is the
-only priced engine transaction we have, and the rule that would use it is blocked on a
-facility-upkeep sensor (§4.3 R-XPL-07).
+[x] **Two actuators were built but unused.** `transfer_order` (E″) is superseded by
+`create_order`. `sell_facility` (J), the only priced engine transaction we have, is now
+called by R-XPL-07 (§4.3), and adds the sale's proceeds to the pass's own cash effect so the
+next income reading does not count them as income.
 
 **The order object cannot be fabricated**, this was measured, not assumed. Its payload
 is exactly 96 bytes (heap headers at −8 and +96 bracket it), and it owns three *separate*
@@ -789,9 +788,13 @@ and budgets the rules had before:
   live definition table (`facilities.py`, `+0x18`) times the counts on our planets, plus
   `ShipDesign:48` for each ship, plus `UNIT_UPKEEP` (3) per stationed military unit, the
   value the memory report reads at `Planet:168` record `+0`. Garrisons were missing at first
-  and a military-heavy civ read about half its real upkeep. [ ] The estimate has not been
-  checked against the engine's own total; about 800/turn for each civ on the turn-214
-  fixture.
+  and a military-heavy civ read about half its real upkeep. **The facility part is
+  confirmed exactly** (Oct 2026), on the `deficit` checkpoint with no AI running: one turn
+  moved cash by -31 twice over; with the military camp sold first it moved -19, with the
+  light turret -23, with both -11, so +12, +8 and +20 against table upkeeps of 12 and 8.
+  [ ] The ship and garrison parts are not checked. `UNIT_UPKEEP` in particular rests on a
+  reading the annotations have since corrected: `Planet:168` record `+0` is a job id, which
+  happens to be 3 too, so the real per-unit figure is unknown.
 * **Order of claim on the cash above the reserve:** crew for a ship that needs to fly
   (R-XPL-09), then hurrying (R-XPL-08) by tier: military builds while at war, expansion
   (colony ships, shipyards), everything else. Scans are built like production, so they are
@@ -859,10 +862,10 @@ Two things this showed about the economy, both worth knowing for every cash rule
 * **Wealth on a small planet is worth little**, about 15 a turn on a 10-pop homeworld at
   turn 34. It is a stopgap in scale as well as in intent.
 
-[ ] **Stopgap planets are held until income reaches `WEALTH_RELEASE_INCOME` (150).** In the
+[x] **Stopgap planets were held until income reached `WEALTH_RELEASE_INCOME` (150).** In the
 measured run both were still in wealth at turn 52 with income +127, while R-XPL-02 had farms
-to build. 150 suits a large empire and is high for a three-planet one; a release tied to the
-reserve (cash back above it, income positive) may fit both.
+to build. 150 suits a large empire and is high for a three-planet one. Done: a stopgap planet
+is released, still one a turn, once income is positive and cash is back above the reserve.
 
 **The engine puts a planet into wealth itself when its build completes**, measured on the
 turn-214 fixture: planets the rule never switched read `PilingUpWealth` the pass after a
@@ -1030,25 +1033,42 @@ here.
 [x] **`DRAFT_CASH_FLOOR` (500) was invented**, like R-XPL-08's budget. Done: drafting now
 spends only cash above `cash.reserve()` (§4.3, Cash policy).
 
-**R-XPL-07, Liquidate to survive a collapse**, [ ] NOT BUILT
+**R-XPL-07, Liquidate to survive a collapse**, IMPLEMENTED in `exploit.run_liquidate`
 ```
-WHEN   incomeRate < 0 for N consecutive turns
-       AND projected Owner:8 hits 0 within RECOVERY_HORIZON turns
-       AND the deficit is attributable to facility upkeep we can shed
-THEN   sell facilities, cheapest-contribution-first, until incomeRate >= 0
-KEEP   never sell the last farm on a planet, a shipyard while a ship is queued,
-       or anything on a planet that is not itself part of the problem
+WHEN   incomeRate < 0 for LIQUIDATE_AFTER (3) turns
+       AND cash + RECOVERY_HORIZON (5) turns of it would be below 0
+       AND the last sale's effect has been read (one turn)
+THEN   sell facilities in SELL_ORDER until the upkeep shed covers the deficit,
+       each type from the planet holding most of it
+KEEP   farms, shipyards and banking centers are never sold; defence only outside
+       a war; a type sold on a planet is not rebuilt there (R-XPL-02) until income
+       is positive and cash is back above the reserve
 USES   J
 ```
+`SELL_ORDER` is a judgment, not a measurement, since no per-facility contribution is read:
+scans and science first (research waits), then hyperspace and command facilities, then
+defence, mines, the military camp and propaganda, and production last. It replaces the
+specified "cheapest contribution first" and "only on a planet that is part of the
+problem", neither of which has a sensor. The rule runs after R-XPL-01's bankers and
+R-XPL-03's wealth, so it acts only on a deficit those could not close. It sells against
+the per-type upkeep `cash.upkeep` uses, which is confirmed (§4.3, Cash policy), and a
+deficit it does not close is met by the next sale a turn later.
+
+**Measured on the `deficit` checkpoint** with R-XPL-03 off (Oct 2026): income read -62,
+-30, -20, -27 from turn 38, and on turn 41, with cash at 88, the rule sold the HQ's light
+turret and military camp, all it was allowed to sell there, 20 upkeep, for 95. Income then
+read -14, -4, +24, +44 and +140 by turn 56, with R-XPL-01's bankers rising alongside, so
+the recovery is not all the sale's. Cash went 227, 165, 135, 115, 88, then 169 after the
+sale, and never below 0, so the game sold nothing of its own choosing.
 The motivating case is not tidying up: a civ that **loses the planets funding its
 expensive buildings** faces a cascade, upkeep it can no longer pay against income it no
 longer has. Liquidating is how a human trades a long-term asset for immediate solvency
 instead of surrendering. It is the economic mirror of R-XTM-05 retreat.
 
-[ ] **Probably no longer blocked: `cash.upkeep` reads per-type facility upkeep** from the
+[x] **No longer blocked: `cash.upkeep` reads per-type facility upkeep** from the
 live definition table and multiplies by the counts on each planet, which answers "what does
-each facility cost per turn" directly. Not yet checked against the engine. The original
-blocker, kept for the record: **blocked on an upkeep sensor.** The trigger needs
+each facility cost per turn" directly, and the second way in below confirmed it. The
+original blocker, kept for the record: **blocked on an upkeep sensor.** The trigger needs
 to know what each facility costs per turn, and we cannot compute it. `incomeRate` is
 derived by differencing `Owner:8` across turns (§2.5), which gives the *net* figure and
 cannot attribute the drain to individual buildings, so "which facility do I sell first"
@@ -1061,7 +1081,7 @@ equivalent. Two ways in, neither attempted:
     happen to own
 
 [ ] Decide whether selling should also be available as a *funding* move (sell to afford
-something better) or strictly as a solvency backstop. Only the latter is specified here.
+something better) or strictly as a solvency backstop. Only the latter is built.
 
 ### 4.4 Exterminate
 
@@ -1521,7 +1541,8 @@ Generated by `constants.py --write`; edit the code, not this table.
 | `MAX_SHIPYARDS` | 2 | `exploit.py` | shipyards a civ builds at most |
 | `BORDER_DIST` | 120.0 | `exploit.py` | a planet this close to a visible rival planet is a border planet |
 | `BORDER_TURRETS` | 2 | `exploit.py` | light turrets wanted on a border planet |
-| `WEALTH_RELEASE_INCOME` | 150 | `exploit.py` | R-XPL-03: while cash.short(), one more planet a turn generates wealth. A stopgap planet is released, one a turn, only above this income. Income that is positive only because of wealth must not release them all at once. |
+| `LIQUIDATE_AFTER` | 3 | `exploit.py` | turns of negative income before anything is sold |
+| `RECOVERY_HORIZON` | 5 | `exploit.py` | and only when this many more turns of it would take cash below 0 |
 | `TURN_WEIGHT` | 10.0 | `expand.py` | score points charged per turn of travel |
 | `SAME_SYSTEM_BONUS` | 30.0 | `expand.py` | shared defence, no exposed transit |
 | `COLONY_SHIP_TARGET` | 1 | `expand.py` | colony ships to keep in existence |
@@ -1976,7 +1997,7 @@ specified above:
    hold a planet that enemy ships come into scan range of.
 
 Everything else outstanding is tuning or economics, not capability: S-04,
-R-XPN-04, R-XPL-03, R-XPL-07. Each is a [ ] on its own rule with a reason. (R-EXP-04
+R-XPN-04, R-XPL-03. Each is a [ ] on its own rule with a reason. R-XPL-07 is built. (R-EXP-04
 is built, as part of R-XTM-05.)
 
 **R-XPL-09 conscription is ON and working**, it buys crew for cash instead of

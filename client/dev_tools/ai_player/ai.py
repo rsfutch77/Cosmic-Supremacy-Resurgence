@@ -72,6 +72,7 @@ RULES = [
     ("R-XPN-01", expand.run_xpn01),           # colony ships
     ("R-EXP-01", explore.run_exp01),          # dedicated scouts
     ("R-XPL-03", exploit.run_wealth),         # wealth where nothing is worth building
+    ("R-XPL-07", exploit.run_liquidate),      # sell facilities in a collapse
     ("R-XPL-02", exploit.run_facilities),     # facilities take what is left
 
     # 3. Crew, then research. Crew gates every order rule below.
@@ -292,6 +293,7 @@ class Loop:
                 elif fn in (exploit.run_food, explore.run_exp02,
                             exploit.run_facilities, exploit.run_jobs,
                             exploit.run_hurry, exploit.run_wealth,
+                            exploit.run_liquidate,
                             exploit.run_crew_supply,
                             exploit.run_conscript,
                             explore.run_exp01,
