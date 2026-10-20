@@ -13,13 +13,13 @@ import re
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-MODULES = ("ai.py", "exploit.py", "expand.py", "explore.py", "exterminate.py",
-           "intel.py")
+MODULES = ("ai.py", "cash.py", "exploit.py", "expand.py", "explore.py",
+           "exterminate.py", "intel.py")
 SPEC = os.path.join(HERE, "STRATEGY.md")
 BEGIN, END = "<!-- constants:begin -->", "<!-- constants:end -->"
 
 # Fixed by the game or the memory layout, not chosen.
-ENGINE_FACTS = {"DEFAULT_LENGTH", "TROOP_BAY", "WAR", "NEWS_VECTOR",
+ENGINE_FACTS = {"DEFAULT_LENGTH", "TROOP_BAY", "WAR", "SHIPYARD", "NEWS_VECTOR",
                 "NEWS_RECORD", "KIND_BATTLE", "OFF_POS", "MAX_TEXT"}
 
 ASSIGN = re.compile(r"^([A-Z][A-Z0-9_]*)\s*=\s*(-?[0-9][0-9._]*(?:\s*\*\s*[0-9]+)?)"

@@ -76,6 +76,10 @@ class Actuator:
                 f"{what} would silently replace it. Production is one slot.")
         self.claimed_production.add(planet.id)
 
+    def keep_production(self, planet):
+        """Claim a planet's production slot without changing it."""
+        self._claim_production(planet, "keeping its current production")
+
     def claim_planet(self, planet):
         self.claimed_planets.add(planet.id)
 
@@ -429,6 +433,7 @@ class Actuator:
         Every idle planet points Planet:296 at one static `PilingUpWealth`
         singleton.
         """
+        self._claim_production(planet, "generating wealth")
         self.log(f"  {planet} -> generating wealth")
         ok = self._u32(planet.addr + 296, gs.PILING_UP_WEALTH,
                        "Planet:296 -> PilingUpWealth singleton")

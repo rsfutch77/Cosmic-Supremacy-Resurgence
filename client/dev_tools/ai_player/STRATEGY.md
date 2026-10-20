@@ -29,9 +29,9 @@ the rival 33k to 3.5k, explored 105 of 108 systems with three self-built scouts,
 built and crewed a bomber, sent it 624 units and fought at turn 114, losing both warships in a
 single turn boundary. Every X now runs unattended; none of them is finished.
 
-[ ] **Still specification, none of these has a `run_*` function:** S-04 insolvency,
-R-XPL-03 wealth mode, R-XPL-07 liquidation. (R-EXP-04 is now part of R-XTM-05.) Each is marked at its own rule below. R-EXP-03 is covered by
-`sensors.History._discover`.
+[ ] **Still specification, none of these has a `run_*` function:** R-XPL-07
+liquidation. S-04 insolvency is covered by R-XPL-03's stopgap, and R-EXP-04 by R-XTM-05.
+R-EXP-03 is covered by `sensors.History._discover`.
 
 **Open questions about the game itself belong in
 `CosmicSupremacy_Reconstruction_Report.md` as [ ] items**, not here, this document
@@ -433,7 +433,10 @@ LIMIT  never below the farmer count that made foodDelta >= 0
 USES   A
 ```
 
-**S-04, Insolvency**, [ ] NOT BUILT
+**S-04, Insolvency**, COVERED by R-XPL-03's stopgap (§4.3, Cash policy), not by bankers.
+A player covers a short treasury with wealth mode until banking centers come online; bankers
+are for a population that is already thriving. The original specification, kept for the
+record:
 ```
 WHEN   incomeRate < 0  AND  Owner:8 < 3 turns of burn
 THEN   reassign workers/scientists to banker (6) on the highest-pop planet;
@@ -753,24 +756,109 @@ priority, first match among types research has unlocked (`exploit.buildable_type
                   within BORDER_DIST
   shipyard 2      if there is none here, the civ has < MAX_SHIPYARDS, and
                   pop >= SHIPYARD_POP
+  factory 1       if there is none and workers >= FACTORY_WORKERS
   university 4    if there is none and pop >= 8
+  banking ctr 16  if there is none and pop >= BANK_POP
 THEN   Planet:284[P] = that id, Planet:344[P] = 1
 USES   B, C
 ```
-`exploit.wanted_facility` is the authority. The defence agency is not built.
+`exploit.wanted_facility` is the authority. The defence agency is not built. Factory and
+banking center were added with the cash policy: "scaled correctly, there is always something
+worth building", and a planet that had built a farm, camp and university otherwise sat idle.
 
-**R-XPL-03, Wealth mode when there is nothing worth building**, [ ] NOT WIRED
+#### Cash policy (Oct 2026), `cash.py`
+
+Written from the user's own play of the original game, which overrides the invented floors
+and budgets the rules had before:
+
+* **Going negative is the danger.** The game sells the civ's ships and facilities until cash
+  is positive again. So a **reserve** of `RESERVE_TURNS` turns of upkeep (floor `MIN_RESERVE`)
+  is never spent on anything discretionary. Upkeep is estimated as facility upkeep from the
+  live definition table (`facilities.py`, `+0x18`) times the counts on our planets, plus
+  `ShipDesign:48` for each ship, plus `UNIT_UPKEEP` (3) per stationed military unit, the
+  value the memory report reads at `Planet:168` record `+0`. Garrisons were missing at first
+  and a military-heavy civ read about half its real upkeep. [ ] The estimate has not been
+  checked against the engine's own total; about 800/turn for each civ on the turn-214
+  fixture.
+* **Order of claim on the cash above the reserve:** crew for a ship that needs to fly
+  (R-XPL-09), then hurrying (R-XPL-08) by tier: military builds while at war, expansion
+  (colony ships, shipyards), everything else. Scans are built like production, so they are
+  hurried like anything else.
+* **A warship built outside a war is not drafted for.** Recruitment crews it for free in
+  time; cash goes to ships that need to fly now.
+* **Wealth mode is the stopgap for low income** (R-XPL-03), and the late-game answer for a
+  dominant civ with nothing left to build. Bankers are not the first stopgap: they are for a
+  population that is thriving and producing plenty, and never the whole population.
+  Thriving is approximated as `BANKER_POP_SHARE` (75%) of the population cap, a rough
+  estimate of when a player starts using them.
+* **In a real pinch bankers go on small planets too.** When the treasury is short
+  (`cash.short`) and the thriving planets are already at `BANKER_MAX`, or there are none,
+  R-XPL-01 adds one banker a pass on the non-thriving planet with the most spare workers,
+  never below `WORKER_FLOOR`: "one more push to stay positive". Those bankers are held while
+  income is at or below `COMFORTABLE_INCOME` and go back to work above it, so the push does
+  not undo itself the next pass. [ ] Exercised against stubs only. Replayed on the `deficit`
+  checkpoint it never fired, correctly: while cash was short no planet had more than
+  `WORKER_FLOOR` non-farmers to spare, the garrison having taken them. Whether a pinch should
+  be allowed below the floor is open.
+* **Diplomacy** spends cash in the original game, but not by an AI, so the policy leaves it
+  out.
+* [ ] **Buying resources on the market** when no planet of ours produces one. The sensors
+  exist (`Owner:1128` stocks, prices from `Owner:916`, memory report "Cash and the resource
+  market"); the purchase itself has not been located, so this needs a new actuator first,
+  found by watching a human buy at the client.
+
+**R-XPL-03, Wealth mode**, IMPLEMENTED in `exploit.run_wealth`
 ```
-WHEN   every priority in R-XPL-02 is satisfied  AND  no ship is queued
-THEN   point Planet:296[P] at 0x0080B540 and set Planet:344[P] = 0
-USES   C   (this direction is available, it is a known static pointer)
+WHEN   a planet is idle and R-XPL-02 has nothing worth building there
+THEN   generate wealth (Planet:296 -> 0x0080B540, Planet:344 = 0)
+WHEN   cash.short(): income < 0 and cash + SHORT_HORIZON turns of it is inside the reserve
+THEN   switch ONE more planet a turn: the most workers among those building a
+       facility that is not yet half done
+KEEP   a planet in wealth while income is short, or while it has nothing to build;
+       above WEALTH_RELEASE_INCOME, release one a turn to R-XPL-02
+USES   C
 ```
-[ ] The actuator (`actions.set_wealth_mode`) is READY and called from `exploit`, but
-there is no `run_xpl03` in `ai.py`'s `RULES`, so there is no rule deciding *when* a planet
-should switch to wealth. Planets that have built everything currently sit idle rather than
-banking cash. Low value while cash is already the resource we cannot spend, which is
-itself the argument for building the rule only after R-XPL-07 or conscription gives cash
-somewhere to go.
+Runs after the ship rules and before R-XPL-02. A ship rule may take a wealth planet, since
+`Planet:344` is 0 there, and military production outranks banking. Release is one a turn
+because income that is positive only because of wealth would otherwise release every planet
+at once and go straight back negative.
+
+**Measured against a real deficit (Oct 2026).** On `duel_fixture2.dat` at turn 36 the user
+recruited 21 garrison units on DemoPlayer, leaving 8 citizens: income went from +210 to -31
+with 227 cash (checkpoint `deficit`). Replayed twice from that checkpoint, 15 turns each:
+
+| | R-XPL-03 on | R-XPL-03 off (`--without R-XPL-03`) |
+|---|---|---|
+| lowest cash | 83 | 30 |
+| income at turn 51 | +117 | +67 |
+| cash at turn 51 | 627 | 386 |
+
+Both recover, because population regrows and income is per citizen, but the stopgap held the
+trough well clear of zero and roughly doubled income by the end. It switched two of three
+planets on turns 41 and 42; it could not switch earlier because every planet was building
+something more than half done. No bankers were placed, correctly: no planet was near its cap.
+
+Two things this showed about the economy, both worth knowing for every cash rule:
+* **Income is mostly per citizen, whatever the job**, about 8 a citizen a turn early on.
+  Making every citizen a farmer moved income only from +2140 to +1737 on the turn-262 game.
+  Overbuilding ships or facilities cannot realistically cause a deficit, since each costs
+  5-50 a turn; losing population while keeping the buildings and garrisons does. That is
+  R-XPL-07's motivating case.
+* **Wealth on a small planet is worth little**, about 15 a turn on a 10-pop homeworld at
+  turn 34. It is a stopgap in scale as well as in intent.
+
+[ ] **Stopgap planets are held until income reaches `WEALTH_RELEASE_INCOME` (150).** In the
+measured run both were still in wealth at turn 52 with income +127, while R-XPL-02 had farms
+to build. 150 suits a large empire and is high for a three-planet one; a release tied to the
+reserve (cash back above it, income positive) may fit both.
+
+**The engine puts a planet into wealth itself when its build completes**, measured on the
+turn-214 fixture: planets the rule never switched read `PilingUpWealth` the pass after a
+hurry finished them. So `Planet:296 == PilingUpWealth` does not mean "our stopgap", and the
+first version of this rule held every just-finished planet in wealth, releasing one a turn.
+Only planets R-XPL-03 switched itself are stopgap planets (`hist.wealth_stopgap`); any other
+wealth planet is either given its next build by R-XPL-02 or, with nothing worth building,
+left in wealth.
 
 **R-XPL-04, Always be researching**
 ```
@@ -850,14 +938,14 @@ walk ships in `exploit.CREW_PRIORITY` order, warships, troop ships, colony ships
 
 **R-XPL-08, Hurry a build with surplus cash**, IMPLEMENTED in `exploit.run_hurry`
 ```
-WHEN   a build is >= 50% done, Planet:300 == 0, and cash above a floor
-THEN   call HurryProduction, cheapest first, within a per-turn budget
+WHEN   a build is >= 50% done (the engine's own limit), Planet:300 == 0, income >= 0
+THEN   call HurryProduction by tier (military at war, expansion, other), cheapest
+       first within a tier, spending everything above cash.reserve()
 USES   K
 ```
-[ ] **The budget rule is arbitrary**, a 5000 floor and a fraction of the remainder, both
-invented. It routinely declined every eligible build ("35552 would exceed the turn's budget")
-while sitting on 20k cash it had no other use for. Wants a real policy, ideally one that
-knows what else the cash is for.
+[x] **The budget rule was arbitrary**, a 5000 floor and half of the remainder per turn. It
+routinely declined every eligible build while sitting on 20k cash. Done: the cash policy
+above. It runs after the crew rules now, so conscripts are paid for first.
 
 **R-XPL-09, Conscript crew for a grounded ship**, IMPLEMENTED in
 `exploit.run_conscript`, and it does the migration by FIELD WRITE rather than by
@@ -865,7 +953,8 @@ calling `ChangeCitizenJobs`. See §7 for why, and for the wrong diagnosis it too
 to get there.
 ```
 WHEN   a ship is BUILT, short of ShipDesign:76 crew, in orbit of our planet P,
-       P has fewer trained units than it needs, and cash > DRAFT_CASH_FLOOR
+       P has fewer trained units than it needs, and cash above cash.reserve();
+       a warship or troop hull only while the civ is at war
 THEN   draft ONE citizen on P (cheapest role first, never a farmer)
 USES   N
 ```
@@ -926,8 +1015,8 @@ to fly, and left with 2, so R-XTM-06 had nothing to garrison. `INVASION_TROOPS` 
 one record is spent and two are kept for the garrison; that is not what the engine did
 here.
 
-[ ] **`DRAFT_CASH_FLOOR` (500) is invented**, like R-XPL-08's budget. It is there so
-drafting cannot empty the treasury the build rules also spend from, and nothing has tuned it.
+[x] **`DRAFT_CASH_FLOOR` (500) was invented**, like R-XPL-08's budget. Done: drafting now
+spends only cash above `cash.reserve()` (§4.3, Cash policy).
 
 **R-XPL-07, Liquidate to survive a collapse**, [ ] NOT BUILT
 ```
@@ -944,7 +1033,10 @@ expensive buildings** faces a cascade, upkeep it can no longer pay against incom
 longer has. Liquidating is how a human trades a long-term asset for immediate solvency
 instead of surrendering. It is the economic mirror of R-XTM-05 retreat.
 
-[ ] **Blocked on an upkeep sensor, which is the whole difficulty.** The trigger needs
+[ ] **Probably no longer blocked: `cash.upkeep` reads per-type facility upkeep** from the
+live definition table and multiplies by the counts on each planet, which answers "what does
+each facility cost per turn" directly. Not yet checked against the engine. The original
+blocker, kept for the record: **blocked on an upkeep sensor.** The trigger needs
 to know what each facility costs per turn, and we cannot compute it. `incomeRate` is
 derived by differencing `Owner:8` across turns (§2.5), which gives the *net* figure and
 cannot attribute the drain to individual buildings, so "which facility do I sell first"
@@ -1394,25 +1486,30 @@ Generated by `constants.py --write`; edit the code, not this table.
 | Name | Value | Module | Meaning |
 |---|---|---|---|
 | `TORN_FRACTION` | 0.5 | `ai.py` | A snapshot taken during turn resolution can show part of an empire. A civ read below this fraction of last turn's planet count is re-read. |
+| `RESERVE_TURNS` | 10 | `cash.py` | turns of upkeep never spent on anything discretionary |
+| `MIN_RESERVE` | 1000 | `cash.py` | the reserve is never smaller than this |
+| `UNIT_UPKEEP` | 3 | `cash.py` | Upkeep of one stationed military unit, the Planet:168 record's +0, which read 3 on every unit the memory report observed. Crew aboard a ship are left to the ship's own ShipDesign:48. |
+| `SHORT_HORIZON` | 5 | `cash.py` | The treasury is short when income is negative and this many turns of it would take cash inside the reserve. R-XPL-03 and R-XPL-01 both act on it. |
 | `SURPLUS_AT` | 0.50 | `exploit.py` | Fraction of food capacity a colony must already hold before a farmer is released. |
 | `GROWTH_MARGIN_PER_POP` | 10.0 | `exploit.py` | Food gained per turn, per citizen, that must remain after releasing a farmer. Growth is fed by the surplus, so a merely positive delta stops it. |
 | `MIN_FARMERS` | 1 | `exploit.py` | Never drop below this many farmers, whatever the food reading says. |
 | `SCIENTIST_SHARE` | 0.5 | `exploit.py` | of non-farmers, in the Growth phase |
 | `REASSIGN_CAP_DIV` | 4 | `exploit.py` | at most ceil(pop / 4) job changes per planet per turn |
+| `BANKER_POP_SHARE` | 0.75 | `exploit.py` | of its population cap a planet must hold to take bankers |
 | `CASH_THIN` | 1000 | `exploit.py` | a reserve this small deserves a decent income behind it |
 | `THIN_INCOME` | 20 | `exploit.py` | ...and "decent" means at least this per turn |
 | `WORKER_FLOOR` | 2 | `exploit.py` | never strip a planet below this many workers |
 | `CREW_PER_COLONY_SHIP` | 2 | `exploit.py` | fallback only; see min_crew() below |
 | `INVASION_TROOPS` | 3 | `exploit.py` | Crew above ShipDesign:76 a troop hull carries. An invasion spends one record above the flight crew (R-XTM-04); the other two are for R-XTM-06 to garrison. |
 | `RECRUIT_RATE_LEAN` | 20 | `exploit.py` | Recruiting flat out starves growth, so a planet that is not comfortably fed trains at this slower rate instead of the maximum. |
-| `DRAFT_CASH_FLOOR` | 500 | `exploit.py` | R-XPL-09: drafting never takes cash below this. The engine charges 5*(T+k)+105, so the price climbs as the military grows. |
 | `FARM_PER_POP` | 4 | `exploit.py` | citizens per farm before another is wanted |
 | `SHIPYARD_POP` | 10 | `exploit.py` | population a second shipyard is worth building at |
+| `FACTORY_WORKERS` | 4 | `exploit.py` | workers a factory is worth building for |
+| `BANK_POP` | 10 | `exploit.py` | population a banking center is worth building at |
 | `MAX_SHIPYARDS` | 2 | `exploit.py` | shipyards a civ builds at most |
 | `BORDER_DIST` | 120.0 | `exploit.py` | a planet this close to a visible rival planet is a border planet |
 | `BORDER_TURRETS` | 2 | `exploit.py` | light turrets wanted on a border planet |
-| `HURRY_FLOOR` | 5000 | `exploit.py` | cash never taken below this by hurrying |
-| `HURRY_BUDGET_SHARE` | 0.5 | `exploit.py` | of the cash above the floor, per turn |
+| `WEALTH_RELEASE_INCOME` | 150 | `exploit.py` | R-XPL-03: while cash.short(), one more planet a turn generates wealth. A stopgap planet is released, one a turn, only above this income. Income that is positive only because of wealth must not release them all at once. |
 | `TURN_WEIGHT` | 10.0 | `expand.py` | score points charged per turn of travel |
 | `SAME_SYSTEM_BONUS` | 30.0 | `expand.py` | shared defence, no exposed transit |
 | `COLONY_SHIP_TARGET` | 1 | `expand.py` | colony ships to keep in existence |
@@ -1915,3 +2012,6 @@ Steps 1-5 are **DONE**. The AI plays all four X's unattended and has fought a ba
    is a fresh turn-0 galaxy with both civs armed, and `metrics.py` compares runs on it.
 6. [ ] **Tune §5 over many fast games**, `--drive` makes this possible and nothing has
    used it for that yet.
+7. [ ] **Buy resources on the market** when no planet of ours produces one (§4.3, Cash
+   policy). Not tasked yet. Stocks (`Owner:1128`) and prices (`Owner:916`) are readable; the
+   purchase has to be located first, by watching a human buy at the client.

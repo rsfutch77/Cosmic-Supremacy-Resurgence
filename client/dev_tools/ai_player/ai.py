@@ -71,8 +71,8 @@ RULES = [
     ("R-XTM-07", exterminate.run_xtm07),      # a troop hull while anything is takeable
     ("R-XPN-01", expand.run_xpn01),           # colony ships
     ("R-EXP-01", explore.run_exp01),          # dedicated scouts
+    ("R-XPL-03", exploit.run_wealth),         # wealth where nothing is worth building
     ("R-XPL-02", exploit.run_facilities),     # facilities take what is left
-    ("R-XPL-08", exploit.run_hurry),          # spend surplus cash on all of it
 
     # 3. Crew, then research. Crew gates every order rule below.
     #    Conscription runs before the loader, which reads the garrison live,
@@ -80,6 +80,7 @@ RULES = [
     ("R-XPL-05", exploit.run_crew_supply),
     ("R-XPL-09", exploit.run_conscript),
     ("R-XPL-06", exploit.run_crew_load),
+    ("R-XPL-08", exploit.run_hurry),          # cash above the reserve, after crew
     ("R-XPL-04", exploit.run_research),
 
     # 4. Orders: garrison, conquer, defend, raid, rally, probe, colonise, scout.
@@ -290,7 +291,8 @@ class Loop:
                        hist=self.history, log=self.log)
                 elif fn in (exploit.run_food, explore.run_exp02,
                             exploit.run_facilities, exploit.run_jobs,
-                            exploit.run_hurry, exploit.run_crew_supply,
+                            exploit.run_hurry, exploit.run_wealth,
+                            exploit.run_crew_supply,
                             exploit.run_conscript,
                             explore.run_exp01,
                             expand.run_xpn01,
