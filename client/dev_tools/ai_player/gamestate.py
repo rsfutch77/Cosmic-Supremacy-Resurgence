@@ -300,6 +300,16 @@ class Planet(Obj):
     @property
     def space(self):        return (self.u32(104) or 0) >> 16
     @property
+    def resource(self):
+        """(resourceId, base units per miner) of this planet's one deposit.
+
+        The planet's resource object sits at Planet:400; its vector of 8-byte
+        [resId, base] records runs Planet:412..416. Galaxy generation pushes
+        exactly one record per planet.
+        """
+        recs = self.vec(412, 8)
+        return struct.unpack_from("<Ii", recs[0]) if recs else (None, 0)
+    @property
     def total_space(self):
         """Space after the owner's planet-space trait (38), rounded as the
         engine's space getter (0x004F1140) rounds it."""
