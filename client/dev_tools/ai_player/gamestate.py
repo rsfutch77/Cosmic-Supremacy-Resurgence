@@ -300,7 +300,16 @@ class Planet(Obj):
     @property
     def space(self):        return (self.u32(104) or 0) >> 16
     @property
-    def max_pop(self):      return self.space // 10
+    def total_space(self):
+        """Space after the owner's planet-space trait (38), rounded as the
+        engine's space getter (0x004F1140) rounds it."""
+        import research
+        civ = self.owner
+        pct = research.trait(civ, research.PLANET_SPACE_TRAIT) if civ else 0
+        extra = self.space * pct / 100
+        return self.space + (int(extra + 0.5) if extra >= 0 else int(extra))
+    @property
+    def max_pop(self):      return self.total_space // 10
     @property
     def food(self):         return self.i32(112)
     @property

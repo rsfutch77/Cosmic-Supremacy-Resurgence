@@ -80,6 +80,7 @@ ORDER_SIZE   = 0x60
 CHANGE_CITIZEN_JOBS = 0x00574180  # __cdecl(Planet* alloc, container* indices,
                                   #         int newJobId, bool bFromMilitaryList)
 GET_DRAFT_COST      = 0x00516060  # __thiscall(int count), ret 4
+GET_TRAIT           = 0x00516180  # __thiscall(int traitId), ret 4, same `this`
 DRAFT_COST_THIS     = 728         # ECX = Owner_primary + 0x30c == civ_tag + 728
 DRAFT_JOB           = 3           # job id 3 is crew/military
 CONTAINER_VECTOR    = 12          # a container holds its vector 12 bytes in
@@ -568,6 +569,20 @@ class Remote:
         # Per pass only; callers that change military call invalidate_draft_cost().
         return self._cached(self._pass_cache, ("draft_cost", civ_tag, count),
                             call)
+
+    def trait(self, civ_tag, trait_id):
+        """GetTrait (read-only): the engine's own value for a civ trait.
+
+        Shares GetDraftCost's `this`. Used to check research.trait, which
+        computes the same thing from memory without a remote thread.
+        """
+        code = (push_imm(trait_id) +
+                mov_ecx_imm(civ_tag + DRAFT_COST_THIS) +
+                mov_eax_imm(GET_TRAIT) +
+                CALL_EAX +
+                RET_4)
+        got = self.run_stub(code, f"trait {trait_id} on 0x{civ_tag:08X}")
+        return None if got is None else struct.unpack("<i", struct.pack("<I", got))[0]
 
     def invalidate_draft_cost(self, civ_tag=None):
         """Forget cached draft prices after the military count changes."""
