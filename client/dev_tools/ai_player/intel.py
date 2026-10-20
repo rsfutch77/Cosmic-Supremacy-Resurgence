@@ -168,6 +168,37 @@ class Intel:
                     "ship_hp": (0, 0)}
         return None
 
+    def fleet(self, foe_names):
+        """The newest fresh report of these civs' ships in a battle.
+
+        Shaped like defence(), planet_hp 0, or None when no such report is
+        fresh. A battle at one of the civ's own planets is passed over: the
+        planet's block carries only its hitpoints, and the owner's side counts
+        the turrets' firepower (BadGuy's HQ read 400/100, a light turret's).
+        So is an unarmed side, a probe or a colony ship, which says nothing
+        about a fleet. A report is about one battle, not the fleet now in view,
+        so this is the last thing the civ was shown, not a count.
+        """
+        turn = self.snap.turn or 0
+        owner = {p.id: p.owner.civ_name for p in self.snap.planets
+                 if p.owner is not None}
+        best = None
+        for pid, rep in self.hist.intel.items():
+            if turn - rep["turn"] > MAX_AGE:
+                continue
+            for name in foe_names:
+                side = rep["sides"].get(name)
+                if (not side or owner.get(pid) == name
+                        or not any(side.get("ship_hp", (0, 0)))
+                        or not any(side.get("firepower", (0, 0, 0)))):
+                    continue
+                if best is None or rep["turn"] > best["turn"]:
+                    best = {"turn": rep["turn"], "civ": name,
+                            "firepower": tuple(side.get("firepower", (0, 0, 0))),
+                            "planet_hp": 0,
+                            "ship_hp": tuple(side["ship_hp"])}
+        return best
+
     def fought_at(self, planet, since):
         """True when a battle at `planet` resolved on turn `since` or later."""
         return self.fought.get(planet.id, -1) >= since

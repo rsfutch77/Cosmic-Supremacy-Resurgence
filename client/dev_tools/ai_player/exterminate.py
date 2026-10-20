@@ -29,6 +29,7 @@ import sensors
 WARSHIP_TARGET = 2        # staged warships before declaring war or raiding
 FLEET_CAP = 8             # warships R-XTM-01 builds toward a target it cannot beat
 STRENGTH_MARGIN = 1.5     # a target must take this many times longer to clear us
+DEFEND_MARGIN = 1.0       # defenders must clear the enemy's last-seen fleet this much faster
 PROBES_IN_FLIGHT = 1      # unarmed hulls sent for a battle report at once
 PLANET_SCAN_RANGE = 30.0  # a planet sees other civs' ships this close (stock client)
 SHIP_SCAN_RANGE = 30.0    # a ship whose scanner range cannot be read
@@ -617,8 +618,8 @@ def _scan_range(design):
 def contacts(snap, civ, foes):
     """Enemy ships and fleets inside our scan range, as the map shows them.
 
-    [(pos, hull class ids, is_fleet)]. A player sees only a ship's class, and
-    for a fleet every class in it but no count.
+    [(pos, hull class ids, is_fleet, owner name)]. A player sees only a ship's
+    class and whose it is, and for a fleet every class in it but no count.
     """
     eyes = [(p.pos, PLANET_SCAN_RANGE) for p in snap.owned_planets(civ)]
     eyes += [(s.pos, _scan_range(s.design)) for s in snap.owned_ships(civ)
@@ -632,12 +633,13 @@ def contacts(snap, civ, foes):
     for s in snap.ships:
         if s.owner is None or s.owner.addr not in foe_addrs or not seen(s.pos):
             continue
-        out.append((s.pos, set(s.design.chassis) if s.design else set(), False))
+        out.append((s.pos, set(s.design.chassis) if s.design else set(), False,
+                    s.owner.civ_name))
     for f in snap.fleets:
         if f.owner is None or f.owner.addr not in foe_addrs or not seen(f.pos):
             continue
         classes = {c for d in f.member_designs for c in (d.chassis or [])}
-        out.append((f.pos, classes, True))
+        out.append((f.pos, classes, True, f.owner.civ_name))
     return out
 
 
@@ -647,8 +649,8 @@ def _is_threat(group):
     A lone shuttle may be a probe or a decoy; the map cannot tell.
     """
     return (len(group) >= 2
-            or any(is_fleet for _pos, _cls, is_fleet in group)
-            or any(c >= 1 for _pos, cls, _f in group for c in cls))
+            or any(c[2] for c in group)
+            or any(k >= 1 for c in group for k in c[1]))
 
 
 def run_xtm02(snap, civ, act, hist, log=print):
@@ -658,6 +660,12 @@ def run_xtm02(snap, civ, act, hist, log=print):
     AI cannot give, so defence means being in orbit when the enemy arrives:
     the planet's owner always defends. Defenders come from the staging planet
     and from idle warships; a raid in flight is not recalled.
+
+    The map shows hull classes but no strength, so the threat is weighed
+    against the newest battle report of that civ's ships (intel.Intel.fleet).
+    Defenders that would lose to it are not sent, and ones already there are
+    left for R-XTM-08 to gather at the staging planet. With no such report
+    the defence goes ahead.
     """
     foes = enemies(snap, civ, act)
     if not foes:
@@ -676,14 +684,14 @@ def run_xtm02(snap, civ, act, hist, log=print):
             and (s.condition is None or s.condition >= RETREAT_AT)
             and ((s.order_type or 0) == 0
                  or (rally is not None and already_heading(s, rally, 1)))]
+    info = pass_intel(snap, civ, hist, act)
     acted = 0
     # The nearest threat to the staging planet first.
     if rally is not None:
         threats.sort(key=lambda t: gs.dist(t[0].pos, rally.pos))
     for planet, group in threats:
-        seen = ", ".join(sorted({"fleet" if f else "ship" for _p, _c, f in group}))
-        classes = sorted({gs.CHASSIS.get(c, c) for _p, cls, _f in group
-                          for c in cls})
+        seen = ", ".join(sorted({"fleet" if c[2] else "ship" for c in group}))
+        classes = sorted({gs.CHASSIS.get(k, k) for c in group for k in c[1]})
         here = [s for s in pool if at_planet(s, planet)]
         going = []
         for s in pool:
@@ -697,6 +705,16 @@ def run_xtm02(snap, civ, act, hist, log=print):
                 f"scan range of {planet}; no warship can reach it within "
                 f"{DEFEND_REACH} turns")
             continue
+        known = info.fleet({c[3] for c in group})
+        if known is not None:
+            m = margin([(s.design, s.condition) for s in here + going
+                        if s.design], known, act)
+            if m < DEFEND_MARGIN:
+                log(f"R-XTM-02: enemy {seen} ({', '.join(map(str, classes))}) "
+                    f"in scan range of {planet}; {len(here) + len(going)} "
+                    f"defender(s) would lose to {known['civ']}'s ships as seen "
+                    f"on turn {known['turn']} (margin {m:.2f}), not defending")
+                continue
         log(f"R-XTM-02: enemy {seen} ({', '.join(map(str, classes))}) in scan "
             f"range of {planet}; holding {len(here)}, sending {len(going)}")
         for s in here:
@@ -819,7 +837,9 @@ def run_xtm06(snap, civ, act, hist, log=print):
     """R-XTM-06: garrison a freshly taken planet with the troops still aboard.
 
     A captured planet is disloyal and in civil disorder, and the repair is
-    occupying infantry. The invasion leaves one unit as the garrison.
+    occupying infantry. The capture itself lands every unit above the flight
+    crew as the garrison, so this only finds work for a second hull reaching
+    a planet the first has already taken.
 
     Loyalty is not located. `Planet:368` is `min(8, turn - Planet:92 + 1)`,
     a timer a garrison does not change; `Planet:100` bytes 0-2 are not it.
@@ -882,7 +902,7 @@ def run_xtm07(snap, civ, act, hist, log=print):
         log(f"R-XTM-07: {len(have)}/{TROOP_TARGET} troop ship(s) and this civ "
             f"has no design with a troop bay. Synthesise one: "
             f"client/dev_tools/game_cycle.py --design "
-            f"'t1:chassis=0,scanner=0,engine=1,engine=1,module=1'")
+            f"'t1:chassis=0,scanner=0,engine=1,module=1'")
         return 0
     yards = [p for p in snap.owned_planets(civ)
              if exploit.SHIPYARD in p.facilities and not p.u32(344)

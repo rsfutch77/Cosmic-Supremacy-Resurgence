@@ -61,6 +61,9 @@ DESIGNS = [
     ("probe4", {"chassis": [0], "scanners": [0], "engines": [3]}),
     ("probe5", {"chassis": [0], "scanners": [0], "engines": [4, 4]}),
     ("probe6", {"chassis": [0], "scanners": [0], "engines": [5, 5]}),
+    # The troop hull for R-XTM-07. A Troop Bay (Advanced Magnetism) takes 90 of
+    # the Shuttle's 120, which leaves room for one Fusion Drive: speed 12.6.
+    ("t1",     {"chassis": [0], "scanners": [0], "engines": [1], "modules": [1]}),
     ("f1",     {"chassis": [0], "scanners": [0], "engines": [0], "weapons": [0]}),
     ("b1",     {"chassis": [0], "scanners": [0], "engines": [0], "weapons": [10]}),
     ("cf1",    {"chassis": [1], "scanners": [0], "engines": [1, 1],
