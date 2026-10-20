@@ -42,6 +42,7 @@ RETREAT_AT = 0.30         # Ship:136 below this and the ship goes home
 SCOUT_RETREAT_AT = 0.50   # a scout is worth more alive than at its target
 REPAIRED_AT = 0.90        # a withdrawn ship stays at the shipyard until this
 AT_PLANET = 1.0           # a ship within this distance of a planet is at it
+GUARD_MEMORY = 10         # turns a guard seen orbiting a planet keeps it off the troop target list
 
 WAR = 1                   # Owner:248 relation code
 
@@ -330,13 +331,58 @@ def known_targets(snap, civ, hist, act, foes):
 
 
 def undefended_planets(snap, civ, hist, act, foes):
-    """Visible enemy planets observed with no defence, recently enough to trust."""
+    """Visible enemy planets observed with no defence, recently enough to trust,
+    and with none of the owner's ships seen in orbit (guarded_planets)."""
     info = pass_intel(snap, civ, hist, act)
+    guarded = guarded_planets(snap, civ)
     out = []
     for p in enemy_planets(snap, civ, hist, foes):
         d = info.defence(p)
-        if d is not None and not intel.defended(d):
+        if d is not None and not intel.defended(d) and p.addr not in guarded:
             out.append(p)
+    return out
+
+
+# (civ addr, planet addr) -> the last turn one of the owner's ships was seen
+# in orbit. Kept for the process; a restart forgets, which costs one look.
+_GUARD_SEEN = {}
+
+
+def guarded_planets(snap, civ):
+    """Addresses of planets one of their owner's ships was seen orbiting
+    within GUARD_MEMORY turns.
+
+    The engine refuses a landing while any living ship of the planet's owner
+    has the planet as Ship:44, armed or not, and says nothing: no report, and
+    the conquer order is re-attached every turn (0x004DB2D0). A fleet at the
+    planet is counted too; whether fleets block is not established. Without
+    the memory a troop hull that sees a guard turns away, loses sight of it,
+    and comes back.
+    """
+    seen_now = _guards_in_sight(snap, civ)
+    for addr in seen_now:
+        _GUARD_SEEN[(civ.addr, addr)] = snap.turn
+    return {addr for (c, addr), turn in _GUARD_SEEN.items()
+            if c == civ.addr and 0 <= snap.turn - turn <= GUARD_MEMORY}
+
+
+def _guards_in_sight(snap, civ):
+    eyes = _eyes(snap, civ)
+    out = set()
+    for s in snap.ships:
+        p = s.orbiting
+        if (p is None or p.owner is None or s.owner is None
+                or s.owner.addr != p.owner.addr or p.owner.addr == civ.addr
+                or not (s.condition or 0) > 0 or not _seen(s.pos, eyes)):
+            continue
+        out.add(p.addr)
+    for f in snap.fleets:
+        if f.owner is None or f.owner.addr == civ.addr or not _seen(f.pos, eyes):
+            continue
+        for p in snap.planets:
+            if (p.owner is not None and p.owner.addr == f.owner.addr
+                    and gs.dist(f.pos, p.pos) <= AT_PLANET):
+                out.add(p.addr)
     return out
 
 
@@ -616,19 +662,29 @@ def _scan_range(design):
                for i in design.scanners)
 
 
+def _eyes(snap, civ):
+    """(position, scan range) of everything that sees for this civ."""
+    eyes = [(p.pos, PLANET_SCAN_RANGE) for p in snap.owned_planets(civ)]
+    eyes += [(s.pos, _scan_range(s.design)) for s in snap.owned_ships(civ)
+             if None not in s.pos]
+    return eyes
+
+
+def _seen(pos, eyes):
+    return None not in pos and any(gs.dist(pos, at) <= r for at, r in eyes)
+
+
 def contacts(snap, civ, foes):
     """Enemy ships and fleets inside our scan range, as the map shows them.
 
     [(pos, hull class ids, is_fleet, owner name)]. A player sees only a ship's
     class and whose it is, and for a fleet every class in it but no count.
     """
-    eyes = [(p.pos, PLANET_SCAN_RANGE) for p in snap.owned_planets(civ)]
-    eyes += [(s.pos, _scan_range(s.design)) for s in snap.owned_ships(civ)
-             if None not in s.pos]
+    eyes = _eyes(snap, civ)
     foe_addrs = {f.addr for f in foes}
 
     def seen(pos):
-        return None not in pos and any(gs.dist(pos, at) <= r for at, r in eyes)
+        return _seen(pos, eyes)
 
     out = []
     for s in snap.ships:

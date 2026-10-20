@@ -90,7 +90,8 @@ rather than read directly.
 | Position | `Ship:4/8/12` | |
 | In orbit of | `Ship:44` | stored, not derived from position |
 | Order object | `Ship:48` | plain struct; `+16/20/24` = destination XYZ |
-| Order type | `Ship:52` | 0 none, 1 move, 2 scout, 3 colonize, 4 attack, 5 conquer, 7 move-near |
+| Order type | `Ship:52` | 0 hold, 1 move, 2 scout, 3 colonize, 4 attack, 5 conquer, 6 bio-bomb, 7 move-near, 8 create wormhole (the engine's own name table at `0x7FC898`) |
+| Wormhole countdown | `Ship:61` | turns left on a type-8 order, 11 at issue; 0 for every other type. Re-issuing restarts it, and on completion the ship becomes a `Wormhole` and is deleted. Nothing else reads it |
 | Pending-orders flag | `Ship:76` | 1 on local civ's ordered ships ⚠ |
 | Design | `Ship:108` | node[0] = `ShipDesign` |
 | Condition | `Ship:136` | 0.0-1.0; the only per-ship damage state |
@@ -491,57 +492,6 @@ so a withdrawing ship is never redirected.
 
 **R-XTM-04, Conquer**, IMPLEMENTED in `exterminate.run_xtm04`, and it has taken a planet
 
-[ ] The target's military camp was in its facility map before the capture and gone after
-(`{6:1, 4:1, 0:7}` → `{4:1, 0:7}`). Fifteen turns passed between the two readings, so this is
-NOT established as a consequence of conquest, check it across a single boundary before
-believing it.
-
-**Crew and troops share one container.** A troop hull was diffed against a scout across the
-whole `Ship` window: there is exactly one 16-byte-record vector, `Ship:124/128/132`, holding
-two records of job id 3. There is no second "troops" vector, which fits the report's finding
-that a citizen, a stationed military unit and a ship's crew member are the same record.
-
-**There is no separate troop-loading action in the UI**, confirmed by the user at the
-client. Crewing and loading troops are the same thing, which is why they share the
-`Ship:124` container. So no engine call has to be found for this: the AI only has to load
-MORE than the minimum.
-
-[x] **A spent troop hull is refilled into its buffer's spare capacity**, confirmed live from
-`t214_troop` (Oct 2026). A crew buffer is never repointed once allocated, since that crashed
-the client, so the first load allocates `ShipDesign:76 + troops` in one call. The engine's
-capture walks `end` back and frees nothing: after #242 took #184, the three records past `end`
-were still the three troops it had landed, and `cap - end` was exactly 3. `load_crew` and
-`conscript_to_crew` write into that room (`actions._add_ship_crew`), and `exploit.crew_gap`
-counts a crewed hull's gap up to its spare. Measured: #242 took #184, flew to the yard at #136,
-took 3 trained units there (2 -> 5), flew out and took #166; #246 refilled the same way after
-taking #159. Every captured planet kept its garrison of 3.
-
-A spent hull refills **only at one of our shipyards not taken within `GARRISON_WINDOW`**
-(`exploit.refills_at`). The first live run refilled anywhere we owned, and R-XPL-06 took the
-three troops #242 had just landed back off #184; R-XTM-06 landed them again the next pass,
-every turn, so the planet sat ungarrisoned across each boundary. A spent hull counts toward
-`TROOP_TARGET` while it has room (`exploit.refillable`), including on the way to a yard
-(R-XTM-04 sends it); one with no room is parked and replaced as before.
-
-[ ] **A garrisoned planet reads as "undefended" to R-XTM-04.** BadGuy's #241 and #244 sat on
-DemoPlayer's yard #136 under conquer orders for many turns without taking it; #136 had trained
-units stationed. Undefended is judged from planetary defence (battle reports), not from
-`Planet:168`, which a player cannot see either; whether a failed landing produces a report that
-could stand in for it is not known.
-
-[ ] **Three troops did not hold #184.** It was taken on turn 232 with a garrison of 3 and
-BadGuy took it back on turn 264. `INVASION_TROOPS` may need to scale with the target's
-population (43 here), or a recapture is simply what a frontline planet costs.
-
-```
-WHEN   a TROOP ship exists and its target planet's weakness == 0
-THEN   Ship:52 = 5 (conquer), destination = that planet's Planet:4/8/12
-NOTE   conquer is confirmed to target an enemy-owned planet's exact XYZ
-USES   E
-```
-A troop hull is loaded with `ShipDesign:76 + exploit.INVASION_TROOPS` at first load, and
-`explore.scoutable` never hands a TROOP hull to R-EXP-02.
-
 **R-XTM-06, Garrison a planet just taken**, IMPLEMENTED in `exterminate.run_xtm06`
 ```
 WHEN   a TROOP ship is in orbit of a planet we took within GARRISON_WINDOW turns
@@ -581,20 +531,6 @@ USES   M
 The hold is what makes the withdrawal mean anything: without it a ship repaired to 0.31
 was free for R-XTM-03 the next pass. It also holds a ship that was never withdrawn, e.g.
 a warship staged at the yard at 0.85, for the turn or two its repair takes.
-
-[ ] **A slow warship's withdrawal is long.** The `f1` makes 6.4 a turn and its nearest yard
-was about 260 units off, so it was still 57 out after 40 turns, at 0.25 the whole way. That
-is the price of going to a yard rather than the nearest planet; whether a nearer planet to
-shelter at first is better is a tuning question, not yet answered.
-
-[ ] **It cannot fire against a one-boundary wipe, and that is how ships have actually died.**
-Damage is multiplicative over up to 200 rounds with no early exit, all inside a single
-turn resolution, so both warships went from condition 1.0 to deleted between two samples and
-this rule never saw a damaged ship. It only helps a hull tough enough to survive a boundary,
-which none of the current designs are. Not a defect in the rule, a reason it is not the
-safety net it looks like. The real mitigation is arriving with enough hull, which R-XTM-03's
-strength test (`STRENGTH_MARGIN`, from battle-report intel) now provides; this rule stays
-attrition-only.
 
 ---
 
@@ -656,29 +592,10 @@ Generated by `constants.py --write`; edit the code, not this table.
 | `SCOUT_RETREAT_AT` | 0.50 | `exterminate.py` | a scout is worth more alive than at its target |
 | `REPAIRED_AT` | 0.90 | `exterminate.py` | a withdrawn ship stays at the shipyard until this |
 | `AT_PLANET` | 1.0 | `exterminate.py` | a ship within this distance of a planet is at it |
+| `GUARD_MEMORY` | 10 | `exterminate.py` | turns a guard seen orbiting a planet keeps it off the troop target list |
 | `AT_PLANET` | 1.0 | `intel.py` | a report this close to a planet is about it |
 | `MAX_AGE` | 40 | `intel.py` | turns; older intel is treated as unknown |
 <!-- constants:end -->
-
----
-
-## 6. Open decisions, need your call before implementation
-
-[ ] **Where the AI sits.** `client/dev_tools/ai_player/` as a peer of the other dev
-   tools, importing `ejbo_viewer`, is the low-friction choice. If the AI is meant to
-   eventually drive a *server-side* civ rather than the client's local player, it
-   belongs under `server/` and reads game state from the server's own model instead.
-   The spec above assumes the client-side reading.
-
-7. [ ] **The client must be relaunched to pick up a code change**, and doing so re-offers
-   the customisation popups and (before persistence) discarded the discovery map. Worth
-   deciding whether the loop should hot-reload its rule modules instead. The restart is not
-   destructive: the popup's commit adds to the current rates rather than resetting them, and
-   dismissing it with Decide Later writes nothing at all, so an unattended run that never
-   answers the dialog loses nothing. It does mean a run that *does* answer it inflates its own
-   homeworld, since each relaunch re-grants the full allowance.
-
----
 
 ## 7. Engine calls vs. field writes
 
@@ -687,61 +604,9 @@ Generated by `constants.py --write`; edit the code, not this table.
 | Candidate | Address | Why it matters |
 |---|---|---|
 | ~~**Read the live research table**~~ | `0x0054AA70` id→record, `0x0054B140` cost, `0x0054B200` prereq-at-index, `0x0054B7D0` exclusion test | **DONE, without an engine call.** `research_dump.py` reads the table the startup builder writes at `0x00857F08` straight from memory, and `research.py` is regenerated from it (`--emit`, `--diff`), so the ≥688 table is gone. These four calls are no longer needed |
-| ~~**`Ship::SetCommand`**~~ | `0x004D9DC0` | **DONE; the crash was our stub, fixed and verified live** (§4.4). Writing `Ship:52` alone is fine: with `Ship:56` null the ship follows its route. [ ] The order-type-8 / `Ship:61 = 0x0B` observation: the ShipCommand ctor `0x004E9BA0` sets `+9 = 0x0B` when the type is 8, and SetCommand copies `+9` to `Ship:61`. That is where the value comes from; what it means is still unknown |
+| ~~**`Ship::SetCommand`**~~ | `0x004D9DC0` | **DONE; the crash was our stub, fixed and verified live** (§4.4). Writing `Ship:52` alone is fine: with `Ship:56` null the ship follows its route. The order-type-8 / `Ship:61 = 0x0B` observation is explained: type 8 is Create Wormhole and `Ship:61` its 11-turn countdown (§2.3). Not worth an actuator: it needs the Wormhole Generator module (30,000 and 1,000 exotics), consumes the ship, and what a wormhole does is not yet known |
 | ~~**`ChangeCitizenJobs`**~~ | `0x00574180` | **DONE, actuator N.** Conscription works and R-XPL-09 uses it. Note it is still *not* used to replace actuator A: setting an ordinary job id by field write remains cheaper than a remote thread, and only job 3 goes through the engine, because only job 3 costs money |
 | ~~**`GetTrait`**~~ | `0x00516180` | **DONE, without an engine call.** `research.trait` computes it from memory and matched the engine on all 46 traits with distinct probe values written to the base block; `remote.trait` is kept as the check |
 | ~~**available space**~~ | `0x004F1140` (PP vftable slot 6) | **Understood.** It returns FREE space, `space + round(space × trait38 / 100) - Planet:108 low word`, and is the only reader of trait 38. `Planet.total_space` reproduces the first two terms |
 | ~~**`GetDraftCost`**~~ | `0x00516060` | **DONE.** `remote.draft_cost`. Validated read-only before the mutating call, per the rule below: six readings across two civs at three counts, every one matching `sum(5*(T+k)+105)` computed independently from a snapshot. That match is also what confirmed `T` counts ship crew as well as stationed units |
 
-[x] **`GetTrait` and the space getter are done, and neither needs an engine call.**
-`GetTrait(t)` is the base value at `Owner:(748 + 4t)`, plus every completed item's TRAIT grant
-for `t`, plus +50 on traits 2-5 during a golden age (`Owner:744`, trait 43) or -20 under trait
-44. `research.trait` reproduces it, checked against `remote.trait` with probe values written to
-every base slot and restored byte-for-byte; the research term is not exercised yet because
-neither test civ has a trait technology. Trait 38 (planet space %, granted +10 by tech 54 and
-+20 by tech 62) raises the population cap: with it held at +50 for six turns, #136 grew from
-its cap of 26 to 29. `Planet.max_pop` now uses the trait-adjusted space.
-
-[x] **`Ship::SetCommand` is marked DO-NOT-USE on the same style of reasoning
-that failed here**, "the client died after we called it", and deserves
-re-testing rather than inheriting this mistake. It may never have been the call.
-**It was not the call, and not the thread either:** our stub pushed one argument to a
-`ret 8` function and returned to address 0 (§4.4). Fixed and verified over five boundaries.
-
-[ ] **The fix is probably not "stop calling them".** Conscription is the only
-answer to the crew bottleneck and hurrying is the only sink for cash. What the
-evidence argues for is calling them ON THE MAIN THREAD, suspend it, point EIP at
-a stub, restore, which the reconstruction report already sketches as the
-remaining route for `LoadGame`, and which would remove the whole class rather
-than these two instances.
-
-[ ] **A FIXTURE AND ITS CANONICAL HASHES ONLY MEAN ANYTHING TOGETHER, and the
-conscription fixtures in `client/` predate 4691f57.** Before that commit the
-actuator read `Owner:8` and a vector's begin/end from the snapshot rather than
-live, so a pass that drafted twice debited one draft's price and removed one
-draft's citizens. Crewing two hulls left BadGuy on 6442 with 16 citizens on its
-HQ; the same pass now leaves 6187 and 14. Cash and population are both inside
-the canonical hash, so every hash taken downstream of those blobs moved with
-them.
-
-The trap is that regenerating a pre-4691f57 fixture and comparing it against a
-pre-4691f57 hash produces a mismatch that reads exactly like a determinism
-failure and is not one. Hashes are evidence only against blobs the same actuator
-produced, so publish the two together and say which actuator built them. The
-difference is structural as well as numeric: post-fix, `conscript_to_crew`
-cannot take four citizens from a planet holding three non-farmers at all, and it
-refuses instead. `allow_farmers` is NOT the way to get them back, it is a
-judgement only R-XPL-09 is positioned to make (§4.3); draft across more than one
-planet.
-
-[ ] **Every earlier "it crashed after we did X" in this document is now
-suspect**, including `Ship::SetCommand`. That one was blamed for a crash at the
-next turn boundary and marked DO-NOT-USE on that basis. It is a mutating engine
-call on a remote thread, so it belongs to this class, and the same experiment
-would settle whether the call is fatal or merely the thread it ran on.
-SetCommand is now settled, and it was neither (§4.4). Before blaming the thread for the
-others, check each stub's pushes against its callee's `ret N`.
-
-[ ] **Buy resources on the market** when no planet of ours produces one (§4.3, Cash
-   policy). Not tasked yet. Stocks (`Owner:1128`) and prices (`Owner:916`) are readable; the
-   purchase has to be located first, by watching a human buy at the client.
