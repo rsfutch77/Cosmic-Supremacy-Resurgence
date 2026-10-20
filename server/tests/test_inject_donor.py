@@ -244,6 +244,28 @@ def main():
         finally:
             mmg.seated = real
 
+    # Generation gives the human seat Owner:4 = 0, and a civ holding 0 never
+    # has its research or score ticked. The fixture's seat one is zeroed here
+    # to stand in for a freshly generated galaxy.
+    print('\nmake_multiplayer_galaxy.build gives every civ a non-zero Owner:4')
+    generated = bytearray(base)
+    struct.pack_into('<I', generated, one['end'] - 4, 0)
+    generated = bytes(generated)
+    before = mmg.owner_ids(generated)
+    check('seat one starts at Owner:4 = 0, as generation leaves it',
+          before[one['name']], 0)
+    built = mmg.build(generated, list(NAMES), log=quiet)
+    ids = mmg.owner_ids(built)
+    check('no civ is left at 0', 0 in ids.values(), False)
+    check('Owner:4 stays unique after build', len(set(ids.values())), len(ids))
+    check('the seat that held 0 takes the lowest unused id from 20',
+          ids[NAMES[0]], min(set(range(mmg.FIRST_OWNER_ID, 256))
+                             - set(before.values())))
+    check('a civ that already had an id keeps it',
+          ids[NAMES[1]], before[two['name']])
+    check('a civ added after the fix does not reuse its id',
+          ids[NAMES[2]] not in (ids[NAMES[0]], ids[NAMES[1]]))
+
     print(f'\n{len(PASS)} passed, {len(FAIL)} failed')
     for f in FAIL:
         print(f'  FAILED: {f}')
