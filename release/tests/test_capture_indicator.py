@@ -235,7 +235,7 @@ check("and takes an ordinary name, trimmed",
 import inspect                                                  # noqa: E402
 src = inspect.getsource(L.Launcher.on_save)
 check("the single-player half is unreachable while a loop is running",
-      src.index("playing_now()") < src.index("save_game"), True)
+      src.index("playing_now()") < src.index("_save_to_dat"), True)
 
 print("\n5. the button names what it will do")
 app = bare(mp_store=Store(), mp_thread=Thread(alive=True))

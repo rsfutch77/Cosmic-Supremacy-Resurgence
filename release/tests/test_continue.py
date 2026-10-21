@@ -155,6 +155,101 @@ check("the rows are redrawn when a game exits",
       "self.view.show_modes(self)" in inspect.getsource(L.Launcher._watch_game),
       True)
 
+print("\n7. Next Turn in Single Player saves first, and Play continues there")
+import base64                                                   # noqa: E402
+import struct                                                   # noqa: E402
+import zlib                                                     # noqa: E402
+import gamectl                                                  # noqa: E402
+
+saves = os.path.join(data, "saves")
+os.makedirs(saves, exist_ok=True)
+
+
+class FakeClient:
+    """Stands in for gamectl.Client: SaveGame lands a capture as cs_server would."""
+    def __init__(self, turn, saves_ok=True):
+        self.t, self.saves_ok, self.calls = turn, saves_ok, []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_exc):
+        return False
+
+    def turn(self):
+        return self.t
+
+    def save_game(self, name):
+        self.calls.append(("save", name, self.t))
+        if not self.saves_ok:
+            return False
+        blob = f"BLOB turn {self.t}".encode()
+        base = os.path.join(saves, f"save_{self.t:03d}")
+        with open(base + ".b64", "w", encoding="ascii") as f:
+            f.write(base64.b64encode(struct.pack("<I", len(blob))
+                                     + zlib.compress(blob)).decode())
+        with open(base + ".json", "w") as f:
+            f.write("{}")
+        return True
+
+    def advance_turn(self, restore=None):
+        self.calls.append(("advance", self.t))
+        self.t += 1
+        return self.t
+
+
+def turn_app(client, mode=MODE):
+    app = bare()
+    app.running_mode = mode
+    app.playing_now = lambda: None
+    app._client = lambda: client
+    app._in_background = lambda label, work, done=None: work()
+    return app
+
+
+for turn in (3, 4, 5):
+    client = FakeClient(turn)
+    turn_app(client).on_next_turn()
+    check(f"turn {turn} is saved before it resolves",
+          [c[0] for c in client.calls], ["save", "advance"])
+check("the engine is given the autosave name", client.calls[0][1],
+      L.AUTOSAVE_NAME)
+autos = sorted(n for n in os.listdir(games) if L.AUTOSAVE_FILE.match(n))
+check("only the newest autosaves are kept", autos,
+      ["Autosave, turn 4.dat", "Autosave, turn 5.dat"])
+with open(os.path.join(games, "Autosave, turn 5.dat"), "rb") as f:
+    check("holding the blob the game sent", f.read(), b"BLOB turn 5")
+check("manual saves are never pruned",
+      all(os.path.exists(p) for p in (older, newer, fresh_dat)), True)
+check("Play continues from the last autosave", L.latest_save(games),
+      os.path.join(games, "Autosave, turn 5.dat"))
+check("a manual save can never be taken for an autosave",
+      L.AUTOSAVE_FILE.match("Autosave, turn 5_turn5.dat"), None)
+
+client = FakeClient(6, saves_ok=False)
+app = turn_app(client)
+app.on_next_turn()
+check("a failed autosave still ends the turn", client.t, 7)
+check("and says so", any("autosave failed" in s for s in app.said), True)
+
+client = FakeClient(7)
+sandbox = next(m for m in MODES if m.get("id") == "sandbox")
+turn_app(client, sandbox).on_next_turn()
+check("a mode that does not continue does not autosave",
+      [c[0] for c in client.calls], ["advance"])
+
+client = FakeClient(8)
+app = turn_app(client)
+app.playing_now = lambda: {"name": "sandbox"}
+app.on_next_turn()
+check("nor does a multiplayer turn", [c[0] for c in client.calls], ["advance"])
+
+since = time.time()
+with open(os.path.join(saves, "save_999.b64"), "w") as f:
+    f.write("half")
+check("a capture still being written is not taken",
+      gamectl.wait_for_capture(saves, since=since, timeout=0.2), None)
+
 shutil.rmtree(data, ignore_errors=True)
 print("\n" + ("ALL PASSED" if not fails else f"FAILURES: {fails}"))
 sys.exit(1 if fails else 0)

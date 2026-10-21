@@ -56,7 +56,9 @@ View the Demo      The original demo galaxy. A look at the game with nothing
                     at stake.
 
 Play Single Player  A full single-player galaxy against the computer. Turns
-                    resolve on your own machine.
+                    resolve on your own machine. Ending a turn saves the game
+                    first, so Play picks up at the last turn you ended, with
+                    your orders for it in place.
 
 Multiplayer         Persistent galaxies against other players, the way the
                     original was played. Opens the list of galaxies: press

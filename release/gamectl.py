@@ -339,9 +339,31 @@ def reset_ai_state(state_dir: str, civ: str, keep_discovery: bool = False):
     return removed
 
 
-def capture_to_dat(save_dir: str, out_path: str, since: float = 0.0) -> str:
-    """Convert the newest captured save into a .dat the client can be launched on."""
-    cap = newest_capture(save_dir, since)
+def wait_for_capture(save_dir: str, since: float = 0.0, timeout: float = 5.0,
+                     poll: float = 0.1):
+    """The newest capture since `since` once the server has finished it, or None.
+
+    cs_server writes a capture's .json sidecar after its .b64, so a .b64 whose
+    sidecar is there is complete.
+    """
+    deadline = time.time() + timeout
+    while True:
+        cap = newest_capture(save_dir, since)
+        if cap is not None and os.path.exists(cap[:-len(".b64")] + ".json"):
+            return cap
+        if time.time() >= deadline:
+            return None
+        time.sleep(poll)
+
+
+def capture_to_dat(save_dir: str, out_path: str, since: float = 0.0,
+                   wait: float = 0.0) -> str:
+    """Convert the newest captured save into a .dat the client can be launched on.
+
+    `wait` is how long to give the server to finish writing the capture.
+    """
+    cap = (wait_for_capture(save_dir, since, wait) if wait
+           else newest_capture(save_dir, since))
     if cap is None:
         raise GameError(
             "the game reported a successful save but nothing arrived at the "

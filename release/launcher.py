@@ -709,6 +709,38 @@ def latest_save(dat_dir: str) -> "str | None":
     return max(dats, key=os.path.getmtime, default=None)
 
 
+# Single Player saves itself as each turn ends, so Play continues from the last
+# turn played even when the player never pressed Save. A manual save is always
+# "<name>_turn<N>.dat", so no manual save can match AUTOSAVE_FILE.
+AUTOSAVE_NAME = "Autosave"          # the name the engine is given, under 16 chars
+AUTOSAVE_FILE = re.compile(r"^Autosave, turn (\d+)\.dat$")
+AUTOSAVE_KEEP = 2
+
+
+def autosave_path(dat_dir: str, turn) -> str:
+    return os.path.join(dat_dir, f"Autosave, turn {turn}.dat")
+
+
+def prune_autosaves(dat_dir: str, keep: int = AUTOSAVE_KEEP) -> list:
+    """Delete all but the `keep` newest autosaves. Returns the names removed."""
+    try:
+        names = [n for n in os.listdir(dat_dir) if AUTOSAVE_FILE.match(n)]
+    except OSError:
+        return []
+    # The turn breaks a tie between saves written within the clock's resolution.
+    paths = sorted((os.path.join(dat_dir, n) for n in names), reverse=True,
+                   key=lambda p: (os.path.getmtime(p),
+                                  int(AUTOSAVE_FILE.match(os.path.basename(p))[1])))
+    removed = []
+    for path in paths[keep:]:
+        try:
+            os.remove(path)
+            removed.append(os.path.basename(path))
+        except OSError:
+            pass            # held open by a Load in progress; next turn retries
+    return removed
+
+
 def launch_mode(mode, game_root: str, galaxy_root: str,
                 galaxy: "str | None" = None) -> subprocess.Popen:
     """Start a mode's client on its galaxy, or on `galaxy` when given."""
@@ -4243,11 +4275,52 @@ class Launcher:
             raise gamectl.GameError("the game is not running")
         return gamectl.Client(pid)
 
+    def _save_to_dat(self, c, name, out_for_turn):
+        """SaveGame on client `c` and turn the server's capture into a .dat.
+
+        `out_for_turn(turn)` names the file. Returns its path.
+        """
+        import gamectl
+        started = time.time() - 1
+        turn = c.turn()
+        if not c.save_game(name):
+            raise gamectl.GameError(
+                "the game refused to save. This usually means the "
+                "launcher's server is not reachable; keep this window "
+                "open while you play.")
+        # The engine's save goes out over HTTP; give the server a moment to
+        # finish writing the capture before converting it.
+        return gamectl.capture_to_dat(os.path.join(self.data_dir, "saves"),
+                                      out_for_turn(turn), since=started,
+                                      wait=5.0)
+
+    def _autosaves(self) -> bool:
+        """Whether Next Turn saves first: Single Player, which Play continues."""
+        return (self.playing_now() is None
+                and bool((self.running_mode or {}).get("continues")))
+
     def on_next_turn(self):
         import gamectl
+        autosave = self._autosaves()
+        dat_dir = os.path.join(self.data_dir, "games")
 
         def work():
             with self._client() as c:
+                # Saved before the turn resolves: the opponent has finished
+                # deciding (the button waits for it), so nothing else is
+                # driving the client, and the save holds everything the player
+                # did this turn, a confirmed setup prompt included.
+                if autosave:
+                    try:
+                        os.makedirs(dat_dir, exist_ok=True)
+                        path = self._save_to_dat(
+                            c, AUTOSAVE_NAME,
+                            lambda turn: autosave_path(dat_dir, turn))
+                        prune_autosaves(dat_dir)
+                        self.say_threadsafe(f"autosaved to {os.path.basename(path)}")
+                    except gamectl.GameError as exc:
+                        self.say_threadsafe(f"autosave failed, ending the turn "
+                                            f"anyway: {exc}")
                 return c.advance_turn(restore=gamectl.HOLD_LENGTH)
         self._in_background("ending the turn", work)
 
@@ -4272,25 +4345,14 @@ class Launcher:
             return
         self._save_name = name
 
-        import gamectl
-        save_dir = os.path.join(self.data_dir, "saves")
         dat_dir = os.path.join(self.data_dir, "games")
         os.makedirs(dat_dir, exist_ok=True)
 
         def work():
-            started = time.time() - 1
             with self._client() as c:
-                turn = c.turn()
-                if not c.save_game(name):
-                    raise gamectl.GameError(
-                        "the game refused to save. This usually means the "
-                        "launcher's server is not reachable; keep this window "
-                        "open while you play.")
-            # The engine's save goes out over HTTP; give the server a moment to
-            # finish writing the capture before looking for it.
-            time.sleep(1.5)
-            out = os.path.join(dat_dir, f"{name}_turn{turn}.dat")
-            return gamectl.capture_to_dat(save_dir, out, since=started)
+                return self._save_to_dat(
+                    c, name,
+                    lambda turn: os.path.join(dat_dir, f"{name}_turn{turn}.dat"))
 
         self._in_background("saving", work)
 
