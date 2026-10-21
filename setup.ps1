@@ -8,7 +8,7 @@
     2. Installs the pinned CPython version from .python-version (managed by uv,
        so multiple versions can coexist without touching the system Python).
     3. Creates server\.venv and installs server\requirements.txt into it.
-    4. Verifies that cs_server.py compiles and its imports resolve.
+    4. Verifies that the requirements import and cs_server.py compiles.
 
     Safe to re-run. Nothing is installed system-wide except uv itself, which
     lives in %USERPROFILE%\.local\bin.
@@ -123,7 +123,8 @@ Write-Step "Verifying"
 $ver = & $VenvPython -c "import sys; print('.'.join(map(str, sys.version_info[:3])))"
 Write-Ok "venv interpreter reports $ver"
 
-& $VenvPython -c "import fastapi, uvicorn, bcrypt, jwt, aiosqlite; print('    OK  third-party imports resolve')"
+# The turn store's (firebase_store.py) and the launcher window's (web_view.py).
+& $VenvPython -c "import google.cloud.firestore, google.cloud.storage, webview; print('    OK  third-party imports resolve')"
 if ($LASTEXITCODE -ne 0) { throw "import check failed" }
 
 & $VenvPython -m py_compile (Join-Path $ServerDir 'cs_server.py')

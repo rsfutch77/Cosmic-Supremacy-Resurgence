@@ -133,7 +133,8 @@ A fourth exists but is not tracked: **`CosmicSupremacy_Player.exe`**, built by
 `CosmicSupremacy_TestBed.exe` plus one byte that stops the coat-of-arms prompt
 opening, and it is what a served multiplayer turn runs on. It is gitignored
 because a patched client in the working tree is one `git commit -a` away from
-entering the history.
+entering the history. `build.ps1` makes its own from TestBed into
+`release/build/` on every build and does not read the one in `client/`.
 
 **Resurgence is TestBed plus exactly 22 bytes at six sites** and nothing else,
 measured by whole-file comparison. Those six are the T1-T5 turn-pipeline
@@ -201,13 +202,15 @@ layout a player will ever have.
 powershell -ExecutionPolicy Bypass -File .\release\tests\run_all.ps1
 ```
 
-Five runs, a few minutes. Close the launcher first, one already holding port
+A few minutes. Close the launcher first, one already holding port
 8888 makes the tests silently reuse it instead of exercising their own server.
 The last four start and kill the real game, so leave the machine alone.
 
 | Test | Covers |
 |------|--------|
 | `test_save_protocol.py` | The wire protocol against cs_server directly, no game: slot allocation from the `gameid=-1` sentinel, `savegamelist` format, blob round-trip, saving over a slot, delimiter injection in a save name |
+| `test_log_send.py` | Sending the launcher's log against a local stand-in relay: when it is offered, what is sent, nothing without Send; the held-seat box during a turn |
+| `test_port_and_support.py` | What holds port 8888, from command lines and then read only from whatever really holds it here (skipped when nothing does); the player code and the relay's seat refusals |
 | `test_status_cycle.py <mode>` | Drives the real launcher and client: click, report running, kill, recover |
 | `test_external_status.py` | The same for a client started outside the launcher, where there is no child handle |
 

@@ -882,30 +882,19 @@ foreach ($m in $playable) {
 # A session mode names no EXE, so the copy above never reaches its client. A
 # player's client must never compute a turn the referee has not.
 #
-# Player is TestBed plus one byte that silences the coat-of-arms prompt. It is
-# gitignored, so a checkout that has not run patch_hide_setup_prompts.py
-# --build ships TestBed, the same fallback game_cycle.resolve_exe makes.
+# Player is TestBed plus one byte that silences the coat-of-arms prompt. Every
+# build makes it from the tracked TestBed into release\build, so the release
+# depends on no gitignored file. client\CosmicSupremacy_Player.exe is neither
+# read nor written, and game_cycle.resolve_exe's choice for dev runs is left
+# as it was.
 $mpModes = @($modes | Where-Object { $_.session -eq 'multiplayer' })
 if ($mpModes.Count -gt 0) {
     Write-Step "Adding the multiplayer client"
-    $mpExe = $null
-    foreach ($name in @('CosmicSupremacy_Player.exe', 'CosmicSupremacy_TestBed.exe')) {
-        $cand = Join-Path $ClientDir $name
-        if (Test-Path $cand) { $mpExe = $cand; break }
-    }
-    if ($mpExe) {
-        Copy-Client $mpExe (Join-Path $GameDir (Split-Path -Leaf $mpExe))
-        Write-Ok "game\$(Split-Path -Leaf $mpExe)"
-        if ((Split-Path -Leaf $mpExe) -ne 'CosmicSupremacy_Player.exe') {
-            Write-Warn2 ('shipping TestBed: players will see the coat-of-arms ' +
-                         'prompt every turn. Build the player client with ' +
-                         'patch_hide_setup_prompts.py --build and re-run')
-        }
-    } else {
-        # Not fatal: the launcher checks for this client before a turn.
-        Write-Warn2 ('no multiplayer client in client\ - the Multiplayer card ' +
-                     'will refuse to start')
-    }
+    $PlayerExe = Join-Path $BuildDir 'CosmicSupremacy_Player.exe'
+    & $VenvPy (Join-Path $ClientTools 'patch_hide_setup_prompts.py') --build --out $PlayerExe | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw 'patch_hide_setup_prompts failed to build the player client' }
+    Copy-Client $PlayerExe (Join-Path $GameDir 'CosmicSupremacy_Player.exe')
+    Write-Ok 'game\CosmicSupremacy_Player.exe, built from CosmicSupremacy_TestBed.exe'
 }
 
 # ── 7c. No loose bytecode ─────────────────────────────────────────────────────

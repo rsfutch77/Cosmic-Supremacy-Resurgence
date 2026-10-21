@@ -30,6 +30,11 @@
       test_turn_clock_hold Single Player turns happen only on Next Turn:
                            the engine's own clock is held and re-held
                            after each boundary. No game.
+      test_log_send        Sending the launcher's log and the held-seat box,
+                           against a local stand-in relay. No game.
+      test_port_and_support
+                           What holds port 8888, read only, and the player
+                           code and seat refusals. No game.
       test_status_cycle   Drives the real launcher and client for each
                            playable mode: launch, kill, status recovers.
       test_external_status Same, for a client started outside the launcher.
@@ -83,6 +88,8 @@ Invoke-Test 'test_minimised_poll.py'
 Invoke-Test 'test_tutorial_patch.py'
 Invoke-Test 'test_continue.py'
 Invoke-Test 'test_turn_clock_hold.py'
+Invoke-Test 'test_log_send.py'
+Invoke-Test 'test_port_and_support.py'
 foreach ($mode in @('tutorial', 'demo', 'testbed')) {
     Invoke-Test 'test_status_cycle.py' @($mode)
 }
