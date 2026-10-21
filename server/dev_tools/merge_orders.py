@@ -74,6 +74,16 @@ the checks compare per-owner job multisets.
 
 **Military recruitment rate**, `PLPR+27`, a percentage in one byte.
 
+**The setup prompts' confirms**, once each. The civ-trait prompt writes the
+ten trait values in `OWNR > CVTR` and sets a flag in `OWPR`; the homeworld
+prompt adds to the homeworld's three rate bytes (`PLPR+4..+6`) and its space
+(`PLPR+11`) and sets another. A confirm is carried only when its flag was
+clear as served and is set in the submission, and only as the dialog could
+have made it: trait values the dialog gives and rates within 25..80, spending
+`GSET.civilization_changes` or `GSET.homeworld_changes` exactly, on the planet
+the client takes for the homeworld (the one founded earliest). Without the
+confirm the prompt would come back on every served turn.
+
 **System renaming**, the `SUN ` section's name at `+24` in its payload. Allowed
 for a civ owning more than half of the system's settled planets in the served
 state; unowned planets do not count.
@@ -113,6 +123,48 @@ OWPR_MAP_COUNT_OFF = 8
 OWPR_RECORD = 8
 RESEARCH_FIELD_COUNT = 2
 RESEARCH_FIELD_LEN = 4
+
+# The setup prompts' flags, one byte each in OWPR, this far past the start of
+# the second research field: Owner:359 (homeworld prompt, dialog 210) and
+# Owner:360 (civ-trait prompt, dialog 218). Each prompt's OK sets its own.
+HOMEWORLD_FLAG_OFF = OWPR_RECORD + 29
+CIV_FLAG_OFF = OWPR_RECORD + 30
+
+# The civ traits in CVTR: a u32 count at +16, then (index, value) pairs of
+# u32s, one per trait the dialog shows. A confirm overwrites each value with
+# what the clicks spent on it give.
+CVTR_COUNT_OFF = 16
+CVTR_PAIRS_OFF = 20
+CVTR_PAIR = 8
+
+# The civ-trait dialog's rules, from its table at 0x7FCD88 and value function
+# 0x515910: per trait in index order, its name, the fewest clicks allowed, the
+# value each click count gives from there, and what one click costs in
+# changes. A negative cost is a trait that pays changes for being raised.
+_OUTPUT = (-16, -8, 0, 8, 15, 21, 25, 28)
+_STRIKE = (-20, -10, 0, 10, 19, 26, 31, 34)
+TRAIT_RULES = (
+    ('food consumption per citizen', -2, (-4, -2, 0, 2, 4), -1),
+    ('income per citizen', -2, (-4, -2, 0, 2, 4), 1),
+    ('food output', -2, _OUTPUT, 1),
+    ('production output', -2, _OUTPUT, 1),
+    ('science output', -2, _OUTPUT, 1),
+    ('mining output', -2, (-24, -12, 0, 12, 23, 33, 41, 48), 1),
+    ('ship speed', -2, (-10, -5, 0, 5, 9, 13, 16, 19), 1),
+    ('ship firepower', -2, _STRIKE, 1),
+    ('planetary defense', -2, _STRIKE, 1),
+    ('troops', -2, _STRIKE, 1),
+)
+
+# The homeworld dialog's fields in PLPR: three signed rate bytes (food,
+# production, science) and the planet space, a u16. A confirm adds the clicks
+# to each rate, and raises space to a floor before adding five per click.
+HOMEWORLD_RATE_OFFS = (4, 5, 6)
+HOMEWORLD_SPACE_OFF = 11
+HOMEWORLD_RATES = (25, 80)          # a rate the dialog leaves, inclusive
+HOMEWORLD_SPACE_FLOOR = 350
+HOMEWORLD_SPACE_STEP = 5
+HOMEWORLD_SPACE_CLICKS = 20
 
 # A planet's name, in PLNT's own payload: a u32 length then the characters.
 PLANET_NAME_OFF = 24
@@ -1280,6 +1332,230 @@ def set_research(blob, civ_oid, values):
     return bytes(out)
 
 
+def _setup_flag_offsets(blob, owpr):
+    """Absolute offsets of the (homeworld, civ) setup flags in this OWPR."""
+    second = owpr.payload + research_offsets(blob, owpr)[-1]
+    return second + HOMEWORLD_FLAG_OFF, second + CIV_FLAG_OFF
+
+
+def setup_flags(blob, civ_oid):
+    """(homeworld, civ) setup-prompt flags of a civ, or None when unreadable."""
+    owpr = _owpr(blob, civ_oid)
+    if owpr is None:
+        return None
+    hw, cv = _setup_flag_offsets(blob, owpr)
+    if cv >= owpr.end:
+        return None
+    return blob[hw], blob[cv]
+
+
+def set_setup_flag(blob, civ_oid, which, value=1):
+    """Write one setup flag, 'homeworld' or 'civ'. Sizes do not change."""
+    owpr = _owpr(blob, civ_oid)
+    if owpr is None:
+        raise SystemExit(f'civ {civ_oid} has no readable OWPR')
+    hw, cv = _setup_flag_offsets(blob, owpr)
+    out = bytearray(blob)
+    out[hw if which == 'homeworld' else cv] = value
+    return bytes(out)
+
+
+def _cvtr(blob, civ_oid):
+    tree = sp.parse_blob(blob)
+    glxy = next(tree[0].find('GLXY'))
+    for o in glxy.children:
+        if o.tag != b'OWNR':
+            continue
+        n = struct.unpack_from('<I', blob, o.payload)[0]
+        if struct.unpack_from('<I', blob, o.payload + 4 + n)[0] == civ_oid:
+            return next(o.find('CVTR'), None)
+    return None
+
+
+def traits_of(blob, civ_oid):
+    """A civ's trait values in index order, or None unless CVTR holds exactly
+    the dialog's traits, each once and in order."""
+    cvtr = _cvtr(blob, civ_oid)
+    if cvtr is None or cvtr.size < CVTR_PAIRS_OFF:
+        return None
+    count = struct.unpack_from('<I', blob, cvtr.payload + CVTR_COUNT_OFF)[0]
+    if (count != len(TRAIT_RULES)
+            or cvtr.size != CVTR_PAIRS_OFF + count * CVTR_PAIR):
+        return None
+    pairs = [struct.unpack_from('<Ii', blob, cvtr.payload + CVTR_PAIRS_OFF
+                                + i * CVTR_PAIR) for i in range(count)]
+    if [index for index, _v in pairs] != list(range(count)):
+        return None
+    return tuple(v for _i, v in pairs)
+
+
+def set_traits(blob, civ_oid, values):
+    """Write a civ's trait values in place. Sizes do not change."""
+    cvtr = _cvtr(blob, civ_oid)
+    if cvtr is None:
+        raise SystemExit(f'civ {civ_oid} has no CVTR')
+    out = bytearray(blob)
+    for i, v in enumerate(values):
+        struct.pack_into('<i', out, cvtr.payload + CVTR_PAIRS_OFF
+                         + i * CVTR_PAIR + 4, v)
+    return bytes(out)
+
+
+def traits_acceptable(values, budget):
+    """(ok, why) for trait values a civ-trait confirm submitted.
+
+    Each value must be one the dialog gives, and the clicks behind them must
+    spend the galaxy's allowance exactly, since OK refuses while any is left.
+    Values overwrite rather than add, so the served values do not matter.
+    """
+    spent = 0
+    for (name, fewest, table, cost), v in zip(TRAIT_RULES, values):
+        if v not in table:
+            return False, f'{name} {v:+d} is not a value the dialog gives'
+        spent += (fewest + table.index(v)) * cost
+    if spent != budget:
+        return False, (f'the traits spend {spent} change(s), and the galaxy '
+                       f'allows exactly {budget}')
+    return True, ''
+
+
+def gset_value(blob, name):
+    """A galaxy setting's value, or None."""
+    gset = next((s for s in sp.flatten(sp.parse_blob(blob))
+                 if s.tag == b'GSET'), None)
+    if gset is None:
+        return None
+    return sp.parse_gset(blob, gset).get(name, {}).get('value')
+
+
+def homeworld_fields(plpr):
+    """(rates, space) of a PLPR payload: the fields the homeworld dialog edits."""
+    rates = tuple(struct.unpack_from('<b', plpr, off)[0]
+                  for off in HOMEWORLD_RATE_OFFS)
+    return rates, struct.unpack_from('<H', plpr, HOMEWORLD_SPACE_OFF)[0]
+
+
+def homeworlds(planets, civ_oid):
+    """The planets the client could take for a civ's homeworld.
+
+    0x00508C60 takes the civ's planet founded earliest, from PLPR+0. A tie is
+    broken by an order the blob does not show, so every planet tied for the
+    earliest is a candidate.
+    """
+    founded = {oid: struct.unpack_from('<I', plpr, FOUNDED_OFF)[0]
+               for oid, (owner, _p, plpr, _n) in planets.items()
+               if owner == civ_oid and plpr is not None}
+    if not founded:
+        return set()
+    first = min(founded.values())
+    return {oid for oid, turn in founded.items() if turn == first}
+
+
+def homeworld_acceptable(served_plpr, submitted_plpr, budget):
+    """(ok, why) for a homeworld confirm, from the planet as served."""
+    (rates_s, space_s) = homeworld_fields(served_plpr)
+    (rates_t, space_t) = homeworld_fields(submitted_plpr)
+    lo, hi = HOMEWORLD_RATES
+    clicks = 0
+    for kind, before, after in zip(('food', 'production', 'science'),
+                                   rates_s, rates_t):
+        if after != before and not lo <= after <= hi:
+            return False, f'{kind} rate {after} is outside {lo}..{hi}'
+        clicks += after - before
+    added = space_t - max(space_s, HOMEWORLD_SPACE_FLOOR)
+    if (added % HOMEWORLD_SPACE_STEP
+            or not 0 <= added // HOMEWORLD_SPACE_STEP <= HOMEWORLD_SPACE_CLICKS):
+        return False, f'space {space_s} -> {space_t} is not a click count'
+    clicks += added // HOMEWORLD_SPACE_STEP
+    if clicks != budget:
+        return False, (f'the homeworld spends {clicks} change(s), and the '
+                       f'galaxy allows exactly {budget}')
+    return True, ''
+
+
+def set_homeworld(blob, planet_oid, submitted_plpr):
+    """Copy the homeworld dialog's fields from a submitted PLPR. In place."""
+    tree = sp.parse_blob(blob)
+    glxy = next(tree[0].find('GLXY'))
+    for sola in (c for c in glxy.children if c.tag == b'SOLA'):
+        for sec in sola.find('PLNT'):
+            if struct.unpack_from('<I', blob, sec.payload)[0] != planet_oid:
+                continue
+            plpr = next(sec.find('PLPR'), None)
+            if plpr is None:
+                raise SystemExit(f'planet {planet_oid} has no PLPR')
+            out = bytearray(blob)
+            for off in HOMEWORLD_RATE_OFFS + (HOMEWORLD_SPACE_OFF,
+                                              HOMEWORLD_SPACE_OFF + 1):
+                out[plpr.payload + off] = submitted_plpr[off]
+            return bytes(out)
+    raise SystemExit(f'planet {planet_oid} not found')
+
+
+def setup_orders(served, sub, civ_oid, served_planets, sub_planets):
+    """([(kind, detail)], [refusal]) for the setup prompts' confirms.
+
+    Each prompt is one-time: its confirm is carried when the flag was clear as
+    served and is set in the submission, and only as the dialog could have
+    made it. kind is 'civ' with the trait values, or 'homeworld' with
+    (planet, submitted PLPR). Anything else that moves those fields is refused.
+    """
+    taken, refusals = [], []
+    flags_s, flags_t = setup_flags(served, civ_oid), setup_flags(sub, civ_oid)
+    if flags_s is None or flags_t is None:
+        return taken, refusals
+
+    traits_s, traits_t = traits_of(served, civ_oid), traits_of(sub, civ_oid)
+    confirmed = not flags_s[1] and flags_t[1]
+    if traits_t is None and confirmed:
+        refusals.append('civilization traits DROPPED, CVTR is not the '
+                        "dialog's ten traits")
+    elif traits_t is not None and (confirmed or traits_t != traits_s):
+        if flags_s[1]:
+            refusals.append('civilization traits DROPPED, they were already '
+                            'customised')
+        elif not confirmed:
+            refusals.append('civilization traits DROPPED, changed without the '
+                            "prompt's confirm")
+        else:
+            ok, why = traits_acceptable(traits_t, gset_value(
+                served, 'civilization_changes'))
+            if ok:
+                taken.append(('civ', traits_t))
+            else:
+                refusals.append(f'civilization traits DROPPED, {why}')
+
+    moved = {oid for oid, (owner, _p, plpr, _n) in served_planets.items()
+             if owner == civ_oid and plpr is not None
+             and oid in sub_planets and sub_planets[oid][2] is not None
+             and homeworld_fields(plpr) != homeworld_fields(sub_planets[oid][2])}
+    confirmed = not flags_s[0] and flags_t[0]
+    if moved or confirmed:
+        if flags_s[0]:
+            refusals.append('homeworld customisation DROPPED, it was already '
+                            'customised')
+        elif not confirmed:
+            refusals.append('homeworld customisation DROPPED, changed without '
+                            "the prompt's confirm")
+        elif len(moved) != 1:
+            refusals.append(f'homeworld customisation DROPPED, it changes '
+                            f'{len(moved)} planets, not one')
+        else:
+            (oid,) = moved
+            if oid not in homeworlds(served_planets, civ_oid):
+                refusals.append(f'homeworld customisation DROPPED, planet '
+                                f'{oid} is not the homeworld')
+            else:
+                ok, why = homeworld_acceptable(
+                    served_planets[oid][2], sub_planets[oid][2],
+                    gset_value(served, 'homeworld_changes'))
+                if ok:
+                    taken.append(('homeworld', (oid, sub_planets[oid][2])))
+                else:
+                    refusals.append(f'homeworld customisation DROPPED, {why}')
+    return taken, refusals
+
+
 def _tally(jobs):
     """"6 farmer, 2 worker" from a list of job ids, for a log line."""
     import collections
@@ -1577,11 +1853,30 @@ def merge(blob, submissions, log=print, notes=None):
 
             # research topic
             theirs = research_of(sub, mine)
-            served = served_research.get(mine)
-            if theirs is not None and served is not None and theirs != served:
+            topic_served = served_research.get(mine)
+            if (theirs is not None and topic_served is not None
+                    and theirs != topic_served):
                 blob = set_research(blob, mine, theirs)
                 topic = struct.unpack_from('<I', theirs[0], 0)[0]
                 log(f"    research: topic taken (id {topic})")
+                accepted += 1
+
+            # The one-time setup prompts' confirms, against the state served.
+            taken, refusals = setup_orders(served, sub, mine, served_planets,
+                                           planet_index(sub))
+            for why in refusals:
+                drop(why)
+            for kind, detail in taken:
+                if kind == 'civ':
+                    blob = set_traits(blob, mine, detail)
+                    log(f"    civilization traits taken: {list(detail)}")
+                else:
+                    oid, plpr = detail
+                    blob = set_homeworld(blob, oid, plpr)
+                    rates, space = homeworld_fields(plpr)
+                    log(f"    homeworld {oid} customised: rates {rates}, "
+                        f"space {space}")
+                blob = set_setup_flag(blob, mine, kind)
                 accepted += 1
 
             # Research belonging to anyone else, against the state as served.
