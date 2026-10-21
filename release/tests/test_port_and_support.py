@@ -289,12 +289,36 @@ check("without the uid or the token",
 check("with no sign-in it still says what to do",
       L.seat_held_text("DemoPlayer", None),
       lambda t: "operator" in t and "code" not in t)
+relay_src = open(os.path.join(REPO, "functions", "relay.py"),
+                 encoding="utf-8").read()
 check("the relay's refusal is the sentence matched",
-      L.SEAT_HELD in open(os.path.join(REPO, "functions", "relay.py"),
-                          encoding="utf-8").read(), True)
+      L.SEAT_HELD in relay_src, True)
+sys.path.insert(0, os.path.join(REPO, "functions"))
+import relay                                                    # noqa: E402
+
+
+class Sandbox:
+    galaxy = "sandbox"
+
+
+try:
+    relay.seat_or_refuse(Sandbox(), {}, "unseated", "DemoPlayer")
+    no_seat = ""
+except relay.Refused as exc:
+    no_seat = str(exc)
+# Read from the refusal itself: the relay builds this sentence in two pieces.
+check("and so is its refusal where seats are not claimed on first use",
+      no_seat, lambda t: L.NOT_SEATED in t)
+check("either sentence is a seat refused",
+      [L.seat_refused("DemoPlayer is " + L.SEAT_HELD),
+       L.seat_refused("HTTP Error 403: Forbidden: no seat in sandbox "
+                      "is bound to this sign-in")], [True, True])
+check("and nothing else is",
+      [L.seat_refused("HTTP Error 503: Service Unavailable"),
+       L.seat_refused(None)], [False, False])
 src = inspect.getsource(L.Launcher.start_multiplayer)
 check("the turn loop's failure turns a held seat into that box",
-      "SEAT_HELD in said[1]" in src and "seat_held_text(" in src, True)
+      "seat_refused(said[1])" in src and "seat_held_text(" in src, True)
 
 print("\n6. a relay refusal is read in the relay's words")
 body = json.dumps({"error": "DemoPlayer is already held by another "

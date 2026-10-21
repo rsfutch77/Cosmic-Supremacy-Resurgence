@@ -48,29 +48,8 @@ is not code-signed. Click **More info**, then **Run anyway**. The launcher's
 source is [in this repository](https://github.com/rsfutch77/Cosmic-Supremacy-Resurgence/blob/v0.1.1/release/launcher.py) if you would rather build it
 yourself.
 
-## What you can play
-
-| Mode | What it is |
-|------|------------|
-| Play the Tutorial | The original guided walkthrough. Start here if you have never played. |
-| View the Demo | The original demo galaxy, in an advanced state. |
-| Play Single Player | A full galaxy against the new Resurgence AI, resolving turns on your machine. |
-| Multiplayer | Not in this release. |
-
 ## Verifying the download
 
     SHA-256  1e77d478dacfbb7a3ce6dbca2272a5d90a1a33eac2cad5cfe18b0eba7082947f
 
     Get-FileHash CosmicSupremacy-Resurgence-v0.1.1.zip -Algorithm SHA256
-
-## Reporting a problem
-
-Click **show log** at the bottom of the launcher, then attach that pane plus
-`data\launcher.log` and `data\cs_server.log` to an
-[issue](https://github.com/rsfutch77/Cosmic-Supremacy-Resurgence/issues).
-
-Thanks to the players who reported these; both came from the first round of
-feedback after v0.1.0.
-
-The restored site, with the full manual and wiki, is at
-[cosmicresurgence.com](https://cosmicresurgence.com).
