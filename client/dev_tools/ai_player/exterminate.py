@@ -705,6 +705,114 @@ def _is_threat(group):
             or any(k >= 1 for c in group for k in c[1]))
 
 
+MILITARY_SCAN = 4
+MILITARY_FRESH = 3        # turns a military scan of a moving stack is current
+
+
+def _scanned_threat(snap, civ, act, foes, group, log):
+    """The group's strength from military scans, scanning it first if a scan
+    is held and none is fresh. None when there is neither."""
+    import intel
+    spots = [c[0] for c in group]
+
+    def fresh():
+        reps = [r for r in intel.military_scans(snap, civ)
+                if snap.turn - r["turn"] <= MILITARY_FRESH
+                and any(gs.dist(r["pos"], at) <= AT_PLANET for at in spots)]
+        if not reps:
+            return None
+        # One report per position: the newest of each.
+        seen, keep = [], []
+        for r in reps:
+            if not any(gs.dist(r["pos"], q) <= AT_PLANET for q in seen):
+                seen.append(r["pos"])
+                keep.append(r)
+        parts = [intel.military_threat(r) for r in keep]
+        return {"turn": min(p["turn"] for p in parts),
+                "civ": "/".join(sorted({c[3] for c in group})),
+                "firepower": tuple(sum(p["firepower"][i] for p in parts)
+                                   for i in range(3)),
+                "planet_hp": 0,
+                "ship_hp": (sum(p["ship_hp"][0] for p in parts),
+                            sum(p["ship_hp"][1] for p in parts))}
+
+    known = fresh()
+    if (known is None and act.remote is not None and not act.dry_run
+            and act.remote.scan_count(civ.addr, MILITARY_SCAN) > 0):
+        foe_addrs = {f.addr for f in foes}
+        targets, taken = [], []
+        for obj in list(snap.ships) + list(snap.fleets):
+            if (obj.owner is None or obj.owner.addr not in foe_addrs
+                    or None in obj.pos
+                    or not any(gs.dist(obj.pos, at) <= 0.01 for at in spots)
+                    or any(gs.dist(obj.pos, q) <= 0.01 for q in taken)):
+                continue
+            taken.append(obj.pos)          # UseScans takes the whole stack
+            targets.append(obj)
+        if targets:
+            log(f"R-XTM-02: military scan of {len(targets)} enemy stack(s)")
+            try:
+                act.use_scan(civ, MILITARY_SCAN, targets)
+                known = fresh()
+            except (ValueError, RuntimeError) as e:
+                log(f"  could not scan: {e}")
+    if known is None and any(c[2] for c in group):
+        known = _fleet_scanned_threat(snap, civ, act, foes, group, log)
+    return known
+
+
+FLEET_SCAN = 3
+
+
+def _fleet_scanned_threat(snap, civ, act, foes, group, log):
+    """A fleet's strength estimated from a fleet scan's per-class counts,
+    each class priced as our own strongest design of that hull. A player
+    knows his own designs, not the enemy's, so this is an estimate."""
+    import intel
+    spots = [c[0] for c in group if c[2]]
+
+    def fresh():
+        return [r for r in intel.fleet_scans(snap, civ)
+                if snap.turn - r["turn"] <= MILITARY_FRESH
+                and any(gs.dist(r["pos"], at) <= AT_PLANET for at in spots)]
+
+    reps = fresh()
+    if (not reps and act.remote is not None and not act.dry_run
+            and act.remote.scan_count(civ.addr, FLEET_SCAN) > 0):
+        foe_addrs = {f.addr for f in foes}
+        targets = [f for f in snap.fleets
+                   if f.owner is not None and f.owner.addr in foe_addrs
+                   and any(gs.dist(f.pos, at) <= 0.01 for at in spots)]
+        if targets:
+            log(f"R-XTM-02: no military scan; fleet scan of {len(targets)} fleet(s)")
+            try:
+                act.use_scan(civ, FLEET_SCAN, targets)
+                reps = fresh()
+            except (ValueError, RuntimeError) as e:
+                log(f"  could not scan: {e}")
+    if not reps:
+        return None
+    ours = [d for d in warship_designs(snap, civ)]
+    if not ours:
+        return None
+    fp, light, heavy = [0, 0, 0], 0.0, 0.0
+    for rep in reps:
+        for cid, n in rep["classes"].items():
+            same = [d for d in ours if cid in (d.chassis or [])] or ours
+            # Priced by what hurts ships, the way margin() counts incoming
+            # fire; a bomber's bombs only hit planets. Pessimistic on purpose.
+            l, h, b, hp = max((unit_stats(d, act) for d in same),
+                              key=lambda u: (u[0] + u[1] / 2, u[3]))
+            fp = [fp[0] + n * l, fp[1] + n * h, fp[2] + n * b]
+            if cid >= intel.HEAVY_CHASSIS:
+                heavy += n * hp
+            else:
+                light += n * hp
+    return {"turn": min(r["turn"] for r in reps),
+            "civ": "/".join(sorted({c[3] for c in group})),
+            "firepower": tuple(fp), "planet_hp": 0, "ship_hp": (light, heavy)}
+
+
 def run_xtm02(snap, civ, act, hist, log=print):
     """R-XTM-02: hold a planet that enemy ships are in scan range of.
 
@@ -757,7 +865,8 @@ def run_xtm02(snap, civ, act, hist, log=print):
                 f"scan range of {planet}; no warship can reach it within "
                 f"{DEFEND_REACH} turns")
             continue
-        known = info.fleet({c[3] for c in group})
+        known = (_scanned_threat(snap, civ, act, foes, group, log)
+                 or info.fleet({c[3] for c in group}))
         if known is not None:
             m = margin([(s.design, s.condition) for s in here + going
                         if s.design], known, act)

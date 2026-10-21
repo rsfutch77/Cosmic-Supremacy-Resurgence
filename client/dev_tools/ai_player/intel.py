@@ -248,6 +248,121 @@ def planetary_scans(snap, civ):
     return out
 
 
+# A military scan (type 4) holds one 124-byte entry per ship in the stack:
+# +0x08 a stats text, +0x34 a hull text naming the chassis, +0x50 base and
+# +0x58 effective hitpoints, +0x60 condition (float), +0x68/+0x6C/+0x70
+# firepower light / heavy / bomb. Matched against an f1's own stat block.
+MILITARY = 4
+MILITARY_ENTRY = 124
+HEAVY_CHASSIS = 3            # chassis 0-2 are light hulls, 3-5 heavy
+
+
+def _std_string(snap, blob, off):
+    """An MSVC std::string inside `blob`: inline below 16 characters."""
+    size, cap = struct.unpack_from("<II", blob, off + 0x10)
+    if not 0 < size <= MAX_TEXT or cap < size:
+        return ""
+    if cap < 16:
+        return blob[off:off + size].decode("latin-1")
+    return _text(snap, struct.unpack_from("<I", blob, off)[0], size)
+
+
+def military_scans(snap, civ):
+    """Every military scan this civ holds, newest first: turn, position, and
+    per ship (chassis id, effective hitpoints, condition, (light, heavy, bomb))."""
+    b, e = snap.rd32(civ.addr + SCAN_REPORTS), snap.rd32(civ.addr + SCAN_REPORTS + 4)
+    out = []
+    if not b or not e or e < b or e - b > 4 * 4096:
+        return out
+    chassis_by_name = {v: k for k, v in gs.CHASSIS.items()}
+    for slot in range(b, e, 4):
+        rep = snap.rd32(slot)
+        head = snap.read(rep, 0x34) if gs.is_ptr(rep) else None
+        if not head or len(head) < 0x34 or struct.unpack_from("<I", head, 4)[0] != MILITARY:
+            continue
+        first, last = struct.unpack_from("<II", head, 0x2C)
+        if not first or last <= first or (last - first) % MILITARY_ENTRY:
+            continue
+        ships = []
+        for i in range((last - first) // MILITARY_ENTRY):
+            ent = snap.read(first + i * MILITARY_ENTRY, MILITARY_ENTRY)
+            if not ent or len(ent) < MILITARY_ENTRY:
+                continue
+            hull = _std_string(snap, ent, 0x34).lower()
+            chassis = next((cid for name, cid in chassis_by_name.items()
+                            if name in hull), 0)
+            ships.append({
+                "chassis": chassis,
+                "hp": struct.unpack_from("<i", ent, 0x58)[0],
+                "condition": struct.unpack_from("<f", ent, 0x60)[0],
+                "firepower": struct.unpack_from("<3i", ent, 0x68),
+            })
+        out.append({"turn": struct.unpack_from("<I", head, 0xC)[0],
+                    "pos": struct.unpack_from("<3f", head, 0x10),
+                    "ships": ships})
+    out.sort(key=lambda r: -r["turn"])
+    return out
+
+
+def military_threat(report):
+    """A military scan as margin() reads a defence: summed firepower and
+    light / heavy ship hitpoints, condition applied, no planet."""
+    fp = [0, 0, 0]
+    light = heavy = 0.0
+    for s in report["ships"]:
+        for i in range(3):
+            fp[i] += s["firepower"][i]
+        hp = s["hp"] * (s["condition"] if 0 < s["condition"] <= 1 else 1.0)
+        if s["chassis"] >= HEAVY_CHASSIS:
+            heavy += hp
+        else:
+            light += hp
+    return {"turn": report["turn"], "firepower": tuple(fp), "planet_hp": 0,
+            "ship_hp": (light, heavy)}
+
+
+# A fleet scan (type 3) holds one 52-byte entry per fleet: +0x04 ship count,
+# +0x18 a text listing each hull class, e.g. "(with 1 x <ShipShuttleSmall>
+# Shuttle-Class, 1 x <ShipCorvetteSmall>Corvette-Class Ships)": only the last
+# class carries "Ships". The class counts are read from that text; +0x08 holds
+# the same counts as four uint16s by chassis id 0-3 (1, 1, 0, 0 for that fleet).
+FLEET = 3
+FLEET_ENTRY = 52
+CLASS_COUNT = re.compile(r"(\d+) x \x0c<Ship\w*>(\w+)-Class")
+
+
+def fleet_scans(snap, civ):
+    """Every fleet scan this civ holds, newest first: turn, position, and
+    {chassis id: ship count} per fleet scanned."""
+    b, e = snap.rd32(civ.addr + SCAN_REPORTS), snap.rd32(civ.addr + SCAN_REPORTS + 4)
+    out = []
+    if not b or not e or e < b or e - b > 4 * 4096:
+        return out
+    chassis_by_name = {v: k for k, v in gs.CHASSIS.items()}
+    for slot in range(b, e, 4):
+        rep = snap.rd32(slot)
+        head = snap.read(rep, 0x34) if gs.is_ptr(rep) else None
+        if not head or len(head) < 0x34 or struct.unpack_from("<I", head, 4)[0] != FLEET:
+            continue
+        first, last = struct.unpack_from("<II", head, 0x2C)
+        if not first or last <= first or (last - first) % FLEET_ENTRY:
+            continue
+        classes = {}
+        for i in range((last - first) // FLEET_ENTRY):
+            ent = snap.read(first + i * FLEET_ENTRY, FLEET_ENTRY)
+            if not ent or len(ent) < FLEET_ENTRY:
+                continue
+            for n, name in CLASS_COUNT.findall(_std_string(snap, ent, 0x18)):
+                cid = chassis_by_name.get(name.lower())
+                if cid is not None:
+                    classes[cid] = classes.get(cid, 0) + int(n)
+        out.append({"turn": struct.unpack_from("<I", head, 0xC)[0],
+                    "pos": struct.unpack_from("<3f", head, 0x10),
+                    "classes": classes})
+    out.sort(key=lambda r: -r["turn"])
+    return out
+
+
 def defended(info):
     return bool(info) and (info["planet_hp"] > 0 or any(info["firepower"])
                            or any(info["ship_hp"]))
