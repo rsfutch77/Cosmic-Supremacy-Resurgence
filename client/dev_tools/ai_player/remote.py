@@ -73,6 +73,15 @@ DESIGN_RESOURCE_COST = 0x00548990   # __thiscall(int resId), ret 4, on tag + 4
 # it: a raw Planet:296 write skips the charge, and a later engine call then
 # refunds a charge that was never made.
 SET_PRODUCTION = 0x004F8290
+# Scans. Held scans are a std::map<type, count> on the Owner (head Owner:64,
+# size Owner:68, which counts types ever held, not scans). The getter is
+# __thiscall(int type) on the Owner primary, ret 4. UseScans is
+# __cdecl(Vec* out, Vec* targets, Owner* primary, int type): it builds `out`
+# itself, makes one report per target group (Owner:320), and takes one scan
+# from the inventory per report. Targets are allocation starts (tag - 8).
+SCAN_COUNT = 0x0053B8F0
+USE_SCANS  = 0x0054E840
+SCAN_VEC_SIZE = 0x18              # proxy, ..., first +0xC, last +0x10, end +0x14
 
 # Declaring war the way the declare-war button does (0x00442A70): a Treaty
 # proposal of kind 1, applied by the engine. The apply copies it into a
@@ -622,6 +631,60 @@ class Remote:
                 CALL_EAX +
                 RET_4)
         self.run_stub(code, f"market {'buy' if buy else 'sell'} {qty} of index {index}")
+
+    def scan_count(self, civ_tag, scan_type):
+        """Scans of this type the civ holds (read-only)."""
+        code = (push_imm(scan_type) +
+                mov_ecx_imm(civ_tag + OWNER_PRIMARY_FROM_TAG) +
+                mov_eax_imm(SCAN_COUNT) +
+                CALL_EAX +
+                RET_4)
+        return self.run_stub(code, f"scans of type {scan_type} held")
+
+    def use_scans(self, civ_tag, scan_type, target_allocs):
+        """Use held scans of one type on these targets; the reports made.
+
+        Runs the engine's own UseScans, which checks the inventory and the
+        target class itself. Returns the new report pointers, which Owner:320
+        owns. The UI's wrapper also posts news and recomputes vision; neither
+        is needed for the report.
+        """
+        n = len(target_allocs)
+        if not n:
+            return []
+        # [0, 0x18) out, built by the engine; [0x20, 0x38) targets;
+        # [0x40] targets' proxy; [0x48 ..) the element array.
+        block = self.alloc(0x48 + 4 * n)
+        out, targets, proxy, arr = block, block + 0x20, block + 0x40, block + 0x48
+        vec = bytearray(SCAN_VEC_SIZE)
+        struct.pack_into("<I", vec, 0, proxy)
+        struct.pack_into("<III", vec, 0xC, arr, arr + 4 * n, arr + 4 * n)
+        self.write(targets, bytes(vec))
+        self.write(proxy, struct.pack("<I", targets))
+        self.write(arr, struct.pack(f"<{n}I", *target_allocs))
+        code = (push_imm(scan_type) +
+                push_imm(civ_tag + OWNER_PRIMARY_FROM_TAG) +
+                push_imm(targets) +
+                push_imm(out) +
+                mov_eax_imm(USE_SCANS) +
+                CALL_EAX +
+                ADD_ESP_16 +
+                RET_4)
+        self.run_stub(code, f"use {n} scan(s) of type {scan_type}")
+        raw = self.read(out, SCAN_VEC_SIZE)
+        out_proxy = struct.unpack_from("<I", raw, 0)[0]
+        first, last = struct.unpack_from("<II", raw, 0xC)
+        made = []
+        if first and last > first:
+            made = list(struct.unpack(f"<{(last - first) // 4}I",
+                                      self.read(first, last - first)))
+        # The engine allocated out's buffer and proxy; the reports stay.
+        for p in (first, out_proxy):
+            if p:
+                self.run_stub(push_imm(p) + mov_eax_imm(OPERATOR_DELETE) +
+                              CALL_EAX + ADD_ESP_4 + RET_4, "free a UseScans buffer")
+        self.free(block)
+        return made
 
     def design_min_crew(self, design_tag):
         """ShipDesign:76: the minimum crew a design needs to function."""

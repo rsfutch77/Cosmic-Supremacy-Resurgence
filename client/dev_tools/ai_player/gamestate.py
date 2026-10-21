@@ -292,6 +292,27 @@ class Ship(Obj):
         return (cap - end) // 16
 
 
+def facility_map(snap, head):
+    """{typeId: count} from a facility map's head node, wherever the map lives
+    (a planet's Planet:204, or the copy inside a planetary scan report)."""
+    if not is_ptr(head):
+        return {}
+    out, seen, stack = {}, set(), [head]
+    while stack and len(seen) < 256:
+        n = stack.pop()
+        if not is_ptr(n) or n in seen:
+            continue
+        seen.add(n)
+        blob = snap.read(n, 24)
+        if not blob or len(blob) < 24:
+            continue
+        left, parent, right, vf, tid, cnt = struct.unpack_from("<IIIIII", blob, 0)
+        if vf == FACILITY_VFTABLE:
+            out[tid] = cnt
+        stack.extend((left, parent, right))
+    return out
+
+
 class Planet(Obj):
     @property
     def pos(self):          return (self.f32(4), self.f32(8), self.f32(12))
@@ -364,23 +385,7 @@ class Planet(Obj):
     def facilities(self):
         """{typeId: count} walked out of the Planet:204 map. An empty map points
         all three head slots at itself."""
-        head = self.u32(204)
-        if not is_ptr(head):
-            return {}
-        out, seen, stack = {}, set(), [head]
-        while stack and len(seen) < 256:
-            n = stack.pop()
-            if not is_ptr(n) or n in seen:
-                continue
-            seen.add(n)
-            blob = self.snap.read(n, 24)
-            if not blob or len(blob) < 24:
-                continue
-            left, parent, right, vf, tid, cnt = struct.unpack_from("<IIIIII", blob, 0)
-            if vf == FACILITY_VFTABLE:
-                out[tid] = cnt
-            stack.extend((left, parent, right))
-        return out
+        return facility_map(self.snap, self.u32(204))
 
     @property
     def production(self):

@@ -204,6 +204,50 @@ class Intel:
         return self.fought.get(planet.id, -1) >= since
 
 
+# Scan reports, Owner:320/324: pointers to report objects. Every report has
+# +4 type, +0xC turn, +0x10..0x18 target position. A planetary scan (type 0)
+# holds a copy of the target's PlanetProperties at +0x28, so the target's
+# Planet:N reads at report + 0x28 + (N - 88).
+SCAN_REPORTS = 320
+PLANETARY = 0
+PLANETARY_COPY = 0x28 - 88
+
+
+def planetary_scans(snap, civ):
+    """{planet id: newest planetary scan of it}: turn, stationed military,
+    citizens, facilities. What a player reads in the scan reports tab."""
+    b, e = snap.rd32(civ.addr + SCAN_REPORTS), snap.rd32(civ.addr + SCAN_REPORTS + 4)
+    out = {}
+    if not b or not e or e < b or e - b > 4 * 4096:
+        return out
+    for slot in range(b, e, 4):
+        rep = snap.rd32(slot)
+        raw = snap.read(rep, 0x200) if gs.is_ptr(rep) else None
+        if not raw or len(raw) < 0x200:
+            continue
+        kind, turn = struct.unpack_from("<I", raw, 4)[0], struct.unpack_from("<I", raw, 0xC)[0]
+        if kind != PLANETARY:
+            continue
+        pos = struct.unpack_from("<3f", raw, 0x10)
+        planet = min(snap.planets, key=lambda p: gs.dist(p.pos, pos), default=None)
+        if planet is None or gs.dist(planet.pos, pos) > AT_PLANET:
+            continue
+
+        def count(off, stride=16):
+            first, last = struct.unpack_from("<II", raw, PLANETARY_COPY + off)
+            return (last - first) // stride if first and last >= first else 0
+        if planet.id in out and out[planet.id]["turn"] > turn:
+            continue
+        out[planet.id] = {
+            "turn": turn,
+            "military": count(168),
+            "citizens": count(144),
+            "facilities": gs.facility_map(
+                snap, struct.unpack_from("<I", raw, PLANETARY_COPY + 204)[0]),
+        }
+    return out
+
+
 def defended(info):
     return bool(info) and (info["planet_hp"] > 0 or any(info["firepower"])
                            or any(info["ship_hp"]))

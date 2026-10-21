@@ -163,6 +163,7 @@ One module per UI action. Grade is how confident we are it works today.
 | N | **Conscript a citizen** | `ChangeCitizenJobs` `0x00574180` (`__cdecl`, 4 args) with job id 3, priced by `GetDraftCost` `0x00516060` | **READY**, `actions.conscript`. Confirmed live: citizen count −1, stationed military +1, and cash down by exactly the quoted 115. The cost getter was validated first against a formula derived from the disassembly, six readings across two civs, all exact |
 | N′ | **Conscript straight onto a ship** | rewrite the citizen list without the drafted records; hand those records to a fresh crew buffer; debit `GetDraftCost` | **READY**, `actions.conscript_to_crew`. Confirmed live twice, and it is what finally unblocked Exterminate. See below |
 | O | **Buy or sell a resource** | engine `BuyResource` `0x005125D0` / `SellResource` `0x00512560`, `__thiscall(index, qty)` `ret 8` on Owner tag + 1116; quotes from `0x00512090` / `0x00511EF0` | **READY**, `actions.market_buy` / `market_sell`. Confirmed live: 100 deuterium cost exactly the quoted 1,200 and moved the next quote to 1,208; 600 metal sold for 585. Tag + 1104, one static reading's off-by-12, crashed the client in `GetTrait`; `remote.market_trade` now checks the owner back-pointer first |
+| P | **Produce and use a scan** | produce: `Planet:292` = type, `SetProduction` on the embedded `Scan` (planet tag + 288); held: `std::map<type,count>` at `Owner:64` (`Owner:68` is the map's size, not a count), getter `0x0053B8F0`; use: `UseScans` `0x0054E840`, `__cdecl(out, targets, Owner primary, type)` | **READY**, `actions.queue_scan` / `use_scan`, `remote.scan_count`. Confirmed live: a route scan produced on #82, held 1, used on BadGuy's #213, one report appended to `Owner:320` and the inventory back to 0. The engine checks the inventory and the target class; one scan per report |
 
 ---
 
@@ -314,6 +315,9 @@ total output it steps down and the surplus scientists become workers.
 **R-XPL-02, Facility build order**
 ```
 priority, first match among types research has unlocked (`exploit.buildable_types`):
+  defence ag. 8   if the civ has none, R-XTM-10 wants a scan type, and this is
+                  its planet without a shipyard that has the most workers;
+                  ahead of farms, which a big planet nearly always wants
   farm 0          if there is none, the store is under 25%, or the surplus is
                   below GROWTH_MARGIN_PER_POP per citizen
   military camp 6 if there is none and pop >= 6
@@ -324,12 +328,19 @@ priority, first match among types research has unlocked (`exploit.buildable_type
   factory 1       if there is none and workers >= FACTORY_WORKERS
   university 4    if there is none and pop >= 8
   banking ctr 16  if there is none and pop >= BANK_POP
+  mine 13         if there is none and miners >= MINE_MINERS (R-XPL-11)
 THEN   Planet:284[P] = that id, Planet:344[P] = 1
 USES   B, C
 ```
-`exploit.wanted_facility` is the authority. The defence agency is not built. Factory and
+`exploit.wanted_facility` is the authority. One defence agency is built, for scans. Factory and
 banking center were added with the cash policy: "scaled correctly, there is always something
 worth building", and a planet that had built a farm, camp and university otherwise sat idle.
+
+[ ] **Big planets build farm after farm.** BadGuy's #116 had 12 farms and was building a 13th
+(3,875 progress) on turn 436, with #134 and #189 the same: a farm is wanted while the surplus is
+below `GROWTH_MARGIN_PER_POP` per citizen, which a large population keeps true. It held the
+defence agency off for 40 turns until the agency was moved ahead of farms. Worth checking whether
+those farms raise the surplus at all, or whether the margin should stop scaling with population.
 
 **R-XPL-10, Buy what a ship lacks**, IMPLEMENTED as `exploit.provision`, called by every ship-queueing rule through `exploit.queue_ship`
 ```
@@ -474,15 +485,26 @@ THEN   hold idle warships already at that planet, and send idle or staged
 USES   M
 ```
 
-[ ] **Scans for what a probe cannot learn; probes stay the battle intel (decided Oct 2026).**
-A probe is a 565-credit hull and its battle report is all R-XTM-03 needs. A scan costs far more:
-the planet needs a Central Defence Agency (facility 8, 6,000 production, from Basic Scanning),
-which is why no civ here has ever scanned, and a route scan is 3,500 production more. Scans are
-still worth having for fleet composition and routes. Known so far, from a route scan queued in
-the UI: queueing is three writes, `Planet:292` = scan type (2 route, 3 fleet), `Planet:296` = the
-embedded `Scan` at planet tag + 288, `Planet:344` = 1, with no target stored at queue time.
-Reports land in `Owner:320` (layout in the annotations). Still to find: where a finished scan is
-held, how it is aimed at a target (watch the UI do it), and what types 0 and 5 are.
+[ ] **Scans, wired in stages (Oct 2026).** Probes stay the fallback for battle intel. The
+policy, decided: keep one each of planetary (0), fleet (3) and military (4) scans in stock once
+unlocked, and use them before invading, on threatening fleets, and on enemy ships; with none in
+stock, probe. Every scan needs a Central Defence Agency (facility 8, 6,000) on the producing
+planet. Types, costs (`0x80AB60`) and unlocks:
+
+| id | Scan | Cost | Target | Reveals | Unlocked by |
+|---|---|---|---|---|---|
+| 0 | Planetary | 9,000 | enemy Planet | a copy of its PlanetProperties: citizens, stationed military, facilities, production | Advanced Scanning (#24) |
+| 1 | System | 20,000 | Sun | 8 turns of vision | Deep-Space Scanning (#21) |
+| 2 | Route | 3,500 | Ship/Fleet | its route | Basic Scanning (#23) |
+| 3 | Fleet | 5,000 | Fleet | ship count and per-class counts | Basic Scanning (#23) |
+| 4 | Military | 16,000 | Ship/Fleet | weapons, shields, units, speed, rank, condition (as text) | Advanced Tactics (#20) |
+| 5-7 | Technology, Energy grid, Leader name | 10,000-20,000 | Planet | civ-level | #24, #19, #79 |
+
+Done: actuator P, R-XTM-10's stock, planetary reports read by `intel.planetary_scans`, and
+their use in R-XTM-04. Still to do: fleet and military reports have no parser, so nothing
+uses them yet. No AI civ forms fleets, so a fleet scan only matters against a human, and
+military scans need Advanced Tactics (#20), which neither test civ has. Both need a sample
+report before a parser can be written. Reports never expire; a system scan's vision does.
 
 **R-XTM-03, Raid**, IMPLEMENTED in `exterminate.run_xtm03`
 ```
@@ -524,6 +546,27 @@ Runs after R-XTM-03, so ships committed to a raid are already claimed, and after
 so a withdrawing ship is never redirected.
 
 **R-XTM-04, Conquer**, IMPLEMENTED in `exterminate.run_xtm04`, and it has taken a planet
+```
+WHEN   a TROOP ship carries troops beyond its flight crew, at war, and some enemy
+       planet is undefended and unguarded (guarded_planets)
+SCAN   with a planetary scan in stock, scan the nearest candidate that has no
+       report from the last SCAN_FRESH turns (one scan a pass)
+SKIP   a candidate whose newest report, of any age, shows a garrison >= the
+       troops aboard, or planetary-defence facilities (9, 10, 11, 19); a
+       garrison does not shrink without a fight
+THEN   conquer (Ship:52 = 5) the nearest candidate left; with no report, as before
+USES   P, M
+```
+A planetary report (`intel.planetary_scans`) is a copy of the target's PlanetProperties, so
+its stationed military is exact as of the scan. BadGuy's HQ read 46.
+
+**R-XTM-10, Keep scans in stock**, IMPLEMENTED in `exterminate.run_xtm10`
+```
+WHEN   in contact, and research has unlocked a type in SCAN_STOCK (planetary 0,
+       fleet 3, military 4) that the civ holds fewer than one of
+THEN   an idle planet with a Central Defence Agency produces it
+USES   P
+```
 
 **R-XTM-06, Garrison a planet just taken**, IMPLEMENTED in `exterminate.run_xtm06`
 ```
@@ -628,8 +671,12 @@ Generated by `constants.py --write`; edit the code, not this table.
 | `REPAIRED_AT` | 0.90 | `exterminate.py` | a withdrawn ship stays at the shipyard until this |
 | `AT_PLANET` | 1.0 | `exterminate.py` | a ship within this distance of a planet is at it |
 | `GUARD_MEMORY` | 10 | `exterminate.py` | turns a guard seen orbiting a planet keeps it off the troop target list |
+| `PLANETARY_SCAN` | 0 | `exterminate.py` |  |
+| `SCAN_FRESH` | 20 | `exterminate.py` | turns a planetary scan's garrison count is trusted |
 | `AT_PLANET` | 1.0 | `intel.py` | a report this close to a planet is about it |
 | `MAX_AGE` | 40 | `intel.py` | turns; older intel is treated as unknown |
+| `SCAN_REPORTS` | 320 | `intel.py` | Scan reports, Owner:320/324: pointers to report objects. Every report has +4 type, +0xC turn, +0x10..0x18 target position. A planetary scan (type 0) holds a copy of the target's PlanetProperties at +0x28, so the target's Planet:N reads at report + 0x28 + (N - 88). |
+| `PLANETARY` | 0 | `intel.py` |  |
 <!-- constants:end -->
 
 ## 7. Engine calls vs. field writes

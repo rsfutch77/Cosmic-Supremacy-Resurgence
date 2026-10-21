@@ -827,6 +827,103 @@ def run_xtm09(snap, civ, act, hist, log=print):
         return len(flying)
 
 
+# Scans (R-XTM-10). Types: 0 planetary, 3 fleet, 4 military; one of each in
+# stock once research unlocks it. A planetary scan reads a target's garrison,
+# which no battle report shows.
+SCAN_STOCK = {0: 1, 3: 1, 4: 1}
+PLANETARY_SCAN = 0
+SCAN_FRESH = 20           # turns before a scanned target is scanned again
+PLANET_DEFENCE_FACILITIES = (9, 10, 11, 19)   # their hitpoints block a landing
+
+
+def _invasion_target(snap, civ, act, ship, candidates, troops, log):
+    """The nearest candidate this hull's troops can take, scanning first.
+
+    With a planetary scan in stock, the nearest candidate without a report
+    from the last SCAN_FRESH turns is scanned (one per pass). The newest
+    report of any age rules a planet out when its garrison is at least
+    `troops`, or it has planetary-defence facilities. With no report the
+    planet stays a candidate, as before scans.
+    """
+    import intel
+    order = sorted(candidates, key=lambda p: gs.dist(ship.pos, p.pos))
+    scans = intel.planetary_scans(snap, civ)
+
+    def fresh(p):
+        rep = scans.get(p.id)
+        return rep if rep and snap.turn - rep["turn"] <= SCAN_FRESH else None
+
+    unscanned = [p for p in order if fresh(p) is None]
+    if (unscanned and act.remote is not None and not act.dry_run
+            and not getattr(act, "scanned_this_pass", False)
+            and act.remote.scan_count(civ.addr, PLANETARY_SCAN) > 0):
+        act.scanned_this_pass = True
+        log(f"R-XTM-04: planetary scan of {unscanned[0]} before committing {ship}")
+        try:
+            act.use_scan(civ, PLANETARY_SCAN, [unscanned[0]])
+            scans = intel.planetary_scans(snap, civ)     # reads reports live
+        except (ValueError, RuntimeError) as e:
+            log(f"  could not scan: {e}")
+    for p in order:
+        # A garrison does not shrink without a fight, so an old report still
+        # rules a planet out; freshness only decides when to scan again.
+        rep = scans.get(p.id)
+        if rep is None:
+            return p
+        turrets = [f for f in PLANET_DEFENCE_FACILITIES if rep["facilities"].get(f)]
+        if rep["military"] >= troops or turrets:
+            log(f"R-XTM-04: {p} is held by {rep['military']} unit(s)"
+                + (f" and planetary defence {turrets}" if turrets else "")
+                + f" (scanned turn {rep['turn']}); {ship} carries {troops}")
+            continue
+        return p
+    return None
+
+
+def wanted_scans(snap, civ, hist):
+    """Scan types worth keeping in stock: SCAN_STOCK's, once research unlocks
+    them and there is someone to scan."""
+    if hist is None or not contacted(snap, civ, hist):
+        return {}
+    import research
+    done = {t for t, _ in civ.completed}
+    unlocked = research.unlocked(done, research.SCAN)
+    return {t: n for t, n in SCAN_STOCK.items() if t in unlocked}
+
+
+def run_xtm10(snap, civ, act, hist, log=print):
+    """R-XTM-10: keep one of each wanted scan type in stock.
+
+    Scans are produced on a planet with a Central Defence Agency (R-XPL-02
+    builds one); an idle one starts the most-needed missing type.
+    """
+    want = wanted_scans(snap, civ, hist)
+    if not want or act.remote is None:
+        return 0
+    making = {p.u32(292) for p in snap.owned_planets(civ)
+              if p.u32(296) == p.addr + 288 and p.u32(344)}
+    missing = [t for t, n in want.items()
+               if t not in making and act.remote.scan_count(civ.addr, t) < n]
+    if not missing:
+        return 0
+    agencies = [p for p in snap.owned_planets(civ) if 8 in p.facilities]
+    if not agencies:
+        log(f"R-XTM-10: scan types {missing} wanted, and no Central Defence "
+            f"Agency yet (R-XPL-02)")
+        return 0
+    idle = [p for p in agencies
+            if not p.building_now and not act.production_claimed(p)]
+    acted = 0
+    for p, t in zip(sorted(idle, key=lambda p: -len(p.population)), missing):
+        log(f"R-XTM-10: no type-{t} scan in stock; producing one at {p}")
+        try:
+            act.queue_scan(p, t)
+            acted += 1
+        except (ValueError, RuntimeError) as e:
+            log(f"  could not start the scan: {e}")
+    return acted
+
+
 def run_xtm04(snap, civ, act, hist, log=print):
     """R-XTM-04: land troops on an undefended enemy planet and take it."""
     foes = enemies(snap, civ, act)
@@ -882,7 +979,10 @@ def run_xtm04(snap, civ, act, hist, log=print):
             except (ValueError, RuntimeError) as e:
                 log(f"  could not send it home: {e}")
             continue
-        target = min(undefended, key=lambda p: gs.dist(ship.pos, p.pos))
+        troops = len(ship.crew) - need
+        target = _invasion_target(snap, civ, act, ship, undefended, troops, log)
+        if target is None:
+            continue
         log(f"R-XTM-04: {ship} ({len(ship.crew)} aboard, {need} to fly) "
             f"-> conquer {target}, undefended, "
             f"{gs.dist(ship.pos, target.pos):.0f} units")

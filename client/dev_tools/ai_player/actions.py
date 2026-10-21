@@ -282,6 +282,46 @@ class Actuator:
                              f"the embedded Facility ({name})")
         return self._u32(planet.addr + 344, 1, "Planet:344 build-active -> 1")
 
+    # P: produce a scan (Planet:292 + SetProduction on the embedded Scan).
+    PLANET_EMBEDDED_SCAN = 288
+    SCAN_TYPE = 292
+    DEFENCE_AGENCY = 8
+
+    def queue_scan(self, planet, scan_type):
+        """Start producing a scan of `scan_type` on a planet with a Central
+        Defence Agency. The finished scan joins the civ's inventory."""
+        if self.DEFENCE_AGENCY not in planet.facilities:
+            raise ValueError(f"{planet} has no Central Defence Agency, so the "
+                             f"UI could not start a scan there")
+        if planet.building_now:
+            raise ValueError(f"{planet} is already building; replacing it would "
+                             f"discard {planet.build_progress} progress")
+        self.log(f"  produce scan type {scan_type} at {planet}")
+        self._claim_production(planet, f"producing scan type {scan_type}")
+        self._u32(planet.addr + self.SCAN_TYPE, scan_type,
+                  f"Planet:292 -> scan type {scan_type}")
+        self._set_production(planet, planet.addr + self.PLANET_EMBEDDED_SCAN,
+                             f"the embedded Scan (type {scan_type})")
+        return self._u32(planet.addr + 344, 1, "Planet:344 build-active -> 1")
+
+    def use_scan(self, civ, scan_type, targets):
+        """Use held scans on these targets (Ships, Fleets or Planets).
+
+        The engine checks the inventory and each target's class; returns the
+        number of reports it made.
+        """
+        if self.dry_run:
+            self.log(f"  [WOULD SCAN] type {scan_type} on "
+                     f"{', '.join(map(str, targets))}")
+            return 0
+        if self.remote is None:
+            raise RuntimeError("use_scan needs a remote.Remote")
+        made = self.remote.use_scans(civ.addr, scan_type,
+                                     [t.addr - 8 for t in targets])
+        self.log(f"  scan type {scan_type} on {', '.join(map(str, targets))}: "
+                 f"{len(made)} report(s)")
+        return len(made)
+
     # I': fit parts to a design.
     # The five part categories sit at a 24-byte stride, each a std::vector of
     # 8-byte [vftable, subtypeId] records.

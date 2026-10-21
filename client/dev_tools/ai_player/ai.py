@@ -71,6 +71,7 @@ RULES = [
     ("R-XTM-07", exterminate.run_xtm07),      # a troop hull while anything is takeable
     ("R-XPN-01", expand.run_xpn01),           # colony ships
     ("R-EXP-01", explore.run_exp01),          # dedicated scouts
+    ("R-XTM-10", exterminate.run_xtm10),      # keep one of each wanted scan in stock
     ("R-XPL-03", exploit.run_wealth),         # wealth where nothing is worth building
     ("R-XPL-07", exploit.run_liquidate),      # sell facilities in a collapse
     ("R-XPL-02", exploit.run_facilities),     # facilities take what is left
@@ -307,7 +308,8 @@ class Loop:
                             exterminate.run_xtm06,
                             exterminate.run_xtm07,
                             exterminate.run_xtm08,
-                            exterminate.run_xtm09):
+                            exterminate.run_xtm09,
+                            exterminate.run_xtm10):
                     fn(snap, civ, act, self.history, log=self.log)
                 else:
                     fn(snap, civ, act, log=self.log)
