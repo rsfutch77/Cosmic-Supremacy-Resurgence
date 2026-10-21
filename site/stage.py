@@ -256,8 +256,10 @@ def mark_missing_images(html, page_rel, staged):
         if not candidates(src, base):      # external image, not ours to judge
             return m.group(0)
         found.append(src)
+        # The comment opener is split from the "[ ]" so a TODO scanner finds the
+        # marker in the staged pages, where it is a task, and not here.
         return (
-            '<!-- [ ] TODO(image): not in the web archive, needs a replacement: '
+            '<!--' ' [ ] TODO(image): not in the web archive, needs a replacement: '
             + src.replace("--", "- -") + ' -->'
             '<span style="display:inline-block;padding:4px 8px;border:1px dashed #b00;'
             'color:#b00;font:11px Verdana,sans-serif;background:#fff5f5;">'

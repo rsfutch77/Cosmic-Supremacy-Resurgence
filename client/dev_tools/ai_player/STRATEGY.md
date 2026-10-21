@@ -492,12 +492,6 @@ hitpoints +0x58, condition +0x60, firepower light/heavy/bomb +0x68/+0x6C/+0x70, 
 text at +0x34 that names the chassis (0-2 light, 3-5 heavy). Read live against an `f1`
 (42 hp, 35/10/0) and a `b1` (80 hp, 0/0/500), both exact. It takes Fleets as well as Ships.
 
-[x] **Scans are wired in (Oct 2026).** Probes stay the fallback for battle intel. The
-policy, decided: keep one each of planetary (0), fleet (3) and military (4) scans in stock once
-unlocked, and use them before invading, on threatening fleets, and on enemy ships; with none in
-stock, probe. Every scan needs a Central Defence Agency (facility 8, 6,000) on the producing
-planet. Types, costs (`0x80AB60`) and unlocks:
-
 | id | Scan | Cost | Target | Reveals | Unlocked by |
 |---|---|---|---|---|---|
 | 0 | Planetary | 9,000 | enemy Planet | a copy of its PlanetProperties: citizens, stationed military, facilities, production | Advanced Scanning (#24) |
@@ -506,12 +500,6 @@ planet. Types, costs (`0x80AB60`) and unlocks:
 | 3 | Fleet | 5,000 | Fleet | ship count and per-class counts | Basic Scanning (#23) |
 | 4 | Military | 16,000 | Ship/Fleet | weapons, shields, units, speed, rank, condition (as text) | Advanced Tactics (#20) |
 | 5-7 | Technology, Energy grid, Leader name | 10,000-20,000 | Planet | civ-level | #24, #19, #79 |
-
-Done: actuator P, R-XTM-10's stock, planetary reports in R-XTM-04, military reports in
-R-XTM-02 and fleet reports as its fallback. A fleet report lists each hull class in text, "1 x
-Shuttle-Class, 1 x Corvette-Class Ships" (only the last class carries "Ships"), and repeats the
-counts as four uint16s by chassis id; read live from a two-shuttle fleet and a mixed
-shuttle/corvette one. Reports never expire; a system scan's vision does.
 
 **R-XTM-03, Raid**, IMPLEMENTED in `exterminate.run_xtm03`
 ```
