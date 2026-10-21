@@ -257,6 +257,9 @@ try:
     app._mp_state("failed", error="DemoPlayer is " + L.SEAT_HELD)
     check("not for a seat held by another sign-in", app.drain(), [])
     app = make_app(d, f"{ROOT}/sandbox")
+    app._mp_state("failed", error="no seat in sandbox " + L.NOT_SEATED)
+    check("nor for a sign-in that holds no seat", app.drain(), [])
+    app = make_app(d, f"{ROOT}/sandbox")
     app._mp_state("lost", turn=12, civ="Ada")
     app.mp_closed = True
     app.drain()
@@ -431,6 +434,20 @@ try:
                   error="HTTP Error 503: Service Unavailable")
     check("an upload that failed for another reason puts up nothing",
           app.msgs.empty(), True)
+    # The sandbox does not let a sign-in claim a seat, so the relay says the
+    # sign-in holds none rather than that the seat is held.
+    app = make_app(fresh_dir())
+    app._mp_state("send_failed", turn=25, civ="Elder Race",
+                  error="HTTP Error 403: Forbidden: no seat in sandbox "
+                        + L.NOT_SEATED)
+    seen = []
+    while not app.msgs.empty():
+        seen.append(app.msgs.get())
+    check("a sign-in with no seat puts up the same box",
+          [m[0] for m in seen], ["__mp_refused__"])
+    check("naming the seat and this copy's player code",
+          seen[0][1] if seen else "",
+          lambda t: "'Elder Race'" in t and "abcd1234" in t)
     import inspect
     src = inspect.getsource(L.Launcher.start_multiplayer)
     check("a new galaxy followed can say it again",
