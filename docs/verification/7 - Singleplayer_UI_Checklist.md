@@ -48,7 +48,7 @@ Your empire is **DemoPlayer** unless you rename it. The computer opponent is
 | | Test | Do | Expect |
 |---|---|---|---|
 | B1  | Galaxy loads | Wait for the game to finish loading | You are looking at a galaxy map with your homeworld, no error dialog, no "Failed to load Save-Game" |
-| B2 | Home world prompt | Watch the first few seconds | The "Customize Your Home World" prompt appears. This is expected in this build, see Known limitations |
+| B2 | Setup prompts are one-time | On **New Game**, confirm "Customize Your Home World", "Customize Your Civilization" and the civ name with OK. Click **Next Turn**, quit, then click **Play Single Player** | Each prompt appears once on the new galaxy. None of them appears again, during play or after continuing |
 | B3  | Civ name accepted | Type a new civilisation name and confirm | The name is accepted, and appears afterwards wherever your empire is named (status bar, Diplomacy, Overview highscores) |
 | B4 | Civ name survives a restart | Save, quit, click **Play Single Player** | The game continues your save with the name you chose. On **New Game**, the name dialog offers that name first, not DemoEmpire |
 | B5 | Coat of arms | In the civ name dialog, drag an image file from Explorer into the coat-of-arms frame, then OK | The image shows in the frame. Next session the dialog lists it, and it is drawn beside your planets |
@@ -227,10 +227,7 @@ windows.
 
 These are understood and already recorded. They are not bugs to file.
 
-1. **The "Customize Your Home World" prompt appears every session.** The Single
-   Player build is the one that can compute turns without a server, and the two
-   go together. Correctly gated in the other modes.
-2. **Fame is always 0.** The server returns a fixed value.
+1. **Fame is always 0.** The server returns a fixed value.
 
 ## Reporting
 

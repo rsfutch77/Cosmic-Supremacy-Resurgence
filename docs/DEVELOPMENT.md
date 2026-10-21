@@ -136,19 +136,19 @@ because a patched client in the working tree is one `git commit -a` away from
 entering the history. `build.ps1` makes its own from TestBed into
 `release/build/` on every build and does not read the one in `client/`.
 
-**Resurgence is TestBed plus exactly 22 bytes at six sites** and nothing else,
-measured by whole-file comparison. Those six are the T1-T5 turn-pipeline
-bypasses, enumerated in the reconstruction report, and they are what let a client
-advance a turn with no server. Two of them also sit on the guards for the
-homeworld setup prompt, which is why that prompt appears on every session in the
-Resurgence build and is correctly gated everywhere else. So the choice of build
-is really the choice of whether a client may compute a turn:
+**Resurgence is TestBed plus exactly 14 bytes at four sites** and nothing else,
+measured by whole-file comparison. Those four are the turn-pipeline bypasses,
+enumerated in the reconstruction report, and they are what let a client advance a
+turn with no server. Two more used to NOP the guards on the homeworld setup
+prompt, which made it come back every session however often it was confirmed;
+they were restored in October 2026. So the choice of build is really the choice
+of whether a client may compute a turn:
 
 | build | ticks without a server | setup prompts | role |
 |-------|------------------------|---------------|------|
-| Resurgence | yes | always offered | the referee, the AI harness |
+| Resurgence | yes | gated as shipped | Single Player, the referee, the AI harness |
 | TestBed | no | gated as shipped | - |
-| Player | no | none | a player's served turn |
+| Player | no | homeworld and traits until confirmed; never the name | a player's served turn |
 
 `client/dev_tools/game_cycle.py` takes the build as a parameter
 (`resolve_exe("player")`), and `server/player_turn.py` defaults players to the

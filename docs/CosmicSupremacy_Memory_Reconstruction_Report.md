@@ -1181,10 +1181,17 @@ spending 15 homeworld increments on production and 15 on science gave `[62,45,55
 production per worker, byte 2 is science per scientist, each `base + clicks`. All three bytes are
 now confirmed rather than one
 
-[ ] **suppress both customisation popups for a returning player.** A client loaded from a
-server-authored `.dat` re-offers the homeworld popup on every load, because the four click counters
-are `.data` globals that no blob can restore: they read `0` against a budget of 30 while the
-homeworld already carries the benefit.
+[x] **suppress both customisation popups for a returning player.** Resolved October 2026, and
+the reading below about the gate was wrong. The homeworld popup's gate is the one-byte flag
+`Owner:359`, set by its own OK and carried in `OWPR`, exactly as the civ-trait popup's is `Owner:360`.
+A pushed state with `Owner:360 = 1` still showed the homeworld popup because the Resurgence client
+NOPped both guards of the homeworld decision routine (T2/T3), so nothing a blob carried could stop
+it. The guards are restored, and the referee carries a confirm into the next turn. The reconstruction
+report's "three one-time setup prompts" section has the gates.
+
+A client loaded from a server-authored `.dat` re-offered the homeworld popup on every load. The
+reading at the time was that the four click counters are `.data` globals that no blob can restore:
+they read `0` against a budget of 30 while the homeworld already carries the benefit.
 
 **What the popup actually does, measured September 2026, replacing the data-loss reading this item
 used to carry.** The dialog's buttons are **OK** and **Decide Later**, and OK is unavailable until
@@ -1522,13 +1529,13 @@ list carries every consequence of the tick, so copying a ship's `DYNO` out of it
 positions. The in-game countdown then reads about 24 hours, which is the artefact of the hold, and
 is why the turn clock a player sees is the launcher's rather than the client's.
 
-**Turn patches T1–T5** (22 bytes total, from `patched17`) bypass server sync checks so turns fire without a real game server:
+**Turn patches T1–T5** (14 bytes total, from `patched17`) bypass server sync checks so turns fire without a real game server:
 
 | Patch | File offset | Effect |
 |---|---|---|
 | T1 | `0x0016CFF0` | Force turn-ready check → always TRUE |
-| T2 | `0x0016D4EF` | NOP turn guard JNZ |
-| T3 | `0x0016D533` | NOP turn guard JZ |
+| T2 | `0x0016D4EF` | Removed October 2026: it NOPped a guard of the homeworld prompt, not a turn guard |
+| T3 | `0x0016D533` | Removed October 2026: the other guard of the homeworld prompt |
 | T4a | `0x0017701A` | Redirect write to sync flag at `0x86F1A0` |
 | T4b | `0x0017702A` | NOP turn guard JZ after sync flag write |
 | T5 | `0x0017902D` | NOP turn guard JZ |

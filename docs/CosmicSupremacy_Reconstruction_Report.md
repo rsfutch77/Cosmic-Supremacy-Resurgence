@@ -806,12 +806,27 @@ order whitelist, so the server rejects the change and the exploit is structurall
 remains is a cosmetic desync between what the player sees and what the referee computes, until the
 next push overwrites it. Suppressing the popup is still worth doing, and it is no longer urgent.
 
-Still open: whether the **civ-trait** allowance re-grants the same way. The trait popup did not
-reappear on either of the last two pushes, so it has not been possible to test, and its commit path
-is unmeasured beyond the fact that it writes `Owner:756` and `Owner:360` on first use.
+*Since October 2026 the merge carries one confirm per civ*, so a player's homeworld and traits
+survive into the next turn, and the prompt stops coming back. `merge_orders.setup_orders` takes a
+confirm only when the served flag is clear and the submitted one set, and only as the dialog could
+have made it: the homeworld rates in 25..80, space as the floor of 350 plus whole five-point
+clicks, the trait values the dialog's table gives, each spending exactly `GSET.homeworld_changes`
+or `GSET.civilization_changes`. A second confirm, or a change with no confirm, is refused with a
+note, so the re-grant stays contained.
 
-[ ] stop the **"Customize Your Home World" popup reappearing after a loaded save**, the trigger
-behind the bug above. Observed on the first successful `.dat` load: the galaxy came back correctly,
+The **civ-trait** commit, read out of the client in October 2026, overwrites rather than adds:
+`0x00498EC0` writes each trait as its value for the clicks spent on it, so a second commit replaces
+the first instead of stacking. Its rules (the click range, value per click count and cost of each
+trait) are in `merge_orders.TRAIT_RULES`, and the trait values are saved in `OWNR > CVTR` as
+(index, value) pairs after a 20-byte header.
+
+[x] stop the **"Customize Your Home World" popup reappearing after a loaded save**, the trigger
+behind the bug above. Resolved October 2026: the gate is `Owner:359`, a flag the popup's own OK sets
+and `OWPR` carries, and the popup ignored it only because patches T2/T3 NOPped both of its guards in
+the Resurgence client. The guards are restored (see "Patches 12–17"), and the referee carries a
+confirm into the next turn. What follows is the investigation as it stood.
+
+Observed on the first successful `.dat` load: the galaxy came back correctly,
 workers, ships and settings all carried over, but the client re-offered homeworld and civ
 customisation a second time, which on its own would also let a player bank a fresh allowance on every
 pushed state.
@@ -1087,52 +1102,54 @@ Seven conditional branches in the save/load validation path (near `0x00175xxx`) 
 | `0x00175cf1` | `74` (JZ) | `EB` (JMP) | Bypasses save-permissions check |
 | `0x00175d20` | `75` (JNZ) | `EB` (JMP) | Forces load-validation success path |
 
-### Patches 12–17, Turn pipeline bypasses (T1–T5, 22 bytes)
+### Patches 12–17, Turn pipeline bypasses (T1–T5, 14 bytes)
 
-Six patch sites bypass server sync checks in the turn pipeline so turns can fire without a real game server. These are applied only to the Resurgence EXE (not TestBed).
+Four patch sites bypass server sync checks in the turn pipeline so turns can fire without a real game server. These are applied only to the Resurgence EXE (not TestBed).
 
-**`CosmicSupremacy_Resurgence.exe` is `CosmicSupremacy_TestBed.exe` plus exactly these 22 bytes and nothing else**, measured by a whole-file comparison in September 2026. The two builds are otherwise identical, so the choice between them is exactly the choice of whether a client may compute a turn.
+**`CosmicSupremacy_Resurgence.exe` is `CosmicSupremacy_TestBed.exe` plus exactly these 14 bytes and nothing else**, measured by a whole-file comparison in October 2026. The two builds are otherwise identical, so the choice between them is exactly the choice of whether a client may compute a turn.
 
 | file | VA | TestBed | Resurgence | what it is |
 |---|---|---|---|---|
 | `0x16CFF0` | `0x0056DBF0` | `80 7C 24 04 00 75 0C` | `B0 01 C3 90 90 90 90` | a predicate rewritten to `mov al,1; ret`, so a sync check always passes |
-| `0x16D4EF` | `0x0056E0EF` | `0F 85 94 00 00 00` | `90` × 6 | `JNZ 0x56E189`, the first guard on the homeworld prompt |
-| `0x16D533` | `0x0056E133` | `74 54` | `90 90` | `JZ 0x56E189`, the second guard on the homeworld prompt |
 | `0x17701A` | `0x00577C1A` | `51 7C 85` | `A0 F1 86` | an operand repointed from `0x857C51` to `0x86F1A0` |
 | `0x17702A` | `0x00577C2A` | `74 58` | `90 90` | a galaxy-join branch removed |
 | `0x17902D` | `0x00579C2D` | `74 0E` | `90 90` | a load-path branch removed |
 
-**Two of the six land on the homeworld customisation prompt, not on the turn pipeline at all.** `0x0056E0D0` is the routine that decides whether to offer the prompt; with both of its guards NOPped it offers it unconditionally, on every session. That is the whole explanation for the prompt appearing on every pushed turn, and it was ours rather than the engine's.
+**T2 and T3 were removed in October 2026.** Until then the build also NOPped `0x16D4EF` (`0F 85 94 00 00 00`, `JNZ 0x56E189`) and `0x16D533` (`74 54`, `JZ 0x56E189`), the two guards of `0x0056E0D0`, the routine that decides whether to offer the homeworld prompt. They were never on the turn pipeline. With both NOPped the prompt ignored its own flag, so it came back at every launch and every hour of play however often it was confirmed, and each confirm added another full allowance (see the re-grant measurements in the memory report). The bytes are TestBed's again, a client with the turn advance still ticks, and a save whose civ has confirmed opens with no prompt.
 
 ### The three one-time setup prompts (September 2026)
 
 Each is a Win32 dialog resource, not an in-engine overlay, so the main window's title still reads `Galaxy Map` while one is up. `client/dev_tools/list_dialogs.py` enumerates them by walking the process's windows, since the title cannot be trusted.
 
-| id | title | decision routine | gate |
+| id | title | decision routine | offered while |
 |---|---|---|---|
-| 210 | Customize Your Home World | `0x0056E0D0` | `[session+0x19B]`, and `0x00508C60(session)` |
-| 218 | Customize Your Civilization | - | - |
-| 225 | Pick your Civilization Name and Coat of Arms | `0x0056E700` | the local civ's `Owner:384` must be non-zero |
+| 210 | Customize Your Home World | `0x0056E0D0` | `Owner:359` is 0 and `0x00508C60(session)` finds a homeworld |
+| 218 | Customize Your Civilization | `0x0056E190` | `Owner:360` is 0 |
+| 225 | Pick your Civilization Name and Coat of Arms | `0x0056E700` | `Owner:384`, the civ name's length, is 0 |
+
+All three are called in turn from the main loop at `0x00579C3D`, and each also waits while another of the three is open. Each keeps a real-time stopwatch (`0x86F2F0`, `0x86F308`, `0x86F320`; `0x005E3360` restarts one at an offset): a prompt is offered once 10 seconds have passed since the client started, and when it is shown its stopwatch is restarted 3600 seconds in the future, so a prompt whose gate stays open comes back on every launch and an hour after each showing.
 
 `0x0052A8D0`, the "session" those guards read, is **the local player's `Owner` object**: it loads `[0x00857904]`, dereferences it and returns the object address minus `0x2C`. Since the reference cell holds the object address minus 8, a guard reading `[session+0x1B4]` is reading `Owner:384`.
 
-**`Owner:384` is a count, not a flag.** A civ's `OWPR` section is exactly `138 + Owner:384` bytes long, measured at values 0, 1 and 7, so writing a value appends that many one-byte records. Their meaning is undecoded and the civilisation traits are the obvious candidate, `GSET.civilization_changes` being 5. Setting the field does silence prompt 225 and does survive a save and reload, and it is still the wrong fix, because it fabricates per-civ state to suppress a cosmetic dialog. `client/dev_tools/patch_hide_setup_prompts.py` returns from `0x0056E700` instead, one byte, fabricating nothing.
+**`Owner:359` and `Owner:360` are one-byte flags, set by the prompts' own OK.** `0x005716E3` sets 359 and `0x00571878` sets 360, on the offline path of each OK handler (`[0x86F1A0]` set and no live server connection). The online path sends `CUCV` (218) to the server and sets nothing locally, leaving the flag to the server's reply. Both flags are written to `OWPR` by `0x0053B230`, after the research fields: the homeworld flag 29 bytes past the end of the second research field and the civ flag 30. `0x00537D00` derives 360 from galaxy settings for a new civ and for an `OWPR` older than version 12.
+
+**`Owner:384` is the length of the civ name, not a count of records.** The chosen name is a VC9 `std::string` at `session+0x1A0`, whose size field is `session+0x1B4`, so `OWPR` is `138 + Owner:384` bytes because the name's characters are written into it. `0x00538470`, the civ's display name, returns that string when the length is non-zero and the player name otherwise. Prompt 225 is therefore offered until a name has been chosen. Measured across saves: `testname4` stores 9. Writing the length without the characters does silence the prompt, and it is still the wrong fix, because it fabricates a name. `client/dev_tools/patch_hide_setup_prompts.py` returns from `0x0056E700` instead, one byte, fabricating nothing.
 
 **The homeworld click counters are not `.data` globals.** `0x00842AE4` through `0x00842AF0` have no absolute references in `.text`. They are fields of the prompt's own singleton, which lives at `0x00840BC8`, at offsets `0x1F1C` through `0x1F28`, and `0x00498E10` zeroes all four every time the prompt is prepared. So they read zero after a load because the dialog is constructed once per process and cleared on every open, not because a save failed to carry them.
 
-- [ ] **A one-time civilisation setup step should replace `patch_hide_setup_prompts.py`.** In the original, a player chose a name and coat of arms once and the blob carried it, which kept `Owner:384` non-zero and the prompt away. Locally generated galaxies never go through that flow, so the patch stands in for it and `Owner:384` is left untouched. Done when the launcher or the site offers the setup step and the patch is no longer applied.
+- [ ] **A one-time civilisation setup step should replace `patch_hide_setup_prompts.py`.** In the original, a player chose a name and coat of arms once and the blob carried it, which kept `Owner:384`, the name's length, non-zero and the prompt away. Locally generated galaxies never go through that flow, so the patch stands in for it and the name is left unset. Done when the launcher or the site offers the setup step and the patch is no longer applied.
 
 **Side effect:** Applying T1–T5 removes the Next Turn button from the UI. This is intentional for the multiplayer build, turns are advanced externally via `fast_turns.py`, not by player clicks.
 
 ### What T1–T5 skip, read out of the file (September 2026)
 
-**None of the six removes a call**, and the code on both sides of every one of them is still
+**None of them removes a call**, and the code on both sides of every one of them is still
 present, so a patched client runs the same routines the original does.
 
 | site | what it reaches |
 |---|---|
 | T1 `0x0056DBF0` | a leaf predicate rewritten to return true. Its own two calls are getters; of its two callers, one selects the string `Connected` over `Disconnected` and the other runs a block it would otherwise skip |
-| T2 `0x0056E0EF`, T3 `0x0056E133` | both guards of `0x0056E0D0`, the homeworld prompt decision routine, not the turn pipeline at all |
+| T2 `0x0056E0EF`, T3 `0x0056E133` | both guards of `0x0056E0D0`, the homeworld prompt decision routine, not the turn pipeline at all. Removed in October 2026 |
 | T4a `0x00577C1A` | a single store repointed |
 | T4b `0x00577C2A` | skips `0x00577C84`, the galaxy-join rejection path |
 | T5 `0x00579C2D` | NOPs a `JZ` whose target `0x00579C3D` is the next basic block, so both paths converge. Its only effect is that `0x0056DE20` may run, which reads the turn counter at `0x008578E8`, increments it and announces. That is the turn advance itself, and it is why T5 is the patch that lets a client tick |
@@ -1263,7 +1280,7 @@ Patches 1–4 (54 bytes) redirect all network traffic from the dead production s
 
 Patches 5–11 (13 bytes) bypass save/load validation checks in the game’s persistence code, which are needed for testbed galaxy saves to function against the local stub server.
 
-Patches 12–17 (22 bytes, T1–T5) bypass turn-pipeline sync checks, enabling external turn control. Applied only to the Resurgence EXE.
+Patches 12–17 (14 bytes, T1, T4a, T4b and T5) bypass turn-pipeline sync checks, enabling external turn control. Applied only to the Resurgence EXE.
 
 Patches 28–31 (1,571 bytes) rewrite the setup and login messages to send a player to the launcher, and the renderer failure message to send a report to the issue tracker instead of an email address at the host. Applied only to the clients a release ships.
 
