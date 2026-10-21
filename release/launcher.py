@@ -1426,6 +1426,62 @@ def install_uid(data_dir: str, mint: bool = False):
     return ident.uid
 
 
+def _fb_auth():
+    """The fb_auth module, or None when this build cannot reach it."""
+    try:
+        import fb_auth
+    except ImportError:
+        multiplayer_modules()           # puts fb_auth on sys.path in a checkout
+        try:
+            import fb_auth
+        except ImportError:
+            return None
+    return fb_auth
+
+
+def account_identity(data_dir: str):
+    """This install's Firebase identity, guest or account, or None when this
+    build cannot reach fb_auth."""
+    fb_auth = _fb_auth()
+    return fb_auth.identity(data_dir) if fb_auth is not None else None
+
+
+# The Google OAuth client's secret, kept out of the repository. build.ps1
+# bundles release\google_client.json when it exists, and a build without it
+# offers no Google login. The file is either {"client_secret": ...} or the JSON
+# Google Cloud downloads for a Desktop client.
+GOOGLE_CLIENT_FILE = "google_client.json"
+
+
+def google_secret():
+    """The Google client secret this build carries, or None."""
+    got = _read_json(bundled(GOOGLE_CLIENT_FILE)) or {}
+    got = got.get("installed", got) if isinstance(got, dict) else {}
+    secret = got.get("client_secret") if isinstance(got, dict) else None
+    return secret if isinstance(secret, str) and secret else None
+
+
+def account_email(data_dir: str):
+    """The email of the account this install is logged in to, or None."""
+    ident = account_identity(data_dir)
+    return ident.account["email"] if ident is not None and ident.account else None
+
+
+# What the account dialogs say. Without an account a player plays as the
+# install's guest, which is the anonymous identity every install already has.
+LOG_IN_TEXT = ("Log in to play your galaxies from any install.")
+CREATE_TEXT = ("Create an online account.")
+CREATED_TEXT = ("Your account is ready, and the galaxies this install joined "
+                "are now your account's.\n\nWe sent a verification email to "
+                "{email}. Open the link in it when you can.")
+GUEST_GAMES_TEXT = ("Notify an Admin if you would like to merge your account with your email. "
+                    "Send player code {code} in your message.")
+DROPPED_TEXT = ("You have been logged out.")
+LOG_OUT_TEXT = ("Log out?")
+GOOGLE_WAIT_TEXT = ("A login window should be open in your browser now.")
+GOOGLE_LINKED_TEXT = ("You are logged in with Google.")
+
+
 # The launcher's record of galaxies the player joined, one per galaxy id. Each
 # holds the store spec the directory gave, so a galaxy that moves is followed
 # without edits. A player may hold seats in several; the one-game-per-machine
@@ -3012,7 +3068,11 @@ class Launcher:
 
     def _show_identity(self):
         self.view.show_identity(self.player)
+        self._show_account()
         self._show_player_code()
+
+    def _show_account(self):
+        self.view.show_account(account_email(self.data_dir))
 
     def _show_player_code(self):
         """Put this install's player code beside the build, once it has one.
@@ -3023,14 +3083,20 @@ class Launcher:
         """
         self.view.show_build(
             build_line(build_id(), player_code(install_uid(self.data_dir))))
+        ident = account_identity(self.data_dir)
+        if ident is not None and ident.dropped:
+            ident.dropped = False
+            self.say("account login refused; playing as this install's guest")
+            self._show_account()
+            self.warn(DROPPED_TEXT)
 
     def ask_player_name(self, reason: str = ""):
         """Ask for the player's name, store it, and return it. None if cancelled.
 
         Modal, and it validates in place beside the field.
         """
-        text = ("This is the name other players see, and the name of your "
-                "civilisation in a galaxy. You enter it once.")
+        text = ("This is the name other players see, and the default name of your "
+                "civilisation in a galaxy.")
         if reason:
             text = reason + "\n\n" + text
         name = self.view.ask_name(text, self.player or "", NAME_RULES,
@@ -3045,6 +3111,9 @@ class Launcher:
         self.player = name
         self._show_identity()
         self.say(f"player  {name}")
+        ident = account_identity(self.data_dir)
+        if ident is not None and ident.account:
+            self._push_name(ident)
         return name
 
     def on_change_name(self):
@@ -3061,6 +3130,177 @@ class Launcher:
                       "to leave the galaxy, then change it.")
             return
         self.ask_player_name()
+
+    def _account_locked(self) -> bool:
+        """Refuse to log in or out under a live galaxy, which knows this
+        player by the sign-in it was joined with."""
+        if self.mp_thread is None or not self.mp_thread.is_alive():
+            return False
+        self.warn("You are playing a galaxy right now.\n\nIt knows you by "
+                  "the login you joined it with. Close "
+                  f"{self.cfg['product']} to leave the galaxy, then log in "
+                  "or out.")
+        return True
+
+    def on_account(self):
+        """Log in, create an account, or show the account that is logged in."""
+        if self._account_locked():
+            return
+        ident = account_identity(self.data_dir)
+        if ident is None:
+            self.warn("This build cannot log in.")
+            return
+        if ident.account:
+            self._account_panel(ident)
+        else:
+            self._log_in(ident)
+        self._show_account()
+        self._show_player_code()
+
+    def _log_in(self, ident):
+        """The log in dialog, until the player logs in, creates an account or
+        cancels. A refusal comes back in the same dialog."""
+        fb_auth = _fb_auth()
+        secret = google_secret()
+        buttons = [("Forgot password", "reset"), ("Create account", "create")]
+        if secret:
+            buttons.append(("Log in with Google", "google"))
+        buttons.append(("Log in", "log_in"))
+        email, problem = "", ""
+        while True:
+            value, got = self.view.ask_fields(
+                "Log in", LOG_IN_TEXT,
+                [("email", "Email", "email", email),
+                 ("password", "Password", "password", "")],
+                buttons, error=problem, default="log_in")
+            email = (got.get("email") or "").strip()
+            password = got.get("password") or ""
+            if value is None:
+                return
+            if value == "create":
+                if self._create_account(ident, email):
+                    return
+                problem = ""
+                continue
+            try:
+                if value == "reset":
+                    self.view.wait_for("Sending…",
+                                       lambda: ident.send_password_reset(email))
+                    self.warn(f"If an account uses {email}, a link to reset "
+                              "its password is on its way.")
+                    problem = ""
+                    continue
+                guest = self._guest_games(ident)
+                code = player_code(ident.uid)
+                if value == "google":
+                    linked, info = self._google(ident, secret)
+                else:
+                    linked, info = self.view.wait_for(
+                        "Logging in…",
+                        lambda: (False, ident.log_in(email, password)
+                                 and ident.lookup()))
+            except fb_auth.AuthError as exc:
+                problem = "" if exc.code == "CANCELLED" else str(exc)
+                continue
+            self.say(f"account logged in as {ident.account['email']}")
+            self._adopt_account_name(ident, info)
+            if linked:
+                self.warn(GOOGLE_LINKED_TEXT)
+            elif guest:
+                self.warn(GUEST_GAMES_TEXT.format(names=", ".join(guest),
+                                                  code=code))
+            return
+
+    def _google(self, ident, secret):
+        """Log in with Google in the player's browser, with a Cancel button
+        meanwhile. Returns (whether the guest became the account, lookup)."""
+        fb_auth = _fb_auth()
+        cancel = threading.Event()
+
+        def work():
+            got = ident.log_in_google(fb_auth.google_id_token(secret, cancel))
+            return got["linked"], ident.lookup()
+
+        return self.view.wait_for(GOOGLE_WAIT_TEXT, work, cancel=cancel)
+
+    def _create_account(self, ident, email: str) -> bool:
+        """The create account dialog. True once the guest is an account, False
+        when the player goes back."""
+        fb_auth = _fb_auth()
+        problem = ""
+        while True:
+            value, got = self.view.ask_fields(
+                "Create account", CREATE_TEXT,
+                [("email", "Email", "email", email),
+                 ("password", "Password", "password", ""),
+                 ("confirm", "Confirm", "password", "")],
+                [("Back", None), ("Create account", "create")],
+                error=problem, note=fb_auth.PASSWORD_RULES, default="create")
+            email = (got.get("email") or "").strip()
+            password = got.get("password") or ""
+            if value is None:
+                return False
+            if password != (got.get("confirm") or ""):
+                problem = "The two passwords are not the same."
+                continue
+            try:
+                self.view.wait_for("Creating your account…",
+                                   lambda: ident.create_account(email, password))
+            except fb_auth.AuthError as exc:
+                problem = str(exc)
+                continue
+            self.say(f"account created for {email}")
+            if self.player:
+                self._push_name(ident)
+            self.warn(CREATED_TEXT.format(email=email))
+            return True
+
+    def _account_panel(self, ident):
+        """Who is logged in, whether the email is verified, and log out."""
+        info = self.view.wait_for("Checking your account…", ident.lookup)
+        text = f"You are logged in as {ident.account['email']}."
+        choices = [("Close", None, False)]
+        if info is not None and not info["verified"]:
+            text += ("\n\nYour email address is not verified yet. Open the "
+                     "link in the email we sent, or send it again.")
+            choices.append(("Send email again", "verify", False))
+        choices.append(("Log out", "log_out", True))
+        value = self.view.choose("Account", text, choices)
+        if value == "verify":
+            sent = self.view.wait_for("Sending…", ident.send_verification)
+            self.warn(f"We sent a verification email to {ident.account['email']}."
+                      if sent else "The email could not be sent. Try again later.")
+        elif value == "log_out" and self.view.ask_yes_no(LOG_OUT_TEXT):
+            email = ident.account["email"]
+            ident.log_out()
+            self.say(f"account {email} logged out")
+
+    def _guest_games(self, ident):
+        """The names of the galaxies this install's guest joined, while the
+        guest is who is playing."""
+        if ident.account or not ident.uid:
+            return []
+        return [str(rec.get("galaxy")) for rec in load_joined(self.data_dir).values()
+                if rec.get("uid") == ident.uid]
+
+    def _adopt_account_name(self, ident, info):
+        """Take the account's name, or give it this install's when it has none."""
+        name, _why = validate_player_name((info or {}).get("name") or "")
+        if name and name != self.player:
+            try:
+                save_identity(self.data_dir, name)
+            except OSError:
+                pass        # usable this run; read from the account next time
+            self.player = name
+            self.view.show_identity(name)
+            self.say(f"player  {name}")
+        elif not name and self.player:
+            self._push_name(ident)
+
+    def _push_name(self, ident):
+        """Store the player's name on the account, off the UI thread."""
+        threading.Thread(target=ident.set_display_name, args=(self.player,),
+                         daemon=True, name="account_name").start()
 
     def show_page(self, name: str):
         """Swap the window's body between the launcher's two pages."""

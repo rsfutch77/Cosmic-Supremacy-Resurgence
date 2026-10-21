@@ -8,6 +8,8 @@
 
       test_identity        The player's name: validation, storage, migration
                            of an older multiplayer.json. No game, no window.
+      test_account         Creating an account, logging in and out, and
+                           what a guest's galaxies do. No game, no network.
       test_packaging       The multiplayer path survives freezing. No game,
                            no window.
       test_signing         The signing step in build.ps1. Signs a copy of a
@@ -78,6 +80,7 @@ function Invoke-Test {
 }
 
 Invoke-Test 'test_identity.py'
+Invoke-Test 'test_account.py'
 Invoke-Test 'test_packaging.py'
 Invoke-Test 'test_signing.py'
 Invoke-Test 'test_build_and_log.py'

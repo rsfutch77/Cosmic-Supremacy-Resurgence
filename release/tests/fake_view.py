@@ -44,13 +44,15 @@ class PageWindow:
 class FakeView:
     def __init__(self, **answers):
         # Scripted prompt answers, by prompt name: "yes_no", "ok_cancel",
-        # "name", "choose", "beta_notice", "open_file". A list is answered
+        # "name", "choose", "beta_notice", "open_file", "fields" (a
+        # (value, {name: text}) pair). A list is answered
         # from the front, one item per prompt.
         self.answers = answers
         self.app = None
         self.status = ("", "")
         self.capture = ("", "")
         self.identity = None
+        self.account = None
         self.build = ""
         self.page = "home"
         self.sort = None
@@ -98,6 +100,9 @@ class FakeView:
     # identity and build
     def show_identity(self, player):
         self.identity = player
+
+    def show_account(self, email):
+        self.account = email
 
     def show_build(self, text):
         self.build = text
@@ -187,6 +192,19 @@ class FakeView:
             return None
         name, _problem = validate(raw)
         return name
+
+    def ask_fields(self, title, text, fields, buttons, error="", note="",
+                   default=None):
+        self.prompts.append(("fields", (title, text, list(fields),
+                                        list(buttons), error)))
+        return self._answer("fields", (None, {}))
+
+    def wait_for(self, text, work, cancel=None):
+        # A "cancel" answer of True presses Cancel before the work runs.
+        self.prompts.append(("wait", text))
+        if cancel is not None and self._answer("cancel", False):
+            cancel.set()
+        return work()
 
     def choose(self, title, body, choices):
         self.prompts.append(("choose", (title, body, choices)))

@@ -767,6 +767,15 @@ if ($IconOut) {
     # so the .ico also ships as data for web_view.
     $piArgs += @('--icon', $IconOut, '--add-data', "$IconOut;.")
 }
+# The Google OAuth client's secret, kept out of the repository. Without it the
+# launcher offers no Google login.
+$GoogleClient = Join-Path $ReleaseDir 'google_client.json'
+if (Test-Path $GoogleClient) {
+    $piArgs += @('--add-data', "$GoogleClient;.")
+    Write-Ok "bundled google_client.json"
+} else {
+    Write-Warn2 "no release\google_client.json: this build has no Google login"
+}
 $piArgs += (Join-Path $ReleaseDir 'launcher.py')
 
 & $VenvPy -m PyInstaller @piArgs

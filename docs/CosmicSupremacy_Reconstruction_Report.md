@@ -1662,6 +1662,31 @@ What is left for after the beta is kept here.
   technology the civ cannot research, or a queue entry it cannot afford, is copied as given. Done
   when the merge applies the rule the UI enforces for each order type it accepts.
 
+- [ ] **An account plays without a verified email.** Creating an account sends the verification
+  email, but nothing waits for it, so anyone can register an address that is not theirs. Done
+  when the relay refuses a write from an email account whose token lacks `email_verified`, and
+  the launcher says so and offers to send the email again.
+
+- [ ] **Logging in has not been played through the live relay.** The relay knows a player by
+  uid, and creating an account or linking Google keeps the guest's, so nothing in it changed;
+  `fb_auth` is tested against the Auth emulator only. Done when an account logged in from a
+  checkout launcher lists galaxies, joins one and submits a turn, logs out and back in and
+  submits again, and the same for a Google login.
+
+- [ ] **Nobody can see who still plays as a guest.** The relay accepts every verified token
+  alike. Done when it records each caller's `firebase.sign_in_provider` (`anonymous`,
+  `password`, `google.com`) with the seat, and the operator view lists which seated players
+  are still guests.
+
+- [ ] **Play by name has no end switch.** Done when a relay setting, off by default, refuses a
+  token whose provider is `anonymous` with a refusal the launcher turns into "log in to play".
+  Turned on once the operator view shows no seated guests.
+
+- [ ] **A guest's seats stay behind when its install logs in to an existing account.** The
+  launcher tells the player to send the operator the guest's player code, and `seat_tool.py`
+  moves the seats by hand. Done when the relay moves them itself, on proof of both the guest's
+  and the account's tokens.
+
 - [ ] **Order types nobody has measured are not merged:** governors, admirals and diplomacy
   proposals. Done when each is measured against a change made in the UI and is either accepted
   or refused with a note.

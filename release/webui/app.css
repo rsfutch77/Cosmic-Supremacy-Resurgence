@@ -133,8 +133,9 @@ main { flex: 1; min-width: 0; padding: 10px 8px; display: flex; flex-direction: 
 .dlg-refs span { color: #93a6b5; font-size: 11px; }
 .dlg-error { color: #ff7a6e; font-weight: bold; }
 .dlg-note {color: #8ea2b3; font-size: 11px; line-height: 15px; }
+.dlg-fields { display: flex; flex-direction: column; gap: 6px; }
 .dlg-field { display: flex; align-items: center; gap: 10px; }
-.dlg-field span { color: #e8eef2; font-weight: bold; }
+.dlg-field span { min-width: 64px; color: #e8eef2; font-weight: bold; }
 .dlg-field input { box-sizing: border-box; width: 220px; height: 22px; padding: 0 6px; background: #0a1018; border: 1px solid #5a7381; color: #e8eef2; font-family: inherit; font-size: 12px; outline: none; }
 .dlg-field input:focus { border-color: #a3d8fe; }
 .dlg-btns { margin-top: auto; display: flex; justify-content: flex-end; gap: 6px; }

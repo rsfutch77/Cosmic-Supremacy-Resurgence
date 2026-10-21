@@ -52,6 +52,8 @@ release/build/
 release/.venv-build/
 # written by launcher.py when it is run from a checkout rather than a release
 release/data/
+# the Google OAuth client's secret, which build.ps1 bundles into the launcher
+release/google_client.json
 # the game's own UI art, extracted from the client EXE by release/extract_ui_art.py
 release/webui/art/
 

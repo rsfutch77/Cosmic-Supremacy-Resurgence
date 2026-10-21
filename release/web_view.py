@@ -93,6 +93,9 @@ class Bridge:
     def change_name(self):
         self._post(lambda app: app.on_change_name())
 
+    def account(self):
+        self._post(lambda app: app.on_account())
+
     def sort(self, key):
         self._post(lambda app: app.sort_by(key))
 
@@ -124,6 +127,16 @@ class Bridge:
 
     def close(self):
         self._post(lambda app: app.on_close())
+
+
+class _Either:
+    """Set when either of two Events is, for `_pump(until=...)`."""
+
+    def __init__(self, a, b):
+        self.a, self.b = a, b
+
+    def is_set(self) -> bool:
+        return self.a.is_set() or self.b.is_set()
 
 
 class WebView:
@@ -316,6 +329,9 @@ class WebView:
     def show_identity(self, player) -> None:
         self._set(name=player or "")
 
+    def show_account(self, email) -> None:
+        self._set(account=email or "")
+
     def show_build(self, text: str) -> None:
         if self._changed("build", text):
             self._set(build=text)
@@ -468,6 +484,59 @@ class WebView:
             if name:
                 return name
             current = raw or ""
+
+    def ask_fields(self, title: str, text: str, fields, buttons,
+                   error: str = "", note: str = "", default=None):
+        """A dialog of several inputs. `fields` holds (name, label, kind,
+        value), kind being "text", "email" or "password"; `buttons` holds
+        (label, value). Returns (pressed value, {name: text}), with None for
+        the value when cancelled."""
+        value, got = self._prompt({
+            "title": title, "text": text, "note": note, "error": error,
+            "inputs": [{"name": name, "label": label, "type": kind,
+                        "value": value or ""}
+                       for name, label, kind, value in fields],
+            "buttons": self._buttons(*buttons), "wide": len(buttons) > 4,
+            "cancel": None, "default": default})
+        return value, (got if isinstance(got, dict) else {})
+
+    def wait_for(self, text: str, work, cancel=None):
+        """Run `work()` off the controller thread with `text` on screen, keep
+        the window answering meanwhile, and return or raise what it did.
+
+        With `cancel`, an Event, the dialog has a Cancel button that sets it,
+        and `work` is waited for until it gives up.
+        """
+        pid = next(self._prompt_ids)
+        finished, pressed = threading.Event(), threading.Event()
+        box = {}
+
+        def runner():
+            try:
+                box["result"] = work()
+            except Exception as exc:
+                box["error"] = exc
+            finished.set()
+            self.post(lambda: None)
+
+        spec = {"id": pid, "kind": "busy", "title": self.cfg["product"],
+                "text": text, "buttons": []}
+        if cancel is not None:
+            self._answers[pid] = [pressed, (None, None)]
+            spec["buttons"] = self._buttons(("Cancel", "cancel"))
+        self._js("prompt", spec)
+        threading.Thread(target=runner, daemon=True, name="wait_for").start()
+        self._pump(until=_Either(finished, pressed))
+        if not finished.is_set() and cancel is not None:
+            cancel.set()
+            self._pump(until=finished)
+        self._answers.pop(pid, None)
+        self._js("dismiss", pid)
+        if not finished.is_set():
+            raise RuntimeError("the window closed before " + text)
+        if "error" in box:
+            raise box["error"]
+        return box.get("result")
 
     def choose(self, title: str, body: str, choices):
         value, _ = self._prompt({
