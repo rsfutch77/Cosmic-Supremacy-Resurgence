@@ -2,7 +2,7 @@
 cs_server refuses requests from a foreign web page and serves the client's own.
 
 The server answers 403 to anything carrying a browser's marks of another
-origin, and keeps a governor id inside DATA_DIR. The client's requests carry
+origin, and files every governor under a number inside DATA_DIR. The client's requests carry
 none of those marks.
 """
 import http.client
@@ -90,10 +90,15 @@ check("nothing saved by a refused request",
       os.path.exists(os.path.join(DATA, "data", "saves")), False)
 
 print("\n3. a governor id stays inside DATA_DIR")
+# A govid that is not a number is a new governor, filed under a number.
+GOVS = os.path.join(DATA, "data", "governors")
+before = set(os.listdir(GOVS))
 check("savegov with a path in govid", request("POST", "savegov", CLIENT,
-      govid=r"x\..\..\escaped", data="x"), (400, "ERROR"))
-check("nothing written outside DATA_DIR", os.path.exists(os.path.join(DATA, "escaped.dat")), False)
-check("loadgov with a path in govid", request("POST", "loadgov", CLIENT, govid="../x")[0], 400)
+      govid=r"x\..\..\escaped", data="x"), (200, "DONE"))
+check("it is filed under a numbered id",
+      sorted(n[:-4].isdigit() for n in set(os.listdir(GOVS)) - before), [True])
+check("nothing written outside DATA_DIR", os.path.exists(os.path.join(DATA, "escaped.b64")), False)
+check("loadgov with a path in govid", request("POST", "loadgov", CLIENT, govid="../x"), (200, "ERROR"))
 
 srv.shutdown()
 shutil.rmtree(DATA, ignore_errors=True)
