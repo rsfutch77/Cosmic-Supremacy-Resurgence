@@ -148,9 +148,12 @@ LOG = "\n".join([
     "[10:00:01]   body\u2026 (9452 more chars not logged)",
     "[10:00:02]   <- 200  4 bytes  b'DONE'",
     "[10:00:03] [Alice] turn 8: submitted",
+    "[10:00:04] account logged in as alice.b+cs@example.co.uk",
 ]) + "\n"
 
 out = L.redact_log_text(LOG)
+check("an account's email is gone", "example.co.uk" in out, False)
+check("in its place", "account logged in as <email>" in out, True)
 check("no body+ line survives", "body+" in out, False)
 check("the head of the body does, as far as data=",
       "gamename='demo'&turn=8&version=1&data=" in out, True)

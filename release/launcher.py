@@ -1495,8 +1495,13 @@ def account_email(data_dir: str):
 
 # What the account dialogs say. Without an account a player plays as the
 # install's guest, which is the anonymous identity every install already has.
-LOG_IN_TEXT = ("Log in to play your galaxies from any install.")
-CREATE_TEXT = ("Create an online account.")
+PRIVACY_PAGE = "cosmicresurgence.com/support_privacy.php.html"
+EMAIL_USE_TEXT = ("Your email address is used to log in and for account "
+                  "emails. Other players never see it. More at "
+                  + PRIVACY_PAGE)
+LOG_IN_TEXT = ("Log in to play your galaxies from any install.\n\n"
+               + EMAIL_USE_TEXT)
+CREATE_TEXT = ("Create an online account.\n\n" + EMAIL_USE_TEXT)
 CREATED_TEXT = ("Your account is ready, and the galaxies this install joined "
                 "are now your account's.\n\nWe sent a verification email to "
                 "{email}. Open the link in it before you join or play a "
@@ -2368,7 +2373,8 @@ def beta_notice_text(state):
 # bodies: a base64 blob in the `data=` field, in 400-character chunks tagged
 # `body+`, up to 4000 characters per request. redact_log_text() makes the copy
 # that can be sent: body dumps replaced by a byte count, the Windows account
-# name taken out of paths, and the tail kept to a cap.
+# name taken out of paths, email addresses taken out, and the tail kept to a
+# cap.
 #
 # The redacted copy still contains (the send prompt is written from this list):
 #   - The player's name, on every multiplayer line: "[Alice] turn 12: submitted".
@@ -2409,6 +2415,11 @@ _USER_DIR = re.compile(r"([A-Za-z]:[\\/]+Users[\\/]+)(?!Public\b|Default\b)"
                        r"([^\\/\s\"']+)", re.I)
 USER_MARK = "<user>"
 
+# An account's email, which the launcher logs at login. The operator finds an
+# account by its uid instead.
+_EMAIL = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
+EMAIL_MARK = "<email>"
+
 
 def scrub_paths(text: str) -> str:
     """Replace the Windows account name in any path with <user>.
@@ -2425,6 +2436,11 @@ def scrub_paths(text: str) -> str:
             masked = os.path.join(parent, USER_MARK)
             text = re.sub(re.escape(home), lambda m: masked, text, flags=re.I)
     return text
+
+
+def scrub(text: str) -> str:
+    """`scrub_paths`, and every email address replaced with <email>."""
+    return _EMAIL.sub(EMAIL_MARK, scrub_paths(text))
 
 
 def _keep_tail(text: str, cap: int) -> str:
@@ -2460,14 +2476,14 @@ def redact_log_text(text: str, cap: int = LOG_UPLOAD_CAP) -> str:
         head = _BODY_HEAD.match(line)
         if head is not None:
             close_run()
-            out.append(scrub_paths(head.group(1)) + "\u2026")
+            out.append(scrub(head.group(1)) + "\u2026")
             elided += len(head.group(2).encode("utf-8", "replace"))
             continue
         if _BODY_MORE.match(line) is not None:
             elided += len(line.encode("utf-8", "replace"))
             continue
         close_run()
-        out.append(scrub_paths(line))
+        out.append(scrub(line))
     close_run()
 
     body = "\n".join(out)
