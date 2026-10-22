@@ -60,7 +60,7 @@ def make_app(player, **answers):
     app.said = []
     app.say = app.said.append
     for name in ("on_account", "_account_locked", "_log_in", "_google",
-                 "_create_account",
+                 "_create_account", "_email_ready",
                  "_account_panel", "_guest_games", "_adopt_account_name",
                  "_push_name", "_show_account", "_show_identity",
                  "_show_player_code", "warn"):
@@ -211,6 +211,40 @@ gil.on_account()
 check("a build without the secret offers no Google",
       [b for kind, args in gil.view.prompts if kind == "fields" for b in args[3]],
       lambda b: all(v != "google" for _l, v in b))
+
+print("\n5c. an email account joins and plays once its address is verified")
+hal, hal_id = make_app("Hal")
+check("a guest goes straight through", hal._email_ready(), True)
+check("without a dialog", hal.view.prompts, [])
+hal_id.create_account("hal@example.com", PASSWORD)
+hal.view = FakeView(choose=["verify", "check", None])
+check("an unverified account is stopped", hal._email_ready(), False)
+told = [args[1] for kind, args in hal.view.prompts if kind == "choose"]
+check("and told why, three times round", told,
+      lambda b: len(b) == 3 and all("hal@example.com" in t for t in b))
+check("Send email again sends it", net.emails[-1], ("VERIFY_EMAIL", hal_id.uid))
+check("and says so", told[1], lambda t: t.startswith("We sent another"))
+check("I have verified it, when it is not, says that", told[2],
+      lambda t: t.startswith("Your email address is not verified yet"))
+check("closing it is logged", hal.said[-1],
+      lambda s: "not verified" in s)
+held = hal_id.token()
+net.verified.add(hal_id.uid)
+hal.view = FakeView(choose="check")
+check("a verified account goes through", hal._email_ready(), True)
+check("with a renewed token, so the relay sees the address verified",
+      hal_id.token() != held, True)
+check("the relay's sentence is recognised",
+      L.email_unverified("verify the email address of this account before it "
+                         "joins or plays"), True)
+check("and its box names the address",
+      L.refusal_box("verify the email address of this account", "Hal", hal.data_dir),
+      lambda t: "hal@example.com" in t and "not verified" in t)
+check("a seat refusal keeps its own box",
+      L.refusal_box("Hal is already held by another sign-in", "Hal", hal.data_dir),
+      lambda t: "held by another sign-in" in t)
+check("and other refusals have none",
+      L.refusal_box("this galaxy is closed", "Hal", hal.data_dir), None)
 
 print("\n6. an account whose login dies is reported once")
 dee.mp_thread = None

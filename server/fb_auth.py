@@ -478,6 +478,13 @@ class FirebaseIdentity:
                 # Offline, or the project is not answering: the caller sends no header.
                 return None
 
+    def renew(self):
+        """A fresh ID token, or None. A held one keeps the claims it was minted
+        with, such as an email not yet verified."""
+        with self._lock:
+            self._expires_at = 0.0
+            return self.token()
+
     def _drop_account(self) -> None:
         """Forget the account on disk and in memory, and load the guest."""
         try:

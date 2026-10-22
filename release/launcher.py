@@ -1099,15 +1099,22 @@ def warning_text(galaxy: str, lines) -> str:
 # The relay refuses a request with a status and a JSON body holding one
 # sentence, `{"error": ...}`. `urllib`'s HTTPError text is only the status line.
 # A seat is refused in one of two sentences: SEAT_HELD where the galaxy lets a
-# sign-in claim a seat on first use, NOT_SEATED where it does not.
+# sign-in claim a seat on first use, NOT_SEATED where it does not. An email
+# account is refused in UNVERIFIED until its address is verified.
 SEAT_HELD = "already held by another sign-in"
 NOT_SEATED = "is bound to this sign-in"
+UNVERIFIED = "verify the email address of this account"
 
 
 def seat_refused(text) -> bool:
     """Whether a refusal's text says this sign-in holds no seat to play."""
     text = str(text or "")
     return SEAT_HELD in text or NOT_SEATED in text
+
+
+def email_unverified(text) -> bool:
+    """Whether a refusal's text says this account's email is not verified."""
+    return UNVERIFIED in str(text or "")
 
 
 def relay_refusal(exc):
@@ -1163,6 +1170,16 @@ def seat_held_text(civ: str, code) -> str:
                 "title.")
     return (said + "\n\nIf the seat is yours, ask the galaxy's operator to "
             "move it to this copy.")
+
+
+def refusal_box(text, civ: str, data_dir: str):
+    """What a player reads about a refusal they can act on, or None."""
+    if seat_refused(text):
+        return seat_held_text(civ, player_code(install_uid(data_dir)))
+    if email_unverified(text):
+        return VERIFY_LOOP_TEXT.format(
+            email=account_email(data_dir) or "your address")
+    return None
 
 
 # A multiplayer galaxy has a turn store that every launcher and the referee
@@ -1482,7 +1499,16 @@ LOG_IN_TEXT = ("Log in to play your galaxies from any install.")
 CREATE_TEXT = ("Create an online account.")
 CREATED_TEXT = ("Your account is ready, and the galaxies this install joined "
                 "are now your account's.\n\nWe sent a verification email to "
-                "{email}. Open the link in it when you can.")
+                "{email}. Open the link in it before you join or play a "
+                "galaxy.")
+VERIFY_TITLE = "Verify your email"
+VERIFY_TEXT = ("Verify your email address to join or play a galaxy.\n\nOpen "
+               "the link in the email we sent to {email}, then press I have "
+               "verified it.")
+VERIFY_LOOP_TEXT = ("Your turn was not sent, because the email address of "
+                    "this account is not verified.\n\nOpen the link in the "
+                    "email we sent to {email}, then close the game and press "
+                    "Play again.")
 GUEST_GAMES_TEXT = ("Notify an Admin if you would like to merge your account with your email. "
                     "Send player code {code} in your message.")
 DROPPED_TEXT = ("You have been logged out.")
@@ -3284,6 +3310,38 @@ class Launcher:
             ident.log_out()
             self.say(f"account {email} logged out")
 
+    def _email_ready(self) -> bool:
+        """Whether this sign-in may join or play: a guest, a Google login, or
+        an email account whose address is verified. Asks for the verification
+        otherwise, and renews the token once it is done, so the relay sees it."""
+        ident = account_identity(self.data_dir)
+        if (ident is None or not ident.account
+                or ident.account.get("provider") != "password"):
+            return True
+        email = ident.account["email"]
+        lead = ""
+        while True:
+            info = self.view.wait_for("Checking your account…", ident.lookup)
+            if info is None:
+                return True             # offline: the relay decides
+            if info["verified"]:
+                self.view.wait_for("Checking your account…", ident.renew)
+                return True
+            value = self.view.choose(
+                VERIFY_TITLE, lead + VERIFY_TEXT.format(email=email),
+                [("Close", None, False), ("Send email again", "verify", False),
+                 ("I have verified it", "check", True)])
+            if value == "verify":
+                sent = self.view.wait_for("Sending…", ident.send_verification)
+                lead = (f"We sent another verification email to {email}.\n\n"
+                        if sent else
+                        "The email could not be sent. Try again later.\n\n")
+            elif value == "check":
+                lead = "Your email address is not verified yet.\n\n"
+            else:
+                self.say("account: email not verified, not joining or playing")
+                return False
+
     def _guest_games(self, ident):
         """The names of the galaxies this install's guest joined, while the
         guest is who is playing."""
@@ -3759,6 +3817,8 @@ class Launcher:
         _player_turn, turn_store = mods
 
         cfg = {"store": g.store}
+        if store_wants_token(cfg) and not self._email_ready():
+            return
         token = player_token(self.data_dir) if store_wants_token(cfg) else None
         try:
             store = open_player_store(turn_store, g.store, token)
@@ -3980,6 +4040,8 @@ class Launcher:
         # behind the Cloud Function gets this install's Firebase identity; a
         # folder or LAN turn_server gets none. An identity that cannot be
         # minted is a missing header, not a refusal to start.
+        if store_wants_token(cfg) and not self._email_ready():
+            return
         token = player_token(self.data_dir) if store_wants_token(cfg) else None
         if token is not None and token() is None:
             self.say("multiplayer: no Firebase identity available, opening the "
@@ -4112,11 +4174,10 @@ class Launcher:
                 why = said[1] if said else str(exc)
                 self.say_threadsafe(f"multiplayer stopped: {why}")
                 self._mp_state("failed", error=why)
-                if (said and seat_refused(said[1])
-                        and not getattr(self, "mp_seat_refused", False)):
+                box = refusal_box(said[1], civ, self.data_dir) if said else None
+                if box and not getattr(self, "mp_seat_refused", False):
                     self.mp_seat_refused = True
-                    self.msgs.put(("__mp_refused__", seat_held_text(
-                        civ, player_code(install_uid(self.data_dir)))))
+                    self.msgs.put(("__mp_refused__", box))
 
         self.mp_thread = threading.Thread(target=work, daemon=True,
                                           name="multiplayer")
@@ -4136,15 +4197,15 @@ class Launcher:
             # The reopen has either happened or is not going to.
             self.mp_reopening = False
 
-        # A seat held by another sign-in refuses every upload while the loop
-        # carries on, so a rebind by the operator takes effect without a
-        # restart. The box saying what to do is shown once per followed galaxy.
-        if (kind in ("send_failed", "lost")
-                and seat_refused(facts.get("error"))
-                and not getattr(self, "mp_seat_refused", False)):
+        # A seat held by another sign-in, or an email not verified, refuses
+        # every upload while the loop carries on, so a rebind by the operator
+        # takes effect without a restart. The box saying what to do is shown
+        # once per followed galaxy.
+        box = (refusal_box(facts.get("error"), civ, self.data_dir)
+               if kind in ("send_failed", "lost") else None)
+        if box and not getattr(self, "mp_seat_refused", False):
             self.mp_seat_refused = True
-            self.msgs.put(("__mp_refused__", seat_held_text(
-                civ, player_code(install_uid(self.data_dir)))))
+            self.msgs.put(("__mp_refused__", box))
         if kind == "send_failed":
             return
         # The store going and coming back. Not turn steps, so the note is left
@@ -4188,10 +4249,11 @@ class Launcher:
             self._mp_probe_closed(self.mp_store)
         if (kind in LOG_OFFER_KINDS
                 and not getattr(self, "mp_log_offered", False)
-                and not seat_refused(facts.get("error"))):
+                and not seat_refused(facts.get("error"))
+                and not email_unverified(facts.get("error"))):
             # Once per followed galaxy. Queued behind the probe above, so a
             # galaxy found closed is not offered. A seat held by another
-            # sign-in has its own box.
+            # sign-in and an email not verified have their own box.
             self.mp_log_offered = True
             self.msgs.put(("__log_offer__", self.mp_store))
         if kind == "submitted":

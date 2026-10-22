@@ -35,6 +35,7 @@ class FakeToolkit:
         self.emails = []        # (request type, email or uid)
         self.google = {}        # Google subject -> uid
         self.password_emails = set()
+        self.verified = set()   # uids whose email is verified
 
     def _issue(self, uid):
         """A fresh login for `uid`, in the Identity Toolkit's camel case."""
@@ -101,7 +102,7 @@ class FakeToolkit:
             google = [{"providerId": "google.com", "displayName": "Google " + s}
                       for s, u in self.google.items() if u == uid]
             return {"users": [{"localId": uid, "email": email,
-                               "emailVerified": False,
+                               "emailVerified": uid in self.verified,
                                "displayName": self.names.get(uid),
                                "providerUserInfo": google}]}
         if url.startswith(fb_auth.IDP_URL):

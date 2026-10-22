@@ -69,6 +69,15 @@ from turn_store import HttpTurnStore                             # noqa: E402
 
 import relay                                                    # noqa: E402
 
+# The storage emulator serves a turn over http from its own port, where the
+# live relay's signed URL names storage.googleapis.com.
+STORAGE_HOST = urllib.parse.urlparse(
+    os.environ.get('STORAGE_EMULATOR_HOST') or 'http://127.0.0.1:9199').netloc
+_store_allows = turn_store._allowed_url
+turn_store._allowed_url = lambda url, base: (
+    urllib.parse.urlparse(url).netloc == STORAGE_HOST
+    or _store_allows(url, base))
+
 PASS, FAIL = [], []
 
 TURN = 7
@@ -265,6 +274,30 @@ def run(referee, galaxy, base, player_a, player_b, player_c, anonymous, ids):
     # Shows the refusals above are not refusing every token.
     check('a real emulator token is accepted',
           call('GET', '/state', token_a)[0], 200)
+
+    print('an email account plays once its address is verified')
+    unverified = craft_token(sub=uid_a, user_id=uid_a, email_verified=False,
+                             firebase={'sign_in_provider': 'password'})
+    verified = craft_token(sub=uid_c, user_id=uid_c, email_verified=True,
+                           firebase={'sign_in_provider': 'password'})
+    code, _h, body = call('POST', f'/submission/{TURN}/DemoPlayer', unverified,
+                          base64.b64encode(MINE))
+    check('an unverified email account may not submit, even to its own seat',
+          (code, json.loads(body).get('error')), (403, relay.UNVERIFIED))
+    check('and nothing of it reached the store',
+          referee.submission('DemoPlayer', TURN), None)
+    code, _h, body = call('POST', '/join', unverified,
+                          json.dumps({'name': 'Unverified'}).encode('utf-8'))
+    check('nor ask to join',
+          (code, json.loads(body).get('error')), (403, relay.UNVERIFIED))
+    check('and no request is waiting', referee.join_requests(), [])
+    check('it still reads the galaxy',
+          call('GET', '/state', unverified)[0], 200)
+    # Refused for the seat, not the address: the check above let it through.
+    code, _h, body = call('POST', f'/submission/{TURN}/DemoPlayer', verified,
+                          base64.b64encode(MINE))
+    check('a verified one is judged on its seat as usual',
+          (code, 'no seat' in json.loads(body).get('error', '')), (403, True))
 
     print('what any signed-in caller may read')
     state = player_a.state()
