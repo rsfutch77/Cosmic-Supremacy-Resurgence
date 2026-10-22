@@ -69,6 +69,16 @@ os.environ.setdefault('FIREBASE_AUTH_EMULATOR_HOST', AUTH_HOST)
 import save_parser as sp                                        # noqa: E402
 from firebase_store import FirebaseTurnStore                     # noqa: E402
 from turn_store import HttpTurnStore                             # noqa: E402
+import turn_store                                               # noqa: E402
+
+# The storage emulator serves a turn over http from its own port, where the
+# live relay's signed URL names storage.googleapis.com.
+STORAGE_HOST = urllib.parse.urlparse(
+    os.environ.get('STORAGE_EMULATOR_HOST') or 'http://127.0.0.1:9199').netloc
+_store_allows = turn_store._allowed_url
+turn_store._allowed_url = lambda url, base: (
+    urllib.parse.urlparse(url).netloc == STORAGE_HOST
+    or _store_allows(url, base))
 
 PASS, FAIL = [], []
 TURN = 7
