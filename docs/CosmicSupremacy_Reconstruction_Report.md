@@ -1666,11 +1666,6 @@ What is left for after the beta is kept here.
   technology the civ cannot research, or a queue entry it cannot afford, is copied as given. Done
   when the merge applies the rule the UI enforces for each order type it accepts.
 
-- [ ] **An account plays without a verified email.** Creating an account sends the verification
-  email, but nothing waits for it, so anyone can register an address that is not theirs. Done
-  when the relay refuses a write from an email account whose token lacks `email_verified`, and
-  the launcher says so and offers to send the email again.
-
 - [ ] **Logging in has not been played through the live relay.** The relay knows a player by
   uid, and creating an account or linking Google keeps the guest's, so nothing in it changed;
   `fb_auth` is tested against the Auth emulator only. Done when an account logged in from a

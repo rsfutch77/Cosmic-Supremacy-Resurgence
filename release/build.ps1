@@ -777,11 +777,13 @@ if ($IconOut) {
     $piArgs += @('--icon', $IconOut, '--add-data', "$IconOut;.")
 }
 # The Google OAuth client's secret, kept out of the repository. Without it the
-# launcher offers no Google login.
+# launcher offers no Google login, which a signed release must not ship.
 $GoogleClient = Join-Path $ReleaseDir 'google_client.json'
 if (Test-Path $GoogleClient) {
     $piArgs += @('--add-data', "$GoogleClient;.")
     Write-Ok "bundled google_client.json"
+} elseif ($Signing) {
+    throw "no release\google_client.json: a signed release would have no Google login"
 } else {
     Write-Warn2 "no release\google_client.json: this build has no Google login"
 }

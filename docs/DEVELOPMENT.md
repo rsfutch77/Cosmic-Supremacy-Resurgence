@@ -193,6 +193,10 @@ the first thing anyone double-clicks.
 The build refuses to start while a launcher is running, since a live one holds
 its own exe and `data\` open and the staging wipe would fail on a file lock.
 
+Google login needs `release\google_client.json`, the Desktop OAuth client's
+JSON from the Google Cloud console, which is gitignored. An unsigned build
+without it warns and offers no Google login; a signed build refuses to run.
+
 Test the result from the staged folder rather than the repo, that is the only
 layout a player will ever have.
 
