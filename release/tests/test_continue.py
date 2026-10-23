@@ -121,9 +121,12 @@ check("and Play continues the new game next time",
 print("\n4a. the galaxy is built with a TestBed-based client, the shipped size")
 builders = os.path.join(data, "builders")
 os.makedirs(builders)
-check("from a checkout, the tracked TestBed when the game folder has none",
-      os.path.basename(L.galaxy_builder(builders) or ""),
-      "CosmicSupremacy_TestBed.exe")
+# The tracked TestBed, or an untracked player client a checkout may also hold.
+check("from a checkout, its own client when the game folder has none",
+      L.galaxy_builder(builders),
+      lambda p: p is not None
+      and os.path.dirname(p) == os.path.join(REPO, "client")
+      and os.path.basename(p) in L.MP_CLIENTS)
 for exe in ("CosmicSupremacy_TestBed.exe", "CosmicSupremacy_Player.exe"):
     open(os.path.join(builders, exe), "wb").close()
 check("the player client first, as a release has it",
