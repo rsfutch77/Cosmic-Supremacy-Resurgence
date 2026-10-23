@@ -38,6 +38,9 @@ import inventory          # noqa: E402  writes TODO-content.md
 
 HOST = "cosmicsupremacy.com"
 SRC = os.path.join(WAYBACK, "cosmicsupremacy_mirror", HOST)
+# Captures of `cosmicsupremacy.com:80` sit in their own folder, and some pages
+# exist only there.
+SRC_80 = SRC + "_80"
 DST = os.path.join(HERE, "public")
 # Hand-written replacements for archived pages. Copied over the staged output,
 # then rewritten and injected like everything else, so an edited page still
@@ -129,17 +132,54 @@ def canonical_pages():
             and fn not in EXCLUDE_PAGES]
 
 
+def mirror_file(rel):
+    """The mirror's copy of `rel`, or None."""
+    for root in (SRC, SRC_80):
+        path = os.path.join(root, rel.replace("/", os.sep))
+        if os.path.isfile(path):
+            return path
+    return None
+
+
+_MEDIA_INDEX = None
+
+
+def media_variants(rel):
+    """Every capture of a wiki media file, whatever size it was fetched at.
+
+    DokuWiki resizes on a query (`?w=400&h=236`) and the archive often holds a
+    file at one size only. The full-size capture comes first.
+    """
+    global _MEDIA_INDEX
+    if _MEDIA_INDEX is None:
+        _MEDIA_INDEX = {}
+        for root in (SRC, SRC_80):
+            for dirpath, _dirs, files in os.walk(os.path.join(root, "wiki", "_media")):
+                folder = os.path.relpath(dirpath, root).replace(os.sep, "/")
+                for fn in files:
+                    # `pirate@w=&h=&cache=cache.svg.png` is `pirate.svg.png`
+                    name, _at, query = fn.partition("@")
+                    key = folder + "/" + name + (query[query.find("."):] if "." in query else "")
+                    variant = folder + "/" + fn
+                    if variant not in _MEDIA_INDEX.setdefault(key, []):
+                        _MEDIA_INDEX[key].append(variant)
+        for found in _MEDIA_INDEX.values():
+            found.sort(key=lambda f: (0 if "@" not in f else 1 if "@w=&h=" in f else 2, f))
+    return _MEDIA_INDEX.get(rel, [])
+
+
 def wiki_pages():
-    out = []
-    wroot = os.path.join(SRC, "wiki")
-    if not os.path.isdir(wroot):
-        return out
-    for dirpath, _dirs, files in os.walk(wroot):
-        for fn in files:
-            if not fn.endswith(".html") or "@" in fn:
-                continue
-            rel = os.path.relpath(os.path.join(dirpath, fn), SRC)
-            out.append(rel.replace(os.sep, "/"))
+    out = set()
+    for root in (SRC, SRC_80):
+        wroot = os.path.join(root, "wiki")
+        if not os.path.isdir(wroot):
+            continue
+        for dirpath, _dirs, files in os.walk(wroot):
+            for fn in files:
+                if not fn.endswith(".html") or "@" in fn:
+                    continue
+                rel = os.path.relpath(os.path.join(dirpath, fn), root)
+                out.add(rel.replace(os.sep, "/"))
     return sorted(out)
 
 
@@ -231,8 +271,22 @@ def candidates(ref, base_dir):
             cand = local_for("/" + rel, q, as_html)
             if cand not in out:
                 out.append(cand)
+
+    if rel.startswith("wiki/_media/"):
+        for cand in media_variants(rel):
+            if cand not in out:
+                out.append(cand)
+
+    # A DokuWiki image viewer only frames the image, so the image stands in for
+    # a viewer that was never captured.
+    if rel.startswith("wiki/_detail/"):
+        for cand in candidates("/wiki/_media/" + rel[len("wiki/_detail/"):], ""):
+            if cand not in out:
+                out.append(cand)
     return out
 
+
+NEVER_ARCHIVED = inventory.never_archived()
 
 _IMG_RE = re.compile(
     '<img[^>]*?src\\s*=\\s*(?:"(?P<dq>[^"]*)"|\'(?P<sq>[^\']*)\')[^>]*>',
@@ -258,6 +312,10 @@ def mark_missing_images(html, page_rel, staged):
         if not candidates(src, base):      # external image, not ours to judge
             return m.group(0)
         found.append(src)
+        if inventory.image_key(src) in NEVER_ARCHIVED:
+            return ('<span style="display:inline-block;padding:4px 8px;'
+                    'border:1px dashed #888;color:#666;font:11px Verdana,sans-serif;'
+                    'background:#f4f4f4;">image not archived</span>')
         # The comment opener is split from the "[ ]" so a TODO scanner finds the
         # marker in the staged pages, where it is a task, and not here.
         return (
@@ -286,6 +344,33 @@ def rewrite_links(text, page_rel, staged):
         return match.group(0)
 
     return REF_RE.sub(sub, text), count
+
+
+# DokuWiki marks a link to a page nobody wrote with class wikilink2 and shows
+# it in red. The page never existed, so the link loses its href and keeps the
+# red text, which the wiki's own CSS still styles.
+_RED_LINK_RE = re.compile(r"<a\b[^>]*\bwikilink2\b[^>]*>", re.I)
+_HREF_ATTR_RE = re.compile(r"""\s+href\s*=\s*(?:"([^"]*)"|'([^']*)')""", re.I)
+RED_LINK_ATTR = ' data-red-link="never written on the original wiki"'
+
+
+def unlink_red_links(html, page_rel, staged):
+    base = posixpath.dirname(page_rel)
+    count = 0
+
+    def sub(m):
+        nonlocal count
+        tag = m.group(0)
+        href = _HREF_ATTR_RE.search(tag)
+        if not href:
+            return tag
+        cands = candidates(href.group(1) or href.group(2) or "", base)
+        if not cands or any(c in staged for c in cands):
+            return tag
+        count += 1
+        return _HREF_ATTR_RE.sub("", tag, count=1)[:-1] + RED_LINK_ATTR + ">"
+
+    return _RED_LINK_RE.sub(sub, html), count
 
 
 NOTICE_MARK = "property of their original creator"
@@ -341,8 +426,8 @@ def inject(html):
 def copy(rel, copied, missing):
     if rel.startswith(EXCLUDE_PREFIXES) or JUNK_PATH_RE.search(rel):
         return False
-    src = os.path.join(SRC, rel.replace("/", os.sep))
-    if not os.path.isfile(src):
+    src = mirror_file(rel)
+    if src is None:
         missing.add(rel)
         return False
     if rel in copied:
@@ -354,9 +439,42 @@ def copy(rel, copied, missing):
     return True
 
 
+def is_page(rel):
+    return os.path.splitext(rel)[1].lower() in PAGE_EXT
+
+
+def follow_links(rel, copied, missing):
+    """Stage the archived pages a staged page links to that its set left out.
+
+    These are captures named after their query string, mostly DokuWiki image
+    viewers and backlink lists. A session-id capture is a duplicate of the clean
+    page, so a link is only followed to a capture without one. Only wiki pages
+    are followed; the game's per-galaxy and score pages are not published.
+    """
+    with open(os.path.join(DST, rel.replace("/", os.sep)),
+              "r", encoding="utf-8", errors="replace") as fh:
+        text = fh.read()
+    found = []
+    for match in REF_RE.finditer(text):
+        if not match.group("pre").lower().startswith("href"):
+            continue
+        for cand in candidates(match.group("url"), posixpath.dirname(rel)):
+            if cand in copied:
+                break
+            if (is_page(cand) and cand.startswith("wiki/") and "sid=" not in cand
+                    and not cand.startswith(inventory.INTENTIONAL)
+                    and cand not in EXCLUDE_PAGES and mirror_file(cand)
+                    and copy(cand, copied, missing)):
+                found.append(cand)
+                break
+    return found
+
+
 def collect_assets(text, base_dir, copied, missing, css_queue):
     for match in REF_RE.finditer(text):
         for cand in candidates(match.group("url"), base_dir):
+            if cand in copied:
+                break
             if is_asset(cand):
                 if copy(cand, copied, missing) and cand.endswith(".css"):
                     css_queue.append(cand)
@@ -413,6 +531,13 @@ def main():
     for rel in pages:
         copy(rel, copied, missing)
 
+    followed = 0
+    queue = [rel for rel in copied if is_page(rel)]
+    while queue:
+        found = follow_links(queue.pop(), copied, missing)
+        followed += len(found)
+        queue += found
+
     # Assets referenced by any staged page.
     for rel in list(copied):
         if os.path.splitext(rel)[1].lower() not in PAGE_EXT:
@@ -429,8 +554,7 @@ def main():
         if css_rel in seen_css:
             continue
         seen_css.add(css_rel)
-        with open(os.path.join(SRC, css_rel.replace("/", os.sep)),
-                  "r", encoding="utf-8", errors="replace") as fh:
+        with open(mirror_file(css_rel), "r", encoding="utf-8", errors="replace") as fh:
             css = fh.read()
         for ref in CSS_URL_RE.findall(css):
             for cand in candidates(ref, posixpath.dirname(css_rel)):
@@ -464,6 +588,7 @@ def main():
     # Only now is the staged set final, so links can be pointed at it.
     staged = set(copied)
     rewritten = 0
+    red_links = 0
     patch_hits = {}
     image_todos = {}
     for rel in sorted(copied):
@@ -474,6 +599,8 @@ def main():
             text = fh.read()
         text, n = rewrite_links(text, rel, staged)
         rewritten += n
+        text, n = unlink_red_links(text, rel, staged)
+        red_links += n
         # Patches run first: they strip the indexer beacon, which would
         # otherwise be counted and marked as a missing image on every page.
         text, hit = patches.apply_all(text)
@@ -505,6 +632,8 @@ def main():
     print("set '%s': %d files (%d pages), %.1f MiB"
           % (args.setname, len(copied), page_count, total / 1048576))
     print("  links repointed at staged pages: %d" % rewritten)
+    print("  linked pages staged from outside the set: %d" % followed)
+    print("  red links to unwritten wiki pages unlinked: %d" % red_links)
     if override_count:
         print("  hand-written overrides applied:  %d" % override_count)
     for name, n in sorted(patch_hits.items()):
@@ -514,8 +643,8 @@ def main():
     print("  TODO-content.md: %d missing images, %d broken link targets (%d refs)"
           % (n_img, n_tgt, n_ref))
     if image_todos:
-        print("  images marked TODO: %d distinct (%d places)"
-              % (len(image_todos), sum(len(v) for v in image_todos.values())))
+        print("  images not in the mirror: %d distinct (%d places), %d marked TODO"
+              % (len(image_todos), sum(len(v) for v in image_todos.values()), n_img))
     for name, _fn in patches.PATCHES:
         if name not in patch_hits:
             print("  site-wide patch MATCHED NOTHING: %s" % name)

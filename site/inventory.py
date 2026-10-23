@@ -10,15 +10,40 @@ than a gap.
 """
 
 import collections
+import html
 import os
 import posixpath
 import re
+import urllib.parse
 
 HREF_RE = re.compile(r"<a[^>]+href=(?:\"([^\"]*)\"|'([^']*)')", re.I)
+COMMENT_RE = re.compile(r"<!--.*?-->", re.S)
+
+# Targets the Wayback Machine has no capture of, checked against its CDX API.
+# Listed as known gaps rather than tasks, since no rebuild can supply them.
+NEVER_ARCHIVED_FILE = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "never_archived.txt")
+
+
+def never_archived():
+    try:
+        with open(NEVER_ARCHIVED_FILE, "r", encoding="utf-8") as fh:
+            lines = fh.read().splitlines()
+    except FileNotFoundError:
+        return set()
+    return {ln.strip() for ln in lines if ln.strip() and not ln.startswith("#")}
+
+
+def image_key(src):
+    """An img src as the mirror-relative path never_archived.txt lists."""
+    return urllib.parse.urlsplit(html.unescape(src)).path.lstrip("/")
+
 
 # Absent by choice, not by accident.
-INTENTIONAL = ("forum/", "wiki/wallpapers", "wiki/tools",
-               "chat.php", "download_firewall")
+INTENTIONAL = ("forum/", "wiki/wallpapers", "wiki/tools", "wiki/dev.html",
+               "chat.php", "download_firewall",
+               "galaxy@", "galaxyscores@",   # per-galaxy pages are not published
+               "demogalaxy.php")             # a login file for the original server
 
 
 def _broken_links(dst, staged, candidates):
@@ -30,7 +55,7 @@ def _broken_links(dst, staged, candidates):
         if not os.path.isfile(full):
             continue
         with open(full, "r", encoding="utf-8", errors="replace") as fh:
-            text = fh.read()
+            text = COMMENT_RE.sub("", fh.read())
         base = posixpath.dirname(rel)
         for dq, sq in HREF_RE.findall(text):
             url = dq or sq
@@ -45,7 +70,13 @@ def _broken_links(dst, staged, candidates):
 
 def write(path, image_todos, dst, staged, candidates):
     """image_todos maps an img src to the list of pages it appears on."""
+    gone = never_archived()
     broken = _broken_links(dst, staged, candidates)
+    lost_links = {t: n for t, n in broken.items() if t in gone}
+    for target in lost_links:
+        del broken[target]
+    lost_images = {s: p for s, p in image_todos.items() if image_key(s) in gone}
+    images = {s: p for s, p in image_todos.items() if s not in lost_images}
 
     lines = [
         "# Content the web archive could not supply",
@@ -55,13 +86,13 @@ def write(path, image_todos, dst, staged, candidates):
         "Pages withheld on purpose (the forum, wallpapers, tools, live chat,",
         "the firewall page) are not listed here: those are decisions, not gaps.",
         "",
-        "## Missing images (%d)" % len(image_todos),
+        "## Missing images (%d)" % len(images),
         "",
         "Each of these renders on the site as a dashed red `[ ] missing image`",
         "marker naming the file, so they can be found while browsing.",
         "",
     ]
-    for src, pages in sorted(image_todos.items(), key=lambda kv: (-len(kv[1]), kv[0])):
+    for src, pages in sorted(images.items(), key=lambda kv: (-len(kv[1]), kv[0])):
         lines.append("- [ ] `%s`" % src[:160])
         lines.append("  - %d place(s), e.g. `%s`" % (len(pages), pages[0]))
 
@@ -70,14 +101,28 @@ def write(path, image_todos, dst, staged, candidates):
         "## Broken links (%d targets, %d references)" % (
             len(broken), sum(broken.values())),
         "",
-        "These resolve to pages the crawler never captured. Most are wiki",
-        "sub-pages and DokuWiki image-detail viewers.",
+        "These resolve to pages the mirror does not hold but the Wayback",
+        "Machine might. Check its CDX API before adding one to never_archived.txt.",
         "",
     ]
     for target, n in broken.most_common():
         lines.append("- [ ] `%s` — %d reference(s)" % (target[:160], n))
 
+    lines += [
+        "",
+        "## Never archived (%d images, %d link targets)" % (
+            len(lost_images), len(lost_links)),
+        "",
+        "The Wayback Machine has no capture of these (`never_archived.txt`).",
+        "Images show a grey `image not archived` marker; links lead to the 404 page.",
+        "",
+    ]
+    for src, pages in sorted(lost_images.items(), key=lambda kv: (-len(kv[1]), kv[0])):
+        lines.append("- `%s`, %d place(s), e.g. `%s`" % (src[:160], len(pages), pages[0]))
+    for target, n in sorted(lost_links.items(), key=lambda kv: (-kv[1], kv[0])):
+        lines.append("- `%s`, %d reference(s)" % (target[:160], n))
+
     with open(path, "w", encoding="utf-8") as fh:
         fh.write("\n".join(lines) + "\n")
 
-    return len(image_todos), len(broken), sum(broken.values())
+    return len(images), len(broken), sum(broken.values())
