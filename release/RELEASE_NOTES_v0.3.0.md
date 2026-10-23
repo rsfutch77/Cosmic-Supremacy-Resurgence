@@ -30,9 +30,8 @@ Completed once you finish it. The game window opens larger.
 
 **Governors and coats of arms** you save in the game are kept.
 
-**Multiplayer** carries more of what you do in a turn: switching ship designs
-off and on, and choosing what a planet builds. A new empire keeps the
-homeworld and the civilisation traits you choose for it. [verify]
+**Multiplayer** A new empire keeps the
+homeworld and the civilisation traits you choose for it.
 
 **A privacy page** on the site says what the game keeps about you:
 [cosmicresurgence.com/support_privacy.php.html](https://cosmicresurgence.com/support_privacy.php.html).
@@ -48,8 +47,6 @@ homeworld and the civilisation traits you choose for it. [verify]
 
 To move your empire to an account, start v0.3.0 with your old `data` folder
 and press **Log in**, then **Create account**. The account keeps the empire.
-
-Single Player games saved in v0.2 [verify: carry over, or start a New Game].
 
 ## Install
 
