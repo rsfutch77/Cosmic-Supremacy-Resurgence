@@ -1686,6 +1686,13 @@ What is left for after the beta is kept here.
   moves the seats by hand. Done when the relay moves them itself, on proof of both the guest's
   and the account's tokens.
 
+- [ ] **The launcher does not update itself.** A launcher below a galaxy's `min_build` links the
+  release page, and the player unzips the new build by hand, keeping `data`. Done when the
+  launcher finds a newer release on its own, downloads it, checks the signature and SHA-256,
+  replaces itself in its folder without elevation and without touching `data`, and goes back to
+  the old build if the new one fails to start. The TUF items in `5 - Release_Checklist.md` and
+  Multiplayer_Checklist M12 are its acceptance list.
+
 - [ ] **Order types nobody has measured are not merged:** governors, admirals and diplomacy
   proposals. Done when each is measured against a change made in the UI and is either accepted
   or refused with a note.

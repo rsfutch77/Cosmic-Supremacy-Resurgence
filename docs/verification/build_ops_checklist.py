@@ -94,18 +94,18 @@ FB.update({
 })
 
 # The Update Framework: attacks on software update
-NO_UPDATER = 'The launcher does not update itself: the player downloads a new zip from the release page (one-click update was removed).'
+UPDATER = 'The launcher will update itself (Reconstruction Report section 14). Until it does, the player downloads a new zip from the release page.'
 TUF = {
-    'TUF-1': ('apply', NO_UPDATER, ['The download page publishes the SHA-256 of each zip and explains how to check it (Website_Checklist R8).', 'Signed builds (M3) make a replaced file detectable by Windows itself.']),
-    'TUF-2': ('apply', 'The launcher does download turns and notes from the relay and Storage.', ['The launcher caps the size of a turn, note or answer it will read, and stops reading past it.']),
-    'TUF-3': NA(NO_UPDATER + ' No dependencies are fetched at run time.'),
-    'TUF-4': NA(NO_UPDATER),
-    'TUF-5': ('apply', 'The analogue here is turns: a launcher served the same old turn must notice.', ['Multiplayer_Checklist M8: a turn the launcher could not refresh is labelled with its age.']),
+    'TUF-1': ('apply', UPDATER, ['The download page publishes the SHA-256 of each zip and explains how to check it (Website_Checklist R8).', 'Signed builds (M3) make a replaced file detectable by Windows itself.', 'The updater installs only a build signed by the project\'s identity (SS-5) whose SHA-256 matches the one the release publishes.']),
+    'TUF-2': ('apply', 'The launcher downloads turns and notes from the relay and Storage, and releases from the release page.', ['The launcher caps the size of a turn, note or answer it will read, and stops reading past it.', 'The updater stops a download that runs past the size the release lists.']),
+    'TUF-3': ('apply', UPDATER, ['An update is one signed zip. The updater fetches no dependencies or plug-ins, at update time or at run time.']),
+    'TUF-4': ('apply', UPDATER, ['The updater remembers only a version it read from a verified build, so an inflated number in the release listing cannot block later updates.']),
+    'TUF-5': ('apply', 'The analogue here is turns: a launcher served the same old turn must notice.', ['Multiplayer_Checklist M8: a turn the launcher could not refresh is labelled with its age.', 'An update check that could not reach the release page says so, rather than "up to date".']),
     'TUF-6': NA('No mirrors. One release page (GitHub) and one relay.'),
-    'TUF-7': NA(NO_UPDATER),
-    'TUF-8': ('apply', None, ['The update notice never points to a build older than the one running.', 'A galaxy\'s `min_build` only rises.']),
-    'TUF-9': ('apply', None, ['The code-signing identity (M3) is the one key that vouches for every build. Keep it in a managed service (Azure Artifact Signing) behind an MFA-protected account, not as a file on the build PC.', 'The GitHub account that publishes releases has MFA.']),
-    'TUF-10': ('apply', None, ['The update notice links one hard-coded release page, never a URL taken from the relay or a galaxy.']),
+    'TUF-7': ('apply', UPDATER, ['The version, the zip and its SHA-256 all come from one release, never combined across releases.']),
+    'TUF-8': ('apply', None, ['The update notice never points to a build older than the one running.', 'The updater never installs a build older than the one running.', 'A galaxy\'s `min_build` only rises.']),
+    'TUF-9': ('apply', None, ['The code-signing identity (M3) is the one key that vouches for every build. Keep it in a managed service (Azure Artifact Signing) behind an MFA-protected account, not as a file on the build PC.', 'The GitHub account that publishes releases has MFA.', 'The updater trusts the signing identity, not the download host, so a compromised GitHub account alone cannot ship a build the launcher installs.']),
+    'TUF-10': ('apply', None, ['The update notice and the updater use one hard-coded release page, never a URL taken from the relay or a galaxy.']),
 }
 
 # Microsoft: minimising SmartScreen warnings
@@ -113,7 +113,7 @@ SS = {
     'SS-1': ('deviation', 'Not listing in the Microsoft Store (decided 8 October 2026). SmartScreen reputation comes from signing every release with one identity (SS-2, SS-5). Without a storefront there is no IARC rating, since IARC is reached only through a participating store; the age floor (PRIV-1) is stated by the project instead.', []),
     'SS-2': ('apply', None, ['Sign the launcher and the client on every release. Unsigned, Smart App Control can block the client outright (seen in Windows Sandbox, 5 October 2026).']),
     'SS-3': ('apply', None, ['Release order: build, sign, then zip, then compute the SHA-256. Nothing is patched after signing; the client\'s binary patches happen before.']),
-    'SS-4': ('apply', None, ['The launcher behaves like an ordinary program: no bundled extras, no autostart, no elevation, nothing written outside its folder (REL-1).']),
+    'SS-4': ('apply', None, ['The launcher behaves like an ordinary program: no bundled extras, no autostart, no elevation, nothing written outside its folder (REL-1).', 'The updater keeps to the same rules: no elevation, nothing written outside the launcher\'s folder.']),
     'SS-5': ('apply', None, ['One signing identity for every release; record it here once chosen.']),
     'SS-6': ('apply', None, ['[x] The download page warns about the unrecognised publisher.', 'Add what Smart App Control does and what to do (Website_Checklist R9).']),
 }
