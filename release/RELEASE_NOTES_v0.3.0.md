@@ -33,8 +33,8 @@ Completed once you finish it. The game window opens larger.
 **Multiplayer** A new empire keeps the
 homeworld and the civilisation traits you choose for it.
 
-**A privacy page** on the site says what the game keeps about you:
-[cosmicresurgence.com/support_privacy.php.html](https://cosmicresurgence.com/support_privacy.php.html).
+**The terms page** on the site now says what the game keeps about you:
+[cosmicresurgence.com/support_terms.php.html](https://cosmicresurgence.com/support_terms.php.html#privacy).
 
 ## Updating from v0.2.2
 

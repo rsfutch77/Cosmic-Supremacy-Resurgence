@@ -755,9 +755,11 @@ LOG_BODY_MAX = 512 * 1024
 LOG_PER_UID_PER_DAY = int(os.environ.get('CS_RELAY_LOG_PER_UID', '5'))
 LOG_PER_DAY = int(os.environ.get('CS_RELAY_LOG_PER_DAY', '100'))
 
-# Each upload deletes up to LOG_PRUNE_BATCH logs older than LOG_KEEP_DAYS.
-# `expire_at` is also written, for a Firestore TTL policy.
+# A log and a day's counts carry `expire_at`, which the Firestore TTL policies
+# in `deploy.py` delete by. Each upload also deletes up to LOG_PRUNE_BATCH logs
+# older than LOG_KEEP_DAYS.
 LOG_KEEP_DAYS = 14
+LOG_QUOTA_KEEP_DAYS = 2     # a day's counts outlive the day they count
 LOG_PRUNE_BATCH = 5
 
 # Why a log was sent. Anything else is recorded as `other`.
@@ -858,7 +860,9 @@ def _take_log(uid: str, body: bytes):
         if total >= LOG_PER_DAY:
             raise Refused(429, 'the operator has had as many logs today as '
                                'can be kept; try again tomorrow')
-        tx.set(quota, {'total': total + 1, 'uids': {uid: mine + 1}},
+        tx.set(quota, {'total': total + 1, 'uids': {uid: mine + 1},
+                       'expire_at': stamp + datetime.timedelta(
+                           days=LOG_QUOTA_KEEP_DAYS)},
                merge=True)
         tx.set(ref, record)
 

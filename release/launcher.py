@@ -1495,7 +1495,7 @@ def account_email(data_dir: str):
 
 # What the account dialogs say. Without an account a player plays as the
 # install's guest, which is the anonymous identity every install already has.
-PRIVACY_PAGE = "cosmicresurgence.com/support_privacy.php.html"
+PRIVACY_PAGE = "cosmicresurgence.com/support_terms.php.html"
 EMAIL_USE_TEXT = ("Your email address is used to log in and for account "
                   "emails. Other players never see it. More at "
                   + PRIVACY_PAGE)

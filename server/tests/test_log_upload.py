@@ -231,6 +231,11 @@ def test_route(relay, L, root, fs, ids):
     check('the id starts with when and the player code',
           reply.get('id'), lambda i: bool(i) and f'-{uid_a[:8]}-' in i)
     check('it can expire', rec.get('expire_at') is not None, True)
+    counts = fs.collection(relay.LOG_QUOTA_COLLECTION).document(
+        relay.log_day(rec['received_at'])).get().to_dict() or {}
+    check('and so can the day\'s counts, which name the sender',
+          (uid_a in (counts.get('uids') or {}),
+           counts.get('expire_at') is not None), (True, True))
 
     # Nothing reads a log back through the relay, the sender included.
     check('GET of the collection is refused',
