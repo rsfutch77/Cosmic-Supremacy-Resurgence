@@ -316,9 +316,12 @@ check("either sentence is a seat refused",
 check("and nothing else is",
       [L.seat_refused("HTTP Error 503: Service Unavailable"),
        L.seat_refused(None)], [False, False])
+check("the relay's refusal of an unverified email is the sentence matched",
+      L.email_unverified(relay.UNVERIFIED), True)
 src = inspect.getsource(L.Launcher.start_multiplayer)
 check("the turn loop's failure turns a held seat into that box",
-      "seat_refused(said[1])" in src and "seat_held_text(" in src, True)
+      "refusal_box(said[1]" in src
+      and "seat_held_text(" in inspect.getsource(L.refusal_box), True)
 
 print("\n6. a relay refusal is read in the relay's words")
 body = json.dumps({"error": "DemoPlayer is already held by another "

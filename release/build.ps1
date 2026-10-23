@@ -755,11 +755,15 @@ $piArgs = @(
     '--hidden-import', 'canonical',
     '--hidden-import', 'order_diff',
     '--hidden-import', 'merge_orders',
+    '--hidden-import', 'facility_rules',
+    '--hidden-import', 'research',
     '--hidden-import', 'game_cycle',
     '--hidden-import', 'gamestate',
     '--hidden-import', 'ejbo_viewer',
     '--hidden-import', 'advance_turns',
     '--hidden-import', 'trigger_save',
+    # Single Player's New Game seeds a freshly built galaxy with it.
+    '--hidden-import', 'make_single_player_galaxy',
     # This install's Firebase identity, imported by player_token(). Missing, it
     # fails silently as "no token".
     '--hidden-import', 'fb_auth',
@@ -771,6 +775,17 @@ if ($IconOut) {
     # --icon is the EXE's icon in Explorer. The taskbar uses the window icon,
     # so the .ico also ships as data for web_view.
     $piArgs += @('--icon', $IconOut, '--add-data', "$IconOut;.")
+}
+# The Google OAuth client's secret, kept out of the repository. Without it the
+# launcher offers no Google login, which a signed release must not ship.
+$GoogleClient = Join-Path $ReleaseDir 'google_client.json'
+if (Test-Path $GoogleClient) {
+    $piArgs += @('--add-data', "$GoogleClient;.")
+    Write-Ok "bundled google_client.json"
+} elseif ($Signing) {
+    throw "no release\google_client.json: a signed release would have no Google login"
+} else {
+    Write-Warn2 "no release\google_client.json: this build has no Google login"
 }
 $piArgs += (Join-Path $ReleaseDir 'launcher.py')
 
@@ -838,12 +853,28 @@ if (Test-Path $License) {
 
 # patch_launch_messages.py writes each client into the stage with its setup
 # message pointing at the launcher and its renderer failure message pointing at
-# the issue tracker. The tracked binary is only read.
+# the issue tracker. The tracked binary is only read. patch_window_size.py then
+# opens each client's main window 10% larger by default, patch_tutorial.py
+# fixes the Tutorial's panel, step checks and texts in the client that runs it,
+# and patch_civ_name.py makes Single Player send a chosen civ name every time.
 $PatchMessages = Join-Path $ClientDir 'dev_tools\patch_launch_messages.py'
+$PatchWindow   = Join-Path $ClientDir 'dev_tools\patch_window_size.py'
+$PatchTutorial = Join-Path $ClientDir 'dev_tools\patch_tutorial.py'
+$PatchCivName  = Join-Path $ClientDir 'dev_tools\patch_civ_name.py'
 function Copy-Client {
     param($src, $dst)
     & $VenvPy $PatchMessages --source $src --out $dst | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "patch_launch_messages failed for $(Split-Path -Leaf $src)" }
+    & $VenvPy $PatchWindow --source $dst --out $dst | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "patch_window_size failed for $(Split-Path -Leaf $src)" }
+    if ((Split-Path -Leaf $src) -eq 'CosmicSupremacy.exe') {
+        & $VenvPy $PatchTutorial --source $dst --out $dst | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "patch_tutorial failed for $(Split-Path -Leaf $src)" }
+    }
+    if ((Split-Path -Leaf $src) -eq 'CosmicSupremacy_Resurgence.exe') {
+        & $VenvPy $PatchCivName --source $dst --out $dst | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw "patch_civ_name failed for $(Split-Path -Leaf $src)" }
+    }
 }
 
 # Several modes share one EXE.
@@ -859,36 +890,31 @@ foreach ($m in $playable) {
         $copied[$m.galaxy] = $true
         Write-Ok "game\galaxies\$($m.galaxy)"
     }
+    # The pass file New Game builds a fresh galaxy from.
+    if ($m.generate -and -not $copied.ContainsKey($m.generate)) {
+        Copy-Item (Join-Path $ClientDir $m.generate) (Join-Path $GalaxyDir $m.generate)
+        $copied[$m.generate] = $true
+        Write-Ok "game\galaxies\$($m.generate)"
+    }
 }
 
 # ── 7b. The multiplayer client ────────────────────────────────────────────────
 # A session mode names no EXE, so the copy above never reaches its client. A
 # player's client must never compute a turn the referee has not.
 #
-# Player is TestBed plus one byte that silences the coat-of-arms prompt. It is
-# gitignored, so a checkout that has not run patch_hide_setup_prompts.py
-# --build ships TestBed, the same fallback game_cycle.resolve_exe makes.
+# Player is TestBed plus one byte that silences the coat-of-arms prompt. Every
+# build makes it from the tracked TestBed into release\build, so the release
+# depends on no gitignored file. client\CosmicSupremacy_Player.exe is neither
+# read nor written, and game_cycle.resolve_exe's choice for dev runs is left
+# as it was.
 $mpModes = @($modes | Where-Object { $_.session -eq 'multiplayer' })
 if ($mpModes.Count -gt 0) {
     Write-Step "Adding the multiplayer client"
-    $mpExe = $null
-    foreach ($name in @('CosmicSupremacy_Player.exe', 'CosmicSupremacy_TestBed.exe')) {
-        $cand = Join-Path $ClientDir $name
-        if (Test-Path $cand) { $mpExe = $cand; break }
-    }
-    if ($mpExe) {
-        Copy-Client $mpExe (Join-Path $GameDir (Split-Path -Leaf $mpExe))
-        Write-Ok "game\$(Split-Path -Leaf $mpExe)"
-        if ((Split-Path -Leaf $mpExe) -ne 'CosmicSupremacy_Player.exe') {
-            Write-Warn2 ('shipping TestBed: players will see the coat-of-arms ' +
-                         'prompt every turn. Build the player client with ' +
-                         'patch_hide_setup_prompts.py --build and re-run')
-        }
-    } else {
-        # Not fatal: the launcher checks for this client before a turn.
-        Write-Warn2 ('no multiplayer client in client\ - the Multiplayer card ' +
-                     'will refuse to start')
-    }
+    $PlayerExe = Join-Path $BuildDir 'CosmicSupremacy_Player.exe'
+    & $VenvPy (Join-Path $ClientTools 'patch_hide_setup_prompts.py') --build --out $PlayerExe | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw 'patch_hide_setup_prompts failed to build the player client' }
+    Copy-Client $PlayerExe (Join-Path $GameDir 'CosmicSupremacy_Player.exe')
+    Write-Ok 'game\CosmicSupremacy_Player.exe, built from CosmicSupremacy_TestBed.exe'
 }
 
 # ── 7c. No loose bytecode ─────────────────────────────────────────────────────

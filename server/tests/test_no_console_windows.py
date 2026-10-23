@@ -219,7 +219,8 @@ def test_referee_tick():
 
     `game_cycle` and `player_turn` are replaced in `sys.modules` for the call,
     so nothing is launched, closed or locked, and the capture is a file
-    written here.
+    written here. `stamp_for_a_holder` passes the stand-in blob through, since
+    it holds no civs to stamp.
     """
     print('referee.tick, the advance_turns child')
     tmp = tempfile.mkdtemp(prefix='nowin_tick_')
@@ -250,12 +251,15 @@ def test_referee_tick():
     kept = {n: sys.modules.get(n) for n in ('game_cycle', 'player_turn')}
     sys.modules['game_cycle'] = FakeClient
     sys.modules['player_turn'] = FakePlayerTurn
+    stamp = referee.stamp_for_a_holder
+    referee.stamp_for_a_holder = lambda b, log=None: b
     got = []
     try:
         rec = with_recorder(referee, {}, lambda: got.append(referee.tick(
             blob, turns=1, secs=10, work_dir=tmp, log=lambda *_: None,
             check_save_path=False)))
     finally:
+        referee.stamp_for_a_holder = stamp
         for n, m in kept.items():
             if m is None:
                 sys.modules.pop(n, None)

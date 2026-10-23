@@ -35,7 +35,8 @@ Your empire is **DemoPlayer** unless you rename it. The computer opponent is
 | A1 | Window opens | Double-click the launcher | The window appears, four modes listed: Tutorial, Demo, Single Player, Multiplayer. Status dot turns green and says the server is up |
 | A2 | Mode text reads correctly | Read the Single Player card | Title and blurb are spelled correctly, no placeholder text, no cut-off words at the edge of the card |
 | A3 | Hover feedback | Move the mouse over the Single Player button | The button lightens. It goes back when you move away |
-| A4  | Game starts | Click **Play Single Player** | The game window opens within a few seconds. Launcher status reads "Single Player is running" in green |
+| A4  | Game starts | Click **Play Single Player** | The game window opens within a few seconds, on your newest save if there is one and on a fresh galaxy if not. Launcher status reads "Single Player is running" in green |
+| A4a | New Game | Quit the game, click **New Game** on the Single Player row | A fresh galaxy at turn 0, even with saves in `data\games`, and the saves are still there |
 | A5  | Controls appear | Look at the launcher after the game window opens | A bar appears with **Next Turn**, **Save**, **Load**, and a turn readout on the left |
 | A6 | Turn readout | Read the left of the control bar | It shows the same turn number the game is showing |
 | A7 | Second game refused | With the game running, click **Play Single Player** again | A dialog explains a game is already running and nothing new starts. The running game is untouched |
@@ -47,10 +48,10 @@ Your empire is **DemoPlayer** unless you rename it. The computer opponent is
 | | Test | Do | Expect |
 |---|---|---|---|
 | B1  | Galaxy loads | Wait for the game to finish loading | You are looking at a galaxy map with your homeworld, no error dialog, no "Failed to load Save-Game" |
-| B2 | Home world prompt | Watch the first few seconds | The "Customize Your Home World" prompt appears. This is expected in this build, see Known limitations |
+| B2 | Setup prompts are one-time | On **New Game**, confirm "Customize Your Home World", "Customize Your Civilization" and the civ name with OK. Click **Next Turn**, quit, then click **Play Single Player** | Each prompt appears once on the new galaxy. None of them appears again, during play or after continuing |
 | B3  | Civ name accepted | Type a new civilisation name and confirm | The name is accepted, and appears afterwards wherever your empire is named (status bar, Diplomacy, Overview highscores) |
-| B4 | Civ name survives a restart | Quit, relaunch Single Player | The name you chose is still there, not back to DemoPlayer |
-| B5 | Coat of arms dialog | Open the coat of arms prompt if offered | The dialog opens and closes without an error. The image itself is blank, see Known limitations |
+| B4 | Civ name survives a restart | Save, quit, click **Play Single Player** | The game continues your save with the name you chose. On **New Game**, the name dialog offers that name first, not DemoEmpire |
+| B5 | Coat of arms | In the civ name dialog, drag an image file from Explorer into the coat-of-arms frame, then OK | The image shows in the frame. Next session the dialog lists it, and it is drawn beside your planets |
 | B6 | Window behaviour | Alt-Tab away and back. Move the window | The game redraws correctly, no black or frozen areas |
 
 ## C. The status bar
@@ -202,14 +203,16 @@ windows.
 | L8  | Screens refresh | Sit on the Planet View when the turn lands, then use the mouse wheel and sorting | Values update in place. Note if sorting or the mouse wheel misbehaves until you switch screens, this was an original bug and we want to know if it survived |
 | L9  | Opponent is really playing | Over ten turns, watch BadGuy in the Overview highscores and on the map | Their score rises, their planet count rises, their ships move. A flat line means the opponent is not running |
 | L10 | Ten turns in a row | Click Next Turn ten times, a few seconds apart | Every one lands. No dialog, no freeze, no turn skipped or doubled |
+| L11 | Clock held | Note the turn number, then leave the game open and untouched for over an hour | The launcher log says "turn clock held" once. The turn number has not moved; it moves only when you click Next Turn |
+| L12 | Sleep does not take turns | Note the turn number, put the PC to sleep with the game open for over an hour, then wake it | The turn number has not moved, and the next Next Turn advances it by exactly one |
 
 ## M. Save, load and shutdown
 
 | | Test | Do | Expect |
 |---|---|---|---|
-| M1  | Save | Click **Save** in the launcher | Buttons grey out briefly, then the log says it saved, and names the file |
+| M1  | Save | Click **Save** in the launcher, type a name, click **Save** | A dialog asks for the save's name, offering `singleplayer` the first time. Buttons grey out briefly, then the log says it saved, and names the file |
 | M2  | No error in game | Watch the game window during the save | No "Failed to save the Save-Game" dialog appears |
-| M3  | Save file exists | Open `data\games` next to the launcher | A file named `savegame_turn<N>.dat` with the turn you saved at |
+| M3  | Save file exists | Open `data\games` next to the launcher | A file named `<name>_turn<N>.dat`, with the name you typed and the turn you saved at |
 | M4  | Load dialog | Click **Load** | A file picker opens in `data\games`, then a confirmation warns that loading restarts the game and unsaved progress is lost |
 | M5  | Cancel is safe | Cancel at the confirmation | Nothing happens. The running game is untouched |
 | M6  | Load restores | Load the save from M1 | The game closes and reopens on the saved galaxy, at the saved turn, with your planets, ships, research and orders as they were |
@@ -224,16 +227,7 @@ windows.
 
 These are understood and already recorded. They are not bugs to file.
 
-1. **The "Customize Your Home World" prompt appears every session.** The Single
-   Player build is the one that can compute turns without a server, and the two
-   go together. Correctly gated in the other modes.
-2. **The coat of arms image is blank.** The server returns a placeholder image.
-   The dialog working is worth testing, the picture is not.
-3. **Fame is always 0.** The server returns a fixed value.
-4. **Every new game is the same galaxy.** Single Player ships one pre-built
-   galaxy. Per-session generation is a known open item.
-5. **Saves are always named `singleplayer`.** Only the turn number tells two
-   saves apart. A name prompt is a known open item.
+1. **Fame is always 0.** The server returns a fixed value.
 
 ## Reporting
 

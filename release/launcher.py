@@ -608,9 +608,144 @@ def launch_ai(mode, data_dir: str) -> "subprocess.Popen | None":
         bufsize=1, env=env, creationflags=CREATE_NO_WINDOW)
 
 
-def launch_mode(mode, game_root: str, galaxy_root: str) -> subprocess.Popen:
+# Written by cs_server when the client reports the Tutorial finished.
+TUTORIAL_FILE = "tutorial.json"
+
+
+def mode_done(mode, data_dir: str) -> bool:
+    """Whether a mode is one the player has finished: the Tutorial, once
+    passed."""
+    if mode.get("id") != "tutorial" or not data_dir:
+        return False
+    return os.path.exists(os.path.join(data_dir, TUTORIAL_FILE))
+
+
+# New Game's galaxy, among the saves so that Play continues it.
+NEW_GAME_FILE = "New Game_turn0.dat"
+GENERATE_TIMEOUT = 120.0   # seconds for the client to build a galaxy
+
+
+def galaxy_builder(game_root: str) -> "str | None":
+    """The client New Game builds a galaxy with: a TestBed-based one, whose
+    galaxies are the shipped Single Player galaxy's size (32 suns). The Single
+    Player client builds them three times larger from the same pass file."""
+    dirs = [game_root]
+    if not getattr(sys, "frozen", False):
+        dirs.append(os.path.join(_repo_root(), "client"))
+    for d in dirs:
+        for exe in MP_CLIENTS:
+            if os.path.exists(os.path.join(d, exe)):
+                return os.path.join(d, exe)
+    return None
+
+
+def generate_galaxy(game_root, pass_file, save_dir, out, log=print,
+                    timeout=GENERATE_TIMEOUT) -> str:
+    """Build a fresh galaxy and write it, seeded for the AI, to `out`. The
+    building client is closed again either way."""
+    import gamectl
+    if multiplayer_modules() is None:
+        raise gamectl.GameError("this build has no galaxy tools")
+    builder = galaxy_builder(game_root)
+    if builder is None:
+        raise gamectl.GameError(f"none of {', '.join(MP_CLIENTS)} to build "
+                                f"a galaxy with")
+    if not os.path.exists(pass_file):
+        raise FileNotFoundError(pass_file)
+    import gamestate as gs
+    import make_single_player_galaxy as msg
+
+    started = time.time() - 1
+    child = subprocess.Popen([builder, pass_file], cwd=os.path.dirname(builder))
+    try:
+        deadline = time.time() + timeout
+        while True:
+            if child.poll() is not None:
+                raise gamectl.GameError("the game exited while building the galaxy")
+            try:
+                snap = gs.Snapshot()
+                if snap.civs and len(snap.suns) > 10:
+                    break
+            except Exception:
+                pass            # still loading
+            if time.time() > deadline:
+                raise gamectl.GameError("the galaxy was not built in time")
+            time.sleep(1.0)
+        log(f"new galaxy: {len(snap.suns)} suns, civs "
+            f"{[c.civ_name for c in snap.civs]}")
+        pid, _name = gamectl.find_client()
+        with gamectl.Client(pid) as c:
+            if not c.save_game("newgalaxy"):
+                raise gamectl.GameError("the game refused to save the galaxy")
+        time.sleep(1.5)
+        cap = gamectl.newest_capture(save_dir, started)
+        if cap is None:
+            raise gamectl.GameError("the galaxy's save never reached the server")
+        with open(cap, "r", encoding="ascii") as fh:
+            blob = gamectl.decode_blob(fh.read())
+    finally:
+        child.terminate()
+        try:
+            child.wait(timeout=10)
+        except Exception:
+            pass
+    blob = msg.seeded(blob, log=lambda _m: None)
+    os.makedirs(os.path.dirname(out), exist_ok=True)
+    tmp = out + ".tmp"
+    with open(tmp, "wb") as fh:
+        fh.write(blob)
+    os.replace(tmp, out)
+    log(f"new galaxy written to {os.path.basename(out)}")
+    return out
+
+
+def latest_save(dat_dir: str) -> "str | None":
+    """The most recently written .dat in `dat_dir`, or None."""
+    try:
+        dats = [os.path.join(dat_dir, n) for n in os.listdir(dat_dir)
+                if n.lower().endswith(".dat")]
+    except OSError:
+        return None
+    return max(dats, key=os.path.getmtime, default=None)
+
+
+# Single Player saves itself as each turn ends, so Play continues from the last
+# turn played even when the player never pressed Save. A manual save is always
+# "<name>_turn<N>.dat", so no manual save can match AUTOSAVE_FILE.
+AUTOSAVE_NAME = "Autosave"          # the name the engine is given, under 16 chars
+AUTOSAVE_FILE = re.compile(r"^Autosave, turn (\d+)\.dat$")
+AUTOSAVE_KEEP = 2
+
+
+def autosave_path(dat_dir: str, turn) -> str:
+    return os.path.join(dat_dir, f"Autosave, turn {turn}.dat")
+
+
+def prune_autosaves(dat_dir: str, keep: int = AUTOSAVE_KEEP) -> list:
+    """Delete all but the `keep` newest autosaves. Returns the names removed."""
+    try:
+        names = [n for n in os.listdir(dat_dir) if AUTOSAVE_FILE.match(n)]
+    except OSError:
+        return []
+    # The turn breaks a tie between saves written within the clock's resolution.
+    paths = sorted((os.path.join(dat_dir, n) for n in names), reverse=True,
+                   key=lambda p: (os.path.getmtime(p),
+                                  int(AUTOSAVE_FILE.match(os.path.basename(p))[1])))
+    removed = []
+    for path in paths[keep:]:
+        try:
+            os.remove(path)
+            removed.append(os.path.basename(path))
+        except OSError:
+            pass            # held open by a Load in progress; next turn retries
+    return removed
+
+
+def launch_mode(mode, game_root: str, galaxy_root: str,
+                galaxy: "str | None" = None) -> subprocess.Popen:
+    """Start a mode's client on its galaxy, or on `galaxy` when given."""
     exe = os.path.join(game_root, mode["exe"])
-    galaxy = os.path.join(galaxy_root, mode["galaxy"])
+    galaxy = galaxy or os.path.join(galaxy_root, mode["galaxy"])
     if not os.path.exists(exe):
         raise FileNotFoundError(exe)
     if not os.path.exists(galaxy):
@@ -634,7 +769,8 @@ NAME_RULES = (f"Up to {NAME_LIMIT} characters. Letters, digits and ordinary "
               f"punctuation, but not {' '.join(NAME_FORBIDDEN)}")
 
 
-def validate_player_name(raw):
+def validate_player_name(raw, forbidden=NAME_FORBIDDEN,
+                         holder="The game's civilisation name"):
     """(name, None) for a name that can be used, or (None, why not).
 
     The reason is shown to the player next to the field. Surrounding spaces
@@ -644,11 +780,11 @@ def validate_player_name(raw):
     if not name:
         return None, "Enter a name."
     if len(name) > NAME_LIMIT:
-        return None, (f"That is {len(name)} characters. The game's civilisation "
-                      f"name holds {NAME_LIMIT}.")
+        return None, (f"That is {len(name)} characters. {holder} "
+                      f"holds {NAME_LIMIT}.")
     # The engine's name field is ASCII, and a civ name is also a file name, so
     # both rules refuse characters. The player is told which ones, not why.
-    bad = sorted({c for c in name if c in NAME_FORBIDDEN or not " " <= c <= "~"})
+    bad = sorted({c for c in name if c in forbidden or not " " <= c <= "~"})
     if bad:
         shown = [c for c in bad if c.isprintable() and not c.isspace()]
         if not shown:
@@ -659,6 +795,17 @@ def validate_player_name(raw):
     if name.endswith("."):
         return None, "A name cannot end in a full stop."
     return name, None
+
+
+# The server drops # and ' from a save's name, and the name is also the .dat's.
+SAVE_NAME_FORBIDDEN = NAME_FORBIDDEN + "#'"
+
+SAVE_NAME_RULES = (f"Up to {NAME_LIMIT} characters. Letters, digits and ordinary "
+                   f"punctuation, but not {' '.join(SAVE_NAME_FORBIDDEN)}")
+
+
+def validate_save_name(raw):
+    return validate_player_name(raw, SAVE_NAME_FORBIDDEN, "A save name")
 
 
 def identity_path(data_dir: str) -> str:
@@ -952,15 +1099,22 @@ def warning_text(galaxy: str, lines) -> str:
 # The relay refuses a request with a status and a JSON body holding one
 # sentence, `{"error": ...}`. `urllib`'s HTTPError text is only the status line.
 # A seat is refused in one of two sentences: SEAT_HELD where the galaxy lets a
-# sign-in claim a seat on first use, NOT_SEATED where it does not.
+# sign-in claim a seat on first use, NOT_SEATED where it does not. An email
+# account is refused in UNVERIFIED until its address is verified.
 SEAT_HELD = "already held by another sign-in"
 NOT_SEATED = "is bound to this sign-in"
+UNVERIFIED = "verify the email address of this account"
 
 
 def seat_refused(text) -> bool:
     """Whether a refusal's text says this sign-in holds no seat to play."""
     text = str(text or "")
     return SEAT_HELD in text or NOT_SEATED in text
+
+
+def email_unverified(text) -> bool:
+    """Whether a refusal's text says this account's email is not verified."""
+    return UNVERIFIED in str(text or "")
 
 
 def relay_refusal(exc):
@@ -1016,6 +1170,16 @@ def seat_held_text(civ: str, code) -> str:
                 "title.")
     return (said + "\n\nIf the seat is yours, ask the galaxy's operator to "
             "move it to this copy.")
+
+
+def refusal_box(text, civ: str, data_dir: str):
+    """What a player reads about a refusal they can act on, or None."""
+    if seat_refused(text):
+        return seat_held_text(civ, player_code(install_uid(data_dir)))
+    if email_unverified(text):
+        return VERIFY_LOOP_TEXT.format(
+            email=account_email(data_dir) or "your address")
+    return None
 
 
 # A multiplayer galaxy has a turn store that every launcher and the referee
@@ -1286,6 +1450,76 @@ def install_uid(data_dir: str, mint: bool = False):
     if ident.uid is None and mint:
         ident.token()
     return ident.uid
+
+
+def _fb_auth():
+    """The fb_auth module, or None when this build cannot reach it."""
+    try:
+        import fb_auth
+    except ImportError:
+        multiplayer_modules()           # puts fb_auth on sys.path in a checkout
+        try:
+            import fb_auth
+        except ImportError:
+            return None
+    return fb_auth
+
+
+def account_identity(data_dir: str):
+    """This install's Firebase identity, guest or account, or None when this
+    build cannot reach fb_auth."""
+    fb_auth = _fb_auth()
+    return fb_auth.identity(data_dir) if fb_auth is not None else None
+
+
+# The Google OAuth client's secret, kept out of the repository. build.ps1
+# bundles release\google_client.json when it exists, and a build without it
+# offers no Google login. The file is either {"client_secret": ...} or the JSON
+# Google Cloud downloads for a Desktop client.
+GOOGLE_CLIENT_FILE = "google_client.json"
+
+
+def google_secret():
+    """The Google client secret this build carries, or None."""
+    got = _read_json(bundled(GOOGLE_CLIENT_FILE)) or {}
+    got = got.get("installed", got) if isinstance(got, dict) else {}
+    secret = got.get("client_secret") if isinstance(got, dict) else None
+    return secret if isinstance(secret, str) and secret else None
+
+
+def account_email(data_dir: str):
+    """The email of the account this install is logged in to, or None."""
+    ident = account_identity(data_dir)
+    return ident.account["email"] if ident is not None and ident.account else None
+
+
+# What the account dialogs say. Without an account a player plays as the
+# install's guest, which is the anonymous identity every install already has.
+PRIVACY_PAGE = "cosmicresurgence.com/support_terms.php.html"
+EMAIL_USE_TEXT = ("Your email address is used to log in and for account "
+                  "emails. Other players never see it. More at "
+                  + PRIVACY_PAGE)
+LOG_IN_TEXT = ("Log in to play your galaxies from any install.\n\n"
+               + EMAIL_USE_TEXT)
+CREATE_TEXT = ("Create an online account.\n\n" + EMAIL_USE_TEXT)
+CREATED_TEXT = ("Your account is ready, and the galaxies this install joined "
+                "are now your account's.\n\nWe sent a verification email to "
+                "{email}. Open the link in it before you join or play a "
+                "galaxy.")
+VERIFY_TITLE = "Verify your email"
+VERIFY_TEXT = ("Verify your email address to join or play a galaxy.\n\nOpen "
+               "the link in the email we sent to {email}, then press I have "
+               "verified it.")
+VERIFY_LOOP_TEXT = ("Your turn was not sent, because the email address of "
+                    "this account is not verified.\n\nOpen the link in the "
+                    "email we sent to {email}, then close the game and press "
+                    "Play again.")
+GUEST_GAMES_TEXT = ("Notify an Admin if you would like to merge your account with your email. "
+                    "Send player code {code} in your message.")
+DROPPED_TEXT = ("You have been logged out.")
+LOG_OUT_TEXT = ("Log out?")
+GOOGLE_WAIT_TEXT = ("A login window should be open in your browser now.")
+GOOGLE_LINKED_TEXT = ("You are logged in with Google.")
 
 
 # The launcher's record of galaxies the player joined, one per galaxy id. Each
@@ -2139,7 +2373,8 @@ def beta_notice_text(state):
 # bodies: a base64 blob in the `data=` field, in 400-character chunks tagged
 # `body+`, up to 4000 characters per request. redact_log_text() makes the copy
 # that can be sent: body dumps replaced by a byte count, the Windows account
-# name taken out of paths, and the tail kept to a cap.
+# name taken out of paths, email addresses taken out, and the tail kept to a
+# cap.
 #
 # The redacted copy still contains (the send prompt is written from this list):
 #   - The player's name, on every multiplayer line: "[Alice] turn 12: submitted".
@@ -2180,6 +2415,11 @@ _USER_DIR = re.compile(r"([A-Za-z]:[\\/]+Users[\\/]+)(?!Public\b|Default\b)"
                        r"([^\\/\s\"']+)", re.I)
 USER_MARK = "<user>"
 
+# An account's email, which the launcher logs at login. The operator finds an
+# account by its uid instead.
+_EMAIL = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
+EMAIL_MARK = "<email>"
+
 
 def scrub_paths(text: str) -> str:
     """Replace the Windows account name in any path with <user>.
@@ -2196,6 +2436,11 @@ def scrub_paths(text: str) -> str:
             masked = os.path.join(parent, USER_MARK)
             text = re.sub(re.escape(home), lambda m: masked, text, flags=re.I)
     return text
+
+
+def scrub(text: str) -> str:
+    """`scrub_paths`, and every email address replaced with <email>."""
+    return _EMAIL.sub(EMAIL_MARK, scrub_paths(text))
 
 
 def _keep_tail(text: str, cap: int) -> str:
@@ -2231,14 +2476,14 @@ def redact_log_text(text: str, cap: int = LOG_UPLOAD_CAP) -> str:
         head = _BODY_HEAD.match(line)
         if head is not None:
             close_run()
-            out.append(scrub_paths(head.group(1)) + "\u2026")
+            out.append(scrub(head.group(1)) + "\u2026")
             elided += len(head.group(2).encode("utf-8", "replace"))
             continue
         if _BODY_MORE.match(line) is not None:
             elided += len(line.encode("utf-8", "replace"))
             continue
         close_run()
-        out.append(scrub_paths(line))
+        out.append(scrub(line))
     close_run()
 
     body = "\n".join(out)
@@ -2562,6 +2807,10 @@ class Launcher:
         self._waiting_since = None
         self._last_seen_turn = None
         self._ctl_busy = False
+        # The game whose turn clock the log has already said is held, so the
+        # hold is announced once per game, not at every boundary.
+        self._held_pid = None
+        self._save_name = "singleplayer"   # offered again by the next Save
         self.running_mode = None
         # The multiplayer session: the turn loop's worker thread, the store it
         # follows, and a flag asking it to stop between turns.
@@ -2797,7 +3046,9 @@ class Launcher:
         self.say(f"server listening on {listening}")
         self.say(f"log     {logfile}")
 
-    def on_play(self, mode):
+    def on_play(self, mode, fresh=False):
+        """Start a mode. A mode that `continues` starts on its newest save
+        unless `fresh`, which is New Game."""
         if not is_playable(mode):
             return
         if mode.get("id") == "multiplayer":
@@ -2812,8 +3063,19 @@ class Launcher:
                       "close the first without saving. Quit the running game "
                       "first, then try again.")
             return
+        if fresh and mode.get("generate"):
+            self.new_galaxy(mode)
+            return
+        save = None
+        if mode.get("continues") and not fresh:
+            save = latest_save(os.path.join(self.data_dir, "games"))
+        self._start(mode, save, fresh_ai=save is None)
+
+    def _start(self, mode, galaxy, fresh_ai):
+        """Launch a mode's client on `galaxy`, or on its own when None."""
         try:
-            self.child = launch_mode(mode, self.game_root, self.galaxy_root)
+            self.child = launch_mode(mode, self.game_root, self.galaxy_root,
+                                     galaxy=galaxy)
         except FileNotFoundError as exc:
             self.warn(f"Missing file:\n\n{exc}\n\nThe release folder looks "
                       "incomplete; try downloading it again.")
@@ -2822,15 +3084,46 @@ class Launcher:
             self.warn(f"Could not start the game:\n\n{exc}")
             return
         self.running_mode = mode
-        self.say(f"launched {mode['id']}: {mode['exe']} {mode['galaxy']}")
+        if galaxy:
+            self.say(f"launched {mode['id']}: {mode['exe']}, on "
+                     f"{os.path.basename(galaxy)}")
+        else:
+            self.say(f"launched {mode['id']}: {mode['exe']} {mode['galaxy']}")
         # "short", not "title": the button titles are imperative.
         self.set_status(f"{_short(mode)} is running", OK)
         if mode.get("ai"):
-            self.start_ai(mode)
+            self.start_ai(mode, fresh_galaxy=fresh_ai)
+
+    def new_galaxy(self, mode):
+        """New Game for a mode that `generate`s: the client builds a galaxy
+        from the pass file, the launcher saves and seeds it for the AI, then
+        plays it. Falls back to the mode's own galaxy if any step fails."""
+        pass_file = os.path.join(self.galaxy_root, mode["generate"])
+        save_dir = os.path.join(self.data_dir, "saves")
+        out = os.path.join(self.data_dir, "games", NEW_GAME_FILE)
+        self.set_status("preparing a new galaxy", WARN)
+
+        def work():
+            try:
+                return generate_galaxy(self.game_root, pass_file, save_dir,
+                                       out, log=self.say_threadsafe)
+            except Exception as exc:          # any failure falls back
+                self.say_threadsafe(f"new galaxy failed ({exc}); playing the "
+                                    f"shipped one")
+                return None
+
+        def done(path):
+            self._start(mode, path, fresh_ai=True)
+
+        self._in_background("preparing a new galaxy", work, done)
 
     def _show_identity(self):
         self.view.show_identity(self.player)
+        self._show_account()
         self._show_player_code()
+
+    def _show_account(self):
+        self.view.show_account(account_email(self.data_dir))
 
     def _show_player_code(self):
         """Put this install's player code beside the build, once it has one.
@@ -2841,14 +3134,20 @@ class Launcher:
         """
         self.view.show_build(
             build_line(build_id(), player_code(install_uid(self.data_dir))))
+        ident = account_identity(self.data_dir)
+        if ident is not None and ident.dropped:
+            ident.dropped = False
+            self.say("account login refused; playing as this install's guest")
+            self._show_account()
+            self.warn(DROPPED_TEXT)
 
     def ask_player_name(self, reason: str = ""):
         """Ask for the player's name, store it, and return it. None if cancelled.
 
         Modal, and it validates in place beside the field.
         """
-        text = ("This is the name other players see, and the name of your "
-                "civilisation in a galaxy. You enter it once.")
+        text = ("This is the name other players see, and the default name of your "
+                "civilisation in a galaxy.")
         if reason:
             text = reason + "\n\n" + text
         name = self.view.ask_name(text, self.player or "", NAME_RULES,
@@ -2863,6 +3162,9 @@ class Launcher:
         self.player = name
         self._show_identity()
         self.say(f"player  {name}")
+        ident = account_identity(self.data_dir)
+        if ident is not None and ident.account:
+            self._push_name(ident)
         return name
 
     def on_change_name(self):
@@ -2879,6 +3181,209 @@ class Launcher:
                       "to leave the galaxy, then change it.")
             return
         self.ask_player_name()
+
+    def _account_locked(self) -> bool:
+        """Refuse to log in or out under a live galaxy, which knows this
+        player by the sign-in it was joined with."""
+        if self.mp_thread is None or not self.mp_thread.is_alive():
+            return False
+        self.warn("You are playing a galaxy right now.\n\nIt knows you by "
+                  "the login you joined it with. Close "
+                  f"{self.cfg['product']} to leave the galaxy, then log in "
+                  "or out.")
+        return True
+
+    def on_account(self):
+        """Log in, create an account, or show the account that is logged in."""
+        if self._account_locked():
+            return
+        ident = account_identity(self.data_dir)
+        if ident is None:
+            self.warn("This build cannot log in.")
+            return
+        if ident.account:
+            self._account_panel(ident)
+        else:
+            self._log_in(ident)
+        self._show_account()
+        self._show_player_code()
+
+    def _log_in(self, ident):
+        """The log in dialog, until the player logs in, creates an account or
+        cancels. A refusal comes back in the same dialog."""
+        fb_auth = _fb_auth()
+        secret = google_secret()
+        buttons = [("Forgot password", "reset"), ("Create account", "create")]
+        if secret:
+            buttons.append(("Log in with Google", "google"))
+        buttons.append(("Log in", "log_in"))
+        email, problem = "", ""
+        while True:
+            value, got = self.view.ask_fields(
+                "Log in", LOG_IN_TEXT,
+                [("email", "Email", "email", email),
+                 ("password", "Password", "password", "")],
+                buttons, error=problem, default="log_in")
+            email = (got.get("email") or "").strip()
+            password = got.get("password") or ""
+            if value is None:
+                return
+            if value == "create":
+                if self._create_account(ident, email):
+                    return
+                problem = ""
+                continue
+            try:
+                if value == "reset":
+                    self.view.wait_for("Sending…",
+                                       lambda: ident.send_password_reset(email))
+                    self.warn(f"If an account uses {email}, a link to reset "
+                              "its password is on its way.")
+                    problem = ""
+                    continue
+                guest = self._guest_games(ident)
+                code = player_code(ident.uid)
+                if value == "google":
+                    linked, info = self._google(ident, secret)
+                else:
+                    linked, info = self.view.wait_for(
+                        "Logging in…",
+                        lambda: (False, ident.log_in(email, password)
+                                 and ident.lookup()))
+            except fb_auth.AuthError as exc:
+                problem = "" if exc.code == "CANCELLED" else str(exc)
+                continue
+            self.say(f"account logged in as {ident.account['email']}")
+            self._adopt_account_name(ident, info)
+            if linked:
+                self.warn(GOOGLE_LINKED_TEXT)
+            elif guest:
+                self.warn(GUEST_GAMES_TEXT.format(names=", ".join(guest),
+                                                  code=code))
+            return
+
+    def _google(self, ident, secret):
+        """Log in with Google in the player's browser, with a Cancel button
+        meanwhile. Returns (whether the guest became the account, lookup)."""
+        fb_auth = _fb_auth()
+        cancel = threading.Event()
+
+        def work():
+            got = ident.log_in_google(fb_auth.google_id_token(secret, cancel))
+            return got["linked"], ident.lookup()
+
+        return self.view.wait_for(GOOGLE_WAIT_TEXT, work, cancel=cancel)
+
+    def _create_account(self, ident, email: str) -> bool:
+        """The create account dialog. True once the guest is an account, False
+        when the player goes back."""
+        fb_auth = _fb_auth()
+        problem = ""
+        while True:
+            value, got = self.view.ask_fields(
+                "Create account", CREATE_TEXT,
+                [("email", "Email", "email", email),
+                 ("password", "Password", "password", ""),
+                 ("confirm", "Confirm", "password", "")],
+                [("Back", None), ("Create account", "create")],
+                error=problem, note=fb_auth.PASSWORD_RULES, default="create")
+            email = (got.get("email") or "").strip()
+            password = got.get("password") or ""
+            if value is None:
+                return False
+            if password != (got.get("confirm") or ""):
+                problem = "The two passwords are not the same."
+                continue
+            try:
+                self.view.wait_for("Creating your account…",
+                                   lambda: ident.create_account(email, password))
+            except fb_auth.AuthError as exc:
+                problem = str(exc)
+                continue
+            self.say(f"account created for {email}")
+            if self.player:
+                self._push_name(ident)
+            self.warn(CREATED_TEXT.format(email=email))
+            return True
+
+    def _account_panel(self, ident):
+        """Who is logged in, whether the email is verified, and log out."""
+        info = self.view.wait_for("Checking your account…", ident.lookup)
+        text = f"You are logged in as {ident.account['email']}."
+        choices = [("Close", None, False)]
+        if info is not None and not info["verified"]:
+            text += ("\n\nYour email address is not verified yet. Open the "
+                     "link in the email we sent, or send it again.")
+            choices.append(("Send email again", "verify", False))
+        choices.append(("Log out", "log_out", True))
+        value = self.view.choose("Account", text, choices)
+        if value == "verify":
+            sent = self.view.wait_for("Sending…", ident.send_verification)
+            self.warn(f"We sent a verification email to {ident.account['email']}."
+                      if sent else "The email could not be sent. Try again later.")
+        elif value == "log_out" and self.view.ask_yes_no(LOG_OUT_TEXT):
+            email = ident.account["email"]
+            ident.log_out()
+            self.say(f"account {email} logged out")
+
+    def _email_ready(self) -> bool:
+        """Whether this sign-in may join or play: a guest, a Google login, or
+        an email account whose address is verified. Asks for the verification
+        otherwise, and renews the token once it is done, so the relay sees it."""
+        ident = account_identity(self.data_dir)
+        if (ident is None or not ident.account
+                or ident.account.get("provider") != "password"):
+            return True
+        email = ident.account["email"]
+        lead = ""
+        while True:
+            info = self.view.wait_for("Checking your account…", ident.lookup)
+            if info is None:
+                return True             # offline: the relay decides
+            if info["verified"]:
+                self.view.wait_for("Checking your account…", ident.renew)
+                return True
+            value = self.view.choose(
+                VERIFY_TITLE, lead + VERIFY_TEXT.format(email=email),
+                [("Close", None, False), ("Send email again", "verify", False),
+                 ("I have verified it", "check", True)])
+            if value == "verify":
+                sent = self.view.wait_for("Sending…", ident.send_verification)
+                lead = (f"We sent another verification email to {email}.\n\n"
+                        if sent else
+                        "The email could not be sent. Try again later.\n\n")
+            elif value == "check":
+                lead = "Your email address is not verified yet.\n\n"
+            else:
+                self.say("account: email not verified, not joining or playing")
+                return False
+
+    def _guest_games(self, ident):
+        """The names of the galaxies this install's guest joined, while the
+        guest is who is playing."""
+        if ident.account or not ident.uid:
+            return []
+        return [str(rec.get("galaxy")) for rec in load_joined(self.data_dir).values()
+                if rec.get("uid") == ident.uid]
+
+    def _adopt_account_name(self, ident, info):
+        """Take the account's name, or give it this install's when it has none."""
+        name, _why = validate_player_name((info or {}).get("name") or "")
+        if name and name != self.player:
+            try:
+                save_identity(self.data_dir, name)
+            except OSError:
+                pass        # usable this run; read from the account next time
+            self.player = name
+            self.view.show_identity(name)
+            self.say(f"player  {name}")
+        elif not name and self.player:
+            self._push_name(ident)
+
+    def _push_name(self, ident):
+        """Store the player's name on the account, off the UI thread."""
+        threading.Thread(target=ident.set_display_name, args=(self.player,),
+                         daemon=True, name="account_name").start()
 
     def show_page(self, name: str):
         """Swap the window's body between the launcher's two pages."""
@@ -3328,6 +3833,8 @@ class Launcher:
         _player_turn, turn_store = mods
 
         cfg = {"store": g.store}
+        if store_wants_token(cfg) and not self._email_ready():
+            return
         token = player_token(self.data_dir) if store_wants_token(cfg) else None
         try:
             store = open_player_store(turn_store, g.store, token)
@@ -3549,6 +4056,8 @@ class Launcher:
         # behind the Cloud Function gets this install's Firebase identity; a
         # folder or LAN turn_server gets none. An identity that cannot be
         # minted is a missing header, not a refusal to start.
+        if store_wants_token(cfg) and not self._email_ready():
+            return
         token = player_token(self.data_dir) if store_wants_token(cfg) else None
         if token is not None and token() is None:
             self.say("multiplayer: no Firebase identity available, opening the "
@@ -3681,11 +4190,10 @@ class Launcher:
                 why = said[1] if said else str(exc)
                 self.say_threadsafe(f"multiplayer stopped: {why}")
                 self._mp_state("failed", error=why)
-                if (said and seat_refused(said[1])
-                        and not getattr(self, "mp_seat_refused", False)):
+                box = refusal_box(said[1], civ, self.data_dir) if said else None
+                if box and not getattr(self, "mp_seat_refused", False):
                     self.mp_seat_refused = True
-                    self.msgs.put(("__mp_refused__", seat_held_text(
-                        civ, player_code(install_uid(self.data_dir)))))
+                    self.msgs.put(("__mp_refused__", box))
 
         self.mp_thread = threading.Thread(target=work, daemon=True,
                                           name="multiplayer")
@@ -3705,15 +4213,15 @@ class Launcher:
             # The reopen has either happened or is not going to.
             self.mp_reopening = False
 
-        # A seat held by another sign-in refuses every upload while the loop
-        # carries on, so a rebind by the operator takes effect without a
-        # restart. The box saying what to do is shown once per followed galaxy.
-        if (kind in ("send_failed", "lost")
-                and seat_refused(facts.get("error"))
-                and not getattr(self, "mp_seat_refused", False)):
+        # A seat held by another sign-in, or an email not verified, refuses
+        # every upload while the loop carries on, so a rebind by the operator
+        # takes effect without a restart. The box saying what to do is shown
+        # once per followed galaxy.
+        box = (refusal_box(facts.get("error"), civ, self.data_dir)
+               if kind in ("send_failed", "lost") else None)
+        if box and not getattr(self, "mp_seat_refused", False):
             self.mp_seat_refused = True
-            self.msgs.put(("__mp_refused__", seat_held_text(
-                civ, player_code(install_uid(self.data_dir)))))
+            self.msgs.put(("__mp_refused__", box))
         if kind == "send_failed":
             return
         # The store going and coming back. Not turn steps, so the note is left
@@ -3757,10 +4265,11 @@ class Launcher:
             self._mp_probe_closed(self.mp_store)
         if (kind in LOG_OFFER_KINDS
                 and not getattr(self, "mp_log_offered", False)
-                and not seat_refused(facts.get("error"))):
+                and not seat_refused(facts.get("error"))
+                and not email_unverified(facts.get("error"))):
             # Once per followed galaxy. Queued behind the probe above, so a
             # galaxy found closed is not offered. A seat held by another
-            # sign-in has its own box.
+            # sign-in and an email not verified have their own box.
             self.mp_log_offered = True
             self.msgs.put(("__log_offer__", self.mp_store))
         if kind == "submitted":
@@ -4116,10 +4625,53 @@ class Launcher:
             raise gamectl.GameError("the game is not running")
         return gamectl.Client(pid)
 
+    def _save_to_dat(self, c, name, out_for_turn):
+        """SaveGame on client `c` and turn the server's capture into a .dat.
+
+        `out_for_turn(turn)` names the file. Returns its path.
+        """
+        import gamectl
+        started = time.time() - 1
+        turn = c.turn()
+        if not c.save_game(name):
+            raise gamectl.GameError(
+                "the game refused to save. This usually means the "
+                "launcher's server is not reachable; keep this window "
+                "open while you play.")
+        # The engine's save goes out over HTTP; give the server a moment to
+        # finish writing the capture before converting it.
+        return gamectl.capture_to_dat(os.path.join(self.data_dir, "saves"),
+                                      out_for_turn(turn), since=started,
+                                      wait=5.0)
+
+    def _autosaves(self) -> bool:
+        """Whether Next Turn saves first: Single Player, which Play continues."""
+        return (self.playing_now() is None
+                and bool((self.running_mode or {}).get("continues")))
+
     def on_next_turn(self):
+        import gamectl
+        autosave = self._autosaves()
+        dat_dir = os.path.join(self.data_dir, "games")
+
         def work():
             with self._client() as c:
-                return c.advance_turn()
+                # Saved before the turn resolves: the opponent has finished
+                # deciding (the button waits for it), so nothing else is
+                # driving the client, and the save holds everything the player
+                # did this turn, a confirmed setup prompt included.
+                if autosave:
+                    try:
+                        os.makedirs(dat_dir, exist_ok=True)
+                        path = self._save_to_dat(
+                            c, AUTOSAVE_NAME,
+                            lambda turn: autosave_path(dat_dir, turn))
+                        prune_autosaves(dat_dir)
+                        self.say_threadsafe(f"autosaved to {os.path.basename(path)}")
+                    except gamectl.GameError as exc:
+                        self.say_threadsafe(f"autosave failed, ending the turn "
+                                            f"anyway: {exc}")
+                return c.advance_turn(restore=gamectl.HOLD_LENGTH)
         self._in_background("ending the turn", work)
 
     def on_save(self):
@@ -4134,25 +4686,23 @@ class Launcher:
             self.say("multiplayer: sending your turn now")
             return
 
-        import gamectl
-        save_dir = os.path.join(self.data_dir, "saves")
+        name = self.view.ask_name(
+            "Name this save. The turn number is added to the file name, so "
+            "saving under the same name on a later turn keeps both.",
+            self._save_name, SAVE_NAME_RULES, validate_save_name,
+            title="Save game")
+        if not name:
+            return
+        self._save_name = name
+
         dat_dir = os.path.join(self.data_dir, "games")
         os.makedirs(dat_dir, exist_ok=True)
 
         def work():
-            started = time.time() - 1
             with self._client() as c:
-                turn = c.turn()
-                if not c.save_game("singleplayer"):
-                    raise gamectl.GameError(
-                        "the game refused to save. This usually means the "
-                        "launcher's server is not reachable; keep this window "
-                        "open while you play.")
-            # The engine's save goes out over HTTP; give the server a moment to
-            # finish writing the capture before looking for it.
-            time.sleep(1.5)
-            out = os.path.join(dat_dir, f"savegame_turn{turn}.dat")
-            return gamectl.capture_to_dat(save_dir, out, since=started)
+                return self._save_to_dat(
+                    c, name,
+                    lambda turn: os.path.join(dat_dir, f"{name}_turn{turn}.dat"))
 
         self._in_background("saving", work)
 
@@ -4343,6 +4893,17 @@ class Launcher:
             # clock.
             if not self._ctl_busy:
                 self.view.set_control("turn", enabled=ready)
+                # A turn happens only on Next Turn. Left alone, the engine
+                # resolves one every hour of wall clock, and on waking from
+                # sleep catches up on all it owes, none of them seen by the
+                # opponent. It re-applies its own length at each boundary, so
+                # this runs every tick, and not while Next Turn is driving it.
+                was = self._ctl_client.hold_clock()
+                pid = self._ctl_client.pid
+                if was is not None and self._held_pid != pid:
+                    self._held_pid = pid
+                    self.say(f"turn clock held: the game advances only on "
+                             f"Next Turn (its own length was {was}s)")
         except Exception:
             self._close_ctl_client()    # a readout is not worth an error path
 
@@ -4431,6 +4992,7 @@ class Launcher:
             self.say(f"{name} exited (code {code})")
             self.stop_ai("the game exited")
             self._close_ctl_client()
+            self.view.show_modes(self)
 
         if self.ai_child is not None and self.ai_child.poll() is not None:
             code = self.ai_child.returncode

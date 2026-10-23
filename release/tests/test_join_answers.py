@@ -378,8 +378,9 @@ def run_emulator():
                                       False, base)
         data = fresh_dir()
         player = turn_store.HttpTurnStore(base, token=lambda: token)
-        # A name the worker refuses before it looks at the blob.
-        name = "A" * (joins.NAME_LIMIT + 1)
+        # The relay takes the name, and the worker refuses it: the stub blob
+        # has no room for an empire.
+        name = "Newcomer"
         L.send_join_request(player, L.join_request(name, uid, "0.1.5",
                                                    turn=0))
         L.save_joined(data, L.joined_record(row, name, uid, base, turn=0))

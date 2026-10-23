@@ -3,7 +3,12 @@ exterminate.py: the Exterminate rules (STRATEGY.md §4.4)
 
 R-XTM-01  keep a standing fleet
 R-XTM-03  send the fleet at the weakest reachable enemy planet
-R-XTM-05  pull damaged ships out
+R-XTM-05  pull damaged ships out, scouts included (R-EXP-04)
+R-XTM-08  gather idle warships at the staging planet
+R-XTM-09  probe an enemy planet we know nothing about
+R-XTM-02  hold a planet an enemy ship or fleet is in scan range of
+
+Enemy strength comes only from this civ's battle reports (intel.py).
 
     python exterminate.py            # dry run, one pass
     python exterminate.py --apply
@@ -13,17 +18,31 @@ import sys
 
 import actions
 import cli
+import expand
 import exploit
+import explore
 import gamestate as gs
+import intel
 import remote
 import sensors
 
-WARSHIP_TARGET = 2        # warships to keep once we are at war with anyone
+WARSHIP_TARGET = 2        # staged warships before declaring war or raiding
+FLEET_CAP = 8             # warships R-XTM-01 builds toward a target it cannot beat
+STRENGTH_MARGIN = 1.5     # a target must take this many times longer to clear us
+DEFEND_MARGIN = 1.0       # defenders must clear the enemy's last-seen fleet this much faster
+PROBES_IN_FLIGHT = 1      # unarmed hulls sent for a battle report at once
+PLANET_SCAN_RANGE = 30.0  # a planet sees other civs' ships this close (stock client)
+SHIP_SCAN_RANGE = 30.0    # a ship whose scanner range cannot be read
+DEFEND_REACH = 12         # turns; defenders farther out than this stay home
+ARRIVE_WITHIN = 0.8       # a ship this close to its target has arrived (battle bucket)
 TROOP_TARGET = 1          # troop hulls to keep while anything is takeable
 GARRISON_WINDOW = 3       # turns after a capture (Planet:92) that count as
                           # newly taken
 RETREAT_AT = 0.30         # Ship:136 below this and the ship goes home
-THREAT_DIST = 120.0       # "near": one sun separation (measured minimum 111.7)
+SCOUT_RETREAT_AT = 0.50   # a scout is worth more alive than at its target
+REPAIRED_AT = 0.90        # a withdrawn ship stays at the shipyard until this
+AT_PLANET = 1.0           # a ship within this distance of a planet is at it
+GUARD_MEMORY = 10         # turns a guard seen orbiting a planet keeps it off the troop target list
 
 WAR = 1                   # Owner:248 relation code
 
@@ -89,8 +108,9 @@ def already_heading(ship, target, order_type, tol=1.0):
 def send_to(act, ship, target, civ, order_type=1):
     """Move `ship` to `target` with a route-only order, not actuator L.
 
-    `set_command` kills the client at the next turn boundary for both move and
-    attack; create_order plus retarget_order is safe.
+    A planet never moves, so the target node `set_command` adds (an escort
+    that follows its target) buys nothing here; create_order plus
+    retarget_order is enough. STRATEGY.md §4.4.
     """
     if already_heading(ship, target, order_type):
         act.log(f"  {ship} is already under order {order_type} for {target}; "
@@ -143,16 +163,8 @@ def anti_planet(design, act=None):
     The three firepower values are independent damage pools: the first two are
     anti-ship and the third is anti-planet.
     """
-    fp = design.firepower
-    # The getters write the lazy stat block, as the ship-design tab does on the
-    # UI thread, so only an armed design with a cold cache is warmed.
-    if (act is not None and act.remote is not None
-            and design.weapons and not any(fp)):
-        try:
-            fp = act.remote.design_firepower(design.addr)
-        except (RuntimeError, OSError):
-            pass
-    return fp[2] > max(fp[0], fp[1])
+    light, heavy, bomb, _hp = unit_stats(design, act)
+    return bomb > max(light, heavy)
 
 
 def warships(snap, civ):
@@ -199,28 +211,240 @@ def unresearched_warships(snap, civ):
     return out
 
 
-def target_planets(snap, civ, hist, foes):
-    """Enemy planets we can legitimately see, weakest first.
-
-    Weakness is stationed military plus the strength of facilities with a
-    non-zero defence class; the battle code skips every other type.
-    """
-    import facilities
+def enemy_planets(snap, civ, hist, foes):
+    """Planets of the civs in `foes` inside our discovery set."""
     foe_addrs = {f.addr for f in foes}
-    tbl = facilities.read_table(snap)
+    return [p for p in snap.planets
+            if p.owner is not None and p.owner.addr in foe_addrs
+            and hist.can_see(snap, p)]
+
+
+def pass_intel(snap, civ, hist, act):
+    """This pass's intel.Intel, after recording quiet enemy planets.
+
+    One of our ships in orbit of a planet we are at war with, undamaged, with
+    no battle report there this turn, shows the planet has no defence.
+    """
+    cached = getattr(hist, "_intel", None)
+    if cached is not None and cached[0] == snap.turn:
+        return cached[1]
+    info = intel.Intel(snap, civ, hist)
+    foes = {f.addr for f in enemies(snap, civ, act)}
+    for s in snap.owned_ships(civ):
+        p = s.orbiting
+        if (p is None or p.owner is None or p.owner.addr not in foes
+                or (s.condition or 0) < 0.999
+                or info.fought_at(p, snap.turn or 0)):
+            continue
+        hist.quiet[p.id] = snap.turn
+    hist._intel = (snap.turn, info)
+    return info
+
+
+_PART_TABLES = {}          # part list name -> {id: component record}, per process
+
+
+def part_tables(snap):
+    """{part list name: {id: component record}}, read once per process."""
+    import components
+    if not _PART_TABLES:
+        for attr, cat in (("chassis", "chassis"), ("scanners", "scanners"),
+                          ("engines", "engines"), ("weapons", "weapons"),
+                          ("modules", "modules")):
+            _PART_TABLES[attr] = components.read_table(snap, cat)
+    return _PART_TABLES
+
+
+def _parts_total(design):
+    """(light, heavy, bomb, units) summed from the component tables.
+
+    A design's own stat block stays uncomputed until a ship of it is built.
+    """
+    l = h = b = units = 0
+    for attr, table in part_tables(design.snap).items():
+        for pid in getattr(design, attr) or []:
+            rec = table.get(pid, {})
+            units += rec.get("units", 0)
+            fl, fh, fb = rec.get("firepower", (0, 0, 0))
+            l, h, b = l + fl, h + fh, b + fb
+    return l, h, b, units
+
+
+def unit_stats(design, act=None):
+    """(light, heavy, bomb, hitpoints) of one of our own designs."""
+    fp = design.firepower
+    # The getters write the lazy stat block, as the ship-design tab does on the
+    # UI thread, so only an armed design with a cold cache is warmed.
+    if (act is not None and act.remote is not None
+            and design.weapons and not any(fp)):
+        try:
+            fp = act.remote.design_firepower(design.addr)
+        except (RuntimeError, OSError):
+            pass
+    hp = design.hp or design.units
+    if not any(fp) or not hp:
+        l, h, b, units = _parts_total(design)
+        fp = fp if any(fp) else (l, h, b)
+        hp = hp or units
+    return fp[0], fp[1], fp[2], hp
+
+
+def margin(units, info, act=None):
+    """How many times faster `units` clear the defenders in `info` than they clear us.
+
+    `units` are (design, condition) pairs. Our hulls are light classes, so
+    enemy heavy firepower hits them at half. Bombs are the only damage to
+    planetary defence; light and heavy firepower hit ships, each at half
+    against the other class. 0 when we cannot hurt the defenders at all.
+    """
+    L = H = B = hp = 0.0
+    for d, cond in units:
+        l, h, b, u = unit_stats(d, act)
+        L, H, B = L + l, H + h, B + b
+        hp += u * (1.0 if cond is None else cond)
+    need = 0.0
+    if info["planet_hp"]:
+        if B <= 0:
+            return 0.0
+        need += info["planet_hp"] / B
+    light, heavy = info["ship_hp"]
+    if light or heavy:
+        if L + H <= 0:
+            return 0.0
+        need += light / (L + H / 2) + heavy / (H + L / 2)
+    tl, th, _tb = info["firepower"]
+    incoming = tl + th / 2
+    if need == 0 or incoming <= 0:
+        return float("inf")
+    return (hp / incoming) / need
+
+
+def known_targets(snap, civ, hist, act, foes):
+    """[(planet, defence)] for visible enemy planets whose defence we know."""
+    info = pass_intel(snap, civ, hist, act)
     out = []
-    for p in snap.planets:
-        own = p.owner
-        if own is None or own.addr not in foe_addrs:
-            continue
-        if not hist.can_see(snap, p):
-            continue
-        defence = sum(tbl[t]["strength_1"] + tbl[t]["strength_2"]
-                      for t, n in p.facilities.items()
-                      for _ in range(n) if t in tbl and tbl[t]["defence_units"])
-        out.append((p.military + defence, p))
-    out.sort(key=lambda x: x[0])
+    for p in enemy_planets(snap, civ, hist, foes):
+        d = info.defence(p)
+        if intel.defended(d):
+            out.append((p, d))
     return out
+
+
+def undefended_planets(snap, civ, hist, act, foes):
+    """Visible enemy planets observed with no defence, recently enough to trust,
+    and with none of the owner's ships seen in orbit (guarded_planets)."""
+    info = pass_intel(snap, civ, hist, act)
+    guarded = guarded_planets(snap, civ)
+    out = []
+    for p in enemy_planets(snap, civ, hist, foes):
+        d = info.defence(p)
+        if d is not None and not intel.defended(d) and p.addr not in guarded:
+            out.append(p)
+    return out
+
+
+# (civ addr, planet addr) -> the last turn one of the owner's ships was seen
+# in orbit. Kept for the process; a restart forgets, which costs one look.
+_GUARD_SEEN = {}
+
+
+def guarded_planets(snap, civ):
+    """Addresses of planets one of their owner's ships was seen orbiting
+    within GUARD_MEMORY turns.
+
+    The engine refuses a landing while any living ship of the planet's owner
+    has the planet as Ship:44, armed or not, and says nothing: no report, and
+    the conquer order is re-attached every turn (0x004DB2D0). A fleet at the
+    planet is counted too; whether fleets block is not established. Without
+    the memory a troop hull that sees a guard turns away, loses sight of it,
+    and comes back.
+    """
+    seen_now = _guards_in_sight(snap, civ)
+    for addr in seen_now:
+        _GUARD_SEEN[(civ.addr, addr)] = snap.turn
+    return {addr for (c, addr), turn in _GUARD_SEEN.items()
+            if c == civ.addr and 0 <= snap.turn - turn <= GUARD_MEMORY}
+
+
+def _guards_in_sight(snap, civ):
+    eyes = _eyes(snap, civ)
+    out = set()
+    for s in snap.ships:
+        p = s.orbiting
+        if (p is None or p.owner is None or s.owner is None
+                or s.owner.addr != p.owner.addr or p.owner.addr == civ.addr
+                or not (s.condition or 0) > 0 or not _seen(s.pos, eyes)):
+            continue
+        out.add(p.addr)
+    for f in snap.fleets:
+        if f.owner is None or f.owner.addr == civ.addr or not _seen(f.pos, eyes):
+            continue
+        for p in snap.planets:
+            if (p.owner is not None and p.owner.addr == f.owner.addr
+                    and gs.dist(f.pos, p.pos) <= AT_PLANET):
+                out.add(p.addr)
+    return out
+
+
+def fleet_designs(snap, civ):
+    """Designs of our warships, built and in production."""
+    queued = [d for d in (production_design(snap, p)
+                          for p in snap.owned_planets(civ))
+              if d is not None and d.role == "WARSHIP"]
+    return [s.design for s in warships(snap, civ) if s.design] + queued
+
+
+def fleet_wants_ships(snap, civ, hist, act):
+    """(wants, goal): whether R-XTM-01 wants another warship, and the target.
+
+    Wanted once contact is made, until there are WARSHIP_TARGET hulls of both
+    firepower classes and they beat a known defence or reach FLEET_CAP. `goal`
+    is _fleet_goal's tuple when a target drives the build, else None.
+    """
+    if not (enemies(snap, civ, act) or contacted(snap, civ, hist)):
+        return False, None
+    fleet = fleet_designs(snap, civ)
+    # The fleet needs both firepower classes: slots 1-2 hit ships, slot 3
+    # hits planets.
+    have_ap = any(anti_planet(d, act) for d in fleet)
+    have_as = any(not anti_planet(d, act) for d in fleet)
+    if len(fleet) >= WARSHIP_TARGET and have_ap and have_as:
+        goal = _fleet_goal(snap, civ, hist, act, fleet)
+        return goal is not None, goal
+    return True, None
+
+
+def war_yard(snap, civ, hist, act):
+    """The shipyard kept for warships while the fleet wants them, or None.
+
+    It is the staging planet, where R-XTM-01 builds when it can. Expansion,
+    scouting and facilities leave it alone so a long build there cannot
+    hold up the fleet.
+    """
+    rally = staging_planet(snap, civ, hist)
+    if rally is None or exploit.SHIPYARD not in rally.facilities:
+        return None
+    wants, _goal = fleet_wants_ships(snap, civ, hist, act)
+    return rally if wants else None
+
+
+def _fleet_goal(snap, civ, hist, act, fleet):
+    """(margin, planet, defence) of the easiest known target `fleet` cannot beat.
+
+    None when there is no known defended target, the fleet already beats one,
+    or it has reached FLEET_CAP.
+    """
+    foes = enemies(snap, civ, act)
+    targets = known_targets(snap, civ, hist, act, foes) if foes else []
+    if not targets:
+        return None
+    units = [(d, 1.0) for d in fleet]
+    scored = [(margin(units, d, act), p, d) for p, d in targets]
+    if any(m >= STRENGTH_MARGIN for m, _p, _d in scored):
+        return None
+    if len(fleet) >= FLEET_CAP:
+        return None
+    return max(scored, key=lambda x: x[0])
 
 
 def run_xtm01(snap, civ, act, hist, log=print):
@@ -233,15 +457,11 @@ def run_xtm01(snap, civ, act, hist, log=print):
     if not foes:
         return 0
     have = warships(snap, civ)
-    queued_now = [d for d in (production_design(snap, p)
-                              for p in snap.owned_planets(civ)) if d is not None]
-    fleet = [s.design for s in have if s.design] + queued_now
-    # The fleet needs both firepower classes: slots 1-2 hit ships, slot 3
-    # hits planets.
-    have_ap = any(anti_planet(d, act) for d in fleet)
-    have_as = any(not anti_planet(d, act) for d in fleet)
-    if len(fleet) >= WARSHIP_TARGET and have_ap and have_as:
+    fleet = fleet_designs(snap, civ)
+    wants, goal = fleet_wants_ships(snap, civ, hist, act)
+    if not wants:
         return 0
+    have_ap = any(anti_planet(d, act) for d in fleet)
     stranded = exploit.awaiting_crew(snap, civ, act, role="WARSHIP")
     if stranded:
         log(f"R-XTM-01: {len(stranded)} warship(s) built and waiting for "
@@ -278,58 +498,538 @@ def run_xtm01(snap, civ, act, hist, log=print):
         log(f"R-XTM-01: {len(have)}/{WARSHIP_TARGET} warship(s); every shipyard "
             f"is already building")
         return 0
-    # Builds the missing class, counting queued hulls as well as flying ones.
-    want_anti_planet = not have_ap
-    pool = [d for d in designs
-            if anti_planet(d, act) == want_anti_planet] or designs
-    design = max(pool, key=lambda d: max(d.firepower))
-    planet = max(yards, key=lambda p: len(p.population))
-    log(f"R-XTM-01: {len(have)}/{WARSHIP_TARGET} warship(s); queueing "
-        f"{design.design_name!r} at {planet}")
-    try:
-        act.queue_ship(planet, design)
-        return 1
-    except (ValueError, RuntimeError) as e:
-        log(f"  could not queue: {e}")
-        return 0
+    # Ships are born at the staging yard when it is free.
+    rally = staging_planet(snap, civ, hist)
+    planet = (rally if rally in yards
+              else max(yards, key=lambda p: len(p.population)))
+    if goal is not None:
+        # The design that most improves the margin against the easiest target.
+        m, target, info = goal
+        units = [(d, 1.0) for d in fleet]
+        design = max(designs, key=lambda d: margin(units + [(d, 1.0)], info, act))
+        log(f"R-XTM-01: {len(fleet)} warship(s) beat no known defence; best "
+            f"is {target} at {m:.2f}x, need {STRENGTH_MARGIN}x; queueing "
+            f"{design.design_name!r} at {planet}")
+    else:
+        # Builds the missing class, counting queued hulls as well as flying ones.
+        want_anti_planet = not have_ap
+        pool = [d for d in designs
+                if anti_planet(d, act) == want_anti_planet] or designs
+        design = max(pool, key=lambda d: max(unit_stats(d, act)[:3]))
+        log(f"R-XTM-01: {len(have)}/{WARSHIP_TARGET} warship(s); queueing "
+            f"{design.design_name!r} at {planet}")
+    return exploit.queue_ship(snap, civ, act, planet, design, log)
 
 
 def run_xtm03(snap, civ, act, hist, log=print):
-    """R-XTM-03: send crewed warships at the weakest visible enemy planet.
+    """R-XTM-03: send the staged fleet at a defended enemy planet it can beat.
 
-    A Move order is enough. Combat is positional: arriving inside the 0.8-unit
-    bucket of an enemy-held planet, at war, starts a fight.
+    A Move order is enough: a ship in orbit of a hostile planet is always the
+    aggressor, and the planet's turrets and ships always defend. A planet with
+    nothing on it produces no battle, so only defended targets are raided.
+    Ships that fought at their planet this turn or last stay in the fight.
     """
     foes = enemies(snap, civ, act)
     if not foes:
         return 0
-    fleet = [s for s in warships(snap, civ)
+    info = pass_intel(snap, civ, hist, act)
+    foe_addrs = {f.addr for f in foes}
+    ready = [s for s in warships(snap, civ)
              if act.is_crewed(s) and not act.is_claimed(s)
              and (s.condition is None or s.condition >= RETREAT_AT)]
-    if not fleet:
-        return 0
-    ranked = target_planets(snap, civ, hist, foes)
-    if not ranked:
-        log(f"R-XTM-03: at war with {[f.civ_name for f in foes]} but no enemy "
-            f"planet is visible yet; Explore has to find one first")
-        return 0
-    weakness, target = ranked[0]
-    log(f"R-XTM-03: {len(fleet)} warship(s) -> {target} "
-        f"(weakness {weakness}, weakest of {len(ranked)} visible)")
     acted = 0
-    for ship in fleet:
+    for s in ready:
+        p = s.orbiting
+        if (p is not None and p.owner is not None and p.owner.addr in foe_addrs
+                and info.fought_at(p, (snap.turn or 0) - 1)):
+            act.claim(s)
+            acted += 1
+    if acted:
+        log(f"R-XTM-03: {acted} warship(s) in a fight at an enemy planet stay")
+    # A raid in flight is claimed, or R-XTM-08 would recall it.
+    targets = enemy_planets(snap, civ, hist, foes)
+    en_route = [s for s in ready if not act.is_claimed(s)
+                and (s.order_type or 0) == 1
+                and any(already_heading(s, p, 1) for p in targets)]
+    for s in en_route:
+        act.claim(s)
+    acted += len(en_route)
+
+    rally = staging_planet(snap, civ, hist)
+    if rally is None:
+        return acted
+    staged = [s for s in ready if not act.is_claimed(s) and at_planet(s, rally)]
+
+    # A raid departs in stages so every ship arrives on the same turn:
+    # hist.raid = {"target": planet id, "arrive": turn, "members": ship ids}.
+    # A ship staged after the raid was planned waits for the next one.
+    plan = hist.raid
+    by_id = {p.id: p for p in targets}
+    if plan is not None and ((snap.turn or 0) >= plan["arrive"]
+                             or plan["target"] not in by_id):
+        plan = hist.raid = None
+    if plan is None:
+        if len(staged) < WARSHIP_TARGET:
+            return acted
+        target = _choose_raid(snap, civ, hist, act, foes, rally, staged, log)
+        if target is None:
+            return acted
+        etas = [_eta(s, target, act) for s in staged]
+        plan = hist.raid = {"target": target.id,
+                            "arrive": (snap.turn or 0) + max(e or 0 for e in etas),
+                            "members": [s.id for s in staged]}
+    target = by_id[plan["target"]]
+    # A ship in flight can run later than its ETA said; the waiting ships
+    # follow the slowest one's arrival as it stands now.
+    for s in en_route:
+        if s.id in plan["members"] and already_heading(s, target, 1):
+            eta = _eta(s, target, act)
+            if eta is not None and (snap.turn or 0) + eta > plan["arrive"]:
+                log(f"R-XTM-03: {s} now reaches {target} on turn "
+                    f"{(snap.turn or 0) + eta}, not {plan['arrive']}; the "
+                    f"rest wait for it")
+                plan["arrive"] = (snap.turn or 0) + eta
+    waiting = 0
+    for ship in staged:
+        if ship.id not in plan["members"]:
+            continue
         need = exploit.min_crew(ship, act)
         if len(ship.crew) < need:
             log(f"  {ship} has {len(ship.crew)}/{need} crew and would "
                 f"contribute zero firepower; leaving it")
             continue
+        act.claim(ship)
+        eta = _eta(ship, target, act)
+        if eta is not None and (snap.turn or 0) + eta < plan["arrive"]:
+            waiting += 1
+            continue
         try:
-            # Move (1) via send_to; combat triggers on co-location.
             send_to(act, ship, target, civ, order_type=1)
-            act.claim(ship)
             acted += 1
         except (ValueError, RuntimeError) as e:
             log(f"  could not order {ship}: {e}")
+    if waiting:
+        log(f"R-XTM-03: {waiting} faster warship(s) wait at {rally} to reach "
+            f"{target} on turn {plan['arrive']} with the rest")
+    return acted
+
+
+def _eta(ship, target, act):
+    """Turns for `ship` to arrive at `target`, or None when its speed is unknown."""
+    import math
+    speed = expand.ship_speed(ship, act)
+    if not speed:
+        return None
+    left = max(0.0, gs.dist(ship.pos, target.pos) - ARRIVE_WITHIN)
+    return math.ceil(left / speed)
+
+
+def _choose_raid(snap, civ, hist, act, foes, rally, staged, log):
+    """The nearest known defended planet `staged` beats by STRENGTH_MARGIN."""
+    units = [(s.design, s.condition) for s in staged if s.design]
+    options = [(margin(units, d, act), p)
+               for p, d in known_targets(snap, civ, hist, act, foes)]
+    if not options:
+        log(f"R-XTM-03: {len(staged)} warship(s) staged at {rally}; no visible "
+            f"enemy planet has a known defence; R-XTM-09 probes the unknown ones")
+        return None
+    beatable = [(m, p) for m, p in options if m >= STRENGTH_MARGIN]
+    if not beatable:
+        m, p = max(options, key=lambda o: o[0])
+        log(f"R-XTM-03: {len(staged)} warship(s) staged at {rally} beat no "
+            f"known defence; best is {p} at {m:.2f}x, need {STRENGTH_MARGIN}x")
+        return None
+    m, target = min(beatable, key=lambda o: gs.dist(rally.pos, o[1].pos))
+    log(f"R-XTM-03: {len(staged)} warship(s) from {rally} -> {target} "
+        f"({m:.2f}x, from the battle report)")
+    return target
+
+
+def _scan_range(design):
+    """A design's scan range: its best scanner's, from the component table."""
+    import components
+    if design is None or not design.scanners:
+        return SHIP_SCAN_RANGE
+    table = _PART_TABLES.get("scanners")
+    if table is None:
+        table = components.read_table(design.snap, "scanners")
+    return max((table.get(i, {}).get("range") or SHIP_SCAN_RANGE)
+               for i in design.scanners)
+
+
+def _eyes(snap, civ):
+    """(position, scan range) of everything that sees for this civ."""
+    eyes = [(p.pos, PLANET_SCAN_RANGE) for p in snap.owned_planets(civ)]
+    eyes += [(s.pos, _scan_range(s.design)) for s in snap.owned_ships(civ)
+             if None not in s.pos]
+    return eyes
+
+
+def _seen(pos, eyes):
+    return None not in pos and any(gs.dist(pos, at) <= r for at, r in eyes)
+
+
+def contacts(snap, civ, foes):
+    """Enemy ships and fleets inside our scan range, as the map shows them.
+
+    [(pos, hull class ids, is_fleet, owner name)]. A player sees only a ship's
+    class and whose it is, and for a fleet every class in it but no count.
+    """
+    eyes = _eyes(snap, civ)
+    foe_addrs = {f.addr for f in foes}
+
+    def seen(pos):
+        return _seen(pos, eyes)
+
+    out = []
+    for s in snap.ships:
+        if s.owner is None or s.owner.addr not in foe_addrs or not seen(s.pos):
+            continue
+        out.append((s.pos, set(s.design.chassis) if s.design else set(), False,
+                    s.owner.civ_name))
+    for f in snap.fleets:
+        if f.owner is None or f.owner.addr not in foe_addrs or not seen(f.pos):
+            continue
+        classes = {c for d in f.member_designs for c in (d.chassis or [])}
+        out.append((f.pos, classes, True, f.owner.civ_name))
+    return out
+
+
+def _is_threat(group):
+    """A fleet, two or more ships, or any hull above shuttle class.
+
+    A lone shuttle may be a probe or a decoy; the map cannot tell.
+    """
+    return (len(group) >= 2
+            or any(c[2] for c in group)
+            or any(k >= 1 for c in group for k in c[1]))
+
+
+MILITARY_SCAN = 4
+MILITARY_FRESH = 3        # turns a military scan of a moving stack is current
+
+
+def _scanned_threat(snap, civ, act, foes, group, log):
+    """The group's strength from military scans, scanning it first if a scan
+    is held and none is fresh. None when there is neither."""
+    import intel
+    spots = [c[0] for c in group]
+
+    def fresh():
+        reps = [r for r in intel.military_scans(snap, civ)
+                if snap.turn - r["turn"] <= MILITARY_FRESH
+                and any(gs.dist(r["pos"], at) <= AT_PLANET for at in spots)]
+        if not reps:
+            return None
+        # One report per position: the newest of each.
+        seen, keep = [], []
+        for r in reps:
+            if not any(gs.dist(r["pos"], q) <= AT_PLANET for q in seen):
+                seen.append(r["pos"])
+                keep.append(r)
+        parts = [intel.military_threat(r) for r in keep]
+        return {"turn": min(p["turn"] for p in parts),
+                "civ": "/".join(sorted({c[3] for c in group})),
+                "firepower": tuple(sum(p["firepower"][i] for p in parts)
+                                   for i in range(3)),
+                "planet_hp": 0,
+                "ship_hp": (sum(p["ship_hp"][0] for p in parts),
+                            sum(p["ship_hp"][1] for p in parts))}
+
+    known = fresh()
+    if (known is None and act.remote is not None and not act.dry_run
+            and act.remote.scan_count(civ.addr, MILITARY_SCAN) > 0):
+        foe_addrs = {f.addr for f in foes}
+        targets, taken = [], []
+        for obj in list(snap.ships) + list(snap.fleets):
+            if (obj.owner is None or obj.owner.addr not in foe_addrs
+                    or None in obj.pos
+                    or not any(gs.dist(obj.pos, at) <= 0.01 for at in spots)
+                    or any(gs.dist(obj.pos, q) <= 0.01 for q in taken)):
+                continue
+            taken.append(obj.pos)          # UseScans takes the whole stack
+            targets.append(obj)
+        if targets:
+            log(f"R-XTM-02: military scan of {len(targets)} enemy stack(s)")
+            try:
+                act.use_scan(civ, MILITARY_SCAN, targets)
+                known = fresh()
+            except (ValueError, RuntimeError) as e:
+                log(f"  could not scan: {e}")
+    if known is None and any(c[2] for c in group):
+        known = _fleet_scanned_threat(snap, civ, act, foes, group, log)
+    return known
+
+
+FLEET_SCAN = 3
+
+
+def _fleet_scanned_threat(snap, civ, act, foes, group, log):
+    """A fleet's strength estimated from a fleet scan's per-class counts,
+    each class priced as our own strongest design of that hull. A player
+    knows his own designs, not the enemy's, so this is an estimate."""
+    import intel
+    spots = [c[0] for c in group if c[2]]
+
+    def fresh():
+        return [r for r in intel.fleet_scans(snap, civ)
+                if snap.turn - r["turn"] <= MILITARY_FRESH
+                and any(gs.dist(r["pos"], at) <= AT_PLANET for at in spots)]
+
+    reps = fresh()
+    if (not reps and act.remote is not None and not act.dry_run
+            and act.remote.scan_count(civ.addr, FLEET_SCAN) > 0):
+        foe_addrs = {f.addr for f in foes}
+        targets = [f for f in snap.fleets
+                   if f.owner is not None and f.owner.addr in foe_addrs
+                   and any(gs.dist(f.pos, at) <= 0.01 for at in spots)]
+        if targets:
+            log(f"R-XTM-02: no military scan; fleet scan of {len(targets)} fleet(s)")
+            try:
+                act.use_scan(civ, FLEET_SCAN, targets)
+                reps = fresh()
+            except (ValueError, RuntimeError) as e:
+                log(f"  could not scan: {e}")
+    if not reps:
+        return None
+    ours = [d for d in warship_designs(snap, civ)]
+    if not ours:
+        return None
+    fp, light, heavy = [0, 0, 0], 0.0, 0.0
+    for rep in reps:
+        for cid, n in rep["classes"].items():
+            same = [d for d in ours if cid in (d.chassis or [])] or ours
+            # Priced by what hurts ships, the way margin() counts incoming
+            # fire; a bomber's bombs only hit planets. Pessimistic on purpose.
+            l, h, b, hp = max((unit_stats(d, act) for d in same),
+                              key=lambda u: (u[0] + u[1] / 2, u[3]))
+            fp = [fp[0] + n * l, fp[1] + n * h, fp[2] + n * b]
+            if cid >= intel.HEAVY_CHASSIS:
+                heavy += n * hp
+            else:
+                light += n * hp
+    return {"turn": min(r["turn"] for r in reps),
+            "civ": "/".join(sorted({c[3] for c in group})),
+            "firepower": tuple(fp), "planet_hp": 0, "ship_hp": (light, heavy)}
+
+
+def run_xtm02(snap, civ, act, hist, log=print):
+    """R-XTM-02: hold a planet that enemy ships are in scan range of.
+
+    Ships meeting in open space fight only under an Attack order, which the
+    AI cannot give, so defence means being in orbit when the enemy arrives:
+    the planet's owner always defends. Defenders come from the staging planet
+    and from idle warships; a raid in flight is not recalled.
+
+    The map shows hull classes but no strength, so the threat is weighed
+    against the newest battle report of that civ's ships (intel.Intel.fleet).
+    Defenders that would lose to it are not sent, and ones already there are
+    left for R-XTM-08 to gather at the staging planet. With no such report
+    the defence goes ahead.
+    """
+    foes = enemies(snap, civ, act)
+    if not foes:
+        return 0
+    ours = snap.owned_planets(civ)
+    groups = {}
+    for c in contacts(snap, civ, foes):
+        p = min(ours, key=lambda q: gs.dist(q.pos, c[0]))
+        groups.setdefault(p.id, (p, []))[1].append(c)
+    threats = [(p, g) for p, g in groups.values() if _is_threat(g)]
+    if not threats:
+        return 0
+    rally = staging_planet(snap, civ, hist)
+    pool = [s for s in warships(snap, civ)
+            if act.is_crewed(s) and not act.is_claimed(s)
+            and (s.condition is None or s.condition >= RETREAT_AT)
+            and ((s.order_type or 0) == 0
+                 or (rally is not None and already_heading(s, rally, 1)))]
+    info = pass_intel(snap, civ, hist, act)
+    acted = 0
+    # The nearest threat to the staging planet first.
+    if rally is not None:
+        threats.sort(key=lambda t: gs.dist(t[0].pos, rally.pos))
+    for planet, group in threats:
+        seen = ", ".join(sorted({"fleet" if c[2] else "ship" for c in group}))
+        classes = sorted({gs.CHASSIS.get(k, k) for c in group for k in c[1]})
+        here = [s for s in pool if at_planet(s, planet)]
+        going = []
+        for s in pool:
+            if s in here or act.is_claimed(s):
+                continue
+            eta = _eta(s, planet, act)
+            if eta is not None and eta <= DEFEND_REACH:
+                going.append(s)
+        if not here and not going:
+            log(f"R-XTM-02: enemy {seen} ({', '.join(map(str, classes))}) in "
+                f"scan range of {planet}; no warship can reach it within "
+                f"{DEFEND_REACH} turns")
+            continue
+        known = (_scanned_threat(snap, civ, act, foes, group, log)
+                 or info.fleet({c[3] for c in group}))
+        if known is not None:
+            m = margin([(s.design, s.condition) for s in here + going
+                        if s.design], known, act)
+            if m < DEFEND_MARGIN:
+                log(f"R-XTM-02: enemy {seen} ({', '.join(map(str, classes))}) "
+                    f"in scan range of {planet}; {len(here) + len(going)} "
+                    f"defender(s) would lose to {known['civ']}'s ships as seen "
+                    f"on turn {known['turn']} (margin {m:.2f}), not defending")
+                continue
+        log(f"R-XTM-02: enemy {seen} ({', '.join(map(str, classes))}) in scan "
+            f"range of {planet}; holding {len(here)}, sending {len(going)}")
+        for s in here:
+            act.claim(s)
+            acted += 1
+        for s in going:
+            try:
+                send_to(act, s, planet, civ, order_type=1)
+                act.claim(s)
+                acted += 1
+            except (ValueError, RuntimeError) as e:
+                log(f"  could not send {s}: {e}")
+    return acted
+
+
+def run_xtm09(snap, civ, act, hist, log=print):
+    """R-XTM-09: send an unarmed hull at an enemy planet we know nothing about.
+
+    Its battle report is the intel; if nothing fires on it, the planet is
+    undefended. Probes in flight are claimed so Explore does not retask them.
+    """
+    foes = enemies(snap, civ, act)
+    if not foes:
+        return 0
+    info = pass_intel(snap, civ, hist, act)
+    unknown = [p for p in enemy_planets(snap, civ, hist, foes)
+               if info.defence(p) is None]
+    if not unknown:
+        return 0
+    probes = [s for s in snap.owned_ships(civ)
+              if s.role == "SCOUT" and act.is_crewed(s)
+              and not act.is_claimed(s) and None not in s.pos]
+    flying = [s for s in probes
+              if any(already_heading(s, p, 1) for p in unknown)]
+    for s in flying:
+        act.claim(s)
+    if len(flying) >= PROBES_IN_FLIGHT:
+        return len(flying)
+    free = [s for s in probes if s not in flying]
+    if not free:
+        log(f"R-XTM-09: {len(unknown)} enemy planet(s) of unknown defence and "
+            f"no free scout to probe them")
+        return len(flying)
+    # One scout keeps exploring while any system is undiscovered.
+    if explore.undiscovered_suns(snap, hist) and len(free) < 2:
+        return len(flying)
+    ship, target = min(((s, p) for s in free for p in unknown),
+                       key=lambda sp: gs.dist(sp[0].pos, sp[1].pos))
+    log(f"R-XTM-09: probing {target} with {ship} "
+        f"({gs.dist(ship.pos, target.pos):.0f} units); "
+        f"{len(unknown)} enemy planet(s) of unknown defence")
+    try:
+        send_to(act, ship, target, civ, order_type=1)
+        act.claim(ship)
+        return len(flying) + 1
+    except (ValueError, RuntimeError) as e:
+        log(f"  could not send the probe: {e}")
+        return len(flying)
+
+
+# Scans (R-XTM-10). Types: 0 planetary, 3 fleet, 4 military; one of each in
+# stock once research unlocks it. A planetary scan reads a target's garrison,
+# which no battle report shows.
+SCAN_STOCK = {0: 1, 3: 1, 4: 1}
+PLANETARY_SCAN = 0
+SCAN_FRESH = 20           # turns before a scanned target is scanned again
+PLANET_DEFENCE_FACILITIES = (9, 10, 11, 19)   # their hitpoints block a landing
+
+
+def _invasion_target(snap, civ, act, ship, candidates, troops, log):
+    """The nearest candidate this hull's troops can take, scanning first.
+
+    With a planetary scan in stock, the nearest candidate without a report
+    from the last SCAN_FRESH turns is scanned (one per pass). The newest
+    report of any age rules a planet out when its garrison is at least
+    `troops`, or it has planetary-defence facilities. With no report the
+    planet stays a candidate, as before scans.
+    """
+    import intel
+    order = sorted(candidates, key=lambda p: gs.dist(ship.pos, p.pos))
+    scans = intel.planetary_scans(snap, civ)
+
+    def fresh(p):
+        rep = scans.get(p.id)
+        return rep if rep and snap.turn - rep["turn"] <= SCAN_FRESH else None
+
+    unscanned = [p for p in order if fresh(p) is None]
+    if (unscanned and act.remote is not None and not act.dry_run
+            and not getattr(act, "scanned_this_pass", False)
+            and act.remote.scan_count(civ.addr, PLANETARY_SCAN) > 0):
+        act.scanned_this_pass = True
+        log(f"R-XTM-04: planetary scan of {unscanned[0]} before committing {ship}")
+        try:
+            act.use_scan(civ, PLANETARY_SCAN, [unscanned[0]])
+            scans = intel.planetary_scans(snap, civ)     # reads reports live
+        except (ValueError, RuntimeError) as e:
+            log(f"  could not scan: {e}")
+    for p in order:
+        # A garrison does not shrink without a fight, so an old report still
+        # rules a planet out; freshness only decides when to scan again.
+        rep = scans.get(p.id)
+        if rep is None:
+            return p
+        turrets = [f for f in PLANET_DEFENCE_FACILITIES if rep["facilities"].get(f)]
+        if rep["military"] >= troops or turrets:
+            log(f"R-XTM-04: {p} is held by {rep['military']} unit(s)"
+                + (f" and planetary defence {turrets}" if turrets else "")
+                + f" (scanned turn {rep['turn']}); {ship} carries {troops}")
+            continue
+        return p
+    return None
+
+
+def wanted_scans(snap, civ, hist):
+    """Scan types worth keeping in stock: SCAN_STOCK's, once research unlocks
+    them and there is someone to scan."""
+    if hist is None or not contacted(snap, civ, hist):
+        return {}
+    import research
+    done = {t for t, _ in civ.completed}
+    unlocked = research.unlocked(done, research.SCAN)
+    return {t: n for t, n in SCAN_STOCK.items() if t in unlocked}
+
+
+def run_xtm10(snap, civ, act, hist, log=print):
+    """R-XTM-10: keep one of each wanted scan type in stock.
+
+    Scans are produced on a planet with a Central Defence Agency (R-XPL-02
+    builds one); an idle one starts the most-needed missing type.
+    """
+    want = wanted_scans(snap, civ, hist)
+    if not want or act.remote is None:
+        return 0
+    making = {p.u32(292) for p in snap.owned_planets(civ)
+              if p.u32(296) == p.addr + 288 and p.u32(344)}
+    missing = [t for t, n in want.items()
+               if t not in making and act.remote.scan_count(civ.addr, t) < n]
+    if not missing:
+        return 0
+    agencies = [p for p in snap.owned_planets(civ) if 8 in p.facilities]
+    if not agencies:
+        log(f"R-XTM-10: scan types {missing} wanted, and no Central Defence "
+            f"Agency yet (R-XPL-02)")
+        return 0
+    idle = [p for p in agencies
+            if not p.building_now and not act.production_claimed(p)]
+    acted = 0
+    for p, t in zip(sorted(idle, key=lambda p: -len(p.population)), missing):
+        log(f"R-XTM-10: no type-{t} scan in stock; producing one at {p}")
+        try:
+            act.queue_scan(p, t)
+            acted += 1
+        except (ValueError, RuntimeError) as e:
+            log(f"  could not start the scan: {e}")
     return acted
 
 
@@ -343,11 +1043,10 @@ def run_xtm04(snap, civ, act, hist, log=print):
     if not troopers:
         return 0
 
-    ranked = target_planets(snap, civ, hist, foes)
-    undefended = [(w, p) for w, p in ranked if w == 0]
+    undefended = undefended_planets(snap, civ, hist, act, foes)
     if not undefended:
-        log(f"R-XTM-04: {len(troopers)} troop ship(s) but every visible enemy "
-            f"planet is defended; that is R-XTM-03's job first")
+        log(f"R-XTM-04: {len(troopers)} troop ship(s) but no visible enemy "
+            f"planet is known to be undefended")
         return 0
 
     ours = snap.owned_planets(civ)
@@ -356,19 +1055,31 @@ def run_xtm04(snap, civ, act, hist, log=print):
         # A hull carrying only its flight crew (ShipDesign:76) cannot invade.
         need = exploit.min_crew(ship, act)
         if len(ship.crew) <= need:
-            # The crew rules load only at a planet we own, so a spent hull
-            # elsewhere goes home.
+            # An empty or spent hull is crewed only at one of our planets
+            # (R-XPL-06, R-XPL-09), and a spent one only at a shipyard not
+            # just taken (exploit.refills_at).
             here = ship.orbiting
-            if here is not None and here.owner is not None \
-                    and here.owner.addr == civ.addr:
-                log(f"R-XTM-04: {ship} is empty at {here}, where R-XPL-06 can "
-                    f"reload it")
+            at_ours = here is not None and here.owner is not None \
+                and here.owner.addr == civ.addr
+            if at_ours and ship.id in act.crewed_ships:
+                log(f"R-XTM-04: {ship} took on crew this pass at {here}")
                 continue
-            if not ours:
+            if at_ours and exploit.crew_gap(ship, act):
+                log(f"R-XTM-04: {ship} is waiting for troops at {here}")
                 continue
-            home = min(ours, key=lambda p: gs.dist(ship.pos, p.pos))
+            docks = ([p for p in ours if exploit.refills_at(ship, p)]
+                     if exploit.refillable(ship) else [])
+            if not docks:
+                if at_ours:
+                    log(f"R-XTM-04: {ship} is spent, has nowhere to refill, "
+                        f"and is parked at {here}")
+                    continue
+                docks = ours
+            if not docks:
+                continue
+            home = min(docks, key=lambda p: gs.dist(ship.pos, p.pos))
             log(f"R-XTM-04: {ship} carries {len(ship.crew)} and cannot land "
-                f"anyone; sending it home to {home} to re-arm "
+                f"anyone; sending it to {home} "
                 f"({gs.dist(ship.pos, home.pos):.0f} units)")
             try:
                 send_to(act, ship, home, civ, order_type=1)
@@ -377,8 +1088,10 @@ def run_xtm04(snap, civ, act, hist, log=print):
             except (ValueError, RuntimeError) as e:
                 log(f"  could not send it home: {e}")
             continue
-        _w, target = min(undefended,
-                         key=lambda wp: gs.dist(ship.pos, wp[1].pos))
+        troops = len(ship.crew) - need
+        target = _invasion_target(snap, civ, act, ship, undefended, troops, log)
+        if target is None:
+            continue
         log(f"R-XTM-04: {ship} ({len(ship.crew)} aboard, {need} to fly) "
             f"-> conquer {target}, undefended, "
             f"{gs.dist(ship.pos, target.pos):.0f} units")
@@ -391,11 +1104,22 @@ def run_xtm04(snap, civ, act, hist, log=print):
     return acted
 
 
+def newly_taken(snap, planet):
+    """Taken within GARRISON_WINDOW turns. Planet:92 is rewritten on capture
+    as well as founding, and the capture resolves in the boundary the hull
+    arrives in, hence a window."""
+    if planet.colonised_turn is None:
+        return False
+    return 0 <= snap.turn - planet.colonised_turn <= GARRISON_WINDOW
+
+
 def run_xtm06(snap, civ, act, hist, log=print):
     """R-XTM-06: garrison a freshly taken planet with the troops still aboard.
 
     A captured planet is disloyal and in civil disorder, and the repair is
-    occupying infantry. The invasion leaves one unit as the garrison.
+    occupying infantry. The capture itself lands every unit above the flight
+    crew as the garrison, so this only finds work for a second hull reaching
+    a planet the first has already taken.
 
     Loyalty is not located. `Planet:368` is `min(8, turn - Planet:92 + 1)`,
     a timer a garrison does not change; `Planet:100` bytes 0-2 are not it.
@@ -407,11 +1131,8 @@ def run_xtm06(snap, civ, act, hist, log=print):
         p = ship.orbiting
         if p is None or p.owner is None or p.owner.addr != civ.addr:
             continue
-        # Only a newly taken planet; elsewhere the hull is loading. Planet:92
-        # is rewritten on capture as well as founding, and the capture
-        # resolves in the boundary the hull arrives in, hence a window.
-        age = None if p.colonised_turn is None else snap.turn - p.colonised_turn
-        if age is None or not (0 <= age <= GARRISON_WINDOW):
+        # Only a newly taken planet; elsewhere the hull is loading.
+        if not newly_taken(snap, p):
             continue
         keep = exploit.min_crew(ship, act)
         spare = len(ship.crew) - keep
@@ -432,11 +1153,14 @@ def run_xtm07(snap, civ, act, hist, log=print):
     foes = enemies(snap, civ, act)
     if not foes:
         return 0
-    ranked = target_planets(snap, civ, hist, foes)
-    if not any(w == 0 for w, _p in ranked):
+    if not undefended_planets(snap, civ, hist, act, foes):
         return 0                       # nothing takeable; build warships instead
 
-    have = [s for s in snap.owned_ships(civ) if s.role == "TROOP"]
+    # A hull that has landed its troops counts while its buffer has room to
+    # refill, including on its way to a yard; one with no room no longer does.
+    have = [s for s in snap.owned_ships(civ) if s.role == "TROOP"
+            and (len(s.crew) > exploit.min_crew(s, act)
+                 or exploit.crew_gap(s, act) or exploit.refillable(s))]
     if len(have) >= TROOP_TARGET:
         return 0
     # No new hull while a built one is waiting for crew.
@@ -455,7 +1179,7 @@ def run_xtm07(snap, civ, act, hist, log=print):
         log(f"R-XTM-07: {len(have)}/{TROOP_TARGET} troop ship(s) and this civ "
             f"has no design with a troop bay. Synthesise one: "
             f"client/dev_tools/game_cycle.py --design "
-            f"'t1:chassis=0,scanner=0,engine=1,engine=1,module=1'")
+            f"'t1:chassis=0,scanner=0,engine=1,module=1'")
         return 0
     yards = [p for p in snap.owned_planets(civ)
              if exploit.SHIPYARD in p.facilities and not p.u32(344)
@@ -468,30 +1192,43 @@ def run_xtm07(snap, civ, act, hist, log=print):
     planet = max(yards, key=lambda p: len(p.population))
     log(f"R-XTM-07: {len(have)}/{TROOP_TARGET} troop ship(s); queueing "
         f"{design.design_name!r} at {planet}")
-    try:
-        act.queue_ship(planet, design)
-        return 1
-    except (ValueError, RuntimeError) as e:
-        log(f"  could not queue: {e}")
-        return 0
+    return exploit.queue_ship(snap, civ, act, planet, design, log)
+
+
+def retreat_threshold(ship):
+    """Condition below which this ship withdraws. R-EXP-04 is the scout case."""
+    return SCOUT_RETREAT_AT if ship.role == "SCOUT" else RETREAT_AT
 
 
 def run_xtm05(snap, civ, act, hist, log=print):
-    """R-XTM-05: withdraw a badly damaged ship to the nearest owned planet.
+    """R-XTM-05 and R-EXP-04: withdraw a damaged ship to a shipyard and hold it.
 
     Damage compounds across turns, the round loop runs up to 200 rounds with no
-    early exit, and condition never recovers on its own.
+    early exit, and condition never recovers on its own. Shipyards repair, so
+    a ship goes to the nearest one, or the nearest owned planet when the civ
+    has none, and is held there until REPAIRED_AT. Without the hold, the next
+    pass would send a ship at RETREAT_AT + 0.01 straight back out.
     """
     ours = snap.owned_planets(civ)
     if not ours:
         return 0
+    yards = [p for p in ours if exploit.SHIPYARD in p.facilities] or ours
     acted = 0
     for ship in snap.owned_ships(civ):
         c = ship.condition
-        if c is None or c >= RETREAT_AT or act.is_claimed(ship):
+        if c is None or act.is_claimed(ship):
             continue
-        home = min(ours, key=lambda p: gs.dist(ship.pos, p.pos))
-        log(f"R-XTM-05: {ship} at condition {c:.2f}; withdrawing to {home}")
+        home = min(yards, key=lambda p: gs.dist(ship.pos, p.pos))
+        if at_planet(ship, home):
+            if c < REPAIRED_AT:
+                log(f"R-XTM-05: {ship} ({ship.role}) at condition {c:.2f}; "
+                    f"holding at {home} until {REPAIRED_AT:.2f}")
+                act.claim(ship)
+            continue
+        if c >= retreat_threshold(ship):
+            continue
+        log(f"R-XTM-05: {ship} ({ship.role}) at condition {c:.2f}, below "
+            f"{retreat_threshold(ship):.2f}; withdrawing to {home}")
         try:
             send_to(act, ship, home, civ, order_type=1)   # not actuator L
             act.claim(ship)
@@ -501,19 +1238,81 @@ def run_xtm05(snap, civ, act, hist, log=print):
     return acted
 
 
+def rival_planets(snap, civ, hist):
+    """Planets of other civs inside our discovery set."""
+    return [p for p in snap.planets
+            if p.owner is not None and p.owner.addr != civ.addr
+            and hist.can_see(snap, p)]
+
+
+def staging_planet(snap, civ, hist):
+    """Where idle warships gather.
+
+    The shipyard planet nearest any rival planet we can see; before contact,
+    the most populous one. Warships are built at shipyards and repaired there,
+    so a frontier colony far from them would keep the fleet in transit. Any
+    owned planet when there is no shipyard.
+    """
+    ours = snap.owned_planets(civ)
+    if not ours:
+        return None
+    yards = [p for p in ours if exploit.SHIPYARD in p.facilities]
+    ours = yards or ours
+    rivals = rival_planets(snap, civ, hist)
+    if not rivals:
+        return max(ours, key=lambda p: (len(p.population), -p.id))
+    return min(ours, key=lambda p: (min(gs.dist(p.pos, r.pos) for r in rivals),
+                                    p.id))
+
+
+def at_planet(ship, planet):
+    return gs.dist(ship.pos, planet.pos) <= AT_PLANET
+
+
+def run_xtm08(snap, civ, act, hist, log=print):
+    """R-XTM-08: send every idle crewed warship to the staging planet.
+
+    Runs after R-XTM-03, so a warship committed to a raid is already claimed.
+    Idle covers no order, a move order and a leftover scout order.
+    """
+    rally = staging_planet(snap, civ, hist)
+    if rally is None:
+        return 0
+    fleet = [s for s in warships(snap, civ)
+             if act.is_crewed(s) and not act.is_claimed(s)
+             and (s.order_type or 0) in (0, 1, 2)]
+    away = [s for s in fleet
+            if not at_planet(s, rally) and not already_heading(s, rally, 1)]
+    if not away:
+        return 0
+    log(f"R-XTM-08: staging at {rally}; {len(away)} of {len(fleet)} idle "
+        f"warship(s) are elsewhere")
+    acted = 0
+    for ship in away:
+        try:
+            send_to(act, ship, rally, civ, order_type=1)
+            act.claim(ship)
+            acted += 1
+        except (ValueError, RuntimeError) as e:
+            log(f"  could not send {ship}: {e}")
+    return acted
+
+
 # R-XTM-05 runs first so R-XTM-03 does not send a retreating ship back into
 # the fight in the same pass.
 def run_xtm00(snap, civ, act, hist, log=print):
     """R-XTM-00: declare war on a civ we can reach and are equipped to fight.
 
-    Gated by ALLOW_DECLARE_WAR. A raw relation write costs no reputation and
-    generates no news item, which against a human is a §1.1 violation (§4.4);
-    the command path is the fix.
+    Through the engine's own declaration (actions.declare_war). A civ still in
+    its build-up protection is left alone, as the declare-war validator
+    refuses it. Gated by ALLOW_DECLARE_WAR.
     """
     if not ALLOW_DECLARE_WAR:
         return 0
-    ready = [s for s in warships(snap, civ) if act.is_crewed(s)]
-    if not ready:
+    rally = staging_planet(snap, civ, hist)
+    ready = [s for s in warships(snap, civ)
+             if act.is_crewed(s) and rally is not None and at_planet(s, rally)]
+    if len(ready) < WARSHIP_TARGET:
         return 0
     acted = 0
     for other in snap.civs:
@@ -524,8 +1323,19 @@ def run_xtm00(snap, civ, act, hist, log=print):
                 and hist.can_see(snap, p)]
         if not seen:
             continue
+        if act.remote is not None:
+            try:
+                protected, played, need = act.remote.war_protection(other.addr)
+            except (RuntimeError, OSError) as e:
+                log(f"R-XTM-00: cannot read {other.civ_name!r}'s build-up "
+                    f"protection ({e}); not declaring")
+                continue
+            if protected:
+                log(f"R-XTM-00: {other.civ_name!r} is in its build-up phase "
+                    f"({played} of {need} turns played); war is refused")
+                continue
         log(f"R-XTM-00: {len(seen)} visible planet(s) of {other.civ_name!r} and "
-            f"{len(ready)} crewed warship(s); declaring war")
+            f"{len(ready)} warship(s) staged at {rally}; declaring war")
         try:
             act.declare_war(civ, other)
             clear_relation_cache()
@@ -535,11 +1345,12 @@ def run_xtm00(snap, civ, act, hist, log=print):
     return acted
 
 
-# See run_xtm00 for the fairness caveat against a human.
-ALLOW_DECLARE_WAR = True
+ALLOW_DECLARE_WAR = True     # off leaves war to the other side to declare
 
 RULES = [("R-XTM-05", run_xtm05), ("R-XTM-00", run_xtm00),
-         ("R-XTM-01", run_xtm01), ("R-XTM-03", run_xtm03)]
+         ("R-XTM-01", run_xtm01), ("R-XTM-03", run_xtm03),
+         ("R-XTM-02", run_xtm02), ("R-XTM-08", run_xtm08),
+         ("R-XTM-09", run_xtm09)]
 
 
 def main():

@@ -24,8 +24,9 @@ PLANET_PROPERTIES = 88
 ORDER_TYPES = {0: "none", 1: "move", 2: "scout", 3: "colonize", 4: "attack",
                5: "conquer", 6: "bio bomb", 7: "move near"}
 
-# Order types that also require Ship:56, the target-object reference node
-# (Ship::HasActiveTargetedOrder, 0x004D9880). Colonize and Scout use coordinates.
+# Order types that become an escort of Ship:56, the target-object reference node,
+# when it is live (Ship::HasActiveTargetedOrder, 0x004D9880). With the null node
+# they follow the route like any other order. Colonize and Scout use coordinates.
 TARGETED_ORDER_TYPES = (1, 4, 7)
 NULL_NODE        = ev.NULL_REF_NODE      # 0x00857C54
 PILING_UP_WEALTH = 0x0080B540            # shared "generating wealth" singleton
@@ -178,6 +179,8 @@ class Design(Obj):
     @property
     def upkeep(self):      return self._n(self.i32(48))
     @property
+    def units(self):       return self._n(self.i32(52))   # base hitpoints
+    @property
     def hp(self):          return self._n(self.i32(56))   # effective, shield in
     @property
     def shield(self):      return self._n(self.i32(72))
@@ -271,6 +274,44 @@ class Ship(Obj):
     @property
     def crewed(self):     return len(self.crew) > 0
 
+    @property
+    def crew_allocated(self):
+        """Ship:124 already holds a buffer; only its spare capacity can be added to."""
+        return is_ptr(self.u32(124))
+
+    @property
+    def crew_spare(self):
+        """Records the crew buffer can still take without reallocating.
+
+        A troop hull that has landed its troops keeps its capacity: landing
+        walks `end` back and frees nothing.
+        """
+        end, cap = self.u32(128), self.u32(132)
+        if not self.crew_allocated or end is None or cap is None or cap < end:
+            return 0
+        return (cap - end) // 16
+
+
+def facility_map(snap, head):
+    """{typeId: count} from a facility map's head node, wherever the map lives
+    (a planet's Planet:204, or the copy inside a planetary scan report)."""
+    if not is_ptr(head):
+        return {}
+    out, seen, stack = {}, set(), [head]
+    while stack and len(seen) < 256:
+        n = stack.pop()
+        if not is_ptr(n) or n in seen:
+            continue
+        seen.add(n)
+        blob = snap.read(n, 24)
+        if not blob or len(blob) < 24:
+            continue
+        left, parent, right, vf, tid, cnt = struct.unpack_from("<IIIIII", blob, 0)
+        if vf == FACILITY_VFTABLE:
+            out[tid] = cnt
+        stack.extend((left, parent, right))
+    return out
+
 
 class Planet(Obj):
     @property
@@ -280,7 +321,26 @@ class Planet(Obj):
     @property
     def space(self):        return (self.u32(104) or 0) >> 16
     @property
-    def max_pop(self):      return self.space // 10
+    def resource(self):
+        """(resourceId, base units per miner) of this planet's one deposit.
+
+        The planet's resource object sits at Planet:400; its vector of 8-byte
+        [resId, base] records runs Planet:412..416. Galaxy generation pushes
+        exactly one record per planet.
+        """
+        recs = self.vec(412, 8)
+        return struct.unpack_from("<Ii", recs[0]) if recs else (None, 0)
+    @property
+    def total_space(self):
+        """Space after the owner's planet-space trait (38), rounded as the
+        engine's space getter (0x004F1140) rounds it."""
+        import research
+        civ = self.owner
+        pct = research.trait(civ, research.PLANET_SPACE_TRAIT) if civ else 0
+        extra = self.space * pct / 100
+        return self.space + (int(extra + 0.5) if extra >= 0 else int(extra))
+    @property
+    def max_pop(self):      return self.total_space // 10
     @property
     def food(self):         return self.i32(112)
     @property
@@ -325,23 +385,7 @@ class Planet(Obj):
     def facilities(self):
         """{typeId: count} walked out of the Planet:204 map. An empty map points
         all three head slots at itself."""
-        head = self.u32(204)
-        if not is_ptr(head):
-            return {}
-        out, seen, stack = {}, set(), [head]
-        while stack and len(seen) < 256:
-            n = stack.pop()
-            if not is_ptr(n) or n in seen:
-                continue
-            seen.add(n)
-            blob = self.snap.read(n, 24)
-            if not blob or len(blob) < 24:
-                continue
-            left, parent, right, vf, tid, cnt = struct.unpack_from("<IIIIII", blob, 0)
-            if vf == FACILITY_VFTABLE:
-                out[tid] = cnt
-            stack.extend((left, parent, right))
-        return out
+        return facility_map(self.snap, self.u32(204))
 
     @property
     def production(self):
@@ -362,8 +406,49 @@ class Sun(Obj):
     def system_name(self): return self.sso(52)
 
 
+class Fleet(Obj):
+    """Fleet. A ship that joins a fleet stops existing as a Ship object; each
+    member is a 44-byte record at Fleet:116, with its ShipDesign reference node
+    at +4. Fields are read directly: the measured extent can stop short."""
+
+    MEMBER = 44
+
+    def _u32(self, off):
+        raw = self.snap.read(self.addr + off, 4)
+        return struct.unpack("<I", raw)[0] if raw and len(raw) == 4 else None
+
+    def _target(self, node):
+        if not is_ptr(node) or node == NULL_NODE:
+            return None
+        t = self.snap.rd32(node)
+        return t if is_ptr(t) else None
+
+    @property
+    def pos(self):
+        raw = self.snap.read(self.addr + 4, 12)
+        return (struct.unpack("<fff", raw) if raw and len(raw) == 12
+                else (None, None, None))
+
+    @property
+    def owner(self):
+        return self.snap.civ_of(self._target(self._u32(40)))
+
+    @property
+    def member_designs(self):
+        b, e = self._u32(116), self._u32(120)
+        if not is_ptr(b) or e is None or e <= b or (e - b) % self.MEMBER:
+            return []
+        out = []
+        for at in range(b, e, self.MEMBER):
+            node = self.snap.rd32(at + 4)
+            d = self.snap.design_of(self._target(node))
+            if d is not None:
+                out.append(d)
+        return out
+
+
 WRAPPERS = {"Owner": Civ, "Planet": Planet, "Ship": Ship,
-            "ShipDesign": Design, "Sun": Sun}
+            "ShipDesign": Design, "Sun": Sun, "Fleet": Fleet}
 
 
 def resolve_civ(snap, name=None, quiet=False):
@@ -421,6 +506,7 @@ class Snapshot:
         self.ships   = by["Ship"]
         self.designs = by["ShipDesign"]
         self.suns    = by["Sun"]
+        self.fleets  = by["Fleet"]
 
         # Allocation start -> entity, for every pointer form a node may carry.
         self._civ_by_start = {}
@@ -475,9 +561,14 @@ class Snapshot:
         return [p for p in self.planets if p.owner is None]
 
     def nearest_sun(self, planet):
-        if not self.suns:
+        """(Sun, distance), or (None, None) when no position is readable.
+
+        An object allocated during the scan can read with blank fields.
+        """
+        suns = [x for x in self.suns if None not in x.pos]
+        if not suns or None in planet.pos:
             return None, None
-        s = min(self.suns, key=lambda x: dist(planet.pos, x.pos))
+        s = min(suns, key=lambda x: dist(planet.pos, x.pos))
         return s, dist(planet.pos, s.pos)
 
     def systems(self):

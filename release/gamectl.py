@@ -32,6 +32,14 @@ WAIT_OBJECT_0          = 0x0
 TURNLENGTH_ADDR = 0x0080AA08
 TURN_COUNTER    = 0x008578E8
 DEFAULT_LENGTH  = 3600
+UNSET_LENGTH    = 0xFFFFFFFF    # before a galaxy is up
+
+# Single Player's turn length between clicks. The engine still resolves a turn
+# whenever this much time has passed, awake or asleep, and catches up on any
+# it owes; a week is past any idle or suspended session. Kept well under
+# 2**31 / 1000 in case the engine works in milliseconds anywhere. Multiplayer
+# holds its own clock (server/player_turn.py, HOLD_SECONDS).
+HOLD_LENGTH     = 7 * 86400
 
 # bool __thiscall SaveGame(void *this, int gameid, std::string *gamename)
 # `this` is never read on this path, so the string allocation doubles for it.
@@ -132,13 +140,33 @@ class Client:
     def turn_length(self):
         return self.rd32(TURNLENGTH_ADDR)
 
-    def advance_turn(self, timeout=45.0, drive=1, poll=0.25):
-        """Resolve exactly one turn, then put the turn length back."""
+    def hold_clock(self, seconds=HOLD_LENGTH):
+        """Push the next timed turn boundary out of reach.
+
+        The engine re-applies the galaxy's own turn length at every boundary,
+        so this has to be repeated after each one. Returns the length it
+        replaced, or None if it wrote nothing: already held, or no galaxy up
+        yet to hold.
+        """
+        was = self.turn_length()
+        if was in (None, UNSET_LENGTH) or was == seconds:
+            return None
+        self.wr32(TURNLENGTH_ADDR, seconds)
+        return was
+
+    def advance_turn(self, timeout=45.0, drive=1, poll=0.25, restore=None):
+        """Resolve exactly one turn, then put the turn length back.
+
+        `restore` is the length to leave behind; by default, whatever was
+        there before. A caller holding the clock passes its hold, so a click
+        that lands just after the engine re-applied its own length does not
+        leave that length running.
+        """
         before = self.turn()
         if before is None:
             raise GameError("cannot read the turn counter: is the game still up?")
-        original = self.turn_length()
-        if original in (None, 0xFFFFFFFF):
+        original = restore if restore is not None else self.turn_length()
+        if original in (None, UNSET_LENGTH):
             original = DEFAULT_LENGTH
         try:
             self.wr32(TURNLENGTH_ADDR, drive)
@@ -311,9 +339,31 @@ def reset_ai_state(state_dir: str, civ: str, keep_discovery: bool = False):
     return removed
 
 
-def capture_to_dat(save_dir: str, out_path: str, since: float = 0.0) -> str:
-    """Convert the newest captured save into a .dat the client can be launched on."""
-    cap = newest_capture(save_dir, since)
+def wait_for_capture(save_dir: str, since: float = 0.0, timeout: float = 5.0,
+                     poll: float = 0.1):
+    """The newest capture since `since` once the server has finished it, or None.
+
+    cs_server writes a capture's .json sidecar after its .b64, so a .b64 whose
+    sidecar is there is complete.
+    """
+    deadline = time.time() + timeout
+    while True:
+        cap = newest_capture(save_dir, since)
+        if cap is not None and os.path.exists(cap[:-len(".b64")] + ".json"):
+            return cap
+        if time.time() >= deadline:
+            return None
+        time.sleep(poll)
+
+
+def capture_to_dat(save_dir: str, out_path: str, since: float = 0.0,
+                   wait: float = 0.0) -> str:
+    """Convert the newest captured save into a .dat the client can be launched on.
+
+    `wait` is how long to give the server to finish writing the capture.
+    """
+    cap = (wait_for_capture(save_dir, since, wait) if wait
+           else newest_capture(save_dir, since))
     if cap is None:
         raise GameError(
             "the game reported a successful save but nothing arrived at the "

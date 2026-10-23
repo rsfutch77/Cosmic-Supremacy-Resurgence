@@ -28,6 +28,7 @@ PAGE_READWRITE     = 0x04
 INFINITE           = 0xFFFFFFFF
 
 OPERATOR_NEW = 0x0065165A
+OPERATOR_DELETE = 0x00651689    # __cdecl(void*), frees what OPERATOR_NEW returned
 SELL_FACILITY = 0x004F8580      # PlanetProperties::SellFacility
 HURRY_PRODUCTION = 0x004EFFF0   # PlanetProperties::HurryProduction
 SHIPCOMMAND_CTOR = 0x004E9BA0   # __thiscall(int orderType, EJBO* target), ret 8
@@ -38,8 +39,10 @@ REPUTATION_ADD    = 0x00534D50  # __thiscall(Owner* other, short delta), ret 8
 RELATION_CODE_OFF = 4           # within the record Find returns
 OWNER_RELATIONS = 248           # Owner:248, the diplomacy container
 OWNER_PRIMARY_FROM_TAG = -52    # Owner allocation starts at tag - 52
-SHIP_SETCOMMAND  = 0x004D9DC0   # __thiscall(ShipCommand*), ret 4
-SHIPCOMMAND_SIZE = 16           # +0 type, +4 target node, +8/+9 two bytes
+SHIP_SETCOMMAND  = 0x004D9DC0   # __thiscall(ShipCommand*, bool), ret 8
+# +0 type, +4 target node, +8/+9 two bytes, +0xA word, +0xC float, +0x10 byte.
+# The ctor writes +0x10, so 16 bytes overflowed the block by one.
+SHIPCOMMAND_SIZE = 0x14
 SHIP_ALLOC_FROM_TAG = -8        # Ship:N == ship_allocation + (N + 8)
 HURRY_COST       = 0x00555660   # __cdecl(PlanetProperties*) -> cost, or -1
 PRODUCTION_DONE  = 0x004F0260   # __thiscall(PP) -> production accumulated
@@ -47,6 +50,59 @@ PP_TOTAL_SLOT    = 0x74         # PP vftable slot -> total production needed
 HURRY_MIN_FRACTION = 0.5        # [0x00750360]; below this the engine refuses
 PLANET_PROPERTIES = 88          # PlanetProperties lives at planet_tag + 88
 OFFLINE_FLAG = 0x0086F1A0       # the local-apply path runs only when this byte is set
+
+# The resource market. Buy and sell are __thiscall(int index, int qty), ret 8,
+# on the civ's resource object at Owner tag + 1116 (the UI passes
+# Owner primary + 0x490, at 0x0057601D), whose +0xC is the Owner:1128 stock
+# vector and +0x38 the Owner primary. Neither checks qty > 0 or the index, and
+# neither returns anything usable: diff cash or stock. The price is shared by
+# every civ. A wrong `this` reads a null owner and kills the client in GetTrait.
+MARKET_THIS  = 1116
+MARKET_OWNER_BACKPTR = 0x38
+MARKET_BUY   = 0x005125D0
+MARKET_SELL  = 0x00512560
+# Quotes, __thiscall(int qty, Owner* primary), ret 8, on the stock record
+# (*Owner:1128 + 8 * index); the total price for qty units, trait 42 applied.
+QUOTE_BUY    = 0x00512090
+QUOTE_SELL   = 0x00511EF0
+DESIGN_RESOURCE_COST = 0x00548990   # __thiscall(int resId), ret 4, on tag + 4
+# PlanetProperties::SetProduction, __thiscall(Production* item, bool resetOnFail)
+# on planet tag + 88, ret 8, al = accepted. The ONLY place a ship's resource
+# cost is checked and taken (0x00512E80), and the place it is refunded when
+# production changes away from a ship. Every production change goes through
+# it: a raw Planet:296 write skips the charge, and a later engine call then
+# refunds a charge that was never made.
+SET_PRODUCTION = 0x004F8290
+# Scans. Held scans are a std::map<type, count> on the Owner (head Owner:64,
+# size Owner:68, which counts types ever held, not scans). The getter is
+# __thiscall(int type) on the Owner primary, ret 4. UseScans is
+# __cdecl(Vec* out, Vec* targets, Owner* primary, int type): it builds `out`
+# itself, makes one report per target group (Owner:320), and takes one scan
+# from the inventory per report. Targets are allocation starts (tag - 8).
+SCAN_COUNT = 0x0053B8F0
+USE_SCANS  = 0x0054E840
+SCAN_VEC_SIZE = 0x18              # proxy, ..., first +0xC, last +0x10, end +0x14
+
+# Declaring war the way the declare-war button does (0x00442A70): a Treaty
+# proposal of kind 1, applied by the engine. The apply copies it into a
+# registered Treaty, makes first contact and writes War into both relation
+# records.
+TREATY_SIZE      = 0x5C
+TREATY_CTOR      = 0x00559A60   # __thiscall(), the default constructor
+TREATY_SET_KIND  = 0x0055AD90   # __thiscall(int kind), ret 4; 1 declares war
+TREATY_APPLY     = 0x0055C3E0   # __thiscall(), returns the registered Treaty
+TREATY_DTOR      = 0x00559B00   # __thiscall(); the proposal is destroyed after apply
+TREATY_PARTY_1   = 0x0C         # reference node, the declaring civ
+TREATY_PARTY_2   = 0x10         # reference node, the other civ
+TREATY_KIND_WAR  = 1
+REF_NODE_FOR_ID  = 0x00537BF0   # __cdecl(int objectId) -> reference node
+# Build-up protection, as checked by the declare-war validator 0x004BDE50.
+GET_GAME_OPTION  = 0x004D4320   # __cdecl(int index) -> option record
+TURNS_PLAYED     = 0x0052AC40   # __cdecl(int turn, Owner* primary) -> turns
+PROTECT_OPTION   = 4            # option record whose byte at +0x30 enables it
+PROTECT_FLAG_OFF = 0x30
+PROTECT_TURNS    = 0x0076F378   # int, turns a new player is protected for
+TURN_COUNTER     = 0x008578E8
 ORDER_CTOR   = 0x004E8420
 ORDER_SIZE   = 0x60
 
@@ -56,6 +112,7 @@ ORDER_SIZE   = 0x60
 CHANGE_CITIZEN_JOBS = 0x00574180  # __cdecl(Planet* alloc, container* indices,
                                   #         int newJobId, bool bFromMilitaryList)
 GET_DRAFT_COST      = 0x00516060  # __thiscall(int count), ret 4
+GET_TRAIT           = 0x00516180  # __thiscall(int traitId), ret 4, same `this`
 DRAFT_COST_THIS     = 728         # ECX = Owner_primary + 0x30c == civ_tag + 728
 DRAFT_JOB           = 3           # job id 3 is crew/military
 CONTAINER_VECTOR    = 12          # a container holds its vector 12 bytes in
@@ -66,6 +123,12 @@ DESIGN_SIZE = 0x118           # 280 bytes
 DESIGN_CTOR = 0x00546EC0      # __thiscall, no stack arguments
 
 DESIGN_STREAM_CTOR = 0x005470A0
+
+# A civ's designs are a vector of reference nodes, begin at Owner:84. The vector
+# object starts 12 bytes before that, which is what push_back takes as ECX.
+REFERENCE_NODE_FOR = 0x00537BF0  # __cdecl(int objectId) -> node, inserts on miss
+VECTOR_PUSH_BACK   = 0x00442D40  # __thiscall(const T&), ret 4, 4-byte elements
+OWNER_DESIGNS      = 84 - CONTAINER_VECTOR
 
 # ShipDesignData lives at EJBO tag + 4. Derived stats are lazy caches reset
 # to -1 when parts change; each getter computes, caches and returns.
@@ -108,12 +171,14 @@ def push_imm(v):     return b"\x68" + struct.pack("<I", v & 0xFFFFFFFF)
 def mov_ecx_imm(v):  return b"\xB9" + struct.pack("<I", v & 0xFFFFFFFF)
 def mov_eax_imm(v):  return b"\xB8" + struct.pack("<I", v & 0xFFFFFFFF)
 CALL_EAX   = b"\xFF\xD0"
+MOVZX_EAX_AL = b"\x0F\xB6\xC0"   # movzx eax, al
 RET_4      = b"\xC2\x04\x00"
 PUSH_ECX   = b"\x51"
 FSTP_ESP   = b"\xD9\x1C\x24"      # fstp dword ptr [esp]
 POP_EAX    = b"\x58"
 SUB_ESP_4  = b"\x83\xEC\x04"
 ADD_ESP_4  = b"\x83\xC4\x04"      # __cdecl callees leave their args to us
+ADD_ESP_8  = b"\x83\xC4\x08"      # two of them
 ADD_ESP_16 = b"\x83\xC4\x10"      # four of them
 
 
@@ -273,6 +338,27 @@ class Remote:
                 RET_4)
         return self.run_stub(code, f"ShipDesign default ctor -> 0x{block:08X}")
 
+    def register_design(self, design_id, civ_tag):
+        """Append a design to a civ's design list, the way the engine does.
+
+        The Owner initialiser at 0x00546430 registers a civ's default design
+        with these two calls. Both allocate through the engine, so the vector
+        can reallocate itself. Returns the design's reference node.
+        """
+        code = (push_imm(design_id) +
+                mov_eax_imm(REFERENCE_NODE_FOR) +
+                CALL_EAX +
+                ADD_ESP_4 +
+                b"\x50" +                  # push eax      the node, as the T
+                b"\x54" +                  # push esp      and a const T& to it
+                mov_ecx_imm(civ_tag + OWNER_DESIGNS) +
+                mov_eax_imm(VECTOR_PUSH_BACK) +
+                CALL_EAX +
+                POP_EAX +                  # the node again, as the result
+                RET_4)
+        return self.run_stub(code, f"register design #{design_id} with civ "
+                                   f"0x{civ_tag:08X}")
+
     def verify_design(self, block):
         """Check that a block really is a constructed ShipDesign."""
         raw = self.read(block, 16)
@@ -364,9 +450,15 @@ class Remote:
     def ship_set_command(self, ship_tag, cmd_block):
         """Ship::SetCommand: writes Ship:52/56/60/61 from the ShipCommand.
 
-        ECX is the ship's allocation start (tag - 8).
+        ECX is the ship's allocation start (tag - 8). The second argument is a
+        bool that, when set, also writes Ship:76 = 1. The player-order path
+        (0x0056EBC0) passes 1 and engine-internal callers pass 0; 0 is used
+        here (STRATEGY.md §4.4). Pushing only the ShipCommand let `ret 8` pop
+        the thread's return address, so the stub returned to lpParameter (0)
+        and the client died.
         """
-        code = (push_imm(cmd_block) +
+        code = (push_imm(0) +
+                push_imm(cmd_block) +
                 mov_ecx_imm(ship_tag + SHIP_ALLOC_FROM_TAG) +
                 mov_eax_imm(SHIP_SETCOMMAND) +
                 CALL_EAX +
@@ -432,6 +524,168 @@ class Remote:
                 mov_eax_imm(REPUTATION_ADD) + CALL_EAX + RET_4)
         return self.run_stub(code, f"reputation {delta:+d} vs 0x{other_tag:08X}")
 
+    def declare_war(self, civ_tag, civ_id, other_tag, other_id):
+        """Declare war from `civ` on `other` through the engine's own path.
+
+        Returns the registered Treaty. The proposal is an engine-heap copy
+        that is destroyed and freed once applied, as the UI's stack one is.
+        """
+        block = self.operator_new(TREATY_SIZE)
+        self.run_stub(mov_ecx_imm(block) + mov_eax_imm(TREATY_CTOR) +
+                      CALL_EAX + RET_4, "Treaty ctor")
+        for off, oid in ((TREATY_PARTY_1, civ_id), (TREATY_PARTY_2, other_id)):
+            node = self.run_stub(push_imm(oid) + mov_eax_imm(REF_NODE_FOR_ID) +
+                                 CALL_EAX + ADD_ESP_4 + RET_4,
+                                 f"reference node for object {oid}")
+            if not node:
+                raise RemoteCallError(f"no reference node for object {oid}")
+            self.write(block + off, struct.pack("<I", node))
+        self.run_stub(push_imm(TREATY_KIND_WAR) + mov_ecx_imm(block) +
+                      mov_eax_imm(TREATY_SET_KIND) + CALL_EAX + RET_4,
+                      "Treaty kind -> declaration of war")
+        treaty = self.run_stub(mov_ecx_imm(block) + mov_eax_imm(TREATY_APPLY) +
+                               CALL_EAX + RET_4, "apply the war treaty")
+        self.run_stub(mov_ecx_imm(block) + mov_eax_imm(TREATY_DTOR) +
+                      CALL_EAX + RET_4, "Treaty dtor on the proposal")
+        self.run_stub(push_imm(block) + mov_eax_imm(OPERATOR_DELETE) +
+                      CALL_EAX + ADD_ESP_4 + RET_4, "free the proposal")
+        if not treaty:
+            raise RemoteCallError("the treaty apply returned NULL")
+        return treaty
+
+    def war_protection(self, other_tag):
+        """(protected, turns played, turns protected) for a war on `other`.
+
+        The declare-war validator refuses while build-up protection is on and
+        the target has played fewer than PROTECT_TURNS turns.
+        """
+        opt = self.run_stub(push_imm(PROTECT_OPTION) +
+                            mov_eax_imm(GET_GAME_OPTION) + CALL_EAX +
+                            ADD_ESP_4 + RET_4, "game option 4")
+        raw = self.read(opt + PROTECT_FLAG_OFF, 1) if opt else None
+        need_raw = self.read(PROTECT_TURNS, 4)
+        need = struct.unpack("<i", need_raw)[0] if need_raw else 0
+        if not raw or raw[0] == 0:
+            return False, None, need
+        turn = struct.unpack("<I", self.read(TURN_COUNTER, 4))[0]
+        played = self.run_stub(push_imm(other_tag + OWNER_PRIMARY_FROM_TAG) +
+                               push_imm(turn) + mov_eax_imm(TURNS_PLAYED) +
+                               CALL_EAX + ADD_ESP_8 + RET_4,
+                               "turns the target has played")
+        played = struct.unpack("<i", struct.pack("<I", played or 0))[0]
+        return played < need, played, need
+
+    def design_resource_cost(self, design_tag, res_id):
+        """ShipDesign:(92 + 4 * res_id): units of a resource one build uses."""
+        def call():
+            code = (push_imm(res_id) +
+                    mov_ecx_imm(design_tag + DESIGN_DATA_OFFSET) +
+                    mov_eax_imm(DESIGN_RESOURCE_COST) +
+                    CALL_EAX +
+                    RET_4)
+            return self.run_stub(code, f"design resource {res_id} on 0x{design_tag:08X}")
+        return self._cached(self._design_cache, ("resource", design_tag, res_id), call)
+
+    def set_production(self, planet_tag, item, reset_on_fail=False):
+        """SetProduction(item): True when the engine accepted it.
+
+        `item` is a ShipDesign at its allocation start, the planet's embedded
+        Facility (tag + 280) or Scan (tag + 288), or the PilingUpWealth
+        singleton. With reset_on_fail a refusal drops the planet to wealth,
+        as the UI's handler does; without it production is left alone.
+        """
+        code = (push_imm(1 if reset_on_fail else 0) +
+                push_imm(item) +
+                mov_ecx_imm(planet_tag + PLANET_PROPERTIES) +
+                mov_eax_imm(SET_PRODUCTION) +
+                CALL_EAX +
+                MOVZX_EAX_AL +
+                RET_4)
+        got = self.run_stub(code, f"SetProduction(0x{item:08X}) on 0x{planet_tag:08X}")
+        return got == 1
+
+    def market_quote(self, civ_tag, record_addr, qty, buy=True):
+        """The engine's total price for qty units (read-only)."""
+        code = (push_imm(civ_tag + OWNER_PRIMARY_FROM_TAG) +
+                push_imm(qty) +
+                mov_ecx_imm(record_addr) +
+                mov_eax_imm(QUOTE_BUY if buy else QUOTE_SELL) +
+                CALL_EAX +
+                RET_4)
+        return self.run_stub(code, f"{'buy' if buy else 'sell'} quote for {qty}")
+
+    def market_trade(self, civ_tag, index, qty, buy=True):
+        """Buy or sell qty units of the resource at stock index `index`."""
+        if qty <= 0:
+            raise RemoteCallError(f"refusing a market trade of {qty}: the engine "
+                                  f"does not check the sign")
+        back = self.read(civ_tag + MARKET_THIS + MARKET_OWNER_BACKPTR, 4)
+        if not back or struct.unpack("<I", back)[0] != civ_tag + OWNER_PRIMARY_FROM_TAG:
+            raise RemoteCallError(
+                f"the market object at civ tag + {MARKET_THIS} does not point back "
+                f"at its Owner; calling it would fault on a null owner")
+        code = (push_imm(qty) +
+                push_imm(index) +
+                mov_ecx_imm(civ_tag + MARKET_THIS) +
+                mov_eax_imm(MARKET_BUY if buy else MARKET_SELL) +
+                CALL_EAX +
+                RET_4)
+        self.run_stub(code, f"market {'buy' if buy else 'sell'} {qty} of index {index}")
+
+    def scan_count(self, civ_tag, scan_type):
+        """Scans of this type the civ holds (read-only)."""
+        code = (push_imm(scan_type) +
+                mov_ecx_imm(civ_tag + OWNER_PRIMARY_FROM_TAG) +
+                mov_eax_imm(SCAN_COUNT) +
+                CALL_EAX +
+                RET_4)
+        return self.run_stub(code, f"scans of type {scan_type} held")
+
+    def use_scans(self, civ_tag, scan_type, target_allocs):
+        """Use held scans of one type on these targets; the reports made.
+
+        Runs the engine's own UseScans, which checks the inventory and the
+        target class itself. Returns the new report pointers, which Owner:320
+        owns. The UI's wrapper also posts news and recomputes vision; neither
+        is needed for the report.
+        """
+        n = len(target_allocs)
+        if not n:
+            return []
+        # [0, 0x18) out, built by the engine; [0x20, 0x38) targets;
+        # [0x40] targets' proxy; [0x48 ..) the element array.
+        block = self.alloc(0x48 + 4 * n)
+        out, targets, proxy, arr = block, block + 0x20, block + 0x40, block + 0x48
+        vec = bytearray(SCAN_VEC_SIZE)
+        struct.pack_into("<I", vec, 0, proxy)
+        struct.pack_into("<III", vec, 0xC, arr, arr + 4 * n, arr + 4 * n)
+        self.write(targets, bytes(vec))
+        self.write(proxy, struct.pack("<I", targets))
+        self.write(arr, struct.pack(f"<{n}I", *target_allocs))
+        code = (push_imm(scan_type) +
+                push_imm(civ_tag + OWNER_PRIMARY_FROM_TAG) +
+                push_imm(targets) +
+                push_imm(out) +
+                mov_eax_imm(USE_SCANS) +
+                CALL_EAX +
+                ADD_ESP_16 +
+                RET_4)
+        self.run_stub(code, f"use {n} scan(s) of type {scan_type}")
+        raw = self.read(out, SCAN_VEC_SIZE)
+        out_proxy = struct.unpack_from("<I", raw, 0)[0]
+        first, last = struct.unpack_from("<II", raw, 0xC)
+        made = []
+        if first and last > first:
+            made = list(struct.unpack(f"<{(last - first) // 4}I",
+                                      self.read(first, last - first)))
+        # The engine allocated out's buffer and proxy; the reports stay.
+        for p in (first, out_proxy):
+            if p:
+                self.run_stub(push_imm(p) + mov_eax_imm(OPERATOR_DELETE) +
+                              CALL_EAX + ADD_ESP_4 + RET_4, "free a UseScans buffer")
+        self.free(block)
+        return made
+
     def design_min_crew(self, design_tag):
         """ShipDesign:76: the minimum crew a design needs to function."""
         def call():
@@ -459,6 +713,20 @@ class Remote:
         # Per pass only; callers that change military call invalidate_draft_cost().
         return self._cached(self._pass_cache, ("draft_cost", civ_tag, count),
                             call)
+
+    def trait(self, civ_tag, trait_id):
+        """GetTrait (read-only): the engine's own value for a civ trait.
+
+        Shares GetDraftCost's `this`. Used to check research.trait, which
+        computes the same thing from memory without a remote thread.
+        """
+        code = (push_imm(trait_id) +
+                mov_ecx_imm(civ_tag + DRAFT_COST_THIS) +
+                mov_eax_imm(GET_TRAIT) +
+                CALL_EAX +
+                RET_4)
+        got = self.run_stub(code, f"trait {trait_id} on 0x{civ_tag:08X}")
+        return None if got is None else struct.unpack("<i", struct.pack("<I", got))[0]
 
     def invalidate_draft_cost(self, civ_tag=None):
         """Forget cached draft prices after the military count changes."""

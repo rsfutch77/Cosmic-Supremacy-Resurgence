@@ -74,12 +74,15 @@ class Bridge:
     def ready(self):
         self._view._page_ready.set()
 
-    def play(self, mode_id):
+    def play(self, mode_id, fresh=False):
         def act(app):
             mode = next((m for m in app.modes if m.get("id") == mode_id), None)
             if mode is not None:
-                app.on_play(mode)
+                app.on_play(mode, fresh=fresh)
         self._post(act)
+
+    def new_game(self, mode_id):
+        self.play(mode_id, fresh=True)
 
     def page(self, name):
         if name == "galaxies":
@@ -89,6 +92,9 @@ class Bridge:
 
     def change_name(self):
         self._post(lambda app: app.on_change_name())
+
+    def account(self):
+        self._post(lambda app: app.on_account())
 
     def sort(self, key):
         self._post(lambda app: app.sort_by(key))
@@ -121,6 +127,16 @@ class Bridge:
 
     def close(self):
         self._post(lambda app: app.on_close())
+
+
+class _Either:
+    """Set when either of two Events is, for `_pump(until=...)`."""
+
+    def __init__(self, a, b):
+        self.a, self.b = a, b
+
+    def is_set(self) -> bool:
+        return self.a.is_set() or self.b.is_set()
 
 
 class WebView:
@@ -277,13 +293,23 @@ class WebView:
         self.app = app
         self._set(
             product=app.cfg["product"],
-            modes=[{"id": m.get("id"), "title": m["title"], "blurb": m["blurb"],
-                    "ready": L.is_playable(m)} for m in app.modes],
+            modes=self._modes(app),
             columns=[{"key": c.key, "heading": c.heading}
                      for c in L.GALAXY_COLUMNS],
             controls=[{"key": k, "label": label} for k, label in L.CONTROLS],
             page="home")
         self.show_sort(app.sort_key, app.sort_desc)
+
+    def _modes(self, app) -> list:
+        return [{"id": m.get("id"), "title": m["title"], "blurb": m["blurb"],
+                 "ready": L.is_playable(m),
+                 "continues": bool(m.get("continues")),
+                 "done": L.mode_done(m, getattr(app, "data_dir", None))}
+                for m in app.modes]
+
+    def show_modes(self, app) -> None:
+        """Redraw the mode rows, for a change such as a finished Tutorial."""
+        self._set(modes=self._modes(app))
 
     def after(self, ms: int, fn) -> None:
         heapq.heappush(self._timers,
@@ -302,6 +328,9 @@ class WebView:
 
     def show_identity(self, player) -> None:
         self._set(name=player or "")
+
+    def show_account(self, email) -> None:
+        self._set(account=email or "")
 
     def show_build(self, text: str) -> None:
         if self._changed("build", text):
@@ -436,13 +465,14 @@ class WebView:
             webview.OPEN_DIALOG, directory=initialdir, file_types=types)
         return picked[0] if picked else ""
 
-    def ask_name(self, text: str, current: str, rules: str, validate):
+    def ask_name(self, text: str, current: str, rules: str, validate,
+                 title: str = "Your name"):
         """Ask until `validate` takes a name or the player cancels. A refusal
         comes back in the same dialog, above the rules."""
         problem = ""
         while True:
             value, raw = self._prompt({
-                "title": "Your name", "text": text, "note": rules,
+                "title": title, "text": text, "note": rules,
                 "error": problem,
                 "input": {"label": "Name", "value": current,
                           "maxlength": L.NAME_LIMIT},
@@ -454,6 +484,59 @@ class WebView:
             if name:
                 return name
             current = raw or ""
+
+    def ask_fields(self, title: str, text: str, fields, buttons,
+                   error: str = "", note: str = "", default=None):
+        """A dialog of several inputs. `fields` holds (name, label, kind,
+        value), kind being "text", "email" or "password"; `buttons` holds
+        (label, value). Returns (pressed value, {name: text}), with None for
+        the value when cancelled."""
+        value, got = self._prompt({
+            "title": title, "text": text, "note": note, "error": error,
+            "inputs": [{"name": name, "label": label, "type": kind,
+                        "value": value or ""}
+                       for name, label, kind, value in fields],
+            "buttons": self._buttons(*buttons), "wide": len(buttons) > 4,
+            "cancel": None, "default": default})
+        return value, (got if isinstance(got, dict) else {})
+
+    def wait_for(self, text: str, work, cancel=None):
+        """Run `work()` off the controller thread with `text` on screen, keep
+        the window answering meanwhile, and return or raise what it did.
+
+        With `cancel`, an Event, the dialog has a Cancel button that sets it,
+        and `work` is waited for until it gives up.
+        """
+        pid = next(self._prompt_ids)
+        finished, pressed = threading.Event(), threading.Event()
+        box = {}
+
+        def runner():
+            try:
+                box["result"] = work()
+            except Exception as exc:
+                box["error"] = exc
+            finished.set()
+            self.post(lambda: None)
+
+        spec = {"id": pid, "kind": "busy", "title": self.cfg["product"],
+                "text": text, "buttons": []}
+        if cancel is not None:
+            self._answers[pid] = [pressed, (None, None)]
+            spec["buttons"] = self._buttons(("Cancel", "cancel"))
+        self._js("prompt", spec)
+        threading.Thread(target=runner, daemon=True, name="wait_for").start()
+        self._pump(until=_Either(finished, pressed))
+        if not finished.is_set() and cancel is not None:
+            cancel.set()
+            self._pump(until=finished)
+        self._answers.pop(pid, None)
+        self._js("dismiss", pid)
+        if not finished.is_set():
+            raise RuntimeError("the window closed before " + text)
+        if "error" in box:
+            raise box["error"]
+        return box.get("result")
 
     def choose(self, title: str, body: str, choices):
         value, _ = self._prompt({

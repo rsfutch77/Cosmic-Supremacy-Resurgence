@@ -207,17 +207,35 @@ check("and says so", app.said, lambda lines: any("sending" in l for l in lines))
 check("it does not touch the client itself",
       any("saving" in l for l in app.said), False)
 
-app = bare(mp_thread=None)
+app = bare(mp_thread=None, view=FakeView(name="Before war"),
+           _save_name="singleplayer")
 called = []
 app._in_background = lambda label, work, done=None: called.append(label)
 app.on_save()
 check("outside multiplayer it still writes a .dat", called, ["saving"])
 check("and asks no turn loop for anything", app.mp_send_now.is_set(), False)
+check("it asks for a name, offering the last one",
+      app.view.prompts[0][1][1], "singleplayer")
+check("and offers the new name next time", app._save_name, "Before war")
+
+app = bare(mp_thread=None, view=FakeView(name=None),
+           _save_name="singleplayer")
+called = []
+app._in_background = lambda label, work, done=None: called.append(label)
+app.on_save()
+check("cancelling the name saves nothing", called, [])
+
+check("a save name refuses what the server would drop",
+      L.validate_save_name("war#1")[0], None)
+check("and what Windows refuses in a file name",
+      L.validate_save_name("a/b")[0], None)
+check("and takes an ordinary name, trimmed",
+      L.validate_save_name("  Before war ")[0], "Before war")
 
 import inspect                                                  # noqa: E402
 src = inspect.getsource(L.Launcher.on_save)
 check("the single-player half is unreachable while a loop is running",
-      src.index("playing_now()") < src.index("save_game"), True)
+      src.index("playing_now()") < src.index("_save_to_dat"), True)
 
 print("\n5. the button names what it will do")
 app = bare(mp_store=Store(), mp_thread=Thread(alive=True))

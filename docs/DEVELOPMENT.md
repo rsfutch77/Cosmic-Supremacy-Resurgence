@@ -101,14 +101,15 @@ the release's `data\` when the launcher sets it:
 | What | Where |
 |------|-------|
 | Save blobs | `saves\`, a `.b64` and a `.json` sidecar per save, listed in `saves\index.json` |
-| Governor blobs | `save_gov_<id>.dat` |
+| Governor library | `governors\`, a `<id>.b64` per saved governor, listed in `governors\index.json` |
 | Request log | `cs_server.log` |
+| Civ names | `civs.json`, per userid |
+| Tutorial completed | `tutorial.json`, written on `passedtutorial`; the launcher marks the Tutorial row |
+| Coats of arms | `coa\<id>.png`, ids in each civ's `coas` in `civs.json` |
 
 Both blob kinds are stored and returned verbatim, the server never parses one.
-Civ names live in memory for the life of the process, and coat-of-arms uploads
-are accepted and discarded, `getcoa` answers with a 1x1 placeholder PNG. Neither
-survives a restart, which is enough for local play and is a gap for a hosted
-galaxy.
+A coat of arms is an image dragged into the civ name dialog; the server keeps
+the PNG the client uploads and serves it back as base64.
 
 Multiplayer state is separate. `server/turn_store.py` holds a galaxy's turn blobs
 and player submissions behind one interface with three implementations, a
@@ -132,21 +133,22 @@ A fourth exists but is not tracked: **`CosmicSupremacy_Player.exe`**, built by
 `CosmicSupremacy_TestBed.exe` plus one byte that stops the coat-of-arms prompt
 opening, and it is what a served multiplayer turn runs on. It is gitignored
 because a patched client in the working tree is one `git commit -a` away from
-entering the history.
+entering the history. `build.ps1` makes its own from TestBed into
+`release/build/` on every build and does not read the one in `client/`.
 
-**Resurgence is TestBed plus exactly 22 bytes at six sites** and nothing else,
-measured by whole-file comparison. Those six are the T1-T5 turn-pipeline
-bypasses, enumerated in the reconstruction report, and they are what let a client
-advance a turn with no server. Two of them also sit on the guards for the
-homeworld setup prompt, which is why that prompt appears on every session in the
-Resurgence build and is correctly gated everywhere else. So the choice of build
-is really the choice of whether a client may compute a turn:
+**Resurgence is TestBed plus exactly 14 bytes at four sites** and nothing else,
+measured by whole-file comparison. Those four are the turn-pipeline bypasses,
+enumerated in the reconstruction report, and they are what let a client advance a
+turn with no server. Two more used to NOP the guards on the homeworld setup
+prompt, which made it come back every session however often it was confirmed;
+they were restored in October 2026. So the choice of build is really the choice
+of whether a client may compute a turn:
 
 | build | ticks without a server | setup prompts | role |
 |-------|------------------------|---------------|------|
-| Resurgence | yes | always offered | the referee, the AI harness |
+| Resurgence | yes | gated as shipped | Single Player, the referee, the AI harness |
 | TestBed | no | gated as shipped | - |
-| Player | no | none | a player's served turn |
+| Player | no | homeworld and traits until confirmed; never the name | a player's served turn |
 
 `client/dev_tools/game_cycle.py` takes the build as a parameter
 (`resolve_exe("player")`), and `server/player_turn.py` defaults players to the
@@ -160,32 +162,6 @@ differ from each other on the local server, measured rather than assumed:
 |------|----------------------------|
 | Tutorial | Yes, `testconnection` at startup, one of the checks this EXE was modified to take |
 | Demo | No, zero requests and zero connection attempts across a 45-second run with both loopback listeners up |
-
-## Backlog
-
-Single-player work. Multiplayer is tracked separately.
-
-### [ ] Let the player name a save
-
-Save writes `data\games\savegame_turn<N>.dat` and the name the engine records is
-always `singleplayer`. A player with several games in flight has only the turn
-number to tell them apart. Wants a name prompt, passed through to
-`gamectl.Client.save_game` (which already takes one) and used for the filename.
-
-### [ ] Per-session galaxy generation, for replayability
-
-Single Player ships one pre-seeded `.dat`, so **every new game is the same
-galaxy**. That is a regression against the pass-file path, which generates a
-fresh galaxy on every launch, measured, two launches gave 170 vs 159 planets
-with different sun layouts and different homeworld positions.
-
-The fix reuses pieces that all already work: launch on the pass file to generate
-a fresh galaxy, trigger `SaveGame`, inject the AI's designs into the blob
-(`make_single_player_galaxy.py` does exactly this), then relaunch on the result.
-Roughly a minute of "preparing your galaxy" at the start of a new game.
-
-Deferred deliberately, the fixed galaxy is playable, and the buttons and the
-seeding were worth proving first.
 
 ## Building a release
 
@@ -217,6 +193,10 @@ the first thing anyone double-clicks.
 The build refuses to start while a launcher is running, since a live one holds
 its own exe and `data\` open and the staging wipe would fail on a file lock.
 
+Google login needs `release\google_client.json`, the Desktop OAuth client's
+JSON from the Google Cloud console, which is gitignored. An unsigned build
+without it warns and offers no Google login; a signed build refuses to run.
+
 Test the result from the staged folder rather than the repo, that is the only
 layout a player will ever have.
 
@@ -226,13 +206,15 @@ layout a player will ever have.
 powershell -ExecutionPolicy Bypass -File .\release\tests\run_all.ps1
 ```
 
-Five runs, a few minutes. Close the launcher first, one already holding port
+A few minutes. Close the launcher first, one already holding port
 8888 makes the tests silently reuse it instead of exercising their own server.
 The last four start and kill the real game, so leave the machine alone.
 
 | Test | Covers |
 |------|--------|
 | `test_save_protocol.py` | The wire protocol against cs_server directly, no game: slot allocation from the `gameid=-1` sentinel, `savegamelist` format, blob round-trip, saving over a slot, delimiter injection in a save name |
+| `test_log_send.py` | Sending the launcher's log against a local stand-in relay: when it is offered, what is sent, nothing without Send; the held-seat box during a turn |
+| `test_port_and_support.py` | What holds port 8888, from command lines and then read only from whatever really holds it here (skipped when nothing does); the player code and the relay's seat refusals |
 | `test_status_cycle.py <mode>` | Drives the real launcher and client: click, report running, kill, recover |
 | `test_external_status.py` | The same for a client started outside the launcher, where there is no child handle |
 

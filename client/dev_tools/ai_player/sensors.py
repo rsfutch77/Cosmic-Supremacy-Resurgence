@@ -20,6 +20,16 @@ STATE_DIR = (os.environ.get("CS_AI_STATE_DIR")
              or os.path.join(os.path.dirname(os.path.abspath(__file__)), "state"))
 
 
+def _seg_dist(a, b, p):
+    """Distance from point p to the segment a-b."""
+    ab = [y - x for x, y in zip(a, b)]
+    n = sum(c * c for c in ab)
+    if n == 0:
+        return _dist(a, p)
+    t = max(0.0, min(1.0, sum((q - x) * c for x, q, c in zip(a, p, ab)) / n))
+    return _dist([x + t * c for x, c in zip(a, ab)], p)
+
+
 def _fingerprint(snap):
     """A stable id for this galaxy: a hash of sorted (sun id, rounded position)."""
     key = tuple(sorted((s.id,
@@ -29,10 +39,12 @@ def _fingerprint(snap):
 
 
 class History:
-    """Turn-over-turn observation, plus the persistent fog-of-war map.
+    """Turn-over-turn observation, plus the persistent fog-of-war map and intel.
 
     Discovery is permanent, as in the game: the set is saved to
-    `state/discovered_<galaxy>_<civ>.json` and reloaded on construction.
+    `state/discovered_<galaxy>_<civ>.json` and reloaded on construction, with
+    the intel this civ has gathered. The game empties a battle report's text
+    a few turns after the battle, so intel is kept here once read.
     """
 
     def __init__(self, snap=None, civ_name=None, persist=True):
@@ -40,8 +52,20 @@ class History:
         self._acted = set()       # planet ids touched since the last observation
         self._stale = set()       # planet ids whose next delta is untrustworthy
         self.discovered = set()   # sun ids whose planets we are allowed to see
+        # Planet id -> the newest battle report read there:
+        # {"turn", "planet_name", "sides": {name: {...}}}.
+        self.intel = {}
+        # Enemy planet id -> turn one of our ships sat there at war unfired on.
+        self.quiet = {}
+        # The raid in progress, {"target", "arrive" turn, "members" ship ids}, or None.
+        self.raid = None
+        # Ship id -> (turn, position) at the last pass, for the swept segment.
+        self._ship_seen = {}
+        # R-XPL-01's scientist share under the wastage ceiling; None until
+        # the rule first runs.
+        self.scientist_share = None
         self._path = None
-        self._persisted = set()   # what is already on disk, to avoid rewriting
+        self._persisted = None    # what is already on disk, to avoid rewriting
         self._want_persist = persist
         if persist and snap is not None:
             self._bind(snap, civ_name)
@@ -59,24 +83,34 @@ class History:
     def _load(self):
         try:
             with open(self._path) as f:
-                ids = json.load(f).get("discovered", [])
-            self.discovered |= {int(i) for i in ids}
-            self._persisted = set(self.discovered)
+                data = json.load(f)
+            self.discovered |= {int(i) for i in data.get("discovered", [])}
+            for k, v in data.get("intel", {}).items():
+                self.intel.setdefault(int(k), v)
+            for k, v in data.get("quiet", {}).items():
+                self.quiet.setdefault(int(k), v)
+            self._persisted = self._state()
         except (OSError, ValueError, TypeError):
             # A missing or corrupt file means nothing explored yet.
             pass
 
-    def _save(self):
-        """Write the map, only when it grew."""
-        if self._path is None or self.discovered == self._persisted:
+    def _state(self):
+        return {"discovered": sorted(self.discovered),
+                "intel": {str(k): v for k, v in sorted(self.intel.items())},
+                "quiet": {str(k): v for k, v in sorted(self.quiet.items())}}
+
+    def save(self):
+        """Write the map and intel, only when they changed."""
+        state = self._state()
+        if self._path is None or state == self._persisted:
             return
         try:
             os.makedirs(STATE_DIR, exist_ok=True)
             tmp = self._path + ".tmp"
             with open(tmp, "w") as f:
-                json.dump({"discovered": sorted(self.discovered)}, f)
+                json.dump(state, f)
             os.replace(tmp, self._path)   # atomic; a killed loop cannot truncate it
-            self._persisted = set(self.discovered)
+            self._persisted = state
         except OSError:
             pass                          # never take the loop down over the map
 
@@ -95,7 +129,12 @@ class History:
                                "military": p.military or 0,
                                "milcost": p.u32(128) or 0}
                         for p in snap.owned_planets(civ)},
-            "civ": {"cash": civ.cash or 0, "research": civ.research or 0},
+            # A completion subtracts the topic's cost from Owner:12 and
+            # records that cost in Owner:108, so adding the costs back gives
+            # every point the civ has ever banked, unbroken by completions.
+            "civ": {"cash": civ.cash or 0, "research": civ.research or 0,
+                    "science": (civ.research or 0)
+                               + sum(cost for _tid, cost in civ.completed)},
         }
         self._stale, self._acted = self._acted, set()
         self._cur, self._prev_for_pass = cur, self.prev
@@ -103,7 +142,7 @@ class History:
         if self._path is None and self._want_persist:
             self._bind(snap, civ.civ_name)
         self._discover(snap, civ)
-        self._save()
+        self.save()
         return self
 
     def _discover(self, snap, civ):
@@ -117,11 +156,23 @@ class History:
             s, _r = snap.nearest_sun(p)
             if s is not None:
                 self.discovered.add(s.id)
+        seen, self._ship_seen = self._ship_seen, {}
+        suns = [x for x in snap.suns if None not in x.pos]
         for sh in snap.owned_ships(civ):
-            s, r = snap.nearest_sun(sh)
+            pos = sh.pos
+            if None in pos:
+                continue
+            self._ship_seen[sh.id] = (snap.turn, pos)
             # Inside the system: widest orbit 39.6, tightest star gap 111.7.
-            if s is not None and r <= 55.0:
-                self.discovered.add(s.id)
+            # A ship sampled once a turn can fly through a system between two
+            # samples, so the line it swept since the last turn counts. Only
+            # one turn's travel: over several, the route may have turned.
+            turn, start = seen.get(sh.id, (None, pos))
+            if turn is None or snap.turn - turn != 1:
+                start = pos
+            for x in suns:
+                if _seg_dist(start, pos, x.pos) <= 55.0:
+                    self.discovered.add(x.id)
         for rep in civ.vec(320, 4):
             import struct as _s
             ptr = _s.unpack("<I", rep)[0]
@@ -246,13 +297,16 @@ class History:
         ours = getattr(self, "_our_cash_effect", 0) or 0
         n = self.turns or 1
         return d - ours / n
-    def research_rate(self): return self._civ_delta("research")
+    def science_rate(self):
+        """Research banked per turn, net of science wastage. Unlike the raw
+        Owner:12 delta it does not dip by a topic's cost when one completes."""
+        return self._civ_delta("science")
 
     def summary(self):
         n = self.turns
         if not n:
             return "no previous observation yet; deltas available next turn"
-        inc, res = self.income_rate(), self.research_rate()
+        inc, res = self.income_rate(), self.science_rate()
         bits = [f"over {n} turn(s): income {inc:+.0f}/turn, "
                 f"research {res:+.0f}/turn"]
         for pid in sorted(self._cur["planets"]):

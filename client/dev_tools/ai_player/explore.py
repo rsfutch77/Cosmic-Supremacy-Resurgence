@@ -25,19 +25,23 @@ ENOUGH_KNOWN_TARGETS = 3
 # Dedicated scouts to keep in the field. Cheap hulls, so several is normal.
 SCOUT_TARGET = 3
 
+# A scout slower than this fraction of the fastest scout design we can build
+# no longer counts toward SCOUT_TARGET, so a faster engine gets built and flown.
+SCOUT_OBSOLETE = 0.5
+
 
 def scoutable(snap, civ, hist, act):
     """Ships we may send scouting.
 
     A ship busy with a purposeful order is left alone. A COLONIZE order whose
-    target we cannot legitimately see is not purposeful.
+    target we cannot legitimately see is not purposeful. Troop and armed hulls
+    never scout: R-XTM-08 keeps warships at the staging planet.
     """
     out = []
     for s in snap.owned_ships(civ):
         if not act.is_crewed(s):
             continue
-        # A troop hull never scouts.
-        if s.role == "TROOP":
+        if s.role in ("TROOP", "WARSHIP"):
             continue
         ot = s.order_type or 0
         if ot in (0, 1):
@@ -88,8 +92,7 @@ def run_exp02(snap, civ, act, hist, log=print):
     if not ships:
         return 0
 
-    # With enough known targets only colony ships are held back; warships keep
-    # looking for the enemy.
+    # With enough known targets colony ships are held back.
     if len(known_free) >= ENOUGH_KNOWN_TARGETS:
         ships = [s for s in ships if s.role != "COLONY"]
         if not ships:
@@ -135,6 +138,24 @@ def run_exp02(snap, civ, act, hist, log=print):
     return acted
 
 
+def design_speed(design):
+    """Speed from the stat block, else total thrust over total hull units.
+
+    The block is a lazy cache that reads None until something warms it. The
+    engine's speed is exactly thrust over units: probe1's 15.43, the Colony
+    Ship's 13.5, f1's 6.43, b1's 3.38 and the engines-only shuttles all match.
+    """
+    if design.speed and design.speed > 0:
+        return design.speed
+    import exterminate
+    tables = exterminate.part_tables(design.snap)
+    thrust = sum(tables["engines"].get(i, {}).get("thrust", 0)
+                 for i in design.engines or [])
+    units = sum(tables[attr].get(i, {}).get("units", 0)
+                for attr in tables for i in getattr(design, attr) or [])
+    return thrust / units if thrust and units else None
+
+
 def scout_designs(snap, civ):
     """Our own purpose-built scouts: chassis, engines and scanners, nothing else.
 
@@ -159,7 +180,10 @@ def scout_designs(snap, civ):
 
 def run_exp01(snap, civ, act, hist, log=print):
     """R-EXP-01: keep dedicated scouts in the field."""
-    have = [s for s in snap.owned_ships(civ) if s.role == "SCOUT"]
+    designs = scout_designs(snap, civ)
+    fastest = max((design_speed(d) or 0 for d in designs), default=0)
+    have = [s for s in snap.owned_ships(civ) if s.role == "SCOUT"
+            and not _obsolete(s, fastest)]
     if len(have) >= SCOUT_TARGET:
         return 0
     stranded = exploit.awaiting_crew(snap, civ, act, role="SCOUT")
@@ -167,30 +191,32 @@ def run_exp01(snap, civ, act, hist, log=print):
         log(f"R-EXP-01: {len(stranded)} scout(s) already built and waiting "
             f"for crew; not queueing another until they can fly")
         return 0
-    designs = scout_designs(snap, civ)
     if not designs:
         log(f"R-EXP-01: {len(have)}/{SCOUT_TARGET} scout(s) and no "
             f"engines-only design exists. Synthesise one: game_cycle.py "
             f"--design 'scout:chassis=0,engine=<fastest unlocked>'")
         return 0
+    import exterminate
+    reserved = exterminate.war_yard(snap, civ, hist, act)
     yards = [p for p in snap.owned_planets(civ)
              if exploit.SHIPYARD in p.facilities and not p.building_now
-             and not act.production_claimed(p)]
+             and not act.production_claimed(p) and p is not reserved]
     if not yards:
         return 0
-    # Fastest design. speed is a lazy stat and reads None until warmed, so
-    # engine count breaks ties on a cold cache.
-    best = max(designs, key=lambda d: (d.speed or 0, len(d.engines)))
+    best = max(designs, key=lambda d: (design_speed(d) or 0, len(d.engines)))
     planet = max(yards, key=lambda p: len(p.population))
-    log(f"R-EXP-01: {len(have)}/{SCOUT_TARGET} scout(s); queueing "
-        f"{best.design_name!r} (speed {best.speed}, {len(best.engines)} engine(s)) "
-        f"at {planet}")
-    try:
-        act.queue_ship(planet, best)
-        return 1
-    except (ValueError, RuntimeError) as e:
-        log(f"  could not queue: {e}")
-        return 0
+    speed = design_speed(best)
+    log(f"R-EXP-01: {len(have)}/{SCOUT_TARGET} current scout(s); queueing "
+        f"{best.design_name!r} (speed {speed and round(speed, 1)}, "
+        f"{len(best.engines)} engine(s)) at {planet}")
+    return exploit.queue_ship(snap, civ, act, planet, best, log)
+
+
+def _obsolete(ship, fastest):
+    """A scout too slow to be worth counting, now that a faster one can be built."""
+    d = ship.design
+    speed = design_speed(d) if d is not None else None
+    return bool(speed and fastest and speed < SCOUT_OBSOLETE * fastest)
 
 
 RULES = [("R-EXP-01", run_exp01), ("R-EXP-02", run_exp02)]

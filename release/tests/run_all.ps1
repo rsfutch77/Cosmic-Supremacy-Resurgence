@@ -8,6 +8,8 @@
 
       test_identity        The player's name: validation, storage, migration
                            of an older multiplayer.json. No game, no window.
+      test_account         Creating an account, logging in and out, and
+                           what a guest's galaxies do. No game, no network.
       test_packaging       The multiplayer path survives freezing. No game,
                            no window.
       test_signing         The signing step in build.ps1. Signs a copy of a
@@ -22,7 +24,20 @@
                            primitive and is off by default. No game.
       test_minimised_poll  The Galaxies page skips its timed listing while
                            minimised. No game, no network.
-      test_status_cycle    Drives the real launcher and client for each
+      test_tutorial_patch  The Tutorial and main-window-size patches the
+                           build applies to the clients. No game.
+      test_continue        Single Player Play continues the newest save,
+                           New Game starts over, and a finished Tutorial is
+                           marked. No game.
+      test_turn_clock_hold Single Player turns happen only on Next Turn:
+                           the engine's own clock is held and re-held
+                           after each boundary. No game.
+      test_log_send        Sending the launcher's log and the held-seat box,
+                           against a local stand-in relay. No game.
+      test_port_and_support
+                           What holds port 8888, read only, and the player
+                           code and seat refusals. No game.
+      test_status_cycle   Drives the real launcher and client for each
                            playable mode: launch, kill, status recovers.
       test_external_status Same, for a client started outside the launcher.
 
@@ -65,6 +80,7 @@ function Invoke-Test {
 }
 
 Invoke-Test 'test_identity.py'
+Invoke-Test 'test_account.py'
 Invoke-Test 'test_packaging.py'
 Invoke-Test 'test_signing.py'
 Invoke-Test 'test_build_and_log.py'
@@ -72,6 +88,11 @@ Invoke-Test 'test_ai_state_reset.py'
 Invoke-Test 'test_save_protocol.py'
 Invoke-Test 'test_save_message_path.py'
 Invoke-Test 'test_minimised_poll.py'
+Invoke-Test 'test_tutorial_patch.py'
+Invoke-Test 'test_continue.py'
+Invoke-Test 'test_turn_clock_hold.py'
+Invoke-Test 'test_log_send.py'
+Invoke-Test 'test_port_and_support.py'
 foreach ($mode in @('tutorial', 'demo', 'testbed')) {
     Invoke-Test 'test_status_cycle.py' @($mode)
 }

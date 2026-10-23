@@ -19,12 +19,20 @@ ship's `DYNO`: the `SHCO` order-type byte (1 move, 3 colonise), the has-orders
 byte, and an appended `ROUT` plus `u32`. Taking the order is copying the
 `DYNO`.
 
-**Research topic**, `OWNR > DATA > OWPR` at `+32` and `+40`, the technology id
-written to both. Copied field by field: the rest of `OWPR` is the civ's
+**Research topic**, `OWNR > DATA > OWPR`, the technology id written twice, 8
+bytes apart, after the completed technologies (`research_offsets`): at `+32`
+and `+40` only while a civ has its two starting technologies. Copied field by field: the rest of `OWPR` is the civ's
 property block (coat-of-arms count, flags).
 
-**Production queue**, `PLNT > PLPR > PROD`: the queue's own fields and a nested
-section naming what is queued (`FCLT` for a facility). Copied whole.
+**Current production**, `PLNT > PLPR > PROD`: what the planet is building, its
+own fields and a nested section naming it (`WLTH` for nothing, `FCLT` with the
+facility type at `+13`, `SCAN`, or `SHIP` with a design id). Copied whole,
+unless the served item was hurried, which the UI does not let be swapped, it
+names any other kind, or it starts a facility the client would not allow
+(`facility_rules.can_build`: researched, fits the free space, the hyperspace
+pair, the per-planet limit), judged on the served planet and research. The
+production queues proper are
+`OWNR > SPQS > SPRQ > PRQU` and have never been seen in a capture.
 
 **Ship designs**, `OWNR > DATA > DSGN`. A new design arrives as a second
 `DSGN`/`SDPR` pair, the civ's design count raised by one and `SAVE+0` raised to
@@ -33,7 +41,9 @@ count, so two players designing on the same turn claim the same id; whoever is
 merged second is renumbered, along with the id in the `DSGN` payload and in
 any production queue that names it. A queue naming a design the galaxy does
 not hold makes the engine refuse the whole galaxy, so such a queue is refused.
-Editing or deleting a design is refused and named.
+Deactivating or reactivating one of the civ's own designs is carried: the
+design's last byte (`ShipDesign+0x114`), 1 inactive. Any other edit, and
+deleting a design, are refused and named.
 
 `OWPR` `+49`, `+77`, `+78`, `+100` and `+110` also move in a design submission
 and are not carried: they move without a design too and differ between
@@ -64,6 +74,16 @@ the checks compare per-owner job multisets.
 
 **Military recruitment rate**, `PLPR+27`, a percentage in one byte.
 
+**The setup prompts' confirms**, once each. The civ-trait prompt writes the
+ten trait values in `OWNR > CVTR` and sets a flag in `OWPR`; the homeworld
+prompt adds to the homeworld's three rate bytes (`PLPR+4..+6`) and its space
+(`PLPR+11`) and sets another. A confirm is carried only when its flag was
+clear as served and is set in the submission, and only as the dialog could
+have made it: trait values the dialog gives and rates within 25..80, spending
+`GSET.civilization_changes` or `GSET.homeworld_changes` exactly, on the planet
+the client takes for the homeworld (the one founded earliest). Without the
+confirm the prompt would come back on every served turn.
+
 **System renaming**, the `SUN ` section's name at `+24` in its payload. Allowed
 for a civ owning more than half of the system's settled planets in the served
 state; unowned planets do not count.
@@ -75,8 +95,10 @@ excluded.
 
 What is refused
 ---------------
-Everything not listed above (facility selection outside the queue, governors,
-admirals, diplomacy) is not accepted. Every refusal is logged and recorded
+Everything not listed above (governors, admirals, diplomacy) is not accepted.
+A fleet (`GLXY > FLET`) is turned back into its member ships before the
+submission is judged, so its other orders still count; a planet joining or
+leaving a production queue keeps what it was building. Every refusal is logged and recorded
 against the civ in the optional `notes` argument to `merge`; `referee.py`
 writes it beside the turn and `player_turn.follow` prints it. A submission
 that cannot be read is dropped whole and named, with anything already taken
@@ -91,9 +113,58 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import save_parser as sp
 import inject_civ as icv
 import inject_design as idg
+import facility_rules
 
-# Fields inside a civ's OWPR that carry the research topic, as (offset, length).
-RESEARCH_FIELDS = ((32, 4), (40, 4))
+# The research topic is written twice in a civ's OWPR, 8 bytes apart, after a
+# map (u32 count at +8, 8-byte pairs) and the completed technologies (u32 count,
+# [id, cost] records). They sit at +32 only while the civ has its two starting
+# technologies and an empty map.
+OWPR_MAP_COUNT_OFF = 8
+OWPR_RECORD = 8
+RESEARCH_FIELD_COUNT = 2
+RESEARCH_FIELD_LEN = 4
+
+# The setup prompts' flags, one byte each in OWPR, this far past the start of
+# the second research field: Owner:359 (homeworld prompt, dialog 210) and
+# Owner:360 (civ-trait prompt, dialog 218). Each prompt's OK sets its own.
+HOMEWORLD_FLAG_OFF = OWPR_RECORD + 29
+CIV_FLAG_OFF = OWPR_RECORD + 30
+
+# The civ traits in CVTR: a u32 count at +16, then (index, value) pairs of
+# u32s, one per trait the dialog shows. A confirm overwrites each value with
+# what the clicks spent on it give.
+CVTR_COUNT_OFF = 16
+CVTR_PAIRS_OFF = 20
+CVTR_PAIR = 8
+
+# The civ-trait dialog's rules, from its table at 0x7FCD88 and value function
+# 0x515910: per trait in index order, its name, the fewest clicks allowed, the
+# value each click count gives from there, and what one click costs in
+# changes. A negative cost is a trait that pays changes for being raised.
+_OUTPUT = (-16, -8, 0, 8, 15, 21, 25, 28)
+_STRIKE = (-20, -10, 0, 10, 19, 26, 31, 34)
+TRAIT_RULES = (
+    ('food consumption per citizen', -2, (-4, -2, 0, 2, 4), -1),
+    ('income per citizen', -2, (-4, -2, 0, 2, 4), 1),
+    ('food output', -2, _OUTPUT, 1),
+    ('production output', -2, _OUTPUT, 1),
+    ('science output', -2, _OUTPUT, 1),
+    ('mining output', -2, (-24, -12, 0, 12, 23, 33, 41, 48), 1),
+    ('ship speed', -2, (-10, -5, 0, 5, 9, 13, 16, 19), 1),
+    ('ship firepower', -2, _STRIKE, 1),
+    ('planetary defense', -2, _STRIKE, 1),
+    ('troops', -2, _STRIKE, 1),
+)
+
+# The homeworld dialog's fields in PLPR: three signed rate bytes (food,
+# production, science) and the planet space, a u16. A confirm adds the clicks
+# to each rate, and raises space to a floor before adding five per click.
+HOMEWORLD_RATE_OFFS = (4, 5, 6)
+HOMEWORLD_SPACE_OFF = 11
+HOMEWORLD_RATES = (25, 80)          # a rate the dialog leaves, inclusive
+HOMEWORLD_SPACE_FLOOR = 350
+HOMEWORLD_SPACE_STEP = 5
+HOMEWORLD_SPACE_CLICKS = 20
 
 # A planet's name, in PLNT's own payload: a u32 length then the characters.
 PLANET_NAME_OFF = 24
@@ -204,6 +275,73 @@ def ship_index(blob):
         if dyno is not None:
             out[oid] = (owner, bytes(blob[dyno.start:dyno.end]))
     return out
+
+
+# A fleet, GLXY > FLET: the SpaceObject header (object id, x, z, y, owner), a
+# DYNO with the fleet's orders, then FLDT: a u32-length name, a u32 member count
+# and one SHPR per member. Member ships leave GLXY as SHIPs while in a fleet. A
+# ship's SHPR keeps the id of the last fleet it was in at +30.
+SHPR_FLEET_OFF = 30
+SHPR_SHIP_OFF = 34
+
+
+def _section_bytes(tag, version, payload):
+    return tag + struct.pack('<I', (version << sp.VERSION_SHIFT) | len(payload)) + payload
+
+
+def without_fleets(sub, served):
+    """(submission, [refusals]) with each fleet the served state does not hold
+    turned back into its member ships.
+
+    Fleets are not carried. Each member is rebuilt from its served SHIP with
+    the SHPR the fleet carried, so crew moved inside the fleet is still judged,
+    and the served fleet field. A member the served state does not hold as a
+    ship is left out.
+    """
+    tree = sp.parse_blob(sub)
+    glxy = next(tree[0].find('GLXY'))
+    fleets = [c for c in glxy.children if c.tag == b'FLET']
+    if not fleets:
+        return sub, []
+    served_tree = sp.parse_blob(served)
+    served_glxy = next(served_tree[0].find('GLXY'))
+    served_fleets = {struct.unpack_from('<I', served, f.payload)[0]
+                     for f in served_glxy.children if f.tag == b'FLET'}
+    ships = {}
+    for sec in served_glxy.find('SHIP'):
+        ships[struct.unpack_from('<I', served, sec.payload)[0]] = sec
+
+    refusals = []
+    body = bytearray(sub[glxy.payload:glxy.end])
+    for fleet in reversed(fleets):
+        fid = struct.unpack_from('<I', sub, fleet.payload)[0]
+        if fid in served_fleets:
+            continue
+        fldt = next(fleet.find('FLDT'), None)
+        n = struct.unpack_from('<I', sub, fldt.payload)[0] if fldt else 0
+        name = bytes(sub[fldt.payload + 4:fldt.payload + 4 + n]) if fldt else b''
+        rebuilt = b''
+        for member in (fleet.find('SHPR') if fldt else ()):
+            shpr = bytearray(sub[member.payload:member.end])
+            oid = struct.unpack_from('<I', shpr, SHPR_SHIP_OFF)[0]
+            ship = ships.get(oid)
+            if ship is None:
+                refusals.append(f'fleet {fid}: member ship {oid} DROPPED, not '
+                                f'a ship in the state served')
+                continue
+            old = next(ship.find('SHPR'))
+            shpr[SHPR_FLEET_OFF:SHPR_FLEET_OFF + 4] = \
+                served[old.payload + SHPR_FLEET_OFF:old.payload + SHPR_FLEET_OFF + 4]
+            payload = (served[ship.payload:old.start]
+                       + _section_bytes(b'SHPR', member.version, bytes(shpr))
+                       + served[old.end:ship.end])
+            rebuilt += _section_bytes(b'SHIP', ship.version, payload)
+        refusals.append(f"fleet {fid} ({name.decode('latin1')!r}) DROPPED, "
+                        f"fleets and their orders are not carried yet; its "
+                        f"ships stay single ships")
+        at, end = fleet.start - glxy.payload, fleet.end - glxy.payload
+        body[at:end] = rebuilt
+    return sp.replace_payload(sub, tree, glxy, bytes(body)), refusals
 
 
 def planet_index(blob):
@@ -437,13 +575,44 @@ def set_planet_name(blob, planet_oid, name: bytes):
     raise SystemExit(f'planet {planet_oid} not found')
 
 
+def research_offsets(blob, owpr):
+    """Offsets within OWPR's payload of the research fields, or None when
+    the lists before them do not fit the section."""
+    p, size = owpr.payload, owpr.size
+    if size < OWPR_MAP_COUNT_OFF + 4:
+        return None
+    m = struct.unpack_from('<I', blob, p + OWPR_MAP_COUNT_OFF)[0]
+    n_at = OWPR_MAP_COUNT_OFF + 4 + m * OWPR_RECORD
+    if n_at + 4 > size:
+        return None
+    n = struct.unpack_from('<I', blob, p + n_at)[0]
+    first = n_at + 4 + n * OWPR_RECORD
+    offs = tuple(first + i * OWPR_RECORD for i in range(RESEARCH_FIELD_COUNT))
+    if offs[-1] + RESEARCH_FIELD_LEN > size:
+        return None
+    return offs
+
+
+def completed_research(blob, civ_oid):
+    """The technology ids a civ has completed, in order, or None."""
+    owpr = _owpr(blob, civ_oid)
+    if owpr is None:
+        return None
+    p = owpr.payload
+    m = struct.unpack_from('<I', blob, p + OWPR_MAP_COUNT_OFF)[0]
+    n_at = p + OWPR_MAP_COUNT_OFF + 4 + m * OWPR_RECORD
+    n = struct.unpack_from('<I', blob, n_at)[0]
+    return [struct.unpack_from('<I', blob, n_at + 4 + i * OWPR_RECORD)[0]
+            for i in range(n)]
+
+
 def research_of(blob, civ_oid):
     """The bytes of a civ's research fields, or None when OWPR is unreadable."""
     owpr = _owpr(blob, civ_oid)
     if owpr is None:
         return None
-    return tuple(bytes(blob[owpr.payload + off:owpr.payload + off + n])
-                 for off, n in RESEARCH_FIELDS)
+    return tuple(bytes(blob[owpr.payload + off:owpr.payload + off + RESEARCH_FIELD_LEN])
+                 for off in research_offsets(blob, owpr))
 
 
 def _owpr(blob, civ_oid):
@@ -456,7 +625,7 @@ def _owpr(blob, civ_oid):
         if struct.unpack_from('<I', blob, o.payload + 4 + n)[0] != civ_oid:
             continue
         owpr = next(o.find('OWPR'), None)
-        if owpr is None or owpr.size < max(off + n2 for off, n2 in RESEARCH_FIELDS):
+        if owpr is None or research_offsets(blob, owpr) is None:
             return None
         return owpr
     return None
@@ -642,13 +811,15 @@ def add_design(blob, civ_oid, record):
 
 
 def design_orders(served, submitted, civ_oid):
-    """([(objectId, design)], [refusals]) for one civ's ship designs.
+    """([(objectId, design)], [(objectId, inactive)], [refusals]) for one civ's
+    ship designs.
 
     `served` and `submitted` are `design_index` results. A design is new when
-    the submission holds one the served state does not. Editing, deleting and
-    touching another civ's design are refused and named.
+    the submission holds one the served state does not. A design whose record
+    differs only in its last byte was deactivated or reactivated. Other edits,
+    deleting, and touching another civ's design are refused and named.
     """
-    new, refused = [], []
+    new, toggled, refused = [], [], []
 
     for oid in sorted(set(served) - set(submitted)):
         whose = 'its own' if served[oid]['civ'] == civ_oid else "another civ's"
@@ -657,7 +828,16 @@ def design_orders(served, submitted, civ_oid):
                        f'a design is not carried yet')
 
     for oid in sorted(set(served) & set(submitted)):
-        if submitted[oid]['record'] == served[oid]['record']:
+        was, now = served[oid]['record'], submitted[oid]['record']
+        if now == was:
+            continue
+        if (len(now) == len(was) and now[:-1] == was[:-1]
+                and now[-1] in (0, 1)):
+            if served[oid]['civ'] != civ_oid:
+                refused.append(f'design {oid} ({served[oid]["name"]!r}) '
+                               f"(de)activation DROPPED, it is another civ's")
+            else:
+                toggled.append((oid, bool(now[-1])))
             continue
         refused.append(f'design {oid} ({served[oid]["name"]!r}) DROPPED, it '
                        f'came back changed; editing a design is not carried '
@@ -686,7 +866,69 @@ def design_orders(served, submitted, civ_oid):
                            f'name to be unique within a civ')
             continue
         new.append((oid, d))
-    return new, refused
+    return new, toggled, refused
+
+
+def set_design_inactive(blob, design_oid, inactive):
+    """`blob` with a design's last byte, `ShipDesign+0x114`, set: 1 inactive,
+    0 active. The design's own section ends with it."""
+    for _civ, _data, designs in design_sections(blob)[0]:
+        for d in designs:
+            if struct.unpack_from('<I', blob, d.payload)[0] == design_oid:
+                out = bytearray(blob)
+                out[d.end - 1] = 1 if inactive else 0
+                return bytes(out)
+    raise KeyError(design_oid)
+
+
+# What a PROD can name in its nested section: nothing (piling up wealth), a
+# facility, a scan, or a ship by design id.
+PROD_KINDS = (b'WLTH', b'FCLT', b'SCAN', b'SHIP')
+PROD_QUEUE_OFF = 2          # queue flag, queue object id, u16
+PROD_LIST_OFF = 9           # u32 count of four-byte pairs
+PROD_FACILITY_OFF = 13      # u32 facility type, after an empty list
+PROD_KIND_OFF = 21          # the nested section, after an empty list
+
+
+def _prod_list_len(prod):
+    """Bytes taken by PROD's list at +9: a u32 count of four-byte pairs. It
+    has been empty in every capture, but what follows it moves with it."""
+    return 4 * struct.unpack_from('<I', prod, 8 + PROD_LIST_OFF)[0]
+
+
+def prod_kind(prod):
+    """The four-byte tag of what a PROD builds, or None."""
+    if prod is None or len(prod) < 8 + PROD_LIST_OFF + 4:
+        return None
+    at = 8 + PROD_KIND_OFF + _prod_list_len(prod)
+    if len(prod) < at + 4:
+        return None
+    return bytes(prod[at:at + 4])
+
+
+def prod_queue(prod):
+    """The production-queue link in a PROD: the flag at +2, the queue's object
+    id at +3 and the u16 at +7. All zero on a planet in no queue."""
+    if prod is None or len(prod) < 8 + PROD_LIST_OFF:
+        return None
+    return bytes(prod[8 + PROD_QUEUE_OFF:8 + PROD_LIST_OFF])
+
+
+def prod_facility(prod):
+    """The facility type a PROD builds, or None when it builds no facility."""
+    if prod_kind(prod) != b'FCLT':
+        return None
+    return struct.unpack_from('<I', prod, 8 + PROD_FACILITY_OFF
+                              + _prod_list_len(prod))[0]
+
+
+def facility_refusal(blob, completed, plpr, facility_type):
+    """Why a facility may not be started on a planet, or '' when it may."""
+    if plpr is None:
+        return 'the planet has no PLPR'
+    ok, why = facility_rules.can_build(blob, completed, plpr,
+                                       facilities_of(plpr) or [], facility_type)
+    return '' if ok else why
 
 
 def prod_builds(prod):
@@ -1085,9 +1327,233 @@ def set_research(blob, civ_oid, values):
     if owpr is None:
         raise SystemExit(f'civ {civ_oid} has no readable OWPR')
     out = bytearray(blob)
-    for (off, n), value in zip(RESEARCH_FIELDS, values):
-        out[owpr.payload + off:owpr.payload + off + n] = value
+    for off, value in zip(research_offsets(blob, owpr), values):
+        out[owpr.payload + off:owpr.payload + off + RESEARCH_FIELD_LEN] = value
     return bytes(out)
+
+
+def _setup_flag_offsets(blob, owpr):
+    """Absolute offsets of the (homeworld, civ) setup flags in this OWPR."""
+    second = owpr.payload + research_offsets(blob, owpr)[-1]
+    return second + HOMEWORLD_FLAG_OFF, second + CIV_FLAG_OFF
+
+
+def setup_flags(blob, civ_oid):
+    """(homeworld, civ) setup-prompt flags of a civ, or None when unreadable."""
+    owpr = _owpr(blob, civ_oid)
+    if owpr is None:
+        return None
+    hw, cv = _setup_flag_offsets(blob, owpr)
+    if cv >= owpr.end:
+        return None
+    return blob[hw], blob[cv]
+
+
+def set_setup_flag(blob, civ_oid, which, value=1):
+    """Write one setup flag, 'homeworld' or 'civ'. Sizes do not change."""
+    owpr = _owpr(blob, civ_oid)
+    if owpr is None:
+        raise SystemExit(f'civ {civ_oid} has no readable OWPR')
+    hw, cv = _setup_flag_offsets(blob, owpr)
+    out = bytearray(blob)
+    out[hw if which == 'homeworld' else cv] = value
+    return bytes(out)
+
+
+def _cvtr(blob, civ_oid):
+    tree = sp.parse_blob(blob)
+    glxy = next(tree[0].find('GLXY'))
+    for o in glxy.children:
+        if o.tag != b'OWNR':
+            continue
+        n = struct.unpack_from('<I', blob, o.payload)[0]
+        if struct.unpack_from('<I', blob, o.payload + 4 + n)[0] == civ_oid:
+            return next(o.find('CVTR'), None)
+    return None
+
+
+def traits_of(blob, civ_oid):
+    """A civ's trait values in index order, or None unless CVTR holds exactly
+    the dialog's traits, each once and in order."""
+    cvtr = _cvtr(blob, civ_oid)
+    if cvtr is None or cvtr.size < CVTR_PAIRS_OFF:
+        return None
+    count = struct.unpack_from('<I', blob, cvtr.payload + CVTR_COUNT_OFF)[0]
+    if (count != len(TRAIT_RULES)
+            or cvtr.size != CVTR_PAIRS_OFF + count * CVTR_PAIR):
+        return None
+    pairs = [struct.unpack_from('<Ii', blob, cvtr.payload + CVTR_PAIRS_OFF
+                                + i * CVTR_PAIR) for i in range(count)]
+    if [index for index, _v in pairs] != list(range(count)):
+        return None
+    return tuple(v for _i, v in pairs)
+
+
+def set_traits(blob, civ_oid, values):
+    """Write a civ's trait values in place. Sizes do not change."""
+    cvtr = _cvtr(blob, civ_oid)
+    if cvtr is None:
+        raise SystemExit(f'civ {civ_oid} has no CVTR')
+    out = bytearray(blob)
+    for i, v in enumerate(values):
+        struct.pack_into('<i', out, cvtr.payload + CVTR_PAIRS_OFF
+                         + i * CVTR_PAIR + 4, v)
+    return bytes(out)
+
+
+def traits_acceptable(values, budget):
+    """(ok, why) for trait values a civ-trait confirm submitted.
+
+    Each value must be one the dialog gives, and the clicks behind them must
+    spend the galaxy's allowance exactly, since OK refuses while any is left.
+    Values overwrite rather than add, so the served values do not matter.
+    """
+    spent = 0
+    for (name, fewest, table, cost), v in zip(TRAIT_RULES, values):
+        if v not in table:
+            return False, f'{name} {v:+d} is not a value the dialog gives'
+        spent += (fewest + table.index(v)) * cost
+    if spent != budget:
+        return False, (f'the traits spend {spent} change(s), and the galaxy '
+                       f'allows exactly {budget}')
+    return True, ''
+
+
+def gset_value(blob, name):
+    """A galaxy setting's value, or None."""
+    gset = next((s for s in sp.flatten(sp.parse_blob(blob))
+                 if s.tag == b'GSET'), None)
+    if gset is None:
+        return None
+    return sp.parse_gset(blob, gset).get(name, {}).get('value')
+
+
+def homeworld_fields(plpr):
+    """(rates, space) of a PLPR payload: the fields the homeworld dialog edits."""
+    rates = tuple(struct.unpack_from('<b', plpr, off)[0]
+                  for off in HOMEWORLD_RATE_OFFS)
+    return rates, struct.unpack_from('<H', plpr, HOMEWORLD_SPACE_OFF)[0]
+
+
+def homeworlds(planets, civ_oid):
+    """The planets the client could take for a civ's homeworld.
+
+    0x00508C60 takes the civ's planet founded earliest, from PLPR+0. A tie is
+    broken by an order the blob does not show, so every planet tied for the
+    earliest is a candidate.
+    """
+    founded = {oid: struct.unpack_from('<I', plpr, FOUNDED_OFF)[0]
+               for oid, (owner, _p, plpr, _n) in planets.items()
+               if owner == civ_oid and plpr is not None}
+    if not founded:
+        return set()
+    first = min(founded.values())
+    return {oid for oid, turn in founded.items() if turn == first}
+
+
+def homeworld_acceptable(served_plpr, submitted_plpr, budget):
+    """(ok, why) for a homeworld confirm, from the planet as served."""
+    (rates_s, space_s) = homeworld_fields(served_plpr)
+    (rates_t, space_t) = homeworld_fields(submitted_plpr)
+    lo, hi = HOMEWORLD_RATES
+    clicks = 0
+    for kind, before, after in zip(('food', 'production', 'science'),
+                                   rates_s, rates_t):
+        if after != before and not lo <= after <= hi:
+            return False, f'{kind} rate {after} is outside {lo}..{hi}'
+        clicks += after - before
+    added = space_t - max(space_s, HOMEWORLD_SPACE_FLOOR)
+    if (added % HOMEWORLD_SPACE_STEP
+            or not 0 <= added // HOMEWORLD_SPACE_STEP <= HOMEWORLD_SPACE_CLICKS):
+        return False, f'space {space_s} -> {space_t} is not a click count'
+    clicks += added // HOMEWORLD_SPACE_STEP
+    if clicks != budget:
+        return False, (f'the homeworld spends {clicks} change(s), and the '
+                       f'galaxy allows exactly {budget}')
+    return True, ''
+
+
+def set_homeworld(blob, planet_oid, submitted_plpr):
+    """Copy the homeworld dialog's fields from a submitted PLPR. In place."""
+    tree = sp.parse_blob(blob)
+    glxy = next(tree[0].find('GLXY'))
+    for sola in (c for c in glxy.children if c.tag == b'SOLA'):
+        for sec in sola.find('PLNT'):
+            if struct.unpack_from('<I', blob, sec.payload)[0] != planet_oid:
+                continue
+            plpr = next(sec.find('PLPR'), None)
+            if plpr is None:
+                raise SystemExit(f'planet {planet_oid} has no PLPR')
+            out = bytearray(blob)
+            for off in HOMEWORLD_RATE_OFFS + (HOMEWORLD_SPACE_OFF,
+                                              HOMEWORLD_SPACE_OFF + 1):
+                out[plpr.payload + off] = submitted_plpr[off]
+            return bytes(out)
+    raise SystemExit(f'planet {planet_oid} not found')
+
+
+def setup_orders(served, sub, civ_oid, served_planets, sub_planets):
+    """([(kind, detail)], [refusal]) for the setup prompts' confirms.
+
+    Each prompt is one-time: its confirm is carried when the flag was clear as
+    served and is set in the submission, and only as the dialog could have
+    made it. kind is 'civ' with the trait values, or 'homeworld' with
+    (planet, submitted PLPR). Anything else that moves those fields is refused.
+    """
+    taken, refusals = [], []
+    flags_s, flags_t = setup_flags(served, civ_oid), setup_flags(sub, civ_oid)
+    if flags_s is None or flags_t is None:
+        return taken, refusals
+
+    traits_s, traits_t = traits_of(served, civ_oid), traits_of(sub, civ_oid)
+    confirmed = not flags_s[1] and flags_t[1]
+    if traits_t is None and confirmed:
+        refusals.append('civilization traits DROPPED, CVTR is not the '
+                        "dialog's ten traits")
+    elif traits_t is not None and (confirmed or traits_t != traits_s):
+        if flags_s[1]:
+            refusals.append('civilization traits DROPPED, they were already '
+                            'customised')
+        elif not confirmed:
+            refusals.append('civilization traits DROPPED, changed without the '
+                            "prompt's confirm")
+        else:
+            ok, why = traits_acceptable(traits_t, gset_value(
+                served, 'civilization_changes'))
+            if ok:
+                taken.append(('civ', traits_t))
+            else:
+                refusals.append(f'civilization traits DROPPED, {why}')
+
+    moved = {oid for oid, (owner, _p, plpr, _n) in served_planets.items()
+             if owner == civ_oid and plpr is not None
+             and oid in sub_planets and sub_planets[oid][2] is not None
+             and homeworld_fields(plpr) != homeworld_fields(sub_planets[oid][2])}
+    confirmed = not flags_s[0] and flags_t[0]
+    if moved or confirmed:
+        if flags_s[0]:
+            refusals.append('homeworld customisation DROPPED, it was already '
+                            'customised')
+        elif not confirmed:
+            refusals.append('homeworld customisation DROPPED, changed without '
+                            "the prompt's confirm")
+        elif len(moved) != 1:
+            refusals.append(f'homeworld customisation DROPPED, it changes '
+                            f'{len(moved)} planets, not one')
+        else:
+            (oid,) = moved
+            if oid not in homeworlds(served_planets, civ_oid):
+                refusals.append(f'homeworld customisation DROPPED, planet '
+                                f'{oid} is not the homeworld')
+            else:
+                ok, why = homeworld_acceptable(
+                    served_planets[oid][2], sub_planets[oid][2],
+                    gset_value(served, 'homeworld_changes'))
+                if ok:
+                    taken.append(('homeworld', (oid, sub_planets[oid][2])))
+                else:
+                    refusals.append(f'homeworld customisation DROPPED, {why}')
+    return taken, refusals
 
 
 def _tally(jobs):
@@ -1124,7 +1590,10 @@ def merge(blob, submissions, log=print, notes=None):
     # submission is compared against the state served, not the merged blob.
     served_research = {o['oid']: research_of(blob, o['oid'])
                        for o in icv.owner_records(blob)}
+    served_completed = {o['oid']: completed_research(blob, o['oid']) or []
+                        for o in icv.owner_records(blob)}
     names = {o['oid']: o['name'] for o in icv.owner_records(blob)}
+    served = blob
     accepted = dropped = 0
 
     for civ_name, sub in submissions:
@@ -1145,15 +1614,23 @@ def merge(blob, submissions, log=print, notes=None):
         try:
             civ = civ_by_name(blob, civ_name)
             mine = civ['oid']
+            sub, refusals = without_fleets(sub, served)
+            for why in refusals:
+                drop(why)
             log(f"{civ_name} (object {mine}):")
 
             # Ship designs, before the production queues that may name them.
             # Judged against `served_designs`, the state as it was served.
             remap = {}
-            new_designs, refusals = design_orders(served_designs,
-                                                  design_index(sub), mine)
+            new_designs, toggled, refusals = design_orders(
+                served_designs, design_index(sub), mine)
             for why in refusals:
                 drop(why)
+            for oid, inactive in toggled:
+                blob = set_design_inactive(blob, oid, inactive)
+                log(f"    design {oid}: "
+                    f"{'deactivated' if inactive else 'reactivated'}")
+                accepted += 1
             for was, d in new_designs:
                 oid = was
                 if oid in design_index(blob):
@@ -1229,6 +1706,31 @@ def merge(blob, submissions, log=print, notes=None):
                     elif prod is None or prod_served is None:
                         drop(f"planet {planet_oid}: production DROPPED, no "
                              f"PROD section on one side")
+                    elif is_hurried(prod_served):
+                        # Paid off and finishing at the tick; the UI does not
+                        # let it be swapped.
+                        drop(f"planet {planet_oid}: production DROPPED, the "
+                             f"item being built was hurried and cannot be "
+                             f"changed")
+                    elif prod_kind(prod) not in PROD_KINDS:
+                        drop(f"planet {planet_oid}: production DROPPED, it "
+                             f"builds {prod_kind(prod)!r}, which is not a "
+                             f"facility, a ship, a scan or wealth")
+                    elif prod_queue(prod) != prod_queue(prod_served):
+                        # The queue is an object under the civ's SPQS, which
+                        # is not carried; a planet naming one the merged galaxy
+                        # lacks would point at nothing.
+                        drop(f"planet {planet_oid}: production DROPPED, it "
+                             f"joins or leaves a production queue, and queues "
+                             f"are not carried yet")
+                    elif (prod_facility(prod) is not None
+                          and prod_facility(prod) != prod_facility(prod_served)
+                          and (why := facility_refusal(
+                              blob, served_completed.get(mine, []),
+                              plpr_served, prod_facility(prod)))):
+                        drop(f"planet {planet_oid}: production DROPPED, "
+                             f"facility {prod_facility(prod)} cannot be built: "
+                             f"{why}")
                     elif (prod_builds(prod) is not None
                           and prod_builds(prod) not in mine_designs):
                         # A queue naming a design the galaxy does not hold makes
@@ -1258,7 +1760,7 @@ def merge(blob, submissions, log=print, notes=None):
                             accepted += 1
                     else:
                         blob = replace_prod(blob, planet_oid, prod)
-                        log(f"    planet {planet_oid}: production queue taken")
+                        log(f"    planet {planet_oid}: production taken")
                         accepted += 1
 
                 if plpr is None or plpr_served is None:
@@ -1325,9 +1827,10 @@ def merge(blob, submissions, log=print, notes=None):
                     continue
                 if name == name_served:
                     continue
-                if name_served[0] == 0 and name[1] == DEFAULT_SUN_NAME:
-                    # Not a rename: a running client writes `Unnamed` into
-                    # every SUN the blob left empty. Skipped without a note.
+                if name[1] == DEFAULT_SUN_NAME:
+                    # Never a rename: a running client writes `Unnamed` into
+                    # every SUN the blob left empty, and the default must not
+                    # erase a name a player set. Skipped without a note.
                     continue
                 # The majority is of the settled planets only, as the client
                 # allows: the only settled planet in a system may name it.
@@ -1350,11 +1853,30 @@ def merge(blob, submissions, log=print, notes=None):
 
             # research topic
             theirs = research_of(sub, mine)
-            served = served_research.get(mine)
-            if theirs is not None and served is not None and theirs != served:
+            topic_served = served_research.get(mine)
+            if (theirs is not None and topic_served is not None
+                    and theirs != topic_served):
                 blob = set_research(blob, mine, theirs)
                 topic = struct.unpack_from('<I', theirs[0], 0)[0]
                 log(f"    research: topic taken (id {topic})")
+                accepted += 1
+
+            # The one-time setup prompts' confirms, against the state served.
+            taken, refusals = setup_orders(served, sub, mine, served_planets,
+                                           planet_index(sub))
+            for why in refusals:
+                drop(why)
+            for kind, detail in taken:
+                if kind == 'civ':
+                    blob = set_traits(blob, mine, detail)
+                    log(f"    civilization traits taken: {list(detail)}")
+                else:
+                    oid, plpr = detail
+                    blob = set_homeworld(blob, oid, plpr)
+                    rates, space = homeworld_fields(plpr)
+                    log(f"    homeworld {oid} customised: rates {rates}, "
+                        f"space {space}")
+                blob = set_setup_flag(blob, mine, kind)
                 accepted += 1
 
             # Research belonging to anyone else, against the state as served.

@@ -13,6 +13,7 @@ are a rename and more are additions; no civ is ever removed.
 What it does:
 
     rename the existing civs            one per player, in order
+    give every civ a non-zero Owner:4   generation gives the human seat 0
     rename their homeworlds             "<player>'s HQ", the engine's own idiom
     add civs for any players beyond two `inject_civ`, each with a homeworld
                                         and this galaxy's own starting fleet
@@ -24,7 +25,12 @@ What it does:
 It expects a freshly generated galaxy. Run on a game in progress it would
 strip the ship orders everyone had already given.
 
-`Owner:4` is left alone; `inject_civ` gives added civs `max + 1`.
+`Owner:4`, the last u32 of an `OWNR` payload, has to be non-zero: a civ holding
+0 is never empire-ticked, so its research, `Owner:24` and score never move
+while its cash does. Generation gives the human seat 0 and the rival 21, so the
+seat-one civ would play the whole galaxy without research. A zero takes the
+lowest unused id from 20 up, as `make_single_player_galaxy.fix_player_civ_id`
+does, before any civ is added; `inject_civ` gives added civs `max + 1`.
 """
 import argparse
 import os
@@ -46,6 +52,9 @@ NAME_LIMIT = 15          # the engine's name buffer
 # between a generated galaxy's two homeworlds. PLPR+4 is Planet:96, the
 # per-unit output rates.
 RATE_OFFSETS = (4, 11)
+
+# The lowest Owner:4 a zero is replaced with; generated civs read 20, 21, ...
+FIRST_OWNER_ID = 20
 
 
 def rename_civ(blob: bytes, old: str, new: str, log=print) -> bytes:
@@ -91,6 +100,31 @@ def homeworld(blob: bytes, civ_name: str):
         plpr = idx[oid][2]
         return len(mo.citizens_of(plpr) or []) if plpr else 0
     return max(mine, key=pop)
+
+
+def owner_ids(blob):
+    """{civ name: Owner:4}, the u32 ending each OWNR payload."""
+    return {o['name']: struct.unpack_from('<I', blob, o['end'] - 4)[0]
+            for o in icv.owner_records(blob)}
+
+
+def fix_owner_ids(blob: bytes, log=print) -> bytes:
+    """Give every civ holding Owner:4 = 0 the lowest unused id from 20 up.
+
+    Four bytes in place per civ; no section length changes.
+    """
+    ids = owner_ids(blob)
+    taken = {v for v in ids.values() if v}
+    out = bytearray(blob)
+    for o in icv.owner_records(blob):
+        if ids[o['name']]:
+            continue
+        uid = next(i for i in range(FIRST_OWNER_ID, 1 << 16) if i not in taken)
+        taken.add(uid)
+        struct.pack_into('<I', out, o['end'] - 4, uid)
+        log(f"  {o['name']}: Owner:4 0 -> {uid}, or its research and score "
+            f"would never tick")
+    return bytes(out)
 
 
 def rename_homeworld(blob: bytes, civ_name: str, log=print) -> bytes:
@@ -286,6 +320,10 @@ def build(blob: bytes, players, log=print) -> bytes:
             if o['name'].startswith('__tmp'):
                 blob = rename_civ(blob, o['name'], want, log=log)
                 break
+
+    # Before any civ is added, so `add_civ`'s `max + 1` stays clear of the
+    # ids handed out here.
+    blob = fix_owner_ids(blob, log=log)
 
     # Added civs get this galaxy's own starting fleet size.
     want_ships = _starting_ships(blob, log=log)

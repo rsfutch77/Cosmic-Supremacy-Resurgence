@@ -330,11 +330,17 @@ So the score list holds one row per distinct `Owner:4`, and the collision, not t
 
 #### Open items
 
-[ ] **The score list is built at a turn boundary, not at load, so a civ with a correct `Owner:4` is still missing for the whole of a galaxy's first turn.** Confirmed on the B galaxy: parked at turn 185 straight off the `.dat`, the score list showed two rows; after one boundary it showed three, with no other change. This is the residual limitation of the fix and it is **not addressed**, it bites every freshly injected galaxy until its first tick, and a galaxy parked at 3600s turns stays wrong for an hour. Two ways round it, neither implemented: tick one boundary before showing the list (`fast_turns.py <secs>` collapses the current turn, one write starts the clock), or render the standing somewhere else entirely, since the numbers are readable per civ off `Owner:28` without the client's table. Worth revisiting properly: find what the boundary path does to the table that the load path does not, which is also the question of whether anything *else* the UI shows is only refreshed at a boundary.
+**The score list is saved in `GLOB` and only a turn boundary rebuilds it.** The GLOB v17 payload is `u32 turn, i32, u8, u32 rowCount`, then one row per `Owner:4`: `u32 Owner:4, u32 nameLen, name, u32 Owner:28, f32 Owner:32, u8 flag` (writers `0x52BFD0`/`0x52BE30`, reader `0x52DA20`). Load (`0x56D700`) reads the rows back as saved; the rebuild `0x52DFE0`, called from the tick at `0x56D240`, runs `Owner::ComputeScore`, which also adds to `Owner:24` and `Owner:32`, so it cannot simply be called at load. **`inject_civ.add_civ` now writes the newcomer's row**, carrying the donor's tail as the clone's `OWNR` does, and leaves a list with no rows (turn 0) for the first boundary; `server/tests/test_score_row.py` covers it.
+
+[ ] **Confirm the injected score row live.** Load a turn-9 or later galaxy with a civ injected by the new `add_civ`: the Overview list shows every civ before any boundary, and still does after one, with the newcomer's score recomputed. Then a turn-0 injection: the list is empty for everyone until the first boundary.
+
+[ ] **The score list also feeds battle scoring.** `0x4430F0` reads it for the score ratio and skips a civ with no row, so a missing row changed battle scoring too, not only the display. Check whether any other caller reads the map at `0x857940`.
+
+[ ] **A clone inherits its donor's display name and score.** The `OWPR` display-name override (`civ+0x1A0`) and `Owner:28`/`Owner:32` are copied, so from the first boundary an injected clone of a renamed donor shows under the donor's display name, and a joiner starts with the donor's score. Same kind of inheritance as `EXSY` below.
 
 [ ] **`EXSY` is cloned, not reset, and that is a cheat rather than a cosmetic defect.** An injected civ inherits the donor's explored-systems map, so cloning a developed donor tells the newcomer where the home planets are. Two things keep it from mattering yet and neither is a fix: the AI player does not read `EXSY` (it keeps its own discovery set, persisted per civ name), and cloning from a turn-1 capture inherits an empty map, so only the developed-donor fixture leaks. The fix needs the record layout, which is not decoded, the leading `u32` reads 63 on a civ that had explored 105 systems, so it is not a plain count and the obvious guess is already falsified. **That `EXSY` is the explored-systems map is itself inferred** from the tag and from its size tracking exploration across two civs; confirm it while decoding it.
 
-[ ] **A joiner inherits the donor's civ traits, bonuses included.** Seen on screen 28 September 2026: a civ that joined at turn 11 carried the donor's food-output trait bonus. `add_civ` clones the donor's `OWNR` whole and the traits are inside it, so this is the same mechanism as `EXSY` and the food stores rather than a separate defect. Accepted for the beta, where everybody starts with the same extra anyway, and wrong afterwards: a new civ should get the homeworld button back and choose its own traits. That needs the trait block located **in the blob**, which is not the same thing as `Owner:744…940` from the memory report, those being offsets into the live object and not into the `OWNR` payload, whose whole length here is 715 bytes. `CVTR` is the obvious candidate section and was byte-identical across three civs in a turn-5 capture, which is consistent with nobody having chosen traits rather than with it being the wrong section.
+[ ] **A joiner inherits the donor's civ traits, bonuses included.** Seen on screen 28 September 2026: a civ that joined at turn 11 carried the donor's food-output trait bonus. `add_civ` clones the donor's `OWNR` whole and the traits are inside it, so this is the same mechanism as `EXSY` and the food stores rather than a separate defect. Accepted for the beta, where everybody starts with the same extra anyway, and wrong afterwards: a new civ should get the homeworld button back and choose its own traits. Everything the fix needs is now located: the trait values are `OWNR > CVTR`, (index, value) pairs after a 20-byte header (`merge_orders.TRAIT_RULES`), and the two prompts are offered while `Owner:359` (homeworld) and `Owner:360` (traits) are clear, both one-byte flags in `OWPR` (see "The three one-time setup prompts"). So `add_civ` should give the joiner the untouched trait values and clear both flags, and the referee then takes the joiner's confirm like anyone else's.
 
 [ ] **Does a joiner inherit the donor's corruption?** Unknown, and it matters more than it looks. A civ joining a galaxy whose seat one is failing late would take on that civ's corruption along with its warehouses, which could cripple a newcomer at the moment they arrive. Corruption has **resisted location in memory entirely** (see the memory report) and is plausibly derived at display time from population, buildings and military rather than stored, in which case copying the planet copies the corruption and there is no field to clear. `GSET.corruption_multiplier = 100` is a galaxy-level knob and the cheapest way to make it vary. Settle whether it is stored or derived first: the two answers need completely different fixes, and only one of them has a field to blank. Observed at −0.5% on a turn-11 joiner, which is unremarkable on its own and says nothing about a late-game donor.
 
@@ -800,12 +806,27 @@ order whitelist, so the server rejects the change and the exploit is structurall
 remains is a cosmetic desync between what the player sees and what the referee computes, until the
 next push overwrites it. Suppressing the popup is still worth doing, and it is no longer urgent.
 
-Still open: whether the **civ-trait** allowance re-grants the same way. The trait popup did not
-reappear on either of the last two pushes, so it has not been possible to test, and its commit path
-is unmeasured beyond the fact that it writes `Owner:756` and `Owner:360` on first use.
+*Since October 2026 the merge carries one confirm per civ*, so a player's homeworld and traits
+survive into the next turn, and the prompt stops coming back. `merge_orders.setup_orders` takes a
+confirm only when the served flag is clear and the submitted one set, and only as the dialog could
+have made it: the homeworld rates in 25..80, space as the floor of 350 plus whole five-point
+clicks, the trait values the dialog's table gives, each spending exactly `GSET.homeworld_changes`
+or `GSET.civilization_changes`. A second confirm, or a change with no confirm, is refused with a
+note, so the re-grant stays contained.
 
-[ ] stop the **"Customize Your Home World" popup reappearing after a loaded save**, the trigger
-behind the bug above. Observed on the first successful `.dat` load: the galaxy came back correctly,
+The **civ-trait** commit, read out of the client in October 2026, overwrites rather than adds:
+`0x00498EC0` writes each trait as its value for the clicks spent on it, so a second commit replaces
+the first instead of stacking. Its rules (the click range, value per click count and cost of each
+trait) are in `merge_orders.TRAIT_RULES`, and the trait values are saved in `OWNR > CVTR` as
+(index, value) pairs after a 20-byte header.
+
+[x] stop the **"Customize Your Home World" popup reappearing after a loaded save**, the trigger
+behind the bug above. Resolved October 2026: the gate is `Owner:359`, a flag the popup's own OK sets
+and `OWPR` carries, and the popup ignored it only because patches T2/T3 NOPped both of its guards in
+the Resurgence client. The guards are restored (see "Patches 12–17"), and the referee carries a
+confirm into the next turn. What follows is the investigation as it stood.
+
+Observed on the first successful `.dat` load: the galaxy came back correctly,
 workers, ships and settings all carried over, but the client re-offered homeworld and civ
 customisation a second time, which on its own would also let a player bank a fresh allowance on every
 pushed state.
@@ -863,7 +884,9 @@ premium 1   waronly 1     autoattack 1
 
 **`primetime` and `primetime_turnlength` are a scheduled fast window.** A galaxy could run at its normal slow rate most of the day and switch to a much shorter turn during peak hours, early evening, when most players are home and want to see things happen. `primetime` is the `(start, end)` pair and `primetime_turnlength` the rate inside it; all three read `-1` here, meaning unused. Not needed for single-player or AI work, recorded because a faithful server has to implement it and nothing else documents it.
 
-[ ] **Not yet mapped to behaviour:** `speed`, `density`, `rank`, `startticks`, `premium`, `score_breakeven`, `civilization_changes`, `hse_multiplier`, `colonymodule_multiplier`. `civilization_changes = 5` is a good guess at the civ-trait budget, matching the trait block at `Owner:744…940`, but that is inference.
+[ ] **Not yet mapped to behaviour:** `speed`, `density`, `rank`, `startticks`, `premium`, `score_breakeven`, `hse_multiplier`, `colonymodule_multiplier`.
+
+**`civilization_changes` is the civ-trait dialog's budget**, confirmed October 2026. Settings live in a vector in registration order, read by `get_setting(index)` at `0x004D4320`; `civilization_changes` is index 25. Its two readers are `0x00498F30`, which returns the budget less the clicks spent and feeds both the dialog's "You have N changes available" line and its OK handler, and `0x00537D00`, which marks a new civ's traits as already chosen (`Owner:360` = 1) when the value is negative. A turn-0 save with the value raised from 5 to 7 opened the dialog reading "You have 7 changes available".
 
 [ ] **`corruption_multiplier = 100` is the first handle on corruption we have.** Corruption has resisted location in memory entirely, see the memory report, and here is a galaxy-level knob for it. Changing it and watching what moves is a far cheaper search than diffing planets, and it is the same trick that finally located `Planet:368`: make the thing vary.
 
@@ -1083,52 +1106,54 @@ Seven conditional branches in the save/load validation path (near `0x00175xxx`) 
 | `0x00175cf1` | `74` (JZ) | `EB` (JMP) | Bypasses save-permissions check |
 | `0x00175d20` | `75` (JNZ) | `EB` (JMP) | Forces load-validation success path |
 
-### Patches 12–17, Turn pipeline bypasses (T1–T5, 22 bytes)
+### Patches 12–17, Turn pipeline bypasses (T1–T5, 14 bytes)
 
-Six patch sites bypass server sync checks in the turn pipeline so turns can fire without a real game server. These are applied only to the Resurgence EXE (not TestBed).
+Four patch sites bypass server sync checks in the turn pipeline so turns can fire without a real game server. These are applied only to the Resurgence EXE (not TestBed).
 
-**`CosmicSupremacy_Resurgence.exe` is `CosmicSupremacy_TestBed.exe` plus exactly these 22 bytes and nothing else**, measured by a whole-file comparison in September 2026. The two builds are otherwise identical, so the choice between them is exactly the choice of whether a client may compute a turn.
+**`CosmicSupremacy_Resurgence.exe` is `CosmicSupremacy_TestBed.exe` plus exactly these 14 bytes and nothing else**, measured by a whole-file comparison in October 2026. The two builds are otherwise identical, so the choice between them is exactly the choice of whether a client may compute a turn.
 
 | file | VA | TestBed | Resurgence | what it is |
 |---|---|---|---|---|
 | `0x16CFF0` | `0x0056DBF0` | `80 7C 24 04 00 75 0C` | `B0 01 C3 90 90 90 90` | a predicate rewritten to `mov al,1; ret`, so a sync check always passes |
-| `0x16D4EF` | `0x0056E0EF` | `0F 85 94 00 00 00` | `90` × 6 | `JNZ 0x56E189`, the first guard on the homeworld prompt |
-| `0x16D533` | `0x0056E133` | `74 54` | `90 90` | `JZ 0x56E189`, the second guard on the homeworld prompt |
 | `0x17701A` | `0x00577C1A` | `51 7C 85` | `A0 F1 86` | an operand repointed from `0x857C51` to `0x86F1A0` |
 | `0x17702A` | `0x00577C2A` | `74 58` | `90 90` | a galaxy-join branch removed |
 | `0x17902D` | `0x00579C2D` | `74 0E` | `90 90` | a load-path branch removed |
 
-**Two of the six land on the homeworld customisation prompt, not on the turn pipeline at all.** `0x0056E0D0` is the routine that decides whether to offer the prompt; with both of its guards NOPped it offers it unconditionally, on every session. That is the whole explanation for the prompt appearing on every pushed turn, and it was ours rather than the engine's.
+**T2 and T3 were removed in October 2026.** Until then the build also NOPped `0x16D4EF` (`0F 85 94 00 00 00`, `JNZ 0x56E189`) and `0x16D533` (`74 54`, `JZ 0x56E189`), the two guards of `0x0056E0D0`, the routine that decides whether to offer the homeworld prompt. They were never on the turn pipeline. With both NOPped the prompt ignored its own flag, so it came back at every launch and every hour of play however often it was confirmed, and each confirm added another full allowance (see the re-grant measurements in the memory report). The bytes are TestBed's again, a client with the turn advance still ticks, and a save whose civ has confirmed opens with no prompt.
 
 ### The three one-time setup prompts (September 2026)
 
 Each is a Win32 dialog resource, not an in-engine overlay, so the main window's title still reads `Galaxy Map` while one is up. `client/dev_tools/list_dialogs.py` enumerates them by walking the process's windows, since the title cannot be trusted.
 
-| id | title | decision routine | gate |
+| id | title | decision routine | offered while |
 |---|---|---|---|
-| 210 | Customize Your Home World | `0x0056E0D0` | `[session+0x19B]`, and `0x00508C60(session)` |
-| 218 | Customize Your Civilization | - | - |
-| 225 | Pick your Civilization Name and Coat of Arms | `0x0056E700` | the local civ's `Owner:384` must be non-zero |
+| 210 | Customize Your Home World | `0x0056E0D0` | `Owner:359` is 0 and `0x00508C60(session)` finds a homeworld |
+| 218 | Customize Your Civilization | `0x0056E190` | `Owner:360` is 0 |
+| 225 | Pick your Civilization Name and Coat of Arms | `0x0056E700` | `Owner:384`, the civ name's length, is 0 |
+
+All three are called in turn from the main loop at `0x00579C3D`, and each also waits while another of the three is open. Each keeps a real-time stopwatch (`0x86F2F0`, `0x86F308`, `0x86F320`; `0x005E3360` restarts one at an offset): a prompt is offered once 10 seconds have passed since the client started, and when it is shown its stopwatch is restarted 3600 seconds in the future, so a prompt whose gate stays open comes back on every launch and an hour after each showing.
 
 `0x0052A8D0`, the "session" those guards read, is **the local player's `Owner` object**: it loads `[0x00857904]`, dereferences it and returns the object address minus `0x2C`. Since the reference cell holds the object address minus 8, a guard reading `[session+0x1B4]` is reading `Owner:384`.
 
-**`Owner:384` is a count, not a flag.** A civ's `OWPR` section is exactly `138 + Owner:384` bytes long, measured at values 0, 1 and 7, so writing a value appends that many one-byte records. Their meaning is undecoded and the civilisation traits are the obvious candidate, `GSET.civilization_changes` being 5. Setting the field does silence prompt 225 and does survive a save and reload, and it is still the wrong fix, because it fabricates per-civ state to suppress a cosmetic dialog. `client/dev_tools/patch_hide_setup_prompts.py` returns from `0x0056E700` instead, one byte, fabricating nothing.
+**`Owner:359` and `Owner:360` are one-byte flags, set by the prompts' own OK.** `0x005716E3` sets 359 and `0x00571878` sets 360, on the offline path of each OK handler (`[0x86F1A0]` set and no live server connection). The online path sends `CUCV` (218) to the server and sets nothing locally, leaving the flag to the server's reply. Both flags are written to `OWPR` by `0x0053B230`, after the research fields: the homeworld flag 29 bytes past the end of the second research field and the civ flag 30. `0x00537D00` derives 360 from galaxy settings for a new civ and for an `OWPR` older than version 12.
+
+**`Owner:384` is the length of the civ name, not a count of records.** The chosen name is a VC9 `std::string` at `session+0x1A0`, whose size field is `session+0x1B4`, so `OWPR` is `138 + Owner:384` bytes because the name's characters are written into it. `0x00538470`, the civ's display name, returns that string when the length is non-zero and the player name otherwise. Prompt 225 is therefore offered until a name has been chosen. Measured across saves: `testname4` stores 9. Writing the length without the characters does silence the prompt, and it is still the wrong fix, because it fabricates a name. `client/dev_tools/patch_hide_setup_prompts.py` returns from `0x0056E700` instead, one byte, fabricating nothing.
 
 **The homeworld click counters are not `.data` globals.** `0x00842AE4` through `0x00842AF0` have no absolute references in `.text`. They are fields of the prompt's own singleton, which lives at `0x00840BC8`, at offsets `0x1F1C` through `0x1F28`, and `0x00498E10` zeroes all four every time the prompt is prepared. So they read zero after a load because the dialog is constructed once per process and cleared on every open, not because a save failed to carry them.
 
-- [ ] **A one-time civilisation setup step should replace `patch_hide_setup_prompts.py`.** In the original, a player chose a name and coat of arms once and the blob carried it, which kept `Owner:384` non-zero and the prompt away. Locally generated galaxies never go through that flow, so the patch stands in for it and `Owner:384` is left untouched. Done when the launcher or the site offers the setup step and the patch is no longer applied.
+- [ ] **A one-time civilisation setup step should replace `patch_hide_setup_prompts.py`.** In the original, a player chose a name and coat of arms once and the blob carried it, which kept `Owner:384`, the name's length, non-zero and the prompt away. Locally generated galaxies never go through that flow, so the patch stands in for it and the name is left unset. Done when the launcher or the site offers the setup step and the patch is no longer applied.
 
 **Side effect:** Applying T1–T5 removes the Next Turn button from the UI. This is intentional for the multiplayer build, turns are advanced externally via `fast_turns.py`, not by player clicks.
 
 ### What T1–T5 skip, read out of the file (September 2026)
 
-**None of the six removes a call**, and the code on both sides of every one of them is still
+**None of them removes a call**, and the code on both sides of every one of them is still
 present, so a patched client runs the same routines the original does.
 
 | site | what it reaches |
 |---|---|
 | T1 `0x0056DBF0` | a leaf predicate rewritten to return true. Its own two calls are getters; of its two callers, one selects the string `Connected` over `Disconnected` and the other runs a block it would otherwise skip |
-| T2 `0x0056E0EF`, T3 `0x0056E133` | both guards of `0x0056E0D0`, the homeworld prompt decision routine, not the turn pipeline at all |
+| T2 `0x0056E0EF`, T3 `0x0056E133` | both guards of `0x0056E0D0`, the homeworld prompt decision routine, not the turn pipeline at all. Removed in October 2026 |
 | T4a `0x00577C1A` | a single store repointed |
 | T4b `0x00577C2A` | skips `0x00577C84`, the galaxy-join rejection path |
 | T5 `0x00579C2D` | NOPs a `JZ` whose target `0x00579C3D` is the next basic block, so both paths converge. Its only effect is that `0x0056DE20` may run, which reads the turn counter at `0x008578E8`, increments it and announces. That is the turn advance itself, and it is why T5 is the patch that lets a client tick |
@@ -1204,15 +1229,70 @@ Each replacement is written into its original's slot and the remainder is NUL-fi
 
 [ ] Patch 31 is verified by byte comparison and by formatting the patched string, not yet on screen. It needs a client whose `CreateDevice` fails.
 
+### Patches 32–35, Main window opens 10% larger (16 bytes, October 2026)
+
+**Release only**, like 28–31: `client/dev_tools/patch_window_size.py` patches each client `release/build.ps1` stages. The bytes are at the same offsets in all four clients.
+
+The main window's `OnCreate` (`0x00404CA0`) first restores the `MainWindowPos` value from `HKCU\Software\CosmicSupremacy` through a `WindowPosition` helper (`0x0062CB30`). The value is 24 bytes, `x, y, w, h`, their sum, and a Jenkins one-at-a-time hash of `"%d%d%d%d"` over the four, and it is applied only if both checks pass, the centre and top-centre lie in a monitor's work area, Ctrl is not held, and the byte at `0x0081A843` is set. The Tutorial clears that byte at `0x0057E96C`. Otherwise the default comes from `0x00403CB0`, a fixed 950 by 609 placed 40 pixels in from the right and bottom of the screen, floored at 60. The Tutorial's layout (`0x0057E597`) calls the same function.
+
+| # | file | VA | original | patched |
+|---|---|---|---|---|
+| 32 | `0x30C4` | `0x00403CC4` | `lea ecx, [edi-0x3DE]`, screen width − 990 | − 1,085 |
+| 33 | `0x30D6` | `0x00403CD6` | `lea edx, [eax-0x289]`, screen height − 649 | − 710 |
+| 34 | `0x30EF` | `0x00403CEF` | `add ecx, 0x3B6`, width 950 | 1,045 |
+| 35 | `0x30F5` | `0x00403CF5` | `add edx, 0x261`, height 609 | 670 |
+
+A saved `MainWindowPos` still wins outside the Tutorial, so an existing player sees the change only after holding Ctrl at startup or in the Tutorial. **CONFIRMED** on screen in the Tutorial.
+
+### Patches 36–40, The Tutorial (October 2026)
+
+**Release only**: `client/dev_tools/patch_tutorial.py`, applied to `CosmicSupremacy.exe`, which runs the Tutorial and the Demo. They fix GitHub issues #1 to #4.
+
+The steps are a `char*[27]` at `0x00819688` (`.data`), indexed by step id. ShowNext (`0x0057E3A0`) sets the current step at `0x0086F4F4` from the next one at `0x0086F504`, or shows a pending popup (ids 25 and 26, state 1 in `int[27]` at `0x0086F488`) first. Event(id) (`0x0057DF60`, cdecl) unlocks Next through `TutorialDlg::Unlock` (`0x004C1C60`, thiscall, `ret 4`) only when `id` is the current step. Every step's condition is hard-coded at its Event call site; step 6 has none. The text renderer takes `\x08` as a bold toggle, `\x0C<Icon>` for an icon, and `\r<rrggbb>` / `\r<default>` for colour.
+
+| # | where | what |
+|---|---|---|
+| 36 | dialog 206 template, file `0x7D3836`–`0x7D38A2` | the panel and its text area 24 dialog units wider and 48 taller (219 by 295 → 243 by 343, text 211 by 272 → 235 by 320), and the Next button moved with them. The text area neither scrolls nor wraps, so the longest steps had lost their last lines and the widest lines their last word |
+| 37 | call `0x004C1D04` → stub `0x006D30A0` (106 bytes in `int3` padding) | the Next handler's call to Unlock goes through a stub that calls Unlock, then for step 14 or 17 walks the `Ship` registry (`0x00854628`) and raises the step's Event when a local ship already holds a Colonize (type 3, `ship+0x3C`) or Move (type 1) order. Step 17 accepts any Move order, not only one to the nearest sun |
+| 38 | `0x004FA6ED` (`mov edx,[esi]; mov eax,[edx+0x74]`) → call stub `0x006D3110` (73 bytes) | in `PlanetProperties::Tick` (`0x004FA490`), where the current item's cost is fetched: on step 21, for a local planet whose item (`+0xD0`) is a `ShipDesign` (vftable `0x00771DF8`), storage (`+0x20`) is raised to the cost, so the Scout Ship is finished on the next tick. Facilities are never matched |
+| 39 | `0x004FA7E6` (`call Event` after `push 21`) → stub `0x006D3170` (98 bytes) | raises Event(21) as before, then on steps 20 to 22 adds one Stationed Military to a local planet with none, the way recruitment does (`0x004F4E00`): `Citizen::Citizen(3, owner)` (`0x005134D0`) and `push_back` on the military list (`PlanetProperties+0x44`, `0x004CB560`), then Event(26), the Stationed Military popup |
+| 40 | new section `.tutor` (23,040 bytes raw), and 22 entries of the step table | the steps' tasks drawn in `ffcc33`, step 11 telling the player to select both Colony Ships (a double-click selects one), step 20 and 21 saying the ship takes one turn, step 22 offering a draft for Credits. The edited texts no longer fit their `.rdata` slots |
+
+Section 40 needs room for one more header: `.text` starts at file `0x400` and the five headers end at `0x2E0`. The image has no relocations, no certificate and no overlay, so the section is appended at the end of the file at the next section-aligned VA, `0x00C2D000`, and `SizeOfImage` grows to match. A patched client maps with `LoadLibraryExW(LOAD_LIBRARY_AS_IMAGE_RESOURCE)`.
+
+**CONFIRMED** on screen by a play-through: the panel holds every step, the tasks are coloured, orders given early count, the Scout Ship comes one turn after step 21 with a soldier.
+
+### Patch 41, Single Player sends a chosen civ name (6 bytes, October 2026)
+
+**Release only**: `client/dev_tools/patch_civ_name.py`, applied to `CosmicSupremacy_Resurgence.exe`.
+
+Dialog 225, "Pick your Civilization Name and Coat of Arms", is a modeless singleton (`0x00496B00`) whose OK handler is `0x00496F20`. It reads the name from combo 1010, writes it into the local civ through `0x00579230` (offline: `Owner+0x1A0`, the coat of arms at `+0x1C0`, the reveal flag at `+0x19D`, all saved in `OWPR`), and sends `uploadcivname` only when `CB_GETCURSEL` is −1. The server lists the stored name, the dropdown selects it, and typing over the selection leaves it selected, so the name was never sent and each session offered `DemoEmpire` again.
+
+| # | file | VA | original | patched |
+|---|---|---|---|---|
+| 41 | `0x96905` | `0x00497505` | `jne 0x004975F7` (`0F 85 EC 00 00 00`) | six `nop` |
+
+**CONFIRMED:** a name typed in the dialog lands in the save's `OWPR`, and with the patch it also arrives as `uploadcivname`, is kept in `civs.json`, and is offered first on the next New Game.
+
+**Coats of arms.** `listcoa` is read with `operator>>` until a read fails (`0x00497B90`), so its answer is space-separated ids. `getcoa`, and `getapprovedcoa` for another civ's id (`0x00517260`), are base64-decoded (`0x005F5F10`), with `FAIL` for none. An image dragged into the dialog (`0x004981A0`) is scaled to 56 by 66 through GDI+ (`0x004977A0`), saved as PNG and sent with `uploadcoa`, whose answer is the new id. The client caches each id's texture and never refetches it, so ids are not reused.
+
+[ ] **Confirm the coat of arms on screen:** a dragged image survives OK, is listed next session, and is drawn beside the civ's planets.
+
 ### Summary
 
 Patches 1–4 (54 bytes) redirect all network traffic from the dead production servers (`www.cosmicsupremacy.com`, `cosmicsupremacy.com`, and a hardcoded IP) to `127.0.0.1:8888`, where the local stub server (`cs_server.py`) listens. Patch 1 converts a conditional branch (JZ) to an unconditional jump (JMP), forcing the client to always take the "success" path past a connection-validation check.
 
 Patches 5–11 (13 bytes) bypass save/load validation checks in the game’s persistence code, which are needed for testbed galaxy saves to function against the local stub server.
 
-Patches 12–17 (22 bytes, T1–T5) bypass turn-pipeline sync checks, enabling external turn control. Applied only to the Resurgence EXE.
+Patches 12–17 (14 bytes, T1, T4a, T4b and T5) bypass turn-pipeline sync checks, enabling external turn control. Applied only to the Resurgence EXE.
 
 Patches 28–31 (1,571 bytes) rewrite the setup and login messages to send a player to the launcher, and the renderer failure message to send a report to the issue tracker instead of an email address at the host. Applied only to the clients a release ships.
+
+Patches 32–35 (16 bytes) open the main window 10% larger by default. Applied to every client a release ships.
+
+Patches 36–40 fix the Tutorial: a larger panel, early orders that count, a one-turn Scout Ship with a free soldier, and coloured tasks in a new `.tutor` section. Applied only to `CosmicSupremacy.exe` in a release.
+
+Patch 41 (6 bytes) makes Single Player's civ name dialog send the name on every OK. Applied only to `CosmicSupremacy_Resurgence.exe` in a release.
 
 ### EXE Variants
 
@@ -1311,7 +1391,7 @@ Key observations from running the patched EXE with a `TEBE` type `.csgalaxy` tok
 
 **Testbed game loop**
 - After entering, the client immediately requests `savegamelist` to enumerate existing saves.
-- Saves are named `TestBed Save 1`, `TestBed Save -1`, etc. with `gameid=-1` as the client's "allocate new slot" sentinel.
+- A new save arrives with `gameid=-1`, the client's "allocate new slot" sentinel, and the name typed in the Save dialog (`Unnamed` by default). The `TestBed Save N` names seen early on were made up by the prototype server.
 - The server should allocate the next available positive integer ID when it receives `gameid=-1`, since the client treats negative IDs as invalid when loading from `savegamelist`.
 - Save/load cycle works identically to other galaxy types, the server stores and returns the binary blob opaquely.
 - Ticks advance client-side (same as tutorial), allowing immediate gameplay without server-driven tick scheduling.
@@ -1568,15 +1648,13 @@ snapshot.
 
 What is left for after the beta is kept here.
 
-- [ ] **The referee polls toward the deadline.** `referee_worker.py` reads the galaxy every 5
-  seconds (`POLL`) for the whole turn, about 16,800 Firestore reads a day per galaxy, measured on
-  `h3check` on 5 October 2026 with no launcher open. That is 34% of the 50,000 free daily reads for
-  one galaxy, so five galaxies spend 84,000 a day before any player asks anything. A gap that
-  shrinks toward the deadline, the way the launchers' `player_turn.poll_gap` does, would bring it
-  near the 888 a day a launcher spends. The cost is that an operator's change to the deadline, or a
-  reopen, is noticed later. Kept at 5 seconds for the beta, decided 7 October 2026; due before a
-  second live galaxy is started or after the beta, whichever comes first. Done when the worker's
-  poll follows the deadline and a measured day of one idle galaxy reads under 2,000 documents.
+- [ ] **Measure the referee's reads after the poll change.** `referee_worker.py` read the galaxy
+  every 5 seconds for the whole turn, about 16,800 Firestore reads a day per galaxy, measured on
+  `h3check` on 5 October 2026 with no launcher open. Its gap now follows the deadline
+  (`poll_gap`: a twentieth of the distance, between `POLL` 5 s and `POLL_CEILING` 120 s, and the
+  ceiling while closed), which works out near 1,100 reads a day for an idle four-hour galaxy. An
+  earlier deadline or a reopen is noticed up to 120 s late. Done when a measured day of one idle
+  galaxy reads under 2,000 documents.
 
 - [ ] **Citizens a player owns on someone else's planet cannot be managed.** `merge_orders.py`
   only considers planets the submitter owns, so a player with population on a rival's colony
@@ -1588,12 +1666,52 @@ What is left for after the beta is kept here.
   technology the civ cannot research, or a queue entry it cannot afford, is copied as given. Done
   when the merge applies the rule the UI enforces for each order type it accepts.
 
-- [ ] **Order types nobody has measured are not merged:** facility selection outside the queue,
-  governors, admirals and diplomacy proposals. Done when each is measured against a change made
-  in the UI and is either accepted or refused with a note.
+- [ ] **Logging in has not been played through the live relay.** The relay knows a player by
+  uid, and creating an account or linking Google keeps the guest's, so nothing in it changed;
+  `fb_auth` is tested against the Auth emulator only. Done when an account logged in from a
+  checkout launcher lists galaxies, joins one and submits a turn, logs out and back in and
+  submits again, and the same for a Google login.
 
-- [ ] **A running client's default star names read as renames.** A client writes `Unnamed`
-  wherever the blob holds an empty name, and `merge_orders.py` sees each one as an attempted
-  system rename every turn. `server/tests/test_rename_materialisation.py` states the wanted
-  behaviour; it skips without its `fog_work/fix80.dat` fixture. Done when that test passes
-  against a multi-civ blob.
+- [ ] **Nobody can see who still plays as a guest.** The relay accepts every verified token
+  alike. Done when it records each caller's `firebase.sign_in_provider` (`anonymous`,
+  `password`, `google.com`) with the seat, and the operator view lists which seated players
+  are still guests.
+
+- [ ] **Play by name has no end switch.** Done when a relay setting, off by default, refuses a
+  token whose provider is `anonymous` with a refusal the launcher turns into "log in to play".
+  Turned on once the operator view shows no seated guests.
+
+- [ ] **A guest's seats stay behind when its install logs in to an existing account.** The
+  launcher tells the player to send the operator the guest's player code, and `seat_tool.py`
+  moves the seats by hand. Done when the relay moves them itself, on proof of both the guest's
+  and the account's tokens.
+
+- [ ] **Order types nobody has measured are not merged:** governors, admirals and diplomacy
+  proposals. Done when each is measured against a change made in the UI and is either accepted
+  or refused with a note.
+
+**Measured in one Single Player session at turn 0 (October 2026,
+`server/tests/fixtures/tier4`):**
+
+- **Deactivating a design** flips only its `DSGN`'s last byte, `0` active and `1` inactive. Carried.
+- **Choosing what a planet builds** writes `PROD`: `+1` build-active, the facility type at `+13`,
+  and the nested kind (`WLTH`, `FCLT`, `SCAN`, or `SHIP` with a design id). Carried when the
+  client's `CanBuildFacility` would allow it (`facility_rules.py`).
+- **Adding a planet to a production queue** creates a queue object under the civ,
+  `OWNR > DATA > SPQS` (a `u32` count, then `SPRQ` holding the object id and a `PRQU` of entries),
+  and links the planet's `PROD` to it at `+2` (flag), `+3` (the queue's object id) and `+7`.
+  Refused with a note.
+- **A fleet** is `GLXY > FLET`: the 20-byte object header (a new object id, raising `SAVE+0`),
+  a `DYNO` with the fleet's orders, and `FLDT`: a `u32`-length name (default `Battle Fleet`, cut
+  to 32 characters), a `u32` member count and one `SHPR` per member. Members leave `GLXY` as
+  `SHIP`s while in the fleet; a ship taken out comes back as a `SHIP` with its own id, and a
+  one-ship fleet survives until disbanded. `SHPR+30` holds the id of the last fleet a ship was
+  in, and keeps it after the ship leaves. Refused with a note: the merge turns the fleet back into
+  its member ships and judges the rest of the submission as usual.
+- **Individual ships cannot be renamed**; only fleets can.
+
+- [ ] **Carry fleets:** forming, joining, leaving, disbanding, renaming, and fleet orders. Needs a
+  fleet id allocated without colliding across players, as designs are, and every member checked:
+  the submitter's, at one position, in no other fleet.
+
+- [ ] **Carry production queues:** the `SPQS` queue objects and the planets' links to them.

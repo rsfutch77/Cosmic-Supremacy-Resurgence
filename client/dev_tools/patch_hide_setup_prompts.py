@@ -14,16 +14,15 @@ The client has three one-time setup prompts, each its own Win32 dialog resource:
     218   Customize Your Civilization
     225   Pick your Civilization Name and Coat of Arms
 
-210 and 218 are gated correctly in the TestBed build. In
-`CosmicSupremacy_Resurgence.exe` two turn-pipeline bypasses NOP their guards:
+210 and 218 are gated by flags their own OK sets, `Owner:359` and `Owner:360`,
+in every build. The multiplayer referee carries a confirm into the next turn
+(`merge_orders.py`), so they are offered until confirmed once.
 
-    0x0056E0EF   JNZ 0x56E189, skip when [session+0x19B] is set   -> 6x NOP
-    0x0056E133   JZ  0x56E189, skip when 0x508C60() returns 0     -> 2x NOP
-
-225 is opened only by the decision function `0x0056E700`, gated on the local
-civ's `Owner:384` being non-zero. `Owner:384` is a count (the `OWPR` section is
-`138 + Owner:384` bytes) and must not be written to silence the prompt. This
-patch makes the decision function return immediately:
+225 is opened only by the decision function `0x0056E700`, while the local civ's
+`Owner:384` is zero. `Owner:384` is the length of the chosen civ name (the name
+is written into `OWPR`, which is `138 + Owner:384` bytes) and must not be
+written to silence the prompt. This patch makes the decision function return
+immediately:
 
     0x0056E700   sub esp, 0x18   ->   ret
 """

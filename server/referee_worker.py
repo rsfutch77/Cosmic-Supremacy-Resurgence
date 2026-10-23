@@ -68,8 +68,13 @@ WORKER_FAILURES_KEY = 'worker_failures'
 # Seconds past the deadline that submissions are still taken.
 GRACE = 20.0
 
-# Seconds between clock reads while waiting.
+# Seconds between clock reads: the distance to the deadline over POLL_SHARE,
+# no shorter than POLL near it and no longer than POLL_CEILING far from it or
+# while the galaxy is closed. The ceiling bounds how late an operator's earlier
+# deadline or a reopen is noticed.
 POLL = 5.0
+POLL_CEILING = 120.0
+POLL_SHARE = 20.0
 
 # Retry wait after a failed resolution, in seconds: doubles from the first
 # value up to the ceiling.
@@ -661,6 +666,12 @@ def galaxy_name(spec: str) -> str:
     return os.path.basename((spec or '').rstrip('\\/')) or spec
 
 
+def poll_gap(left: float, poll: float = POLL) -> float:
+    """Seconds to wait before the next clock read, `left` seconds before the
+    deadline."""
+    return max(poll, min(POLL_CEILING, left / POLL_SHARE))
+
+
 def run(store, save_dir=None, grace: float = GRACE, poll: float = POLL,
         once: bool = False, stop=None, guard=None, log=print,
         server=None, sleeper=time.sleep, page=None, gid=None,
@@ -698,7 +709,7 @@ def run(store, save_dir=None, grace: float = GRACE, poll: float = POLL,
                         'ticked. The worker stays up, and will resume if it '
                         'is reopened.')
                     said_closed = True
-                sleeper(poll)
+                sleeper(max(poll, POLL_CEILING))
                 continue
             said_closed = False
 
@@ -711,7 +722,7 @@ def run(store, save_dir=None, grace: float = GRACE, poll: float = POLL,
                     log(f'  worker: turn {turn} has {left:.0f}s left, '
                         f'nothing to do')
                     return EXIT_OK
-                sleeper(min(poll, left))
+                sleeper(min(poll_gap(left, poll), left))
                 continue
             if -left < grace:
                 sleeper(min(poll, grace + left))
@@ -793,7 +804,7 @@ def main(argv=None) -> int:
     ap.add_argument('--grace', type=float, default=GRACE,
                     help='seconds past the deadline to keep taking submissions')
     ap.add_argument('--poll', type=float, default=POLL,
-                    help='how often the clock is read')
+                    help='shortest gap between clock reads, near the deadline')
     ap.add_argument('--port', type=int, default=STUB_PORT,
                     help='the port cs_server.py listens on')
     ap.add_argument('--no-cs-server', action='store_true',

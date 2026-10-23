@@ -92,6 +92,12 @@ function drawModes(modes) {
     b.disabled = !m.ready || modesDisabled;
     b.dataset.ready = m.ready ? "1" : "";
     row.append(b, el("div", "blurb", m.blurb));
+    if (m.continues) {
+      const fresh = gbtn("New Game", () => call("new_game", m.id), "small newgame");
+      fresh.disabled = b.disabled;
+      row.append(fresh);
+    }
+    if (m.done) row.append(el("div", "done", "Completed"));
     box.appendChild(row);
   }
 }
@@ -142,7 +148,7 @@ function nextPrompt() {
   $("scrim").classList.toggle("on", !!current);
   if (!current) return;
   const p = current;
-  $("dlg").classList.toggle("wide", p.kind === "notice");
+  $("dlg").classList.toggle("wide", p.kind === "notice" || !!p.wide);
   $("dlg-title").textContent = p.title || "";
   $("dlg-text").textContent = p.text || "";
   show("dlg-text", !!p.text);
@@ -154,12 +160,23 @@ function nextPrompt() {
   $("dlg-note").textContent = p.note || "";
   show("dlg-note", !!p.note);
 
-  show("dlg-field", !!p.input);
-  if (p.input) {
-    $("dlg-label").textContent = p.input.label || "";
-    $("dlg-input").value = p.input.value || "";
-    $("dlg-input").maxLength = p.input.maxlength || 200;
+  // `input` is one field answered as its text, `inputs` several answered as {name: text}.
+  const fields = $("dlg-fields");
+  fields.replaceChildren();
+  const inputs = p.inputs || (p.input ? [p.input] : []);
+  show("dlg-fields", inputs.length > 0);
+  for (const f of inputs) {
+    const box = el("input");
+    box.type = f.type || "text";
+    box.spellcheck = false;
+    box.value = f.value || "";
+    box.maxLength = f.maxlength || 200;
+    box.dataset.name = f.name || "";
+    const row = el("label", "dlg-field");
+    row.append(el("span", "", f.label || ""), box);
+    fields.appendChild(row);
   }
+  show("dlg-x", p.kind !== "busy");
 
   const refs = $("dlg-refs");
   refs.replaceChildren();
@@ -180,19 +197,26 @@ function nextPrompt() {
   const btns = $("dlg-btns");
   btns.replaceChildren();
   for (const b of p.buttons) btns.appendChild(gbtn(b.label, () => answer(b.value)));
-  if (p.input) { $("dlg-input").focus(); $("dlg-input").select(); }
+  const first = [...fields.querySelectorAll("input")].find((b) => !b.value) || fields.querySelector("input");
+  if (first) { first.focus(); first.select(); }
   else if (btns.lastChild) btns.lastChild.focus();
+}
+
+function typed() {
+  const boxes = [...$("dlg-fields").querySelectorAll("input")];
+  if (current.inputs) return Object.fromEntries(boxes.map((b) => [b.dataset.name, b.value]));
+  return current.input ? boxes[0].value : null;
 }
 
 function answer(value) {
   if (!current) return;
   const p = current;
-  call("resolve", p.id, value === undefined ? null : value, p.input ? $("dlg-input").value : null);
+  call("resolve", p.id, value === undefined ? null : value, typed());
   nextPrompt();
 }
 
 document.addEventListener("keydown", (e) => {
-  if (!current) return;
+  if (!current || current.kind === "busy") return;
   if (e.key === "Escape") { e.preventDefault(); answer(current.cancel); }
   if (e.key === "Enter" && current.default !== undefined && current.default !== null) {
     e.preventDefault();
@@ -220,6 +244,7 @@ window.ui = {
     }
     if (s.page) showPage(s.page);
     if (s.name !== undefined) $("name-btn").textContent = s.name || "set name";
+    if (s.account !== undefined) $("account-btn").textContent = s.account || "log in";
     if (s.build !== undefined) $("st-build").textContent = s.build;
     if (s.status) {
       $("st-text").textContent = s.status.text;
@@ -261,6 +286,12 @@ window.ui = {
   prompt(p) {
     prompts.push(p);
     if (!current) nextPrompt();
+  },
+  // Takes down a prompt that has no buttons, once Python is done with it.
+  dismiss(id) {
+    if (current && current.id === id) { nextPrompt(); return; }
+    const queued = prompts.findIndex((p) => p.id === id);
+    if (queued >= 0) prompts.splice(queued, 1);
   },
 };
 

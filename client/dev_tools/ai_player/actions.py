@@ -47,6 +47,9 @@ class Actuator:
         # Signed effect of this pass's actions on the treasury (negative when
         # spending), so the income sensor can exclude it.
         self.cash_effect = 0
+        # (civ addr, resource id) -> units bought, less units a queued ship
+        # took, this pass; the snapshot's Owner:1128 shows neither yet.
+        self.bought = {}
 
     @property
     def remote(self):
@@ -75,6 +78,10 @@ class Actuator:
                 f"{planet} already had its production set this pass; "
                 f"{what} would silently replace it. Production is one slot.")
         self.claimed_production.add(planet.id)
+
+    def keep_production(self, planet):
+        """Claim a planet's production slot without changing it."""
+        self._claim_production(planet, "keeping its current production")
 
     def claim_planet(self, planet):
         self.claimed_planets.add(planet.id)
@@ -132,6 +139,11 @@ class Actuator:
         data = self.snap.read(begin, span)
         return [] if data is None else [data[i:i + stride]
                                         for i in range(0, span, stride)]
+
+    def live_military(self, planet):
+        """Stationed units on `planet` now, including any drafted this pass."""
+        return len(self._live_vec(planet, self.PLANET_MILITARY,
+                                  self.CITIZEN_STRIDE))
 
     def _live_ptr(self, obj, off):
         """One of a vector's three pointers as it stands now in the process."""
@@ -229,9 +241,11 @@ class Actuator:
                              f"queue a ship there")
         self.log(f"  queue {design.design_name!r} at {planet}")
         self._claim_production(planet, f"queueing {design.design_name!r}")
-        ok = self._u32(planet.addr + 296, design.addr - 12,
-                       f"Planet:296 -> ShipDesign {design.design_name!r} (tag-12)")
-        return self._u32(planet.addr + 344, 1, "Planet:344 build-active -> 1") and ok
+        # Through the engine, which takes the design's resource cost from
+        # Owner:1128 and refuses when the stock is short, as the UI would.
+        self._set_production(planet, design.addr - 12,
+                             f"ShipDesign {design.design_name!r}")
+        return self._u32(planet.addr + 344, 1, "Planet:344 build-active -> 1")
 
     # C: start a facility build (three plain writes).
     PLANET_EMBEDDED_FACILITY = 280   # Facility{vftable, typeId} lives here
@@ -260,12 +274,53 @@ class Actuator:
                              f"discard {planet.build_progress} progress")
         name = gs.FACILITIES[type_id]
         self.log(f"  build {name} at {planet}")
-        ok = self._u32(planet.addr + 284, type_id, f"Planet:284 -> {name}")
         self._claim_production(planet, f"building facility type {type_id}")
-        ok = self._u32(planet.addr + 296,
-                       planet.addr + self.PLANET_EMBEDDED_FACILITY,
-                       "Planet:296 -> the planet's embedded Facility") and ok
-        return self._u32(planet.addr + 344, 1, "Planet:344 build-active -> 1") and ok
+        # The type is the embedded Facility's own id field; SetProduction then
+        # runs the engine's facility checks.
+        self._u32(planet.addr + 284, type_id, f"Planet:284 -> {name}")
+        self._set_production(planet, planet.addr + self.PLANET_EMBEDDED_FACILITY,
+                             f"the embedded Facility ({name})")
+        return self._u32(planet.addr + 344, 1, "Planet:344 build-active -> 1")
+
+    # P: produce a scan (Planet:292 + SetProduction on the embedded Scan).
+    PLANET_EMBEDDED_SCAN = 288
+    SCAN_TYPE = 292
+    DEFENCE_AGENCY = 8
+
+    def queue_scan(self, planet, scan_type):
+        """Start producing a scan of `scan_type` on a planet with a Central
+        Defence Agency. The finished scan joins the civ's inventory."""
+        if self.DEFENCE_AGENCY not in planet.facilities:
+            raise ValueError(f"{planet} has no Central Defence Agency, so the "
+                             f"UI could not start a scan there")
+        if planet.building_now:
+            raise ValueError(f"{planet} is already building; replacing it would "
+                             f"discard {planet.build_progress} progress")
+        self.log(f"  produce scan type {scan_type} at {planet}")
+        self._claim_production(planet, f"producing scan type {scan_type}")
+        self._u32(planet.addr + self.SCAN_TYPE, scan_type,
+                  f"Planet:292 -> scan type {scan_type}")
+        self._set_production(planet, planet.addr + self.PLANET_EMBEDDED_SCAN,
+                             f"the embedded Scan (type {scan_type})")
+        return self._u32(planet.addr + 344, 1, "Planet:344 build-active -> 1")
+
+    def use_scan(self, civ, scan_type, targets):
+        """Use held scans on these targets (Ships, Fleets or Planets).
+
+        The engine checks the inventory and each target's class; returns the
+        number of reports it made.
+        """
+        if self.dry_run:
+            self.log(f"  [WOULD SCAN] type {scan_type} on "
+                     f"{', '.join(map(str, targets))}")
+            return 0
+        if self.remote is None:
+            raise RuntimeError("use_scan needs a remote.Remote")
+        made = self.remote.use_scans(civ.addr, scan_type,
+                                     [t.addr - 8 for t in targets])
+        self.log(f"  scan type {scan_type} on {', '.join(map(str, targets))}: "
+                 f"{len(made)} report(s)")
+        return len(made)
 
     # I': fit parts to a design.
     # The five part categories sit at a 24-byte stride, each a std::vector of
@@ -355,7 +410,9 @@ class Actuator:
 
     # I: create a ship design.
     def create_design(self, name, civ=None):
-        """Default-construct a new ShipDesign. Untested.
+        """Default-construct a new ShipDesign and register it with `civ`.
+
+        Created, owned and registered live; never yet queued or built from.
 
         The engine allocates 280 bytes and its no-argument constructor at
         0x00546EC0 initialises them, reaching the EJBO-tagging base class. The
@@ -416,7 +473,43 @@ class Actuator:
                 except ValueError as e:
                     # Not fatal: the design exists and can be inspected unowned.
                     self.log(f"  [warn] could not set the owner: {e}")
+                else:
+                    self.register_design(fresh, civ)
         return block
+
+    def civ_design_ids(self, civ):
+        """Ids in a civ's design list, Owner:84, a vector of reference nodes.
+
+        Each node is the value slot of a node in the reference map, so the id
+        is the key 4 bytes before it. Read live: registering reallocates the
+        vector, so the snapshot's copy of Owner:84 goes stale.
+        """
+        rd = self.snap.rd32
+        begin, end = rd(civ.addr + 84), rd(civ.addr + 88)
+        nodes = [rd(begin + 4 * i) for i in range((end - begin) // 4)]
+        return [rd(n - 4) for n in nodes]
+
+    # I''': register a design with its civ.
+    def register_design(self, design, civ):
+        """Put a design in its civ's design list.
+
+        Constructing a design enters it in the global object map only. A civ's
+        designs are the ones its Owner:84 vector holds a reference node to;
+        a design missing from it has no reference node at all.
+        """
+        if design.id in self.civ_design_ids(civ):
+            self.log(f"  {design} is already in {civ.civ_name!r}'s design list")
+            return True
+        if self.dry_run:
+            self.log(f"  [WOULD REGISTER] {design} with {civ.civ_name!r}")
+            return True
+        node = self.remote.register_design(design.id, civ.addr)
+        ok = design.id in self.civ_design_ids(civ)
+        self.log(f"  registered {design} with {civ.civ_name!r}, node "
+                 f"0x{node:08X}" if ok else
+                 f"  [warn] {design} is not in {civ.civ_name!r}'s design list "
+                 f"after registering it")
+        return ok
 
     def set_wealth_mode(self, planet):
         """Stop building and generate wealth instead.
@@ -424,10 +517,26 @@ class Actuator:
         Every idle planet points Planet:296 at one static `PilingUpWealth`
         singleton.
         """
+        self._claim_production(planet, "generating wealth")
         self.log(f"  {planet} -> generating wealth")
-        ok = self._u32(planet.addr + 296, gs.PILING_UP_WEALTH,
-                       "Planet:296 -> PilingUpWealth singleton")
-        return self._u32(planet.addr + 344, 0, "Planet:344 build-active -> 0") and ok
+        # Through the engine, which refunds a ship's reserved resources.
+        self._set_production(planet, gs.PILING_UP_WEALTH, "PilingUpWealth",
+                             reset_on_fail=True)
+        return self._u32(planet.addr + 344, 0, "Planet:344 build-active -> 0")
+
+    def _set_production(self, planet, item, what, reset_on_fail=False):
+        """Point a planet's production at `item` the way the UI does."""
+        if self.dry_run:
+            self.log(f"  [WOULD SET PRODUCTION] {planet} -> {what}")
+            return True
+        if self.remote is None:
+            raise RuntimeError("production changes need a remote.Remote: a raw "
+                               "Planet:296 write skips the resource charge")
+        if not self.remote.set_production(planet.addr, item, reset_on_fail):
+            raise ValueError(f"the engine refused {what} at {planet} (short of "
+                             f"resources, or a facility check failed)")
+        self.log(f"  SetProduction: {planet} -> {what}")
+        return True
 
     # J: move a trained unit from a planet onto a ship as crew.
     SHIP_CREW      = 124      # begin/end/cap at 124/128/132
@@ -462,9 +571,8 @@ class Actuator:
             raise RuntimeError("load_crew needs a remote.Remote to allocate")
 
         # Take from the end so the surviving records stay contiguous from begin.
-        taken = b"".join(mil[-count:])
-        buf = self._set_ship_crew(ship, b"".join(aboard) + taken,
-                                  len(aboard) + count)
+        taken = mil[-count:]
+        buf = self._add_ship_crew(ship, taken)
 
         mb = self._live_ptr(planet, self.PLANET_MILITARY)
         new_end = mb + (len(mil) - count) * self.CITIZEN_STRIDE
@@ -537,6 +645,31 @@ class Actuator:
             self.log(f"  [leak] abandoned the old crew buffer 0x{old:08X}; "
                      f"freeing an engine allocation is not something we do")
         return buf
+
+    def _add_ship_crew(self, ship, records):
+        """Add 16-byte crew records to a ship, never repointing a live buffer.
+
+        An empty crew vector gets a fresh engine buffer. An allocated one is
+        written only into its spare capacity, which is how a troop hull that
+        has landed its troops is refilled. Returns the buffer's begin.
+        """
+        begin = self._live_ptr(ship, self.SHIP_CREW)
+        if not gs.is_ptr(begin):
+            return self._set_ship_crew(ship, b"".join(records), len(records))
+        end = self._live_ptr(ship, self.SHIP_CREW + 4)
+        cap = self._live_ptr(ship, self.SHIP_CREW + 8)
+        blob = b"".join(records)
+        if end is None or cap is None or cap - end < len(blob):
+            raise ValueError(
+                f"{ship}'s crew buffer has "
+                f"{((cap or 0) - (end or 0)) // self.CITIZEN_STRIDE} spare "
+                f"record(s), need {len(records)}; repointing one the engine "
+                f"owns is what crashed the client")
+        aboard = (end - begin) // self.CITIZEN_STRIDE
+        self._write(end, blob, f"{len(records)} crew record(s) into spare capacity")
+        self._u32(ship.addr + self.SHIP_CREW + 4, end + len(blob),
+                  f"crew end -> {aboard + len(records)} aboard")
+        return begin
 
     def _append_military(self, planet, records):
         """Add 16-byte units to a planet's stationed-military vector.
@@ -631,6 +764,60 @@ class Actuator:
         self.log(f"  garrisoned {count} unit(s) from {ship} onto {planet}")
         return count
 
+    # O: buy or sell a resource on the market (engine call).
+    MARKET_LOT = 100              # the UI's spinner step, and its minimum
+
+    def market_buy(self, civ, res_id, qty):
+        """Buy qty units through the engine's own BuyResource; returns the price."""
+        return self.market_trade(civ, res_id, qty, buy=True)
+
+    def market_sell(self, civ, res_id, qty):
+        """Sell qty units through the engine's own SellResource; returns the takings."""
+        return self.market_trade(civ, res_id, qty, buy=False)
+
+    def market_trade(self, civ, res_id, qty, buy=True):
+        """Trade qty units of a resource at the engine's quote, which every
+        civ's trading moves. Returns the cash moved, read back from the
+        treasury (positive either way)."""
+        if qty <= 0 or qty % self.MARKET_LOT:
+            raise ValueError(f"buy {qty}: the UI trades in positive lots of "
+                             f"{self.MARKET_LOT}")
+        stock_vec = self.snap.rd32(civ.addr + 1128)
+        n = (self.snap.rd32(civ.addr + 1132) - stock_vec) // 8 if stock_vec else 0
+        index = next((i for i in range(n)
+                      if self.snap.rd32(stock_vec + 8 * i) == res_id), None)
+        if index is None:
+            raise ValueError(f"{civ.civ_name} has no stock record for resource "
+                             f"{res_id}")
+        name = gs.RESOURCES.get(res_id, res_id)
+        if self.remote is None:
+            raise RuntimeError("market_buy needs a remote.Remote for the price")
+        price = self.remote.market_quote(civ.addr, stock_vec + 8 * index, qty,
+                                         buy=buy)
+        cash = self._live_cash(civ)
+        before = self.snap.rd32(stock_vec + 8 * index + 4)
+        if price is None or cash is None:
+            raise RuntimeError(f"no quote or cash reading for {qty} {name}")
+        if buy and price > cash:
+            raise ValueError(f"{qty} {name} costs {price}, cash is {cash}")
+        if not buy and (before is None or before < qty):
+            raise ValueError(f"selling {qty} {name}, only {before} in stock")
+        verb = "buy" if buy else "sell"
+        if self.dry_run:
+            self.log(f"  [WOULD {verb.upper()}] {qty} {name} for {price}")
+            return None
+        self.remote.market_trade(civ.addr, index, qty, buy=buy)
+        moved = abs(self._live_cash(civ) - cash)
+        after = self.snap.rd32(stock_vec + 8 * index + 4)
+        if after != before + (qty if buy else -qty) or moved != price:
+            raise RuntimeError(f"market {verb} of {qty} {name} did not land as "
+                               f"quoted: stock {before} -> {after}, cash moved "
+                               f"{moved} against {price}")
+        self.cash_effect += -moved if buy else moved
+        self.log(f"  {'bought' if buy else 'sold'} {qty} {name} for {moved} "
+                 f"({before} -> {after})")
+        return moved
+
     # J: sell a facility (engine call).
     def sell_facility(self, planet, type_id, count=1):
         """Sell `count` of a facility type, crediting the civ's treasury.
@@ -659,8 +846,15 @@ class Actuator:
                 "the offline flag at 0x0086F1A0 is clear, so this client is on "
                 "the networked path; the server owns the sale and applying it "
                 "locally would desync")
+        civ = planet.owner
+        before = self._live_cash(civ) if civ else None
         ok = self.remote.sell_facility(planet.addr, type_id, count)
-        self.log(f"  sold {count} x {name} on {planet} (engine returned {ok})")
+        after = self._live_cash(civ) if civ else None
+        # The proceeds are ours, not income: next turn's reading excludes them.
+        paid = (after - before) if None not in (before, after) else 0
+        self.cash_effect += paid
+        self.log(f"  sold {count} x {name} on {planet} for {paid} "
+                 f"(engine returned {ok})")
         self.writes.append((planet.addr, b"", b"", f"sold {count} x {name}"))
         return ok
 
@@ -819,7 +1013,8 @@ class Actuator:
 
         Citizens and crew share one 16-byte record, so the citizen list is
         rewritten without the drafted records and those records fill a fresh
-        crew buffer. The ship's crew vector must be empty. `GetDraftCost`
+        crew buffer, or the spare capacity of the ship's existing one.
+        `GetDraftCost`
         prices all `count` drafts and the treasury is debited by that number,
         as in `conscript`. Crew drafted this way never joins the planet's
         garrison.
@@ -832,10 +1027,15 @@ class Actuator:
         # Checked before anything is taken from the planet.
         existing = self._live_ptr(ship, self.SHIP_CREW)
         if gs.is_ptr(existing):
-            raise ValueError(
-                f"{ship} already has a crew vector (0x{existing:08X}); this "
-                f"path only ever fills an empty one, because repointing a "
-                f"vector the engine owns is what crashed the client")
+            end = self._live_ptr(ship, self.SHIP_CREW + 4)
+            cap = self._live_ptr(ship, self.SHIP_CREW + 8)
+            spare = ((cap - end) // self.CITIZEN_STRIDE
+                     if end is not None and cap is not None else 0)
+            if spare < count:
+                raise ValueError(
+                    f"{ship} already has a crew vector (0x{existing:08X}) with "
+                    f"room for {spare} more, need {count}; repointing a vector "
+                    f"the engine owns is what crashed the client")
 
         self._require_sane(planet.addr + self.CITIZEN_LIST,
                            f"{planet}'s citizen vector")
@@ -906,7 +1106,7 @@ class Actuator:
         self._u32(planet.addr + self.CITIZEN_LIST + 4, cbegin + len(kept),
                   f"citizen end -> {len(keep)}")
 
-        self._set_ship_crew(ship, b"".join(drafted), count)
+        self._add_ship_crew(ship, drafted)
 
         # Re-read live: `civ.cash` holds the balance the pass opened with.
         cash = self._live_cash(civ)
@@ -925,17 +1125,19 @@ class Actuator:
 
     # L: set a ship's command, target node included (engine call).
     # Order types that consult Ship:56. Ship::HasActiveTargetedOrder
-    # (0x004D9880) requires one of these types and a non-null Ship:56.
+    # (0x004D9880) requires one of these types and a live Ship:56, and a ship
+    # that has one is moved as an escort of its target (STRATEGY.md §4.4).
     TARGETED_ORDER_TYPES = (1, 4, 7)      # Move, Attack, MoveNear
 
     def set_command(self, ship, order_type, target, civ=None):
         """Give a ship an order that names a target object, not just coordinates.
 
-        Do not use: an order set this way crashes the client when the engine
-        resolves the turn. Use `exterminate.send_to` instead (STRATEGY.md §4.4).
-        It is kept because the ShipCommand/SetCommand pair is the only known way
-        to populate `Ship:56`. A route-only order leaves `Ship:56` as the null
-        node and the ship still navigates.
+Aimed at one of our own ships it is an escort: the engine re-aims the
+        order at the leader every turn. Aimed at a planet or an enemy ship the
+        engine drops the target node at the first turn boundary, so it is not
+        a pursuit tool; `exterminate.send_to` re-aiming each pass is
+        (STRATEGY.md §4.4). Verified live over five boundaries since the stub
+        fix that ended its crash.
 
         ShipCommand's constructor turns the target into a reference node via
         GetReferenceNode(objectId), and Ship::SetCommand writes Ship:52/56/60/61.
@@ -1014,60 +1216,35 @@ class Actuator:
                             f"SetCommand type {order_type} at {target}"))
         return got_type == order_type and got_node == node
 
-    # M: declare war (engine-assisted, symmetric).
-    # The engine's applier writes the same relation code into both civs'
-    # Owner:248 in one call, so both sides are always written.
+    # M: declare war through the engine, as the declare-war button does.
     WAR, NEUTRAL = 1, 0
     RELATION_NAMES = {0: "Neutral", 1: "War", 2: "Cease-Fire", 3: "Peace",
                       4: "Alliance"}
 
-    # Reputation cost of declaring war. The UI's formula is unknown; None
-    # applies no cost, which makes war free. Tracked in STRATEGY.md.
-    WAR_REPUTATION_DELTA = None
+    def declare_war(self, civ, other):
+        """Declare war from `civ` on `other`; True when both records read War.
 
-    def declare_war(self, civ, other, reputation_delta=None):
-        """Move two civs to War, both directions, and apply the standing cost.
-
-        The engine creates the relation record (`first_contact`, a no-op when
-        one exists) and adjusts the clamped standing score; only the relation
-        code is written directly. No "Declares War" news item is generated.
+        The engine registers a war Treaty naming `civ` as the declarer, makes
+        first contact and writes War into both civs' relation records. Callers
+        check `remote.war_protection` first, as the UI's validator does.
         """
         if other.addr == civ.addr:
             raise ValueError("a civ cannot declare war on itself")
         if self.dry_run:
             self.log(f"  [WOULD DECLARE WAR] {civ.civ_name!r} -> "
-                     f"{other.civ_name!r}, both directions")
+                     f"{other.civ_name!r}, through the engine")
             return None
         if self.remote is None:
             raise RuntimeError("declare_war needs a remote.Remote")
-
-        for a, b in ((civ, other), (other, civ)):
-            self.remote.first_contact(a.addr, b.addr)
-        wrote = []
+        treaty = self.remote.declare_war(civ.addr, civ.id, other.addr, other.id)
+        self.log(f"  war treaty 0x{treaty:08X}: {civ.civ_name!r} declares war "
+                 f"on {other.civ_name!r}")
+        codes = []
         for a, b in ((civ, other), (other, civ)):
             rec = self.remote.relation_record(a.addr, b.addr)
-            if rec is None:
-                raise RuntimeError(
-                    f"no relation record for {a.civ_name!r} -> {b.civ_name!r} "
-                    f"even after first contact; refusing to half-declare")
-            before = self.snap.rd32(rec + remote.RELATION_CODE_OFF)
-            self._u32(rec + remote.RELATION_CODE_OFF, self.WAR,
-                      f"{a.civ_name!r} -> {b.civ_name!r}: "
-                      f"{self.RELATION_NAMES.get(before, before)} -> War")
-            wrote.append(rec)
-
-        delta = (self.WAR_REPUTATION_DELTA if reputation_delta is None
-                 else reputation_delta)
-        if delta:
-            for a, b in ((civ, other), (other, civ)):
-                self.remote.add_reputation(a.addr, b.addr, delta)
-            self.log(f"  applied {delta:+d} reputation both ways")
-        else:
-            self.log("  [!] NO reputation change applied; the UI's figure is "
-                     "not known, so declaring war is currently FREE. Fine while "
-                     "every civ runs this code; not fine against a human.")
-        return all(self.snap.rd32(r + remote.RELATION_CODE_OFF) == self.WAR
-                   for r in wrote)
+            codes.append(self.snap.rd32(rec + remote.RELATION_CODE_OFF)
+                         if rec else None)
+        return all(c == self.WAR for c in codes)
 
     # G: set a planet's recruitment rate (Planet:100 byte 3).
     # The UI maximum is per planet: 40% plus 20% per military camp. The engine
@@ -1160,8 +1337,9 @@ class Actuator:
         self._f32(ord_ptr + ORD_PROGRESS, 0.0, "route progress -> 0")
 
         # set_type=False leaves Ship:52 alone, for callers that set the type
-        # and target node together through Ship::SetCommand. Types 1, 4 and 7
-        # with Ship:56 still the null node crash the client.
+        # and target node together through Ship::SetCommand. With Ship:56 the
+        # null node the type is harmless: HasActiveTargetedOrder reads false
+        # and the ship follows the route written here.
         if set_type:
             self._u32(ship.addr + SHIP_ORDER_TYPE, order_type,
                       f"order type -> {name}")

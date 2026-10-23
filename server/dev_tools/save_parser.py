@@ -42,7 +42,7 @@ KNOWN_TAGS = {
     b'DATA', b'OWPR', b'KNPL', b'EXSY', b'HQAS', b'CVTR', b'SERV', b'DSGN',
     b'SDPR', b'GOVS', b'ADMS', b'SPQS', b'USSE', b'SOLA', b'SUN ', b'PLNT',
     b'PLPR', b'PROD', b'WLTH', b'ENLI', b'SHIP', b'DYNO', b'SHCO', b'SHPR',
-    b'ROUT', b'NEBU', b'CZYY', b'INFO',
+    b'ROUT', b'NEBU', b'CZYY', b'INFO', b'FLET', b'FLDT', b'SPRQ', b'PRQU',
 }
 
 SIZE_MASK     = 0x03FFFFFF

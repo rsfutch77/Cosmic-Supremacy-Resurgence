@@ -42,6 +42,7 @@ CLIENT_DIR = os.path.dirname(HERE)
 REPO_ROOT = os.path.dirname(CLIENT_DIR)
 
 IMAGE_BASE = 0x00400000
+CREATE_NO_WINDOW = 0x08000000
 
 _FAILED = (
     b"%s setup partly failed!\n\nIt appears as if you do not have sufficient "
@@ -166,7 +167,8 @@ def site_state(data: bytes, va: int, original: bytes, patched: bytes) -> str:
 def is_tracked(path: str) -> bool:
     try:
         r = subprocess.run(['git', 'ls-files', '--error-unmatch', path],
-                           cwd=REPO_ROOT, capture_output=True)
+                           cwd=REPO_ROOT, capture_output=True,
+                           creationflags=CREATE_NO_WINDOW if os.name == 'nt' else 0)
     except OSError:
         return False
     return r.returncode == 0

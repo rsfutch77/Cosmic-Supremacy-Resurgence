@@ -15,6 +15,8 @@ served back from here with a 304 to a launcher that already holds it.
 
 What it enforces:
   * the caller holds a verified Firebase ID token, or nothing is answered
+  * an email and password sign-in joins and submits only once its address
+    is verified
   * a caller writes only its own submission, resolved through the seat map
   * only the referee publishes a turn, starts a galaxy, archives, or notes;
     no authenticated path here does any of those
@@ -101,6 +103,10 @@ STATE_CEILING = float(os.environ.get('CS_RELAY_STATE_CEILING', '60'))  # 0 = off
 # Longest hold for the galaxy listing, in seconds; 0 turns it off.
 LISTING_SECONDS = float(os.environ.get('CS_RELAY_LISTING_SECONDS', '60'))
 
+# The refusal an email account gets until its address is verified. The
+# launcher finds it by this sentence.
+UNVERIFIED = 'verify the email address of this account before it joins or plays'
+
 _STORES = {}
 _APP = None
 # galaxy -> (when it was read, how long it may be served, the document)
@@ -148,7 +154,12 @@ def _jwt_claims(token: str) -> dict:
 
 
 def verify(token: str) -> str:
-    """The uid this token belongs to, or a refusal.
+    """The uid this token belongs to, or a refusal."""
+    return verify_claims(token)['uid']
+
+
+def verify_claims(token: str) -> dict:
+    """This token's claims, with `uid` set, or a refusal.
 
     Against the Auth emulator (`FIREBASE_AUTH_EMULATOR_HOST` set) tokens are
     unsigned, so the claims are checked here. Anywhere else `firebase_admin`
@@ -168,7 +179,7 @@ def verify(token: str) -> str:
         uid = claims.get('user_id') or claims.get('sub')
         if not uid:
             raise Refused(401, 'this token names no user')
-        return uid
+        return dict(claims, uid=uid)
     try:
         import firebase_admin
         from firebase_admin import auth
@@ -181,9 +192,19 @@ def verify(token: str) -> str:
         except ValueError:
             _APP = firebase_admin.initialize_app(options={'projectId': name})
     try:
-        return auth.verify_id_token(token, app=_APP)['uid']
+        return auth.verify_id_token(token, app=_APP)
     except Exception as exc:                                    # noqa: BLE001
         raise Refused(401, f'this token was refused: {type(exc).__name__}')
+
+
+def verified_or_refuse(claims: dict):
+    """Refuse an email and password sign-in whose address is not verified.
+
+    A guest has no address and a Google sign-in's is Google's, so both pass.
+    """
+    provider = (claims.get('firebase') or {}).get('sign_in_provider')
+    if provider == 'password' and not claims.get('email_verified'):
+        raise Refused(403, UNVERIFIED)
 
 
 def bearer(headers: dict) -> str:
@@ -734,9 +755,11 @@ LOG_BODY_MAX = 512 * 1024
 LOG_PER_UID_PER_DAY = int(os.environ.get('CS_RELAY_LOG_PER_UID', '5'))
 LOG_PER_DAY = int(os.environ.get('CS_RELAY_LOG_PER_DAY', '100'))
 
-# Each upload deletes up to LOG_PRUNE_BATCH logs older than LOG_KEEP_DAYS.
-# `expire_at` is also written, for a Firestore TTL policy.
+# A log and a day's counts carry `expire_at`, which the Firestore TTL policies
+# in `deploy.py` delete by. Each upload also deletes up to LOG_PRUNE_BATCH logs
+# older than LOG_KEEP_DAYS.
 LOG_KEEP_DAYS = 14
+LOG_QUOTA_KEEP_DAYS = 2     # a day's counts outlive the day they count
 LOG_PRUNE_BATCH = 5
 
 # Why a log was sent. Anything else is recorded as `other`.
@@ -837,7 +860,9 @@ def _take_log(uid: str, body: bytes):
         if total >= LOG_PER_DAY:
             raise Refused(429, 'the operator has had as many logs today as '
                                'can be kept; try again tomorrow')
-        tx.set(quota, {'total': total + 1, 'uids': {uid: mine + 1}},
+        tx.set(quota, {'total': total + 1, 'uids': {uid: mine + 1},
+                       'expire_at': stamp + datetime.timedelta(
+                           days=LOG_QUOTA_KEEP_DAYS)},
                merge=True)
         tx.set(ref, record)
 
@@ -886,7 +911,8 @@ def _route(method: str, path: str, headers: dict, body: bytes):
         raise Refused(403, 'a log is sent here and read by the operator, and '
                            'this door serves none back')
     galaxy, parts = parts[0], parts[1:]
-    uid = verify(bearer(headers))
+    claims = verify_claims(bearer(headers))
+    uid = claims['uid']
     store = store_for(galaxy)
 
     if method in ('GET', 'HEAD'):
@@ -960,6 +986,9 @@ def _route(method: str, path: str, headers: dict, body: bytes):
                                'caller only about its own request')
 
     if method == 'POST':
+        if parts == ['join'] or parts[:1] == ['submission'] \
+                or parts[:2] == ['commit', 'submission']:
+            verified_or_refuse(claims)
         if parts == ['join']:
             return _lodge_join(store, doc, uid, body)
         if parts and parts[0] in ('join', 'joins'):

@@ -69,6 +69,16 @@ os.environ.setdefault('FIREBASE_AUTH_EMULATOR_HOST', AUTH_HOST)
 import save_parser as sp                                        # noqa: E402
 from firebase_store import FirebaseTurnStore                     # noqa: E402
 from turn_store import HttpTurnStore                             # noqa: E402
+import turn_store                                               # noqa: E402
+
+# The storage emulator serves a turn over http from its own port, where the
+# live relay's signed URL names storage.googleapis.com.
+STORAGE_HOST = urllib.parse.urlparse(
+    os.environ.get('STORAGE_EMULATOR_HOST') or 'http://127.0.0.1:9199').netloc
+_store_allows = turn_store._allowed_url
+turn_store._allowed_url = lambda url, base: (
+    urllib.parse.urlparse(url).netloc == STORAGE_HOST
+    or _store_allows(url, base))
 
 PASS, FAIL = [], []
 TURN = 7
@@ -221,6 +231,11 @@ def test_route(relay, L, root, fs, ids):
     check('the id starts with when and the player code',
           reply.get('id'), lambda i: bool(i) and f'-{uid_a[:8]}-' in i)
     check('it can expire', rec.get('expire_at') is not None, True)
+    counts = fs.collection(relay.LOG_QUOTA_COLLECTION).document(
+        relay.log_day(rec['received_at'])).get().to_dict() or {}
+    check('and so can the day\'s counts, which name the sender',
+          (uid_a in (counts.get('uids') or {}),
+           counts.get('expire_at') is not None), (True, True))
 
     # Nothing reads a log back through the relay, the sender included.
     check('GET of the collection is refused',

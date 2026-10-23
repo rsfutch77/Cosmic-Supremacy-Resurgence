@@ -44,6 +44,23 @@ def bump(blob, oid):
     return mo.set_research(blob, oid, (bytes(first),) + tuple(cur[1:]))
 
 
+def with_completed(blob, oid, tech):
+    """`blob` with one more completed technology on a civ, as the engine
+    records it: the count raised and an [id, cost] record appended."""
+    import struct
+    owpr = mo._owpr(blob, oid)
+    body = bytearray(blob[owpr.payload:owpr.end])
+    m = struct.unpack_from('<I', body, mo.OWPR_MAP_COUNT_OFF)[0]
+    n_at = mo.OWPR_MAP_COUNT_OFF + 4 + m * mo.OWPR_RECORD
+    n = struct.unpack_from('<I', body, n_at)[0]
+    struct.pack_into('<I', body, n_at, n + 1)
+    at = n_at + 4 + n * mo.OWPR_RECORD
+    body[at:at] = struct.pack('<II', tech, 1600)
+    tree = sp.parse_blob(blob)
+    sec = next(s for s in tree[0].find('OWPR') if s.payload == owpr.payload)
+    return sp.replace_payload(blob, tree, sec, bytes(body))
+
+
 def main():
     if not os.path.exists(GALAXY):
         print(f'no fixture at {GALAXY}')
@@ -98,6 +115,21 @@ def main():
           len(said), 1)
     check('and the refusal names whose it is',
           b['name'] in (said[0] if said else ''), True)
+
+    # The topic follows the completed list, which grows as research completes.
+    print('\na civ with more research completed')
+    grown = with_completed(served, a['oid'], 18)
+    check('the completed list reads three technologies',
+          mo.completed_research(grown, a['oid']),
+          mo.completed_research(served, a['oid']) + [18])
+    check('and the topic still reads as served',
+          mo.research_of(grown, a['oid']), mo.research_of(served, a['oid']))
+    out = mo.merge(grown, [(a['name'], bump(grown, a['oid']))], log=quiet)
+    check('a topic change lands', mo.research_of(out, a['oid']),
+          mo.research_of(bump(grown, a['oid']), a['oid']))
+    check('and leaves the completed list alone',
+          mo.completed_research(out, a['oid']),
+          mo.completed_research(grown, a['oid']))
 
     print(f'\n{len(PASS)} passed, {len(FAIL)} failed')
     return 1 if FAIL else 0

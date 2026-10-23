@@ -10,6 +10,7 @@ priority order, writes, and sleeps.
     python ai.py --apply --follow --turns 20
     python ai.py --apply --follow --drive 10   # also shorten turns to 10s
     python ai.py --apply --follow --drive 10 --halt-on-contact
+    python ai.py --apply --follow --metrics run.jsonl
 
 `--halt-on-contact` stops the loop on the first turn an enemy planet is visible,
 after the rules have run (so R-XTM-03 has already committed the fleet), and
@@ -29,6 +30,7 @@ import exploit
 import exterminate
 import explore
 import gamestate as gs
+import metrics
 import remote
 import sensors
 
@@ -36,12 +38,29 @@ TURN_COUNTER    = gs.TURN_COUNTER
 TURNLENGTH_ADDR = 0x0080AA08
 DEFAULT_LENGTH  = 3600
 
+# A snapshot taken during turn resolution can show part of an empire. A civ
+# read below this fraction of last turn's planet count is re-read.
+TORN_FRACTION = 0.5
+
+
+def looks_torn(now, before):
+    """True when `now` planets reads like a partial copy of `before`.
+
+    Zero planets is always suspect: a civ that truly holds nothing has lost.
+    """
+    return now == 0 or (bool(before) and now < before * TORN_FRACTION)
+
+
+def planet_count(hist):
+    """Planets the civ held at the last pass, or None before the first."""
+    return len(hist.prev["planets"]) if hist.prev else None
+
 # Rule order is a strategy decision. Only shipyard planets can make ships, while
 # facilities can be built anywhere, so ship builds get first claim on production.
 RULES = [
     # 1. Preserve what exists. A wreck must not be claimed by anything else,
     #    and a starving colony undoes any amount of expansion.
-    ("R-XTM-05", exterminate.run_xtm05),      # withdraw damaged ships
+    ("R-XTM-05", exterminate.run_xtm05),      # withdraw damaged ships (and R-EXP-04)
     ("R-XTM-00", exterminate.run_xtm00),      # declare war (off by default)
     ("S-food",   exploit.run_food),           # famine / surplus farmers
     ("R-XPL-01", exploit.run_jobs),           # the rest of the job mix
@@ -52,24 +71,32 @@ RULES = [
     ("R-XTM-07", exterminate.run_xtm07),      # a troop hull while anything is takeable
     ("R-XPN-01", expand.run_xpn01),           # colony ships
     ("R-EXP-01", explore.run_exp01),          # dedicated scouts
+    ("R-XTM-10", exterminate.run_xtm10),      # keep one of each wanted scan in stock
+    ("R-XPL-03", exploit.run_wealth),         # wealth where nothing is worth building
+    ("R-XPL-07", exploit.run_liquidate),      # sell facilities in a collapse
     ("R-XPL-02", exploit.run_facilities),     # facilities take what is left
-    ("R-XPL-08", exploit.run_hurry),          # spend surplus cash on all of it
 
     # 3. Crew, then research. Crew gates every order rule below.
-    #    Conscription runs before the loader; a unit drafted this turn is
-    #    loaded next turn, since this pass's snapshot predates the draft.
+    #    Conscription runs before the loader, which reads the garrison live,
+    #    so a unit drafted this pass is loaded in the same pass.
     ("R-XPL-05", exploit.run_crew_supply),
     ("R-XPL-09", exploit.run_conscript),
     ("R-XPL-06", exploit.run_crew_load),
+    ("R-XPL-08", exploit.run_hurry),          # cash above the reserve, after crew
     ("R-XPL-04", exploit.run_research),
 
-    # 4. Orders: garrison, conquer, raid, colonise, scout.
+    # 4. Orders: garrison, conquer, defend, raid, rally, probe, colonise, scout.
     #    A hull that just took a planet lands its troops before R-XTM-04 sends
     #    it on, or the planet rebels. Invasions claim undefended targets before
-    #    raids pick defended ones.
+    #    raids pick defended ones. Defence takes staged warships before a raid
+    #    can. Warships nothing claimed go to the staging planet. A probe claims
+    #    its scout before Explore can.
     ("R-XTM-06", exterminate.run_xtm06),
     ("R-XTM-04", exterminate.run_xtm04),
+    ("R-XTM-02", exterminate.run_xtm02),
     ("R-XTM-03", exterminate.run_xtm03),
+    ("R-XTM-08", exterminate.run_xtm08),
+    ("R-XTM-09", exterminate.run_xtm09),
     ("R-XPN-02", expand.run_xpn02),
     ("R-EXP-02", explore.run_exp02),
 ]
@@ -126,6 +153,8 @@ class Loop:
         # Set by run(); one_pass uses it to notice when it is outrunning the
         # turn it is deciding for.
         self.drive = None
+        # A metrics.Recorder, or None. Set by main() from --metrics.
+        self.metrics = None
 
     def turn(self):
         b = gs.ev.read_bytes(self.state.handle, TURN_COUNTER, 4)
@@ -184,10 +213,10 @@ class Loop:
     def _snapshot_settled(self, tries=3, pause=1.5):
         """Snapshot, and retry if the galaxy looks half-rewritten.
 
-        A snapshot taken during turn resolution can show a civ owning no
-        planets. A civ cannot lose every planet between two turns, so that read
-        is treated as torn and repeated.
+        A read that `looks_torn` against last turn's planet count is repeated.
+        After `tries` reads the last one is used.
         """
+        had = planet_count(self.history)
         for attempt in range(tries):
             t0 = time.time()
             snap = gs.Snapshot(self.state)
@@ -197,13 +226,11 @@ class Loop:
             self.last_scan_tries = attempt + 1
             if civ is None:
                 return snap, None
-            if snap.owned_planets(civ):
+            now = len(snap.owned_planets(civ))
+            if not looks_torn(now, had):
                 return snap, civ
-            # Retried on the first pass too, when there is no history. A civ
-            # that truly holds nothing has already lost.
-            had = self.history.prev and self.history.prev["planets"]
-            self.log(f"[loop] read 0 planets"
-                     + (f" for a civ that had {len(had)}" if had else "")
+            self.log(f"[loop] read {now} planet(s)"
+                     + (f" for a civ that had {had}" if had else "")
                      + f"; turn resolution may still be in flight, "
                        f"re-reading ({attempt + 1}/{tries})")
             time.sleep(pause)
@@ -266,17 +293,23 @@ class Loop:
                        hist=self.history, log=self.log)
                 elif fn in (exploit.run_food, explore.run_exp02,
                             exploit.run_facilities, exploit.run_jobs,
-                            exploit.run_hurry, exploit.run_crew_supply,
+                            exploit.run_hurry, exploit.run_wealth,
+                            exploit.run_liquidate,
+                            exploit.run_crew_supply,
                             exploit.run_conscript,
                             explore.run_exp01,
                             expand.run_xpn01,
                             exterminate.run_xtm00,
+                            exterminate.run_xtm02,
                             exterminate.run_xtm01,
                             exterminate.run_xtm03,
                             exterminate.run_xtm04,
                             exterminate.run_xtm05,
                             exterminate.run_xtm06,
-                            exterminate.run_xtm07):
+                            exterminate.run_xtm07,
+                            exterminate.run_xtm08,
+                            exterminate.run_xtm09,
+                            exterminate.run_xtm10):
                     fn(snap, civ, act, self.history, log=self.log)
                 else:
                     fn(snap, civ, act, log=self.log)
@@ -287,6 +320,8 @@ class Loop:
                 rule_times[name] = time.time() - rule_started
         # Record this pass's spending so next turn's income reading excludes it.
         self.history.note_cash_effect(act.cash_effect)
+        # Intel read by the rules this pass.
+        self.history.save()
         self.passes += 1
         self.log(f"    {act.summary()}")
         if self.remote is not None:
@@ -295,6 +330,8 @@ class Loop:
         # marker. It is written after every rule has run, atomically, so a
         # killed loop cannot leave a file that reads as a completed turn.
         self._mark_pass_done(snap.turn)
+        if self.metrics is not None:
+            self.metrics.record(snap, [self])
 
         elapsed = time.time() - pass_started
         slow = sorted(rule_times.items(), key=lambda kv: -kv[1])[:3]
@@ -339,16 +376,14 @@ class Loop:
             foes = exterminate.enemies(snap, civ, act)
             if not foes:
                 return
-            ranked = exterminate.target_planets(snap, civ, self.history, foes)
+            seen = exterminate.enemy_planets(snap, civ, self.history, foes)
         except Exception as e:
             self.log(f"[loop] contact check raised {type(e).__name__}: {e}")
             return
-        if not ranked:
+        if not seen:
             return
-        weakness, target = ranked[0]
-        self.halt_reason = (
-            f"CONTACT on turn {snap.turn}: {len(ranked)} enemy planet(s) "
-            f"visible, weakest is {target} (weakness {weakness})")
+        self.halt_reason = (f"CONTACT on turn {snap.turn}: {len(seen)} enemy "
+                            f"planet(s) visible")
 
     def run(self, follow=False, max_turns=None, drive=None, stall=None):
         original = None
@@ -436,6 +471,8 @@ def main():
                 top=opt("--top", 0, int),
                 settle=opt("--settle", 1.5, float),
                 halt_on_contact=cli.flag(args, "--halt-on-contact"))
+    if opt("--metrics"):
+        loop.metrics = metrics.Recorder(opt("--metrics"), log=loop.log)
     loop.run(follow=cli.flag(args, "--follow"),
              max_turns=opt("--turns", None, int),
              drive=opt("--drive", None, int),

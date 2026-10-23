@@ -96,7 +96,7 @@ EXCLUDE_PAGES = {
 
 # Injected into staged pages only; the mirror on disk is never modified. The
 # archived markup is someone else's work, so every served page says so and says
-# how to reach whoever is hosting it.
+# how to reach whoever is hosting it, and links the terms page's privacy section.
 NOTICE = """
 <div style="max-width:990px;margin:0 auto;padding:14px 18px;
      font:11px Verdana,Arial,sans-serif;color:#7a94ad;line-height:1.6;
@@ -108,6 +108,8 @@ NOTICE = """
   If you are the original owner and would like this taken down or handed over,
   contact us in the <a href="https://www.facebook.com/groups/145339627564"
   style="color:#a9c6e0;text-decoration:underline;">Facebook group</a>.
+  <br><a href="/support_terms.php.html#privacy"
+  style="color:#a9c6e0;text-decoration:underline;">Privacy</a>
 </div>
 """
 
@@ -256,8 +258,10 @@ def mark_missing_images(html, page_rel, staged):
         if not candidates(src, base):      # external image, not ours to judge
             return m.group(0)
         found.append(src)
+        # The comment opener is split from the "[ ]" so a TODO scanner finds the
+        # marker in the staged pages, where it is a task, and not here.
         return (
-            '<!-- [ ] TODO(image): not in the web archive, needs a replacement: '
+            '<!--' ' [ ] TODO(image): not in the web archive, needs a replacement: '
             + src.replace("--", "- -") + ' -->'
             '<span style="display:inline-block;padding:4px 8px;border:1px dashed #b00;'
             'color:#b00;font:11px Verdana,sans-serif;background:#fff5f5;">'

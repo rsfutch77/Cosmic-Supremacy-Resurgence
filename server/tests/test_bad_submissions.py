@@ -33,10 +33,9 @@ import referee
 from turn_store import TurnStore
 
 GALAXY = os.path.join(ROOT, 'server', 'galaxy_demo')
-# A different galaxy, not a different turn of this one. (`duel3.b64` is this
-# same galaxy at turn 3.)
-OTHER_GALAXY = os.path.join(ROOT, 'server', 'saves',
-                            'save_066_20260918_015123_g0_t110.b64')
+# A different galaxy, not a different turn of this one: the Single Player
+# galaxy, which is tracked. (`duel3.b64` is this same galaxy at turn 3.)
+OTHER_GALAXY = os.path.join(ROOT, 'client', 'SinglePlayerGalaxy.dat')
 TURN = 9
 ROSTER = ['DemoPlayer', 'Neighbor', 'BadGuy']
 

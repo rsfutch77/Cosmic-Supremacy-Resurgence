@@ -165,11 +165,10 @@ def release_client_lock():
 def resolve_exe(which=None):
     """Pick a client build.
 
-    Resurgence and TestBed differ by 22 bytes at six sites, the turn pipeline
-    bypasses that let a client advance a turn with no server. Two of them also
-    NOP the guards on the homeworld setup prompts.
+    Resurgence and TestBed differ by 14 bytes at four sites, the turn pipeline
+    bypasses that let a client advance a turn with no server.
 
-        resurgence   ticks without a server, offers the setup prompts always
+        resurgence   ticks without a server, gates the prompts as shipped
         testbed      waits for a server tick, gates the prompts as shipped
         player       testbed, plus one byte that silences the coat-of-arms
                      prompt; built by patch_hide_setup_prompts.py --build

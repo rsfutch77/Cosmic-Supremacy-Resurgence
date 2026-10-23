@@ -252,6 +252,55 @@ def grants(tid):
     return GRANTS.get(tid, ())
 
 
+# GetTrait (0x00516180), reproduced from memory: the base trait at
+# Owner:(748 + 4t), plus every completed item's TRAIT grant for t, plus a flat
+# +50 to the four output traits (2-5) during a golden age (trait 43, read from
+# Owner:744) or -20 when trait 44 is set instead.
+TRAIT_BASE = 748
+GOLDEN_AGE_TRAIT, DARK_AGE_TRAIT = 43, 44
+PLANET_SPACE_TRAIT = 38
+NO_AGE = 9999
+
+
+def _i32(civ, off):
+    u = civ.snap.rd32(civ.addr + off)
+    return None if u is None else u - (1 << 32) if u & 0x80000000 else u
+
+
+def _age_trait(civ, t):
+    v = _i32(civ, TRAIT_BASE - 4)             # Owner:744
+    if v is None or v == NO_AGE or v == 0:
+        return 0
+    if t == GOLDEN_AGE_TRAIT:
+        return v if v > 0 else 0
+    return -v if v < 0 else 0
+
+
+def trait(civ, t):
+    """A civ trait as the engine applies it: base + research + age bonus.
+
+    Memoised on the civ object, which lives for one snapshot.
+    """
+    memo = civ.__dict__.setdefault("_traits", {})
+    if t not in memo:
+        memo[t] = _trait(civ, t)
+    return memo[t]
+
+
+def _trait(civ, t):
+    if t in (GOLDEN_AGE_TRAIT, DARK_AGE_TRAIT):
+        return _age_trait(civ, t)
+    value = _i32(civ, TRAIT_BASE + 4 * t) or 0
+    value += sum(v for tid, _cost in civ.completed
+                 for kind, oid, v in grants(tid) if kind == TRAIT and oid == t)
+    if 2 <= t <= 5:
+        if _age_trait(civ, GOLDEN_AGE_TRAIT) > 0:
+            value += 50
+        elif _age_trait(civ, DARK_AGE_TRAIT) > 0:
+            value -= 20
+    return value
+
+
 def describe_grants(tid):
     """Human-readable 'what you get', for the decision log."""
     out = []
@@ -323,12 +372,18 @@ def unlocked_by(kind, obj_id):
 
 
 def available(done, allow_doctrines=ALLOW_DOCTRINES, by_value=True,
-              boost=None):
-    """Every legal pick, best first: by grant value, then costFactor, then id."""
+              boost=None, costly_first=False):
+    """Every legal pick, best first: by grant value, then costFactor, then id.
+
+    `costly_first` reverses the costFactor tiebreak. A tech's price is its
+    costFactor times the techs completed before it, so a fixed set of techs
+    costs least bought highest-factor first.
+    """
     ok = [t for t in sorted(TECHS) if selectable(t, done, allow_doctrines)]
+    sign = -1 if costly_first else 1
     if not by_value:
-        return sorted(ok, key=lambda t: (TECHS[t][1], t))
-    return sorted(ok, key=lambda t: (-value(t, boost), TECHS[t][1], t))
+        return sorted(ok, key=lambda t: (sign * TECHS[t][1], t))
+    return sorted(ok, key=lambda t: (-value(t, boost), sign * TECHS[t][1], t))
 
 
 def explain(tid, done):

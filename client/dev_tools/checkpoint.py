@@ -6,8 +6,11 @@ checkpoint.py: named restore points for the running game
     python checkpoint.py restore t41     # close the client, bring it up on t41
 
 A checkpoint is the engine's raw save blob at `client/checkpoints/<name>.dat`,
-in the form the client accepts on its command line. `game_cycle.py` does the
-capture and the relaunch.
+in the form the client accepts on its command line, plus the AI's persisted
+state at that moment in `client/checkpoints/<name>.state/` (discovery, intel
+and quiet planets per civ). Restoring puts both back, so a controller resumed
+from a checkpoint knows only what it knew on that turn. `game_cycle.py` does
+the capture and the relaunch.
 """
 import argparse
 import os
@@ -24,8 +27,40 @@ sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(REPO, "server", "dev_tools"))
 
 
+STATE_PREFIX = "discovered_"     # the AI's per-galaxy, per-civ state files
+
+
 def path_for(name):
     return os.path.join(CHECKPOINTS, f"{name}.dat")
+
+
+def state_dir_for(name):
+    return os.path.join(CHECKPOINTS, f"{name}.state")
+
+
+def save_state(name):
+    """Copy the AI's state files beside checkpoint `name`."""
+    dest = state_dir_for(name)
+    os.makedirs(dest, exist_ok=True)
+    files = [f for f in os.listdir(STATE)
+             if f.startswith(STATE_PREFIX)] if os.path.isdir(STATE) else []
+    for f in files:
+        shutil.copy2(os.path.join(STATE, f), os.path.join(dest, f))
+    print(f"  AI state: {len(files)} file(s) -> {dest}")
+
+
+def restore_state(name):
+    """Put checkpoint `name`'s AI state files back, replacing newer ones."""
+    src = state_dir_for(name)
+    if not os.path.isdir(src):
+        print(f"  [!] {name!r} has no saved AI state; the controller keeps "
+              f"whatever is newest, which may be from a later turn")
+        return
+    os.makedirs(STATE, exist_ok=True)
+    files = os.listdir(src)
+    for f in files:
+        shutil.copy2(os.path.join(src, f), os.path.join(STATE, f))
+    print(f"  AI state: {len(files)} file(s) restored from {src}")
 
 
 def turn_of(capture):
@@ -58,6 +93,7 @@ def do_save(name=None):
     blob = sp.decode_save(open(capture).read())
     with open(dest, "wb") as f:
         f.write(blob)
+    save_state(name)
     print(f"\ncheckpoint {name!r}: {dest} ({len(blob):,} bytes)")
     print(f"  from {os.path.basename(capture)}")
     return dest
@@ -85,9 +121,11 @@ def do_restore(name, fresh_map=False):
         raise SystemExit(f"no checkpoint named {name!r}; try `checkpoint.py list`")
     if fresh_map and os.path.isdir(STATE):
         for f in os.listdir(STATE):
-            if f.startswith("discovered_"):
+            if f.startswith(STATE_PREFIX):
                 os.remove(os.path.join(STATE, f))
                 print(f"  cleared {f}")
+    else:
+        restore_state(name)
     gc.close_client()
     gc.launch(dat)
 

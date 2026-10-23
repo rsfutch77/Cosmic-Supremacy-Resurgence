@@ -25,6 +25,16 @@ the runtime service account has no private key. Once, by the operator:
 
 The runtime account is the one the deploy reports, granted the role on itself.
 Without it every signed URL raises about a missing private key.
+
+Sent logs and the daily log counts are deleted by Firestore TTL policies on
+their `expire_at` field. Once, by the operator:
+
+    gcloud firestore fields ttls update expire_at \\
+        --collection-group=beta_logs --enable-ttl --project cs-resurgence
+    gcloud firestore fields ttls update expire_at \\
+        --collection-group=beta_log_quota --enable-ttl --project cs-resurgence
+
+`gcloud firestore fields ttls list --project cs-resurgence` shows them.
 """
 import argparse
 import os

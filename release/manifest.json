@@ -1,6 +1,6 @@
 {
   "product": "Cosmic Supremacy: Resurgence",
-  "version": "0.2.2",
+  "version": "0.3.0",
   "server": {
     "host": "127.0.0.1",
     "port": 8888
@@ -42,6 +42,8 @@
       "needs_server": true,
       "show": true,
       "controls": true,
+      "continues": true,
+      "generate": "TestBedGalaxy_local.csgalaxy",
       "ai": { "civ": "BadGuy" }
     },
     {

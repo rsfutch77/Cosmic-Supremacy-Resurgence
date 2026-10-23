@@ -67,14 +67,54 @@ DEMO_USERID   = 1
 DEMO_PASSHASH = 'abcdef'   # from DemoGalaxy_local.csgalaxy token
 DEMO_GALAXY_ID = 0
 
-# Civ state for this server session: { userid_str: {'civname': str, 'coaid': str} }
-_civ_state: dict = {}
+# Civ name and coat of arms per user, { userid_str: {'civname': str, 'coaid': str} },
+# kept in DATA_DIR so a name chosen in one session is there in the next.
+CIV_FILE = os.path.join(DATA_DIR, 'civs.json')
+TUTORIAL_FILE = os.path.join(DATA_DIR, 'tutorial.json')
+
+# Uploaded coats of arms, <id>.png. Ids count up from 1 and are never reused,
+# since the client caches each id's texture for good.
+COA_DIR = os.path.join(DATA_DIR, 'coa')
+COA_MAX_BYTES = 256 * 1024
+PNG_SIGNATURE = b'\x89PNG\r\n\x1a\n'
+
+
+def _next_coa_id() -> int:
+    try:
+        used = [int(n[:-4]) for n in os.listdir(COA_DIR)
+                if n.endswith('.png') and n[:-4].isdigit()]
+    except OSError:
+        used = []
+    return max(used, default=0) + 1
+_civ_state: 'dict | None' = None
 
 def _default_civ() -> dict:
     return {'civname': 'DemoEmpire', 'coaid': '0'}
 
+def _civs() -> dict:
+    global _civ_state
+    if _civ_state is None:
+        try:
+            import json as _json
+            with open(CIV_FILE, 'r', encoding='utf-8') as f:
+                got = _json.load(f)
+            _civ_state = got if isinstance(got, dict) else {}
+        except (OSError, ValueError):
+            # Absent or corrupt reads as no civs, which serves the default.
+            _civ_state = {}
+    return _civ_state
+
 def _get_civ(userid: str) -> dict:
-    return _civ_state.get(userid, _default_civ())
+    return dict(_default_civ(), **_civs().get(userid, {}))
+
+def _set_civ(userid: str, **fields):
+    import json as _json
+    civs = _civs()
+    civs[userid] = dict(_get_civ(userid), **fields)
+    tmp = CIV_FILE + '.tmp'
+    with open(tmp, 'w', encoding='utf-8') as f:
+        _json.dump(civs, f, indent=2, sort_keys=True)
+    os.replace(tmp, CIV_FILE)
 
 # Every savegame POST is written to saves/ verbatim (base64 as sent) with a .json
 # sidecar of the other fields. Each save gets its own sequence number and none is
@@ -181,6 +221,100 @@ def _allocate_gameid(idx: dict) -> int:
     return n
 
 
+# The governor library: one entry per saved governor, kept across galaxies.
+# The client sends govid -1 for a new name and an existing id to overwrite, and
+# never reads an id back, so the server numbers them.
+GOV_DIR   = os.path.join(DATA_DIR, 'governors')
+GOV_INDEX = os.path.join(GOV_DIR, 'index.json')
+GOV_VERSION = 2       # what the client sends; loadgov decompresses only above 1
+
+
+def _read_gov_index() -> dict:
+    try:
+        import json as _json
+        with open(GOV_INDEX, 'r', encoding='utf-8') as f:
+            idx = _json.load(f)
+        return idx if isinstance(idx, dict) else {}
+    except (OSError, ValueError):
+        return {}
+
+
+def _write_gov_index(idx: dict):
+    import json as _json
+    os.makedirs(GOV_DIR, exist_ok=True)
+    tmp = GOV_INDEX + '.tmp'
+    with open(tmp, 'w', encoding='utf-8') as f:
+        _json.dump(idx, f, indent=2, sort_keys=True)
+    os.replace(tmp, GOV_INDEX)
+
+
+def _gov_id(params: dict) -> int:
+    try:
+        return int(params.get('govid', ['-1'])[0])
+    except ValueError:
+        return -1
+
+
+def _governor_action(action: str, params: dict, raw_body: str):
+    idx = _read_gov_index()
+
+    # Reply: <id>#SPC#<name>#SPC#<extra line>...#NEXT#...DONE, or a bare DONE.
+    # Extra fields show as grey lines under the name.
+    if action == 'govlist':
+        recs = [f"{k}#SPC#{v['name']}#SPC#Saved {v.get('saved', '')}"
+                for k, v in sorted(idx.items(), key=lambda kv: int(kv[0]))]
+        log(f'  -> govlist: {len(recs)} governor(s)')
+        return 200, 'text/plain', '#NEXT#'.join(recs + ['DONE'])
+
+    govid = _gov_id(params)
+
+    # Request: govid, govname, version, data (base64 of the zlib'd Governor).
+    if action == 'savegov':
+        name = _clean_field(params.get('govname', [''])[0].strip("'"))
+        raw = _raw_data_field(raw_body) if raw_body else None
+        data = raw if raw is not None else params.get('data', [''])[0]
+        try:
+            version = int(params.get('version', [str(GOV_VERSION)])[0])
+        except ValueError:
+            version = GOV_VERSION
+        if str(govid) not in idx:
+            govid = _allocate_gameid(idx)
+        os.makedirs(GOV_DIR, exist_ok=True)
+        with open(os.path.join(GOV_DIR, f'{govid}.b64'), 'w', encoding='ascii',
+                  errors='replace') as f:
+            f.write(data)
+        idx[str(govid)] = {'name': name or f'Governor {govid}', 'version': version,
+                           'saved': datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}
+        _write_gov_index(idx)
+        log(f'  -> savegov: govid={govid} name={name!r} version={version} '
+            f'{len(data)} chars')
+        # The client checks for DONE (0x4a0c3f).
+        return 200, 'text/plain', 'DONE'
+
+    # Reply: DONE#VER#<6 digits>#DATA#<base64>. Anything else reads as a failure.
+    if action == 'loadgov':
+        entry = idx.get(str(govid))
+        path = os.path.join(GOV_DIR, f'{govid}.b64')
+        if entry is None or not os.path.exists(path):
+            log(f'  -> loadgov: govid={govid} not in the library')
+            return 200, 'text/plain', 'ERROR'
+        with open(path, 'r', encoding='ascii', errors='replace') as f:
+            data = f.read()
+        log(f'  -> loadgov: govid={govid} {entry["name"]!r}')
+        return 200, 'text/plain', (f'DONE#VER#{entry.get("version", GOV_VERSION):06d}'
+                                   f'#DATA#{data}')
+
+    # delgov: the client drops the entry from its list on DONE.
+    idx.pop(str(govid), None)
+    _write_gov_index(idx)
+    try:
+        os.remove(os.path.join(GOV_DIR, f'{govid}.b64'))
+    except OSError:
+        pass            # already gone, which is what was asked
+    log(f'  -> delgov: govid={govid}')
+    return 200, 'text/plain', 'DONE'
+
+
 def _clean_field(text: str) -> str:
     """Drop '#' from a player-supplied name, so it cannot form the #SPC# or
     #NEXT# list delimiters."""
@@ -222,34 +356,69 @@ def handle_action(action: str, params: dict, raw_body: str = '') -> tuple[int, s
         # Request: action=uploadcivname&userid=<n>&passhash='<h>'&civname='<name>'
         # The game does not check the response body.
         userid  = params.get('userid', ['1'])[0]
-        civname = params.get('civname', [''])[0].strip("'")
+        civname = _clean_field(params.get('civname', [''])[0].strip("'"))
         if civname:
-            civ = _civ_state.setdefault(userid, _default_civ())
-            civ['civname'] = civname
-            log(f'  -> uploadcivname: userid={userid} civname={civname!r} (persisted)')
+            try:
+                _set_civ(userid, civname=civname)
+                log(f'  -> uploadcivname: userid={userid} civname={civname!r} (persisted)')
+            except OSError as e:
+                # Still answered OK: the game does not check, and the name holds
+                # for this session.
+                _civs()[userid] = dict(_get_civ(userid), civname=civname)
+                log(f'  !! uploadcivname: userid={userid} civname={civname!r} not written: {e}')
         else:
             log(f'  -> uploadcivname: userid={userid} (no civname param, ignored)')
         return 200, 'text/plain', 'OK'
 
-    # Response: coaid#NEXT#DONE, one coaid per record. The game calls getcoa only
-    # for coaids listed here.
+    # Response: the user's coat-of-arms ids, separated by spaces, read with
+    # operator>> until one fails (0x497b90). Empty for none. The dialog then
+    # calls getcoa for each.
     if action == 'listcoa':
         userid = params.get('userid', ['1'])[0]
-        coaid  = _get_civ(userid)['coaid']
-        body   = f'{coaid}#NEXT#DONE'
-        log(f'  -> listcoa: userid={userid} coaid={coaid} ({len(body)} bytes)')
+        ids = _get_civ(userid).get('coas', [])
+        log(f'  -> listcoa: userid={userid} ids={ids}')
+        return 200, 'text/plain', ' '.join(str(i) for i in ids)
+
+    # Response: the image as plain base64, no line breaks (0x5f5f10), or FAIL.
+    # getapprovedcoa is the same fetch for another civ's coaid (0x517260).
+    if action in ('getcoa', 'getapprovedcoa'):
+        try:
+            coaid = int(params.get('coaid', ['0'])[0])
+        except ValueError:
+            coaid = 0
+        path = os.path.join(COA_DIR, f'{coaid}.png')
+        if coaid <= 0 or not os.path.exists(path):
+            log(f'  -> {action}: coaid={coaid} unknown')
+            return 200, 'text/plain', 'FAIL'
+        import base64
+        with open(path, 'rb') as f:
+            body = base64.b64encode(f.read()).decode('ascii')
+        log(f'  -> {action}: coaid={coaid} ({len(body)} chars)')
         return 200, 'text/plain', body
 
-    if action == 'getcoa':
-        # A 1x1 placeholder PNG.
-        import base64
-        empty_png = base64.b64decode(
-            'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=='
-        )
-        return 200, 'image/png', empty_png
-
+    # Request: version=1&data=<base64 PNG, not URL-encoded>, the image dragged
+    # into the dialog at 56x66. Response: the new coaid in decimal, -1 refused.
     if action == 'uploadcoa':
-        return 200, 'text/plain', 'OK'
+        import base64
+        userid = params.get('userid', ['1'])[0]
+        raw = _raw_data_field(raw_body) if raw_body else None
+        try:
+            png = base64.b64decode(raw if raw is not None
+                                   else params.get('data', [''])[0])
+        except ValueError:
+            png = b''
+        if not png.startswith(PNG_SIGNATURE) or len(png) > COA_MAX_BYTES:
+            log(f'  !! uploadcoa: userid={userid} not a PNG within '
+                f'{COA_MAX_BYTES} bytes ({len(png)} bytes), refused')
+            return 200, 'text/plain', '-1'
+        coaid = _next_coa_id()
+        os.makedirs(COA_DIR, exist_ok=True)
+        with open(os.path.join(COA_DIR, f'{coaid}.png'), 'wb') as f:
+            f.write(png)
+        civ = _get_civ(userid)
+        _set_civ(userid, coaid=str(coaid), coas=civ.get('coas', []) + [coaid])
+        log(f'  -> uploadcoa: userid={userid} coaid={coaid} ({len(png)} bytes)')
+        return 200, 'text/plain', str(coaid)
 
     # The client does strncmp(response, "DONE", 4) at 0x0048b350 and shows
     # "Failed to save the Save-Game" for anything else.
@@ -332,36 +501,24 @@ def handle_action(action: str, params: dict, raw_body: str = '') -> tuple[int, s
         log(f'  -> loadgame: gameid={gameid} not in the save index, returning empty')
         return 200, 'text/plain', 'DONE#VER#000000#DATA#'
 
-    # A governor id is part of a file name, so it must be digits only.
-    govid = params.get('govid', ['0'])[0]
-    if action in ('savegov', 'loadgov') and not (govid.isascii() and govid.isdigit()):
-        log(f'  !! {action}: govid {govid!r} is not a number, refused')
-        return 400, 'text/plain', 'ERROR'
+    if action in ('savegov', 'govlist', 'loadgov', 'delgov'):
+        return _governor_action(action, params, raw_body)
 
-    if action == 'savegov':
-        govid    = params.get('govid',   ['0'])[0]
-        govname  = params.get('govname', [''])[0].strip("'")
-        data_str = params.get('data',    [''])[0]
-        gov_path = os.path.join(DATA_DIR, f'save_gov_{govid}.dat')
-        with open(gov_path, 'wb') as f:
-            f.write(data_str.encode('latin-1'))
-        log(f'  -> savegov: govid={govid} name={govname} {len(data_str)} bytes')
-        # The client checks for DONE, as for savegame (0x4a0c3f).
-        return 200, 'text/plain', 'DONE'
-
-    if action == 'govlist':
-        return 200, 'text/plain', 'DONE'
-
-    if action == 'loadgov':
-        govid    = params.get('govid', ['0'])[0]
-        gov_path = os.path.join(DATA_DIR, f'save_gov_{govid}.dat')
-        if os.path.exists(gov_path):
-            gov_data = open(gov_path, 'rb').read().decode('latin-1')
-            # Assumed to use the loadgame format, DONE#VER#<6>#DATA#.
-            return 200, 'text/plain', 'DONE#VER#000000#DATA#' + gov_data
-        return 200, 'text/plain', 'DONE#VER#000000#DATA#'
-
+    # Sent once, when the last Tutorial step is shown. The launcher reads the
+    # file to mark the Tutorial completed.
     if action == 'passedtutorial':
+        userid = params.get('userid', ['0'])[0]
+        import json as _json
+        try:
+            tmp = TUTORIAL_FILE + '.tmp'
+            with open(tmp, 'w', encoding='utf-8') as f:
+                _json.dump({'passed': True, 'userid': userid,
+                            'at': datetime.datetime.now().isoformat(timespec='seconds')},
+                           f, indent=2)
+            os.replace(tmp, TUTORIAL_FILE)
+            log(f'  -> passedtutorial: userid={userid} (recorded)')
+        except OSError as e:
+            log(f'  !! passedtutorial: userid={userid} not recorded: {e}')
         return 200, 'text/plain', 'OK'
 
     if action == 'entertestbedgalaxy':

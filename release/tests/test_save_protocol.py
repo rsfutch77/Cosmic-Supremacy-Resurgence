@@ -9,6 +9,7 @@ Speaks the wire format directly, without the game:
     loadgame      -> DONE#VER#<6>#DATA#<blob>
 """
 import http.client
+import json
 import os
 import shutil
 import sys
@@ -113,6 +114,86 @@ idx = os.path.join(DATA, "saves", "index.json")
 check("index.json written", os.path.exists(idx), True)
 cs_server_index = cs_server._read_index()
 check("three slots recorded", len(cs_server_index), 3)
+
+print("\n10. the civ name survives a server restart")
+check("an unnamed civ is the default",
+      post("listcivnames", userid=1), "DemoEmpire#SPC#0#NEXT#DONE")
+post("uploadcivname", userid=1, passhash="'abcdef'", civname="'Vega Union'")
+check("the new name is listed",
+      post("listcivnames", userid=1), "Vega Union#SPC#0#NEXT#DONE")
+check("civs.json written", os.path.exists(os.path.join(DATA, "civs.json")), True)
+cs_server._civ_state = None             # what a fresh process starts with
+check("and read back after a restart",
+      post("listcivnames", userid=1), "Vega Union#SPC#0#NEXT#DONE")
+check("another user still gets the default",
+      post("listcivnames", userid=2), "DemoEmpire#SPC#0#NEXT#DONE")
+
+print("\n11. a finished Tutorial is recorded")
+done_file = os.path.join(DATA, "tutorial.json")
+check("nothing is recorded before it", os.path.exists(done_file), False)
+check("the client is answered OK",
+      post("passedtutorial", userid=0, passhash="'abcdef'"), "OK")
+check("tutorial.json says so",
+      json.load(open(done_file, encoding="utf-8")).get("passed"), True)
+
+
+def raw_post(action, body):
+    """A POST whose body is sent as the client sends it, base64 unescaped."""
+    c = http.client.HTTPConnection("127.0.0.1", 8899, timeout=5)
+    c.request("POST", f"/clientinterface.php?action={action}", body,
+              {"Content-Type": "application/x-cosmicsupremacy",
+               "Content-Length": str(len(body))})
+    out = c.getresponse().read().decode("latin-1")
+    c.close()
+    return out
+
+
+print("\n12. the governor library")
+GOV = "eJy+rule/s+AA=="        # base64 with '+' and '/', which parse_qs would mangle
+check("an empty library is a bare DONE", post("govlist", userid=1), "DONE")
+saved = raw_post("savegov", "userid=1&passhash='abcdef'&govid=-1&"
+                 f"govname='Core worlds'&version=2&data={GOV}")
+check("a new governor (govid -1) is taken", saved, "DONE")
+lst = post("govlist", userid=1)
+check("and listed as id 1 with its name", lst.startswith("1#SPC#Core worlds#SPC#Saved "),
+      True)
+check("the list ends in DONE", lst.endswith("#NEXT#DONE"), True)
+check("loading it gives version 2 and the data byte for byte",
+      post("loadgov", userid=1, govid=1), f"DONE#VER#000002#DATA#{GOV}")
+raw_post("savegov", "userid=1&passhash='abcdef'&govid=1&govname='Core worlds'&"
+         "version=2&data=bmV3")
+check("saving under an existing id overwrites it",
+      post("loadgov", userid=1, govid=1), "DONE#VER#000002#DATA#bmV3")
+raw_post("savegov", "userid=1&passhash='abcdef'&govid=-1&govname='Mining'&"
+         "version=2&data=bWlu")
+check("a second new name gets id 2",
+      post("govlist", userid=1).count("#NEXT#"), 2)
+check("deleting answers DONE", post("delgov", userid=1, govid=1), "DONE")
+check("and the list keeps only the other",
+      post("govlist", userid=1).startswith("2#SPC#Mining#SPC#"), True)
+check("a deleted governor does not load",
+      post("loadgov", userid=1, govid=1).startswith("DONE#VER#"), False)
+
+print("\n13. coats of arms")
+import base64                                                   # noqa: E402
+PNG = base64.b64encode(
+    b"\x89PNG\r\n\x1a\n" + b"\x00\x00\x00\rIHDR" + bytes(range(256)) * 3).decode()
+check("a user with none lists nothing", post("listcoa", userid=7), "")
+check("an unknown id is FAIL", post("getcoa", coaid=0), "FAIL")
+check("an upload answers the new id",
+      raw_post("uploadcoa", f"userid=7&passhash='abcdef'&version=1&data={PNG}"), "1")
+check("which is listed", post("listcoa", userid=7), "1")
+check("and served back as the same base64", post("getcoa", coaid=1), PNG)
+check("to other civs too", post("getapprovedcoa", coaid=1), PNG)
+check("a file that is not a PNG is refused with -1",
+      raw_post("uploadcoa", "userid=7&passhash='abcdef'&version=1&data=bm90IGEgcG5n"),
+      "-1")
+check("a second upload gets the next id",
+      raw_post("uploadcoa", f"userid=7&passhash='abcdef'&version=1&data={PNG}"), "2")
+check("and both are listed, space separated", post("listcoa", userid=7), "1 2")
+check("the civ's coaid is the newest",
+      json.load(open(os.path.join(DATA, "civs.json"), encoding="utf-8"))["7"]["coaid"],
+      "2")
 
 srv.shutdown()
 shutil.rmtree(DATA, ignore_errors=True)
