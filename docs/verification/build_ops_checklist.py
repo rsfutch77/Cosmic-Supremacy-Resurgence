@@ -261,6 +261,10 @@ REL = [
      'Microsoft Learn, "Code signing options for Windows app developers" (29 August 2026)',
      ['Azure Artifact Signing (about $9.99 a month) accepts individuals in the USA and Canada only; check the operator\'s eligibility.',
       'Record the choice in `docs/DEVELOPMENT.md` under Building a release.']),
+    ('REL-7', 'The live referee runs the released code. The sandbox runs a staged copy, so a release that is not restaged leaves the referee on the old merge rules.',
+     'This project',
+     ['The referee is restaged from the tag with `server\\sandbox\\stage.ps1` and restarted between turns (`docs/DEVELOPMENT.md`, Release checklist step 10).',
+      '`C:\\CSReferee\\out\\bootstrap.log` names the tag\'s commit, with no `+`, and the next turn closes under it.']),
 ]
 
 PRIV = [
