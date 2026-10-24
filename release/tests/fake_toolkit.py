@@ -55,6 +55,12 @@ class FakeToolkit:
         self.calls.append(url.split("/")[-1].split("?")[0])
         if self.offline:
             raise urllib.error.URLError("getaddrinfo failed")
+        if url.startswith(fb_auth.SIGNUP_URL) and "idToken" in payload:
+            uid = self.tokens[payload["idToken"]]
+            if payload["email"] in self.accounts:
+                self._refuse(url, "EMAIL_EXISTS")
+            self.accounts[payload["email"]] = (uid, payload["password"])
+            return dict(self._issue(uid), email=payload["email"])
         if url.startswith(fb_auth.SIGNUP_URL):
             self.n += 1
             uid = f"uid{self.n}"
@@ -80,13 +86,12 @@ class FakeToolkit:
                     "expires_in": "3600"}
         if url.startswith(fb_auth.UPDATE_URL):
             uid = self.tokens[payload["idToken"]]
-            if "displayName" in payload:
-                self.names[uid] = payload["displayName"]
-                return {"localId": uid}
-            if payload["email"] in self.accounts:
-                self._refuse(url, "EMAIL_EXISTS")
-            self.accounts[payload["email"]] = (uid, payload["password"])
-            return dict(self._issue(uid), email=payload["email"])
+            if "email" in payload:
+                # The live project's email enumeration protection.
+                self._refuse(url, "OPERATION_NOT_ALLOWED : Please verify the "
+                                  "new email before changing email.")
+            self.names[uid] = payload["displayName"]
+            return {"localId": uid}
         if url.startswith(fb_auth.PASSWORD_URL):
             uid, password = self.accounts.get(payload["email"], (None, None))
             if uid is None or password != payload["password"]:

@@ -54,7 +54,7 @@ TOOLKIT = "https://identitytoolkit.googleapis.com/v1/"
 SIGNUP_URL = TOOLKIT + "accounts:signUp"
 REFRESH_URL = "https://securetoken.googleapis.com/v1/token"
 DELETE_URL = TOOLKIT + "accounts:delete"
-UPDATE_URL = TOOLKIT + "accounts:update"            # links an email to the guest
+UPDATE_URL = TOOLKIT + "accounts:update"            # sets the display name
 PASSWORD_URL = TOOLKIT + "accounts:signInWithPassword"
 OOB_URL = TOOLKIT + "accounts:sendOobCode"          # reset and verification emails
 LOOKUP_URL = TOOLKIT + "accounts:lookup"
@@ -513,8 +513,11 @@ class FirebaseIdentity:
             guest = self.token()
             if not guest:
                 raise AuthError("OFFLINE")
+            # signUp with the guest's token links, as the client SDKs do. The
+            # project's email enumeration protection refuses an email set
+            # through accounts:update.
             try:
-                got = self._call(UPDATE_URL, {"idToken": guest, "email": email,
+                got = self._call(SIGNUP_URL, {"idToken": guest, "email": email,
                                               "password": password,
                                               "returnSecureToken": True})
             except NETWORK_ERRORS as exc:
