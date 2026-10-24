@@ -71,7 +71,13 @@ if (-not $Store -and -not $Seed) {
     exit 2
 }
 
-$Cfg = Get-Content (Join-Path $Repo 'server\.venv\pyvenv.cfg')
+# A worktree has no venv of its own, so the main checkout's is staged.
+$Venv = Join-Path $Repo 'server\.venv'
+if (-not (Test-Path $Venv)) {
+    $Main = Split-Path -Parent (& git -C $Repo rev-parse --path-format=absolute --git-common-dir)
+    $Venv = Join-Path $Main 'server\.venv'
+}
+$Cfg = Get-Content (Join-Path $Venv 'pyvenv.cfg')
 $PyHome = (($Cfg | Where-Object { $_ -match '^home\s*=' }) -split '=', 2)[1].Trim()
 if (-not (Test-Path $PyHome)) {
     Write-Host "The venv's Python home $PyHome does not exist." -ForegroundColor Red
@@ -94,6 +100,9 @@ $Skip = @('/XD', '__pycache__', 'saves', 'worker_work', 'referee_work', 'join_wo
           'galaxy_demo', 'uidemo', 'snapshots', 'checkpoints', 'state', 'tests',
           '/XF', '*.log', '*.dmp', '*.dat', '*.b64', '*.sqlite3', '*.bak')
 Copy-Tree (Join-Path $Repo 'server') (Join-Path $Code 'server') $Skip
+if ($Venv -ne (Join-Path $Repo 'server\.venv')) {
+    Copy-Tree $Venv (Join-Path $Code 'server\.venv') @('/XD', '__pycache__')
+}
 Copy-Tree (Join-Path $Repo 'client\dev_tools') (Join-Path $Code 'client\dev_tools') $Skip
 Get-ChildItem (Join-Path $Repo 'client') -Filter '*.exe' |
     Copy-Item -Destination (New-Item -ItemType Directory -Force (Join-Path $Code 'client'))
@@ -148,6 +157,7 @@ $Config = [ordered]@{ store = $Store; seed = $SeedName; bucket = $Bucket; once =
 $Config | ConvertTo-Json | Set-Content -Encoding utf8 (Join-Path $Stage 'config.json')
 
 $Commit = (& git -C $Repo rev-parse --short HEAD 2>$null)
+if (& git -C $Repo status --porcelain 2>$null) { $Commit += '+' }     # a dirty tree
 Set-Content -Encoding utf8 (Join-Path $Stage 'commit.txt') $Commit
 
 function Map($HostDir, $SandboxDir, $ReadOnly) {
