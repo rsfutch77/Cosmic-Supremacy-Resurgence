@@ -42,8 +42,9 @@ def image_key(src):
 # Absent by choice, not by accident.
 INTENTIONAL = ("forum/", "wiki/wallpapers", "wiki/tools", "wiki/dev.html",
                "chat.php", "download_firewall",
-               "galaxy@", "galaxyscores@",   # per-galaxy pages are not published
-               "demogalaxy.php")             # a login file for the original server
+               "demogalaxy.php",             # a login file for the original server
+               "downloads/CosmicSupremacy.msi",  # releases ship from GitHub
+               "downloads/d3dx9_")           # Microsoft's DirectX runtime
 
 
 def _broken_links(dst, staged, candidates):
@@ -62,16 +63,20 @@ def _broken_links(dst, staged, candidates):
             cands = candidates(url, base)
             if not cands or any(c in staged for c in cands):
                 continue
-            target = cands[0]
+            target = next((c for c in cands if "sid=" not in c), cands[0])
             if not target.startswith(INTENTIONAL):
                 broken[target] += 1
     return broken
 
 
-def write(path, image_todos, dst, staged, candidates):
-    """image_todos maps an img src to the list of pages it appears on."""
+def write(path, image_todos, dst, staged, candidates, unlinked):
+    """image_todos maps an img src to the list of pages it appears on, and
+    unlinked counts the targets of links the build removed."""
     gone = never_archived()
     broken = _broken_links(dst, staged, candidates)
+    for target, n in unlinked.items():
+        if not target.startswith(INTENTIONAL):
+            broken[target] += n
     lost_links = {t: n for t, n in broken.items() if t in gone}
     for target in lost_links:
         del broken[target]
@@ -101,8 +106,8 @@ def write(path, image_todos, dst, staged, candidates):
         "## Broken links (%d targets, %d references)" % (
             len(broken), sum(broken.values())),
         "",
-        "These resolve to pages the mirror does not hold but the Wayback",
-        "Machine might. Check its CDX API before adding one to never_archived.txt.",
+        "The mirror does not hold these, but the Wayback Machine might. The site",
+        "shows each link as plain text. Check the CDX API before never_archived.txt.",
         "",
     ]
     for target, n in broken.most_common():
@@ -114,7 +119,7 @@ def write(path, image_todos, dst, staged, candidates):
             len(lost_images), len(lost_links)),
         "",
         "The Wayback Machine has no capture of these (`never_archived.txt`).",
-        "Images show a grey `image not archived` marker; links lead to the 404 page.",
+        "Images show a grey `image not archived` marker; links show as plain text.",
         "",
     ]
     for src, pages in sorted(lost_images.items(), key=lambda kv: (-len(kv[1]), kv[0])):

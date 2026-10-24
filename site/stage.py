@@ -53,7 +53,8 @@ REF_RE = re.compile(
 CSS_URL_RE = re.compile(r"""url\(\s*['"]?([^'")]+)['"]?\s*\)""", re.I)
 
 ASSET_EXT = {".css", ".js", ".png", ".jpg", ".jpeg", ".gif", ".ico",
-             ".mp4", ".svg", ".ttf", ".woff", ".woff2", ".swf"}
+             ".mp4", ".svg", ".ttf", ".woff", ".woff2", ".swf",
+             ".psd"}   # the logos page offers the logo's Photoshop source
 PAGE_EXT = {".html", ".htm"}
 
 # DokuWiki serves its CSS and JS through PHP endpoints (css.php, js.php) and its
@@ -215,6 +216,9 @@ def local_for(url_path, query, as_html):
     return rel[len(prefix):] if rel.startswith(prefix) else rel
 
 
+SELECTING_PARAMS = {"page", "galid"}
+
+
 def candidates(ref, base_dir):
     """Mirror-relative paths this reference could mean, best guess first.
 
@@ -255,6 +259,18 @@ def candidates(ref, base_dir):
                 return candidates(mp.path, "")
         return []
 
+    # The mirror's rewriter already turned some links into its own filenames,
+    # `screenshots@sid=abc.php.html`, so the query is read back out of the name.
+    folder, name = posixpath.split(rel)
+    if "@" in name and not query:
+        stem, _at, rest = name.partition("@")
+        rest = rest[:-5] if rest.endswith(".html") else rest
+        ext = ".php" if rest.endswith(".php") else ""
+        decoded = "/" + posixpath.join(folder, stem + ext)
+        out = [rel] + [c for c in candidates(decoded + "?" + rest[:len(rest) - len(ext)], "")
+                       if c != rel]
+        return out
+
     queries = [query]
     if query:
         kept = [kv for kv in urllib.parse.parse_qsl(query, keep_blank_values=True)
@@ -262,7 +278,9 @@ def candidates(ref, base_dir):
         without_sid = urllib.parse.urlencode(kept)
         if without_sid != query:
             queries.append(without_sid)
-        if "" not in queries:
+        # `?page=2` or `?galid=5` names different content, so the bare page
+        # does not stand in for it.
+        if "" not in queries and not {k.lower() for k, _v in kept} & SELECTING_PARAMS:
             queries.append("")
 
     out = []
@@ -373,6 +391,41 @@ def unlink_red_links(html, page_rel, staged):
     return _RED_LINK_RE.sub(sub, html), count
 
 
+# An internal link to anything not published keeps its text and loses the link.
+# A pager button for a page that was never captured is dropped, and a pager
+# with no buttons left goes with it.
+_ANCHOR_RE = re.compile(r"<a\b([^>]*)>(.*?)</a\s*>", re.I | re.S)
+_PAGER_BUTTON_RE = re.compile(
+    r"^\s*(?:&laquo;|«)?\s*(?:\d+|next|prev|previous|first|last)?\s*(?:&raquo;|»)?\s*$",
+    re.I)
+_PAGER_RE = re.compile(r"<p\b[^>]*>\s*Pages \(\d+\):.*?</p>", re.I | re.S)
+
+
+def unlink_dead_links(html, page_rel, staged):
+    """Return the page and the target of each link it removed."""
+    base = posixpath.dirname(page_rel)
+    dead = []
+
+    def sub(m):
+        href = _HREF_ATTR_RE.search(m.group(1))
+        if not href:
+            return m.group(0)
+        cands = candidates(href.group(1) or href.group(2) or "", base)
+        if not cands or any(c in staged for c in cands):
+            return m.group(0)
+        dead.append(next((c for c in cands if "sid=" not in c), cands[0]))
+        inner = m.group(2)
+        return "" if inner.strip() and _PAGER_BUTTON_RE.match(inner) else inner
+
+    def pager(m):
+        if not re.search(r"<a\b", m.group(0), re.I):
+            return ""
+        # The ellipsis led to the last page; without a link after it, it goes too.
+        return re.sub(r"<b>\s*\.\.\.\s*</b>(?![\s\S]*<a\b)", "", m.group(0))
+
+    return _PAGER_RE.sub(pager, _ANCHOR_RE.sub(sub, html)), dead
+
+
 NOTICE_MARK = "property of their original creator"
 _ANY_ROBOTS_RE = re.compile(r"\s*<meta[^>]+name=[\"']robots[\"'][^>]*>", re.I)
 
@@ -443,13 +496,16 @@ def is_page(rel):
     return os.path.splitext(rel)[1].lower() in PAGE_EXT
 
 
+FOLLOW_PREFIXES = ("wiki/", "community_", "game_news@", "galaxy@", "galaxyscores@")
+
+
 def follow_links(rel, copied, missing):
     """Stage the archived pages a staged page links to that its set left out.
 
     These are captures named after their query string, mostly DokuWiki image
     viewers and backlink lists. A session-id capture is a duplicate of the clean
-    page, so a link is only followed to a capture without one. Only wiki pages
-    are followed; the game's per-galaxy and score pages are not published.
+    page, so a link is only followed to a capture without one, and only into
+    the wiki, the community pages, and the galaxy and score pages they list.
     """
     with open(os.path.join(DST, rel.replace("/", os.sep)),
               "r", encoding="utf-8", errors="replace") as fh:
@@ -461,7 +517,7 @@ def follow_links(rel, copied, missing):
         for cand in candidates(match.group("url"), posixpath.dirname(rel)):
             if cand in copied:
                 break
-            if (is_page(cand) and cand.startswith("wiki/") and "sid=" not in cand
+            if (is_page(cand) and cand.startswith(FOLLOW_PREFIXES) and "sid=" not in cand
                     and not cand.startswith(inventory.INTENTIONAL)
                     and cand not in EXCLUDE_PAGES and mirror_file(cand)
                     and copy(cand, copied, missing)):
@@ -589,6 +645,7 @@ def main():
     staged = set(copied)
     rewritten = 0
     red_links = 0
+    dead_links = {}
     patch_hits = {}
     image_todos = {}
     for rel in sorted(copied):
@@ -604,6 +661,10 @@ def main():
         # Patches run first: they strip the indexer beacon, which would
         # otherwise be counted and marked as a missing image on every page.
         text, hit = patches.apply_all(text)
+        # After the patches, which repoint some links that would otherwise go.
+        text, gone = unlink_dead_links(text, rel, staged)
+        for target in gone:
+            dead_links[target] = dead_links.get(target, 0) + 1
         text, missing_imgs = mark_missing_images(text, rel, staged)
         for src in missing_imgs:
             image_todos.setdefault(src, []).append(rel)
@@ -634,12 +695,14 @@ def main():
     print("  links repointed at staged pages: %d" % rewritten)
     print("  linked pages staged from outside the set: %d" % followed)
     print("  red links to unwritten wiki pages unlinked: %d" % red_links)
+    print("  links to unpublished targets unlinked: %d" % sum(dead_links.values()))
     if override_count:
         print("  hand-written overrides applied:  %d" % override_count)
     for name, n in sorted(patch_hits.items()):
         print("  site-wide patch: %-32s %d pages" % (name, n))
     n_img, n_tgt, n_ref = inventory.write(
-        os.path.join(HERE, "TODO-content.md"), image_todos, DST, staged, candidates)
+        os.path.join(HERE, "TODO-content.md"), image_todos, DST, staged, candidates,
+        dead_links)
     print("  TODO-content.md: %d missing images, %d broken link targets (%d refs)"
           % (n_img, n_tgt, n_ref))
     if image_todos:

@@ -264,6 +264,21 @@ SMILEYS = {
     "fixme.gif":          ("\N{WARNING SIGN}", "FIXME"),
     "delete.gif":         ("\N{CROSS MARK}", "DELETEME"),
     "wink.gif":           ("\N{WINKING FACE}", ";-)"),
+    # The forum's set, which the news posts use. None of it was archived.
+    "smile.gif":          ("\N{SLIGHTLY SMILING FACE}", "Smile"),
+    "biggrin.gif":        ("\N{GRINNING FACE WITH SMILING EYES}", "Big Grin"),
+    "confused.gif":       ("\N{CONFUSED FACE}", "Confused"),
+    "cool.gif":           ("\N{SMILING FACE WITH SUNGLASSES}", "Cool"),
+    "crying.gif":         ("\N{CRYING FACE}", "Crying"),
+    "eek.gif":            ("\N{FACE SCREAMING IN FEAR}", "Shocked"),
+    "evil.gif":           ("\N{SMILING FACE WITH HORNS}", "Evil"),
+    "lol.gif":            ("\N{FACE WITH TEARS OF JOY}", "LOL"),
+    "mad.gif":            ("\N{POUTING FACE}", "Mad"),
+    "neutral.gif":        ("\N{NEUTRAL FACE}", "Neutral"),
+    "redface.gif":        ("\N{FLUSHED FACE}", "Red Face"),
+    "rolleyes.gif":       ("\N{FACE WITH ROLLING EYES}", "Roll Eyes"),
+    "surprised.gif":      ("\N{FACE WITH OPEN MOUTH}", "Surprised"),
+    "tongue.gif":         ("\N{FACE WITH STUCK-OUT TONGUE}", "Tongue"),
 }
 
 _SMILEY_IMG_RE = re.compile(
