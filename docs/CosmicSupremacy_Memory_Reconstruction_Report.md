@@ -354,15 +354,19 @@ test them.
 | **Attack** | **4** | confirmed on a fleet, the order lives on `Fleet:52`, and every member record inherits it rather than carrying its own |
 
 So a scout targets a *system* while move and conquer target *planets*, and the destination's identity
-distinguishes the orders as reliably as the id does. Ids `6` and anything above `7` remain
-unaccounted for and should cover bio-bomb and create-wormhole.
+distinguishes the orders as reliably as the id does. `6` is bio-bomb and `8` create wormhole, from
+the engine's order-name table at `0x7FC898`.
 
-[ ] **conscript a citizen without the UI.** Crew comes from either conscription (pay cash
+[x] **conscript a citizen without the UI.** Crew comes from either conscription (pay cash
 for an immediate unit) or the per-planet recruitment rate at `Planet:100` byte 3 plus a wait.
 The rate is a plain byte and is reachable; conscription is a UI button whose memory-side effect
 is unknown. Diff a planet and the civ across a single conscription click: expect cash down,
 the `Planet:168` stationed-military vector up by one, and possibly a population change. Until
 this is solved an external controller can only raise the rate and wait.
+**Solved October 2026, through the engine rather than by a diff.** `ChangeCitizenJobs`
+`0x00574180` with job id 3, priced by `GetDraftCost` `0x00516060`. Confirmed live: citizens −1,
+stationed military +1, cash down by exactly the quoted 115. `actions.conscript`, actuator N in
+`client/dev_tools/ai_player/STRATEGY.md`.
 
 **Loading crew without the UI, SOLVED (Aug 2026).** A stationed military unit, a ship's
 crew member and a planet citizen are the SAME 16-byte record, `[jobId, flags, owner-node,
@@ -380,7 +384,9 @@ engine and the ship flies, but nothing has checked whether the UI also updates s
 move does not, a per-civ military total, or a morale or upkeep figure. Diff a planet and a
 ship across one context-menu load and compare with what `load_crew` writes.
 
-[ ] identify the bio-bomb and create-wormhole order ids in `Ship:52`, needs a bio ship and a wormhole ship
+[x] identify the bio-bomb and create-wormhole order ids in `Ship:52`, needs a bio ship and a wormhole ship.
+**6 is bio-bomb and 8 is create wormhole**, with 7 move-near, from the engine's own order-name
+table at `0x7FC898`. A type-8 order also sets `Ship:61`, its 11-turn countdown (STRATEGY.md §2.3).
 
 **`Ship:76` is not simply "an order exists".** It reads `1` on the local player's ordered ships and `0`
 on the AI's, even when the AI ship carries a valid order type and a fully populated order object. It
@@ -581,8 +587,8 @@ static's presence carries no diplomatic meaning, which cost one wrong conclusion
 
 **Remaining diplomacy work**, all deferred, war was the piece that mattered for the prototype:
 
-[ ] record the other `Treaty:16` type values by proposing each treaty kind, only `3` (war) is known, and the ids may not be contiguous
-[ ] decode the propose-treaty flow: whether a proposal creates a `Treaty` immediately or only on acceptance, and what `Treaty:12` and `Treaty:20` mean once a treaty has a duration (RTTI has a `TreatyLength` class)
+[ ] record the other `Treaty:16` type values by proposing each treaty kind, only `3` (war) is known, and the ids may not be contiguous. The declare-war button passes kind `1` to the proposal's setter `0x0055AD90`, so the proposal kind and the stored `Treaty:16` are not the same number
+[ ] decode the propose-treaty flow: whether a proposal creates a `Treaty` immediately or only on acceptance, and what `Treaty:12` and `Treaty:20` mean once a treaty has a duration (RTTI has a `TreatyLength` class). War is answered: the button builds an unregistered proposal (`0x5C` bytes, ctor `0x00559A60`), and apply `0x0055C3E0` copies it into a registered `Treaty`, makes first contact and writes War into both relation records; the proposal is then destroyed (`remote.declare_war`). The treaties that need acceptance are not
 [ ] find where "send message" state lives, RTTI has `SendMessageDlg` and `MessageListener`, so there is likely a message list per civ
 [ ] find the per-civ colour field behind "change color", likely a plain value on `Owner`, and a cheap write test would confirm it
 [ ] locate the `Fleet` registry so a fabricated fleet can be registered, make a fleet, scan memory for pointers to it, then find the `.data` vector holding the array, exactly as the `Treaty` registry was found
@@ -732,7 +738,7 @@ Not investigated. Deferred deliberately: news is a *record of* events the protot
 through other structures, so it is presentation rather than authoritative state, and nothing in the
 minimum playable loop depends on it.
 
-[ ] **investigate the News tab as a unit.** Expected shape, by analogy with what is already
+[x] **investigate the News tab as a unit.** Done October 2026, see "News items located" below. Expected shape, by analogy with what is already
 mapped: a per-civ `std::vector` of event records, most likely on `Owner` (compare `Owner:320`, the
 scan-report vector) or in a `.data` registry (compare the `Ship` and `Treaty` registries).
 Attackable by the method that worked for scan reports and for known players, take a snapshot, cause
@@ -814,23 +820,33 @@ Its idle value is `9999` rather than `0` while the UI shows 0 turns, so 9999 is 
 golden age" sentinel; that part is inferred, not tested.
 
 **`Owner:932/936/940` are the only offsets the engine overwrote**, it accepted probes `58/59/60`
-and reset all three to `0` on the next turn, while everything from 748 to 928 held. `932` is the
-leading candidate for **dark age turns**, cleared because a golden age was active, but that is a
-hypothesis built on one observation.
+and reset all three to `0` on the next turn, while everything from 748 to 928 held. They are not
+dark age turns, which was the leading guess: see below.
 
-Four items remain open:
+**Trait `t` is `Owner:(748 + 4t)`**, from `GetTrait` `0x00516180`, which `research.trait`
+reproduces and which matched the engine on all 46 traits with distinct probes (October 2026). The
+engine's value is that base, plus every completed item's trait grant, plus +50 on traits 2-5 in a
+golden age or −20 in a dark age. **Golden and dark age share `Owner:744`**: trait 43 is a positive
+value there and trait 44 a negative one, so `GetTrait` never reads the slots at `Owner:920/924`.
+`Owner:932/936/940` would be traits 46-48, past the 46 that were matched.
 
-[ ] resolve `Owner:788` (ship shield strength): probe `22` displayed as **−12**, but the doctrine's
+[x] resolve `Owner:788` (ship shield strength): probe `22` displayed as **−12**, but the doctrine's
 −10 shield penalty predicts **+12**. Either the sign was transcribed wrong or the penalty is not a
 flat −10, and since every other doctrine-affected trait fits the additive model exactly, this one
-disagreement is worth settling before the model is trusted
-[ ] separate `Owner:792`: the screen showed `23` for **both** "income per citizen" and "ship units
-bonus", and only this offset holds 23, so one of the two is derived or lives outside the block
-[ ] identify `Owner:748` and `Owner:752`, which held probes `12`/`13` that no trait displayed.
+disagreement is worth settling before the model is trusted. **A transcription error:** it displayed
++12, so every doctrine-affected trait fits the additive model (see the `Owner:788` annotation)
+[x] separate `Owner:792`: the screen showed `23` for **both** "income per citizen" and "ship units
+bonus", and only this offset holds 23, so one of the two is derived or lives outside the block.
+**`Owner:792` is the ship units bonus**, a percentage. Income per citizen is `Owner:752`, rendered
+as base 10 + bonus, so its probe 13 also displayed 23
+[x] identify `Owner:748` and `Owner:752`, which held probes `12`/`13` that no trait displayed.
 "Food consumption per citizen" is the candidate: it read `10` before the pass and an unexplained
-`232` during it
+`232` during it. **Food consumption and income per citizen**, both confirmed by write test and
+both rendered as base 10 + bonus
 [ ] confirm which of `Owner:920/924/928` is **anonymous scanning**, the UI renders it as a
-checkbox rather than a number and read "enabled" while all three were non-zero
+checkbox rather than a number and read "enabled" while all three were non-zero. `920` and `924`
+are traits 43 and 44, the age traits `GetTrait` takes from `Owner:744` instead, which leaves `928`
+(trait 45) as the likeliest if the checkbox goes through `GetTrait`. Unconfirmed
 
 #### Cash and the resource market
 
@@ -884,7 +900,9 @@ and the stocks directly, but it means prices are not a pure function of the modi
 [ ] confirm the **buy**-price formula with a second value of `Owner:916`, it currently rests on one
 data point, unlike the sell formula which is confirmed on five
 [ ] determine whether trading, turn resolution, or both move the market, and whether AI trading
-affects the human's prices
+affects the human's prices. Half answered October 2026: trading moves it (buying 100 deuterium
+moved the next quote from 1,200 to 1,208), and the price is shared by every civ, so AI trading
+does move the human's prices (`remote.py`, market section). Turn resolution is untested
 
 > **Scanner bug worth remembering:** the first price sweep "found" the sequence at a dozen
 > consecutive addresses, which is arithmetically impossible for an increasing sequence. The cause
@@ -944,14 +962,22 @@ a struct can be three bytes of stale allocator residue behind a one-byte field, 
 catches it is comparing the same offset across two instances.
 
 [ ] re-check the ~27 dormant `Planet` offsets in a developed save before treating them as unused
-[ ] identify `Owner:924` and `Owner:928` alongside the existing `Owner:920` item, one of the three
-is "anonymous scanning", which the UI renders as a checkbox rather than a number
+[x] identify `Owner:924` and `Owner:928` alongside the existing `Owner:920` item, one of the three
+is "anonymous scanning", which the UI renders as a checkbox rather than a number. **They are traits
+44 and 45**, `Owner:920` trait 43; the anonymous-scanning question stays with the trait-block item
 [ ] understand why the engine **zeroes** `Owner:932/936/940` on the next turn while accepting writes
-to every trait from 748 to 928; `932` is the dark-age-turns candidate, and a field the engine
-actively rejects is worth understanding before trying to load state into it
-[ ] identify `Ship:56` and `Fleet:56`, the same slot on both classes, holding the static null node
+to every trait from 748 to 928, a field the engine actively rejects is worth understanding before
+trying to load state into it. Not dark age turns: dark age is a negative `Owner:744`. Lead worth
+checking first: `research.py`'s grant table says trait grants land at `Owner:932 + 4 × trait`,
+which would make these a per-turn recomputed cache of research bonuses. Unverified
+[x] identify `Ship:56` and `Fleet:56`, the same slot on both classes, holding the static null node
 on every instance ever observed including ships under orders and in fleets, so nothing has been seen
-to fill it
+to fill it. **`Ship:56` is the order's target-object reference node.** `Ship::SetCommand`
+`0x004D9DC0` writes it with `Ship:52` from the `ShipCommand`'s `+4`, and
+`Ship::HasActiveTargetedOrder` `0x004D9880` reads it for move, attack and move-near: a live node
+makes the ship escort that object. It was always null because every order observed was coordinates
+only.
+[ ] confirm `Fleet:56` is the same target node as `Ship:56`; assumed from the shared slot, untested
 [ ] identify `Owner:356`, a packed uint16 pair that moved `0x00000001 -> 0x00010001` when a
 technology completed
 [ ] identify `Owner:1208/1212/1216`, a float triple in X/Z/Y layout present only on the AI civ and
@@ -961,9 +987,12 @@ assigned, 0 on the others, tracking `Admiral:8`)
 [ ] decide whether `Sun` needs annotating at all, only 8 fields are known and `Sun:44/80/84/88`
 vary across all 108 suns, but the galaxy is client-generated from a seed, so suns may need no
 syncing whatsoever. Settle the question before spending effort on the fields
-[ ] settle `Planet:96`: 499 distinct values across 525 planets looks like real per-planet state, but
+[x] settle `Planet:96`: 499 distinct values across 525 planets looks like real per-planet state, but
 both homeworlds share the identical pointer-shaped value `0x01278BE0`, which fits the appearance
-block already documented around `Planet:20-32`. Probably cosmetic; cheap to confirm
+block already documented around `Planet:20-32`. Probably cosmetic; cheap to confirm. **Not cosmetic:
+it is the packed per-unit output rates**, food, production and science per worker, confirmed by
+control in September 2026; see "Homeworld customisation" below. The shared `0x01278BE0` was not
+re-examined.
 
 ### Ship designs: the full registry table, and two falsifications (August 2026)
 
@@ -995,11 +1024,18 @@ the corvette `corv` *and* on the **shuttle** `troop`, and `2` on the other three
 `troop` is a shuttle. What those two actually share is a **personnel module**, large pilot cabin
 (id 2) and troop bay (id 1), against a base of `2` with no module or with a colony module. Leading
 reading is crew/unit capacity, which fits the "ship units bonus" trait at `Owner:792`. Untested.
+The chassis table in `components.py` carries both a crew minimum and a crew maximum, and `:76` is
+now the minimum, so `:80` as the maximum is the reading to test.
 
 **The real chassis id is the second word of the `ShipDesign:128` vector**, `0` on four shuttles, `1`
 on the single corvette.
 
-**`ShipDesign:76` is a payload-delivery flag**, with three readings falsified along the way:
+**CORRECTION (October 2026): `ShipDesign:76` is the minimum crew, not a payload flag.** It is the
+lazy cache filled by the engine's getter `0x005490E0` (`remote.design_min_crew`), and the AI loads
+crew against it and its ships fly at that count. The payload reading below fitted the five designs
+by coincidence: the colony and troop designs simply need two crew.
+
+The superseded reading, with three others falsified along the way:
 
 | design | module fitted (id) | `:76` | `:80` |
 |---|---|---|---|
@@ -1058,9 +1094,13 @@ complete.
 pointing at text-like memory in another. Leading reading is the civ's default/starting design
 [ ] pin down `ShipDesign:76` and `ShipDesign:80` together: build a design mixing a **troop bay with
 weapons** to see whether `:76` stays 2, and a design with **two personnel modules** to see whether
-`:80` scales past 7 (which would confirm it as a capacity rather than a flag)
-[ ] extend the part-id tables by fitting each remaining part type once, the weapon ids are already
-known to be non-contiguous (`0` then `10`), so the ranges cannot be inferred and must be observed
+`:80` scales past 7 (which would confirm it as a capacity rather than a flag). `:76` is settled as
+the minimum crew (see the correction above); `:80` remains, with crew maximum the reading to test
+[x] extend the part-id tables by fitting each remaining part type once, the weapon ids are already
+known to be non-contiguous (`0` then `10`), so the ranges cannot be inferred and must be observed.
+**Done without fitting:** `client/dev_tools/ai_player/components.py` reads all six part-definition
+tables from the live client, ids being each record's position: 6 chassis, 7 engines, 6 modules,
+4 scanners, 5 shields and 15 weapons, with names, costs and stats.
 
 ### Homeworld customisation, four click counts in `.data` (August 2026)
 
@@ -1302,20 +1342,21 @@ These describe what a civ **can** do, as distinct from what it **has** (the per-
 **Two falsifications, both caught by write tests.**
 
 - **`Owner:68` is not the available-scan count.** Writing 8 changed nothing in the UI. It does
-  increment `0 → 1 → 2` as scans are produced but did **not** decrement when one was used, so the best
-  remaining reading is a lifetime total. The earlier `CONFIRMED` label rested on two correlated
-  increments and no causal test.
+  increment `0 → 1 → 2` as scans are produced but did **not** decrement when one was used. It is the
+  size of the inventory map at `Owner:64`, the number of scan types ever held (October 2026). The
+  earlier `CONFIRMED` label rested on two correlated increments and no causal test.
 - **`Owner:200` is not the inventory either.** Setting both descriptor entries to the same type id did
   not change what the scans tab offered.
 
 The lesson is specific and cheap: **a write test costs one command and settles direction of
 causation**, which two consistent correlations do not. Both fields had passed the correlation bar.
 
-The scan *inventory*, how many of each type are held, remains unlocated.
+The scan *inventory*, how many of each type are held, is the map at `Owner:64`, located in October
+2026 by its getter rather than by a diff.
 
-[ ] locate the scan inventory: the count of each held scan type. `Owner:68` and the `Owner:200` descriptor vector are both excluded by write test; take a short-interval snapshot across producing or consuming a single scan
-[ ] run each remaining scan type and record its type id and report-object class, only route (2, `RouteScan`) and fleet (3, `FleetScan`) are known, and the ids are not contiguous so others may sit outside 2–3
-[ ] check whether each scan type's results vector at report`+44` has a different element layout, route and fleet both begin with a pointer to the scanned object, but the remainder differs in length (44 vs 52 bytes) and has not been decoded
+[x] locate the scan inventory: the count of each held scan type. `Owner:68` and the `Owner:200` descriptor vector are both excluded by write test; take a short-interval snapshot across producing or consuming a single scan. **A `std::map<type, count>` headed at `Owner:64`**, read by the getter `0x0053B8F0`. `Owner:68` is the map's size, the number of types ever held, which is why it rose on production and did not fall on use. Confirmed live October 2026: a route scan produced, held 1, used, back to 0 (actuator P in STRATEGY.md).
+[ ] run each remaining scan type and record its type id and report-object class, only route (2, `RouteScan`) and fleet (3, `FleetScan`) are known, and the ids are not contiguous so others may sit outside 2–3. Now also planetary (0) and military (4), from `intel.py`, with report classes unrecorded; Surveillance Scanning (tech 79) grants a type 7
+[ ] check whether each scan type's results vector at report`+44` has a different element layout, route and fleet both begin with a pointer to the scanned object, but the remainder differs in length (44 vs 52 bytes) and has not been decoded. They differ. Fleet (52 bytes): `+0x04` ship count, `+0x08` four uint16 counts by chassis, `+0x18` hull-class text. Military (124 bytes, one per ship): `+0x08` stats text, `+0x34` hull text, `+0x50/+0x58` base and effective hitpoints, `+0x60` condition, `+0x68/+0x6C/+0x70` firepower light, heavy, bomb. A planetary report holds a copy of the target's `PlanetProperties` at report `+0x28` instead. Route is still undecoded
 [ ] Recon tab, believed to have no backing state in memory; confirm by diffing across opening and using it, and record the negative result either way
 
 ### The reference-node idiom
@@ -1635,9 +1676,12 @@ trade the known-players ship shuffle makes.
 [ ] check whether more than one item can complete per turn, the stockpile survived at 7640, well
 above the next cost, so a single turn might absorb several if the topic is rewritten between them,
 which would collapse the load to far fewer turns
-[ ] establish whether doctrine ids occupy a distinct range from technology ids, three samples
+[x] establish whether doctrine ids occupy a distinct range from technology ids, three samples
 (`3`, `12` technologies; `43` a doctrine) hint at it but do not show it, and it only matters if the
-server ever has to validate an id rather than copy it
+server ever has to validate an id rather than copy it. **They do not.** The live research table
+(`research.py`, generated by `research_dump.py`) has doctrines at 43-50 and 54-68, with
+technologies 51-53 between the blocks. The engine tells them apart by record, not id: a record with
+exclusions is a doctrine (`0x0054B9E0`).
 
 **`Owner:344` is withdrawn as a research candidate.** It doubled 120 → 240 bytes on doctrine
 completion, having also doubled on a technology completion in an earlier game, so the correlation
@@ -1647,8 +1691,9 @@ list nor the "available/unlocked build options" previously guessed, and a field 
 right events with the wrong contents is exactly the shape that produced the falsified `Owner:68`
 and `Owner:200`.
 
-[ ] identify `Owner:344` on its own terms, mixed ASCII and `SolarSystem` pointers across civs
-suggests the 8-byte record framing is wrong, so start by establishing the real element stride
+[x] identify `Owner:344` on its own terms, mixed ASCII and `SolarSystem` pointers across civs
+suggests the 8-byte record framing is wrong, so start by establishing the real element stride.
+**It is the news vector**, 120-byte records, one per item; see "News items located" above.
 
 ### Research/science accrual, TestBed “Next Turn” vs. full turn resolution (June 2026)
 
@@ -2040,10 +2085,13 @@ Engine entry points, all `__thiscall` on `PlanetProperties` (= planet tag + 88):
 0x00573650 covers all four modes on the same 0/7/8/9 key, the receiver to use if production
 is ever driven over the wire rather than by poking memory.
 
-[ ] write-test the three-write facility build: `Planet:284` = type id, `Planet:296` = planet
+[x] write-test the three-write facility build: `Planet:284` = type id, `Planet:296` = planet
 tag + 280, `Planet:344` = 1. Byte-for-byte what the engine's own setter does, but it SKIPS
 `CanBuildFacility`, so it must not be used for a type the civ has not unlocked (`Owner:172`)
-or cannot afford. Untested as a write.
+or cannot afford. Untested as a write. **Superseded.** The AI built farms and shipyards this way
+over a full game, but since October 2026 every production change goes through `SetProduction`
+`0x004F8290` instead (actuators C and D in STRATEGY.md), because a raw `Planet:296` write skips a
+ship's resource charge.
 
 ### Production classes are not EJBO-tagged, but they are reachable
 
