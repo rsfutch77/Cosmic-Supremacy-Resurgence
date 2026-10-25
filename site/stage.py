@@ -74,7 +74,8 @@ def is_asset(rel):
 
 # Held back deliberately: the forum carries real users' posts, names and
 # avatars. Nothing under these prefixes is staged, so they always 404.
-EXCLUDE_PREFIXES = ("forum/", "wiki/_export/")
+EXCLUDE_PREFIXES = ("forum/", "wiki/_export/",
+                    "wiki/howto")    # editing the wiki, which is gone with the forum
 
 # The crawler turned fragments of the wiki's JavaScript into URLs and then
 # archived 404 pages under those names. They are not pages, they are parser
@@ -83,8 +84,9 @@ JUNK_PATH_RE = re.compile(
     r"[+'()\[\]]|;|this\.|\.get\(|indexOf|className|DOKU_BASE|XMLHTTP"
     r"|domLib|ajax_qsearch|=file", re.I)
 
-# Whole pages that are deliberately not republished. Their nav entries are
-# stripped by patches.py, and firebase.json must not rewrite anything to them.
+# Whole pages that are deliberately not republished. Nav entries for some are
+# stripped by patches.py, other links show as plain text, and firebase.json
+# must not rewrite anything to them.
 EXCLUDE_PAGES = {
     "chat.php.html",             # live chat needs a server nobody is running
     "download_firewall.php.html",  # firewall rules for a server that is gone
@@ -92,6 +94,16 @@ EXCLUDE_PAGES = {
     "wiki/wallpapers.html",      # only thumbnails survived; nothing to show
     "wiki/dev.html",             # retired; captured to the CSV at the repo root
     "wiki/guides/todo-guide.html",  # ditto; it only described wiki/dev.html
+    "wiki/bg.html",              # its one picture was a 404 on the original too
+    # Old galaxies whose score graph was never archived.
+    "galaxyscores@galid=44.php.html",
+    "galaxyscores@galid=409.php.html",
+    "galaxyscores@galid=410.php.html",
+    "galaxyscores@galid=415.php.html",
+    "galaxyscores@galid=417.php.html",
+    "galaxyscores@galid=497.php.html",
+    "galaxyscores@galid=500.php.html",
+    "galaxyscores@galid=515.php.html",
 }
 
 # No robots meta is injected: the site is indexable. The archived pages carry
@@ -664,7 +676,8 @@ def main():
         # After the patches, which repoint some links that would otherwise go.
         text, gone = unlink_dead_links(text, rel, staged)
         for target in gone:
-            dead_links[target] = dead_links.get(target, 0) + 1
+            if target not in EXCLUDE_PAGES and not target.startswith(EXCLUDE_PREFIXES):
+                dead_links[target] = dead_links.get(target, 0) + 1
         text, missing_imgs = mark_missing_images(text, rel, staged)
         for src in missing_imgs:
             image_todos.setdefault(src, []).append(rel)

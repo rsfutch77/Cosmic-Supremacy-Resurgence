@@ -17,12 +17,11 @@ The mirror does not hold these, but the Wayback Machine might. The site
 shows each link as plain text. Check the CDX API before never_archived.txt.
 
 
-## Never archived (41 images, 159 link targets)
+## Never archived (29 images, 153 link targets)
 
 The Wayback Machine has no capture of these (`never_archived.txt`).
 Images show a grey `image not archived` marker; links show as plain text.
 
-- `/wiki/_media/wiki/dokuwiki-128.png?w=&amp;h=&amp;cache=cache`, 6 place(s), e.g. `wiki/howto/syntax.html`
 - `/wiki/_media/guides/defeating-fleetsplit-1.jpg?w=&amp;h=&amp;cache=cache`, 1 place(s), e.g. `wiki/guides/unsguide/fleetsplit.html`
 - `/wiki/_media/guides/defeating-fleetsplit-2.jpg?w=&amp;h=&amp;cache=cache`, 1 place(s), e.g. `wiki/guides/unsguide/fleetsplit.html`
 - `/wiki/_media/guides/defeating-fleetsplit-3.jpg?w=&amp;h=&amp;cache=cache`, 1 place(s), e.g. `wiki/guides/unsguide/fleetsplit.html`
@@ -52,24 +51,11 @@ Images show a grey `image not archived` marker; links show as plain text.
 - `/wiki/_media/guides/unsguide/turn-431.png?w=400&amp;h=&amp;cache=cache`, 1 place(s), e.g. `wiki/guides/unsguide/fleetsplit.html`
 - `/wiki/_media/guides/unsguide/turn-432.png?w=400&amp;h=&amp;cache=cache`, 1 place(s), e.g. `wiki/guides/unsguide/fleetsplit.html`
 - `/wiki/_media/guides/unsguide/turn-433.png?w=400&amp;h=&amp;cache=cache`, 1 place(s), e.g. `wiki/guides/unsguide/fleetsplit.html`
-- `/wiki/_media/turn-155.jpg?w=&amp;h=&amp;cache=cache`, 1 place(s), e.g. `wiki/bg.html`
-- `/wiki/_media/wiki/dokuwiki-128.png?w=200&amp;h=50&amp;cache=cache`, 1 place(s), e.g. `wiki/howto/syntax.html`
-- `/wiki/_media/wiki/dokuwiki-128.png?w=50&amp;h=&amp;cache=cache`, 1 place(s), e.g. `wiki/howto/syntax.html`
-- `scoregraphs/scoregraph_409.png`, 1 place(s), e.g. `galaxyscores@galid=409.php.html`
-- `scoregraphs/scoregraph_410.png`, 1 place(s), e.g. `galaxyscores@galid=410.php.html`
-- `scoregraphs/scoregraph_415.png`, 1 place(s), e.g. `galaxyscores@galid=415.php.html`
-- `scoregraphs/scoregraph_417.png`, 1 place(s), e.g. `galaxyscores@galid=417.php.html`
-- `scoregraphs/scoregraph_44.png`, 1 place(s), e.g. `galaxyscores@galid=44.php.html`
-- `scoregraphs/scoregraph_497.png`, 1 place(s), e.g. `galaxyscores@galid=497.php.html`
-- `scoregraphs/scoregraph_500.png`, 1 place(s), e.g. `galaxyscores@galid=500.php.html`
-- `scoregraphs/scoregraph_515.png`, 1 place(s), e.g. `galaxyscores@galid=515.php.html`
 - `wiki/st_team.html`, 58 reference(s)
-- `wiki/howto/playground.html`, 14 reference(s)
 - `wiki/guides/nongolfguide/auxgovernors.html`, 9 reference(s)
 - `wiki/guides/nongolfguide/designing-governors.html`, 8 reference(s)
 - `wiki/guides/nongolfguide/planetspecialization.html`, 8 reference(s)
 - `download.php.html`, 7 reference(s)
-- `wiki/_detail/wiki/dokuwiki-128@id=howto_syntax&cache=cache.png.html`, 7 reference(s)
 - `wiki/guides/unsguide/cloakedscouts.html`, 7 reference(s)
 - `wiki/guides/unsguide/scriptingtricks.html`, 7 reference(s)
 - `wiki/guides/nongolfguide/governorsectioning.html`, 6 reference(s)
@@ -150,7 +136,6 @@ Images show a grey `image not archived` marker; links show as plain text.
 - `galaxy@galid=956.php.html`, 1 reference(s)
 - `galaxyscores@galid=23.php.html`, 1 reference(s)
 - `galaxyscores@galid=310.php.html`, 1 reference(s)
-- `galaxyscores@galid=311.php.html`, 1 reference(s)
 - `galaxyscores@galid=346.php.html`, 1 reference(s)
 - `galaxyscores@galid=439.php.html`, 1 reference(s)
 - `galaxyscores@galid=633.php.html`, 1 reference(s)
@@ -187,7 +172,6 @@ Images show a grey `image not archived` marker; links show as plain text.
 - `galaxyscores@galid=955.php.html`, 1 reference(s)
 - `galaxyscores@galid=956.php.html`, 1 reference(s)
 - `galaxyscores@galid=977.php.html`, 1 reference(s)
-- `images/Cursor.psd.html`, 1 reference(s)
 - `manual@chapter=26&name=The_Admiral.php.html`, 1 reference(s)
 - `wiki/_detail/guides/defeating-fleetsplit-1@id=guides_unsguide_fleetsplit&cache=cache.jpg.html`, 1 reference(s)
 - `wiki/_detail/guides/defeating-fleetsplit-2@id=guides_unsguide_fleetsplit&cache=cache.jpg.html`, 1 reference(s)
@@ -218,7 +202,5 @@ Images show a grey `image not archived` marker; links show as plain text.
 - `wiki/_detail/guides/unsguide/turn-431@id=guides_unsguide_fleetsplit&cache=cache.png.html`, 1 reference(s)
 - `wiki/_detail/guides/unsguide/turn-432@id=guides_unsguide_fleetsplit&cache=cache.png.html`, 1 reference(s)
 - `wiki/_detail/guides/unsguide/turn-433@id=guides_unsguide_fleetsplit&cache=cache.png.html`, 1 reference(s)
-- `wiki/_detail/turn-155@id=bg&cache=cache.jpg.html`, 1 reference(s)
 - `wiki/gecko@do=backlink.html`, 1 reference(s)
-- `wiki/howto/manual-rules.html`, 1 reference(s)
 - `wiki/jacksguide/videotutorials.html`, 1 reference(s)

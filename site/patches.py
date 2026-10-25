@@ -433,6 +433,17 @@ def remove_social_bar(html):
     return _SOCIAL_BAR_RE.sub("", html)
 
 
+# DokuWiki's Search, Login, Index, Recent changes, Old revisions and Show page
+# buttons are forms that ask the wiki engine for a page, and no engine runs here.
+# Each carries a hidden `do` field, which no other form on the site has.
+_WIKI_FORM_RE = re.compile(
+    r"<form\b(?:(?!</form>).)*?name=['\"]do['\"](?:(?!</form>).)*?</form\s*>", re.I | re.S)
+
+
+def remove_wiki_buttons(html):
+    return _WIKI_FORM_RE.sub("", html)
+
+
 PATCHES = [
     ("remove the Live Chat tab", remove_live_chat),
     ("point the Forum tab at the Facebook group", repoint_forum_tab),
@@ -449,6 +460,7 @@ PATCHES = [
     ("modernise smileys", modernise_smileys),
     ("point support e-mail at GitHub", redirect_support_email),
     ("remove the social bookmark bar", remove_social_bar),
+    ("remove the wiki's engine buttons", remove_wiki_buttons),
 ]
 
 
