@@ -423,6 +423,16 @@ def replace_galaxy_list(html):
     return html
 
 
+# The footer's bookmark bar links to Digg, del.icio.us, Ma.gnolia and other
+# services that are gone, and its RSS feed is an archived copy that never updates.
+_SOCIAL_BAR_RE = re.compile(
+    r"<div\s+class=['\"]social['\"][^>]*>(?:(?!<div\b).)*?</div\s*>\s*", re.I | re.S)
+
+
+def remove_social_bar(html):
+    return _SOCIAL_BAR_RE.sub("", html)
+
+
 PATCHES = [
     ("remove the Live Chat tab", remove_live_chat),
     ("point the Forum tab at the Facebook group", repoint_forum_tab),
@@ -438,6 +448,7 @@ PATCHES = [
     ("strip DokuWiki indexer beacons", strip_indexer_beacons),
     ("modernise smileys", modernise_smileys),
     ("point support e-mail at GitHub", redirect_support_email),
+    ("remove the social bookmark bar", remove_social_bar),
 ]
 
 
