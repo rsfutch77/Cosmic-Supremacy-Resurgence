@@ -1711,7 +1711,7 @@ What is left for after the beta is kept here.
 - **Adding a planet to a production queue** creates a queue object under the civ,
   `OWNR > DATA > SPQS` (a `u32` count, then `SPRQ` holding the object id and a `PRQU` of entries),
   and links the planet's `PROD` to it at `+2` (flag), `+3` (the queue's object id) and `+7`.
-  Refused with a note.
+  Carried, with the queue itself (see the 25 October measurements below).
 - **A fleet** is `GLXY > FLET`: the 20-byte object header (a new object id, raising `SAVE+0`),
   a `DYNO` with the fleet's orders, and `FLDT`: a `u32`-length name (default `Battle Fleet`, cut
   to 32 characters), a `u32` member count and one `SHPR` per member. Members leave `GLXY` as
@@ -1742,17 +1742,23 @@ turns were advanced with `gamectl.Client.advance_turn`. Each step is one change 
 
 - **A production queue** is an `SPRQ` in the civ's `OWNR > DATA > SPQS`, whose `u32` count goes
   from 0 to 1. `SPRQ` holds the queue's object id, a `u32` count of planets using it and a `u8`,
-  then a `PRQU`: a `u16` (2 with one entry, 4 after a second was added, still 4 after one was
-  deleted), a `u32`-length name, a `u32` entry count and the entries. A queue no planet uses is
-  saved and survives a reload.
-- **A queue entry** is 14 bytes, stored in the order the UI shows: a `u16` kind (1 facility,
-  3 ship), a `u16` count, a `u8` infinite flag, a `u8` count mode (1 "build up to"), then 8 bytes
-  naming the item: all zero for a farm, `u32` 8 and the design id for a ship. Adding, deleting,
-  reordering and editing an entry change only these bytes and the enclosing lengths.
+  then a `PRQU` (version 1): a `u16` entry-id counter (2 with one entry, 4 after a second was
+  added, still 4 after one was deleted), a `u32`-length name, a `u32` entry count and the entries.
+  A queue no planet uses is saved and survives a reload. `save_parser` does not reach a `SPQS`
+  that sits after a civ's news items in `DATA`; `merge_orders.py` finds it by its tag.
+- **A queue entry** is stored in the order the UI shows: a `u16` entry id (1 for the farm, 3 for
+  the Colony Ship; it moves with its entry when reordered), a `u16` count, a `u8` infinite flag,
+  a `u8` count mode (1 "build up to"), a `u32` item type (0 facility, 8 ship), then a `u32`
+  naming the item: the facility type (0 for a farm) or the design id. Adding, deleting,
+  reordering and editing an entry change only these bytes and the enclosing lengths. The client's
+  writer (`0x556560`) and reader (`0x556D20`) know item types 0 to 9: types 1 to 6 have nothing
+  after the type, and 7 and 9 a `u32`. What types 1 to 7 and 9 name has not been measured. The
+  reader drops a ship entry whose design does not resolve.
 - **Assigning a queue to a planet** raises the queue's planet count and links the planet's `PROD`
-  (`+2` flag, `+3` queue id, `+7` a `u16` that is the current item's kind when the queue chose it).
-  The planet switches to the queue's item at once, dropping what it was building, and the civ's
-  `OWPR` `+132..+143` move with it.
+  (`+2` flag, `+3` queue id, `+7` the `u16` id of the entry the planet is building). The planet
+  switches to the queue's item at once, dropping what it was building, and the civ's `OWPR`
+  `+132..+143` move with it. They move with a manual override too, so they follow production in
+  general, not the queue.
 - **Overriding a queued planet's production** by hand keeps the queue link and sets `+7` to 0.
   When the item completes the engine returns the planet to the queue by itself (measured across
   turns 113 to 128).
@@ -1772,4 +1778,12 @@ turns were advanced with `gamectl.Client.advance_turn`. Each step is one change 
   fleet id allocated without colliding across players, as designs are, and every member checked:
   the submitter's, at one position, in no other fleet.
 
-- [ ] **Carry production queues:** the `SPQS` queue objects and the planets' links to them.
+- [ ] **Production queues are carried, except entries of item types nobody has measured.**
+  `merge_orders.py` carries creating, editing, reordering and deleting queues and entries, and
+  planets joining, overriding and leaving them (`test_queues_merge.py`). A new queue is
+  renumbered like a design when another player's object took its id, ship entries follow a
+  renumbered design, and the planet counts are recounted from the merged links. Still refused, with
+  a note: a queue holding an entry of item type 1 to 7 or 9, which the client's reader accepts but
+  whose meaning is unknown. Done when each of those is measured from a queue made in the UI and
+  carried or refused for a reason, and a planet assigned to a queue in a live galaxy is still on
+  it after the tick, building its entry.
