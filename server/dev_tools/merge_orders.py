@@ -93,9 +93,20 @@ characters. Carried for planets the submitter owns. `EXSY` also holds names
 but is each civ's cache of names seen, not where a rename is authored, so it is
 excluded.
 
+**Governors**, `OWNR > DATA > GOVS`, and the planet's link to one, the last
+`u32` of its `PLNT`. Creating a governor appends a `GVNR` and raises `SAVE+0`
+to its id, so a new one is renumbered like a design when another player's
+design or governor took the id. Editing rewrites the `GVNR` in place, and
+deleting removes it. Assigning sets the planet's link; the client offers no
+way to unassign. Carried for the civ's own governors and planets, as records
+whose sections fit, with a printable name and at least one rule, which the
+client requires; the rules themselves are the engine's to run. Deleting a
+governor that still governs a planet is refused. Each `GVNR` counts the
+planets it governs, and the referee recounts that from the merged links.
+
 What is refused
 ---------------
-Everything not listed above (governors, admirals, diplomacy) is not accepted.
+Everything not listed above (admirals, diplomacy) is not accepted.
 A fleet (`GLXY > FLET`) is turned back into its member ships before the
 submission is judged, so its other orders still count; a planet joining or
 leaving a production queue keeps what it was building. Every refusal is logged and recorded
@@ -105,6 +116,7 @@ that cannot be read is dropped whole and named, with anything already taken
 from it rolled back.
 """
 import argparse
+import collections
 import os
 import struct
 import sys
@@ -208,6 +220,23 @@ CREW_ARRAY_OFF = 8
 # count of that civ's designs. The readers are `inject_design.py`'s.
 DESIGN_COUNT_BEFORE = 4     # the count dword, this far before the first DSGN
 MAX_DESIGN_NAME = 15        # the client's name buffer, per inject_design
+
+# A civ's governors are in its `OWNR > DATA > GOVS`: a u32 count, then one
+# `GVNR` per governor, in creation order:
+#
+#     GVNR v0   u32 objectId ; u32 planets governed ; one byte ; GVDT
+#     GVDT v1   u32 nameLen ; name ; two bytes ; u32 rule count ;
+#               per rule a RULE (one byte, the rule's checkbox) then the
+#               rule's own section (RLSP, RLPR, RLRR ...)
+#
+# A planet names its governor in the u32 after its `PLPR`, the last four bytes
+# of the `PLNT`, 0 for none. The client offers no way to unassign one.
+GOVS_COUNT = 4
+GVNR_GOVERNS_AT = 4         # in the GVNR payload, after the object id
+GVNR_FIXED = 9              # object id, planets governed and the one byte
+GVDT_AFTER_NAME = 2
+RULE_FLAG = 1
+GOVERNOR_LINK = 4           # the PLNT's trailing u32
 
 # Where a queued ship names its design, as an offset into a whole `PROD`
 # section: past PROD's own 8-byte header, then the nested `SHIP` section whose
@@ -1556,6 +1585,203 @@ def setup_orders(served, sub, civ_oid, served_planets, sub_planets):
     return taken, refusals
 
 
+def _govs(blob, civ_oid):
+    """(tree, the civ's GOVS section), the section None when it has none."""
+    tree = sp.parse_blob(blob)
+    glxy = next(tree[0].find('GLXY'))
+    for o in glxy.children:
+        if o.tag != b'OWNR':
+            continue
+        n = struct.unpack_from('<I', blob, o.payload)[0]
+        if struct.unpack_from('<I', blob, o.payload + 4 + n)[0] == civ_oid:
+            return tree, next(o.find('GOVS'), None)
+    return tree, None
+
+
+def _sections(raw, at, end):
+    """[(tag, payload start, payload end)] of the sections filling raw[at:end]
+    exactly, or None."""
+    out = []
+    while at < end:
+        if end - at < 8:
+            return None
+        size = struct.unpack_from('<I', raw, at + 4)[0] & sp.SIZE_MASK
+        if at + 8 + size > end:
+            return None
+        out.append((bytes(raw[at:at + 4]), at + 8, at + 8 + size))
+        at += 8 + size
+    return out
+
+
+def governors_of(blob, civ_oid):
+    """[(objectId, whole GVNR section)] of a civ in creation order, or None
+    unless its GOVS holds exactly its count of GVNR sections."""
+    _tree, govs = _govs(blob, civ_oid)
+    if govs is None or govs.size < GOVS_COUNT:
+        return None
+    count = struct.unpack_from('<I', blob, govs.payload)[0]
+    secs = _sections(blob, govs.payload + GOVS_COUNT, govs.end)
+    if (secs is None or len(secs) != count
+            or any(tag != b'GVNR' or end - at < GVNR_FIXED
+                   for tag, at, end in secs)):
+        return None
+    return [(struct.unpack_from('<I', blob, at)[0], bytes(blob[at - 8:end]))
+            for _tag, at, end in secs]
+
+
+def governor_ids(blob):
+    """Every governor's object id, whichever civ holds it."""
+    ids = set()
+    for o in icv.owner_records(blob):
+        ids.update(oid for oid, _r in governors_of(blob, o['oid']) or [])
+    return ids
+
+
+def read_governor(record):
+    """(name, why) for a whole GVNR section: the name as bytes and '', or None
+    and what is wrong with it. The rules are judged only as sections that fit;
+    the engine runs them."""
+    body = _sections(record, 8 + GVNR_FIXED, len(record))
+    if not body or len(body) != 1 or body[0][0] != b'GVDT':
+        return None, 'its record is not one GVDT'
+    _tag, at, end = body[0]
+    if end - at < 4:
+        return None, 'its GVDT is cut short'
+    n = struct.unpack_from('<I', record, at)[0]
+    rules_at = at + 4 + n + GVDT_AFTER_NAME
+    if rules_at + 4 > end:
+        return None, 'its name runs past its GVDT'
+    name = bytes(record[at + 4:at + 4 + n])
+    rules = struct.unpack_from('<I', record, rules_at)[0]
+    secs = _sections(record, rules_at + 4, end)
+    if secs is None or len(secs) != 2 * rules:
+        return None, f'its GVDT does not hold the {rules} rule(s) it counts'
+    for (flag, f_at, f_end), (rule, _a, _e) in zip(secs[::2], secs[1::2]):
+        if flag != b'RULE' or f_end - f_at != RULE_FLAG or not rule.startswith(b'RL'):
+            return None, 'a rule is not a RULE followed by its own section'
+    if not rules:
+        return None, 'it has no rules, which the client does not allow'
+    if not name:
+        return None, 'the name is empty'
+    ok, why = name_acceptable(name)
+    return (name, '') if ok else (None, why)
+
+
+def with_governor_id(record, oid):
+    """A GVNR section carrying a different object id."""
+    out = bytearray(record)
+    struct.pack_into('<I', out, 8, int(oid))
+    return bytes(out)
+
+
+def with_governed(record, count):
+    """A GVNR section saying it governs `count` planets."""
+    out = bytearray(record)
+    struct.pack_into('<I', out, 8 + GVNR_GOVERNS_AT, int(count))
+    return bytes(out)
+
+
+def set_governors(blob, civ_oid, records):
+    """Rewrite a civ's GOVS to hold these whole GVNR sections, in order."""
+    tree, govs = _govs(blob, civ_oid)
+    if govs is None:
+        raise SystemExit(f'civ {civ_oid} has no GOVS')
+    payload = struct.pack('<I', len(records)) + b''.join(records)
+    return sp.replace_payload(blob, tree, govs, payload)
+
+
+def governor_links(blob):
+    """{planetObjectId: governorObjectId}, 0 for a planet with none."""
+    return {struct.unpack_from('<I', blob, s.payload)[0]:
+            struct.unpack_from('<I', blob, s.end - GOVERNOR_LINK)[0]
+            for s in sp.flatten(sp.parse_blob(blob)) if s.tag == b'PLNT'}
+
+
+def set_governor_link(blob, planet_oid, gov_oid):
+    """Name a planet's governor. Sizes do not change."""
+    for s in sp.flatten(sp.parse_blob(blob)):
+        if (s.tag == b'PLNT'
+                and struct.unpack_from('<I', blob, s.payload)[0] == planet_oid):
+            out = bytearray(blob)
+            struct.pack_into('<I', out, s.end - GOVERNOR_LINK, int(gov_oid))
+            return bytes(out)
+    raise SystemExit(f'planet {planet_oid} not found')
+
+
+def governor_orders(served, sub, civ_oid, served_planets, names):
+    """(new, edited, deleted, links, refusals) for a civ's governors, judged
+    against the state served.
+
+    new and edited are [(objectId, GVNR)], new ones under the id submitted;
+    deleted is a list of ids; links is [(planet, governor)]. The number of
+    planets each governor governs is the referee's to count, so it is ignored
+    here. Deleting a governor that would still govern a planet, and
+    unassigning one, are not something the client was seen to do, and are
+    refused.
+    """
+    refusals = []
+    for o in icv.owner_records(served):
+        if (o['oid'] != civ_oid
+                and governors_of(sub, o['oid']) != governors_of(served, o['oid'])):
+            refusals.append(f"governors DROPPED, they belong to {o['name']}")
+    mine_s, mine_t = governors_of(served, civ_oid), governors_of(sub, civ_oid)
+    if mine_s is None or mine_t is None:
+        if mine_t != mine_s:
+            refusals.append('governors DROPPED, GOVS does not hold its count '
+                            'of governors')
+        return [], [], [], [], refusals
+    held, kept = dict(mine_s), dict(mine_t)
+    high = struct.unpack_from('<I', served, idg.HIGH_WATER_ID)[0]
+
+    new, edited = [], []
+    for oid, record in mine_t:
+        if oid in held and with_governed(record, 0) == with_governed(held[oid], 0):
+            continue
+        if oid not in held and oid <= high:
+            refusals.append(f'governor {oid} DROPPED, it is new and {oid} is '
+                            f'not a new object id')
+            continue
+        name, why = read_governor(record)
+        if name is None:
+            refusals.append(f'governor {oid} DROPPED, {why}')
+            continue
+        (edited if oid in held else new).append((oid, record))
+
+    usable = set(held) | {oid for oid, _r in new}
+    links_s, links_t = governor_links(served), governor_links(sub)
+    links = []
+    for planet, gov in sorted(links_t.items()):
+        was = links_s.get(planet)
+        if was is None or gov == was:
+            continue
+        owner = served_planets[planet][0] if planet in served_planets else None
+        if owner != civ_oid:
+            refusals.append(f'planet {planet}: governor DROPPED, owned by '
+                            f'{names.get(owner, owner)}')
+        elif gov == 0:
+            refusals.append(f'planet {planet}: governor DROPPED, unassigning '
+                            f'one is not something the client offers')
+        elif gov not in usable:
+            refusals.append(f'planet {planet}: governor DROPPED, {gov} is not '
+                            f'a governor this civ holds')
+        else:
+            links.append((planet, gov))
+
+    final = dict(links_s)
+    final.update(links)
+    deleted = []
+    for oid, record in mine_s:
+        if oid in kept:
+            continue
+        governs = sorted(p for p, g in final.items() if g == oid)
+        if governs:
+            refusals.append(f'governor {oid} deletion DROPPED, it still '
+                            f'governs planet(s) {governs}')
+        else:
+            deleted.append(oid)
+    return new, edited, deleted, links, refusals
+
+
 def _tally(jobs):
     """"6 farmer, 2 worker" from a list of job ids, for a log line."""
     import collections
@@ -1633,10 +1859,11 @@ def merge(blob, submissions, log=print, notes=None):
                 accepted += 1
             for was, d in new_designs:
                 oid = was
-                if oid in design_index(blob):
-                    # Another player's design already took this id, so this one
-                    # is renumbered. The only check made against the merged
-                    # blob: an id is free or taken in the galaxy being built.
+                if oid in design_index(blob) or oid in governor_ids(blob):
+                    # Another player's design or governor already took this
+                    # id, so this one is renumbered. The only check made
+                    # against the merged blob: an id is free or taken in the
+                    # galaxy being built.
                     oid = next_object_id(blob)
                     remap[was] = oid
                 blob = set_high_water(blob, oid)
@@ -1878,6 +2105,47 @@ def merge(blob, submissions, log=print, notes=None):
                         f"space {space}")
                 blob = set_setup_flag(blob, mine, kind)
                 accepted += 1
+
+            # Governors, against the state served. A new one takes a free id,
+            # and the planets-governed counts follow the links as merged.
+            new_govs, edited, deleted, links, refusals = governor_orders(
+                served, sub, mine, served_planets, names)
+            for why in refusals:
+                drop(why)
+            if new_govs or edited or deleted or links:
+                records = dict(governors_of(blob, mine))
+                renumbered = {}
+                for oid, record in edited:
+                    records[oid] = record
+                    log(f"    governor {oid}: "
+                        f"{read_governor(record)[0].decode('latin1')!r} edited")
+                    accepted += 1
+                for was, record in new_govs:
+                    oid = was
+                    if oid <= idg.max_object_id(blob):
+                        # Taken in the galaxy being built, by another player's
+                        # design or governor.
+                        oid = next_object_id(blob)
+                        renumbered[was] = oid
+                    blob = set_high_water(blob, oid)
+                    records[oid] = with_governor_id(record, oid)
+                    log(f"    governor {oid}: "
+                        f"{read_governor(record)[0].decode('latin1')!r} taken"
+                        + (f", submitted as {was} and renumbered"
+                           if oid != was else ""))
+                    accepted += 1
+                for planet_oid, gov in links:
+                    gov = renumbered.get(gov, gov)
+                    blob = set_governor_link(blob, planet_oid, gov)
+                    log(f"    planet {planet_oid}: governor {gov} assigned")
+                    accepted += 1
+                for oid in deleted:
+                    del records[oid]
+                    log(f"    governor {oid}: deleted")
+                    accepted += 1
+                governs = collections.Counter(governor_links(blob).values())
+                blob = set_governors(blob, mine, [
+                    with_governed(r, governs[oid]) for oid, r in records.items()])
 
             # Research belonging to anyone else, against the state as served.
             for other in (o for o in icv.owner_records(blob)

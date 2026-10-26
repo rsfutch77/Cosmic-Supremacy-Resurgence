@@ -1693,9 +1693,13 @@ What is left for after the beta is kept here.
   the old build if the new one fails to start. The TUF items in `5 - Release_Checklist.md` and
   Multiplayer_Checklist M12 are its acceptance list.
 
-- [ ] **Order types nobody has measured are not merged:** governors, admirals and diplomacy
-  proposals. Done when each is measured against a change made in the UI and is either accepted
-  or refused with a note.
+- [ ] **Order types nobody has measured are not merged:** admirals and diplomacy proposals.
+  Done when each is measured against a change made in the UI and is either accepted or refused
+  with a note.
+
+- [ ] **Governors are carried, but no governor has run through the live referee.** Measured in
+  Single Player and merged in `test_governors_merge.py`. Done when a governor assigned in a live
+  galaxy is still assigned after the tick and its rule has acted on the planet.
 
 **Measured in one Single Player session at turn 0 (October 2026,
 `server/tests/fixtures/tier4`):**
@@ -1716,6 +1720,20 @@ What is left for after the beta is kept here.
   in, and keeps it after the ship leaves. Refused with a note: the merge turns the fleet back into
   its member ships and judges the rest of the submission as usual.
 - **Individual ships cannot be renamed**; only fleets can.
+
+**Measured in one Single Player session at turn 0 (23 October 2026,
+`server/tests/fixtures/governors`):**
+
+- **A governor** is a `GVNR` in the civ's `OWNR > DATA > GOVS`, after a `u32` count: its object
+  id, a `u32` count of the planets it governs, one byte, and a `GVDT` holding the name and the
+  rules, each rule a one-byte `RULE` (its checkbox) followed by the rule's own section (`RLSP`
+  for maintain population, `RLPR` and `RLRR` with a nested `COND`). Creating one appends a
+  `GVNR` and raises `SAVE+0` to its id; the client will not create one without a rule.
+- **Assigning** writes the governor's id into the planet's last `u32`, after its `PLPR`, and
+  moves the planets-governed counts. The client offers no way to unassign.
+- **Editing** rewrites the `GVNR` in place under the same id. **Deleting** from the selector
+  removes the `GVNR`; the governor library on the local server keeps its own copy, so Load
+  brings it back. Carried; deleting one that still governs a planet is refused.
 
 **Measured in two Single Player sessions on 25 October 2026 (`server/tests/fixtures/tier5`):**
 production queues on `clean.dat` at turn 111 (`q*`), fleets on `SinglePlayerGalaxy.dat` at turn 0

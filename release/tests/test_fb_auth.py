@@ -18,6 +18,7 @@ import shutil
 import sys
 import tempfile
 import threading
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -205,8 +206,15 @@ else:
           isinstance(live_token, str) and len(live_token) > 500, True)
     check("and names a uid", bool(live.uid), True)
     live._expires_at = 0
+    time.sleep(1.1)         # a token minted in the same second is the same token
     check("and refreshes it to a different token",
           live.token() not in (None, live_token), True)
+    live_uid = live.uid
+    live.send_verification = lambda: False      # example.com receives nothing
+    live_email = f"cs-live-{os.getpid()}@example.com"
+    check("and links an email and password to the guest",
+          (live.create_account(live_email, "Correct horse 1"), live.uid),
+          ({"email": live_email, "provider": "password"}, live_uid))
     check("and the user is deleted again", live.delete(), True)
     check("leaving no state file behind",
           not os.path.exists(os.path.join(live_dir, fb_auth.STATE_FILE)), True)
