@@ -88,12 +88,11 @@ def level(store, turn: int, source: int, targets, log=print) -> bool:
     sp.parse_blob(out)                      # refuse to publish what will not parse
     after = canonical.canonical_hash(out)
 
-    state = store.state()
-    deadline, seconds = state['deadline'], state['turn_seconds']
+    deadline = store.state()['deadline']
     store.publish(turn, out)
-    state = store.state()
-    state['deadline'] = deadline            # publish restarts the clock
-    store._put_state(state)
+    # publish restarts the clock. Every store has update_state; only the
+    # folder store has _put_state.
+    store.update_state({'deadline': deadline})
     log(f'  published turn {turn} again, canonical {after[:16]}, '
         f'{round(deadline - time.time())}s still on the clock')
 
