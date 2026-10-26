@@ -95,6 +95,8 @@ EXCLUDE_PAGES = {
     "wiki/dev.html",             # retired; captured to the CSV at the repo root
     "wiki/guides/todo-guide.html",  # ditto; it only described wiki/dev.html
     "wiki/bg.html",              # its one picture was a 404 on the original too
+    "register.php.html",         # account forms for a server that is gone
+    "forgotpw.php.html",
     # Old galaxies whose score graph was never archived.
     "galaxyscores@galid=44.php.html",
     "galaxyscores@galid=409.php.html",
