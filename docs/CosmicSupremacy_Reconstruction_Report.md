@@ -1716,9 +1716,9 @@ What is left for after the beta is kept here.
   a `DYNO` with the fleet's orders, and `FLDT`: a `u32`-length name (default `Battle Fleet`, cut
   to 32 characters), a `u32` member count and one `SHPR` per member. Members leave `GLXY` as
   `SHIP`s while in the fleet; a ship taken out comes back as a `SHIP` with its own id, and a
-  one-ship fleet survives until disbanded. `SHPR+30` holds the id of the last fleet a ship was
-  in, and keeps it after the ship leaves. Refused with a note: the merge turns the fleet back into
-  its member ships and judges the rest of the submission as usual.
+  one-ship fleet survives until disbanded. A `SHPR` ends with a `f32`, the id of the last fleet
+  its ship was in (`SHPR+30` with two crew), kept after the ship leaves, and the ship's own id.
+  Carried (`test_fleets_merge.py`).
 - **Individual ships cannot be renamed**; only fleets can.
 
 **Measured in one Single Player session at turn 0 (23 October 2026,
@@ -1768,8 +1768,17 @@ turns were advanced with `gamectl.Client.advance_turn`. Each step is one change 
 - **Disbanding** removes the `FLET` and returns every member with empty orders. `SAVE+0` is not
   lowered.
 
-- [ ] **Carry fleets:** forming, joining, leaving, disbanding, renaming, and fleet orders. Needs a
-  fleet id allocated without colliding across players, as designs are, and every member checked:
-  the submitter's, at one position, in no other fleet.
+- [ ] **Fleets are carried, but no fleet the merge built has been loaded by the engine or run
+  through the live referee.** Forming, renaming, fleet orders, ships leaving and joining, one fleet
+  joining another, and disbanding are merged in `test_fleets_merge.py`, and each Single Player step
+  comes out of the merge byte for byte as the client saved it. A new fleet takes a free id as
+  designs and governors do, and every ship in it is checked: the submitter's as served, placed
+  once, all at one position. Done when blobs the merge wrote itself (two civs' fleets with one
+  renumbered, a ship left out of a fleet, crew moved inside one) load in the client, and a fleet
+  formed in a live galaxy is still a fleet after the tick.
+
+- [ ] **Reclaiming a civ leaves its fleets behind.** `wipe_civ.wipe` deletes a civ's `SHIP`s but
+  not its `FLET`s, so an abandoned civ's fleets stay in the galaxy under an owner with no planets.
+  Done when the wipe removes them too and the result loads.
 
 - [ ] **Carry production queues:** the `SPQS` queue objects and the planets' links to them.
