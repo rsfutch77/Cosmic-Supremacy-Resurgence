@@ -1717,6 +1717,39 @@ What is left for after the beta is kept here.
   its member ships and judges the rest of the submission as usual.
 - **Individual ships cannot be renamed**; only fleets can.
 
+**Measured in two Single Player sessions on 25 October 2026 (`server/tests/fixtures/tier5`):**
+production queues on `clean.dat` at turn 111 (`q*`), fleets on `SinglePlayerGalaxy.dat` at turn 0
+(`f*`). Both ran with the turn length set to 30 days so that no turn resolved between steps, and
+turns were advanced with `gamectl.Client.advance_turn`. Each step is one change made in the UI.
+
+- **A production queue** is an `SPRQ` in the civ's `OWNR > DATA > SPQS`, whose `u32` count goes
+  from 0 to 1. `SPRQ` holds the queue's object id, a `u32` count of planets using it and a `u8`,
+  then a `PRQU`: a `u16` (2 with one entry, 4 after a second was added, still 4 after one was
+  deleted), a `u32`-length name, a `u32` entry count and the entries. A queue no planet uses is
+  saved and survives a reload.
+- **A queue entry** is 14 bytes, stored in the order the UI shows: a `u16` kind (1 facility,
+  3 ship), a `u16` count, a `u8` infinite flag, a `u8` count mode (1 "build up to"), then 8 bytes
+  naming the item: all zero for a farm, `u32` 8 and the design id for a ship. Adding, deleting,
+  reordering and editing an entry change only these bytes and the enclosing lengths.
+- **Assigning a queue to a planet** raises the queue's planet count and links the planet's `PROD`
+  (`+2` flag, `+3` queue id, `+7` a `u16` that is the current item's kind when the queue chose it).
+  The planet switches to the queue's item at once, dropping what it was building, and the civ's
+  `OWPR` `+132..+143` move with it.
+- **Overriding a queued planet's production** by hand keeps the queue link and sets `+7` to 0.
+  When the item completes the engine returns the planet to the queue by itself (measured across
+  turns 113 to 128).
+- **Setting a queued planet to Wealth** is the only way out of a queue: the link is cleared and
+  the queue's planet count drops.
+- **Deleting a queue** is allowed once no planet uses it, and leaves `SPQS` byte-identical to a
+  civ that never had one.
+- **Renaming a fleet** rewrites only the name in `FLDT`.
+- **A fleet's move order** is the same three edits as a ship's, in the `FLET`'s own `DYNO`; the
+  members' records do not change.
+- **A ship leaving a fleet** comes back with empty orders. **Joining an existing fleet** is the
+  exact reverse: the blob after leaving and rejoining is byte-identical to the one before.
+- **Disbanding** removes the `FLET` and returns every member with empty orders. `SAVE+0` is not
+  lowered.
+
 - [ ] **Carry fleets:** forming, joining, leaving, disbanding, renaming, and fleet orders. Needs a
   fleet id allocated without colliding across players, as designs are, and every member checked:
   the submitter's, at one position, in no other fleet.
