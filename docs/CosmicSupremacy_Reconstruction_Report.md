@@ -1796,8 +1796,10 @@ turns were advanced with `gamectl.Client.advance_turn`. Each step is one change 
   renumbered design, and the planet counts are recounted from the merged links. Five blobs the
   merge wrote (a queue assigned, shared by two planets, overridden, two civs' queues with one
   renumbered, a queue naming a renumbered design) load in the Resurgence client, resolve a turn and
-  save again with their queues intact (25 October 2026). Still refused, with
-  a note: a queue holding an entry of item type 1 to 7 or 9, which the client's reader accepts but
-  whose meaning is unknown. Done when each of those is measured from a queue made in the UI and
-  carried or refused for a reason, and a planet assigned to a queue in a live galaxy is still on
-  it after the tick, building its entry.
+  save again with their queues intact (25 October 2026). In the live sandbox galaxy, tmog66's
+  queue of a facility and a ship, assigned to four planets on turn 55, came through the referee
+  (staged at `a715489`) with every planet still linked and building one of its entries in turn
+  56, and no refusal notes (26 October 2026). Still refused, with a note: a queue holding an
+  entry of item type 1 to 7 or 9, which the client's reader accepts but whose meaning is unknown.
+  Done when each of those is measured from a queue made in the UI and carried or refused for a
+  reason.
