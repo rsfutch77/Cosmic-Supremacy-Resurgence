@@ -122,14 +122,30 @@ rule, which the client requires; the rules themselves are the engine's to run.
 Deleting a governor that still governs a planet is refused. Each `GVNR` counts
 the planets it governs, and the referee recounts that from the merged links.
 
+**Fleets**, `GLXY > FLET`: the object header (object id, x, z, y, owner), a
+`DYNO` with the fleet's orders, and `FLDT`, a `u32`-length name, a `u32` count
+and one `SHPR` per ship. Ships leave `GLXY` while in a fleet. A `SHPR` ends
+with the id of the last fleet its ship was in, then the ship's own id.
+Forming, renaming, a fleet's orders (copied whole, as a ship's are), ships
+leaving and joining, one fleet joining another, and disbanding are carried for
+the civ's own fleets, as where the submission leaves each of its ships. Every
+ship keeps its `SHPR` as served, its crew judged with the people below; a ship
+leaving takes the fleet's position and its own submitted `DYNO`, and a fleet
+keeps its header. A new fleet raises `SAVE+0` and is renumbered like a design
+when another player's new object took its id. It is refused unless its id is
+new, it names the submitter, its name fits the client's 32 characters, and it
+holds at least one ship, each the submitter's as served, placed once in the
+submission, and all at one position. A ship joins only the civ's own fleet,
+at that fleet's position. Moving or giving away a fleet, a fleet not laid out
+as measured, and any change to another civ's fleet are refused. A refused
+step leaves its ships where they were served.
+
 What is refused
 ---------------
-Everything not listed above (admirals, diplomacy) is not accepted.
-A fleet (`GLXY > FLET`) is turned back into its member ships before the
-submission is judged, so its other orders still count. Every refusal is
-logged and recorded against the civ in the optional `notes` argument to
-`merge`; `referee.py` writes it beside the turn and `player_turn.follow` prints
-it. A submission
+Everything not listed above (admirals, diplomacy) is not accepted. Every
+refusal is logged and recorded against the civ in the optional `notes` argument
+to `merge`; `referee.py` writes it beside the turn and `player_turn.follow`
+prints it. A submission
 that cannot be read is dropped whole and named, with anything already taken
 from it rolled back.
 """
@@ -324,71 +340,443 @@ def ship_index(blob):
     return out
 
 
-# A fleet, GLXY > FLET: the SpaceObject header (object id, x, z, y, owner), a
-# DYNO with the fleet's orders, then FLDT: a u32-length name, a u32 member count
-# and one SHPR per member. Member ships leave GLXY as SHIPs while in a fleet. A
-# ship's SHPR keeps the id of the last fleet it was in at +30.
-SHPR_FLEET_OFF = 30
-SHPR_SHIP_OFF = 34
+# A fleet, GLXY > FLET: the 20-byte object header (object id, x, z, y, owner),
+# a DYNO with the fleet's orders, then FLDT: a u32-length name, a u32 member
+# count and one SHPR per member. Member ships leave GLXY as SHIPs while in a
+# fleet. A SHIP is the same header, a DYNO and a SHPR.
+OBJECT_HEADER = 20
+OBJECT_POS = slice(4, 16)       # x, z, y, three f32
+OBJECT_OWNER_AT = 16
+SHIP_VERSION = 0
+FLET_VERSION = 0
+FLDT_VERSION = 1
+MAX_FLEET_NAME = 32             # the client cuts a longer name to this
+
+# A SHPR ends with 12 bytes after its crew: a f32, the id of the last fleet the
+# ship was in, and the ship's own id. The last fleet outlives the fleet.
+SHPR_TAIL = 12
+SHPR_FLEET_FROM_END = 8         # then the ship's own id, the last four bytes
 
 
 def _section_bytes(tag, version, payload):
     return tag + struct.pack('<I', (version << sp.VERSION_SHIFT) | len(payload)) + payload
 
 
-def without_fleets(sub, served):
-    """(submission, [refusals]) with each fleet the served state does not hold
-    turned back into its member ships.
+def shpr_ids(shpr):
+    """(last fleet, own id) from a SHPR payload, or None unless its crew and
+    tail fill it exactly."""
+    crew = crew_of(shpr)
+    if crew is None or len(shpr) != (CREW_ARRAY_OFF + len(crew) * POP_RECORD
+                                     + SHPR_TAIL):
+        return None
+    return struct.unpack_from('<II', shpr, len(shpr) - SHPR_FLEET_FROM_END)
 
-    Fleets are not carried. Each member is rebuilt from its served SHIP with
-    the SHPR the fleet carried, so crew moved inside the fleet is still judged,
-    and the served fleet field. A member the served state does not hold as a
-    ship is left out.
-    """
-    tree = sp.parse_blob(sub)
+
+def with_last_fleet(shpr, fleet_oid):
+    """A SHPR payload naming a different last fleet."""
+    out = bytearray(shpr)
+    struct.pack_into('<I', out, len(out) - SHPR_FLEET_FROM_END, int(fleet_oid))
+    return bytes(out)
+
+
+def _children(blob, at, end):
+    """[(tag, version, whole section, payload)] filling blob[at:end] exactly,
+    or None."""
+    secs = _sections(blob, at, end)
+    if secs is None:
+        return None
+    return [(tag, struct.unpack_from('<I', blob, p - 4)[0] >> sp.VERSION_SHIFT,
+             bytes(blob[p - 8:e]), bytes(blob[p:e])) for tag, p, e in secs]
+
+
+def fleet_name_acceptable(name):
+    """(ok, reason) for a submitted fleet name."""
+    if len(name) > MAX_FLEET_NAME:
+        return False, (f'the name is {len(name)} bytes and the client cuts '
+                       f'one to {MAX_FLEET_NAME}')
+    if any(b < 0x20 or b > 0x7e for b in name):
+        return False, 'the name holds bytes outside printable ASCII'
+    return True, ''
+
+
+def _read_object(blob, sec):
+    """The header fields every SHIP and FLET starts with."""
+    head = bytes(blob[sec.payload:sec.payload + OBJECT_HEADER])
+    if len(head) < OBJECT_HEADER:
+        return {'tag': sec.tag, 'sec': sec, 'oid': None, 'owner': None,
+                'pos': None, 'record': bytes(blob[sec.start:sec.end]),
+                'why': 'it is shorter than an object header'}
+    return {'tag': sec.tag, 'sec': sec, 'oid': struct.unpack_from('<I', head)[0],
+            'owner': struct.unpack_from('<I', head, OBJECT_OWNER_AT)[0],
+            'pos': head[OBJECT_POS], 'record': bytes(blob[sec.start:sec.end]),
+            'why': ''}
+
+
+def read_ship(blob, sec):
+    """A GLXY SHIP as a dict: oid, owner, pos, dyno (the whole section), shpr
+    (its payload), shpr_version, last_fleet, and why, '' when it is a header,
+    a DYNO and a SHPR naming the ship."""
+    out = _read_object(blob, sec)
+    old = next(sec.find('SHPR'), None)
+    out.update(dyno=None, shpr_version=None, last_fleet=None,
+               shpr=bytes(blob[old.payload:old.end]) if old else None)
+    if out['why']:
+        return out
+    kids = _children(blob, sec.payload + OBJECT_HEADER, sec.end)
+    if not kids or [k[0] for k in kids] != [b'DYNO', b'SHPR']:
+        out['why'] = 'it is not a header, a DYNO and a SHPR'
+        return out
+    ids = shpr_ids(kids[1][3])
+    if ids is None or ids[1] != out['oid']:
+        out['why'] = 'its SHPR does not end by naming it'
+        return out
+    out.update(dyno=kids[0][2], shpr=kids[1][3], shpr_version=kids[1][1],
+               last_fleet=ids[0])
+    return out
+
+
+def read_fleet(blob, sec):
+    """A GLXY FLET as a dict: oid, owner, pos, dyno (the whole section), name,
+    members [(ship id, SHPR payload, SHPR version)] in order, and why, '' when
+    it has the layout measured."""
+    out = _read_object(blob, sec)
+    out.update(dyno=None, name=None, members=[])
+    if out['why']:
+        return out
+    kids = _children(blob, sec.payload + OBJECT_HEADER, sec.end)
+    if (sec.version != FLET_VERSION or not kids
+            or [k[0] for k in kids] != [b'DYNO', b'FLDT']
+            or kids[1][1] != FLDT_VERSION):
+        out['why'] = 'it is not a header, a DYNO and an FLDT as measured'
+        return out
+    fldt = kids[1][3]
+    n = struct.unpack_from('<I', fldt)[0] if len(fldt) >= 4 else None
+    if n is None or 8 + n > len(fldt):
+        out['why'] = 'its name runs past its FLDT'
+        return out
+    count = struct.unpack_from('<I', fldt, 4 + n)[0]
+    members = _children(fldt, 8 + n, len(fldt))
+    if (members is None or len(members) != count
+            or any(tag != b'SHPR' for tag, *_r in members)):
+        out['why'] = f'its FLDT does not hold the {count} SHPR(s) it counts'
+        return out
+    ids = [shpr_ids(payload) for _t, _v, _w, payload in members]
+    if None in ids:
+        out['why'] = 'a member SHPR does not end by naming its ship'
+        return out
+    out.update(dyno=kids[0][2], name=bytes(fldt[4:4 + n]),
+               members=[(own, payload, version) for (_f, own), (_t, version,
+                        _w, payload) in zip(ids, members)])
+    return out
+
+
+def space_objects(blob):
+    """(tree, GLXY, [object]): GLXY's SHIPs and FLETs in order, each read by
+    read_ship or read_fleet, its section under 'sec'."""
+    tree = sp.parse_blob(blob)
     glxy = next(tree[0].find('GLXY'))
-    fleets = [c for c in glxy.children if c.tag == b'FLET']
-    if not fleets:
-        return sub, []
-    served_tree = sp.parse_blob(served)
-    served_glxy = next(served_tree[0].find('GLXY'))
-    served_fleets = {struct.unpack_from('<I', served, f.payload)[0]
-                     for f in served_glxy.children if f.tag == b'FLET'}
-    ships = {}
-    for sec in served_glxy.find('SHIP'):
-        ships[struct.unpack_from('<I', served, sec.payload)[0]] = sec
+    objects = []
+    for sec in glxy.children:
+        if sec.tag == b'SHIP':
+            objects.append(read_ship(blob, sec))
+        elif sec.tag == b'FLET':
+            objects.append(read_fleet(blob, sec))
+    return tree, glxy, objects
 
-    refusals = []
-    body = bytearray(sub[glxy.payload:glxy.end])
-    for fleet in reversed(fleets):
-        fid = struct.unpack_from('<I', sub, fleet.payload)[0]
+
+def fleet_index(blob):
+    """{fleetObjectId: fleet} for every FLET, read by read_fleet."""
+    return {o['oid']: o for o in space_objects(blob)[2] if o['tag'] == b'FLET'}
+
+
+def fleet_orders(served, sub, civ_oid, names):
+    """(layout, refusals) for one civ's fleets, judged against the state served.
+
+    layout is None when nothing changes, else how the civ's ships and fleets
+    end the turn:
+
+        target      {ship: the fleet it ends in, or None}, for each ship
+        fleets      {fleet: {name, dyno, members, pos, new}}, each with a ship
+        out         {ship: DYNO section} for each ship leaving a fleet
+        last_fleet  {ship: the last fleet its submitted SHPR names}, singles
+        appended    [('ship' | 'fleet', id)], the new objects in submitted order
+        log         [line], one per change taken
+
+    Fleet ids are as submitted; a new one is renumbered when it is applied. A
+    ship whose move is refused stays where it was served, and a fleet left
+    with no ship is gone, as disbanding leaves it.
+    """
+    s_objects = space_objects(served)[2]
+    t_objects = space_objects(sub)[2]
+    high = struct.unpack_from('<I', served, idg.HIGH_WATER_ID)[0]
+    refusals, log = [], []
+
+    def who(civ):
+        return names.get(civ, civ)
+
+    def label(fid, name):
+        return f"fleet {fid} ({name.decode('latin1')!r})" if name is not None \
+            else f'fleet {fid}'
+
+    served_fleets = {o['oid']: o for o in s_objects if o['tag'] == b'FLET'}
+    mine_fleets = {fid: f for fid, f in served_fleets.items()
+                   if f['owner'] == civ_oid and not f['why']}
+    at, owner_of, pos_of, field_of = {}, {}, {}, {}
+    for o in s_objects:
+        if o['why']:
+            continue
+        if o['tag'] == b'SHIP':
+            at[o['oid']], owner_of[o['oid']] = None, o['owner']
+            pos_of[o['oid']], field_of[o['oid']] = o['pos'], o['last_fleet']
+        else:
+            for m, shpr, _v in o['members']:
+                at[m], owner_of[m], pos_of[m] = o['oid'], o['owner'], o['pos']
+                field_of[m] = shpr_ids(shpr)[0]
+    mine = {s for s, owner in owner_of.items() if owner == civ_oid}
+
+    # Where the submission puts each ship, and its readable fleets.
+    counted = collections.Counter(o['oid'] for o in t_objects
+                                  if o['tag'] == b'FLET')
+    places = collections.defaultdict(list)
+    singles, fleets_t, pinned = {}, {}, set()
+    for o in t_objects:
+        if o['tag'] == b'SHIP':
+            places[o['oid']].append(None)
+            singles[o['oid']] = o
+            continue
+        fid, why = o['oid'], o['why']
+        if not why and counted[fid] > 1:
+            why = f'the submission holds {counted[fid]} fleets under its id'
+        if why:
+            was = served_fleets.get(fid)
+            if was is None:
+                refusals.append(f'{label(fid, None)} DROPPED, {why}')
+            elif was['owner'] != civ_oid:
+                if o['record'] != was['record']:
+                    refusals.append(f'fleet {fid}: DROPPED, owned by '
+                                    f"{who(was['owner'])}")
+            else:
+                if o['record'] != was['record'] or counted[fid] > 1:
+                    refusals.append(f'fleet {fid}: changes DROPPED, {why}; it '
+                                    f'stays as served')
+                pinned |= {m for m, _s, _v in was['members']}
+            continue
+        fleets_t[fid] = o
+        for m, _s, _v in o['members']:
+            places[m].append(fid)
+
+    for fid, f in fleets_t.items():
+        was = served_fleets.get(fid)
+        if was is not None and was['owner'] != civ_oid \
+                and f['record'] != was['record']:
+            refusals.append(f"fleet {fid}: DROPPED, owned by {who(was['owner'])}")
+
+    # New fleets: formed this turn, from ships this civ was served together.
+    accepted = {}
+    for fid, f in fleets_t.items():
         if fid in served_fleets:
             continue
-        fldt = next(fleet.find('FLDT'), None)
-        n = struct.unpack_from('<I', sub, fldt.payload)[0] if fldt else 0
-        name = bytes(sub[fldt.payload + 4:fldt.payload + 4 + n]) if fldt else b''
-        rebuilt = b''
-        for member in (fleet.find('SHPR') if fldt else ()):
-            shpr = bytearray(sub[member.payload:member.end])
-            oid = struct.unpack_from('<I', shpr, SHPR_SHIP_OFF)[0]
-            ship = ships.get(oid)
-            if ship is None:
-                refusals.append(f'fleet {fid}: member ship {oid} DROPPED, not '
-                                f'a ship in the state served')
+        members = [m for m, _s, _v in f['members']]
+        stray = next((m for m in members if m not in mine), None)
+        twice = next((m for m in members
+                      if len(places[m]) > 1 or m in pinned), None)
+        name_ok, name_why = fleet_name_acceptable(f['name'])
+        if fid <= high:
+            why = f'it is new and {fid} is not a new object id'
+        elif f['owner'] != civ_oid:
+            why = f"it names {who(f['owner'])} as its owner"
+        elif not name_ok:
+            why = name_why
+        elif not members:
+            why = 'it holds no ship'
+        elif stray is not None:
+            why = f'ship {stray} is not one this civ was served'
+        elif twice is not None:
+            why = f'ship {twice} is placed more than once'
+        elif len({pos_of[m] for m in members}) != 1:
+            why = 'its ships are not all at one position'
+        else:
+            accepted[fid] = f
+            continue
+        refusals.append(f'{label(fid, f["name"])} DROPPED, {why}; its ships '
+                        f'stay as they were')
+
+    # Where each of the civ's ships ends the turn.
+    target, out = {}, {}
+    for s in sorted(mine):
+        here, there = at[s], places.get(s, [])
+        if s in pinned or not there or there == [here]:
+            target[s] = here
+            continue
+        target[s] = here
+        if len(there) > 1:
+            refusals.append(f'ship {s}: fleet change DROPPED, the submission '
+                            f'places it {len(there)} times')
+            continue
+        there = there[0]
+        if there is None:
+            if singles[s]['why']:
+                refusals.append(f'ship {s}: leaving fleet {here} DROPPED, '
+                                f"{singles[s]['why']}")
+            else:
+                target[s], out[s] = None, singles[s]['dyno']
+        elif there in accepted:
+            target[s] = there
+        elif there in mine_fleets:
+            if pos_of[s] != mine_fleets[there]['pos']:
+                refusals.append(f'ship {s}: joining fleet {there} DROPPED, it '
+                                f"is not at the fleet's position")
+            else:
+                target[s] = there
+        elif there in served_fleets:
+            refusals.append(f'ship {s}: joining fleet {there} DROPPED, the '
+                            f"fleet is owned by {who(served_fleets[there]['owner'])}")
+
+    # The fleets that end the turn with a ship in them.
+    fleets = {}
+    for fid in list(mine_fleets) + list(accepted):
+        listed = [m for m, _s, _v in fleets_t[fid]['members']] \
+            if fid in fleets_t else []
+        kept = [m for m, _s, _v in mine_fleets[fid]['members']] \
+            if fid in mine_fleets else []
+        members = [m for m in listed if target.get(m) == fid]
+        members += [m for m in kept if target.get(m) == fid and m not in members]
+        was = mine_fleets.get(fid)
+        now = fleets_t.get(fid)
+        if not members:
+            if was is not None:
+                log.append(f'fleet {fid}: disbanded, no ship is left in it')
+            continue
+        if was is None:
+            fleets[fid] = {'name': now['name'], 'dyno': now['dyno'],
+                           'members': members, 'pos': pos_of[members[0]],
+                           'new': True}
+            log.append(f"{label(fid, now['name'])}: formed from ship(s) "
+                       f'{members}')
+            continue
+        name, dyno = was['name'], was['dyno']
+        if now is not None:
+            if (now['pos'], now['owner']) != (was['pos'], was['owner']):
+                refusals.append(f'fleet {fid}: position or owner DROPPED, a '
+                                f'submission neither moves nor gives away a '
+                                f'fleet')
+            if now['name'] != was['name']:
+                ok, why = fleet_name_acceptable(now['name'])
+                if ok:
+                    name = now['name']
+                    log.append(f"fleet {fid}: renamed "
+                               f"{was['name'].decode('latin1')!r} -> "
+                               f"{name.decode('latin1')!r}")
+                else:
+                    refusals.append(f'fleet {fid}: rename DROPPED, {why}')
+            if now['dyno'] != was['dyno']:
+                dyno = now['dyno']
+                log.append(f'fleet {fid}: order taken ({len(was["dyno"])} -> '
+                           f'{len(dyno)} bytes)')
+        fleets[fid] = {'name': name, 'dyno': dyno, 'members': members,
+                       'pos': was['pos'], 'new': False}
+        joined = [m for m in members if at[m] != fid]
+        if joined:
+            log.append(f'fleet {fid}: joined by ship(s) {joined}')
+    for s in sorted(out):
+        log.append(f'ship {s}: left fleet {at[s]}')
+
+    last_fleet = {s: singles[s]['last_fleet'] for s in mine
+                  if target[s] is None and s in singles
+                  and not singles[s]['why']}
+    refusals = list(dict.fromkeys(refusals))    # a twice-held id is said once
+    if not log and all(v == field_of[s] for s, v in last_fleet.items()):
+        return None, refusals
+
+    appended = []
+    for o in t_objects:
+        if o['tag'] == b'SHIP' and o['oid'] in out:
+            appended.append(('ship', o['oid']))
+        elif o['tag'] == b'FLET' and o['oid'] in accepted:
+            appended.append(('fleet', o['oid']))
+    return {'target': target, 'fleets': fleets, 'out': out,
+            'last_fleet': last_fleet, 'appended': appended,
+            'log': log}, refusals
+
+
+def set_fleets(blob, civ_oid, layout, renumbered=None):
+    """`blob` with one civ's ships and fleets laid out as `layout` says (see
+    fleet_orders), every enclosing size corrected.
+
+    Each ship keeps the SHPR `blob` holds for it, crew included, naming the
+    fleet it is in, or for a single ship the last fleet it was in. A fleet
+    keeps its header and a new one takes its ships' position. Ships and fleets
+    that are new to GLXY follow its last SHIP or FLET, where the client puts
+    them. `renumbered` maps a new fleet's submitted id to the id it takes.
+    """
+    renumbered = renumbered or {}
+    tree, glxy, objects = space_objects(blob)
+    shpr, pos_of = {}, {}
+    for o in objects:
+        if o['owner'] != civ_oid or o['why']:
+            continue
+        if o['tag'] == b'SHIP':
+            shpr[o['oid']] = (o['shpr'], o['shpr_version'])
+            pos_of[o['oid']] = o['pos']
+        else:
+            for m, payload, version in o['members']:
+                shpr[m] = (payload, version)
+                pos_of[m] = o['pos']
+    final = {renumbered.get(fid, fid) for fid in layout['fleets']}
+
+    def last(s):
+        held = shpr_ids(shpr[s][0])[0]
+        want = layout['last_fleet'].get(s)
+        if want is None:
+            return held
+        want = renumbered.get(want, want)
+        return want if want == held or want in final else held
+
+    def ship_bytes(s, pos, dyno, version=SHIP_VERSION):
+        payload, shpr_version = shpr[s]
+        head = struct.pack('<I', s) + pos + struct.pack('<I', civ_oid)
+        return _section_bytes(b'SHIP', version, head + dyno + _section_bytes(
+            b'SHPR', shpr_version, with_last_fleet(payload, last(s))))
+
+    def fleet_bytes(fid):
+        f, oid = layout['fleets'][fid], renumbered.get(fid, fid)
+        fldt = (struct.pack('<I', len(f['name'])) + f['name']
+                + struct.pack('<I', len(f['members']))
+                + b''.join(_section_bytes(b'SHPR', shpr[m][1],
+                                          with_last_fleet(shpr[m][0], oid))
+                           for m in f['members']))
+        head = struct.pack('<I', oid) + f['pos'] + struct.pack('<I', civ_oid)
+        return _section_bytes(b'FLET', FLET_VERSION, head + f['dyno']
+                              + _section_bytes(b'FLDT', FLDT_VERSION, fldt))
+
+    edits, after = [], None
+    for o in objects:
+        sec = o['sec']
+        after = sec.end
+        if o['owner'] != civ_oid or o['why']:
+            continue
+        if o['tag'] == b'SHIP':
+            if o['oid'] not in layout['target']:
                 continue
-            old = next(ship.find('SHPR'))
-            shpr[SHPR_FLEET_OFF:SHPR_FLEET_OFF + 4] = \
-                served[old.payload + SHPR_FLEET_OFF:old.payload + SHPR_FLEET_OFF + 4]
-            payload = (served[ship.payload:old.start]
-                       + _section_bytes(b'SHPR', member.version, bytes(shpr))
-                       + served[old.end:ship.end])
-            rebuilt += _section_bytes(b'SHIP', ship.version, payload)
-        refusals.append(f"fleet {fid} ({name.decode('latin1')!r}) DROPPED, "
-                        f"fleets and their orders are not carried yet; its "
-                        f"ships stay single ships")
-        at, end = fleet.start - glxy.payload, fleet.end - glxy.payload
-        body[at:end] = rebuilt
-    return sp.replace_payload(sub, tree, glxy, bytes(body)), refusals
+            if layout['target'][o['oid']] is None:
+                new = ship_bytes(o['oid'], o['pos'], o['dyno'], sec.version)
+            else:
+                new = b''
+        else:
+            new = fleet_bytes(o['oid']) if o['oid'] in layout['fleets'] else b''
+        if new != o['record']:
+            edits.append((sec.start, sec.end, new))
+    added = b''.join(fleet_bytes(oid) if kind == 'fleet'
+                     else ship_bytes(oid, pos_of[oid], layout['out'][oid])
+                     for kind, oid in layout['appended'])
+    if added:
+        if after is None:
+            raise SystemExit('GLXY holds no SHIP or FLET to add after')
+        edits.append((after, after, added))
+    body = bytearray(blob[glxy.payload:glxy.end])
+    for start, end, new in sorted(edits, reverse=True):
+        body[start - glxy.payload:end - glxy.payload] = new
+    return sp.replace_payload(blob, tree, glxy, bytes(body))
 
 
 def planet_index(blob):
@@ -1070,16 +1458,30 @@ def set_military(blob, planet_oid, records):
     raise SystemExit(f'planet {planet_oid} not found')
 
 
+def _shpr_section(blob, glxy, ship_oid):
+    """A ship's SHPR section, in its SHIP or in the fleet it is in, or None.
+    Raises when its SHIP has none."""
+    for sec in glxy.children:
+        if (sec.tag == b'SHIP'
+                and struct.unpack_from('<I', blob, sec.payload)[0] == ship_oid):
+            shpr = next(sec.find('SHPR'), None)
+            if shpr is None:
+                raise SystemExit(f'ship {ship_oid} has no SHPR')
+            return shpr
+        if sec.tag == b'FLET':
+            for shpr in sec.find('SHPR'):
+                ids = shpr_ids(bytes(blob[shpr.payload:shpr.end]))
+                if ids is not None and ids[1] == ship_oid:
+                    return shpr
+    return None
+
+
 def set_crew(blob, ship_oid, records):
-    """Write a ship's crew. The section's size changes."""
+    """Write a ship's crew, in a fleet or not. The section's size changes."""
     tree = sp.parse_blob(blob)
     glxy = next(tree[0].find('GLXY'))
-    for sec in glxy.find('SHIP'):
-        if struct.unpack_from('<I', blob, sec.payload)[0] != ship_oid:
-            continue
-        shpr = next(sec.find('SHPR'), None)
-        if shpr is None:
-            raise SystemExit(f'ship {ship_oid} has no SHPR')
+    shpr = _shpr_section(blob, glxy, ship_oid)
+    if shpr is not None:
         raw = bytes(blob[shpr.payload:shpr.end])
         old = crew_of(raw)
         if old is None:
@@ -2095,15 +2497,15 @@ def _tally(jobs):
 
 
 def _ship_crew_index(blob):
-    """{shipObjectId: (owner, SHPR payload bytes)}"""
-    tree = sp.parse_blob(blob)
-    glxy = next(tree[0].find('GLXY'))
+    """{shipObjectId: (owner, SHPR payload bytes)}, a fleet's ships under the
+    fleet's owner."""
     out = {}
-    for sec in glxy.find('SHIP'):
-        oid, _x, _z, _y, owner = struct.unpack_from('<IfffI', blob, sec.payload)
-        shpr = next(sec.find('SHPR'), None)
-        out[oid] = (owner,
-                    bytes(blob[shpr.payload:shpr.end]) if shpr else None)
+    for o in space_objects(blob)[2]:
+        if o['tag'] == b'SHIP':
+            out[o['oid']] = (o['owner'], o['shpr'])
+        elif not o['why']:
+            for m, shpr, _v in o['members']:
+                out[m] = (o['owner'], shpr)
     return out
 
 
@@ -2115,6 +2517,8 @@ def merge(blob, submissions, log=print, notes=None):
     `player_turn.follow` can print it into the launcher's log.
     """
     served_ships = ship_index(blob)
+    served_members = {m: f['owner'] for f in fleet_index(blob).values()
+                      for m, _s, _v in f['members']}
     served_planets = planet_index(blob)
     served_designs = design_index(blob)
     # Research as it was served, like the three indexes above: every
@@ -2145,9 +2549,6 @@ def merge(blob, submissions, log=print, notes=None):
         try:
             civ = civ_by_name(blob, civ_name)
             mine = civ['oid']
-            sub, refusals = without_fleets(sub, served)
-            for why in refusals:
-                drop(why)
             log(f"{civ_name} (object {mine}):")
 
             # Ship designs, before the production queues that may name them.
@@ -2164,12 +2565,11 @@ def merge(blob, submissions, log=print, notes=None):
                 accepted += 1
             for was, d in new_designs:
                 oid = was
-                if (oid in design_index(blob) or oid in governor_ids(blob)
-                        or oid in queue_ids(blob)):
-                    # Another player's design, governor or production queue
-                    # already took this id, so this one is renumbered. The
-                    # only check made against the merged blob: an id is free
-                    # or taken in the galaxy being built.
+                if oid <= idg.max_object_id(blob):
+                    # Another player's new object already took this id, so
+                    # this one is renumbered. The only check made against the
+                    # merged blob: an id is free or taken in the galaxy being
+                    # built.
                     oid = next_object_id(blob)
                     remap[was] = oid
                 blob = set_high_water(blob, oid)
@@ -2212,10 +2612,38 @@ def merge(blob, submissions, log=print, notes=None):
             usable = {oid: {e[0] for e in read_queue(r)[0] or ()}
                       for oid, r in queues_of(blob, mine) or ()
                       if oid not in deleted_queues}
+            # Fleets, against the state served, before the ship orders and
+            # crews that look for ships where the fleets leave them. A new
+            # fleet takes a free id like a design.
+            layout, refusals = fleet_orders(served, sub, mine, names)
+            for why in refusals:
+                drop(why)
+            if layout is not None:
+                renumbered = {}
+                for was in sorted(f for f, v in layout['fleets'].items()
+                                  if v['new']):
+                    oid = was
+                    if oid <= idg.max_object_id(blob):
+                        oid = next_object_id(blob)
+                        renumbered[was] = oid
+                    blob = set_high_water(blob, oid)
+                blob = set_fleets(blob, mine, layout, renumbered)
+                for line in layout['log']:
+                    log(f"    {line}")
+                    accepted += 1
+                for was, oid in renumbered.items():
+                    log(f"    fleet {oid}: submitted as {was} and renumbered")
 
             # ship orders
             for ship_oid, (_claimed, dyno) in sorted(ship_index(sub).items()):
                 if ship_oid not in served_ships:
+                    if ship_oid in served_members:
+                        # Out of a fleet: the fleet step judged it.
+                        owner = served_members[ship_oid]
+                        if owner != mine:
+                            drop(f"ship {ship_oid}: DROPPED, owned by "
+                                 f"{names.get(owner, owner)}")
+                        continue
                     drop(f"ship {ship_oid}: DROPPED, not in the state served")
                     continue
                 owner, as_served = served_ships[ship_oid]
@@ -2554,6 +2982,11 @@ def main():
             print(f"  planet {oid:<5} owner {names.get(owner, owner):<14} "
                   f"{label!r:<20} PROD {len(prod) if prod else 'none'} bytes, "
                   f"{_tally([c[0] for c in cz]) if cz else 'no population'}")
+        for oid, f in sorted(fleet_index(blob).items()):
+            label = f['why'] or (f"{f['name'].decode('latin1')!r}, ships "
+                                 f"{[m for m, _s, _v in f['members']]}")
+            print(f"  fleet  {oid:<5} owner {names.get(f['owner'], f['owner']):<14} "
+                  f"{label}")
         for o in icv.owner_records(blob):
             r = research_of(blob, o['oid'])
             topic = struct.unpack_from('<I', r[0], 0)[0] if r else None

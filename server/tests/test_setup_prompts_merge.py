@@ -196,11 +196,10 @@ def main():
 
     print('another submission does not lose its fleet to the merge before it')
     g = sp.load_any(os.path.join(FIX, 't4g.dat'))
-    _out, notes = merged(served, ('BadGuy', served), ('DemoPlayer', g))
+    out, notes = merged(served, ('BadGuy', served), ('DemoPlayer', g))
     check('the second submission is read, not dropped whole',
           [n for n in notes.get('DemoPlayer', []) if 'could not be read' in n], [])
-    check('and its fleet is reported as usual',
-          any('fleet 204' in n for n in notes.get('DemoPlayer', [])), True)
+    check('and its fleet is carried', 204 in mo.fleet_index(out), True)
 
     print(f'\n{len(PASS)} passed, {len(FAIL)} failed')
     return 1 if FAIL else 0
