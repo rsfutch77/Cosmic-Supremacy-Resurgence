@@ -3,9 +3,9 @@ test_fleet_and_queue.py: fleets and production queues are refused, nothing else 
 ======================================================================================
     server\\.venv\\Scripts\\python.exe server\\tests\\test_fleet_and_queue.py
 
-Fleets and production queues are not carried. A submission holding a fleet has
-it turned back into its member ships, with a note, and is otherwise judged as
-usual; a planet that joins a queue keeps what it was building, with a note.
+Fleets are not carried. A submission holding a fleet has it turned back into
+its member ships, with a note, and is otherwise judged as usual. A planet that
+joins a production queue is carried with the queue (`test_queues_merge.py`).
 
 Fixtures in `fixtures/tier4`, saved in one Single Player session at turn 0:
 `t4e` builds a Colony Ship, `t4f` adds it to a production queue, `t4g` forms
@@ -89,9 +89,12 @@ def main():
     planet = next(p for p, v in mo.planet_index(f).items()
                   if mo.prod_queue(v[1]) not in (None, bytes(7)))
     out, notes = merged(e, f)
-    check('a planet joining a queue keeps what it was building',
-          mo.planet_index(out)[planet][1], mo.planet_index(e)[planet][1])
-    check('and the player is told', any('production queue' in n for n in notes))
+    check('a planet joining a queue is carried with it',
+          (mo.planet_index(out)[planet][1], mo.queues_of(out, mo.civ_by_name(
+              out, CIV)['oid'])),
+          (mo.planet_index(f)[planet][1], mo.queues_of(f, mo.civ_by_name(
+              f, CIV)['oid'])))
+    check('without a note', [n for n in notes if 'queue' in n], [])
 
     print(f'\n{len(PASS)} passed, {len(FAIL)} failed')
     return 1 if FAIL else 0
