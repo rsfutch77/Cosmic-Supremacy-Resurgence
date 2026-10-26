@@ -4931,13 +4931,23 @@ class Launcher:
         """Ask before quitting out from under a running game.
 
         The warning is about the player's turn, which covers both single
-        player and the multiplayer turn loop.
+        player and the multiplayer turn loop, including a turn still being
+        sent after the game window has closed.
         """
         if running_clients(self.client_exes):
             if not self.view.ask_ok_cancel(
                     "Quit launcher?",
                     "A game is still running.\n\nClose your client first to "
                     "make sure your turn is saved.\n\nClose anyway?"):
+                return
+        elif self.mp_thread is not None and self.mp_thread.is_alive():
+            # The game may have closed since the last status tick.
+            self._watch_mp_client(False)
+            if self.mp_sending and not self.view.ask_ok_cancel(
+                    "Quit launcher?",
+                    "Your turn is still being sent.\n\nKeep the launcher open "
+                    "until it finishes, or your orders may not arrive.\n\n"
+                    "Close anyway?"):
                 return
         self.stop_multiplayer("the launcher is closing")
         self.stop_ai("the launcher is closing")
