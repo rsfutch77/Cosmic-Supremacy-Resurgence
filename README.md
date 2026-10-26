@@ -85,7 +85,7 @@ the deep detail.
 
 ## Use of Generative AI
 
-I'm a fan of the original game and definitely did not grow up around the languages this game was originally written in. My goal with this project was to rebuild the original as faithfully as possible. To that end, I only use GenAI to help me understand how this puzzle fits together. GenAI will not be used to create new art assets for the game, and the "AI" players will not use GenAI. 
+I'm a fan of the original game. GenAI will not be used to create new art assets for the game, and the "AI" players will not use GenAI, the game itself is all the original code as written by the original developers with the minimal necessary patches described in plain English. My goal with this project was to relaunch the orginal game with the original code, just with a modern server to replace the server that was lost. To that end, I only use GenAI to help me understand how this puzzle fits together, decoding how the original server used to work and which commands it used to send.  Cybersecurity was also not left up to GenAI to decide. The rebuilt server uses modern best practice security checklists from Google and Microsoft that you can find here in the repo. 
 
 ## Licence
 
