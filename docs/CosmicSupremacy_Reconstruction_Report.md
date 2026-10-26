@@ -1774,7 +1774,7 @@ turns were advanced with `gamectl.Client.advance_turn`. Each step is one change 
 - **Disbanding** removes the `FLET` and returns every member with empty orders. `SAVE+0` is not
   lowered.
 
-- [ ] **Fleets are carried, but no fleet has run through the live referee.** Forming, renaming,
+- [x] **Fleets are carried, and one has run through the live referee.** Forming, renaming,
   fleet orders, ships leaving and joining, one fleet joining another, and disbanding are merged in
   `test_fleets_merge.py`, and each Single Player step comes out of the merge byte for byte as the
   client saved it. A new fleet takes a free id as designs and governors do, and every ship in it is
@@ -1782,12 +1782,19 @@ turns were advanced with `gamectl.Client.advance_turn`. Each step is one change 
   itself (two civs' fleets with one renumbered, a ship left out of an ordered fleet, crew moved
   inside one, one fleet merged into another, a renumbered fleet a ship left) load in the
   Resurgence client, resolve a turn and save again with their fleets intact; the ordered fleet
-  moves along its route and the ship left out stays put (25 October 2026). Done when a fleet
-  formed in a live galaxy is still a fleet after the tick.
+  moves along its route and the ship left out stays put (25 October 2026). In the live sandbox
+  galaxy (referee staged at `a715489`), Beta's fleet 227 of ships 221 and 214, submitted on turn
+  56, was still a fleet of both in turn 57, and Beta had no refusal note (26 October 2026). Beta
+  never had two ships together, so for the test turn 56 was republished at its publish with 214
+  moved beside 221, the deadline kept and the turn-55 archive record updated, and the fleet was
+  submitted by script; turn 57 was then republished with the fleet split back into idle ships and
+  214 where it was. Elder Race, whose launcher fetched turn 56 before the edit, got the expected
+  note `ship 214: DROPPED, owned by Beta` and lost nothing.
 
-- [ ] **Reclaiming a civ leaves its fleets behind.** `wipe_civ.wipe` deletes a civ's `SHIP`s but
-  not its `FLET`s, so an abandoned civ's fleets stay in the galaxy under an owner with no planets.
-  Done when the wipe removes them too and the result loads.
+- [x] **Reclaiming a civ removes its fleets.** `wipe_civ.wipe` cuts a civ's `FLET`s with the ships
+  inside them, as well as its `SHIP`s, and `check` fails while one is left. A galaxy with
+  DemoPlayer's ordered fleet wiped (tier5 `f3`) loads in the Resurgence client as BadGuy, resolves
+  a turn and saves again (26 October 2026).
 
 - [ ] **Production queues are carried, except entries of item types nobody has measured.**
   `merge_orders.py` carries creating, editing, reordering and deleting queues and entries, and
