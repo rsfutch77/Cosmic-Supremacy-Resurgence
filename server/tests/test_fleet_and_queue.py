@@ -1,11 +1,11 @@
 """
-test_fleet_and_queue.py: fleets and production queues are refused, nothing else is lost
-======================================================================================
+test_fleet_and_queue.py: fleets are carried, production queues refused, nothing else is lost
+=========================================================================================
     server\\.venv\\Scripts\\python.exe server\\tests\\test_fleet_and_queue.py
 
-Fleets and production queues are not carried. A submission holding a fleet has
-it turned back into its member ships, with a note, and is otherwise judged as
-usual; a planet that joins a queue keeps what it was building, with a note.
+Fleets are carried; `test_fleets_merge.py` covers each step and refusal.
+Production queues are not: a planet that joins a queue keeps what it was
+building, with a note.
 
 Fixtures in `fixtures/tier4`, saved in one Single Player session at turn 0:
 `t4e` builds a Colony Ship, `t4f` adds it to a production queue, `t4g` forms
@@ -67,22 +67,21 @@ def main():
 
     print('a fleet formed in a turn')
     out, notes = merged(f, g)
-    check('the fleet is not carried', fleets(out), [])
-    check('its ships are still single ships', {192, 193} <= set(mo.ship_index(out)))
-    check('and the player is told once', sum('fleet 204' in n for n in notes), 1)
-    check('nothing else is refused because the ships moved into a fleet',
-          [n for n in notes if 'people' in n or 'not in the state served' in n], [])
+    check('the fleet is carried', [mo.fleet_index(out)[204]['record']],
+          [mo.fleet_index(g)[204]['record']])
+    check('nothing is refused because the ships moved into a fleet', notes, [])
 
     print("a fleet's move order")
     out, notes = merged(f, i)
-    check('is not carried either: the ships keep their served orders',
-          [mo.ship_index(out)[s][1] for s in (192, 193)],
-          [mo.ship_index(f)[s][1] for s in (192, 193)])
-    check('with the same note', any('fleet 204' in n for n in notes))
+    check('is carried in the fleet', mo.fleet_index(out)[204]['dyno'],
+          mo.fleet_index(i)[204]['dyno'])
 
     print('a ship that left a fleet within the turn')
     out, notes = merged(f, j)
-    check('both ships are single ships in the result', {192, 193} <= set(mo.ship_index(out)))
+    check('is a single ship and the other stays in the fleet',
+          (193 in mo.ship_index(out),
+           [m for m, _s, _v in mo.fleet_index(out)[204]['members']]),
+          (True, [192]))
 
     print('a production queue')
     e = load('e')
