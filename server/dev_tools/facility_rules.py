@@ -72,6 +72,19 @@ def free_space(base, lost, pct, used):
     return total - used
 
 
+def content_version(blob):
+    """The galaxy's content version, or None when it cannot be read."""
+    try:
+        return sbp.get_content_version(blob)
+    except (SystemExit, Exception):           # noqa: BLE001
+        return None
+
+
+def type_count(blob):
+    """How many facility types the galaxy's content version has."""
+    return len(tables(content_version(blob))[0])
+
+
 def can_build(blob, completed, plpr, facilities, facility_type):
     """(ok, reason) for starting `facility_type` on a planet.
 
@@ -79,11 +92,7 @@ def can_build(blob, completed, plpr, facilities, facility_type):
     PLPR payload and `facilities` its [(type, count)] list. Ownership is the
     caller's to check: the client's rule does not look at it.
     """
-    try:
-        version = sbp.get_content_version(blob)
-    except (SystemExit, Exception):           # noqa: BLE001
-        version = None
-    space, once = tables(version)
+    space, once = tables(content_version(blob))
     if not 0 <= facility_type < len(space):
         return False, f'there is no facility type {facility_type}'
     types, pct = unlocked(completed)

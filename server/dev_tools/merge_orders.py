@@ -31,8 +31,26 @@ unless the served item was hurried, which the UI does not let be swapped, it
 names any other kind, or it starts a facility the client would not allow
 (`facility_rules.can_build`: researched, fits the free space, the hyperspace
 pair, the per-planet limit), judged on the served planet and research. The
-production queues proper are
-`OWNR > SPQS > SPRQ > PRQU` and have never been seen in a capture.
+planet's link to a production queue, `+2..+8`, is part of the copy and is
+judged with the queues below.
+
+**Production queues**, `OWNR > DATA > SPQS`: a `u32` count, then one `SPRQ` per
+queue holding its object id, a `u32` count of the planets using it, a byte, and
+a `PRQU` with the name and the entries in the order the UI shows them. An entry
+is an entry id, a count, an infinite flag, a count mode and an item: a facility
+type (item type 0) or a design (item type 8). A planet joins a queue through
+its `PROD`: a flag at `+2`, the queue's id at `+3`, and at `+7` the id of the
+entry it is building, 0 after a manual override; Wealth clears all three and is
+the only way out. Carried for the civ's own queues and planets: creating,
+editing, reordering and deleting queues and entries, and the links with the
+production that comes with them. A new queue takes a free object id as a
+governor does and its planets follow it; a ship entry follows a renumbered
+design. Refused: an entry naming a design the civ does not hold in the merged
+galaxy, a facility type the galaxy lacks, any other item type, which has not
+been measured, a planet naming a queue or entry the merged galaxy lacks, and
+deleting a queue a planet still uses. The planet counts are recounted from the
+merged links. The civ's `OWPR` `+132..+143` move with any production change,
+queued or not, and are not carried.
 
 **Ship designs**, `OWNR > DATA > DSGN`. A new design arrives as a second
 `DSGN`/`SDPR` pair, the civ's design count raised by one and `SAVE+0` raised to
@@ -96,22 +114,22 @@ excluded.
 **Governors**, `OWNR > DATA > GOVS`, and the planet's link to one, the last
 `u32` of its `PLNT`. Creating a governor appends a `GVNR` and raises `SAVE+0`
 to its id, so a new one is renumbered like a design when another player's
-design or governor took the id. Editing rewrites the `GVNR` in place, and
-deleting removes it. Assigning sets the planet's link; the client offers no
-way to unassign. Carried for the civ's own governors and planets, as records
-whose sections fit, with a printable name and at least one rule, which the
-client requires; the rules themselves are the engine's to run. Deleting a
-governor that still governs a planet is refused. Each `GVNR` counts the
-planets it governs, and the referee recounts that from the merged links.
+design, governor or production queue took the id. Editing rewrites the
+`GVNR` in place, and deleting removes it. Assigning sets the planet's link; the
+client offers no way to unassign. Carried for the civ's own governors and
+planets, as records whose sections fit, with a printable name and at least one
+rule, which the client requires; the rules themselves are the engine's to run.
+Deleting a governor that still governs a planet is refused. Each `GVNR` counts
+the planets it governs, and the referee recounts that from the merged links.
 
 What is refused
 ---------------
 Everything not listed above (admirals, diplomacy) is not accepted.
 A fleet (`GLXY > FLET`) is turned back into its member ships before the
-submission is judged, so its other orders still count; a planet joining or
-leaving a production queue keeps what it was building. Every refusal is logged and recorded
-against the civ in the optional `notes` argument to `merge`; `referee.py`
-writes it beside the turn and `player_turn.follow` prints it. A submission
+submission is judged, so its other orders still count. Every refusal is
+logged and recorded against the civ in the optional `notes` argument to
+`merge`; `referee.py` writes it beside the turn and `player_turn.follow` prints
+it. A submission
 that cannot be read is dropped whole and named, with anything already taken
 from it rolled back.
 """
@@ -913,7 +931,7 @@ def set_design_inactive(blob, design_oid, inactive):
 # What a PROD can name in its nested section: nothing (piling up wealth), a
 # facility, a scan, or a ship by design id.
 PROD_KINDS = (b'WLTH', b'FCLT', b'SCAN', b'SHIP')
-PROD_QUEUE_OFF = 2          # queue flag, queue object id, u16
+PROD_QUEUE_OFF = 2          # queue flag, queue object id, u16 entry id
 PROD_LIST_OFF = 9           # u32 count of four-byte pairs
 PROD_FACILITY_OFF = 13      # u32 facility type, after an empty list
 PROD_KIND_OFF = 21          # the nested section, after an empty list
@@ -941,6 +959,22 @@ def prod_queue(prod):
     if prod is None or len(prod) < 8 + PROD_LIST_OFF:
         return None
     return bytes(prod[8 + PROD_QUEUE_OFF:8 + PROD_LIST_OFF])
+
+
+def queue_link(prod):
+    """(flag, queue object id, entry id) of a PROD, or None.
+
+    The entry id names the queue entry the planet is building, 0 after a
+    manual override."""
+    link = prod_queue(prod)
+    return None if link is None else struct.unpack('<BIH', link)
+
+
+def with_prod_queue(prod, oid):
+    """A `PROD` section linked to a different queue object id."""
+    out = bytearray(prod)
+    struct.pack_into('<I', out, 8 + PROD_QUEUE_OFF + 1, int(oid))
+    return bytes(out)
 
 
 def prod_facility(prod):
@@ -1782,6 +1816,277 @@ def governor_orders(served, sub, civ_oid, served_planets, names):
     return new, edited, deleted, links, refusals
 
 
+# A civ's production queues are in its `OWNR > DATA > SPQS`: a u32 count, then
+# one `SPRQ` per queue:
+#
+#     SPRQ v0   u32 objectId ; u32 planets using it ; one byte ; PRQU
+#     PRQU v1   u16 entry-id counter ; u32 nameLen ; name ; u32 entry count ;
+#               the entries, in the order the UI shows them
+#
+# An entry is a u16 entry id, a u16 count, a u8 infinite flag, a u8 count mode
+# (1 "build up to") and a u32 item type, then a u32 naming the item for the
+# types the reader follows with one: the facility type for 0, the design's
+# object id for 8. The writer is 0x556560 and the reader 0x556D20.
+#
+# The parser stops at a civ's news items in `DATA`, so `SPQS` is found by its
+# tag and believed when it holds its count of `SPRQ` sections.
+SPQS_COUNT = 4
+SPRQ_USING_AT = 4           # in the SPRQ payload, after the object id
+SPRQ_FIXED = 9              # object id, planets using it and the one byte
+PRQU_VERSION = 1
+QUEUE_ENTRY = 10            # entry id, count, two flags and the item type
+ITEM_FACILITY = 0
+ITEM_SHIP = 8
+ITEM_ARGUMENT = {0, 7, 8, 9}    # item types followed by a u32
+ITEM_TYPES = 10                 # the reader's switch covers 0..9
+
+
+def _spqs(blob):
+    """(tree, {civObjectId: (DATA, SPQS start, SPQS end) or None}) for every
+    civ. A civ's entry is None unless its DATA holds exactly one SPQS holding
+    its count of SPRQ sections."""
+    tree = sp.parse_blob(blob)
+    glxy = next(tree[0].find('GLXY'))
+    out = {}
+    for o in glxy.children:
+        if o.tag != b'OWNR':
+            continue
+        n = struct.unpack_from('<I', blob, o.payload)[0]
+        civ = struct.unpack_from('<I', blob, o.payload + 4 + n)[0]
+        data = next((c for c in o.children if c.tag == b'DATA'), None)
+        found = []
+        at = blob.find(b'SPQS', data.payload, data.end - 8) if data else -1
+        while at >= 0:
+            end = (at + 8 + (struct.unpack_from('<I', blob, at + 4)[0]
+                             & sp.SIZE_MASK))
+            if at + 8 + SPQS_COUNT <= end <= data.end:
+                count = struct.unpack_from('<I', blob, at + 8)[0]
+                secs = _sections(blob, at + 8 + SPQS_COUNT, end)
+                if (secs is not None and len(secs) == count
+                        and all(tag == b'SPRQ' and e - p >= SPRQ_FIXED
+                                for tag, p, e in secs)):
+                    found.append((at, end))
+            at = blob.find(b'SPQS', at + 1, data.end - 8)
+        out[civ] = (data,) + found[0] if len(found) == 1 else None
+    return tree, out
+
+
+def queues_by_civ(blob):
+    """{civObjectId: [(objectId, whole SPRQ section)] in order, or None when
+    the civ's SPQS cannot be found}."""
+    out = {}
+    for civ, found in _spqs(blob)[1].items():
+        if found is None:
+            out[civ] = None
+            continue
+        _data, at, end = found
+        secs = _sections(blob, at + 8 + SPQS_COUNT, end)
+        out[civ] = [(struct.unpack_from('<I', blob, p)[0],
+                     bytes(blob[p - 8:e])) for _tag, p, e in secs]
+    return out
+
+
+def queues_of(blob, civ_oid):
+    """[(objectId, whole SPRQ section)] of a civ in order, or None when its
+    SPQS cannot be found."""
+    return queues_by_civ(blob).get(civ_oid)
+
+
+def queue_ids(blob):
+    """Every production queue's object id, whichever civ holds it."""
+    return {oid for queues in queues_by_civ(blob).values()
+            for oid, _r in queues or ()}
+
+
+def set_queues(blob, civ_oid, records):
+    """Rewrite a civ's SPQS to hold these whole SPRQ sections, in order."""
+    tree, civs = _spqs(blob)
+    if civs.get(civ_oid) is None:
+        raise ValueError(f'civ {civ_oid} has no readable SPQS')
+    data, at, end = civs[civ_oid]
+    version = struct.unpack_from('<I', blob, at + 4)[0] >> sp.VERSION_SHIFT
+    spqs = sp.build_section(b'SPQS', version, struct.pack('<I', len(records))
+                            + b''.join(records))
+    body = bytes(blob[data.payload:at]) + spqs + bytes(blob[end:data.end])
+    return sp.replace_payload(blob, tree, data, body)
+
+
+def read_queue(record):
+    """([(entry id, item type, item, item offset)], why) for a whole SPRQ
+    section: the entries and '', or None and what is wrong with it. The item
+    and its offset are None for an item type with nothing after it."""
+    body = _sections(record, 8 + SPRQ_FIXED, len(record))
+    if not body or len(body) != 1 or body[0][0] != b'PRQU':
+        return None, 'its record is not one PRQU'
+    _tag, at, end = body[0]
+    version = struct.unpack_from('<I', record, at - 4)[0] >> sp.VERSION_SHIFT
+    if version != PRQU_VERSION:
+        return None, f'its PRQU is version {version}, not {PRQU_VERSION}'
+    if end - at < 6:
+        return None, 'its PRQU is cut short'
+    name_end = at + 6 + struct.unpack_from('<I', record, at + 2)[0]
+    if name_end + 4 > end:
+        return None, 'its name runs past its PRQU'
+    ok, why = name_acceptable(bytes(record[at + 6:name_end]))
+    if not ok:
+        return None, why
+    count = struct.unpack_from('<I', record, name_end)[0]
+    entries, p = [], name_end + 4
+    for _i in range(count):
+        if p + QUEUE_ENTRY > end:
+            break
+        eid = struct.unpack_from('<H', record, p)[0]
+        itype = struct.unpack_from('<I', record, p + 6)[0]
+        p += QUEUE_ENTRY
+        if itype >= ITEM_TYPES:
+            return None, (f'entry {eid} has item type {itype}, which the '
+                          f'engine does not read')
+        item = item_at = None
+        if itype in ITEM_ARGUMENT:
+            if p + 4 > end:
+                break
+            item, item_at = struct.unpack_from('<I', record, p)[0], p
+            p += 4
+        entries.append((eid, itype, item, item_at))
+    if len(entries) != count or p != end:
+        return None, f'its PRQU does not hold the {count} entries it counts'
+    ids = [e[0] for e in entries]
+    if 0 in ids or len(set(ids)) != len(ids):
+        return None, 'its entry ids are not distinct and non-zero'
+    return entries, ''
+
+
+def with_queue_id(record, oid):
+    """An SPRQ section carrying a different object id."""
+    out = bytearray(record)
+    struct.pack_into('<I', out, 8, int(oid))
+    return bytes(out)
+
+
+def with_using(record, count):
+    """An SPRQ section saying `count` planets use it."""
+    out = bytearray(record)
+    struct.pack_into('<I', out, 8 + SPRQ_USING_AT, int(count))
+    return bytes(out)
+
+
+def with_queue_designs(record, remap):
+    """An SPRQ section whose ship entries follow designs renumbered in
+    `remap`."""
+    entries, _why = read_queue(record)
+    out = bytearray(record)
+    for _eid, itype, item, at in entries or ():
+        if itype == ITEM_SHIP and item in remap:
+            struct.pack_into('<I', out, at, int(remap[item]))
+    return bytes(out)
+
+
+def queue_refusal(record, designs, facility_types):
+    """Why a queue may not be carried, or '' when it may.
+
+    `designs` are the design ids the civ holds in the merged galaxy. Only
+    facility and ship entries have been measured; any other item type is
+    refused.
+    """
+    entries, why = read_queue(record)
+    if entries is None:
+        return why
+    for eid, itype, item, _at in entries:
+        if itype == ITEM_FACILITY:
+            if item >= facility_types:
+                return (f'entry {eid} names facility type {item}, and the '
+                        f'galaxy has {facility_types}')
+        elif itype == ITEM_SHIP:
+            if item not in designs:
+                return (f'entry {eid} builds design {item}, which the civ '
+                        f'does not own in the merged galaxy')
+        else:
+            return (f'entry {eid} has item type {itype}; only facilities and '
+                    f'ships have been measured')
+    return ''
+
+
+def queue_links(blob):
+    """{planetObjectId: (flag, queue object id, entry id)} for every planet
+    with a readable PROD."""
+    out = {}
+    for oid, (_owner, prod, _plpr, _name) in planet_index(blob).items():
+        link = queue_link(prod)
+        if link is not None:
+            out[oid] = link
+    return out
+
+
+def link_refusal(prod, prod_served, queues):
+    """Why a planet's queue link may not be carried, or '' when it may.
+
+    `queues` is {queue object id: entry ids} for the queues the civ holds in
+    the merged galaxy. Leaving a queue clears the flag.
+    """
+    link = queue_link(prod)
+    if link == queue_link(prod_served):
+        return ''
+    flag, qid, entry = link
+    if flag == 0:
+        return ''
+    if flag != 1:
+        return f'its queue link flag reads {flag}'
+    if qid not in queues:
+        return (f'it names production queue {qid}, which is not one of the '
+                f"civ's queues in the merged galaxy")
+    if entry and entry not in queues[qid]:
+        return (f'it is on entry {entry} of production queue {qid}, which '
+                f'that queue does not hold')
+    return ''
+
+
+def queue_orders(served, sub, civ_oid, designs, remap, facility_types):
+    """(new, edited, deleted, refusals) for a civ's production queues, judged
+    against the state served.
+
+    new and edited are [(objectId, SPRQ)], new ones under the id submitted,
+    their ship entries following `remap`, the designs renumbered in this
+    merge. deleted is a list of ids; the caller deletes one only once no
+    planet uses it. The planet counts are the referee's to recount, so they
+    are ignored here.
+    """
+    refusals = []
+    all_s, all_t = queues_by_civ(served), queues_by_civ(sub)
+    for o in icv.owner_records(served):
+        if o['oid'] != civ_oid and all_t.get(o['oid']) != all_s.get(o['oid']):
+            refusals.append(f"production queues DROPPED, they belong to "
+                            f"{o['name']}")
+    mine_s, mine_t = all_s.get(civ_oid), all_t.get(civ_oid)
+    if mine_s is None or mine_t is None:
+        if mine_t != mine_s:
+            refusals.append('production queues DROPPED, SPQS does not hold '
+                            'its count of queues')
+        return [], [], [], refusals
+    if len({oid for oid, _r in mine_t}) != len(mine_t):
+        refusals.append('production queues DROPPED, two of them share an '
+                        'object id')
+        return [], [], [], refusals
+    held, kept = dict(mine_s), dict(mine_t)
+    high = struct.unpack_from('<I', served, idg.HIGH_WATER_ID)[0]
+
+    new, edited = [], []
+    for oid, record in mine_t:
+        if oid in held and with_using(record, 0) == with_using(held[oid], 0):
+            continue
+        if oid not in held and oid <= high:
+            refusals.append(f'production queue {oid} DROPPED, it is new and '
+                            f'{oid} is not a new object id')
+            continue
+        record = with_queue_designs(record, remap)
+        why = queue_refusal(record, designs, facility_types)
+        if why:
+            refusals.append(f'production queue {oid} DROPPED, {why}')
+            continue
+        (edited if oid in held else new).append((oid, record))
+    deleted = [oid for oid, _r in mine_s if oid not in kept]
+    return new, edited, deleted, refusals
+
+
 def _tally(jobs):
     """"6 farmer, 2 worker" from a list of job ids, for a log line."""
     import collections
@@ -1859,11 +2164,12 @@ def merge(blob, submissions, log=print, notes=None):
                 accepted += 1
             for was, d in new_designs:
                 oid = was
-                if oid in design_index(blob) or oid in governor_ids(blob):
-                    # Another player's design or governor already took this
-                    # id, so this one is renumbered. The only check made
-                    # against the merged blob: an id is free or taken in the
-                    # galaxy being built.
+                if (oid in design_index(blob) or oid in governor_ids(blob)
+                        or oid in queue_ids(blob)):
+                    # Another player's design, governor or production queue
+                    # already took this id, so this one is renumbered. The
+                    # only check made against the merged blob: an id is free
+                    # or taken in the galaxy being built.
                     oid = next_object_id(blob)
                     remap[was] = oid
                 blob = set_high_water(blob, oid)
@@ -1873,6 +2179,39 @@ def merge(blob, submissions, log=print, notes=None):
                        if oid != was else ""))
                 accepted += 1
             mine_designs = designs_of(blob, mine)
+
+            # Production queues, after the designs their entries may name and
+            # before the planets that join them. A new one takes a free id as
+            # a governor does; a deleted one goes after the planets have moved.
+            new_queues, edited_queues, deleted_queues, refusals = queue_orders(
+                served, sub, mine, mine_designs, remap,
+                facility_rules.type_count(blob))
+            for why in refusals:
+                drop(why)
+            queue_remap = {}
+            if new_queues or edited_queues:
+                records = dict(queues_of(blob, mine))
+                for oid, record in edited_queues:
+                    records[oid] = record
+                    log(f"    production queue {oid}: edited")
+                    accepted += 1
+                for was, record in new_queues:
+                    oid = was
+                    if oid <= idg.max_object_id(blob):
+                        # Taken in the galaxy being built, by another
+                        # player's design, governor or queue.
+                        oid = next_object_id(blob)
+                        queue_remap[was] = oid
+                    blob = set_high_water(blob, oid)
+                    records[oid] = with_queue_id(record, oid)
+                    log(f"    production queue {oid}: taken"
+                        + (f", submitted as {was} and renumbered"
+                           if oid != was else ""))
+                    accepted += 1
+                blob = set_queues(blob, mine, list(records.values()))
+            usable = {oid: {e[0] for e in read_queue(r)[0] or ()}
+                      for oid, r in queues_of(blob, mine) or ()
+                      if oid not in deleted_queues}
 
             # ship orders
             for ship_oid, (_claimed, dyno) in sorted(ship_index(sub).items()):
@@ -1904,6 +2243,10 @@ def merge(blob, submissions, log=print, notes=None):
                 # A queue naming a renumbered design follows the new id.
                 if prod is not None and prod_builds(prod) in remap:
                     prod = with_prod_design(prod, remap[prod_builds(prod)])
+                # A planet joining a renumbered production queue follows it.
+                link = queue_link(prod)
+                if link and link[0] == 1 and link[1] in queue_remap:
+                    prod = with_prod_queue(prod, queue_remap[link[1]])
 
                 if name is None and name_served is not None:
                     # planet_name returns None for a corrupt or overlong name.
@@ -1943,13 +2286,11 @@ def merge(blob, submissions, log=print, notes=None):
                         drop(f"planet {planet_oid}: production DROPPED, it "
                              f"builds {prod_kind(prod)!r}, which is not a "
                              f"facility, a ship, a scan or wealth")
-                    elif prod_queue(prod) != prod_queue(prod_served):
-                        # The queue is an object under the civ's SPQS, which
-                        # is not carried; a planet naming one the merged galaxy
-                        # lacks would point at nothing.
-                        drop(f"planet {planet_oid}: production DROPPED, it "
-                             f"joins or leaves a production queue, and queues "
-                             f"are not carried yet")
+                    elif why := link_refusal(prod, prod_served, usable):
+                        # A planet naming a queue the merged galaxy lacks
+                        # would point at nothing.
+                        drop(f"planet {planet_oid}: production DROPPED, "
+                             f"{why}")
                     elif (prod_facility(prod) is not None
                           and prod_facility(prod) != prod_facility(prod_served)
                           and (why := facility_refusal(
@@ -2005,6 +2346,30 @@ def merge(blob, submissions, log=print, notes=None):
                         log(f"    planet {planet_oid}: recruitment rate "
                             f"{rate_served}% -> {rate}%")
                         accepted += 1
+
+            # A queue is deleted only once no planet uses it as merged, and
+            # each counts the planets that do.
+            merged_queues = queues_of(blob, mine)
+            if merged_queues:
+                links = queue_links(blob)
+                using = collections.Counter(
+                    qid for flag, qid, _e in links.values() if flag == 1)
+                records = []
+                for oid, record in merged_queues:
+                    if oid in deleted_queues:
+                        users = sorted(p for p, (flag, qid, _e)
+                                       in links.items()
+                                       if flag == 1 and qid == oid)
+                        if users:
+                            drop(f"production queue {oid} deletion DROPPED, "
+                                 f"planet(s) {users} still use it")
+                        else:
+                            log(f"    production queue {oid}: deleted")
+                            accepted += 1
+                            continue
+                    records.append(with_using(record, using[oid]))
+                if records != [r for _oid, r in merged_queues]:
+                    blob = set_queues(blob, mine, records)
 
             # Everybody this civ holds, judged together (see people_acceptable).
             ok, why = people_acceptable(blob, sub, mine)
@@ -2124,7 +2489,7 @@ def merge(blob, submissions, log=print, notes=None):
                     oid = was
                     if oid <= idg.max_object_id(blob):
                         # Taken in the galaxy being built, by another player's
-                        # design or governor.
+                        # design, governor or production queue.
                         oid = next_object_id(blob)
                         renumbered[was] = oid
                     blob = set_high_water(blob, oid)
