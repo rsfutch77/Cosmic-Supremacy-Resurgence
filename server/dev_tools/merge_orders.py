@@ -2230,8 +2230,8 @@ def governor_orders(served, sub, civ_oid, served_planets, names):
 # types the reader follows with one: the facility type for 0, the design's
 # object id for 8. The writer is 0x556560 and the reader 0x556D20.
 #
-# The parser stops at a civ's news items in `DATA`, so `SPQS` is found by its
-# tag and believed when it holds its count of `SPRQ` sections.
+# `SPQS` is found by its tag in `DATA` and believed when it holds its count of
+# `SPRQ` sections.
 SPQS_COUNT = 4
 SPRQ_USING_AT = 4           # in the SPRQ payload, after the object id
 SPRQ_FIXED = 9              # object id, planets using it and the one byte

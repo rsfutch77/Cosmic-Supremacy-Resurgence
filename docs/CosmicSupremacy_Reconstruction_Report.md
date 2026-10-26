@@ -1744,8 +1744,8 @@ turns were advanced with `gamectl.Client.advance_turn`. Each step is one change 
   from 0 to 1. `SPRQ` holds the queue's object id, a `u32` count of planets using it and a `u8`,
   then a `PRQU` (version 1): a `u16` entry-id counter (2 with one entry, 4 after a second was
   added, still 4 after one was deleted), a `u32`-length name, a `u32` entry count and the entries.
-  A queue no planet uses is saved and survives a reload. `save_parser` does not reach a `SPQS`
-  that sits after a civ's news items in `DATA`; `merge_orders.py` finds it by its tag.
+  A queue no planet uses is saved and survives a reload. A civ's `SPQS` and `GOVS` sit after
+  its news items (`NEWS`) in `DATA`, which `save_parser` walks past.
 - **A queue entry** is stored in the order the UI shows: a `u16` entry id (1 for the farm, 3 for
   the Colony Ship; it moves with its entry when reordered), a `u16` count, a `u8` infinite flag,
   a `u8` count mode (1 "build up to"), a `u32` item type (0 facility, 8 ship), then a `u32`
@@ -1774,13 +1774,15 @@ turns were advanced with `gamectl.Client.advance_turn`. Each step is one change 
 - **Disbanding** removes the `FLET` and returns every member with empty orders. `SAVE+0` is not
   lowered.
 
-- [ ] **Fleets are carried, but no fleet the merge built has been loaded by the engine or run
-  through the live referee.** Forming, renaming, fleet orders, ships leaving and joining, one fleet
-  joining another, and disbanding are merged in `test_fleets_merge.py`, and each Single Player step
-  comes out of the merge byte for byte as the client saved it. A new fleet takes a free id as
-  designs and governors do, and every ship in it is checked: the submitter's as served, placed
-  once, all at one position. Done when blobs the merge wrote itself (two civs' fleets with one
-  renumbered, a ship left out of a fleet, crew moved inside one) load in the client, and a fleet
+- [ ] **Fleets are carried, but no fleet has run through the live referee.** Forming, renaming,
+  fleet orders, ships leaving and joining, one fleet joining another, and disbanding are merged in
+  `test_fleets_merge.py`, and each Single Player step comes out of the merge byte for byte as the
+  client saved it. A new fleet takes a free id as designs and governors do, and every ship in it is
+  checked: the submitter's as served, placed once, all at one position. Five blobs the merge wrote
+  itself (two civs' fleets with one renumbered, a ship left out of an ordered fleet, crew moved
+  inside one, one fleet merged into another, a renumbered fleet a ship left) load in the
+  Resurgence client, resolve a turn and save again with their fleets intact; the ordered fleet
+  moves along its route and the ship left out stays put (25 October 2026). Done when a fleet
   formed in a live galaxy is still a fleet after the tick.
 
 - [ ] **Reclaiming a civ leaves its fleets behind.** `wipe_civ.wipe` deletes a civ's `SHIP`s but
@@ -1791,7 +1793,10 @@ turns were advanced with `gamectl.Client.advance_turn`. Each step is one change 
   `merge_orders.py` carries creating, editing, reordering and deleting queues and entries, and
   planets joining, overriding and leaving them (`test_queues_merge.py`). A new queue is
   renumbered like a design when another player's object took its id, ship entries follow a
-  renumbered design, and the planet counts are recounted from the merged links. Still refused, with
+  renumbered design, and the planet counts are recounted from the merged links. Five blobs the
+  merge wrote (a queue assigned, shared by two planets, overridden, two civs' queues with one
+  renumbered, a queue naming a renumbered design) load in the Resurgence client, resolve a turn and
+  save again with their queues intact (25 October 2026). Still refused, with
   a note: a queue holding an entry of item type 1 to 7 or 9, which the client's reader accepts but
   whose meaning is unknown. Done when each of those is measured from a queue made in the UI and
   carried or refused for a reason, and a planet assigned to a queue in a live galaxy is still on

@@ -145,10 +145,12 @@ def main():
     noq = high_water(mo.set_queues(base, ME, []), QUEUE - 1)
 
     print('what the fixtures hold')
-    check("the parser reaches only BadGuy's SPQS, GoodGuy's is past its news",
+    check("the parser reaches both civs' SPQS, GoodGuy's past its news",
           [s.tag for s in sp.flatten(sp.parse_blob(base)) if s.tag == b'SPQS'],
-          [b'SPQS'])
-    check('but it is found by its tag, with the one queue',
+          [b'SPQS', b'SPQS'])
+    check("GoodGuy's governors are read too, none of them",
+          mo.governors_of(base, ME), [])
+    check('and it is found by its tag, with the one queue',
           [oid for oid, _r in mo.queues_of(base, ME)], [QUEUE])
     check('the layout written here is the one the client writes',
           sprq(QUEUE, b'newqueue', [FARM, (3, 1, 0, 0, mo.ITEM_SHIP,
