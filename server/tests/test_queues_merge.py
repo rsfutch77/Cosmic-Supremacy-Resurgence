@@ -163,6 +163,9 @@ def main():
           [mo.queue_link(mo.planet_index(load(s))[HQ][1])
            for s in ('q1assign', 'q4', 'q10')],
           [(1, QUEUE, 1), (1, QUEUE, 3), (1, QUEUE, 0)])
+    check('a scan is item type 9, route 2 and fleet 3',
+          entries_of(load('qs2'), ME, mo.queues_of(load('qs2'), ME)[0][0]),
+          [(3, 9, 2), (2, 9, 3)])
     check('deleting the queue leaves SPQS as a civ that never had one',
           mo.queues_of(load('q13'), ME), [])
     check('the made-up starting state holds no queue, and 674 is free',
@@ -182,7 +185,10 @@ def main():
              ('a planet leaving it through Wealth', load('q8'), load('q9')),
              ('overriding a queued planet by hand', load('q9'), load('q10')),
              ('the last planet leaving it', load('q11s2'), load('q12')),
-             ('deleting it', load('q12'), load('q13')))
+             ('deleting it', load('q12'), load('q13')),
+             ('assigning a queue of one route scan', load('qs0'), load('qs1')),
+             ('adding a fleet scan to it', load('qs1'), load('qs2')),
+             ('adding every facility researched', load('qs2'), load('qs3')))
     for label, served, sub in steps:
         out, notes = merged(served, ('GoodGuy', sub))
         check(f'{label}: nothing about queues refused', about_queues(notes), [])
@@ -303,9 +309,13 @@ def main():
         "a ship entry naming another civ's design": (
             ours_with(sprq(QUEUE, b'q', [(1, 1, 0, 0, 8, 661)])),
             'entry 1 builds design 661, which the civ does not own'),
-        'an item type nobody has measured': (
+        'an item type the client never queues': (
             ours_with(sprq(QUEUE, b'q', [(1, 1, 0, 0, 3, None)])),
-            'entry 1 has item type 3; only facilities and ships'),
+            'entry 1 has item type 3; the client queues only facilities, '
+            'ships and scans'),
+        'a scan the scanning screen does not list': (
+            ours_with(sprq(QUEUE, b'q', [(1, 1, 0, 0, 9, 6)])),
+            'entry 1 names scan 6, and the scanning screen has 6'),
         'an item type the engine does not read': (
             ours_with(sprq(QUEUE, b'q', [(1, 1, 0, 0, 12, None)])),
             'entry 1 has item type 12, which the engine does not read'),

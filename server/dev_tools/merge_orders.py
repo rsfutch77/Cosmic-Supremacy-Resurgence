@@ -38,18 +38,19 @@ judged with the queues below.
 queue holding its object id, a `u32` count of the planets using it, a byte, and
 a `PRQU` with the name and the entries in the order the UI shows them. An entry
 is an entry id, a count, an infinite flag, a count mode and an item: a facility
-type (item type 0) or a design (item type 8). A planet joins a queue through
-its `PROD`: a flag at `+2`, the queue's id at `+3`, and at `+7` the id of the
-entry it is building, 0 after a manual override; Wealth clears all three and is
-the only way out. Carried for the civ's own queues and planets: creating,
-editing, reordering and deleting queues and entries, and the links with the
-production that comes with them. A new queue takes a free object id as a
-governor does and its planets follow it; a ship entry follows a renumbered
-design. Refused: an entry naming a design the civ does not hold in the merged
-galaxy, a facility type the galaxy lacks, any other item type, which has not
-been measured, a planet naming a queue or entry the merged galaxy lacks, and
-deleting a queue a planet still uses. The planet counts are recounted from the
-merged links. The civ's `OWPR` `+132..+143` move with any production change,
+type (item type 0), a design (item type 8) or a scan (item type 9; route is 2,
+fleet 3). The client's queue editor offers nothing else. A planet joins a
+queue through its `PROD`: a flag at `+2`, the queue's id at `+3`, and at `+7`
+the id of the entry it is building, 0 after a manual override; Wealth clears
+all three and is the only way out. Carried for the civ's own queues and
+planets: creating, editing, reordering and deleting queues and entries, and the
+links with the production that comes with them. A new queue takes a free object
+id as a governor does and its planets follow it; a ship entry follows a
+renumbered design. Refused: an entry naming a design the civ does not hold in
+the merged galaxy, a facility type the galaxy lacks, a scan the scanning screen
+does not list, any other item type, which the editor never writes, a planet
+naming a queue or entry the merged galaxy lacks, and deleting a queue a planet
+still uses. The planet counts are recounted from the merged links. The civ's `OWPR` `+132..+143` move with any production change,
 queued or not, and are not carried.
 
 **Ship designs**, `OWNR > DATA > DSGN`. A new design arrives as a second
@@ -2228,7 +2229,8 @@ def governor_orders(served, sub, civ_oid, served_planets, names):
 # An entry is a u16 entry id, a u16 count, a u8 infinite flag, a u8 count mode
 # (1 "build up to") and a u32 item type, then a u32 naming the item for the
 # types the reader follows with one: the facility type for 0, the design's
-# object id for 8. The writer is 0x556560 and the reader 0x556D20.
+# object id for 8, the scan for 9. The writer is 0x556560 and the reader
+# 0x556D20.
 #
 # `SPQS` is found by its tag in `DATA` and believed when it holds its count of
 # `SPRQ` sections.
@@ -2239,6 +2241,8 @@ PRQU_VERSION = 1
 QUEUE_ENTRY = 10            # entry id, count, two flags and the item type
 ITEM_FACILITY = 0
 ITEM_SHIP = 8
+ITEM_SCAN = 9
+SCAN_KINDS = 6                  # the scanning screen's six; route is 2, fleet 3
 ITEM_ARGUMENT = {0, 7, 8, 9}    # item types followed by a u32
 ITEM_TYPES = 10                 # the reader's switch covers 0..9
 
@@ -2386,9 +2390,9 @@ def with_queue_designs(record, remap):
 def queue_refusal(record, designs, facility_types):
     """Why a queue may not be carried, or '' when it may.
 
-    `designs` are the design ids the civ holds in the merged galaxy. Only
-    facility and ship entries have been measured; any other item type is
-    refused.
+    `designs` are the design ids the civ holds in the merged galaxy. The
+    client's queue editor writes only facilities, ships and scans, so any
+    other item type is refused.
     """
     entries, why = read_queue(record)
     if entries is None:
@@ -2402,9 +2406,13 @@ def queue_refusal(record, designs, facility_types):
             if item not in designs:
                 return (f'entry {eid} builds design {item}, which the civ '
                         f'does not own in the merged galaxy')
+        elif itype == ITEM_SCAN:
+            if item >= SCAN_KINDS:
+                return (f'entry {eid} names scan {item}, and the scanning '
+                        f'screen has {SCAN_KINDS}')
         else:
-            return (f'entry {eid} has item type {itype}; only facilities and '
-                    f'ships have been measured')
+            return (f'entry {eid} has item type {itype}; the client queues '
+                    f'only facilities, ships and scans')
     return ''
 
 

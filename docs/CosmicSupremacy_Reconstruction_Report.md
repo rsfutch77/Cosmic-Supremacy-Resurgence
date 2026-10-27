@@ -1748,12 +1748,16 @@ turns were advanced with `gamectl.Client.advance_turn`. Each step is one change 
   its news items (`NEWS`) in `DATA`, which `save_parser` walks past.
 - **A queue entry** is stored in the order the UI shows: a `u16` entry id (1 for the farm, 3 for
   the Colony Ship; it moves with its entry when reordered), a `u16` count, a `u8` infinite flag,
-  a `u8` count mode (1 "build up to"), a `u32` item type (0 facility, 8 ship), then a `u32`
-  naming the item: the facility type (0 for a farm) or the design id. Adding, deleting,
+  a `u8` count mode (1 "build up to"), a `u32` item type (0 facility, 8 ship, 9 scan), then a
+  `u32` naming the item: the facility type (0 for a farm), the design id, or the scan (2 route,
+  3 fleet, measured 27 October 2026; the other four scans were not yet researched). The queue
+  editor offers facilities, ships and scans and nothing else, so no other item type comes from
+  the UI; a queue of every facility researched (0, 2, 4, 6, 8 and 9) holds type 0 throughout
+  (`tier5/qs3`). Adding, deleting,
   reordering and editing an entry change only these bytes and the enclosing lengths. The client's
   writer (`0x556560`) and reader (`0x556D20`) know item types 0 to 9: types 1 to 6 have nothing
-  after the type, and 7 and 9 a `u32`. What types 1 to 7 and 9 name has not been measured. The
-  reader drops a ship entry whose design does not resolve.
+  after the type, and 7 and 9 a `u32`. What types 1 to 7 name has not been measured, since the
+  editor never writes them. The reader drops a ship entry whose design does not resolve.
 - **Assigning a queue to a planet** raises the queue's planet count and links the planet's `PROD`
   (`+2` flag, `+3` queue id, `+7` the `u16` id of the entry the planet is building). The planet
   switches to the queue's item at once, dropping what it was building, and the civ's `OWPR`
@@ -1796,7 +1800,7 @@ turns were advanced with `gamectl.Client.advance_turn`. Each step is one change 
   DemoPlayer's ordered fleet wiped (tier5 `f3`) loads in the Resurgence client as BadGuy, resolves
   a turn and saves again (26 October 2026).
 
-- [ ] **Production queues are carried, except entries of item types nobody has measured.**
+- [x] **Production queues are carried.**
   `merge_orders.py` carries creating, editing, reordering and deleting queues and entries, and
   planets joining, overriding and leaving them (`test_queues_merge.py`). A new queue is
   renumbered like a design when another player's object took its id, ship entries follow a
@@ -1806,7 +1810,7 @@ turns were advanced with `gamectl.Client.advance_turn`. Each step is one change 
   save again with their queues intact (25 October 2026). In the live sandbox galaxy, tmog66's
   queue of a facility and a ship, assigned to four planets on turn 55, came through the referee
   (staged at `a715489`) with every planet still linked and building one of its entries in turn
-  56, and no refusal notes (26 October 2026). Still refused, with a note: a queue holding an
-  entry of item type 1 to 7 or 9, which the client's reader accepts but whose meaning is unknown.
-  Done when each of those is measured from a queue made in the UI and carried or refused for a
-  reason.
+  56, and no refusal notes (26 October 2026). Scan entries are carried for the six scans the
+  scanning screen lists; a queue of two scans and six facilities made in the UI merges back
+  byte for byte (`tier5/qs0` to `qs3`). Refused, with a note: an entry of item type 1 to 7,
+  which the client's reader accepts but its queue editor never writes.
