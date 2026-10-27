@@ -1648,13 +1648,18 @@ snapshot.
 
 What is left for after the beta is kept here.
 
-- [ ] **Measure the referee's reads after the poll change.** `referee_worker.py` read the galaxy
+- [x] **Measure the referee's reads after the poll change.** `referee_worker.py` read the galaxy
   every 5 seconds for the whole turn, about 16,800 Firestore reads a day per galaxy, measured on
   `h3check` on 5 October 2026 with no launcher open. Its gap now follows the deadline
   (`poll_gap`: a twentieth of the distance, between `POLL` 5 s and `POLL_CEILING` 120 s, and the
   ceiling while closed), which works out near 1,100 reads a day for an idle four-hour galaxy. An
-  earlier deadline or a reopen is noticed up to 120 s late. Done when a measured day of one idle
-  galaxy reads under 2,000 documents.
+  earlier deadline or a reopen is noticed up to 120 s late. Measured on the sandbox galaxy, whose
+  launchers are never all closed for a day: the one hour with no relay request (27 October,
+  02:00 UTC) read 30 documents, and a fit over 19 hours from 26 October 13:00 UTC gives 31.5 reads
+  an hour, 0.81 per relay request and 80.4 more in each tick hour, no hour off by more than 9.
+  That is about 1,240 reads a day for the referee alone, an upper bound since the tick hours
+  include launchers fetching the new turn. `server/dev_tools/firestore_reads.py --hours N` lists
+  the hours.
 
 - [ ] **Citizens a player owns on someone else's planet are refused, and the client is not yet
   measured.** A colony keeps the owner of the colonists that founded it. In `galaxy_demo`,
