@@ -143,7 +143,12 @@ step leaves its ships where they were served.
 
 What is refused
 ---------------
-Everything not listed above (admirals, diplomacy) is not accepted. Every
+Everything not listed above is not accepted. Admirals and diplomacy are
+refused by name until they are measured in the UI: creating, editing or
+deleting an `ADML` in any civ's `ADMS`, a ship or fleet naming a different
+admiral in its `DYNO` (its orders are taken, naming the admiral served), a
+treaty added to, changed in or removed from the list after SAVE's last
+section, and a stance moved in a civ's `KNPL`. Every
 refusal is logged and recorded against the civ in the optional `notes` argument
 to `merge`; `referee.py` writes it beside the turn and `player_turn.follow`
 prints it. A submission
@@ -620,7 +625,12 @@ def fleet_orders(served, sub, civ_oid, names):
                 refusals.append(f'ship {s}: leaving fleet {here} DROPPED, '
                                 f"{singles[s]['why']}")
             else:
-                target[s], out[s] = None, singles[s]['dyno']
+                # It may keep the fleet's admiral or have none.
+                dyno, why = admiral_kept(singles[s]['dyno'], (
+                    dyno_admiral(served_fleets[here]['dyno']) or 0, 0))
+                if why:
+                    refusals.append(f'ship {s}: {why}')
+                target[s], out[s] = None, dyno
         elif there in accepted:
             target[s] = there
         elif there in mine_fleets:
@@ -649,7 +659,10 @@ def fleet_orders(served, sub, civ_oid, names):
                 log.append(f'fleet {fid}: disbanded, no ship is left in it')
             continue
         if was is None:
-            fleets[fid] = {'name': now['name'], 'dyno': now['dyno'],
+            dyno, why = admiral_kept(now['dyno'], (0,))
+            if why:
+                refusals.append(f'fleet {fid}: {why}')
+            fleets[fid] = {'name': now['name'], 'dyno': dyno,
                            'members': members, 'pos': pos_of[members[0]],
                            'new': True}
             log.append(f"{label(fid, now['name'])}: formed from ship(s) "
@@ -671,9 +684,14 @@ def fleet_orders(served, sub, civ_oid, names):
                 else:
                     refusals.append(f'fleet {fid}: rename DROPPED, {why}')
             if now['dyno'] != was['dyno']:
-                dyno = now['dyno']
-                log.append(f'fleet {fid}: order taken ({len(was["dyno"])} -> '
-                           f'{len(dyno)} bytes)')
+                taken, why = admiral_kept(
+                    now['dyno'], (dyno_admiral(was['dyno']) or 0,))
+                if why:
+                    refusals.append(f'fleet {fid}: {why}')
+                if taken != was['dyno']:
+                    dyno = taken
+                    log.append(f'fleet {fid}: order taken ({len(was["dyno"])} '
+                               f'-> {len(dyno)} bytes)')
         fleets[fid] = {'name': name, 'dyno': dyno, 'members': members,
                        'pos': was['pos'], 'new': False}
         joined = [m for m in members if at[m] != fid]
@@ -2022,8 +2040,8 @@ def setup_orders(served, sub, civ_oid, served_planets, sub_planets):
     return taken, refusals
 
 
-def _govs(blob, civ_oid):
-    """(tree, the civ's GOVS section), the section None when it has none."""
+def _civ_section(blob, civ_oid, tag):
+    """(tree, the civ's first section with this tag), None when it has none."""
     tree = sp.parse_blob(blob)
     glxy = next(tree[0].find('GLXY'))
     for o in glxy.children:
@@ -2031,8 +2049,13 @@ def _govs(blob, civ_oid):
             continue
         n = struct.unpack_from('<I', blob, o.payload)[0]
         if struct.unpack_from('<I', blob, o.payload + 4 + n)[0] == civ_oid:
-            return tree, next(o.find('GOVS'), None)
+            return tree, next(o.find(tag), None)
     return tree, None
+
+
+def _govs(blob, civ_oid):
+    """(tree, the civ's GOVS section), the section None when it has none."""
+    return _civ_section(blob, civ_oid, 'GOVS')
 
 
 def _sections(raw, at, end):
@@ -2217,6 +2240,227 @@ def governor_orders(served, sub, civ_oid, served_planets, names):
         else:
             deleted.append(oid)
     return new, edited, deleted, links, refusals
+
+
+# A civ's admirals are in its `OWNR > DATA > ADMS`, after `GOVS`: a u32 count,
+# then one `ADML` per admiral. Read off the client's writer (0x53B4A0, 0x5A51B0,
+# 0x5A4F20) and reader (0x53D73C, 0x5A6FF0); no save on hand holds one:
+#
+#     ADML v0   u32 objectId ; u32 ships assigned ; one byte ; ADDT
+#     ADDT v0   u32 nameLen ; name ; u32, likely the type ; u32 rule count ;
+#               per rule a RULE (one byte, its checkbox) then the rule's own
+#               section (ATPL, DFPL, RLYP, TMSC ... 24 tags)
+#
+# A ship or fleet names its admiral in its DYNO, the u32 after the has-orders
+# byte. Admirals are not carried until they are measured in the UI.
+ADMS_COUNT = 4
+ADML_SHIPS_AT = 4           # in the ADML payload, after the object id
+ADML_FIXED = 9              # object id, ships assigned and the one byte
+DYNO_ORBIT = 4              # the orbit planet's id, before SHCO
+DYNO_AFTER_SHCO = 5         # a u32 and the has-orders byte, then the admiral
+
+
+def admirals_of(blob, civ_oid):
+    """[(objectId, whole ADML section)] of a civ in order, or None unless its
+    ADMS holds exactly its count of ADML sections."""
+    _tree, adms = _civ_section(blob, civ_oid, 'ADMS')
+    if adms is None or adms.size < ADMS_COUNT:
+        return None
+    count = struct.unpack_from('<I', blob, adms.payload)[0]
+    secs = _sections(blob, adms.payload + ADMS_COUNT, adms.end)
+    if (secs is None or len(secs) != count
+            or any(tag != b'ADML' or end - at < ADML_FIXED
+                   for tag, at, end in secs)):
+        return None
+    return [(struct.unpack_from('<I', blob, at)[0], bytes(blob[at - 8:end]))
+            for _tag, at, end in secs]
+
+
+def admiral_name(record):
+    """The name in a whole ADML section, or None when its ADDT cannot be read."""
+    body = _sections(record, 8 + ADML_FIXED, len(record))
+    if not body or body[0][0] != b'ADDT' or body[0][2] - body[0][1] < 4:
+        return None
+    _tag, at, end = body[0]
+    n = struct.unpack_from('<I', record, at)[0]
+    return bytes(record[at + 4:at + 4 + n]) if at + 4 + n <= end else None
+
+
+def _with_ships(record, count):
+    out = bytearray(record)
+    struct.pack_into('<I', out, 8 + ADML_SHIPS_AT, int(count))
+    return bytes(out)
+
+
+def admiral_refusals(served, sub, civ_oid, names):
+    """[refusal] for every admiral a submission creates, edits or deletes, its
+    own or another civ's. None of it is carried."""
+    refusals = []
+    for o in icv.owner_records(served):
+        was, now = admirals_of(served, o['oid']), admirals_of(sub, o['oid'])
+        if was == now:
+            continue
+        if o['oid'] != civ_oid:
+            refusals.append(f"admirals DROPPED, they belong to {o['name']}")
+            continue
+        if was is None or now is None:
+            refusals.append('admirals DROPPED, ADMS does not hold its count of '
+                            'admirals')
+            continue
+        held, kept = dict(was), dict(now)
+
+        def label(oid, record):
+            name = admiral_name(record)
+            return f'admiral {oid}' + (f" ({name.decode('latin1')!r})"
+                                       if name is not None else '')
+        for oid, record in now:
+            if oid not in held:
+                refusals.append(f'{label(oid, record)} DROPPED, creating an '
+                                f'admiral is not carried yet')
+            elif _with_ships(record, 0) != _with_ships(held[oid], 0):
+                refusals.append(f'{label(oid, record)} DROPPED, editing an '
+                                f'admiral is not carried yet')
+        for oid, record in was:
+            if oid not in kept:
+                refusals.append(f'{label(oid, record)} deletion DROPPED, '
+                                f'deleting an admiral is not carried yet')
+    return refusals
+
+
+def dyno_admiral_at(dyno):
+    """Where a whole DYNO section holds its admiral id, or None."""
+    at = 8 + DYNO_ORBIT
+    if len(dyno) < at + 8 or dyno[at:at + 4] != b'SHCO':
+        return None
+    at += 8 + (struct.unpack_from('<I', dyno, at + 4)[0] & sp.SIZE_MASK)
+    at += DYNO_AFTER_SHCO
+    return at if at + 4 <= len(dyno) else None
+
+
+def dyno_admiral(dyno):
+    """The admiral id a whole DYNO section names, 0 for none, or None."""
+    at = dyno_admiral_at(dyno) if dyno is not None else None
+    return struct.unpack_from('<I', dyno, at)[0] if at is not None else None
+
+
+def admiral_kept(dyno, allowed):
+    """(dyno, refusal): a submitted DYNO naming one of the `allowed` admiral
+    ids, the first of them the one served, or the same DYNO naming that one
+    and the refusal of the change. Admiral assignments are not carried."""
+    now = dyno_admiral(dyno)
+    if now is None or now in allowed:
+        return dyno, ''
+    out = bytearray(dyno)
+    struct.pack_into('<I', out, dyno_admiral_at(dyno), int(allowed[0]))
+    if now == 0:
+        why = f'unassigning admiral {allowed[0]} DROPPED'
+    else:
+        why = f'admiral {now} assignment DROPPED'
+    return bytes(out), why + ', admirals are not carried yet'
+
+
+# Treaties, proposals among them, follow the last section in SAVE: a u32
+# count, then one TRTY per treaty. The client writes every treaty it holds
+# (0x55A4D0, reached from SaveGame with no player) and reads them back into its
+# registry (0x55BD00). Read off the writer and reader; no save on hand holds
+# one:
+#
+#     TRTY v2   u32 objectId ; TRDT
+#     TRDT v1   u32 first party ; u32 second party ; u32 kind (1 war) ;
+#               u32 ; i32 ; u32 ; u32 turn applied ; two bytes ;
+#               u32 count, items ; u32 count, items
+#
+# Each item is its own section: CRLS, CRPT, RSLS, RSPT, SLOS, SHBR, SHGM, SHWH,
+# TRLE. A civ's stance toward each civ it has met is in its `KNPL`: a u32
+# count, then a 36-byte record per civ, keyed by that civ's object id, the
+# stance at +12 (3 in a fork at peace, 1 in the same fork after a declaration
+# of war). Diplomacy is not carried until it is measured in the UI.
+TREATY_COUNT = 4
+TRTY_PARTIES_AT = 4 + 8     # in the TRTY payload, past the id and TRDT's header
+KNPL_COUNT = 4
+KNPL_RECORD = 36
+KNPL_STANCE_AT = 12
+STANCES = {0: 'Neutral', 1: 'War', 2: 'Cease-Fire', 3: 'Peace', 4: 'Alliance'}
+
+
+def treaties(blob):
+    """{objectId: whole TRTY section} after SAVE's last section, or None
+    unless a u32 count of TRTY sections fills that tail exactly."""
+    save = sp.parse_blob(blob)[0]
+    at = save.children[-1].end if save.children else save.payload
+    if save.end - at < TREATY_COUNT:
+        return None
+    count = struct.unpack_from('<I', blob, at)[0]
+    secs = _sections(blob, at + TREATY_COUNT, save.end)
+    if (secs is None or len(secs) != count
+            or any(tag != b'TRTY' or end - p < TRTY_PARTIES_AT + 12
+                   for tag, p, end in secs)):
+        return None
+    return {struct.unpack_from('<I', blob, p)[0]: bytes(blob[p - 8:end])
+            for _tag, p, end in secs}
+
+
+def treaty_parties(record):
+    """(first party, second party, kind) of a whole TRTY section."""
+    return struct.unpack_from('<III', record, 8 + TRTY_PARTIES_AT)
+
+
+def stances(blob):
+    """{(civ, other civ): stance code} for every civ whose KNPL reads as a
+    count of whole records."""
+    out = {}
+    for o in icv.owner_records(blob):
+        _tree, knpl = _civ_section(blob, o['oid'], 'KNPL')
+        if knpl is None or knpl.size < KNPL_COUNT:
+            continue
+        count = struct.unpack_from('<I', blob, knpl.payload)[0]
+        if knpl.size != KNPL_COUNT + count * KNPL_RECORD:
+            continue
+        for i in range(count):
+            at = knpl.payload + KNPL_COUNT + i * KNPL_RECORD
+            other, = struct.unpack_from('<I', blob, at)
+            out[(o['oid'], other)] = struct.unpack_from(
+                '<I', blob, at + KNPL_STANCE_AT)[0]
+    return out
+
+
+def diplomacy_refusals(served, sub, civ_oid, names):
+    """[refusal] for every treaty a submission adds, changes or removes, and
+    every stance it moves. None of it is carried."""
+    refusals, named = [], set()
+
+    def who(civ):
+        return names.get(civ, civ)
+
+    was, now = treaties(served), treaties(sub)
+    if was != now:
+        if was is None or now is None:
+            refusals.append('diplomacy DROPPED, the treaty list does not hold '
+                            'its count of treaties')
+        else:
+            for oid in sorted(set(was) | set(now)):
+                if was.get(oid) == now.get(oid):
+                    continue
+                first, second, kind = treaty_parties(now.get(oid) or was[oid])
+                named.add(frozenset((first, second)))
+                what = ('proposing a treaty or declaring war' if oid not in was
+                        else 'withdrawing or deleting a treaty' if oid not in now
+                        else 'answering or changing a treaty')
+                refusals.append(f'treaty {oid} ({who(first)} and '
+                                f'{who(second)}, kind {kind}) DROPPED, {what} '
+                                f'is not carried yet')
+    s, t = stances(served), stances(sub)
+    for civ, other in sorted((k for k in set(s) & set(t) if s[k] != t[k]),
+                             key=lambda k: (k[0] != civ_oid, k)):
+        pair = frozenset((civ, other))
+        if pair in named:
+            continue
+        named.add(pair)
+        refusals.append(f'stance of {who(civ)} toward {who(other)} DROPPED, '
+                        f'{STANCES.get(s[(civ, other)], s[(civ, other)])} -> '
+                        f'{STANCES.get(t[(civ, other)], t[(civ, other)])}; '
+                        f'diplomacy is not carried yet')
+    return refusals
 
 
 # A civ's production queues are in its `OWNR > DATA > SPQS`: a u32 count, then
@@ -2661,6 +2905,11 @@ def merge(blob, submissions, log=print, notes=None):
                     drop(f"ship {ship_oid}: DROPPED, owned by "
                          f"{names.get(owner, owner)}")
                     continue
+                dyno, why = admiral_kept(dyno, (dyno_admiral(as_served) or 0,))
+                if why:
+                    drop(f"ship {ship_oid}: {why}")
+                if dyno == as_served:
+                    continue
                 blob = replace_dyno(blob, ship_oid, dyno)
                 log(f"    ship {ship_oid}: order taken "
                     f"({len(as_served)} -> {len(dyno)} bytes)")
@@ -2947,6 +3196,13 @@ def merge(blob, submissions, log=print, notes=None):
                 governs = collections.Counter(governor_links(blob).values())
                 blob = set_governors(blob, mine, [
                     with_governed(r, governs[oid]) for oid, r in records.items()])
+
+            # Admirals and diplomacy are refused, named, until they are
+            # measured in the UI. Nothing is taken from either.
+            for why in admiral_refusals(served, sub, mine, names):
+                drop(why)
+            for why in diplomacy_refusals(served, sub, mine, names):
+                drop(why)
 
             # Research belonging to anyone else, against the state as served.
             for other in (o for o in icv.owner_records(blob)
