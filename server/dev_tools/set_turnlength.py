@@ -1,7 +1,10 @@
 """
 set_turnlength.py: change a galaxy's configured turn length in a save blob
     python set_turnlength.py <capture.b64|.dat> --secs 10 --dat out.dat
+    python set_turnlength.py clean.dat --set waronly=0 --dat peace.dat
 
+`--set NAME=VALUE` rewrites any whole-number setting (int32 or int16) in
+place, and may be repeated.
 """
 import argparse
 import os
@@ -10,6 +13,9 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import save_parser as sp
+
+# The settings a value can be written into in place, by GSET type code.
+WHOLE = {0: "<i", 2: "<h"}
 
 
 def gset_entries(blob, payload):
@@ -56,6 +62,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("capture")
     ap.add_argument("--secs", type=int, default=None)
+    ap.add_argument("--set", action="append", default=[],
+                    metavar="NAME=VALUE", help="any int32 or int16 setting")
     ap.add_argument("--dat", default=None)
     ap.add_argument("-o", "--out", default=None)
     a = ap.parse_args()
@@ -73,17 +81,27 @@ def main():
         mark = "  <--" if name == "turnlength" else ""
         print(f"  {name:<20} type {tc}  @{off}  = {val}{mark}")
 
-    if a.secs is None:
-        print("\nno --secs given; nothing changed")
+    changes = [("turnlength", a.secs)] if a.secs is not None else []
+    for spec in a.set:
+        name, _eq, value = spec.partition("=")
+        try:
+            changes.append((name, int(value)))
+        except ValueError:
+            sys.exit(f"--set wants NAME=NUMBER, got {spec!r}")
+    if not changes:
+        print("\nno --secs or --set given; nothing changed")
         return
-    hit = next((e for e in entries if e[0] == "turnlength"), None)
-    if hit is None:
-        sys.exit("this galaxy has no 'turnlength' setting")
-    _n, tc, off, old = hit
-    if tc != 0:
-        sys.exit(f"turnlength is type {tc}, not the int32 this rewrites")
-    struct.pack_into("<i", blob, off, a.secs)
-    print(f"\nturnlength {old} -> {a.secs} (in place, no section resized)")
+    print()
+    for name, value in changes:
+        hit = next((e for e in entries if e[0] == name), None)
+        if hit is None:
+            sys.exit(f"this galaxy has no {name!r} setting")
+        _n, tc, off, old = hit
+        if tc not in WHOLE:
+            sys.exit(f"{name} is type {tc}, not an int32 or int16 this "
+                     f"rewrites")
+        struct.pack_into(WHOLE[tc], blob, off, value)
+        print(f"{name} {old} -> {value} (in place, no section resized)")
 
     out = a.out or (a.capture if a.capture.endswith(".b64")
                     else None)
