@@ -577,6 +577,10 @@ meaningful change: **a new heap `Treaty` object**. **No `Owner` field changed at
 Real data ends around `+32`; beyond that is unrelated UTF-16 UI text, so the object is roughly
 40 bytes rather than the 192 default window.
 
+**Corrected from the client's writer (October 2026):** the kind is `+12`, where the setter
+`0x0055AD90` stores it, and `1` declares war. `+16` is the next field of `TRDT` and is not
+decoded. The serialised layout is in section 14 of the main report.
+
 **`Owner:1264 … 1300` is not diplomacy.** Those ten reference slots stayed null through the
 declaration, and were null in a separate game that was already at war. The earlier "per-rival
 diplomacy/treaty slots" reading is withdrawn.
