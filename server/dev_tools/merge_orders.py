@@ -88,8 +88,12 @@ Soldiers are the same record with job id 3, in a second array that follows: a
 `u32` count at `PLPR+40+9*citizens`, then the records. A ship's crew is counted
 at `SHPR+4` with the records at `SHPR+8`. Moving somebody moves the record
 byte for byte. Only these arrays are copied, never the rest of `PLPR`. The
-per-citizen owner id equals the planet's owner on every engine-created planet;
-the checks compare per-owner job multisets.
+per-citizen owner id usually equals the planet's owner, but a colony keeps the
+owner of the colonists that founded it, so a civ can hold citizens on another
+civ's planet. The checks compare how many people each owner holds, not their
+jobs. People are carried only on the submitter's own planets and ships; a
+change on a planet or ship another civ owns is refused and named, its own
+citizens included, as the client has not been measured managing them.
 
 **Military recruitment rate**, `PLPR+27`, a percentage in one byte.
 
@@ -930,6 +934,47 @@ def people_acceptable(served, submitted, civ_oid):
             c[2] for c in all_a):
         return False, 'per-citizen values were invented rather than reordered'
     return True, ''
+
+
+def foreign_people_refusals(planets, crews, submitted, civ_oid, names):
+    """[reason] for people changed on a planet or ship another civ owns.
+
+    `planets` and `crews` are `planet_index` and `_ship_crew_index` of the
+    state served. `people_acceptable` judges only what the submitter owns, so
+    a change anywhere else is named here rather than passed over. A civ's own
+    citizens on such a planet are named with what was done to them.
+    """
+    out = []
+    after = planet_index(submitted)
+    for oid, (owner, _prod, plpr, _nm) in sorted(planets.items()):
+        if owner == civ_oid or oid not in after or plpr is None:
+            continue
+        sub_plpr = after[oid][2]
+        if sub_plpr is None:
+            continue
+        if (citizen_bytes(plpr), military_of(plpr)[1]) == (
+                citizen_bytes(sub_plpr), military_of(sub_plpr)[1]):
+            continue
+        why = (f"planet {oid}: people DROPPED, owned by "
+               f"{names.get(owner, owner) if owner else 'nobody'}")
+        cz_a, cz_b = citizens_of(plpr), citizens_of(sub_plpr)
+        if cz_a is not None and cz_b is not None:
+            own_a = [c[0] for c in cz_a if c[1] == civ_oid]
+            own_b = [c[0] for c in cz_b if c[1] == civ_oid]
+            if sorted(own_a) != sorted(own_b):
+                why += (f"; {names.get(civ_oid, civ_oid)}'s citizens there "
+                        f"went {_tally(own_a) or 'none'} -> "
+                        f"{_tally(own_b) or 'none'}, and people on another "
+                        f"civ's planet are not carried")
+        out.append(why)
+    after = _ship_crew_index(submitted)
+    for oid, (owner, shpr) in sorted(crews.items()):
+        if owner == civ_oid or oid not in after:
+            continue
+        if crew_of(shpr or b'') != crew_of(after[oid][1] or b''):
+            out.append(f"ship {oid}: crew DROPPED, owned by "
+                       f"{names.get(owner, owner)}")
+    return out
 
 
 def systems(blob):
@@ -2528,6 +2573,7 @@ def merge(blob, submissions, log=print, notes=None):
     served_members = {m: f['owner'] for f in fleet_index(blob).values()
                       for m, _s, _v in f['members']}
     served_planets = planet_index(blob)
+    served_crews = _ship_crew_index(blob)
     served_designs = design_index(blob)
     # Research as it was served, like the three indexes above: every
     # submission is compared against the state served, not the merged blob.
@@ -2839,6 +2885,11 @@ def merge(blob, submissions, log=print, notes=None):
                     log(f"    ship {oid}: crew {len(ships_before[oid])} -> "
                         f"{len(ships_after[oid])}")
                     accepted += 1
+            # People on planets and ships other civs own, against the state
+            # served: never copied, always named.
+            for why in foreign_people_refusals(served_planets, served_crews,
+                                               sub, mine, names):
+                drop(why)
 
             # system names, which belong to whoever holds most of the system
             served_systems = systems(blob)
@@ -2990,6 +3041,11 @@ def main():
             print(f"  planet {oid:<5} owner {names.get(owner, owner):<14} "
                   f"{label!r:<20} PROD {len(prod) if prod else 'none'} bytes, "
                   f"{_tally([c[0] for c in cz]) if cz else 'no population'}")
+            if cz and any(c[1] != owner for c in cz):
+                # Each citizen in array order: job, owner, per-citizen value.
+                print(' ' * 9 + ', '.join(
+                    f"{JOB_IDS.get(j, j)} {names.get(o, o)} {v}"
+                    for j, o, v, _r in cz))
         for oid, f in sorted(fleet_index(blob).items()):
             label = f['why'] or (f"{f['name'].decode('latin1')!r}, ships "
                                  f"{[m for m, _s, _v in f['members']]}")
