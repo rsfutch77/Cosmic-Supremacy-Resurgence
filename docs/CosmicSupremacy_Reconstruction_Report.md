@@ -1656,11 +1656,20 @@ What is left for after the beta is kept here.
   earlier deadline or a reopen is noticed up to 120 s late. Done when a measured day of one idle
   galaxy reads under 2,000 documents.
 
-- [ ] **Citizens a player owns on someone else's planet cannot be managed.** `merge_orders.py`
-  only considers planets the submitter owns, so a player with population on a rival's colony
-  cannot reassign it. The per-citizen owner already says whose each citizen is, but letting one
-  player write into another's `PLPR` has not been measured. Done when a reassignment on a rival's
-  planet is measured in the client and the merge either accepts it or refuses it with a note.
+- [ ] **Citizens a player owns on someone else's planet are refused, and the client is not yet
+  measured.** A colony keeps the owner of the colonists that founded it. In `galaxy_demo`,
+  Neighbor's planet 138 was founded on turn 7 by a ship whose crew a join had left owned by
+  DemoPlayer, and holds two DemoPlayer farmers; the engine ticked it through turn 30 (`h3check`)
+  and citizens born there are Neighbor's. No other save in the checkout, the war fixtures
+  included, has anyone on another civ's planet. The merge passed over a submitter's changes
+  there without a note; it now refuses any change to people on a planet or ship another civ
+  owns, naming the planet, its owner and what the submitter did to its own citizens there
+  (`test_rival_citizens.py`). The planet's owner reassigns everyone on it, other civs'
+  citizens included, and that is carried, because the checks count people per owner and not
+  jobs. Neighbor's client moved the last farmer in the array on `h3check` turns 17 and 18, a
+  Neighbor citizen both times. Done when two reassignments on planet 138 are measured in the
+  client, one by DemoPlayer on its own farmers and one by Neighbor reaching DemoPlayer's, and the
+  merge carries or refuses each to match.
 
 - [ ] **Nothing checks that a submitted order is legal**, only that it is the player's own. A
   technology the civ cannot research, or a queue entry it cannot afford, is copied as given. Done
