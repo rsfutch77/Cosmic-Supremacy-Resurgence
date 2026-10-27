@@ -890,7 +890,7 @@ premium 1   waronly 1     autoattack 1
 
 [ ] **`corruption_multiplier = 100` is the first handle on corruption we have.** Corruption has resisted location in memory entirely, see the memory report, and here is a galaxy-level knob for it. Changing it and watching what moves is a far cheaper search than diffing planets, and it is the same trick that finally located `Planet:368`: make the thing vary.
 
-- [ ] **The first non-sandbox galaxy turns `waronly` off.** `waronly = 1` allows no alliances, which is what the sandbox galaxy is for. Neither `galaxy_tool.py` nor `make_multiplayer_galaxy.py` writes `GSET`, so a new galaxy keeps whatever its generated blob carries. Decide `sandbox` at the same time: it is the fifth `GSET` entry, and `GetGameOption(4)` gates the client's build-up protection in the declare-war validator at `0x004BDE50`, 300 turns from `0x0076F378`. The original Newbie Sandbox Galaxy ran 10-minute turns, so 300 turns was about two days; at 4-hour turns it is 50 days. The client enforces protection only in its UI, and `merge_orders.py` refuses diplomacy outright. Done when a non-sandbox galaxy runs with `waronly = 0`, an alliance between two civs survives a tick, and its `sandbox` value is chosen on purpose.
+- [ ] **The first non-sandbox galaxy turns `waronly` off.** `waronly = 1` allows no alliances, which is what the sandbox galaxy is for. Neither `galaxy_tool.py` nor `make_multiplayer_galaxy.py` writes `GSET`, so a new galaxy keeps whatever its generated blob carries. Decide `sandbox` at the same time: it is the fifth `GSET` entry, and `GetGameOption(4)` gates the client's build-up protection in the declare-war validator at `0x004BDE50`, 300 turns from `0x0076F378`. The original Newbie Sandbox Galaxy ran 10-minute turns, so 300 turns was about two days; at 4-hour turns it is 50 days. The client enforces protection only in its UI, and `merge_orders.py` refuses diplomacy outright, with a note naming each treaty and stance it dropped. Done when a non-sandbox galaxy runs with `waronly = 0`, an alliance between two civs survives a tick, and its `sandbox` value is chosen on purpose.
 
 **`turnlength` drives the game's clock, and the engine re-applies it AT EVERY TURN BOUNDARY.** A galaxy set to 75 was observed writing 75 back over a driven 15 at each boundary, so a galaxy configured above the floor runs at its configured rate with nothing driving it, `ai.py --drive` is only needed to go faster than the game wants to.
 
@@ -1694,8 +1694,10 @@ What is left for after the beta is kept here.
   Multiplayer_Checklist M12 are its acceptance list.
 
 - [ ] **Order types nobody has measured are not merged:** admirals and diplomacy proposals.
-  Done when each is measured against a change made in the UI and is either accepted or refused
-  with a note.
+  Both are refused with a note naming what was dropped (`test_admirals_diplomacy_merge.py`); until
+  27 October 2026 a new admiral or treaty was ignored without one, and an admiral id in a ship's
+  `DYNO` rode along with its orders. Done when each is measured against a change made in the UI
+  and is either accepted or refused with a note.
 
 - [ ] **Governors are carried, but no governor has run through the live referee.** Measured in
   Single Player and merged in `test_governors_merge.py`. Done when a governor assigned in a live
@@ -1814,3 +1816,53 @@ turns were advanced with `gamectl.Client.advance_turn`. Each step is one change 
   scanning screen lists; a queue of two scans and six facilities made in the UI merges back
   byte for byte (`tier5/qs0` to `qs3`). Refused, with a note: an entry of item type 1 to 7,
   which the client's reader accepts but its queue editor never writes.
+
+**Read off the client on 27 October 2026, not yet measured:** admirals and diplomacy. No save on
+this machine holds an admiral or a treaty (all 440 captures under `client`, `server/saves`,
+`server/tests/fixtures` and `server/galaxy_demo` have an empty `ADMS` in every civ and an empty
+treaty list), so each layout below is the writer's and reader's, checked only for the empty case.
+
+- **An admiral** is an `ADML` in the civ's `OWNR > DATA > ADMS`, after a `u32` count (writer
+  `0x53B4A0`, `ADMS` read at `0x53D73C`, each `ADML` by `0x5A6FF0`): its object id, a `u32` count of the ships it commands
+  (`Admiral:8`), one byte, and an `ADDT` (`0x5A4F20`): a `u32`-length name, a `u32` that is
+  inferred to be the admiral type (the manual's transport, scout, defense and assault), a `u32`
+  rule count, and per rule a one-byte `RULE` (its checkbox) followed by the rule's section. The
+  same shape as a governor. The reader's rule factory (`0x5A4590`) knows 24 tags: `ATPL`, `ATSH`,
+  `DFPL`, `FSHP`, `ICSH`, `LSSL`, `RECQ`, `RTCN`, `STLS`, `RLYP`, `RZPT`, `SPTS`, `TSCQ`, `TMMR`,
+  `TMSC`, `STPF`, `TRSM`, `WUFL`, `WLSL` (the 19 `AdmiralRule*` classes) and `ASFL`, `ASAD`,
+  `MASH`, `SCSP`, `SCRG` (`AddShipsToFleet`, `AssignNewShipsToAdmiral`, `ManShips`,
+  `ScoutSpecificSuns`, `ScoutSunsInRange`). An unknown tag falls through to a store through a
+  null pointer, so a rule the client does not know is likely to crash the load. Several rules
+  hold lists of object ids (planets, suns, ships) and `RLYP`/`RZPT` six `u32`s that are probably
+  a reference point and angles.
+- **Assigning** an admiral writes its id into the ship's or fleet's `DYNO`, the `u32` after the
+  has-orders byte (`DYNO+26`, `Ship:80`).
+- **A treaty**, a proposal or a declaration of war among them, is not under any civ: the client
+  keeps one registry (`0x86ED6C`) and `SaveGame` writes all of it after `SAVE`'s last section as
+  a `u32` count and one `TRTY` v2 per treaty (writer `0x55A4D0`, reader `0x55BD00`). `TRTY` holds
+  the treaty's object id and a `TRDT` v1: the two parties' civ ids, a `u32` kind (`1` declares
+  war, from the setter `0x55AD90`, which also empties both item lists), four `u32`s not yet
+  decoded (the memory capture of a war read `3`, `-1` and the turn twice), two bytes, then two
+  item lists, inferred to be what the proposer demands and offers. An item is its own section:
+  `CRLS`, `CRPT`, `RSLS`, `RSPT` (credits and resources, lump sum and per turn), `SLOS`, `SHBR`,
+  `SHGM`, `SHWH` (sharing), `TRLE` (treaty length). Offline the client applies a proposal itself
+  (`0x55C3E0`, from `0x56F310`); accept, decline, withdraw and delete go through `0x56F470`
+  with an action 0 to 3. The memory report's `Treaty:16 = 3` for war is the field after the kind;
+  the kind is `Treaty:12`.
+- **A civ's stance** toward each civ it has met is in its `KNPL` v12: a `u32` count, then a
+  36-byte record keyed by the other civ's id. The stance (0 neutral, 1 war, 2 cease-fire, 3
+  peace, 4 alliance) is the `u32` at record `+12`: it reads 3 in `control_fork_played.dat` and 1
+  in `war_fork_played.dat`, the same fork after a declaration of war. The rest of the record is
+  not decoded.
+- **`waronly`** (GSET index 29) does two things in the client: first contact sets the stance to
+  war (`0x534FF3`), and the diplomacy screen's context menu adds "Propose New Treaty" greyed out
+  (`0x4425BF`). "Declare War" is greyed while already at war. So the sandbox galaxy, `waronly = 1`,
+  cannot produce a proposal or a declaration from the UI; measuring either needs a galaxy with
+  `waronly = 0`.
+
+- [x] **Admirals and diplomacy are refused by name.** `merge_orders.py` carries none of it and
+  says what it dropped: an admiral created, edited or deleted in any civ's `ADMS`; a ship or
+  fleet naming a different admiral (its orders are still taken, naming the admiral served); a
+  treaty added, changed or removed; and a stance moved in a `KNPL`. A ship leaving a fleet may
+  keep the fleet's admiral or have none. No step of the governor, tier4 or tier5 sessions trips
+  any of these.
