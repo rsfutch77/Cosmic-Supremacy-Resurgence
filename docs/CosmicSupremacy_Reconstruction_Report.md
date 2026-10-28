@@ -1661,8 +1661,7 @@ What is left for after the beta is kept here.
   include launchers fetching the new turn. `server/dev_tools/firestore_reads.py --hours N` lists
   the hours.
 
-- [ ] **Citizens a player owns on someone else's planet are refused, and the client is not yet
-  measured.** A colony keeps the owner of the colonists that founded it. In `galaxy_demo`,
+- [x] **Citizens a player owns on someone else's planet are refused, as the client does.** A colony keeps the owner of the colonists that founded it. In `galaxy_demo`,
   Neighbor's planet 138 was founded on turn 7 by a ship whose crew a join had left owned by
   DemoPlayer, and holds two DemoPlayer farmers; the engine ticked it through turn 30 (`h3check`)
   and citizens born there are Neighbor's. No other save in the checkout, the war fixtures
@@ -1672,9 +1671,14 @@ What is left for after the beta is kept here.
   (`test_rival_citizens.py`). The planet's owner reassigns everyone on it, other civs'
   citizens included, and that is carried, because the checks count people per owner and not
   jobs. Neighbor's client moved the last farmer in the array on `h3check` turns 17 and 18, a
-  Neighbor citizen both times. Done when two reassignments on planet 138 are measured in the
-  client, one by DemoPlayer on its own farmers and one by Neighbor reaching DemoPlayer's, and the
-  merge carries or refuses each to match.
+  Neighbor citizen both times. Measured on 27 October 2026 on `galaxy_demo` turn 11. DemoPlayer's
+  planet list holds only its own planets, and double-clicking either of Neighbor's on the map
+  opens nothing, so DemoPlayer cannot reach its farmers on 138 and the refusal matches. Neighbor
+  opens 138, the tooltip names each farmer's civ, and moving three farmers to worker took both of
+  Neighbor's and one of DemoPlayer's (`rivalB`, `save_005`); the merge carries that in either
+  order with no note, alongside DemoPlayer's untouched `rivalA`. The manual's loyalty page
+  describes a ruler's influence over a planet's population growing each turn; whether the citizen
+  owner field itself ever changes to the planet's owner is not measured.
 
 - [ ] **Nothing checks that a submitted order is legal**, only that it is the player's own. A
   technology the civ cannot research, or a queue entry it cannot afford, is copied as given. Done

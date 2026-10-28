@@ -132,7 +132,7 @@ def main():
     check('reassigning its own citizens there is taken without a note',
           (mo.planet_index(out)[theirs][2] == mo.planet_index(sub)[theirs][2],
            notes), (True, {}))
-    # Not measured in the client: whether its UI moves another civ's citizens.
+    # The owner's client moves another civ's citizens on its planet (rivalB).
     sub = rejob(served, theirs, demo, 2, count=2)
     out, notes = merged(served, [('BadGuy', sub)])
     check("reassigning DemoPlayer's citizens there is taken, as it was",
