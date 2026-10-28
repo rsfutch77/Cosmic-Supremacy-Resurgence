@@ -2,6 +2,8 @@ Cosmic Supremacy: Resurgence v0.4.0: fleets and production queues in
 multiplayer.
 
 If you have v0.3.1, replace it with this. See "Updating from v0.3.1" below.
+Multiplayer galaxies now need v0.4.0, and a v0.3.1 launcher says so when you
+press Play.
 
 ## New in v0.4.0
 
@@ -25,11 +27,6 @@ news list could still lose its governor changes.
 **A reclaimed empire's fleets go with it.** When an empire is reclaimed after
 too many missed turns, its fleets and the ships in them are removed along with
 the rest of it.
-
-## Missed turns
-
-A player is now warned after 12 missed turns in a row, and their empire is
-reclaimed after 48. It used to be 6 and 24.
 
 ## The website
 
