@@ -3,14 +3,19 @@ test_admirals_diplomacy_merge.py: admirals and diplomacy are refused by name
 =============================================================================
     server\\.venv\\Scripts\\python.exe server\\tests\\test_admirals_diplomacy_merge.py
 
-Neither has been measured in the UI, so the merge carries none of it and says
-what it dropped. Before this, a new admiral or a treaty was ignored without a
-note, and an admiral id in a ship's DYNO rode along with its orders, naming an
-admiral the merged galaxy did not hold.
+The merge carries none of it and says what it dropped. Before this, a new
+admiral or a treaty was ignored without a note, and an admiral id in a ship's
+DYNO rode along with its orders, naming an admiral the merged galaxy did not
+hold.
 
-No save on hand holds an admiral or a treaty. The records built here follow
-the client's writers (ADML 0x5A51B0, ADDT 0x5A4F20, TRTY 0x55A4D0, TRDT
-0x559890); the fixtures are the governor, tier4 and tier5 sessions.
+The records built here follow the client's writers (ADML 0x5A51B0, ADDT
+0x5A4F20, TRTY 0x55A4D0, TRDT 0x559890); the fixtures are the governor, tier4
+and tier5 sessions. `fixtures/admirals` is a session in the client on
+`clean.dat` (27 October 2026): a1 created and assigned to the colony ship (a2),
+b1 assigned (a3), a rule added and one unticked (a4), renamed (a5), Scout
+created (a6), b1 moved to Scout (a7), b1 given a manual move (a8), b1 set to
+none (a9), Scout deleted (a10), one turn advanced (a13). Turn 111 ticked on its
+own between a2 and a3.
 """
 import os
 import struct
@@ -59,6 +64,10 @@ def load(name):
     folder = 'governors' if name.startswith('g_') else (
         'tier4' if name.startswith('t4') else 'tier5')
     return sp.load_any(os.path.join(FIX, folder, name + '.dat'))
+
+
+def adm(name):
+    return sp.load_any(os.path.join(FIX, 'admirals', name + '.b64'))
 
 
 def merged(served, *subs):
@@ -286,6 +295,49 @@ def main():
     out, notes = merged(f1, ('DemoPlayer', f4))
     check('and one leaving as measured says nothing', notes.get('DemoPlayer'),
           None)
+
+    print('the admiral session in the client')
+    steps = ['a0', 'a2', 'a3', 'a4', 'a5', 'a6', 'a7', 'a8', 'a9', 'a10', 'a13']
+    s = {n: adm(n) for n in steps}
+    five, scout = (674, b'a1'), (675, b'Scout')
+    named = (674, b'Admiral Five')
+    check('each step reads its admirals',
+          [[(a, mo.admiral_name(r)) for a, r in mo.admirals_of(s[n], GOOD)]
+           for n in steps],
+          [[], [five], [five], [five], [named], [named, scout],
+           [named, scout], [named, scout], [named, scout], [named], [named]])
+    check("and each step's ships name them in their DYNO (b1, colony ship)",
+          [tuple(mo.dyno_admiral(mo.ship_index(s[n])[sh][1])
+                 for sh in (669, 672)) for n in steps],
+          [(0, 0), (0, 674), (674, 674), (674, 674), (674, 674), (674, 674),
+           (675, 674), (675, 674), (0, 674), (0, 674), (0, 674)])
+    check('a turn leaves the admirals as they were',
+          mo.admirals_of(s['a13'], GOOD), mo.admirals_of(s['a10'], GOOD))
+    for prev, cur, want in (
+            ('a0', 'a2', "admiral 674 ('a1') DROPPED, creating"),
+            ('a3', 'a4', "admiral 674 ('a1') DROPPED, editing"),
+            ('a4', 'a5', "admiral 674 ('Admiral Five') DROPPED, editing"),
+            ('a5', 'a6', "admiral 675 ('Scout') DROPPED, creating"),
+            ('a6', 'a7', None),
+            ('a9', 'a10', "admiral 675 ('Scout') deletion DROPPED, deleting")):
+        got = mo.admiral_refusals(s[prev], s[cur], GOOD, {})
+        check(f'{cur} over {prev}: {want or "a ships-assigned count says nothing"}',
+              [g.startswith(want) for g in got] if want else got,
+              [True] if want else [])
+    for prev, cur, served, word in (('a6', 'a7', 674, 'assignment'),
+                                    ('a8', 'a9', 675, 'unassigning')):
+        dyno, why = mo.admiral_kept(mo.ship_index(s[cur])[669][1], (served,))
+        check(f'{cur} over {prev}: b1 keeps admiral {served}, named',
+              (mo.dyno_admiral(dyno), word in why), (served, True))
+    out, notes = merged(s['a0'], ('GoodGuy', s['a2']))
+    check('a2 over a0: the colony ship and ADMS are as served, both named',
+          (mo.dyno_admiral(mo.ship_index(out)[672][1]),
+           mo.admirals_of(out, GOOD), len(notes.get('GoodGuy', []))),
+          (0, [], 2))
+    out, notes = merged(s['a7'], ('GoodGuy', s['a8']))
+    check("a8 over a7: b1's manual move is taken under its admiral, unnamed",
+          (mo.ship_index(out)[669], notes.get('GoodGuy')),
+          (mo.ship_index(s['a8'])[669], None))
 
     print('diplomacy is refused by name and nothing of it is taken')
     proposed = mo.set_high_water(with_treaties(base, [trty(231, ME, THEM)]),

@@ -1714,8 +1714,9 @@ What is left for after the beta is kept here.
 - [ ] **Order types nobody has measured are not merged:** admirals and diplomacy proposals.
   Both are refused with a note naming what was dropped (`test_admirals_diplomacy_merge.py`); until
   27 October 2026 a new admiral or treaty was ignored without one, and an admiral id in a ship's
-  `DYNO` rode along with its orders. Done when each is measured against a change made in the UI
-  and is either accepted or refused with a note.
+  `DYNO` rode along with its orders. Admirals are measured (27 October 2026) and every step made
+  in the UI is refused with a note, or taken when it is only an order. Done when diplomacy is
+  measured the same way.
 
 - [ ] **Governors are carried, but no governor has run through the live referee.** Measured in
   Single Player and merged in `test_governors_merge.py`. Done when a governor assigned in a live
@@ -1877,6 +1878,30 @@ treaty list), so each layout below is the writer's and reader's, checked only fo
   (`0x4425BF`). "Declare War" is greyed while already at war. So the sandbox galaxy, `waronly = 1`,
   cannot produce a proposal or a declaration from the UI; measuring either needs a galaxy with
   `waronly = 0`.
+
+**Measured in one Single Player session on 27 October 2026 (`server/tests/fixtures/admirals`):**
+admirals on `clean.dat` as GoodGuy, turns 110 to 112, with the turn length set to 30 days.
+Turn 111 ticked on its own between `a2` and `a3`, once, without anyone ending the turn. Every
+layout read off the client above held.
+
+- **Creating an admiral** appends an `ADML`, raises the count, and raises `SAVE+0` to its id
+  (674, then 675). The client writes it when the admiral is first assigned or saved, not while
+  the editor is open. An assault admiral's type reads 2, a scout's 3.
+- **A rule** is its checkbox byte and its section, as read. "When conquering transfer X
+  stationed military" is `TSCQ` with X as a `u32`. "Man ships of a design in orbit of a planet
+  with stationed military, if rank" is `MASH`, 22 bytes, holding the planet's object id (265,
+  GoodGuy's HQ) among values not yet told apart. "Scout systems within N units of a sun" is
+  `SCRG`, 37 bytes, ending with 260, likely the home sun's id, and N. Unticking a rule clears its byte and keeps
+  the rule. Renaming rewrites only the name.
+- **Assigning** writes the admiral's id into the ship's `DYNO`, the `u32` after the has-orders
+  byte, and moves the ships-commanded counts. Choosing "none" writes 0. A manual move order
+  keeps the ship's admiral.
+- **Deleting** removes the whole `ADML` and lowers the count; `SAVE+0` stays. The delete button
+  is greyed out while the admiral commands a ship.
+- **A turn** leaves the admiral record as it was. The `SHPR` of the colony ship under "man ships
+  fully" grew by 9 bytes in the tick, likely crew the rule brought aboard.
+- **Not measured:** an admiral on a fleet, since GoodGuy had no two ships together; the other
+  choices in each rule; and the other rule types.
 
 - [x] **Admirals and diplomacy are refused by name.** `merge_orders.py` carries none of it and
   says what it dropped: an admiral created, edited or deleted in any civ's `ADMS`; a ship or
