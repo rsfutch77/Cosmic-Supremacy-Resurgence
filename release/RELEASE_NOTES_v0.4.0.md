@@ -16,9 +16,6 @@ and delete production queues, including scans, and put planets on a queue. A
 planet you build something else on by hand goes back to its queue when that
 item is done, and setting a planet to Wealth takes it off the queue.
 
-**Quitting while your turn is being sent.** If you close the launcher while it
-is still sending your turn, it now asks first, so your orders are not lost.
-
 ## Fixed in v0.4.0
 
 **Governors are kept for every empire.** In v0.3.1 an empire with items in its
@@ -56,7 +53,7 @@ new signature takes time to earn Windows' trust. Click **More info**, then click
 
 ## Verifying the download
 
-    SHA-256  <fill in from the signed build>
+    SHA-256  87f764d056182e75c52aa859fb1b3b56b31fa13370068446261b8baf83fd7db6
 
     Get-FileHash CosmicSupremacy-Resurgence-v0.4.0.zip -Algorithm SHA256
 
