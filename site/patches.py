@@ -264,6 +264,21 @@ SMILEYS = {
     "fixme.gif":          ("\N{WARNING SIGN}", "FIXME"),
     "delete.gif":         ("\N{CROSS MARK}", "DELETEME"),
     "wink.gif":           ("\N{WINKING FACE}", ";-)"),
+    # The forum's set, which the news posts use. None of it was archived.
+    "smile.gif":          ("\N{SLIGHTLY SMILING FACE}", "Smile"),
+    "biggrin.gif":        ("\N{GRINNING FACE WITH SMILING EYES}", "Big Grin"),
+    "confused.gif":       ("\N{CONFUSED FACE}", "Confused"),
+    "cool.gif":           ("\N{SMILING FACE WITH SUNGLASSES}", "Cool"),
+    "crying.gif":         ("\N{CRYING FACE}", "Crying"),
+    "eek.gif":            ("\N{FACE SCREAMING IN FEAR}", "Shocked"),
+    "evil.gif":           ("\N{SMILING FACE WITH HORNS}", "Evil"),
+    "lol.gif":            ("\N{FACE WITH TEARS OF JOY}", "LOL"),
+    "mad.gif":            ("\N{POUTING FACE}", "Mad"),
+    "neutral.gif":        ("\N{NEUTRAL FACE}", "Neutral"),
+    "redface.gif":        ("\N{FLUSHED FACE}", "Red Face"),
+    "rolleyes.gif":       ("\N{FACE WITH ROLLING EYES}", "Roll Eyes"),
+    "surprised.gif":      ("\N{FACE WITH OPEN MOUTH}", "Surprised"),
+    "tongue.gif":         ("\N{FACE WITH STUCK-OUT TONGUE}", "Tongue"),
 }
 
 _SMILEY_IMG_RE = re.compile(
@@ -408,6 +423,27 @@ def replace_galaxy_list(html):
     return html
 
 
+# The footer's bookmark bar links to Digg, del.icio.us, Ma.gnolia and other
+# services that are gone, and its RSS feed is an archived copy that never updates.
+_SOCIAL_BAR_RE = re.compile(
+    r"<div\s+class=['\"]social['\"][^>]*>(?:(?!<div\b).)*?</div\s*>\s*", re.I | re.S)
+
+
+def remove_social_bar(html):
+    return _SOCIAL_BAR_RE.sub("", html)
+
+
+# DokuWiki's Search, Login, Index, Recent changes, Old revisions and Show page
+# buttons are forms that ask the wiki engine for a page, and no engine runs here.
+# Each carries a hidden `do` field, which no other form on the site has.
+_WIKI_FORM_RE = re.compile(
+    r"<form\b(?:(?!</form>).)*?name=['\"]do['\"](?:(?!</form>).)*?</form\s*>", re.I | re.S)
+
+
+def remove_wiki_buttons(html):
+    return _WIKI_FORM_RE.sub("", html)
+
+
 PATCHES = [
     ("remove the Live Chat tab", remove_live_chat),
     ("point the Forum tab at the Facebook group", repoint_forum_tab),
@@ -423,6 +459,8 @@ PATCHES = [
     ("strip DokuWiki indexer beacons", strip_indexer_beacons),
     ("modernise smileys", modernise_smileys),
     ("point support e-mail at GitHub", redirect_support_email),
+    ("remove the social bookmark bar", remove_social_bar),
+    ("remove the wiki's engine buttons", remove_wiki_buttons),
 ]
 
 

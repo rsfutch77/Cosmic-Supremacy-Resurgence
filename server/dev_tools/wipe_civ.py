@@ -1,6 +1,7 @@
 """
 wipe_civ.py: remove a civ's presence from a save blob
-Returns every planet a civ owns to uncolonised and deletes every ship it owns.
+Returns every planet a civ owns to uncolonised and deletes every ship and fleet
+it owns.
 The civ's `OWNR` record is left in place, so no object id is freed, the `GLXY`
 civ count is unchanged and `SAVE+0` is unchanged.
 
@@ -196,6 +197,24 @@ def delete_ship(blob, ship_id, log=print):
     return blob
 
 
+def fleet_records(blob):
+    """[{id, owner, members, off, end}] for every `GLXY > FLET`.
+
+    A member ship lives inside its fleet's `FLDT` as an `SHPR` ending with the
+    ship's own id, so cutting the fleet removes its ships too.
+    """
+    glxy = next(sp.parse_blob(blob)[0].find('GLXY'))
+    out = []
+    for f in glxy.find('FLET'):
+        oid, _x, _z, _y, owner = struct.unpack_from('<IfffI', blob, f.payload)
+        fldt = next(f.find('FLDT'), None)
+        members = ([struct.unpack_from('<I', blob, s.end - 4)[0]
+                    for s in fldt.find('SHPR')] if fldt is not None else [])
+        out.append({'id': oid, 'owner': owner, 'members': members,
+                    'off': f.start, 'end': f.end})
+    return out
+
+
 def referenced_by(blob, oid, exclude):
     """Civs whose own `OWNR` range holds a dword reading `oid`.
 
@@ -273,6 +292,13 @@ def wipe(blob, name, remove_owner=False, force_owner=False, log=print,
         blob = uncolonise(blob, pid, blank, log=log)
     for sid in ships:
         blob = delete_ship(blob, sid, log=log)
+    # From the last fleet back, so the offsets still to cut stay valid.
+    fleets = [f for f in fleet_records(blob) if f["owner"] == civ["oid"]]
+    for f in sorted(fleets, key=lambda f: f["off"], reverse=True):
+        log(f"  fleet {f['id']}: removing {f['end'] - f['off']} bytes at "
+            f"{f['off']}, with ship(s) {f['members']}")
+        blob = cut_section(blob, f["off"], f["end"], log=log, what="fleet")
+        ships = ships + f["members"]
 
     # SAVE+0 and the civ count are left alone, as the engine does after a ship
     # dies; the civ count still matches the OWNR records present.
@@ -301,6 +327,10 @@ def check(blob, name, planets, ships, log=print):
     left = [s for s in ships if s in live]
     if left:
         log(f"  FAIL: ship(s) {left} are still in the blob")
+        ok = False
+    kept = [f["id"] for f in fleet_records(blob) if civ and f["owner"] == civ["oid"]]
+    if kept:
+        log(f"  FAIL: fleet(s) {kept} are still in the blob")
         ok = False
     blanks = {p["id"]: p for p in icv.planet_records(blob)}
     for pid in planets:

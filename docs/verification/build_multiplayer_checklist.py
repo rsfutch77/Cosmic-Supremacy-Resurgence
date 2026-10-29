@@ -89,8 +89,8 @@ M = [
           'A sign-in older than an hour still works: the ID token is renewed (Epic testing guide, token renewal after 60 minutes).']),
         ('M12', 'A launcher too old for the galaxy is told so, and how to update, and is not allowed to submit orders the referee would misread.',
          'Xbox XR-003',
-         ['Below the minimum build, the launcher refuses to play and links the update.',
-          'The message says what to keep (the `data` folder) so the seat survives the update.']),
+         ['Below the minimum build, the launcher refuses to play and offers the update. Until the launcher updates itself (Reconstruction Report section 14), it links the release page.',
+          'The seat survives the update: the updater leaves the `data` folder alone. Until then, the message says to keep `data`.']),
     ]),
     ('Identity and seats', [
         ('M13', 'A player\'s seat survives a reinstall, a new PC, or a lost data folder, by a recovery route that cannot be used to take someone else\'s seat.',

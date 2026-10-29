@@ -71,10 +71,6 @@
         "destination": "/download_stability.php.html"
       },
       {
-        "source": "/forgotpw.php",
-        "destination": "/forgotpw.php.html"
-      },
-      {
         "source": "/galaxy.php",
         "destination": "/galaxy.php.html"
       },
@@ -105,10 +101,6 @@
       {
         "source": "/premiumupgrade.php",
         "destination": "/premiumupgrade.php.html"
-      },
-      {
-        "source": "/register.php",
-        "destination": "/register.php.html"
       },
       {
         "source": "/screenshots.php",

@@ -519,6 +519,69 @@ check("and serving a turn opens it again",
       "mp_turn_open = True" in st, True)
 
 print()
+print("quitting while a turn is still being sent")
+
+
+class _Thread:
+    def is_alive(self):
+        return True
+
+
+class _Quit(_Close):
+    """Just enough Launcher to drive on_close with the game window gone."""
+
+    def __init__(self, turn_open, sending=False, answer=False, seen=True):
+        super().__init__(turn_open)
+        self.mp_sending, self.mp_client_seen = sending, seen
+        self.mp_thread, self.client_exes, self.servers = _Thread(), [], []
+        self.asked, self.closed, self.answer = [], False, answer
+        self.view = self
+
+    def _watch_mp_client(self, up):
+        L.Launcher._watch_mp_client(self, up)
+
+    def ask_ok_cancel(self, title, msg):
+        self.asked.append(msg)
+        return self.answer
+
+    def stop_multiplayer(self, why=""):
+        pass
+
+    def stop_ai(self, why=""):
+        pass
+
+    def close(self):
+        self.closed = True
+
+
+_clients = L.running_clients
+L.running_clients = lambda exes: []
+try:
+    q = _Quit(turn_open=True, sending=True, seen=False)
+    L.Launcher.on_close(q)
+    check("a turn being sent is warned about",
+          any("still being sent" in m for m in q.asked), True)
+    check("and Cancel keeps the launcher open", q.closed, False)
+
+    q = _Quit(turn_open=True, sending=True, seen=False, answer=True)
+    L.Launcher.on_close(q)
+    check("while OK closes it anyway", q.closed, True)
+
+    # The game closed less than a status tick ago, so mp_sending is not set
+    # yet; the close notices it first.
+    q = _Quit(turn_open=True)
+    L.Launcher.on_close(q)
+    check("a game closed since the last tick is warned about too",
+          any("still being sent" in m for m in q.asked), True)
+
+    q = _Quit(turn_open=False)
+    L.Launcher.on_close(q)
+    check("a finished turn quits without asking", (q.asked, q.closed),
+          ([], True))
+finally:
+    L.running_clients = _clients
+
+print()
 print("sharing a server this launcher did not start")
 import tempfile, json as _json
 _d = tempfile.mkdtemp()

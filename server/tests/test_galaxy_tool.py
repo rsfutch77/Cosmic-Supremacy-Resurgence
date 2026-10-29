@@ -140,6 +140,30 @@ def run_folder(tmp):
               (2, True))
         check(f'{label}: and nothing was written', snapshot(root), before)
 
+    print('raising its minimum build')
+    for label, build, says in (
+            ('a lower build', '0.1.12', 'only rises'),
+            ('a build the launcher cannot order', 'v0.4.0', 'not a dotted'),
+            ('a galaxy that does not exist', '0.4.0', 'no galaxy nowhere')):
+        code, text = tool(root, 'min-build',
+                          'nowhere' if 'exist' in label else 'one', build)
+        check(f'{label}: refused and says why', (code, says in text),
+              (2, True))
+        check(f'{label}: and nothing was written', snapshot(root), before)
+    code, text = tool(root, 'min-build', 'one', '0.4.0', '--dry-run')
+    check('a dry run says what it would do, and writes nothing',
+          (code, 'from 0.2.0' in text, store.state().get(
+              turn_store.MIN_BUILD_KEY)), (0, True, '0.2.0'))
+    code, text = tool(root, 'min-build', 'one', ' 0.4.0 ')
+    check('raising it succeeds, trimmed',
+          (code, store.state().get(turn_store.MIN_BUILD_KEY)), (0, '0.4.0'))
+    check('and turns away a launcher from before it',
+          (launcher.version_problem('0.3.1', store.state()) is not None,
+           launcher.version_problem('0.4.0', store.state())), (True, None))
+    check('the same build again is accepted',
+          tool(root, 'min-build', 'one', '0.4')[0], 0)
+    before = snapshot(root)
+
     print('closing it')
     code, text = tool(root, 'close', 'one', '--reason', '  ')
     check('a close with no reason is refused', (code, 'with a reason' in text),

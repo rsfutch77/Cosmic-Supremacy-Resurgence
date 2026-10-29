@@ -955,7 +955,7 @@ DEV_MARK = "dev"                # run from a clone; no packaging step involved
 UNSTAMPED_MARK = "unstamped"    # packaged, but the stamp did not reach the bundle
 
 # Where a launcher that is too old is told to go.
-UPDATE_URL = "https://github.com/rsfutch77/Cosmic-Supremacy-Resurgence/releases/latest"
+UPDATE_URL = "https://cosmicresurgence.com/download_client.php.html"
 
 # The galaxy state key for its minimum build. A galaxy without one is played
 # by any build.
@@ -1035,12 +1035,9 @@ def version_problem(build: str, state) -> "str | None":
     if not build_is_below(build, minimum):
         return None
     return (f"This galaxy needs build {minimum} or newer.\n\nThis launcher is "
-            f"build {build}.\n\nAn older build can hand the galaxy a turn the "
-            "referee cannot use, and that goes wrong quietly, so the galaxy "
-            "stops here instead.\n\nThe current release is at\n" + UPDATE_URL
+            f"build {build}.\n\nThe current release is at\n" + UPDATE_URL
             + "\n\nCopy the data folder from this launcher's folder into the "
-            "new one before starting it, or it signs in as someone new and "
-            "your seat will be refused.")
+            "new one before starting it.")
 
 
 def closed_problem(state) -> "str | None":
@@ -4931,13 +4928,23 @@ class Launcher:
         """Ask before quitting out from under a running game.
 
         The warning is about the player's turn, which covers both single
-        player and the multiplayer turn loop.
+        player and the multiplayer turn loop, including a turn still being
+        sent after the game window has closed.
         """
         if running_clients(self.client_exes):
             if not self.view.ask_ok_cancel(
                     "Quit launcher?",
                     "A game is still running.\n\nClose your client first to "
                     "make sure your turn is saved.\n\nClose anyway?"):
+                return
+        elif self.mp_thread is not None and self.mp_thread.is_alive():
+            # The game may have closed since the last status tick.
+            self._watch_mp_client(False)
+            if self.mp_sending and not self.view.ask_ok_cancel(
+                    "Quit launcher?",
+                    "Your turn is still being sent.\n\nKeep the launcher open "
+                    "until it finishes, or your orders may not arrive.\n\n"
+                    "Close anyway?"):
                 return
         self.stop_multiplayer("the launcher is closing")
         self.stop_ai("the launcher is closing")

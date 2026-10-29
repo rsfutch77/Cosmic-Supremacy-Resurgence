@@ -10,10 +10,11 @@ Live at **https://cosmicresurgence.com** (also `cs-resurgence.web.app`).
 Tracked, because it is source:
 
     firebase.json     hosting config: rewrites, headers, 404 behaviour
-    404.html          the "not restored yet" page
+    404.html          the "not in the archive" page
     stage.py          builds public/ out of the archive
     serve.py          local preview that mimics Firebase's 404 handling
     overrides/        hand-written pages that replace archived ones
+    never_archived.txt  targets the Wayback Machine has no capture of
 
 Not tracked:
 

@@ -890,7 +890,7 @@ premium 1   waronly 1     autoattack 1
 
 [ ] **`corruption_multiplier = 100` is the first handle on corruption we have.** Corruption has resisted location in memory entirely, see the memory report, and here is a galaxy-level knob for it. Changing it and watching what moves is a far cheaper search than diffing planets, and it is the same trick that finally located `Planet:368`: make the thing vary.
 
-- [ ] **The first non-sandbox galaxy turns `waronly` off.** `waronly = 1` allows no alliances, which is what the sandbox galaxy is for. Neither `galaxy_tool.py` nor `make_multiplayer_galaxy.py` writes `GSET`, so a new galaxy keeps whatever its generated blob carries. Decide `sandbox` at the same time: it is the fifth `GSET` entry, and `GetGameOption(4)` gates the client's build-up protection in the declare-war validator at `0x004BDE50`, 300 turns from `0x0076F378`. The original Newbie Sandbox Galaxy ran 10-minute turns, so 300 turns was about two days; at 4-hour turns it is 50 days. The client enforces protection only in its UI, and `merge_orders.py` refuses diplomacy outright. Done when a non-sandbox galaxy runs with `waronly = 0`, an alliance between two civs survives a tick, and its `sandbox` value is chosen on purpose.
+- [ ] **The first non-sandbox galaxy turns `waronly` off.** `waronly = 1` allows no alliances, which is what the sandbox galaxy is for. Neither `galaxy_tool.py` nor `make_multiplayer_galaxy.py` writes `GSET`, so a new galaxy keeps whatever its generated blob carries. Decide `sandbox` at the same time: it is the fifth `GSET` entry, and `GetGameOption(4)` gates the client's build-up protection in the declare-war validator at `0x004BDE50`, 300 turns from `0x0076F378`. The original Newbie Sandbox Galaxy ran 10-minute turns, so 300 turns was about two days; at 4-hour turns it is 50 days. The client enforces protection only in its UI, and `merge_orders.py` refuses diplomacy outright, with a note naming each treaty and stance it dropped. Done when a non-sandbox galaxy runs with `waronly = 0`, an alliance between two civs survives a tick, and its `sandbox` value is chosen on purpose.
 
 **`turnlength` drives the game's clock, and the engine re-applies it AT EVERY TURN BOUNDARY.** A galaxy set to 75 was observed writing 75 back over a driven 15 at each boundary, so a galaxy configured above the floor runs at its configured rate with nothing driving it, `ai.py --drive` is only needed to go faster than the game wants to.
 
@@ -1648,19 +1648,37 @@ snapshot.
 
 What is left for after the beta is kept here.
 
-- [ ] **Measure the referee's reads after the poll change.** `referee_worker.py` read the galaxy
+- [x] **Measure the referee's reads after the poll change.** `referee_worker.py` read the galaxy
   every 5 seconds for the whole turn, about 16,800 Firestore reads a day per galaxy, measured on
   `h3check` on 5 October 2026 with no launcher open. Its gap now follows the deadline
   (`poll_gap`: a twentieth of the distance, between `POLL` 5 s and `POLL_CEILING` 120 s, and the
   ceiling while closed), which works out near 1,100 reads a day for an idle four-hour galaxy. An
-  earlier deadline or a reopen is noticed up to 120 s late. Done when a measured day of one idle
-  galaxy reads under 2,000 documents.
+  earlier deadline or a reopen is noticed up to 120 s late. Measured on the sandbox galaxy, whose
+  launchers are never all closed for a day: the one hour with no relay request (27 October,
+  02:00 UTC) read 30 documents, and a fit over 19 hours from 26 October 13:00 UTC gives 31.5 reads
+  an hour, 0.81 per relay request and 80.4 more in each tick hour, no hour off by more than 9.
+  That is about 1,240 reads a day for the referee alone, an upper bound since the tick hours
+  include launchers fetching the new turn. `server/dev_tools/firestore_reads.py --hours N` lists
+  the hours.
 
-- [ ] **Citizens a player owns on someone else's planet cannot be managed.** `merge_orders.py`
-  only considers planets the submitter owns, so a player with population on a rival's colony
-  cannot reassign it. The per-citizen owner already says whose each citizen is, but letting one
-  player write into another's `PLPR` has not been measured. Done when a reassignment on a rival's
-  planet is measured in the client and the merge either accepts it or refuses it with a note.
+- [x] **Citizens a player owns on someone else's planet are refused, as the client does.** A colony keeps the owner of the colonists that founded it. In `galaxy_demo`,
+  Neighbor's planet 138 was founded on turn 7 by a ship whose crew a join had left owned by
+  DemoPlayer, and holds two DemoPlayer farmers; the engine ticked it through turn 30 (`h3check`)
+  and citizens born there are Neighbor's. No other save in the checkout, the war fixtures
+  included, has anyone on another civ's planet. The merge passed over a submitter's changes
+  there without a note; it now refuses any change to people on a planet or ship another civ
+  owns, naming the planet, its owner and what the submitter did to its own citizens there
+  (`test_rival_citizens.py`). The planet's owner reassigns everyone on it, other civs'
+  citizens included, and that is carried, because the checks count people per owner and not
+  jobs. Neighbor's client moved the last farmer in the array on `h3check` turns 17 and 18, a
+  Neighbor citizen both times. Measured on 27 October 2026 on `galaxy_demo` turn 11. DemoPlayer's
+  planet list holds only its own planets, and double-clicking either of Neighbor's on the map
+  opens nothing, so DemoPlayer cannot reach its farmers on 138 and the refusal matches. Neighbor
+  opens 138, the tooltip names each farmer's civ, and moving three farmers to worker took both of
+  Neighbor's and one of DemoPlayer's (`rivalB`, `save_005`); the merge carries that in either
+  order with no note, alongside DemoPlayer's untouched `rivalA`. The manual's loyalty page
+  describes a ruler's influence over a planet's population growing each turn; whether the citizen
+  owner field itself ever changes to the planet's owner is not measured.
 
 - [ ] **Nothing checks that a submitted order is legal**, only that it is the player's own. A
   technology the civ cannot research, or a queue entry it cannot afford, is copied as given. Done
@@ -1686,9 +1704,19 @@ What is left for after the beta is kept here.
   moves the seats by hand. Done when the relay moves them itself, on proof of both the guest's
   and the account's tokens.
 
-- [ ] **Order types nobody has measured are not merged:** admirals and diplomacy proposals.
-  Done when each is measured against a change made in the UI and is either accepted or refused
-  with a note.
+- [ ] **The launcher does not update itself.** A launcher below a galaxy's `min_build` links the
+  release page, and the player unzips the new build by hand, keeping `data`. Done when the
+  launcher finds a newer release on its own, downloads it, checks the signature and SHA-256,
+  replaces itself in its folder without elevation and without touching `data`, and goes back to
+  the old build if the new one fails to start. The TUF items in `5 - Release_Checklist.md` and
+  Multiplayer_Checklist M12 are its acceptance list.
+
+- [x] **Order types nobody has measured are not merged:** admirals and diplomacy proposals.
+  Both are refused with a note naming what was dropped (`test_admirals_diplomacy_merge.py`); until
+  27 October 2026 a new admiral or treaty was ignored without one, and an admiral id in a ship's
+  `DYNO` rode along with its orders. Both are measured (27 and 28 October 2026) and every step
+  made in the UI is refused with a note, or taken when it is only an order. Carrying diplomacy
+  means changing both civs at once, since accepting a treaty moves its lump sums immediately.
 
 - [ ] **Governors are carried, but no governor has run through the live referee.** Measured in
   Single Player and merged in `test_governors_merge.py`. Done when a governor assigned in a live
@@ -1704,14 +1732,14 @@ What is left for after the beta is kept here.
 - **Adding a planet to a production queue** creates a queue object under the civ,
   `OWNR > DATA > SPQS` (a `u32` count, then `SPRQ` holding the object id and a `PRQU` of entries),
   and links the planet's `PROD` to it at `+2` (flag), `+3` (the queue's object id) and `+7`.
-  Refused with a note.
+  Carried, with the queue itself (see the 25 October measurements below).
 - **A fleet** is `GLXY > FLET`: the 20-byte object header (a new object id, raising `SAVE+0`),
   a `DYNO` with the fleet's orders, and `FLDT`: a `u32`-length name (default `Battle Fleet`, cut
   to 32 characters), a `u32` member count and one `SHPR` per member. Members leave `GLXY` as
   `SHIP`s while in the fleet; a ship taken out comes back as a `SHIP` with its own id, and a
-  one-ship fleet survives until disbanded. `SHPR+30` holds the id of the last fleet a ship was
-  in, and keeps it after the ship leaves. Refused with a note: the merge turns the fleet back into
-  its member ships and judges the rest of the submission as usual.
+  one-ship fleet survives until disbanded. A `SHPR` ends with a `f32`, the id of the last fleet
+  its ship was in (`SHPR+30` with two crew), kept after the ship leaves, and the ship's own id.
+  Carried (`test_fleets_merge.py`).
 - **Individual ships cannot be renamed**; only fleets can.
 
 **Measured in one Single Player session at turn 0 (23 October 2026,
@@ -1728,8 +1756,183 @@ What is left for after the beta is kept here.
   removes the `GVNR`; the governor library on the local server keeps its own copy, so Load
   brings it back. Carried; deleting one that still governs a planet is refused.
 
-- [ ] **Carry fleets:** forming, joining, leaving, disbanding, renaming, and fleet orders. Needs a
-  fleet id allocated without colliding across players, as designs are, and every member checked:
-  the submitter's, at one position, in no other fleet.
+**Measured in two Single Player sessions on 25 October 2026 (`server/tests/fixtures/tier5`):**
+production queues on `clean.dat` at turn 111 (`q*`), fleets on `SinglePlayerGalaxy.dat` at turn 0
+(`f*`). Both ran with the turn length set to 30 days so that no turn resolved between steps, and
+turns were advanced with `gamectl.Client.advance_turn`. Each step is one change made in the UI.
 
-- [ ] **Carry production queues:** the `SPQS` queue objects and the planets' links to them.
+- **A production queue** is an `SPRQ` in the civ's `OWNR > DATA > SPQS`, whose `u32` count goes
+  from 0 to 1. `SPRQ` holds the queue's object id, a `u32` count of planets using it and a `u8`,
+  then a `PRQU` (version 1): a `u16` entry-id counter (2 with one entry, 4 after a second was
+  added, still 4 after one was deleted), a `u32`-length name, a `u32` entry count and the entries.
+  A queue no planet uses is saved and survives a reload. A civ's `SPQS` and `GOVS` sit after
+  its news items (`NEWS`) in `DATA`, which `save_parser` walks past.
+- **A queue entry** is stored in the order the UI shows: a `u16` entry id (1 for the farm, 3 for
+  the Colony Ship; it moves with its entry when reordered), a `u16` count, a `u8` infinite flag,
+  a `u8` count mode (1 "build up to"), a `u32` item type (0 facility, 8 ship, 9 scan), then a
+  `u32` naming the item: the facility type (0 for a farm), the design id, or the scan (2 route,
+  3 fleet, measured 27 October 2026; the other four scans were not yet researched). The queue
+  editor offers facilities, ships and scans and nothing else, so no other item type comes from
+  the UI; a queue of every facility researched (0, 2, 4, 6, 8 and 9) holds type 0 throughout
+  (`tier5/qs3`). Adding, deleting,
+  reordering and editing an entry change only these bytes and the enclosing lengths. The client's
+  writer (`0x556560`) and reader (`0x556D20`) know item types 0 to 9: types 1 to 6 have nothing
+  after the type, and 7 and 9 a `u32`. What types 1 to 7 name has not been measured, since the
+  editor never writes them. The reader drops a ship entry whose design does not resolve.
+- **Assigning a queue to a planet** raises the queue's planet count and links the planet's `PROD`
+  (`+2` flag, `+3` queue id, `+7` the `u16` id of the entry the planet is building). The planet
+  switches to the queue's item at once, dropping what it was building, and the civ's `OWPR`
+  `+132..+143` move with it. They move with a manual override too, so they follow production in
+  general, not the queue.
+- **Overriding a queued planet's production** by hand keeps the queue link and sets `+7` to 0.
+  When the item completes the engine returns the planet to the queue by itself (measured across
+  turns 113 to 128).
+- **Setting a queued planet to Wealth** is the only way out of a queue: the link is cleared and
+  the queue's planet count drops.
+- **Deleting a queue** is allowed once no planet uses it, and leaves `SPQS` byte-identical to a
+  civ that never had one.
+- **Renaming a fleet** rewrites only the name in `FLDT`.
+- **A fleet's move order** is the same three edits as a ship's, in the `FLET`'s own `DYNO`; the
+  members' records do not change.
+- **A ship leaving a fleet** comes back with empty orders. **Joining an existing fleet** is the
+  exact reverse: the blob after leaving and rejoining is byte-identical to the one before.
+- **Disbanding** removes the `FLET` and returns every member with empty orders. `SAVE+0` is not
+  lowered.
+
+- [x] **Fleets are carried, and one has run through the live referee.** Forming, renaming,
+  fleet orders, ships leaving and joining, one fleet joining another, and disbanding are merged in
+  `test_fleets_merge.py`, and each Single Player step comes out of the merge byte for byte as the
+  client saved it. A new fleet takes a free id as designs and governors do, and every ship in it is
+  checked: the submitter's as served, placed once, all at one position. Five blobs the merge wrote
+  itself (two civs' fleets with one renumbered, a ship left out of an ordered fleet, crew moved
+  inside one, one fleet merged into another, a renumbered fleet a ship left) load in the
+  Resurgence client, resolve a turn and save again with their fleets intact; the ordered fleet
+  moves along its route and the ship left out stays put (25 October 2026). In the live sandbox
+  galaxy (referee staged at `a715489`), Beta's fleet 227 of ships 221 and 214, submitted on turn
+  56, was still a fleet of both in turn 57, and Beta had no refusal note (26 October 2026). Beta
+  never had two ships together, so for the test turn 56 was republished at its publish with 214
+  moved beside 221, the deadline kept and the turn-55 archive record updated, and the fleet was
+  submitted by script; turn 57 was then republished with the fleet split back into idle ships and
+  214 where it was. Elder Race, whose launcher fetched turn 56 before the edit, got the expected
+  note `ship 214: DROPPED, owned by Beta` and lost nothing.
+
+- [x] **Reclaiming a civ removes its fleets.** `wipe_civ.wipe` cuts a civ's `FLET`s with the ships
+  inside them, as well as its `SHIP`s, and `check` fails while one is left. A galaxy with
+  DemoPlayer's ordered fleet wiped (tier5 `f3`) loads in the Resurgence client as BadGuy, resolves
+  a turn and saves again (26 October 2026).
+
+- [x] **Production queues are carried.**
+  `merge_orders.py` carries creating, editing, reordering and deleting queues and entries, and
+  planets joining, overriding and leaving them (`test_queues_merge.py`). A new queue is
+  renumbered like a design when another player's object took its id, ship entries follow a
+  renumbered design, and the planet counts are recounted from the merged links. Five blobs the
+  merge wrote (a queue assigned, shared by two planets, overridden, two civs' queues with one
+  renumbered, a queue naming a renumbered design) load in the Resurgence client, resolve a turn and
+  save again with their queues intact (25 October 2026). In the live sandbox galaxy, tmog66's
+  queue of a facility and a ship, assigned to four planets on turn 55, came through the referee
+  (staged at `a715489`) with every planet still linked and building one of its entries in turn
+  56, and no refusal notes (26 October 2026). Scan entries are carried for the six scans the
+  scanning screen lists; a queue of two scans and six facilities made in the UI merges back
+  byte for byte (`tier5/qs0` to `qs3`). Refused, with a note: an entry of item type 1 to 7,
+  which the client's reader accepts but its queue editor never writes.
+
+**Read off the client on 27 October 2026, not yet measured:** admirals and diplomacy. No save on
+this machine holds an admiral or a treaty (all 440 captures under `client`, `server/saves`,
+`server/tests/fixtures` and `server/galaxy_demo` have an empty `ADMS` in every civ and an empty
+treaty list), so each layout below is the writer's and reader's, checked only for the empty case.
+
+- **An admiral** is an `ADML` in the civ's `OWNR > DATA > ADMS`, after a `u32` count (writer
+  `0x53B4A0`, `ADMS` read at `0x53D73C`, each `ADML` by `0x5A6FF0`): its object id, a `u32` count of the ships it commands
+  (`Admiral:8`), one byte, and an `ADDT` (`0x5A4F20`): a `u32`-length name, a `u32` that is
+  inferred to be the admiral type (the manual's transport, scout, defense and assault), a `u32`
+  rule count, and per rule a one-byte `RULE` (its checkbox) followed by the rule's section. The
+  same shape as a governor. The reader's rule factory (`0x5A4590`) knows 24 tags: `ATPL`, `ATSH`,
+  `DFPL`, `FSHP`, `ICSH`, `LSSL`, `RECQ`, `RTCN`, `STLS`, `RLYP`, `RZPT`, `SPTS`, `TSCQ`, `TMMR`,
+  `TMSC`, `STPF`, `TRSM`, `WUFL`, `WLSL` (the 19 `AdmiralRule*` classes) and `ASFL`, `ASAD`,
+  `MASH`, `SCSP`, `SCRG` (`AddShipsToFleet`, `AssignNewShipsToAdmiral`, `ManShips`,
+  `ScoutSpecificSuns`, `ScoutSunsInRange`). An unknown tag falls through to a store through a
+  null pointer, so a rule the client does not know is likely to crash the load. Several rules
+  hold lists of object ids (planets, suns, ships) and `RLYP`/`RZPT` six `u32`s that are probably
+  a reference point and angles.
+- **Assigning** an admiral writes its id into the ship's or fleet's `DYNO`, the `u32` after the
+  has-orders byte (`DYNO+26`, `Ship:80`).
+- **A treaty**, a proposal or a declaration of war among them, is not under any civ: the client
+  keeps one registry (`0x86ED6C`) and `SaveGame` writes all of it after `SAVE`'s last section as
+  a `u32` count and one `TRTY` v2 per treaty (writer `0x55A4D0`, reader `0x55BD00`). `TRTY` holds
+  the treaty's object id and a `TRDT` v1: the two parties' civ ids, a `u32` kind (`1` declares
+  war, from the setter `0x55AD90`, which also empties both item lists), four `u32`s not yet
+  decoded (the memory capture of a war read `3`, `-1` and the turn twice), two bytes, then two
+  item lists, inferred to be what the proposer demands and offers. An item is its own section:
+  `CRLS`, `CRPT`, `RSLS`, `RSPT` (credits and resources, lump sum and per turn), `SLOS`, `SHBR`,
+  `SHGM`, `SHWH` (sharing), `TRLE` (treaty length). Offline the client applies a proposal itself
+  (`0x55C3E0`, from `0x56F310`); accept, decline, withdraw and delete go through `0x56F470`
+  with an action 0 to 3. The memory report's `Treaty:16 = 3` for war is the field after the kind;
+  the kind is `Treaty:12`.
+- **A civ's stance** toward each civ it has met is in its `KNPL` v12: a `u32` count, then a
+  36-byte record keyed by the other civ's id. The stance (0 neutral, 1 war, 2 cease-fire, 3
+  peace, 4 alliance) is the `u32` at record `+12`: it reads 3 in `control_fork_played.dat` and 1
+  in `war_fork_played.dat`, the same fork after a declaration of war. The rest of the record is
+  not decoded.
+- **`waronly`** (GSET index 29) reads in the client as two things: first contact sets the stance
+  to war (`0x534FF3`), and the diplomacy screen's context menu adds "Propose New Treaty" greyed
+  out (`0x4425BF`). The second does not hold in the UI: on `control_fork_played.dat`, `waronly
+  = 1`, "Propose New Treaty" and "Declare War" are both available and every treaty kind can be
+  chosen (28 October 2026). Sandbox players can propose treaties and declare war.
+
+**Measured in one Single Player session on 27 October 2026 (`server/tests/fixtures/admirals`):**
+admirals on `clean.dat` as GoodGuy, turns 110 to 112, with the turn length set to 30 days.
+Turn 111 ticked on its own between `a2` and `a3`, once, without anyone ending the turn. Every
+layout read off the client above held.
+
+- **Creating an admiral** appends an `ADML`, raises the count, and raises `SAVE+0` to its id
+  (674, then 675). The client writes it when the admiral is first assigned or saved, not while
+  the editor is open. An assault admiral's type reads 2, a scout's 3.
+- **A rule** is its checkbox byte and its section, as read. "When conquering transfer X
+  stationed military" is `TSCQ` with X as a `u32`. "Man ships of a design in orbit of a planet
+  with stationed military, if rank" is `MASH`, 22 bytes, holding the planet's object id (265,
+  GoodGuy's HQ) among values not yet told apart. "Scout systems within N units of a sun" is
+  `SCRG`, 37 bytes, ending with 260, likely the home sun's id, and N. Unticking a rule clears its byte and keeps
+  the rule. Renaming rewrites only the name.
+- **Assigning** writes the admiral's id into the ship's `DYNO`, the `u32` after the has-orders
+  byte, and moves the ships-commanded counts. Choosing "none" writes 0. A manual move order
+  keeps the ship's admiral.
+- **Deleting** removes the whole `ADML` and lowers the count; `SAVE+0` stays. The delete button
+  is greyed out while the admiral commands a ship.
+- **A turn** leaves the admiral record as it was. The `SHPR` of the colony ship under "man ships
+  fully" grew by 9 bytes in the tick, likely crew the rule brought aboard.
+- **Not measured:** an admiral on a fleet, since GoodGuy had no two ships together; the other
+  choices in each rule; and the other rule types.
+
+**Measured in one Single Player session on 27 and 28 October 2026
+(`server/tests/fixtures/diplomacy`):** diplomacy on `control_fork_played.dat` written with
+`waronly = 0` and 30-day turns, at peace, turns 180 and 181, switching between GoodGuy and BadGuy
+with `set_blob_player.py` to answer. Every capture's GSET reads `waronly = 1`, so the client
+either ignores the setting on load or the capture rewrites it.
+
+- **`TRDT`** is the proposer's and recipient's civ ids, the kind (0 trade, 1 war, 2 cease-fire,
+  4 alliance; peace is likely 3), the status (0 proposed, 1 accepted, 2 declined, 3 at war), an
+  `i32` length (-2 until accepted), an `i32` start turn (-1 until accepted), the turn proposed,
+  one deleted byte per party, then the proposer's demands and its offers.
+- **Proposing** adds a `TRTY` and raises `SAVE+0` to its id. A military alliance stores no length
+  item; the UI fixes it at 100 turns. A cease-fire also stores none; the UI says it binds for 20
+  turns and a peace for 50. Map sharing is an `SHGM` in both lists. A trade with 10 metal as a
+  lump sum is an `RSLS` (amount, resource 0 for metal); 1 credit per turn for 10 turns is a `CRPT`
+  and a `TRLE` in the same list.
+- **Withdrawing** a proposal removes the `TRTY`. **Declining** sets the status to 2.
+  **Deleting** a declined treaty sets only the deleting party's byte and keeps the record.
+- **Accepting** sets the status to 1, the length from the `TRLE` (or 20 for the cease-fire) and the
+  start turn, and at once moves the lump sum between both civs' `OWPR` (metal 630 to 625 and 630 to
+  635). Accepting the cease-fire also removed the war treaty and set both stances to 2.
+- **Declaring war** removes the active trade treaty, adds a kind 1 treaty with status 3, length
+  -1 and the turn twice, and sets both civs' stance to 1. The UI shows a civ at war in red,
+  cease-fire in yellow and peace in green; grey before contact, likely stance 0.
+- **A turn** leaves the treaties as they were.
+- **Not measured:** peace and alliance acceptance, the per-turn payments over a turn, a treaty
+  running out, and the other item types.
+
+- [x] **Admirals and diplomacy are refused by name.** `merge_orders.py` carries none of it and
+  says what it dropped: an admiral created, edited or deleted in any civ's `ADMS`; a ship or
+  fleet naming a different admiral (its orders are still taken, naming the admiral served); a
+  treaty added, changed or removed; and a stance moved in a `KNPL`. A ship leaving a fleet may
+  keep the fleet's admiral or have none. No step of the governor, tier4 or tier5 sessions trips
+  any of these.
