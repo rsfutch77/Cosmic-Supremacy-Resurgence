@@ -16,6 +16,14 @@ b1 assigned (a3), a rule added and one unticked (a4), renamed (a5), Scout
 created (a6), b1 moved to Scout (a7), b1 given a manual move (a8), b1 set to
 none (a9), Scout deleted (a10), one turn advanced (a13). Turn 111 ticked on its
 own between a2 and a3.
+
+`fixtures/diplomacy` is a session in the client on `control_fork_played.dat`
+with waronly off (27 and 28 October 2026). GoodGuy proposes an alliance (d1)
+and withdraws it (d2), proposes a trade (d3); BadGuy declines it (d4); GoodGuy
+proposes another (d5p); BadGuy accepts it (d5), deletes the declined one (d6),
+declares war (d7); a turn passes (d8); BadGuy proposes a cease-fire (d9);
+GoodGuy accepts it (d9a). d3b, d4g, d5b and d9g are the step before, reloaded
+as the other civ.
 """
 import os
 import struct
@@ -95,10 +103,23 @@ def with_admirals(blob, civ, records):
     return sp.replace_payload(blob, tree, adms, payload)
 
 
+def dip(name):
+    return sp.load_any(os.path.join(FIX, 'diplomacy', name + '.b64'))
+
+
+def trdt(record):
+    """(proposer, recipient, kind, status, length, start turn, turn proposed,
+    deleted by proposer, deleted by recipient) of a whole TRTY section."""
+    at = 8 + mo.TRTY_PARTIES_AT
+    return struct.unpack_from('<IIIIiiI', record, at) + tuple(
+        record[at + 28:at + 30])
+
+
 def trty(oid, first, second, kind=3, mine=(), theirs=()):
-    """A whole TRTY section as the writer lays one out: the parties, the
-    kind, four undecoded fields, the turn, two bytes and two item lists."""
-    body = struct.pack('<IIIIiII', first, second, kind, 0, -2, 0, 0) + b'\0\0'
+    """A whole TRTY section as the writer lays out a proposal: the parties,
+    the kind, the status, the length, the start turn, the turn proposed, the
+    deleted bytes and two item lists."""
+    body = struct.pack('<IIIIiiI', first, second, kind, 0, -2, -1, 0) + b'\0\0'
     for items in (mine, theirs):
         body += struct.pack('<I', len(items)) + b''.join(items)
     return sp.build_section(b'TRTY', 2, struct.pack('<I', oid)
@@ -380,6 +401,58 @@ def main():
           notes.get('GoodGuy'),
           ['treaty 700 (GoodGuy and BadGuy, kind 1) DROPPED, proposing a '
            'treaty or declaring war is not carried yet'])
+
+    print('the diplomacy session in the client')
+    names = {GOOD: 'GoodGuy', BAD: 'BadGuy'}
+    steps = ['d0', 'd1', 'd2', 'd3', 'd4', 'd5', 'd6', 'd7', 'd8', 'd9', 'd9a']
+    d = {n: dip(n) for n in steps + ['d3b', 'd4g', 'd5p', 'd5b', 'd9g']}
+    declined = (GOOD, BAD, 0, 2, -2, -1, 180, 0, 0)
+    gone = declined[:-1] + (1,)
+    war = (BAD, GOOD, 1, 3, -1, 180, 180, 0, 0)
+    check('each step reads its treaties',
+          [{t: trdt(r) for t, r in mo.treaties(d[n]).items()} for n in steps],
+          [{}, {679: (GOOD, BAD, 4, 0, -2, -1, 180, 0, 0)}, {},
+           {680: (GOOD, BAD, 0, 0, -2, -1, 180, 0, 0)}, {680: declined},
+           {680: declined, 681: (GOOD, BAD, 0, 1, 10, 180, 180, 0, 0)},
+           {680: gone, 681: (GOOD, BAD, 0, 1, 10, 180, 180, 0, 0)},
+           {680: gone, 682: war}, {680: gone, 682: war},
+           {680: gone, 682: war, 683: (BAD, GOOD, 2, 0, -2, -1, 181, 0, 0)},
+           {680: gone, 683: (BAD, GOOD, 2, 1, 20, 181, 181, 0, 0)}])
+    check('and each step its stances, the same both ways',
+          [(mo.stances(d[n])[(GOOD, BAD)], mo.stances(d[n])[(BAD, GOOD)])
+           for n in steps],
+          [(3, 3)] * 7 + [(1, 1)] * 3 + [(2, 2)])
+    check('a turn leaves the treaties as they were',
+          mo.treaties(d['d8']), mo.treaties(d['d7']))
+    for prev, cur, civ, want in (
+            ('d0', 'd1', GOOD, [(679, 'proposing')]),
+            ('d1', 'd2', GOOD, [(679, 'withdrawing')]),
+            ('d2', 'd3', GOOD, [(680, 'proposing')]),
+            ('d3b', 'd4', BAD, [(680, 'answering')]),
+            ('d4g', 'd5p', GOOD, [(681, 'proposing')]),
+            ('d5b', 'd5', BAD, [(681, 'answering')]),
+            ('d5', 'd6', BAD, [(680, 'answering')]),
+            ('d6', 'd7', BAD, [(681, 'withdrawing'), (682, 'proposing')]),
+            ('d7', 'd8', BAD, []),
+            ('d8', 'd9', BAD, [(683, 'proposing')]),
+            ('d9g', 'd9a', GOOD, [(682, 'withdrawing'),
+                                  (683, 'answering')])):
+        got = mo.diplomacy_refusals(d[prev], d[cur], civ, names)
+        check(f'{cur} over {prev}: '
+              f'{", ".join(f"{t} {w}" for t, w in want) or "says nothing"}',
+              [(int(g.split()[1]), g.split('DROPPED, ')[1].split()[0])
+               for g in got], want)
+    def owpr(blob):
+        glxy = next(sp.parse_blob(blob)[0].find('GLXY'))
+        return [sp.own_bytes(blob, next(next(o.find('DATA')).find('OWPR')))
+                for o in glxy.find('OWNR')]
+
+    check("d5 moves the trade's 5 metal between the civs' OWPR",
+          owpr(d['d5']) != owpr(d['d5b']))
+    out, notes = merged(d['d5b'], ('BadGuy', d['d5']))
+    check('d5 over d5b: the treaty and both OWPR are as served, named once',
+          (mo.treaties(out), owpr(out), len(notes.get('BadGuy', []))),
+          (mo.treaties(d['d5b']), owpr(d['d5b']), 1))
 
     print('one submission refused for admirals and diplomacy keeps the rest')
     both = with_treaties(with_admirals(ordered(base, ship), ME,

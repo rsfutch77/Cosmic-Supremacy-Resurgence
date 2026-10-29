@@ -1711,12 +1711,12 @@ What is left for after the beta is kept here.
   the old build if the new one fails to start. The TUF items in `5 - Release_Checklist.md` and
   Multiplayer_Checklist M12 are its acceptance list.
 
-- [ ] **Order types nobody has measured are not merged:** admirals and diplomacy proposals.
+- [x] **Order types nobody has measured are not merged:** admirals and diplomacy proposals.
   Both are refused with a note naming what was dropped (`test_admirals_diplomacy_merge.py`); until
   27 October 2026 a new admiral or treaty was ignored without one, and an admiral id in a ship's
-  `DYNO` rode along with its orders. Admirals are measured (27 October 2026) and every step made
-  in the UI is refused with a note, or taken when it is only an order. Done when diplomacy is
-  measured the same way.
+  `DYNO` rode along with its orders. Both are measured (27 and 28 October 2026) and every step
+  made in the UI is refused with a note, or taken when it is only an order. Carrying diplomacy
+  means changing both civs at once, since accepting a treaty moves its lump sums immediately.
 
 - [ ] **Governors are carried, but no governor has run through the live referee.** Measured in
   Single Player and merged in `test_governors_merge.py`. Done when a governor assigned in a live
@@ -1873,11 +1873,11 @@ treaty list), so each layout below is the writer's and reader's, checked only fo
   peace, 4 alliance) is the `u32` at record `+12`: it reads 3 in `control_fork_played.dat` and 1
   in `war_fork_played.dat`, the same fork after a declaration of war. The rest of the record is
   not decoded.
-- **`waronly`** (GSET index 29) does two things in the client: first contact sets the stance to
-  war (`0x534FF3`), and the diplomacy screen's context menu adds "Propose New Treaty" greyed out
-  (`0x4425BF`). "Declare War" is greyed while already at war. So the sandbox galaxy, `waronly = 1`,
-  cannot produce a proposal or a declaration from the UI; measuring either needs a galaxy with
-  `waronly = 0`.
+- **`waronly`** (GSET index 29) reads in the client as two things: first contact sets the stance
+  to war (`0x534FF3`), and the diplomacy screen's context menu adds "Propose New Treaty" greyed
+  out (`0x4425BF`). The second does not hold in the UI: on `control_fork_played.dat`, `waronly
+  = 1`, "Propose New Treaty" and "Declare War" are both available and every treaty kind can be
+  chosen (28 October 2026). Sandbox players can propose treaties and declare war.
 
 **Measured in one Single Player session on 27 October 2026 (`server/tests/fixtures/admirals`):**
 admirals on `clean.dat` as GoodGuy, turns 110 to 112, with the turn length set to 30 days.
@@ -1902,6 +1902,33 @@ layout read off the client above held.
   fully" grew by 9 bytes in the tick, likely crew the rule brought aboard.
 - **Not measured:** an admiral on a fleet, since GoodGuy had no two ships together; the other
   choices in each rule; and the other rule types.
+
+**Measured in one Single Player session on 27 and 28 October 2026
+(`server/tests/fixtures/diplomacy`):** diplomacy on `control_fork_played.dat` written with
+`waronly = 0` and 30-day turns, at peace, turns 180 and 181, switching between GoodGuy and BadGuy
+with `set_blob_player.py` to answer. Every capture's GSET reads `waronly = 1`, so the client
+either ignores the setting on load or the capture rewrites it.
+
+- **`TRDT`** is the proposer's and recipient's civ ids, the kind (0 trade, 1 war, 2 cease-fire,
+  4 alliance; peace is likely 3), the status (0 proposed, 1 accepted, 2 declined, 3 at war), an
+  `i32` length (-2 until accepted), an `i32` start turn (-1 until accepted), the turn proposed,
+  one deleted byte per party, then the proposer's demands and its offers.
+- **Proposing** adds a `TRTY` and raises `SAVE+0` to its id. A military alliance stores no length
+  item; the UI fixes it at 100 turns. A cease-fire also stores none; the UI says it binds for 20
+  turns and a peace for 50. Map sharing is an `SHGM` in both lists. A trade with 10 metal as a
+  lump sum is an `RSLS` (amount, resource 0 for metal); 1 credit per turn for 10 turns is a `CRPT`
+  and a `TRLE` in the same list.
+- **Withdrawing** a proposal removes the `TRTY`. **Declining** sets the status to 2.
+  **Deleting** a declined treaty sets only the deleting party's byte and keeps the record.
+- **Accepting** sets the status to 1, the length from the `TRLE` (or 20 for the cease-fire) and the
+  start turn, and at once moves the lump sum between both civs' `OWPR` (metal 630 to 625 and 630 to
+  635). Accepting the cease-fire also removed the war treaty and set both stances to 2.
+- **Declaring war** removes the active trade treaty, adds a kind 1 treaty with status 3, length
+  -1 and the turn twice, and sets both civs' stance to 1. The UI shows a civ at war in red,
+  cease-fire in yellow and peace in green; grey before contact, likely stance 0.
+- **A turn** leaves the treaties as they were.
+- **Not measured:** peace and alliance acceptance, the per-turn payments over a turn, a treaty
+  running out, and the other item types.
 
 - [x] **Admirals and diplomacy are refused by name.** `merge_orders.py` carries none of it and
   says what it dropped: an admiral created, edited or deleted in any civ's `ADMS`; a ship or

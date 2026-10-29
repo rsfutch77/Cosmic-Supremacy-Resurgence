@@ -2407,19 +2407,21 @@ def admiral_kept(dyno, allowed):
 # Treaties, proposals among them, follow the last section in SAVE: a u32
 # count, then one TRTY per treaty. The client writes every treaty it holds
 # (0x55A4D0, reached from SaveGame with no player) and reads them back into its
-# registry (0x55BD00). Read off the writer and reader; no save on hand holds
-# one:
+# registry (0x55BD00):
 #
 #     TRTY v2   u32 objectId ; TRDT
-#     TRDT v1   u32 first party ; u32 second party ; u32 kind (1 war) ;
-#               u32 ; i32 ; u32 ; u32 turn applied ; two bytes ;
-#               u32 count, items ; u32 count, items
+#     TRDT v1   u32 proposer ; u32 recipient ; u32 kind ; u32 status ;
+#               i32 length (-2 unset) ; i32 start turn (-1 unset) ;
+#               u32 turn proposed ; a deleted byte per party ;
+#               u32 count, the proposer's demands ; u32 count, its offers
 #
-# Each item is its own section: CRLS, CRPT, RSLS, RSPT, SLOS, SHBR, SHGM, SHWH,
-# TRLE. A civ's stance toward each civ it has met is in its `KNPL`: a u32
-# count, then a 36-byte record per civ, keyed by that civ's object id, the
-# stance at +12 (3 in a fork at peace, 1 in the same fork after a declaration
-# of war). Diplomacy is not carried until it is measured in the UI.
+# Kinds are 0 trade, 1 war, 2 cease-fire and 4 alliance; statuses are 0
+# proposed, 1 accepted, 2 declined and 3 at war. Each item is its own section:
+# CRLS, CRPT, RSLS, RSPT, SLOS, SHBR, SHGM, SHWH, TRLE. Accepting a treaty
+# moves its lump sums between both civs at once. A civ's stance toward each
+# civ it has met is in its `KNPL`: a u32 count, then a 36-byte record per civ,
+# keyed by that civ's object id, the stance at +12. Diplomacy is not carried
+# yet.
 TREATY_COUNT = 4
 TRTY_PARTIES_AT = 4 + 8     # in the TRTY payload, past the id and TRDT's header
 KNPL_COUNT = 4
