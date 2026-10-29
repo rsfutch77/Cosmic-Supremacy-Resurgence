@@ -741,6 +741,31 @@ def prune_autosaves(dat_dir: str, keep: int = AUTOSAVE_KEEP) -> list:
     return removed
 
 
+# A civ's activity flags in memory: Owner:712 for this turn, Owner:720 for the
+# next. A boundary that finds Owner:712 set resets the civ's Inactivity penalty.
+# Nothing in the client sets them; the referee does it in multiplayer.
+ACTIVE_FLAGS = (712, 720)
+
+
+def mark_civs_active(snap) -> list:
+    """Set every civ's activity flags in the running client. Returns the names
+    of the civs changed.
+
+    Every civ or none: a flag on one civ alone is a lasting food and
+    recruitment advantage.
+    """
+    import gamestate as gs
+    todo = [c.addr + off for c in snap.civs for off in ACTIVE_FLAGS
+            if snap.read(c.addr + off, 1) != b"\x01"]
+    for addr in todo:
+        if not gs.ev.write_bytes(snap.h, addr, b"\x01"):
+            for undo in todo:
+                gs.ev.write_bytes(snap.h, undo, b"\x00")
+            raise RuntimeError(f"could not write 0x{addr:08X}")
+    return sorted({c.civ_name for c in snap.civs
+                   for off in ACTIVE_FLAGS if c.addr + off in todo})
+
+
 def launch_mode(mode, game_root: str, galaxy_root: str,
                 galaxy: "str | None" = None) -> subprocess.Popen:
     """Start a mode's client on its galaxy, or on `galaxy` when given."""
@@ -4649,6 +4674,7 @@ class Launcher:
     def on_next_turn(self):
         import gamectl
         autosave = self._autosaves()
+        local = self.playing_now() is None
         dat_dir = os.path.join(self.data_dir, "games")
 
         def work():
@@ -4668,8 +4694,27 @@ class Launcher:
                     except gamectl.GameError as exc:
                         self.say_threadsafe(f"autosave failed, ending the turn "
                                             f"anyway: {exc}")
+                if local:
+                    self._mark_active()
                 return c.advance_turn(restore=gamectl.HOLD_LENGTH)
         self._in_background("ending the turn", work)
+
+    def _mark_active(self):
+        """Mark every civ in a local game active, so no Inactivity penalty
+        grows. A failure is reported and the turn ends anyway."""
+        if multiplayer_modules() is None:
+            self.say_threadsafe("this build cannot mark the civs active; the "
+                                "Inactivity penalty will grow")
+            return
+        try:
+            import gamestate as gs
+            marked = mark_civs_active(gs.Snapshot())
+        except Exception as exc:                                # noqa: BLE001
+            self.say_threadsafe(f"could not mark the civs active, ending the "
+                                f"turn anyway: {exc}")
+            return
+        if marked:
+            self.say_threadsafe(f"marked active: {', '.join(marked)}")
 
     def on_save(self):
         """Save in single player; send the turn now in multiplayer.

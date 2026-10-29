@@ -40,6 +40,7 @@ import inject_civ as icv
 import merge_orders
 import canonical
 import abandonment
+import activity
 import joins
 import turn_store
 from turn_store import TurnStore, open_store
@@ -64,10 +65,15 @@ def apply_orders(blob: bytes, submissions, log=print, notes=None) -> bytes:
     and named. See merge_orders.py for what "orders" currently covers.
 
     `notes` is an optional `{civ: [reason]}` filled with every refusal.
+
+    Each submitting civ is marked active for the tick, so its Inactivity
+    penalty does not grow.
     """
     if not submissions:
         return blob
-    return merge_orders.merge(blob, submissions, log=log, notes=notes)
+    merged = merge_orders.merge(blob, submissions, log=log, notes=notes)
+    return activity.mark_present(merged, [civ for civ, _sub in submissions],
+                                 log=log)
 
 
 def galaxy_id(blob: bytes):
