@@ -3,6 +3,7 @@ galaxy_tool.py: the operator ends a galaxy and starts the next one
     python galaxy_tool.py firebase://cs-resurgence list
     python galaxy_tool.py firebase://cs-resurgence close sandbox --reason "Season one is over."
     python galaxy_tool.py firebase://cs-resurgence reopen sandbox
+    python galaxy_tool.py firebase://cs-resurgence min-build sandbox 0.4.0
     python galaxy_tool.py firebase://cs-resurgence start season2 --name "Season Two" \\
         --generate fresh.b64 --player Alice --player Bob --replaces sandbox \\
         --min-build 0.2.0
@@ -16,6 +17,9 @@ development. The relay has no route for any of it.
 state through `galaxy_directory.set_status`. Nothing is deleted; turns and the
 archive still read, submissions are refused, and the launcher shows the
 reason. The current turn and its archive are read back after the write.
+
+`min-build` raises the oldest launcher build a running galaxy accepts. It
+refuses to lower one, and reads the value back after the write.
 
 `start` registers a galaxy and publishes its first turn with the roster, from
 one of:
@@ -140,6 +144,41 @@ def reopen(directory, gid: str, dry_run: bool = False, out=None) -> dict:
     directory.set_status(gid, gd.OPEN)
     print(f'reopened {gid} ({g.name})', file=out)
     return {'gid': gid, 'dry_run': False}
+
+
+def build_parts(build: str) -> tuple:
+    return tuple(int(p) for p in build.split('.'))
+
+
+def set_min_build(directory, gid: str, build: str, dry_run: bool = False,
+                  out=None) -> dict:
+    out = out or sys.stdout
+    build = (build or '').strip()
+    if not MIN_BUILD.fullmatch(build):
+        raise Refused(f'{build!r} is not a dotted number like 0.2.0, and a '
+                      f'launcher reads it as no minimum at all')
+    g = row(directory, gid)
+    store = directory.store(gid)
+    was = store.state().get(turn_store.MIN_BUILD_KEY)
+    if was and MIN_BUILD.fullmatch(was):
+        width = max(len(build_parts(was)), len(build_parts(build)))
+        old, new = (build_parts(b) + (0,) * (width - len(build_parts(b)))
+                    for b in (was, build))
+        if new < old:
+            raise Refused(f'{gid} already needs build {was}, and a minimum '
+                          f'build only rises')
+    if dry_run:
+        print(f'would set {gid} ({g.name}) to need build {build}, from '
+              f'{was or "none"}', file=out)
+        return {'gid': gid, 'dry_run': True, 'was': was}
+    store.update_state({turn_store.MIN_BUILD_KEY: build})
+    got = store.state().get(turn_store.MIN_BUILD_KEY)
+    if got != build:
+        raise Refused(f'{gid} was written to need build {build} and reads '
+                      f'back {got!r}')
+    print(f'{gid} ({g.name}) now needs build {build}, from {was or "none"}',
+          file=out)
+    return {'gid': gid, 'dry_run': False, 'was': was}
 
 
 def first_blob(players, blob_path: str = None, generate: str = None,
@@ -286,6 +325,11 @@ def main(argv=None, out=None) -> int:
     r = sub.add_parser('reopen', help='undo a close')
     r.add_argument('galaxy')
     r.add_argument('--dry-run', action='store_true')
+    m = sub.add_parser('min-build', help='raise the oldest launcher build a '
+                                         'galaxy accepts')
+    m.add_argument('galaxy')
+    m.add_argument('build', help='a dotted number, such as 0.4.0')
+    m.add_argument('--dry-run', action='store_true')
     s = sub.add_parser('start', help='register a galaxy and publish turn one')
     s.add_argument('galaxy')
     s.add_argument('--name', help='what the Galaxies page calls it')
@@ -318,6 +362,10 @@ def main(argv=None, out=None) -> int:
             return 0
         if a.cmd == 'reopen':
             reopen(directory, a.galaxy, dry_run=a.dry_run, out=out)
+            return 0
+        if a.cmd == 'min-build':
+            set_min_build(directory, a.galaxy, a.build, dry_run=a.dry_run,
+                          out=out)
             return 0
         start(directory, a.galaxy, a.name, a.player, blob_path=a.blob,
               generate=a.generate, turn_seconds=a.turn_seconds, warn=a.warn,
