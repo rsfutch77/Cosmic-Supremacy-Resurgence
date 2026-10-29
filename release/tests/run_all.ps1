@@ -32,7 +32,9 @@
       test_turn_clock_hold Single Player turns happen only on Next Turn:
                            the engine's own clock is held and re-held
                            after each boundary. No game.
-      test_log_send        Sending the launcher's log and the held-seat box,
+      test_mark_active     Single Player's Next Turn marks every civ active,
+                           so no Inactivity penalty grows. No game.
+      test_log_send       Sending the launcher's log and the held-seat box,
                            against a local stand-in relay. No game.
       test_port_and_support
                            What holds port 8888, read only, and the player
@@ -91,6 +93,7 @@ Invoke-Test 'test_minimised_poll.py'
 Invoke-Test 'test_tutorial_patch.py'
 Invoke-Test 'test_continue.py'
 Invoke-Test 'test_turn_clock_hold.py'
+Invoke-Test 'test_mark_active.py'
 Invoke-Test 'test_log_send.py'
 Invoke-Test 'test_port_and_support.py'
 foreach ($mode in @('tutorial', 'demo', 'testbed')) {

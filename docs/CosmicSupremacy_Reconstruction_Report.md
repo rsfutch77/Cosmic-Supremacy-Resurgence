@@ -680,6 +680,41 @@ against that civ, and read the newcomer's tab. If the items come across, a playe
 somebody else's battles happened, which is a smaller version of the `EXSY` map leak and the same
 class of bug. If they do not, something clears it and that something is worth naming.
 
+### `SERV`, the Inactivity penalty and what keeps it at zero (October 2026)
+
+    SERV v5   u32  Owner:652
+              u32  baseline, Owner:716, the turn the civ was last seen active
+              u8   flag, Owner:712, set while the civ is active this turn
+
+Read at `0x00545E14` and written at `0x0053C2E5`. `Owner:720`, the pending
+flag `set_activity.py` writes in memory, is not saved.
+
+The food tooltip's `Inactivity: -N%` grows a point a turn from 72 turns after
+the baseline. At each boundary `0x00543B90` sets the baseline to the turn
+before when the flag is set, then copies `Owner:720` into the flag. Nothing in
+the client sets `Owner:720`, so a referee that loads a blob and ticks once
+never refreshes a baseline, and every civ in a served galaxy decays from turn
+73.
+
+**The referee sets the flag for each civ whose submission it took**
+(`server/activity.py`, from `referee.apply_orders`). CONFIRMED on a three-civ
+galaxy at turn 11 with one civ flagged: after the tick that civ read baseline 11
+and flag 0, and the other two read 0 and 0. A civ that stops playing decays from
+72 turns after its last submission.
+
+**Single Player's Next Turn sets both flags in memory for every civ**
+(`launcher.mark_civs_active`). The engine copies `Owner:720` forward, so the
+flags stay set. CONFIRMED on the Single Player galaxy over three turns: both
+civs' baselines read 0, 1, 2. The snapshot this takes adds about a second to
+each Next Turn.
+
+**The boundary skips any civ with `Owner:4` = 0** (`cmp [esi+0x38], 0` at
+`0x00543C28`), the same civ that never ticks research. A flag set on one is
+neither applied nor cleared.
+
+`python server/activity.py <blob>` prints every civ's baseline, flag and
+penalty.
+
 ### `EXSY`, a civ's explored systems and what it calls them
 
     +0   u32  record count
