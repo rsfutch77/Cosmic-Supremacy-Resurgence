@@ -934,7 +934,7 @@ Two things make this easy to get wrong, and both cost this project a false concl
 * **At LOAD the live value at `0x0080AA08` reads 3600 regardless of the config.** Reading it there and stopping says the setting does nothing. The refresh runs at a turn BOUNDARY, and on a 3600-second galaxy the first boundary is an hour away, so nothing can be observed without driving turns first.
 * **Below 60 the value never appears at all.** Two sites in the binary clamp it, `cmp esi, 60 ; mov [0x0080AA08], esi ; jg skip ; mov [0x0080AA08], 60`, so a galaxy configured at 10 presents as 60 every turn, which reads like the engine ignoring the config rather than honouring it and rounding up.
 
-* **The in-game countdown is tied to neither the config nor the live value.** A blob carrying `turnlength = 43200` came up with `0x0080AA08` reading 3600 and the UI showing 45 minutes. Nothing was found that reads back what the display is derived from, so a turn clock that has to be trusted belongs outside the client.
+- [ ] **The in-game countdown disagrees with the launcher.** It is tied to neither the config nor the live value: a blob carrying `turnlength = 43200` came up with `0x0080AA08` reading 3600 and the UI showing 45 minutes. Nothing was found that reads back what the display is derived from, so the launcher's deadline is the only clock to trust. Either find what the UI reads and feed it the server's deadline, or hide or replace the in-game countdown. Done when the in-game clock matches the launcher's deadline for a whole turn, or no longer shows.
 
 **60 seconds is therefore the engine's real minimum turn**, which is worth knowing independently: the original game had no reason to support anything faster, and a training loop does. Lowering it is one byte per site (`3c` → `01`), keeping the clamp and moving its floor.
 
@@ -1756,6 +1756,14 @@ What is left for after the beta is kept here.
 - [ ] **Governors are carried, but no governor has run through the live referee.** Measured in
   Single Player and merged in `test_governors_merge.py`. Done when a governor assigned in a live
   galaxy is still assigned after the tick and its rule has acted on the planet.
+
+- [ ] **Play stays live on the galaxies page while a turn is processing.** `row_action` offers
+  Play on every seated row whatever the turn loop is doing, and the guard is only in
+  `_take_turn_loop` once pressed: Play on the processing galaxy asks the loop to reopen the
+  game, and Play on another galaxy with the game closed switches without asking, holding the
+  window for up to 20 s in `stop_multiplayer`. Done when, from orders sent until the next turn
+  opens, the followed galaxy's Play and every other row's Play are greyed out with a line saying
+  the turn is being processed.
 
 **Measured in one Single Player session at turn 0 (October 2026,
 `server/tests/fixtures/tier4`):**
