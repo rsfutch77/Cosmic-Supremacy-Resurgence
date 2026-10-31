@@ -6,7 +6,8 @@ test_ai_history_carry.py: a loop run one pass per process keeps its history
 `bot_seats` builds a fresh `ai.Loop` for every turn. Each case here builds a
 fresh `sensors.History` per pass the same way and checks what the next pass
 reads: the food delta that frees farmers, the planets it distrusts, and the
-controllers a rule keeps between passes.
+controllers a rule keeps between passes. The food delta also has to tell a
+birth, which spends the store, from starving.
 
 The galaxy is a stand-in, so no client is needed.
 """
@@ -38,8 +39,9 @@ class Sun:
 
 
 class Planet:
-    def __init__(self, pid, food, pop):
+    def __init__(self, pid, food, pop=10, cap=1480):
         self.id, self.food, self.population = pid, food, [0] * pop
+        self.food_cap = cap
         self.build_progress, self.military = 0, 0
 
     def u32(self, _off):
@@ -59,9 +61,11 @@ class Snap:
     SUNS = [Sun(1, (0.0, 0.0, 0.0)), Sun(2, (500.0, 0.0, 0.0))]
 
     def __init__(self, turn, food):
-        """`food` maps planet id to its food store this turn."""
+        """`food` maps planet id to its food store this turn, or to
+        (food, population, store size)."""
         self.turn, self.suns = turn, self.SUNS
-        self.planets = [Planet(pid, f, 10) for pid, f in sorted(food.items())]
+        self.planets = [Planet(pid, *(f if isinstance(f, tuple) else (f,)))
+                        for pid, f in sorted(food.items())]
 
     def owned_planets(self, _civ):
         return self.planets
@@ -209,6 +213,32 @@ def case_one_process_unchanged():
     check('delta in process', hist.food_delta(7), 4.0)
 
 
+def case_birth_is_not_starving():
+    print('a birth puts the store size back into the food delta')
+    fresh_dir()
+    # Beta's #187 at turns 83 and 84: 17 citizens, store size 2600.
+    one_pass(83, {187: (2241, 17, 2600), 9: (500, 10, 1480),
+                  10: (500, 10, 1480)})
+    _h, seen = one_pass(84, {187: (22, 18, 2600), 9: (400, 10, 1480),
+                             10: (700, 11, 1480)})
+    check('birth reads as income', seen[187], 381.0)
+    check('no birth, food falling, still starving', seen[9], -100.0)
+    check('a citizen with food rising is not a birth', seen[10], 200.0)
+
+
+def case_birth_against_reading_without_size():
+    print('a reading saved before the store size was kept uses the size now')
+    fresh_dir()
+    hist, _ = one_pass(83, {187: (2241, 17, 2600)})
+    with open(hist._path) as f:
+        data = json.load(f)
+    del data['carry']['end']['prev']['planets']['187']['cap']
+    with open(hist._path, 'w') as f:
+        json.dump(data, f)
+    _h, seen = one_pass(84, {187: (22, 18, 2600)})
+    check('birth reads as income', seen[187], 381.0)
+
+
 def main():
     case_delta_across_processes()
     case_acted_planet_is_stale()
@@ -219,6 +249,8 @@ def main():
     case_unreadable_carry()
     case_no_persist_writes_nothing()
     case_one_process_unchanged()
+    case_birth_is_not_starving()
+    case_birth_against_reading_without_size()
     print(f'\n{len(PASS)} passed, {len(FAIL)} failed')
     return 1 if FAIL else 0
 

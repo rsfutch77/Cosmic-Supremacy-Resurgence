@@ -196,6 +196,8 @@ class History:
         cur = {
             "turn": snap.turn,
             "planets": {p.id: {"food": p.food or 0,
+                               # The store's size, which a birth spends.
+                               "cap": p.food_cap or 0,
                                "pop": len(p.population),
                                "progress": p.build_progress or 0,
                                # Planet:124, the military food store. A unit
@@ -287,7 +289,8 @@ class History:
         d = self._cur["turn"] - p["turn"]
         return d if d > 0 else None
 
-    def _delta(self, planet_id, key):
+    def _pair(self, planet_id):
+        """(last reading, this reading, turns between) for a planet, or None."""
         p = getattr(self, "_prev_for_pass", None)
         n = self.turns
         if not p or not n or planet_id in self._stale:
@@ -295,11 +298,31 @@ class History:
         a, b = p["planets"].get(planet_id), self._cur["planets"].get(planet_id)
         if a is None or b is None:
             return None                # newly founded, or lost
+        return a, b, n
+
+    def _delta(self, planet_id, key):
+        pair = self._pair(planet_id)
+        if pair is None:
+            return None
+        a, b, n = pair
         return (b[key] - a[key]) / n
 
     def food_delta(self, planet_id):
-        """Food gained per turn. Negative means the colony is starving."""
-        return self._delta(planet_id, "food")
+        """Food gained per turn. Negative means the colony is starving.
+
+        A birth empties the store by its size, so each citizen born puts that
+        size back. Food that rose is left alone, since a citizen can also
+        arrive without being born.
+        """
+        pair = self._pair(planet_id)
+        if pair is None:
+            return None
+        a, b, n = pair
+        food, born = b["food"] - a["food"], b["pop"] - a["pop"]
+        if born > 0 and food < 0:
+            # A reading saved before the store size was kept falls back to now.
+            food += born * (a.get("cap") or b.get("cap") or 0)
+        return food / n
 
     def pop_growth(self, planet_id):
         return self._delta(planet_id, "pop")
