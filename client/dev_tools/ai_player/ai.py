@@ -320,8 +320,8 @@ class Loop:
                 rule_times[name] = time.time() - rule_started
         # Record this pass's spending so next turn's income reading excludes it.
         self.history.note_cash_effect(act.cash_effect)
-        # Intel read by the rules this pass.
-        self.history.save()
+        # Intel read by the rules this pass, and the state the next pass resumes.
+        self.history.end_pass()
         self.passes += 1
         self.log(f"    {act.summary()}")
         if self.remote is not None:
