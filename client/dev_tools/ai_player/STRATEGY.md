@@ -367,6 +367,21 @@ Only miners produce resources (plus a flat trait-41 metal bonus); a planet has e
 deposit, and a resource with no planet of ours is bought (R-XPL-10). One miner on a base-10
 metal world makes 10 a turn, more than a banker's income at the market's buy price.
 
+**R-XPL-12, Confirm the setup prompts**, IMPLEMENTED in `server/dev_tools/bot_setup.py`, run by `bot_seats`
+```
+WHEN   the served turn still offers the civ-trait prompt (Owner:360 clear)
+THEN   spend civilization_changes on production output, then food output,
+       each change where the next click adds most; science only once both are full
+WHEN   it still offers the homeworld prompt (Owner:359 clear)
+THEN   spend homeworld_changes alternating the homeworld's production and food
+       rates, production first; space takes no clicks and rises to 350
+USES   an edit of the captured save, before it is submitted
+```
+The prompts are dialogs 218 and 210, offered every turn until each is confirmed once. The
+bot writes what the dialog's OK writes, and the referee carries it only as the dialog could
+have made it (`merge_orders.setup_orders`). At the shipped budgets of 5 and 30 this is
+production +21%, food +15%, and homeworld rates food 47, production 45, science 40.
+
 **R-XPL-03, Wealth mode**, IMPLEMENTED in `exploit.run_wealth`
 ```
 WHEN   a planet is idle and R-XPL-02 has nothing worth building there

@@ -310,8 +310,9 @@ def ai_pass_marker(state_dir: str, civ: str):
 def reset_ai_state(state_dir: str, civ: str, keep_discovery: bool = False):
     """Forget what the opponent learned in an earlier game. Returns what it removed.
 
-    `discovered_<galaxy>_<civ>.json` is its fog-of-war map. Single Player
-    always launches the same galaxy, so the key repeats across games.
+    `discovered_<galaxy>_<civ>.json` is its fog-of-war map and its last pass's
+    readings. Single Player always launches the same galaxy, so the key
+    repeats across games. A Load of an earlier turn carries no readings.
     `pass_<civ>.json` is the last turn it finished deciding, not keyed by
     galaxy, and the readiness gate opens at or past it.
 
