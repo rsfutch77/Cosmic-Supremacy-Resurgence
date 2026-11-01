@@ -60,6 +60,7 @@ main { flex: 1; min-width: 0; padding: 10px 8px; display: flex; flex-direction: 
 .status { position: absolute; left: 120px; right: 120px; top: 9px; line-height: 14px; display: flex; justify-content: center; align-items: center; gap: 18px;
           color: #0a1a33; font-size: 11px; white-space: nowrap; }
 .status { overflow: hidden; }
+.stlink { color: #0a1a33; font-weight: bold; text-decoration: underline; cursor: pointer; }
 .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 5px; vertical-align: -1px; }
 
 /* Section header: the game's light-blue bar with grilles at both ends. Its light

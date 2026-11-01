@@ -116,6 +116,9 @@ class Bridge:
     def send_log(self):
         self._post(lambda app: app.offer_log())
 
+    def update(self):
+        self._post(lambda app: app.on_update())
+
     def log_refs(self):
         self._post(lambda app: app.show_log_refs())
 
@@ -335,6 +338,10 @@ class WebView:
     def show_build(self, text: str) -> None:
         if self._changed("build", text):
             self._set(build=text)
+
+    def show_update(self, text: str) -> None:
+        if self._changed("update", text or ""):
+            self._set(update=text or "")
 
     def set_status(self, text: str, colour: str) -> None:
         self._set(status={"text": text,

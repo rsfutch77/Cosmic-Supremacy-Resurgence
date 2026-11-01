@@ -246,6 +246,7 @@ window.ui = {
     if (s.name !== undefined) $("name-btn").textContent = s.name || "set name";
     if (s.account !== undefined) $("account-btn").textContent = s.account || "log in";
     if (s.build !== undefined) $("st-build").textContent = s.build;
+    if (s.update !== undefined) { $("st-update").textContent = s.update; show("st-update", !!s.update); }
     if (s.status) {
       $("st-text").textContent = s.status.text;
       $("st-dot").style.background = s.status.colour;
@@ -298,7 +299,7 @@ window.ui = {
 // ── wiring ──
 
 for (const b of document.querySelectorAll("[data-page]")) b.addEventListener("click", () => call("page", b.dataset.page));
-for (const b of document.querySelectorAll("[data-act]")) b.addEventListener("click", () => call(b.dataset.act));
+for (const b of document.querySelectorAll("[data-act]")) b.addEventListener("click", (e) => { e.preventDefault(); call(b.dataset.act); });
 
 const skinReady = buildSkin().catch((e) => console.error(e));
 window.addEventListener("pywebviewready", () => skinReady.then(() => call("ready")));

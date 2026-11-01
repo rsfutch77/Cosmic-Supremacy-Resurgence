@@ -982,6 +982,39 @@ UNSTAMPED_MARK = "unstamped"    # packaged, but the stamp did not reach the bund
 # Where a launcher that is too old is told to go.
 UPDATE_URL = "https://cosmicresurgence.com/download_client.php.html"
 
+# How often a running launcher looks for a newer release, after the first look
+# shortly after it starts.
+UPDATE_CHECK_FIRST_MS = 15_000
+UPDATE_CHECK_EVERY_MS = 6 * 3600 * 1000
+# A checkout may name a stand-in release feed and download prefix.
+UPDATE_FEED_ENV = "CS_UPDATE_FEED"
+UPDATE_DOWNLOADS_ENV = "CS_UPDATE_DOWNLOADS"
+
+
+def update_source() -> "tuple[str, str, bool]":
+    """The release feed and download prefix this build trusts, and whether
+    they are a test's.
+
+    A release build trusts updater.FEED. A test build carries its own in
+    build.json, written by build.ps1 -UpdateFeed; a checkout may name one in
+    the environment. A packaged build never reads the environment.
+    """
+    import updater
+    info = build_info()
+    feed, downloads = info.get("update_feed"), info.get("update_downloads")
+    if not getattr(sys, "frozen", False):
+        feed = os.environ.get(UPDATE_FEED_ENV) or feed
+        downloads = os.environ.get(UPDATE_DOWNLOADS_ENV) or downloads
+    if isinstance(feed, str) and isinstance(downloads, str) and feed and downloads:
+        return feed, downloads, True
+    return updater.FEED, updater.DOWNLOADS, False
+
+
+def can_self_update() -> bool:
+    """Only a packaged launcher replaces its own folder. A checkout's folder is
+    release\\ in the repository, so a checkout only looks."""
+    return bool(getattr(sys, "frozen", False))
+
 # The galaxy state key for its minimum build. A galaxy without one is played
 # by any build.
 MIN_BUILD_KEY = "min_build"
@@ -2931,9 +2964,15 @@ class Launcher:
         # startup still records where the game was looked for.
         self._logfh = None
         self._pending: "list[str]" = []
+        # A newer release that is downloaded, staged and verified, as
+        # (Release, staged folder), and whether a look for one is in flight.
+        self.update_ready = None
+        self.update_busy = False
 
         view.build(self)
         self._boot()
+        self._update_boot()
+        view.after(UPDATE_CHECK_FIRST_MS, self._update_tick)
         view.after(120, self._drain)
         view.after(1000, self._watch_game)
 
@@ -3873,7 +3912,7 @@ class Launcher:
             if problem:
                 self.say(f"join: build {build_id()} is below {g.id}'s minimum "
                          f"{state.get(MIN_BUILD_KEY)!r}")
-                self.warn(problem)
+                self._below_minimum(problem, state.get(MIN_BUILD_KEY))
                 return
             # The listing may predate the galaxy closing.
             problem = closed_problem(state)
@@ -4101,7 +4140,7 @@ class Launcher:
             if problem:
                 self.say(f"multiplayer: build {build_id()} is below this "
                          f"galaxy's minimum {state.get(MIN_BUILD_KEY)!r}")
-                self.warn(problem)
+                self._below_minimum(problem, state.get(MIN_BUILD_KEY))
                 return
             # Also ahead of the roster: a closed galaxy refuses submissions.
             problem = closed_problem(state)
@@ -4991,14 +5030,133 @@ class Launcher:
                     "until it finishes, or your orders may not arrive.\n\n"
                     "Close anyway?"):
                 return
-        self.stop_multiplayer("the launcher is closing")
-        self.stop_ai("the launcher is closing")
+        self._shut_down("the launcher is closing")
+
+    def _shut_down(self, why: str):
+        self.stop_multiplayer(why)
+        self.stop_ai(why)
         for srv in self.servers:
             try:
                 srv.shutdown()
             except Exception:
                 pass
         self.view.close()
+
+    def _update_boot(self):
+        """Tell the helper that started this launcher it is up, or report an
+        update that was put back, and clear what an update left behind."""
+        if not can_self_update():
+            return
+        import updater
+        here = app_dir()
+        if len(sys.argv) == 3 and sys.argv[1] == "--updated":
+            updater.confirm_started(here)
+            self.say(f"update: this launcher is now build {build_id()}")
+            helper = int(sys.argv[2]) if sys.argv[2].isdigit() else 0
+
+            def tidy():
+                updater.wait_for_exit(helper, updater.START_WAIT + 30)
+                updater.clean(here)
+            threading.Thread(target=tidy, daemon=True, name="update-clean").start()
+            return
+        why = updater.take_failure(here)
+        updater.clean(here)
+        if why:
+            self.say(f"update: put back the old build ({why})")
+            self.warn("The update could not be installed, so this launcher is "
+                      f"still build {build_id()}: {why}.\n\nThe current "
+                      f"release is at\n{UPDATE_URL}")
+
+    def _update_tick(self):
+        """Look for a newer release, off the UI thread. A packaged launcher
+        also downloads, stages and verifies it."""
+        self.view.after(UPDATE_CHECK_EVERY_MS, self._update_tick)
+        if self.update_busy or self.update_ready is not None:
+            return
+        self.update_busy = True
+        feed, downloads, test = update_source()
+        current, here, install = build_id(), app_dir(), can_self_update()
+
+        def work():
+            import updater
+            found, err = None, None
+            try:
+                if install:
+                    found = updater.prepare(here, current, feed, downloads)
+                else:
+                    release = updater.check(current, feed, downloads)
+                    found = (release, None) if release else None
+            except updater.UpdateError as exc:
+                err = str(exc)
+            except Exception as exc:
+                err = f"the update check failed ({exc!r})"
+            self.msgs.put(("__update__", found, err, feed if test else None))
+        threading.Thread(target=work, daemon=True, name="update").start()
+
+    def _on_update_checked(self, found, err, test_feed):
+        self.update_busy = False
+        where = f" (test feed {test_feed})" if test_feed else ""
+        if err:
+            self.say(f"update: not updated, {err}{where}")
+            return
+        if found is None:
+            self.say(f"update: no release newer than {build_id()}{where}")
+            return
+        release, staged = found
+        if staged is None:
+            self.say(f"update: v{release.version} is out{where}; a checkout "
+                     "does not install it")
+            return
+        self.update_ready = found
+        self.say(f"update: v{release.version} is downloaded and its "
+                 f"signatures checked{where}")
+        self.view.show_update(f"Update to v{release.version}")
+
+    def _below_minimum(self, problem: str, minimum):
+        """A galaxy needs a newer build: offer the downloaded one if it is new
+        enough, or say where to get one."""
+        ready = self.update_ready
+        if ready is None or build_is_below(ready[0].version, str(minimum)):
+            self.warn(problem)
+            return
+        if self.view.ask_ok_cancel(
+                "Update needed",
+                f"This galaxy needs build {minimum} or newer, and this "
+                f"launcher is build {build_id()}.\n\nv{ready[0].version} is "
+                "downloaded and checked. Update now?"):
+            self.on_update(confirm=False)
+
+    def on_update(self, confirm: bool = True):
+        """Restart into the downloaded release, when nothing would be lost."""
+        if self.update_ready is None:
+            return
+        release, staged = self.update_ready
+        if running_clients(self.client_exes):
+            self.warn("Close the game first.\n\nThe update replaces the game's "
+                      "files, so it waits until the game is closed.")
+            return
+        if self.mp_thread is not None and self.mp_thread.is_alive():
+            self._watch_mp_client(False)
+            if self.mp_sending:
+                self.warn("Your turn is still being sent.\n\nUpdate once it "
+                          "has gone.")
+                return
+        if confirm and not self.view.ask_ok_cancel(
+                "Update",
+                f"Restart into v{release.version}?\n\nThe launcher closes and "
+                "opens again on its own. The data folder, with your login and "
+                "your Single Player games, stays as it is."):
+            return
+        import updater
+        self.say(f"update: restarting into v{release.version}")
+        try:
+            updater.hand_off(app_dir(), staged)
+        except OSError as exc:
+            self.say(f"update: could not start the new launcher ({exc})")
+            self.warn(f"The update could not start ({exc}).\n\nThe current "
+                      f"release is at\n{UPDATE_URL}")
+            return
+        self._shut_down("the launcher is updating")
 
     def say(self, msg: str):
         self.view.append_log(msg)
@@ -5168,6 +5326,8 @@ class Launcher:
                 elif isinstance(msg, tuple) and msg and msg[0] == "__mp_played__":
                     _tag, gid, turn = msg
                     self._on_mp_played(gid, turn)
+                elif isinstance(msg, tuple) and msg and msg[0] == "__update__":
+                    self._on_update_checked(*msg[1:])
                 elif isinstance(msg, tuple) and msg and msg[0] == "__mp_refused__":
                     self.warn(msg[1])
                 elif isinstance(msg, tuple) and msg and msg[0] == "__log_offer__":
@@ -5215,6 +5375,15 @@ def main() -> int:
     # web_view imports this module by name. Run as a script it is __main__,
     # and without this the import would load a second copy beside it.
     sys.modules.setdefault("launcher", sys.modules[__name__])
+    # The updater asks a staged launcher for its build, and starts it to
+    # finish the swap. Neither opens a window.
+    if len(sys.argv) == 3 and sys.argv[1] == "--print-build":
+        with open(sys.argv[2], "w", encoding="utf-8") as fh:
+            json.dump(build_info(), fh)
+        return 0
+    if len(sys.argv) == 4 and sys.argv[1] == "--finish-update":
+        import updater
+        return updater.finish_main(sys.argv[2:])
     with open(bundled("manifest.json"), "r", encoding="utf-8") as fh:
         cfg = json.load(fh)
     set_app_user_model_id()     # must precede the first window

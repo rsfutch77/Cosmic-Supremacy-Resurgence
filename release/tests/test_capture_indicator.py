@@ -540,6 +540,9 @@ class _Quit(_Close):
     def _watch_mp_client(self, up):
         L.Launcher._watch_mp_client(self, up)
 
+    def _shut_down(self, why):
+        L.Launcher._shut_down(self, why)
+
     def ask_ok_cancel(self, title, msg):
         self.asked.append(msg)
         return self.answer

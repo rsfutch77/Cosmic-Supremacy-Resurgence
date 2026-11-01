@@ -64,11 +64,15 @@ def git_commit(repo: str = REPO) -> "str | None":
         return None
 
 
-def stamp(version: "str | None", out_dir: str) -> str:
+def stamp(version: "str | None", out_dir: str,
+          update_feed: "str | None" = None,
+          update_downloads: "str | None" = None) -> str:
     """Write build.json into `out_dir` and return its path.
 
     `version` is what the packaging step decided. None falls back to the
-    manifest, as build.ps1 does for -Version.
+    manifest, as build.ps1 does for -Version. A test build names the release
+    feed it updates from, and the prefix its zips are downloaded from; a
+    release build names neither.
     """
     info = {
         "build": (version or "").strip() or manifest_version(),
@@ -79,6 +83,11 @@ def stamp(version: "str | None", out_dir: str) -> str:
     commit = git_commit()
     if commit:
         info["commit"] = commit
+    if bool(update_feed) != bool(update_downloads):
+        raise ValueError("a test feed needs both a feed and a download prefix")
+    if update_feed:
+        info["update_feed"] = update_feed
+        info["update_downloads"] = update_downloads
 
     os.makedirs(out_dir, exist_ok=True)
     path = os.path.join(out_dir, BUILD_FILE)
@@ -91,7 +100,9 @@ def stamp(version: "str | None", out_dir: str) -> str:
 def main(argv) -> int:
     version = argv[1] if len(argv) > 1 else None
     out_dir = argv[2] if len(argv) > 2 else os.path.join(HERE, "build")
-    path = stamp(version, out_dir)
+    feed = argv[3] if len(argv) > 3 else None
+    downloads = argv[4] if len(argv) > 4 else None
+    path = stamp(version, out_dir, feed, downloads)
     print(path)
     with open(path, encoding="utf-8") as fh:
         print(fh.read().strip())

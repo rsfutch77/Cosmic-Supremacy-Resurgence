@@ -73,6 +73,15 @@
     the signing step with a self-signed certificate; a release is not built
     with it.
 
+.PARAMETER UpdateFeed
+    A test build's release feed: a URL answering like GitHub's latest-release
+    API. Needs -UpdateDownloads. Written into build.json, so the frozen
+    launcher updates from it and from nowhere else. A release is not built
+    with it.
+
+.PARAMETER UpdateDownloads
+    The prefix every zip a test feed offers is downloaded from.
+
 .EXAMPLE
     powershell -ExecutionPolicy Bypass -File .\release\build.ps1
 
@@ -96,7 +105,9 @@ param(
                                                  ForEach-Object { $_.Trim() } | Where-Object { $_ })
                                            } else { @('InteractiveBrowserCredential') }),
     [switch]$SkipGameExecutables,
-    [switch]$SignAllowUntrusted
+    [switch]$SignAllowUntrusted,
+    [string]$UpdateFeed,
+    [string]$UpdateDownloads
 )
 
 $ErrorActionPreference = 'Stop'
@@ -710,11 +721,15 @@ Write-Step "Freezing launcher (PyInstaller)"
 
 # The build name is decided here. stamp_build writes it to build.json, which
 # launcher.build_info() reads back through bundled().
-& $VenvPy (Join-Path $ReleaseDir 'stamp_build.py') $Version $BuildDir | Out-Null
+if ([bool]$UpdateFeed -ne [bool]$UpdateDownloads) { throw '-UpdateFeed and -UpdateDownloads go together' }
+$stampArgs = @($Version, $BuildDir)
+if ($UpdateFeed) { $stampArgs += @($UpdateFeed, $UpdateDownloads) }
+& $VenvPy (Join-Path $ReleaseDir 'stamp_build.py') @stampArgs | Out-Null
 if ($LASTEXITCODE -ne 0) { throw 'stamp_build failed' }
 $BuildStamp = Join-Path $BuildDir 'build.json'
 if (-not (Test-Path $BuildStamp)) { throw "stamp_build reported success but $BuildStamp is missing" }
 Write-Ok "stamped build $Version"
+if ($UpdateFeed) { Write-Warn2 "TEST BUILD: updates only from $UpdateFeed. Never publish it." }
 
 $piArgs = @(
     '--noconfirm', '--onefile', '--windowed',
@@ -736,6 +751,8 @@ $piArgs = @(
     '--hidden-import', 'cs_server',
     # gamectl backs Next Turn / Save / Load and is imported inside the handlers.
     '--hidden-import', 'gamectl',
+    # updater finds, checks and installs a newer release.
+    '--hidden-import', 'updater',
     # The multiplayer turn machinery, every module reached from inside a
     # function once a galaxy is configured.
     '--paths', $ServerTools,
