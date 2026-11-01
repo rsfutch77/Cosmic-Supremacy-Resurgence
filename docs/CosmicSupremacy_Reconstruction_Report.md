@@ -1739,12 +1739,17 @@ What is left for after the beta is kept here.
   moves the seats by hand. Done when the relay moves them itself, on proof of both the guest's
   and the account's tokens.
 
-- [ ] **The launcher does not update itself.** A launcher below a galaxy's `min_build` links the
-  release page, and the player unzips the new build by hand, keeping `data`. Done when the
-  launcher finds a newer release on its own, downloads it, checks the signature and SHA-256,
-  replaces itself in its folder without elevation and without touching `data`, and goes back to
-  the old build if the new one fails to start. The TUF items in `5 - Release_Checklist.md` and
-  Multiplayer_Checklist M12 are its acceptance list.
+- [x] **The launcher updates itself** (`release/updater.py`, `test_updater.py`). It reads the
+  latest release on GitHub, downloads its one zip within the listed size, checks the SHA-256
+  against both the asset digest and the release notes, and requires every `.exe` and `.dll` to
+  carry a valid Artifact Signing signature with the pinned subject, issuer and identity EKU. The
+  staged launcher must report the release's build, newer than the running one. Update waits for
+  the game to close, swaps every entry but `data` and `update` into `update\previous`, and puts
+  the old build back when the new one does not report its window within 90 s. A signed 0.5.0
+  replaced itself with 0.5.0.1 from a local feed on 1 November 2026, keeping the login, and
+  refused an unsigned build; the no-start rollback is covered only by `test_updater.py`. A
+  launcher built without `-UpdateFeed` reads only the real release page. The TUF items in
+  `5 - Release_Checklist.md` and Multiplayer_Checklist M12 are its acceptance list.
 
 - [x] **Order types nobody has measured are not merged:** admirals and diplomacy proposals.
   Both are refused with a note naming what was dropped (`test_admirals_diplomacy_merge.py`); until
@@ -1752,6 +1757,16 @@ What is left for after the beta is kept here.
   `DYNO` rode along with its orders. Both are measured (27 and 28 October 2026) and every step
   made in the UI is refused with a note, or taken when it is only an order. Carrying diplomacy
   means changing both civs at once, since accepting a treaty moves its lump sums immediately.
+
+- [ ] **Admirals and diplomacy are carried, but none has run through the live referee.**
+  `merge_orders.py` carries a civ's own admirals and their ships, and each diplomacy step the
+  client was seen to take, applying an acceptance's lump sums and both stances itself; every
+  step of the admiral and diplomacy sessions merges to what the client wrote
+  (`test_admirals_diplomacy_merge.py`). Still refused: an admiral on a fleet. Built on the UI's
+  word, not a save: a peace binding for 50 turns and an alliance for 100, a credit lump sum as
+  one `u32`, and no war while a cease-fire or peace binds. Done when an admiral created, given rules and assigned to ships in a live galaxy is still
+  assigned after the tick and has acted on its ships, and a treaty proposed by one player and
+  accepted by the other is in force after the tick with its lump sums moved once.
 
 - [ ] **Governors are carried, but no governor has run through the live referee.** Measured in
   Single Player and merged in `test_governors_merge.py`. Done when a governor assigned in a live
@@ -1973,9 +1988,13 @@ either ignores the setting on load or the capture rewrites it.
 - **Not measured:** peace and alliance acceptance, the per-turn payments over a turn, a treaty
   running out, and the other item types.
 
-- [x] **Admirals and diplomacy are refused by name.** `merge_orders.py` carries none of it and
-  says what it dropped: an admiral created, edited or deleted in any civ's `ADMS`; a ship or
-  fleet naming a different admiral (its orders are still taken, naming the admiral served); a
-  treaty added, changed or removed; and a stance moved in a `KNPL`. A ship leaving a fleet may
-  keep the fleet's admiral or have none. No step of the governor, tier4 or tier5 sessions trips
-  any of these.
+- [x] **Admirals and diplomacy are carried as measured** (`merge_orders.py`,
+  `test_admirals_diplomacy_merge.py`). An admiral is judged like a governor: a new id, a printable
+  name, a type below 4 and only the 24 rule tags the reader knows. A ship names 0 or an admiral its
+  civ holds as merged, following a renumbering; deleting one still in command is refused; the
+  referee recounts each `ADML`'s ships. A treaty step is taken only as the client takes it,
+  against the treaty as served, and refused when the other party changed that treaty earlier in
+  the merge. On acceptance the referee moves the lump sums from the merged `OWPR` resources (a
+  `u32` count of 5 at the second research field `+55`, then a resource byte and a `u32` per
+  resource) and credits, and refuses it when the payer is short. Refused: an admiral on a fleet,
+  another civ's admirals, a treaty ended any other way, and a stance moved without a treaty.
