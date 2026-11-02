@@ -1758,15 +1758,21 @@ What is left for after the beta is kept here.
   made in the UI is refused with a note, or taken when it is only an order. Carrying diplomacy
   means changing both civs at once, since accepting a treaty moves its lump sums immediately.
 
-- [ ] **Admirals and diplomacy are carried, but none has run through the live referee.**
+- [x] **Admirals and diplomacy run through the live referee.**
   `merge_orders.py` carries a civ's own admirals and their ships, and each diplomacy step the
   client was seen to take, applying an acceptance's lump sums and both stances itself; every
   step of the admiral and diplomacy sessions merges to what the client wrote
-  (`test_admirals_diplomacy_merge.py`). Still refused: an admiral on a fleet. Built on the UI's
-  word, not a save: a peace binding for 50 turns and an alliance for 100, a credit lump sum as
-  one `u32`, and no war while a cease-fire or peace binds. Done when an admiral created, given rules and assigned to ships in a live galaxy is still
-  assigned after the tick and has acted on its ships, and a treaty proposed by one player and
-  accepted by the other is in force after the tick with its lump sums moved once.
+  (`test_admirals_diplomacy_merge.py`). On the sandbox galaxy (1 November 2026, turns 93 to
+  97), with bot civs submitting bytes built from the client's recorded records: Beta's Scout
+  admiral stayed assigned across two ticks and gave its idle ship an engine scout order; Beta
+  proposed a trade of 5 metal for 1 credit a turn over 10 turns, Sir Blorpington accepted it the
+  next turn, and after the tick it was in force from turn 96 with the metal moved once (630 to
+  625 and 635). The two civs had not met, so their contact was written into turn 95 at the
+  publish. Still refused: an admiral on a fleet. Built on the UI's word, not a save: a peace
+  binding for 50 turns and an alliance for 100, a credit lump sum as one `u32`, and no war while
+  a cease-fire or peace binds.
+  - [ ] An admiral made in the client UI and a treaty answered in it go through a live galaxy
+  - [ ] A per-turn credit payment is seen moving after an accepted trade
 
 - [ ] **Governors are carried, but no governor has run through the live referee.** Measured in
   Single Player and merged in `test_governors_merge.py`. Done when a governor assigned in a live
