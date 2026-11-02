@@ -870,10 +870,12 @@ diplomacy work; the earlier `(0,630) (1,350) (2,260) (3,0) (4,0)` reading was si
 stocks. It is also the only vector observed whose **capacity exceeds its end** (48 vs 40), research
 and known-players both grow to an exact fit, so a sixth resource could be appended in place.
 
-**Prices are computed, not stored.** A sweep of 369 MB, *including 285 MB of read-only data that
-earlier sweeps never covered*, found no contiguous `[100,150,200,300,900]` at any stride from 4 to
-24; a layout-agnostic search found **zero** 512-byte windows containing all five values in any order.
-They are compiled constants.
+**The base prices are compiled constants.** A sweep of 369 MB, *including 285 MB of read-only data
+that earlier sweeps never covered*, found no contiguous `[100,150,200,300,900]` at any stride from 4
+to 24, because they are not contiguous: each is a float in its own 0x5C-byte row of the engine's
+market table at `0x7FC9E8` (`0x7FCBB8` when `[0x80AA00]` is `0x98`), set by a static initialiser.
+Each row holds the base sale price per 100 units (`+4`), a divisor of 100 (`+8`), the buy factor 8
+(`+0xC`) and **the units the market holds** (`+0x10`), the one part that changes.
 
 **`Owner:916` drives both prices**, CONFIRMED by a single-variable write test with a pre-registered
 prediction. Writing 25, with nothing else changed, produced sell prices `125/188/250/375/1125`,
@@ -889,7 +891,30 @@ Positive is good in both directions: it raises sell revenue and lowers purchase 
 `800 → 600` as sell went `100 → 125`). That also explains why buy is exactly 8× sell only when the
 modifier is 0.
 
-**So the syncable market state is just `Owner:916` plus the `Owner:1128` stocks**, no price table.
+`Owner:916` is trait 42, which `GetTrait` adds to from research: Doctrine: Trade (49) grants +50.
+
+**The market's held units are saved, as `GLOB > RSMA`**: five `i32`s in resource order, right
+after a four-byte `TMGX` (writer `0x512250`, reader `0x5122B0`). A sale (`0x512560`) adds the
+units sold and a purchase (`0x5125D0`) takes them away, so the count goes negative on purchases.
+Every tick (`0x511C30`, called beside the score rebuild at `0x56D24A`) takes 1,000 off each positive
+count and leaves a negative one alone: a sale's price drop is gone a turn later, a purchase's rise
+stays until somebody sells. `0x511E70` zeroes all five for a new galaxy.
+
+The quotes (`0x511EF0` sale, `0x512090` purchase) price 100 units at a time. For each lot, with
+`h` the held count after the lots before it:
+
+```
+e     = round(h × (0.2 + 0.8 / (1 + 5e-7 × h²)))     when h > 0, else h
+price = max(trunc(base − e / 100), round(base / 3))  per 100 units; a purchase then × 8
+total = sum of trunc(price × lot / 100), then + round(total × trait42 / 100), − on a purchase
+```
+
+It reproduces every measurement: 600 metal sold for 585, 100 deuterium bought for 1,200 then
+quoted 1,208, and the trait-25 prices above. `merge_orders.market_total` is this formula, and the
+referee carries market trades by the move in `RSMA` (`server/tests/test_market_merge.py`).
+
+**So the syncable market state is `RSMA`, the `Owner:1128` stocks and the research list**, which
+gives trait 42.
 
 > **Method note.** The `×1.54` reading that first suggested this relationship was taken while the
 > *entire trait block was scrambled* by the probe pass, fifty variables at once, and the buy/sell
@@ -897,16 +922,15 @@ modifier is 0.
 > only worth acting on once re-run as a clean one-variable test. The same instinct with no follow-up
 > test is what produced `Owner:68` and `Owner:200`.
 
-[ ] explain the residual price drift: an early clean reading gave `99/149/199/300/900`, one below
-base on the three resources with non-zero stock and exactly base on the two with zero stock, while a
-later clean reading gave base exactly. Small, and irrelevant to sync if the server writes `Owner:916`
-and the stocks directly, but it means prices are not a pure function of the modifier
-[ ] confirm the **buy**-price formula with a second value of `Owner:916`, it currently rests on one
-data point, unlike the sell formula which is confirmed on five
-[ ] determine whether trading, turn resolution, or both move the market, and whether AI trading
-affects the human's prices. Half answered October 2026: trading moves it (buying 100 deuterium
-moved the next quote from 1,200 to 1,208), and the price is shared by every civ, so AI trading
-does move the human's prices (`remote.py`, market section). Turn resolution is untested
+[ ] explain the displayed price drift: the Ship-Resources screen shows `99/149/199/299/900`, one
+below base on each resource the civ holds and base on one it does not (turn 85 of the live galaxy,
+November 2026). Its served `RSMA` was all 0 at turn 83 and nothing carried could move it since. The
+sale quote at 0 is base, so the column is not the quote for 100 units; the screen's list builder is
+around `0x512AF0`
+[x] confirm the **buy**-price formula: read from `0x512090`, the trait is taken off a purchase as it
+is added to a sale, so one data point was enough
+[x] determine whether trading, turn resolution, or both move the market: both, and every civ shares
+it. Trading moves `RSMA`; each tick takes 1,000 off a positive count (above)
 
 > **Scanner bug worth remembering:** the first price sweep "found" the sequence at a dozen
 > consecutive addresses, which is arithmetically impossible for an increasing sequence. The cause
