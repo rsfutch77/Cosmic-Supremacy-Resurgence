@@ -1155,10 +1155,21 @@ def warning_text(galaxy: str, lines) -> str:
 # sentence, `{"error": ...}`. `urllib`'s HTTPError text is only the status line.
 # A seat is refused in one of two sentences: SEAT_HELD where the galaxy lets a
 # sign-in claim a seat on first use, NOT_SEATED where it does not. An email
-# account is refused in UNVERIFIED until its address is verified.
+# account is refused in UNVERIFIED until its address is verified. A guest is
+# refused in GUESTS_REFUSED where the galaxy is played by account only.
 SEAT_HELD = "already held by another sign-in"
 NOT_SEATED = "is bound to this sign-in"
 UNVERIFIED = "verify the email address of this account"
+GUESTS_REFUSED = "log in to play"
+LOG_IN_TO_PLAY_TEXT = ("This galaxy is played by account only. Log in, or "
+                       "create an account, to play it.\n\nThe galaxies this "
+                       "install joined as a guest come with you when you log "
+                       "in.")
+
+
+def guest_refused(text) -> bool:
+    """Whether a refusal's text says this galaxy turns guests away."""
+    return GUESTS_REFUSED in str(text or "")
 
 
 def seat_refused(text) -> bool:
@@ -1234,6 +1245,8 @@ def refusal_box(text, civ: str, data_dir: str):
     if email_unverified(text):
         return VERIFY_LOOP_TEXT.format(
             email=account_email(data_dir) or "your address")
+    if guest_refused(text):
+        return LOG_IN_TO_PLAY_TEXT
     return None
 
 
@@ -1571,6 +1584,61 @@ VERIFY_LOOP_TEXT = ("Your turn was not sent, because the email address of "
                     "Play again.")
 GUEST_GAMES_TEXT = ("Notify an Admin if you would like to merge your account with your email. "
                     "Send player code {code} in your message.")
+GUEST_MOVED_TEXT = ("The galaxies this install joined as a guest are now your "
+                    "account's: {names}.")
+GUEST_KEPT_TEXT = ("{galaxy} stays with this install's guest, because {why}. "
+                   "Log out to play it as the guest.")
+
+
+# A guest's seats move to the account the install logged in to, through the
+# relay's GUEST_ROUTE, on both sign-ins' tokens.
+GUEST_ROUTE = "_guest"
+
+
+def guest_relays(records, uid) -> list:
+    """The relays the guest's joined galaxies are played through, each once."""
+    out = []
+    for rec in (records or {}).values():
+        if rec.get("uid") != uid:
+            continue
+        spec = str(rec.get("store") or "").strip().rstrip("/")
+        if not spec.startswith(("http://", "https://")):
+            continue
+        if not store_wants_token(dict(rec, store=spec)):
+            continue
+        base = spec.rsplit("/", 1)[0]
+        if base not in out:
+            out.append(base)
+    return out
+
+
+def move_guest_seats(base: str, account_token: str, guest_token: str,
+                     timeout: float = 30.0) -> dict:
+    """Ask the relay to move the guest's seats to the account. Its reply,
+    `{"moved": [...], "kept": [...]}`, or the HTTPError it refused with."""
+    import urllib.request
+    req = urllib.request.Request(
+        f"{base.rstrip('/')}/{GUEST_ROUTE}",
+        data=json.dumps({"guest": guest_token}).encode("utf-8"),
+        method="POST",
+        headers={"Content-Type": "application/json",
+                 "Authorization": f"Bearer {account_token}"})
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return json.loads(resp.read() or b"{}")
+
+
+def adopt_moved_seats(data_dir: str, guest_uid: str, account_uid: str,
+                      moved) -> None:
+    """Rewrite the joined records the relay moved, so they name the account."""
+    galaxies = {str(m.get("galaxy")) for m in moved or []}
+    records = load_joined(data_dir)
+    changed = False
+    for gid, rec in records.items():
+        if gid in galaxies and rec.get("uid") == guest_uid:
+            rec["uid"] = account_uid
+            changed = True
+    if changed:
+        write_joined(data_dir, records)
 DROPPED_TEXT = ("You have been logged out.")
 LOG_OUT_TEXT = ("Log out?")
 GOOGLE_WAIT_TEXT = ("A login window should be open in your browser now.")
@@ -3303,6 +3371,7 @@ class Launcher:
                     problem = ""
                     continue
                 guest = self._guest_games(ident)
+                guest_uid = ident.uid
                 code = player_code(ident.uid)
                 if value == "google":
                     linked, info = self._google(ident, secret)
@@ -3319,9 +3388,45 @@ class Launcher:
             if linked:
                 self.warn(GOOGLE_LINKED_TEXT)
             elif guest:
-                self.warn(GUEST_GAMES_TEXT.format(names=", ".join(guest),
-                                                  code=code))
+                self._move_guest_seats(ident, guest_uid, guest, code)
             return
+
+    def _move_guest_seats(self, ident, guest_uid, names, code):
+        """Move the guest's seats to the account just logged in to, and say
+        what moved. Anything the relay could not move falls back to sending
+        the operator the player code."""
+        bases = guest_relays(load_joined(self.data_dir), guest_uid)
+
+        def work():
+            got, account = ident.guest(), ident.token()
+            if not got or not account or got[0] != guest_uid:
+                return None
+            return [move_guest_seats(base, account, got[1]) for base in bases]
+
+        replies = None
+        if bases:
+            try:
+                replies = self.view.wait_for("Moving your galaxies…", work)
+            except Exception as exc:                # noqa: BLE001
+                said = relay_refusal(exc)
+                self.say(f"account: guest seats not moved, "
+                         f"{said[1] if said else exc}")
+        moved = [m for r in replies or [] for m in r.get("moved") or []]
+        kept = [k for r in replies or [] for k in r.get("kept") or []]
+        if not moved and not kept:
+            self.warn(GUEST_GAMES_TEXT.format(names=", ".join(names),
+                                              code=code))
+            return
+        adopt_moved_seats(self.data_dir, guest_uid, ident.uid, moved)
+        lines = []
+        if moved:
+            lines.append(GUEST_MOVED_TEXT.format(
+                names=", ".join(str(m.get("galaxy")) for m in moved)))
+        lines.extend(GUEST_KEPT_TEXT.format(galaxy=k.get("galaxy"),
+                                            why=k.get("why"))
+                     for k in kept)
+        self.say(f"account: {len(moved)} guest seat(s) moved, {len(kept)} kept")
+        self.warn("\n\n".join(lines))
 
     def _google(self, ident, secret):
         """Log in with Google in the player's browser, with a Cancel button

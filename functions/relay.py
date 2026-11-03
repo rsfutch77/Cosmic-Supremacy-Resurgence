@@ -29,6 +29,13 @@ What it enforces:
     caller reads back only its own request
   * a launcher's log is capped before and while it is inflated, counted per
     sign-in and per day, and never served back to anyone
+  * a guest is refused every galaxy route where the document says
+    `guests: refuse`
+  * a guest's seats move only to an account, on both tokens
+
+A submission records the caller's `sign_in_provider` under `seat_providers`,
+in the batch that stores it, so the operator view can say who still plays as
+a guest.
 
 A join comes from a caller with no seat, so `seat_or_refuse` is not on that
 path. Instead:
@@ -106,6 +113,22 @@ LISTING_SECONDS = float(os.environ.get('CS_RELAY_LISTING_SECONDS', '60'))
 # The refusal an email account gets until its address is verified. The
 # launcher finds it by this sentence.
 UNVERIFIED = 'verify the email address of this account before it joins or plays'
+
+# Galaxy document fields beside `seats`. Neither is in the store's state
+# allowlist, so neither is served to a player.
+PROVIDERS_KEY = 'seat_providers'    # uid -> the sign_in_provider it last wrote with
+GUESTS_KEY = 'guests'               # 'refuse' turns a guest away; anything else lets it play
+GUESTS_REFUSE = 'refuse'
+GUEST = 'anonymous'                 # a guest's sign_in_provider
+
+# The refusal a guest gets where `guests` is `refuse`. The launcher finds it
+# by this sentence.
+GUESTS_REFUSED = 'this galaxy is played by account only; log in to play'
+
+# A guest's seats move to the account the same install logged in to.
+GUEST_ROUTE = '_guest'
+MAX_GUEST_BYTES = 8192
+REBOUND_KEY = 'seats_rebound'       # each seat's last move, as `seat_tool.py` writes it
 
 _STORES = {}
 _APP = None
@@ -197,14 +220,42 @@ def verify_claims(token: str) -> dict:
         raise Refused(401, f'this token was refused: {type(exc).__name__}')
 
 
+def provider_of(claims: dict) -> str:
+    """The token's sign_in_provider: `anonymous`, `password`, `google.com`."""
+    return str((claims.get('firebase') or {}).get('sign_in_provider') or '')
+
+
 def verified_or_refuse(claims: dict):
     """Refuse an email and password sign-in whose address is not verified.
 
     A guest has no address and a Google sign-in's is Google's, so both pass.
     """
-    provider = (claims.get('firebase') or {}).get('sign_in_provider')
-    if provider == 'password' and not claims.get('email_verified'):
+    if provider_of(claims) == 'password' and not claims.get('email_verified'):
         raise Refused(403, UNVERIFIED)
+
+
+def guest_or_refuse(doc: dict, claims: dict):
+    """Refuse a guest on a galaxy whose document says `guests: refuse`.
+
+    Checked against the document the route read anyway, so it costs nothing.
+    """
+    if provider_of(claims) == GUEST and \
+            (doc.get(GUESTS_KEY) or '') == GUESTS_REFUSE:
+        raise Refused(403, GUESTS_REFUSED)
+
+
+def provider_fields(doc: dict, uid: str, claims: dict) -> dict:
+    """The galaxy document fields recording how this uid signed in, or {}
+    when the document already says so.
+
+    Written with a submission, in the batch that stores it. Creating an
+    account or linking Google keeps the uid and changes the provider, so the
+    record follows the latest submission.
+    """
+    provider = provider_of(claims)
+    if not provider or (doc.get(PROVIDERS_KEY) or {}).get(uid) == provider:
+        return {}
+    return {PROVIDERS_KEY: {uid: provider}}
 
 
 def bearer(headers: dict) -> str:
@@ -564,16 +615,17 @@ def _submission_body(body: bytes, turn: int) -> bytes:
     return blob
 
 
-def _take_submission(store, doc, uid, turn, civ, body):
+def _take_submission(store, doc, uid, turn, civ, body, extra=None):
     """Check a submission and store it, in one call.
 
     Every refusal happens before anything is written, so a bad upload leaves
-    the player's previous submission for this turn standing.
+    the player's previous submission for this turn standing. `extra` is
+    merged into the galaxy document in the same batch.
     """
     _may_submit(store, doc, uid, turn, civ)
     blob = _submission_body(body, turn)
     try:
-        tag = store.write_submission(civ, turn, blob, doc=doc)
+        tag = store.write_submission(civ, turn, blob, doc=doc, extra=extra)
     except turn_store.SubmissionTooLarge as exc:
         raise Refused(413, str(exc))
     forget_doc(store)
@@ -605,7 +657,7 @@ def _serve_submission(store, doc, turn, civ, headers):
     raise Refused(404, f'{civ} has not submitted for {turn}')
 
 
-def _commit_submission(store, doc, uid, turn, civ):
+def _commit_submission(store, doc, uid, turn, civ, extra=None):
     """Bring in an upload made to a Cloud Storage ticket.
 
     The object is read once, checked as `_take_submission` checks a body,
@@ -624,7 +676,7 @@ def _commit_submission(store, doc, uid, turn, civ):
         raise Refused(404, f'{civ} has uploaded nothing for turn {turn}')
     try:
         decoded = _submission_body(data, turn)
-        tag = store.write_submission(civ, turn, decoded, doc=doc)
+        tag = store.write_submission(civ, turn, decoded, doc=doc, extra=extra)
     except (Refused, turn_store.SubmissionTooLarge) as exc:
         # The upload replaced any earlier object, so without a document the
         # civ now has nothing stored for this turn.
@@ -889,6 +941,82 @@ def _prune_logs(fs, now: float) -> int:
     return gone
 
 
+def _guest_token(body: bytes) -> str:
+    """The guest's ID token out of a seat move's body."""
+    if len(body) > MAX_GUEST_BYTES:
+        raise Refused(413, f'a seat move may be {MAX_GUEST_BYTES:,} bytes')
+    try:
+        said = json.loads(body or b'{}')
+    except ValueError:
+        raise Refused(400, 'a seat move is a JSON object naming `guest`')
+    token = said.get('guest') if isinstance(said, dict) else None
+    if not isinstance(token, str) or not token:
+        raise Refused(400, 'a seat move names the guest\'s ID token as '
+                           '`guest`')
+    return token
+
+
+def _move_guest(account: dict, body: bytes):
+    """Move every seat a guest holds to the account the bearer logged in to.
+
+    Both tokens prove themselves: the bearer is the account, which may not be a
+    guest and, with a password, must be verified; the body's is a guest. A
+    galaxy where the account already holds a seat keeps the guest's, and the
+    answer says so. Each galaxy moves in its own transaction, recorded under
+    `seats_rebound` as `seat_tool.py` records one, with `by: relay`. A waiting
+    join request stays under the guest's uid.
+    """
+    if provider_of(account) == GUEST:
+        raise Refused(403, 'seats move to an account, and this sign-in is a '
+                           'guest')
+    verified_or_refuse(account)
+    guest = verify_claims(_guest_token(body))
+    if provider_of(guest) != GUEST:
+        raise Refused(403, 'only a guest\'s seats move here, and this token '
+                           'is an account\'s')
+    to, old = account['uid'], guest['uid']
+    moved, kept = [], []
+    if to == old:
+        return _json({'moved': moved, 'kept': kept})
+    from google.cloud import firestore
+    from google.cloud.firestore_v1.field_path import FieldPath
+
+    @firestore.transactional
+    def _move(tx, ref):
+        snap = ref.get(transaction=tx)
+        seats = (snap.to_dict() or {}).get('seats') or {}
+        civ = seats.get(old)
+        if civ is None:
+            return None, None
+        if seats.get(to) is not None:
+            return civ, f'this account already plays {seats[to]} here'
+        # A civ name may hold a dot, so its path is quoted. A uid is plain.
+        tx.update(ref, {
+            f'seats.{to}': civ,
+            f'seats.{old}': firestore.DELETE_FIELD,
+            FieldPath(REBOUND_KEY, civ).to_api_repr():
+                {'from': old, 'to': to, 'at': time.time(), 'by': 'relay'},
+            f'{PROVIDERS_KEY}.{to}': provider_of(account),
+            f'{PROVIDERS_KEY}.{old}': firestore.DELETE_FIELD,
+        })
+        return civ, None
+
+    fs = store_for(CATALOG).fs
+    for snap in catalog().stream():
+        if old not in ((snap.to_dict() or {}).get('seats') or {}):
+            continue
+        civ, why = _move(fs.transaction(), snap.reference)
+        if civ is None:
+            continue
+        row = {'galaxy': snap.id, 'civ': civ}
+        if why:
+            kept.append(dict(row, why=why))
+        else:
+            moved.append(row)
+            _HELD.pop(snap.id, None)
+    return _json({'moved': moved, 'kept': kept})
+
+
 REFEREE_ONLY = ('only the referee publishes a turn, and it does not come '
                 'through here')
 
@@ -910,6 +1038,11 @@ def _route(method: str, path: str, headers: dict, body: bytes):
             return _take_log(uid, body)
         raise Refused(403, 'a log is sent here and read by the operator, and '
                            'this door serves none back')
+    if parts[0] == GUEST_ROUTE:
+        # About every galaxy, and never refused by `guests: refuse`.
+        if method == 'POST' and len(parts) == 1:
+            return _move_guest(verify_claims(bearer(headers)), body)
+        raise Refused(404, 'a guest\'s seats are moved with a POST here')
     galaxy, parts = parts[0], parts[1:]
     claims = verify_claims(bearer(headers))
     uid = claims['uid']
@@ -918,6 +1051,7 @@ def _route(method: str, path: str, headers: dict, body: bytes):
     if method in ('GET', 'HEAD'):
         if parts == ['state']:
             doc = public_doc(store)
+            guest_or_refuse(doc, claims)
             return _json({k: doc[k] for k in firebase_store.STATE_FIELDS
                           if k in doc and k not in PRIVATE_FIELDS})
         if len(parts) == 2 and parts[0] == 'turn':
@@ -925,19 +1059,23 @@ def _route(method: str, path: str, headers: dict, body: bytes):
             # The document's current turn always exists: `start` and `publish`
             # write the object before the document names it.
             doc = public_doc(store)
+            guest_or_refuse(doc, claims)
             if turn != doc.get('turn') and not store.has_turn(turn):
                 raise Refused(404, f'no turn {turn}')
             return _redirect(signed_url(store, store.turn_object(turn), 'GET'))
         if len(parts) == 2 and parts[0] == 'submissions':
             # The store answers the current turn from the document already
             # read; see `FirebaseTurnStore.submitted_civs`.
+            doc = public_doc(store)
+            guest_or_refuse(doc, claims)
             return _json(store.submitted_civs(_turn_number(parts[1]),
-                                              doc=public_doc(store)))
+                                              doc=doc))
         if len(parts) == 4 and parts[:2] == ['upload', 'submission']:
             # No document read: the POST it names checks everything afresh.
             return _upload_ticket(_turn_number(parts[2]), parts[3])
 
     doc = galaxy_doc(store)
+    guest_or_refuse(doc, claims)
 
     if method in ('GET', 'HEAD'):
         if len(parts) == 3 and parts[0] == 'submission':
@@ -995,12 +1133,13 @@ def _route(method: str, path: str, headers: dict, body: bytes):
             raise Refused(403, 'a join request is answered by the worker at a '
                                'turn boundary, and it does not come through '
                                'here')
+        extra = provider_fields(doc, uid, claims)
         if len(parts) == 4 and parts[:2] == ['commit', 'submission']:
             return _commit_submission(store, doc, uid,
-                                      _turn_number(parts[2]), parts[3])
+                                      _turn_number(parts[2]), parts[3], extra)
         if len(parts) == 3 and parts[0] == 'submission':
             return _take_submission(store, doc, uid, _turn_number(parts[1]),
-                                    parts[2], body)
+                                    parts[2], body, extra)
         if parts and parts[0] in ('start', 'turn', 'archive', 'note'):
             raise Refused(403, REFEREE_ONLY)
 

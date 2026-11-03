@@ -6,12 +6,15 @@ Headless and offline. Launcher methods run on a stand-in with a `FakeView`, and
 fb_auth talks to the `FakeToolkit`. fb_auth itself is covered in
 test_fb_auth.py.
 """
+import io
+import json
 import os
 import shutil
 import sys
 import tempfile
 import threading
 import types
+import urllib.error
 
 import pathlib
 REPO = str(pathlib.Path(__file__).resolve().parents[2])
@@ -61,7 +64,8 @@ def make_app(player, **answers):
     app.say = app.said.append
     for name in ("on_account", "_account_locked", "_log_in", "_google",
                  "_create_account", "_email_ready",
-                 "_account_panel", "_guest_games", "_adopt_account_name",
+                 "_account_panel", "_guest_games", "_move_guest_seats",
+                 "_adopt_account_name",
                  "_push_name", "_show_account", "_show_identity",
                  "_show_player_code", "warn"):
         setattr(app, name, getattr(L.Launcher, name).__get__(app))
@@ -86,6 +90,26 @@ def settle():
 
 def fields_errors(app):
     return [args[4] for kind, args in app.view.prompts if kind == "fields"]
+
+
+moves = []
+
+
+def relay_moves(reply=None, refuse=None):
+    """Stand in for the relay's seat move: record each call, then answer
+    `reply` or raise `refuse`."""
+    def move(base, account, guest, timeout=30.0):
+        moves.append((base, account, guest))
+        if refuse is not None:
+            raise refuse
+        return reply
+    L.move_guest_seats = move
+
+
+def refused(sentence, code=403):
+    return urllib.error.HTTPError("https://relay/_guest", code, "refused", {},
+                                  io.BytesIO(json.dumps(
+                                      {"error": sentence}).encode()))
 
 
 print("1. a guest creates an account and keeps its galaxies")
@@ -114,6 +138,8 @@ check("and the player is told about the verification email",
 
 print("\n2. a second install logs in, takes the account's name, and is told "
       "its guest's galaxies stay behind")
+# Ann's address is not verified, so the relay refuses the move.
+relay_moves(refuse=refused(L.UNVERIFIED + " before it joins or plays"))
 bo, bo_id = make_app("Bo", fields=[
     ("log_in", {"email": "ann@example.com", "password": "wrong"}),
     ("log_in", {"email": "ann@example.com", "password": PASSWORD})])
@@ -127,8 +153,39 @@ check("then the install is the account", (bo_id.uid, bo.view.account),
 check("and takes the account's name", (bo.player, bo.view.identity), ("Ann", "Ann"))
 check("which is kept for the next run", L.load_identity(bo.data_dir), "Ann")
 told = bo.view.warnings()
-check("the player is given the guest's code for the operator",
+check("the relay was asked to move the guest's seats, once",
+      [m[0] for m in moves], ["https://relay"])
+check("with the account's token as the bearer and the guest's in the body",
+      (moves[0][1] == bo_id.token(), bool(moves[0][2]),
+       moves[0][2] != moves[0][1]), (True, True, True))
+check("refused, the player is given the guest's code for the operator",
       told, lambda w: len(w) == 1 and L.player_code(bo_guest) in w[0])
+check("and the joined record still names the guest",
+      L.load_joined(bo.data_dir)["sandbox"]["uid"], bo_guest)
+
+print("\n2b. a third install logs in, and the relay moves its guest's seats")
+cy, cy_id = make_app("Cy", fields=[
+    ("log_in", {"email": "ann@example.com", "password": PASSWORD})])
+join(cy, cy_id, "sandbox")
+join(cy, cy_id, "second")
+cy_guest = cy_id.uid
+moves.clear()
+relay_moves(reply={"moved": [{"galaxy": "sandbox", "civ": "Cy"}],
+                   "kept": [{"galaxy": "second", "civ": "Cy",
+                             "why": "this account already plays Ann here"}]})
+cy.on_account()
+told = cy.view.warnings()
+check("both galaxies share a relay, so it is asked once",
+      [m[0] for m in moves], ["https://relay"])
+check("the moved galaxy's record now names the account",
+      L.load_joined(cy.data_dir)["sandbox"]["uid"], cy_id.uid)
+check("the kept one still names the guest",
+      L.load_joined(cy.data_dir)["second"]["uid"], cy_guest)
+check("the player reads what moved and what stayed, and no player code",
+      told, lambda w: len(w) == 1 and "now your account's: sandbox." in w[0]
+      and "second stays with this install's guest, because this account "
+          "already plays Ann here" in w[0]
+      and L.player_code(cy_guest) not in w[0])
 
 print("\n3. the account panel logs out to the guest")
 bo.view = FakeView(choose="log_out", yes_no=True)
@@ -243,6 +300,10 @@ check("and its box names the address",
 check("a seat refusal keeps its own box",
       L.refusal_box("Hal is already held by another sign-in", "Hal", hal.data_dir),
       lambda t: "held by another sign-in" in t)
+check("a galaxy played by account only tells a guest to log in",
+      L.refusal_box("this galaxy is played by account only; log in to play",
+                    "Hal", hal.data_dir),
+      lambda t: t == L.LOG_IN_TO_PLAY_TEXT and "Log in" in t)
 check("and other refusals have none",
       L.refusal_box("this galaxy is closed", "Hal", hal.data_dir), None)
 

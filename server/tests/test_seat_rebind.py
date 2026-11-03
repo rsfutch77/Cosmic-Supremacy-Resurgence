@@ -290,6 +290,34 @@ def run(referee, galaxy, spec, player_a, player_b,
     check('and the document was not written by reading it',
           referee.doc.get().update_time, stamp)
 
+    print('turning guests away')
+    check('B\'s submissions recorded it as a guest',
+          (referee.doc.get().to_dict().get(seat_tool.PROVIDERS_KEY)
+           or {}).get(uid_b), 'anonymous')
+    code, text = tool(spec, 'guests', 'refuse')
+    check('refusing guests is itself refused while a seat may be one',
+          (code, 'DemoPlayer       plays as a guest' in text,
+           'has not written since' in text), (1, True, True))
+    check('and nothing was written',
+          seat_tool.GUESTS_KEY in (referee.doc.get().to_dict() or {}), False)
+    code, text = tool(spec, 'guests', 'refuse', '--anyway')
+    check('--anyway refuses them', (code, (referee.doc.get().to_dict() or {})
+                                    .get(seat_tool.GUESTS_KEY)), (0, 'refuse'))
+    refused = rf.refusal(player_b.submit, 'DemoPlayer', TURN, FROM_A)
+    check('and the relay then turns the guest away with "log in to play"',
+          (rf.status_of(refused), 'log in to play' in rf.body_of(refused)),
+          (403, True))
+    check('leaving its last submission standing',
+          referee.submission('DemoPlayer', TURN), FROM_B)
+    check('list says guests are refused',
+          'guests refuse' in tool(spec, 'list')[1], True)
+    code, _text = tool(spec, 'guests', 'allow')
+    check('allow removes the field',
+          (code, seat_tool.GUESTS_KEY in (referee.doc.get().to_dict() or {})),
+          (0, False))
+    check('and the guest plays again',
+          rf.refusal(player_b.submit, 'DemoPlayer', TURN, FROM_B), None)
+
 
 if __name__ == '__main__':
     sys.exit(main())

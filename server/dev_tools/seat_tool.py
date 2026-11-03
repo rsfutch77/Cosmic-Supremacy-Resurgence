@@ -6,6 +6,8 @@ seat_tool.py: the operator's hand on a galaxy's seat map
     python seat_tool.py firebase://cs-resurgence/sandbox rebind DemoPlayer <uid>
     python seat_tool.py firebase://cs-resurgence/sandbox rebind DemoPlayer <uid> --dry-run
     python seat_tool.py firebase://cs-resurgence/sandbox bind Newcomer <uid>
+    python seat_tool.py firebase://cs-resurgence/sandbox guests refuse
+    python seat_tool.py firebase://cs-resurgence/sandbox guests allow
 
 A seat is a `seats` entry on the galaxy document, `{uid: civ}`; the relay lets
 a Firebase uid act as a civ only when that entry says so. The uid is per data
@@ -36,6 +38,12 @@ joiner already playing another civ. `joined` names the uid that asked.
 
 The last move of each seat is kept under `seats_rebound`, which is outside the
 store's state allowlist and never served to a player.
+
+`guests refuse` sets `guests: refuse` on the galaxy document, and the relay
+then answers a guest's every request about this galaxy with "log in to play".
+It is refused while any seat's holder last wrote as a guest or has not written
+since the relay began recording `seat_providers`, unless `--anyway`. `guests
+allow` removes the field.
 """
 from __future__ import annotations
 
@@ -58,6 +66,9 @@ for _d in (SERVER, HERE):
 import firebase_store                                           # noqa: E402
 
 REBOUND_KEY = 'seats_rebound'   # galaxy document field holding each seat's last move
+PROVIDERS_KEY = 'seat_providers'    # uid -> sign_in_provider, written by the relay
+GUESTS_KEY = 'guests'           # 'refuse' and the relay turns guests away
+GUEST = 'anonymous'
 
 # A uid becomes part of a Firestore field path, so it must be plain letters and
 # digits; a dot or slash would write outside `seats`.
@@ -287,11 +298,14 @@ def cmd_list(store, out) -> int:
     held = seats(doc)
     by_civ = {civ: uid for uid, civ in held.items()}
     moved = doc.get(REBOUND_KEY) or {}
-    print(f'{store.galaxy}: seat_claim {doc.get("seat_claim") or "off"}',
-          file=out)
+    providers = doc.get(PROVIDERS_KEY) or {}
+    print(f'{store.galaxy}: seat_claim {doc.get("seat_claim") or "off"}, '
+          f'guests {doc.get(GUESTS_KEY) or "allowed"}', file=out)
     for civ in [str(c) for c in (doc.get('civs') or [])]:
         uid = by_civ.pop(civ, None)
         line = f'  {civ:<16} {uid or "(no seat)"}'
+        if uid:
+            line += f'  {providers.get(uid) or "sign-in not seen yet"}'
         if civ in moved:
             line += (f'  rebound {_when(moved[civ].get("at"))} from '
                      f'{moved[civ].get("from")}')
@@ -386,6 +400,40 @@ def cmd_rebind(store, out, civ, uid, dry_run, auth_check,
     return 0
 
 
+def still_guests(doc: dict) -> list:
+    """(civ, why) for each seat that may still be a guest: one whose holder
+    last wrote as a guest, or has not written since sign-ins were recorded."""
+    providers = doc.get(PROVIDERS_KEY) or {}
+    out = []
+    for uid, civ in sorted(seats(doc).items(), key=lambda s: s[1]):
+        provider = providers.get(uid)
+        if provider == GUEST:
+            out.append((civ, 'plays as a guest'))
+        elif not provider:
+            out.append((civ, 'has not written since sign-ins were recorded'))
+    return out
+
+
+def cmd_guests(store, out, setting: str, anyway: bool) -> int:
+    """Turn guests away from this galaxy, or let them back."""
+    doc = galaxy_doc(store)
+    if setting == 'refuse' and not anyway:
+        left = still_guests(doc)
+        if left:
+            print(f'not refusing guests in {store.galaxy}; these seats may '
+                  f'still be guests, and would be locked out:', file=out)
+            for civ, why in left:
+                print(f'  {civ:<16} {why}', file=out)
+            print('pass --anyway to refuse them regardless', file=out)
+            return 1
+    from google.cloud import firestore
+    store.doc.update({GUESTS_KEY: 'refuse' if setting == 'refuse'
+                      else firestore.DELETE_FIELD})
+    print(f'guests {"refused" if setting == "refuse" else "allowed"} in '
+          f'{store.galaxy}', file=out)
+    return 0
+
+
 def main(argv=None, out=None) -> int:
     out = out or sys.stdout
     ap = argparse.ArgumentParser(description=__doc__.split('\n')[1])
@@ -406,11 +454,17 @@ def main(argv=None, out=None) -> int:
         r.add_argument('--dry-run', action='store_true')
         r.add_argument('--no-auth-check', action='store_true',
                        help='skip checking the uid exists in Firebase Auth')
+    g = sub.add_parser('guests', help='refuse guests here, or allow them')
+    g.add_argument('setting', choices=['refuse', 'allow'])
+    g.add_argument('--anyway', action='store_true',
+                   help='refuse even while a seat may still be a guest')
     args = ap.parse_args(argv)
     try:
         store = open_galaxy(args.galaxy)
         if args.cmd == 'list':
             return cmd_list(store, out)
+        if args.cmd == 'guests':
+            return cmd_guests(store, out, args.setting, args.anyway)
         if args.cmd == 'candidates':
             return cmd_candidates(store, out, args.limit, code=args.code)
         return cmd_rebind(store, out, args.civ, args.uid, args.dry_run,

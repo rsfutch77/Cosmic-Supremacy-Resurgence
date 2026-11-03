@@ -433,13 +433,14 @@ class FirebaseTurnStore:
         return f'firestore://{self.project}/{ref.path}'
 
     def write_submission(self, civ: str, turn: int, blob: bytes,
-                         doc: dict = None) -> str:
+                         doc: dict = None, extra: dict = None) -> str:
         """Store one civ's submission as a document, and say its tag.
 
         The bytes are not checked here. The civ is added to `SUBMITTED_KEY` in
         the same batch unless `doc` (the galaxy document as the caller read it)
-        already records them. Raises `SubmissionTooLarge` past
-        `MAX_SUBMISSION_DATA`.
+        already records them. `extra` is merged into the galaxy document in
+        that batch, in the same write when there is one. Raises
+        `SubmissionTooLarge` past `MAX_SUBMISSION_DATA`.
         """
         data = base64.b64decode(sp.encode_save(blob))
         if len(data) > MAX_SUBMISSION_DATA:
@@ -456,10 +457,13 @@ class FirebaseTurnStore:
             'bytes': len(blob),
             'at': time.time(),
         })
+        fields = dict(extra or {})
         if doc is None or civ not in (submitted_of(doc, turn) or []):
             from google.cloud import firestore
-            batch.set(self.doc, {SUBMITTED_KEY: {
-                str(int(turn)): firestore.ArrayUnion([civ])}}, merge=True)
+            fields[SUBMITTED_KEY] = {
+                str(int(turn)): firestore.ArrayUnion([civ])}
+        if fields:
+            batch.set(self.doc, fields, merge=True)
         batch.commit()
         return tag
 
