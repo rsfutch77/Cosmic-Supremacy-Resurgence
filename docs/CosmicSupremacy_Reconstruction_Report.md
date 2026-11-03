@@ -348,7 +348,7 @@ So the score list holds one row per distinct `Owner:4`, and the collision, not t
 
 [ ] **Homeworld placement is one hardcoded policy.** New civs are placed as far from every claimed planet as possible, which is the right default for testing an AI (contact becomes something it has to earn) but not the only one worth having, random placement is what a real generator does and is the only way to test a hostile neighbour two systems away, and clustered or per-team placement follow from it. Wants a `--placement` option rather than a second function.
 
-- [ ] **A galaxy injected with a colonisation in flight is verified on disk only.** The colony ships' `ROUT` sections come out byte-identical after injection, and across the tick archive the planet a colonise order names is the planet that changes hands two ticks later, 7 times out of 7. Done when such a galaxy is loaded in the client and the colony ship still arrives.
+- [x] **A galaxy injected with a colonisation in flight plays on in the client.** The colony ships' `ROUT` sections come out byte-identical after injection, and across the tick archive the planet a colonise order names is the planet that changes hands two ticks later, 7 times out of 7. In the client (`join_acceptance.py k1`, 2 November 2026), DemoPlayer's two colony ships were sent from turn 11 of the demo galaxy and Joiner was added at the same turn; played 60 turns with and without the join, the near target #141 went to DemoPlayer on turn 13 and the far target #6 on turn 63 in both, with no divergence in any ship's orders, and Joiner's homeworld grew from 7 to 28. `k1load` opened the joined galaxy as Joiner, in the TestBed build, since this checkout has no `CosmicSupremacy_Player.exe`.
 
 ### Audit: is memory editing still needed for multiplayer? (August 2026)
 
@@ -1778,8 +1778,11 @@ What is left for after the beta is kept here.
   `test_governors_merge.py`. On the sandbox galaxy (2 November 2026, turns 97 to 98), Beta
   submitted governor 260 "g3", built from the Single Player record of a "Set Recruitment Rate"
   rule at 10%, on home planet 186. After the tick 186 still names governor 260 and its
-  recruitment rate reads 10%; Beta's other planets have no governor and stay at 0%.
-  - [ ] A governor made in the client UI goes through a live galaxy
+  recruitment rate reads 10%; Beta's other planets have no governor and stay at 0%. When Beta's
+  bot set 186 back to 0% on turn 99, the governor restored 10% by turn 103, so the rule acts
+  every tick, not only on assignment.
+  - [x] A governor made in the client UI goes through a live galaxy. Robert, 2 November: a hurry
+    governor in tmog66's empire works.
 
 - [ ] **Play stays live on the galaxies page while a turn is processing.** `row_action` offers
   Play on every seated row whatever the turn loop is doing, and the guard is only in
