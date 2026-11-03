@@ -1774,9 +1774,12 @@ What is left for after the beta is kept here.
   - [ ] An admiral made in the client UI and a treaty answered in it go through a live galaxy
   - [ ] A per-turn credit payment is seen moving after an accepted trade
 
-- [ ] **Governors are carried, but no governor has run through the live referee.** Measured in
-  Single Player and merged in `test_governors_merge.py`. Done when a governor assigned in a live
-  galaxy is still assigned after the tick and its rule has acted on the planet.
+- [x] **Governors run through the live referee.** Measured in Single Player and merged in
+  `test_governors_merge.py`. On the sandbox galaxy (2 November 2026, turns 97 to 98), Beta
+  submitted governor 260 "g3", built from the Single Player record of a "Set Recruitment Rate"
+  rule at 10%, on home planet 186. After the tick 186 still names governor 260 and its
+  recruitment rate reads 10%; Beta's other planets have no governor and stay at 0%.
+  - [ ] A governor made in the client UI goes through a live galaxy
 
 - [ ] **Play stays live on the galaxies page while a turn is processing.** `row_action` offers
   Play on every seated row whatever the turn loop is doing, and the guard is only in
