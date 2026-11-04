@@ -675,13 +675,17 @@ def run_catalog(referee, galaxy, root, token_a, token_c):
 
 def run_guests():
     """How each seat signed in, the switch that turns guests away, and a
-    guest's seats moving to an account. On two galaxies of its own."""
+    guest's seats and waiting joins moving to an account. On three galaxies
+    of its own."""
     stamp = int(time.time())
     one, two = f'guests1_{stamp}', f'guests2_{stamp}'
+    three = f'guests3_{stamp}'
     ref1 = FirebaseTurnStore(PROJECT, one, bucket=BUCKET)
     ref2 = FirebaseTurnStore(PROJECT, two, bucket=BUCKET)
+    ref3 = FirebaseTurnStore(PROJECT, three, bucket=BUCKET)
     ref1.start(BLOB7, ['Alpha', 'Beta'], turn_seconds=1800)
     ref2.start(BLOB7, ['Gamma', 'Delta'], turn_seconds=1800)
+    ref3.start(BLOB7, ['Epsilon'], turn_seconds=1800)
     guest_uid, guest = sign_up()
     linked_uid, linked_guest = sign_up()
     acct_uid = f'acct{stamp}'
@@ -696,6 +700,13 @@ def run_guests():
                  merge=True)
     ref2.doc.set({'seats': {guest_uid: 'Gamma', acct_uid: 'Delta'}},
                  merge=True)
+
+    def lodge(name):
+        ref3.request_join({'name': name, 'uid': guest_uid,
+                           'requested_at': time.time(),
+                           'requested_turn': TURN})
+
+    lodge('Newbie')
 
     def call(method, path, token=None, body=b''):
         headers = {'Authorization': f'Bearer {token}'} if token else {}
@@ -764,8 +775,10 @@ def run_guests():
         code, _h, out = move(account, body)
         got = json.loads(out)
         check('both tokens move the seats', code, 200)
-        check('the answer names each seat moved',
-              got.get('moved'), [{'galaxy': one, 'civ': 'Alpha'}])
+        check('the answer names each seat moved, and each waiting join',
+              got.get('moved'), [{'galaxy': one, 'civ': 'Alpha'},
+                                 {'galaxy': three, 'civ': 'Newbie',
+                                  'waiting': True}])
         check('and each kept, with why',
               [(k['galaxy'], k['civ']) for k in got.get('kept') or []],
               [(two, 'Gamma')])
@@ -793,10 +806,29 @@ def run_guests():
         again = json.loads(move(account, body)[2])
         check('a second move finds nothing more to move',
               (again.get('moved'), len(again.get('kept') or [])), ([], 1))
+        check('the waiting join is filed under the account now',
+              (ref3.join_request(guest_uid),
+               (ref3.join_request(acct_uid) or {}).get('name'),
+               (ref3.join_request(acct_uid) or {}).get('uid')),
+              (None, 'Newbie', acct_uid))
+        check('and the account reads it back through the relay',
+              json.loads(call('GET', f'/{three}/join',
+                              account)[2]).get('state'), 'waiting')
+        lodge('Newbie2')
+        third = json.loads(move(account, body)[2])
+        check('a guest join where the account is already waiting is kept',
+              [(k['galaxy'], k['civ'], k['why'])
+               for k in third.get('kept') or [] if k['galaxy'] == three],
+              [(three, 'Newbie2',
+                'this account is already waiting to join here')])
+        check('and both requests stay where they were',
+              ((ref3.join_request(guest_uid) or {}).get('name'),
+               (ref3.join_request(acct_uid) or {}).get('name')),
+              ('Newbie2', 'Newbie'))
         check('the route takes only a POST',
               call('GET', f'/{relay.GUEST_ROUTE}', account)[0], 404)
     finally:
-        for ref in (ref1, ref2):
+        for ref in (ref1, ref2, ref3):
             ref.delete_everything()
 
 

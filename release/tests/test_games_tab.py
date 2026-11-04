@@ -6,6 +6,7 @@ Headless and offline: a galaxy directory and a turn store in a temporary
 folder. A folder galaxy must never mint an identity or reach Firebase. A join
 request is written and read back as a file; no check claims a seat was granted.
 """
+import inspect
 import json
 import os
 import shutil
@@ -367,6 +368,19 @@ check("this install's own seat is not a refusal",
       L.seat_claim_problem("Bob", seats, held="Bob"), None)
 check("but somebody else's still is",
       bool(L.seat_claim_problem("Alice", seats, held="Bob")), True)
+
+print("\n10b. Play follows the seat this install joined as")
+joined = {"galaxy": "sandbox", "name": "Bob"}
+check("the player's own name, when it is a seat",
+      L.seat_to_play("Alice", seats, joined), "Alice")
+check("the joined name, when the player's name changed since",
+      L.seat_to_play("Dave", seats, joined), "Bob")
+check("the player's name, when the joined name is not a seat either",
+      L.seat_to_play("Dave", seats, {"name": "Erin"}), "Dave")
+check("and with no joined record", L.seat_to_play("Dave", seats), "Dave")
+mp = inspect.getsource(L.Launcher.start_multiplayer)
+check("Play picks the seat before the roster check",
+      0 <= mp.find("seat_to_play(") < mp.find("roster_problem("), True)
 
 print("\n11. the request a Join writes")
 req = L.join_request("Alice", "uid-1", "0.1.2", turn=4, now=1000.0)

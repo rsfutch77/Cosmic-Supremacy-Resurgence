@@ -963,8 +963,10 @@ def _move_guest(account: dict, body: bytes):
     guest and, with a password, must be verified; the body's is a guest. A
     galaxy where the account already holds a seat keeps the guest's, and the
     answer says so. Each galaxy moves in its own transaction, recorded under
-    `seats_rebound` as `seat_tool.py` records one, with `by: relay`. A waiting
-    join request stays under the guest's uid.
+    `seats_rebound` as `seat_tool.py` records one, with `by: relay`. A join
+    request still waiting is refiled under the account's uid, and answered as
+    a row with `waiting: true`. A galaxy where the account already plays or is
+    already waiting keeps the guest's request.
     """
     if provider_of(account) == GUEST:
         raise Refused(403, 'seats move to an account, and this sign-in is a '
@@ -1001,14 +1003,33 @@ def _move_guest(account: dict, body: bytes):
         })
         return civ, None
 
+    @firestore.transactional
+    def _move_join(tx, store, seats):
+        mine, theirs = store.join_doc(old), store.join_doc(to)
+        snap = mine.get(transaction=tx)
+        if not snap.exists:
+            return None, None
+        req = snap.to_dict() or {}
+        name = req.get('name')
+        if seats.get(to) is not None:
+            return name, f'this account already plays {seats[to]} here'
+        if theirs.get(transaction=tx).exists:
+            return name, 'this account is already waiting to join here'
+        tx.set(theirs, dict(req, uid=to, key=to))
+        tx.delete(mine)
+        return name, None
+
     fs = store_for(CATALOG).fs
     for snap in catalog().stream():
-        if old not in ((snap.to_dict() or {}).get('seats') or {}):
-            continue
-        civ, why = _move(fs.transaction(), snap.reference)
+        seats = (snap.to_dict() or {}).get('seats') or {}
+        if old in seats:
+            civ, why = _move(fs.transaction(), snap.reference)
+            row = {'galaxy': snap.id, 'civ': civ}
+        else:
+            civ, why = _move_join(fs.transaction(), store_for(snap.id), seats)
+            row = {'galaxy': snap.id, 'civ': civ, 'waiting': True}
         if civ is None:
             continue
-        row = {'galaxy': snap.id, 'civ': civ}
         if why:
             kept.append(dict(row, why=why))
         else:

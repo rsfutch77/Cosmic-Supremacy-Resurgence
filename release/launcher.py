@@ -1839,6 +1839,17 @@ def seat_claim_problem(name: str, seats, held: str = None):
             "galaxy to move it.")
 
 
+def seat_to_play(name: str, seats, joined=None) -> str:
+    """The seat Play follows: the player's name, or the name this install
+    joined the galaxy as when only that one is in the roster. A rename or a
+    login can change the player's name after the join."""
+    seats = [str(c) for c in (seats or [])]
+    held = (joined or {}).get("name")
+    if name not in seats and held in seats:
+        return held
+    return name
+
+
 def pending_join(g, recs) -> bool:
     """Whether this player has asked for a seat in `g` and is not in it yet.
 
@@ -4299,6 +4310,7 @@ class Launcher:
             seats = None
             self.say(f"multiplayer: could not read the roster ({exc})")
         if seats is not None:
+            civ = seat_to_play(civ, seats, cfg.get("joined"))
             taken = reclaimed_seat(state, civ)
             problem = roster_problem(civ, seats, taken)
             if problem:
