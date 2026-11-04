@@ -5284,9 +5284,8 @@ class Launcher:
                 return
         if confirm and not self.view.ask_ok_cancel(
                 "Update",
-                f"Restart into v{release.version}?\n\nThe launcher closes and "
-                "opens again on its own. The data folder, with your login and "
-                "your Single Player games, stays as it is."):
+                f"Restart into v{release.version}?\n\nThe launcher will close and "
+                "open again on its own."):
             return
         import updater
         self.say(f"update: restarting into v{release.version}")
