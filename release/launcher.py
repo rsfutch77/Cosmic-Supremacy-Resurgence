@@ -1594,6 +1594,16 @@ GUEST_KEPT_TEXT = ("{galaxy} stays with this install's guest, because {why}. "
 # relay's GUEST_ROUTE, on both sign-ins' tokens.
 GUEST_ROUTE = "_guest"
 
+# A guest is warned before it joins or plays a galaxy behind the relay, again
+# after GUEST_WARN_EVERY seconds, until galaxies refuse guests.
+GUEST_ONLY_TITLE = "Playing as a guest"
+GUEST_ONLY_TEXT = ("You are playing as this install's guest.\n\nGalaxies "
+                   "will soon be played by account only, and a guest will not "
+                   "be let in. Log in, or create an account, to keep playing. "
+                   "The galaxies this install joined as a guest come with you "
+                   "when you log in.")
+GUEST_WARN_EVERY = 24 * 3600
+
 
 def guest_relays(records, uid) -> list:
     """The relays the guest's joined galaxies are played through, each once."""
@@ -3524,6 +3534,30 @@ class Launcher:
                 self.say("account: email not verified, not joining or playing")
                 return False
 
+    def _guest_ready(self) -> bool:
+        """Whether a guest goes on to join or play, after it is warned that
+        galaxies are going account only. An account goes on unasked, and so
+        does a guest warned within GUEST_WARN_EVERY. A guest that logs in from
+        the warning goes on as the account."""
+        ident = account_identity(self.data_dir)
+        if ident is None or ident.account:
+            return True
+        now = time.monotonic()
+        last = getattr(self, "_guest_warned_at", None)
+        if last is not None and now - last < GUEST_WARN_EVERY:
+            return True
+        value = self.view.choose(
+            GUEST_ONLY_TITLE, GUEST_ONLY_TEXT,
+            [("Play as guest", "guest", False), ("Log in", "log_in", True)])
+        if value is None:
+            self.say("account: guest warning closed, not joining or playing")
+            return False
+        self._guest_warned_at = now
+        if value == "log_in":
+            self.on_account()
+            return self._email_ready()
+        return True
+
     def _guest_games(self, ident):
         """The names of the galaxies this install's guest joined, while the
         guest is who is playing."""
@@ -3999,7 +4033,8 @@ class Launcher:
         _player_turn, turn_store = mods
 
         cfg = {"store": g.store}
-        if store_wants_token(cfg) and not self._email_ready():
+        if store_wants_token(cfg) and not (self._email_ready()
+                                          and self._guest_ready()):
             return
         token = player_token(self.data_dir) if store_wants_token(cfg) else None
         try:
@@ -4222,7 +4257,8 @@ class Launcher:
         # behind the Cloud Function gets this install's Firebase identity; a
         # folder or LAN turn_server gets none. An identity that cannot be
         # minted is a missing header, not a refusal to start.
-        if store_wants_token(cfg) and not self._email_ready():
+        if store_wants_token(cfg) and not (self._email_ready()
+                                          and self._guest_ready()):
             return
         token = player_token(self.data_dir) if store_wants_token(cfg) else None
         if token is not None and token() is None:

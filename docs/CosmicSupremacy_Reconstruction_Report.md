@@ -1734,6 +1734,12 @@ What is left for after the beta is kept here.
   token whose provider is `anonymous` with a refusal the launcher turns into "log in to play".
   Turned on once the operator view shows no seated guests.
 
+- [ ] **The sandbox still lets guests in.** A guest is warned before it joins or plays, once a
+  day, that galaxies will soon be played by account only (`GUEST_ONLY_TEXT` in the launcher).
+  Done when `seat_tool.py firebase://cs-resurgence/sandbox guests refuse` is set, after the operator view shows
+  no seated guests, and the launcher update that follows rewords the warning to say guests are
+  refused.
+
 - [ ] **A guest's seats stay behind when its install logs in to an existing account.** The
   launcher tells the player to send the operator the guest's player code, and `seat_tool.py`
   moves the seats by hand. Done when the relay moves them itself, on proof of both the guest's

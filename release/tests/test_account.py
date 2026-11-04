@@ -63,7 +63,7 @@ def make_app(player, **answers):
     app.said = []
     app.say = app.said.append
     for name in ("on_account", "_account_locked", "_log_in", "_google",
-                 "_create_account", "_email_ready",
+                 "_create_account", "_email_ready", "_guest_ready",
                  "_account_panel", "_guest_games", "_move_guest_seats",
                  "_adopt_account_name",
                  "_push_name", "_show_account", "_show_identity",
@@ -306,6 +306,32 @@ check("a galaxy played by account only tells a guest to log in",
       lambda t: t == L.LOG_IN_TO_PLAY_TEXT and "Log in" in t)
 check("and other refusals have none",
       L.refusal_box("this galaxy is closed", "Hal", hal.data_dir), None)
+
+print("\n5d. a guest is warned that galaxies are going account only")
+gus, gus_id = make_app("Gus", choose="guest")
+check("a guest is warned before it joins or plays", gus._guest_ready(), True)
+check("in the warning's own words",
+      [args[1] for kind, args in gus.view.prompts if kind == "choose"],
+      [L.GUEST_ONLY_TEXT])
+gus.view = FakeView(choose="guest")
+gus._guest_ready()
+check("and not again the same day", gus.view.prompts, [])
+gus._guest_warned_at -= L.GUEST_WARN_EVERY
+gus._guest_ready()
+check("but again the next", len(gus.view.prompts), 1)
+gus.view = FakeView()
+gus._guest_warned_at = None
+check("closing the warning goes no further", gus._guest_ready(), False)
+check("and is logged", gus.said[-1], lambda s: "guest warning closed" in s)
+net.verified.add(ann_id.uid)
+gus.view = FakeView(choose="log_in", fields=[
+    ("log_in", {"email": "ann@example.com", "password": PASSWORD})])
+check("Log in goes on as the account", gus._guest_ready(), True)
+check("which is logged in", gus_id.account,
+      lambda a: bool(a) and a["email"] == "ann@example.com")
+gus.view = FakeView()
+check("an account is not warned", (gus._guest_ready(), gus.view.prompts),
+      (True, []))
 
 print("\n6. an account whose login dies is reported once")
 dee.mp_thread = None
