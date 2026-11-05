@@ -1719,20 +1719,20 @@ What is left for after the beta is kept here.
   technology the civ cannot research, or a queue entry it cannot afford, is copied as given. Done
   when the merge applies the rule the UI enforces for each order type it accepts.
 
-- [ ] **Logging in has not been played through the live relay.** The relay knows a player by
-  uid, and creating an account or linking Google keeps the guest's, so nothing in it changed;
-  `fb_auth` is tested against the Auth emulator only. Done when an account logged in from a
-  checkout launcher lists galaxies, joins one and submits a turn, logs out and back in and
-  submits again, and the same for a Google login.
+- [x] **Logging in is played through the live relay.** The relay knows a player by uid, and
+  creating an account or linking Google keeps the guest's. On 4 November 2026 an email login
+  and a Google login from a checkout launcher each listed the sandbox, submitted, logged out
+  and back in, and submitted again. A login adopts the account's stored name; Play follows the
+  seat the install joined as (`seat_to_play`), so a rename does not lose the seat.
 
-- [ ] **Nobody can see who still plays as a guest.** The relay accepts every verified token
-  alike. Done when it records each caller's `firebase.sign_in_provider` (`anonymous`,
-  `password`, `google.com`) with the seat, and the operator view lists which seated players
-  are still guests.
+- [x] **The operator view shows who still plays as a guest.** A submission records the
+  caller's `firebase.sign_in_provider` under `seat_providers`, and the operator view lists each
+  seat's provider and the seated guests. On 4 November 2026 the sandbox showed every seat on
+  Google and no seated guests.
 
-- [ ] **Play by name has no end switch.** Done when a relay setting, off by default, refuses a
-  token whose provider is `anonymous` with a refusal the launcher turns into "log in to play".
-  Turned on once the operator view shows no seated guests.
+- [x] **Play by name has an end switch.** `seat_tool.py <galaxy> guests refuse` makes the
+  relay refuse a token whose provider is `anonymous`, and the launcher shows "log in to play".
+  It ships off; the sandbox still allows guests.
 
 - [ ] **The sandbox still lets guests in.** A guest is warned before it joins or plays, once a
   day, that galaxies will soon be played by account only (`GUEST_ONLY_TEXT` in the launcher).
@@ -1740,10 +1740,11 @@ What is left for after the beta is kept here.
   no seated guests, and the launcher update that follows rewords the warning to say guests are
   refused.
 
-- [ ] **A guest's seats stay behind when its install logs in to an existing account.** The
-  launcher tells the player to send the operator the guest's player code, and `seat_tool.py`
-  moves the seats by hand. Done when the relay moves them itself, on proof of both the guest's
-  and the account's tokens.
+- [x] **A guest's seats follow its install to an existing account.** On login the launcher
+  posts both the guest's and the account's tokens, and the relay moves each seat and each
+  waiting join to the account, keeping any the account already holds in that galaxy. On
+  3 November 2026 the sandbox seat `guest-test` moved from a guest to a Google account, and on
+  4 November a waiting guest join moved before its turn.
 
 - [x] **The launcher updates itself** (`release/updater.py`, `test_updater.py`). It reads the
   latest release on GitHub, downloads its one zip within the listed size, checks the SHA-256
