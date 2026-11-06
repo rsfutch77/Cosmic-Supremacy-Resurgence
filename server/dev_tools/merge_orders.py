@@ -107,6 +107,14 @@ have made it: trait values the dialog gives and rates within 25..80, spending
 the client takes for the homeworld (the one founded earliest). Without the
 confirm the prompt would come back on every served turn.
 
+**The civ name and coat of arms**, once. Dialog 225 writes the name, the
+"Reveal True Player Name" checkbox and the arms id at the end of `OWPR`, and is
+offered while the name is empty. Carried only while the name is empty as
+served, and only as the dialog's OK allows: 3 to 30 printable characters after
+trimming spaces and tabs, none matching another civ's player name or chosen
+name in any case, and an arms id from the player's own uploads (`arms`), or
+none. A name another civ took earlier in the same merge counts.
+
 **System renaming**, the `SUN ` section's name at `+24` in its payload. Allowed
 for a civ owning more than half of the system's settled planets in the served
 state; unowned planets do not count.
@@ -214,6 +222,13 @@ RESEARCH_FIELD_LEN = 4
 # Owner:360 (civ-trait prompt, dialog 218). Each prompt's OK sets its own.
 HOMEWORLD_FLAG_OFF = OWPR_RECORD + 29
 CIV_FLAG_OFF = OWPR_RECORD + 30
+
+# What dialog 225 chose closes OWPR: the civ name (u32 length, characters), the
+# "Reveal True Player Name" checkbox (one byte) and the coat-of-arms id (i32).
+IDENTITY_TAIL = 5                  # the checkbox and the arms id
+NO_ARMS = -1
+CIV_NAME_MIN, CIV_NAME_MAX = 3, 30  # after trimming, as the dialog's OK checks
+CIV_NAME_TRIM = b' \t'
 
 # The civ traits in CVTR: a u32 count at +16, then (index, value) pairs of
 # u32s, one per trait the dialog shows. A confirm overwrites each value with
@@ -2115,6 +2130,91 @@ def setup_orders(served, sub, civ_oid, served_planets, sub_planets):
     return taken, refusals
 
 
+def _identity_at(blob, owpr):
+    """Absolute offset of the civ name's length field in this OWPR, or None.
+
+    The name is the only variable field after the research, so it is found
+    from the end: the length that matches the distance to the tail.
+    """
+    tail = owpr.end - IDENTITY_TAIL
+    for n in range(MAX_NAME + 1):
+        at = tail - n - 4
+        if at < owpr.payload:
+            return None
+        if struct.unpack_from('<I', blob, at)[0] == n:
+            return at
+    return None
+
+
+def civ_identity(blob, civ_oid):
+    """(name bytes, reveal byte, arms id) of a civ, or None when unreadable."""
+    owpr = _owpr(blob, civ_oid)
+    if owpr is None:
+        return None
+    at = _identity_at(blob, owpr)
+    if at is None:
+        return None
+    tail = owpr.end - IDENTITY_TAIL
+    return (bytes(blob[at + 4:tail]), blob[tail],
+            struct.unpack_from('<i', blob, tail + 1)[0])
+
+
+def set_civ_identity(blob, civ_oid, name, reveal, arms):
+    """Write a civ's name, checkbox and arms id. OWPR grows with the name."""
+    tree, owpr = _civ_section(blob, civ_oid, 'OWPR')
+    at = None if owpr is None else _identity_at(blob, owpr)
+    if at is None:
+        raise SystemExit(f'civ {civ_oid} has no readable OWPR')
+    payload = (bytes(blob[owpr.payload:at]) + struct.pack('<I', len(name))
+               + name + bytes([reveal]) + struct.pack('<i', arms))
+    return sp.replace_payload(blob, tree, owpr, payload)
+
+
+def _civ_name_key(name):
+    return name.strip(CIV_NAME_TRIM).upper()
+
+
+def identity_orders(served, sub, blob, civ_oid, names, arms):
+    """((name, reveal, arms) or None, [refusal]) for dialog 225's choice.
+
+    Carried once, while the name is empty as served, and only as the dialog
+    could have made it. `blob` is the galaxy being built, so a name another
+    civ took earlier in this merge counts. `arms` holds the arms ids this
+    player may use.
+    """
+    was, now = civ_identity(served, civ_oid), civ_identity(sub, civ_oid)
+    if was is None or now is None or was == now:
+        return None, []
+    name, reveal, coat = now
+    if was[0]:
+        return None, ['civilization name DROPPED, it was already chosen']
+    if not name:
+        return None, ['civilization name DROPPED, the checkbox or coat of '
+                      'arms changed without a name']
+    ok, why = name_acceptable(name)
+    if not ok:
+        return None, [f'civilization name DROPPED, {why}']
+    if not CIV_NAME_MIN <= len(name.strip(CIV_NAME_TRIM)) <= CIV_NAME_MAX:
+        return None, [f'civilization name DROPPED, it needs to be between '
+                      f'{CIV_NAME_MIN} and {CIV_NAME_MAX} characters long']
+    if reveal not in (0, 1):
+        return None, [f'civilization name DROPPED, the reveal checkbox is '
+                      f'{reveal}']
+    if coat != NO_ARMS and coat not in arms:
+        return None, [f"civilization name DROPPED, coat of arms {coat} is "
+                      f"not one of this player's uploads"]
+    key = _civ_name_key(name)
+    for oid, other in names.items():
+        if oid == civ_oid:
+            continue
+        theirs = civ_identity(blob, oid)
+        if key in (_civ_name_key(other.encode('latin1')),
+                   theirs and _civ_name_key(theirs[0])):
+            return None, [f'civilization name DROPPED, a similar name is '
+                          f'already used by {other}']
+    return now, []
+
+
 def _civ_section(blob, civ_oid, tag):
     """(tree, the civ's first section with this tag), None when it has none."""
     tree = sp.parse_blob(blob)
@@ -3311,12 +3411,14 @@ def _ship_crew_index(blob):
     return out
 
 
-def merge(blob, submissions, log=print, notes=None):
+def merge(blob, submissions, log=print, notes=None, arms=None):
     """submissions: [(civ_name, submitted_blob)]. Returns the merged blob.
 
     `notes` is an optional `{civ: [reason]}` that every refusal is recorded in
     as well as logged. `referee.py` writes it beside the turn so
-    `player_turn.follow` can print it into the launcher's log.
+    `player_turn.follow` can print it into the launcher's log. `arms` is an
+    optional `{civ: {coat-of-arms id}}` of the uploads each player may choose;
+    without it only no arms is carried.
     """
     served_ships = ship_index(blob)
     served_members = {m: f['owner'] for f in fleet_index(blob).values()
@@ -3741,6 +3843,21 @@ def merge(blob, submissions, log=print, notes=None):
                     log(f"    homeworld {oid} customised: rates {rates}, "
                         f"space {space}")
                 blob = set_setup_flag(blob, mine, kind)
+                accepted += 1
+
+            # The civ name and coat of arms, once, against the state served
+            # and the names already taken in the galaxy being built.
+            chosen, refusals = identity_orders(
+                served, sub, blob, mine, names, (arms or {}).get(civ_name, ()))
+            for why in refusals:
+                drop(why)
+            if chosen is not None:
+                blob = set_civ_identity(blob, mine, *chosen)
+                name, reveal, coat = chosen
+                log(f"    civilization name taken: "
+                    f"{name.decode('latin1')!r}"
+                    f"{', player name revealed' if reveal else ''}"
+                    f"{f', coat of arms {coat}' if coat != NO_ARMS else ''}")
                 accepted += 1
 
             # Governors, against the state served. A new one takes a free id,
