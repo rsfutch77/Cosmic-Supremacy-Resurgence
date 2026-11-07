@@ -177,6 +177,15 @@ def serve(blob: bytes, civ: str, work_dir=None, hold=HOLD_SECONDS,
     return dat
 
 
+def served_blob(store, civ: str, turn: int) -> bytes:
+    """The turn as `civ` is served it: its own view where the store keeps one
+    (`fog.project`), otherwise the turn. The relay's turn route already answers
+    with the caller's view."""
+    view = getattr(store, 'view_blob', None)
+    blob = view(civ, turn) if view is not None else None
+    return blob if blob is not None else store.turn_blob(turn)
+
+
 def collect(name="player", save_dir=None, log=print, announce=True) -> str:
     """Take the player's state back. Returns the capture path.
 
@@ -432,9 +441,10 @@ def follow(store: TurnStore, civ: str, poll: float = 5.0, rounds: int = 0,
             break
         turn, deadline = got
 
-        blob = store.turn_blob(turn)
+        blob = served_blob(store, civ, turn)
 
-        # `blob` is the authoritative turn and the baseline for every diff.
+        # `blob` is the turn as this civ is served it, and the baseline for
+        # every diff.
         # `to_load` is what goes into the client, which on a restart is the
         # player's own submission.
         to_load = blob

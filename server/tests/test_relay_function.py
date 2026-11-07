@@ -231,6 +231,7 @@ def main():
             {'a': (uid_a, token_a), 'b': (uid_b, token_b),
              'c': (uid_c, token_c), 'd': (uid_d, token_d)})
         run_catalog(referee, galaxy, root, token_a, token_c)
+        run_views(referee, galaxy, token_a, token_b)
     finally:
         httpd.shutdown()
         httpd.server_close()
@@ -605,6 +606,36 @@ def run(referee, galaxy, base, player_a, player_b, player_c, anonymous, ids):
               os.environ['STORAGE_EMULATOR_HOST'].rstrip('/')), True)
 
     run_joins(referee, galaxy, call, ids)
+
+
+def run_views(referee, galaxy, token_a, token_b):
+    """A seat named in a turn's views is served its own; see `fog`."""
+    def location(token, turn):
+        code, headers, _body = relay.handle(
+            'GET', f'/{galaxy}/turn/{turn}',
+            {'Authorization': f'Bearer {token}'}, b'')
+        return code, urllib.parse.unquote(headers.get('Location', ''))
+
+    print('each seat is served its own view of a turn')
+    turn = referee.state()['turn'] + 1
+    shared, view = make_blob(turn), make_blob(turn, filler=b'v')
+    referee.publish(turn, shared, views={'DemoPlayer': view})
+    code, where = location(token_a, turn)
+    check('a seat with a view is sent to it',
+          (code, referee.view_object('DemoPlayer', turn) in where), (302, True))
+    code, where = location(token_b, turn)
+    check('a seat without one is sent to the turn',
+          (code, referee.turn_object(turn) in where), (302, True))
+    check('the referee reads the view back',
+          referee.view_blob('DemoPlayer', turn), view)
+    check('and None for a civ given none', referee.view_blob('Neighbor', turn),
+          None)
+    referee.publish(turn + 1, make_blob(turn + 1))
+    check('the next publish deletes the last turn\'s views',
+          referee._has(referee.view_object('DemoPlayer', turn)), False)
+    code, where = location(token_a, turn + 1)
+    check('and a turn with no views sends every seat to the turn',
+          referee.turn_object(turn + 1) in where, True)
 
 
 def run_catalog(referee, galaxy, root, token_a, token_c):

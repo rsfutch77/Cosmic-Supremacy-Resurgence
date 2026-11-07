@@ -627,7 +627,9 @@ than rebuilding what was removed.
 **The engine hides more than a full-state blob suggests.** A client holding the whole galaxy still
 draws only the planets in systems that civ has entered, ownership included, and another civ's ships
 only within scan range, about 30 units. So what full-state distribution leaks is what a modified
-client could draw, not what the stock one does.
+client could draw, not what the stock one does, with one exception: in a system the civ has entered
+and left, the stock client draws the live planets, so a player watches it grow. See "Each civ is
+served the systems it has left as it last saw them".
 
 ### `NEWS`, how an engagement is established, and who is told about it
 
@@ -749,11 +751,14 @@ matters:
 
     u32   system count
     per system:
-        u32 system id, u32 sun id, str sun name, u32 undecoded, u32 planet count
+        u32 system id, u32 sun id, str sun name, u32 turn last looked, u32 planet count
         per planet:
-            u32   last known owner civ id, 0 for never seen
-            u32   an observed quantity, undecoded
+            u32   owner civ id when last looked, 0 for none
+            u32   population when last looked
             str   planet name
+
+The two `u32`s that were undecoded here are decoded in "Each civ is served the
+systems it has left as it last saw them" below.
 
 `parse` raises unless the walk lands exactly on the end, and `build(parse(x))`
 is byte-identical, verified 21 of 21 tables across 7 blobs.
@@ -782,6 +787,84 @@ capital marker, misleads a player about the board rather than about history. The
 fog-correct version clears only the wiped civ's own table and lets rivals keep
 theirs until they re-scout. Not attempted, and it needs a rule for what a rival
 sees when they do look again.
+
+The "206 against the correct 202" above is not staleness. In `galaxy_demo`
+Neighbor (206) joined as a clone of BadGuy (202), before `joins` emptied a
+joiner's `EXSY`, and its inherited table names BadGuy's capital as Neighbor's
+own planet.
+
+#### Each civ is served the systems it has left as it last saw them (November 2026)
+
+Reported by a player: planets in a system they had visited and left kept
+growing on their map, and new colonies appeared there. The manual's Recon
+Screen page says scouted information is from the last time the system was
+scouted and may be outdated, and that the sun's tooltip names that turn. So the
+original game showed a left system as it was last seen.
+
+**The two undecoded `EXSY` fields are that memory: per system the turn last
+looked, per planet the population then.** Measured across 44 local blobs and
+the tracked `admirals` and `diplomacy` fixtures. Every row whose turn equals the
+blob's turn matches the live owner and population exactly, except in
+tool-edited forks and turn-0 generator output, where the client had not yet
+refreshed the table. In `diplomacy/d9.b64` (turn 181) BadGuy last looked at
+GoodGuy's home at turn 34 and remembers populations 8, 0, 8, 0, 10, 0 against
+live 15, 8, 14, 0, 17, 12; the two zeros are colonies founded since.
+
+**A system a civ holds a planet in is not refreshed.** In `galaxy_demo`
+DemoPlayer's home row reads turn 2 at turn 11.
+
+**The client draws population and ownership from the live record, and the
+referee published one blob for everyone.** So the engine held the right answer
+and nothing served it.
+
+`server/fog.py` serves it. A system is stale for a civ when its `EXSY` turn is
+before the blob's turn and the civ holds no planet in it. Each planet there
+whose live owner or population differs from memory is rewritten:
+
+- remembered empty: owner 0, name cleared, no citizens, soldiers or
+  facilities, and the `PROD` of a never-colonised planet
+- remembered owned: owner set to the remembered civ, citizens cut or padded
+  to the remembered population; soldiers and facilities go when the owner
+  changed, and the name becomes the remembered one
+
+A planet is left live when the viewer owns it or has citizens on it, when
+memory names the viewer (the joiner case above) or a civ the galaxy does not
+hold, or when its `PLPR` does not walk.
+
+Nothing is added or removed, so a view keeps every object id, system and
+planet. It passes `screen_submission`'s galaxy check, the high-water id is
+unchanged, and the client's `min_suns` guard sees every sun. That is what the
+system-dropping `project_blob.py` above could not do.
+
+The referee projects each civ after the tick and publishes a view only for a
+civ whose view differs (`publish(..., views=)`, recorded under `views` on the
+galaxy document or in `state.json`). The relay's turn route sends a seated
+caller to its own view; `player_turn.served_blob` reads it from a folder store.
+Before the merge, `fog.restore` puts the authoritative planets back into each
+submission. A civ cannot order another civ's planet, so nothing is lost, and
+the merge then takes a fogged civ's orders exactly as an unfogged one's
+(`server/tests/test_fog.py`).
+
+**A view loads in the real client and holds the remembered planets.** BadGuy's
+view of `d9` came up at turn 181, and client memory read GoodGuy's home planets
+as populations 8, 0, 8, 0, 10, 0, with the two later colonies unowned.
+
+[ ] **Confirm on screen that the map draws them**, and that the planet sphere's
+size follows population.
+
+[ ] **A view keeps the live header fields of a rewritten `PLPR`**: the output
+rates at `+4`, food and production counters, and, when the owner is
+unchanged, the facility list. Whether the stock client shows any of them for
+another civ's planet is not known.
+
+[ ] **A caller without a seat is served the whole turn.** Under `first-use`
+that is every player before their first submission, and any signed-in user who
+asks. An older turn is also served whole, since views are kept for the current
+turn only.
+
+[ ] **The folder store and `turn_server` do not enforce views.** A folder
+store's player reads the files directly, and `turn_server` serves every caller
+the turn.
 
 #### The trailing dword of every `KNPL` payload is unreliable
 

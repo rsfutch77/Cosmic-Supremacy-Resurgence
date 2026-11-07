@@ -13,21 +13,22 @@ must drop the same systems here.
         u32   system id
         u32   sun id          (equal to the system id in every row seen)
         str   sun name        (u32 length then unpadded bytes)
-        u32   undecoded       (13, 3 and 2 observed)
+        u32   the turn the civ last looked   (key `turn`)
         u32   planet count
         per planet:
-            u32   last known owner civ id, 0 for never seen
-            u32   an observed quantity, undecoded
-            str   planet name
+            u32   owner civ id when last looked, 0 for none
+            u32   population when last looked  (key `population`)
+            str   planet name, `Unnamed` for one nobody has named
 
 `str` is a `u32` length followed by exactly that many unpadded bytes, so
 records are not aligned and the table can only be walked.
 
 The table is a per-civ cache of observations: the same planet carries
 different values in different civs' tables, and an owner can be stale. A
-rename is stored on the object itself (`PLNT`/`SUN ` payload +24). Dropping a
-row therefore loses no player decision. Undecoded fields are carried through
-byte for byte.
+row whose turn is the blob's turn matches the live owner and population. A
+system the civ holds a planet in is not refreshed. A rename is stored on the
+object itself (`PLNT`/`SUN ` payload +24). Dropping a row therefore loses no
+player decision. `server/fog.py` serves a civ its stale rows.
 """
 import struct
 
@@ -52,16 +53,16 @@ def parse(payload: bytes):
         sys_id, sun_id = struct.unpack_from('<II', payload, i)
         i += 8
         sun_name, i = _rd_str(payload, i)
-        unknown, n_pl = struct.unpack_from('<II', payload, i)
+        looked, n_pl = struct.unpack_from('<II', payload, i)
         i += 8
         planets = []
         for p in range(n_pl):
-            owner, seen = struct.unpack_from('<II', payload, i)
+            owner, pop = struct.unpack_from('<II', payload, i)
             i += 8
             name, i = _rd_str(payload, i)
-            planets.append({'owner': owner, 'seen': seen, 'name': name})
+            planets.append({'owner': owner, 'population': pop, 'name': name})
         systems.append({'system': sys_id, 'sun': sun_id, 'sun_name': sun_name,
-                        'unknown': unknown, 'planets': planets})
+                        'turn': looked, 'planets': planets})
     if i != len(payload):
         raise ValueError(f'EXSY walked to {i} of {len(payload)} bytes; the '
                          f'layout does not fit this table')
@@ -74,9 +75,9 @@ def build(systems) -> bytes:
     for s in systems:
         out += struct.pack('<II', s['system'], s['sun'])
         out += _wr_str(s['sun_name'])
-        out += struct.pack('<II', s['unknown'], len(s['planets']))
+        out += struct.pack('<II', s['turn'], len(s['planets']))
         for p in s['planets']:
-            out += struct.pack('<II', p['owner'], p['seen'])
+            out += struct.pack('<II', p['owner'], p['population'])
             out += _wr_str(p['name'])
     return bytes(out)
 

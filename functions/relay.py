@@ -925,8 +925,17 @@ def _route(method: str, path: str, headers: dict, body: bytes):
             # The document's current turn always exists: `start` and `publish`
             # write the object before the document names it.
             doc = public_doc(store)
-            if turn != doc.get('turn') and not store.has_turn(turn):
-                raise Refused(404, f'no turn {turn}')
+            if turn != doc.get('turn'):
+                # A held copy may predate the publish, and with it the views.
+                doc = galaxy_doc(store)
+                if turn != doc.get('turn') and not store.has_turn(turn):
+                    raise Refused(404, f'no turn {turn}')
+            # A seat named in the turn's views is served its own; see `fog`.
+            civ = seat_of(doc, uid)
+            if civ is not None and civ in (
+                    doc.get(turn_store.VIEWS_KEY) or {}).get(str(turn), ()):
+                return _redirect(signed_url(store, store.view_object(civ, turn),
+                                            'GET'))
             return _redirect(signed_url(store, store.turn_object(turn), 'GET'))
         if len(parts) == 2 and parts[0] == 'submissions':
             # The store answers the current turn from the document already

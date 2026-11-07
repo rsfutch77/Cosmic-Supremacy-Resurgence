@@ -41,6 +41,7 @@ import merge_orders
 import canonical
 import abandonment
 import activity
+import fog
 import joins
 import turn_store
 from turn_store import TurnStore, open_store
@@ -68,12 +69,34 @@ def apply_orders(blob: bytes, submissions, log=print, notes=None) -> bytes:
 
     Each submitting civ is marked active for the tick, so its Inactivity
     penalty does not grow.
+
+    Each civ was served its `fog.project` view, so the planets that view
+    rewrote are put back first and the merge judges the rest.
     """
     if not submissions:
         return blob
+    submissions = [(civ, _unfogged(blob, civ, sub, log))
+                   for civ, sub in submissions]
     merged = merge_orders.merge(blob, submissions, log=log, notes=notes)
     return activity.mark_present(merged, [civ for civ, _sub in submissions],
                                  log=log)
+
+
+def _unfogged(blob: bytes, civ: str, sub: bytes, log=print) -> bytes:
+    """`fog.restore`, or the submission as sent when it cannot be read; the
+    merge then refuses it with its own note."""
+    try:
+        return fog.restore(blob, civ, sub)
+    except Exception as exc:                                    # noqa: BLE001
+        log(f"  referee: {civ}: fog not restored, {type(exc).__name__}: {exc}")
+        return sub
+
+
+def views(blob: bytes, civs, log=print) -> dict:
+    """{civ: the blob as that civ is served it}, for each named civ the
+    blob holds."""
+    held = {o['name'] for o in icv.owner_records(blob)}
+    return {civ: fog.project(blob, civ, log=log) for civ in civs if civ in held}
 
 
 def galaxy_id(blob: bytes):
@@ -327,7 +350,10 @@ def resolve_turn(store: TurnStore, save_dir=None, log=print) -> int:
     else:
         joined = early
 
-    store.publish(new_turn, nxt)
+    # Only a civ whose view differs from the turn is given one.
+    held = views(nxt, [o['name'] for o in icv.owner_records(nxt)], log=log)
+    store.publish(new_turn, nxt,
+                  views={c: v for c, v in held.items() if v != nxt})
     joins.commit(store, turn, new_turn, joined, log=log)
     store.archive(turn, {
         "turn": turn,
