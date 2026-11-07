@@ -28,9 +28,8 @@ client/dev_tools/ai_player/state/
 *.exe.bak
 # patch-script backups, which name the patch they precede
 *.exe.*.bak
-# the player client: CosmicSupremacy_TestBed.exe with the coat-of-arms prompt
-# patched out, built by client/dev_tools/patch_hide_setup_prompts.py --build.
-# A patched binary belongs beside the tracked one, never in place of it.
+# CosmicSupremacy_Player.exe is made only by release/build.ps1. A copy here is
+# patched to hide dialog 225 and should be deleted.
 client/CosmicSupremacy_Player.exe
 tools
 

@@ -4349,7 +4349,7 @@ class Launcher:
         # Coats of arms go to this galaxy's relay while multiplayer is played.
         server = sys.modules.get("cs_server")
         if server is not None:
-            server.ARMS_STORE = lambda: (
+            server.MP_STORE = lambda: (
                 self.mp_store if (self.running_mode or {}).get("id")
                 == "multiplayer" else None)
         self.mp_civ = civ

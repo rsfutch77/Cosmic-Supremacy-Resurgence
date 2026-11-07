@@ -82,14 +82,16 @@ PNG_SIGNATURE = b'\x89PNG\r\n\x1a\n'
 # callable returning that galaxy's store, or None. The coats of arms are then
 # the relay's, numbered across every galaxy and shown to other players once
 # the operator approves them. A store that keeps none (a folder, a LAN
-# `turn_server.py`) offers none, since its referee would refuse them.
-ARMS_STORE = None
+# `turn_server.py`) offers none, since its referee would refuse them. The civ
+# name dialog is offered no names, and the name chosen is carried by the
+# referee, not kept in `civs.json`.
+MP_STORE = None
 
 
-def _arms_store():
+def _mp_store():
     """The multiplayer galaxy's store, or None in single player."""
     try:
-        return ARMS_STORE() if ARMS_STORE else None
+        return MP_STORE() if MP_STORE else None
     except Exception:                                           # noqa: BLE001
         return None
 
@@ -391,6 +393,11 @@ def handle_action(action: str, params: dict, raw_body: str = '') -> tuple[int, s
     # leaves the civ unconfigured, and FUN_0x496830 ([esi+0x4988]) then shows the
     # "Customize Your Home World" popup every tick.
     if action == 'listcivnames':
+        if _mp_store() is not None:
+            # Split on `#SPC#` and empty pieces skipped (0x00497FF0), so an
+            # empty answer offers no names.
+            log('  -> listcivnames: multiplayer, no names offered')
+            return 200, 'text/plain', ''
         userid = params.get('userid', ['1'])[0]
         civ = _get_civ(userid)
         civname = civ['civname']
@@ -404,7 +411,10 @@ def handle_action(action: str, params: dict, raw_body: str = '') -> tuple[int, s
         # The game does not check the response body.
         userid  = params.get('userid', ['1'])[0]
         civname = _clean_field(params.get('civname', [''])[0].strip("'"))
-        if civname:
+        if _mp_store() is not None:
+            log(f'  -> uploadcivname: multiplayer, {civname!r} left to the '
+                f'referee')
+        elif civname:
             try:
                 _set_civ(userid, civname=civname)
                 log(f'  -> uploadcivname: userid={userid} civname={civname!r} (persisted)')
@@ -421,7 +431,7 @@ def handle_action(action: str, params: dict, raw_body: str = '') -> tuple[int, s
     # operator>> until one fails (0x497b90). Empty for none. The dialog then
     # calls getcoa for each.
     if action == 'listcoa':
-        store = _arms_store()
+        store = _mp_store()
         if store is not None:
             return 200, 'text/plain', _relay_arms(store, action)
         userid = params.get('userid', ['1'])[0]
@@ -436,7 +446,7 @@ def handle_action(action: str, params: dict, raw_body: str = '') -> tuple[int, s
             coaid = int(params.get('coaid', ['0'])[0])
         except ValueError:
             coaid = 0
-        store = _arms_store()
+        store = _mp_store()
         if store is not None:
             return 200, 'text/plain', _relay_arms(store, action, coaid=coaid)
         path = os.path.join(COA_DIR, f'{coaid}.png')
@@ -464,7 +474,7 @@ def handle_action(action: str, params: dict, raw_body: str = '') -> tuple[int, s
             log(f'  !! uploadcoa: userid={userid} not a PNG within '
                 f'{COA_MAX_BYTES} bytes ({len(png)} bytes), refused')
             return 200, 'text/plain', '-1'
-        store = _arms_store()
+        store = _mp_store()
         if store is not None:
             return 200, 'text/plain', _relay_arms(store, action, png=png)
         coaid = _next_coa_id()

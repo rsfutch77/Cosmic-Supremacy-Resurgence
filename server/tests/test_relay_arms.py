@@ -80,11 +80,30 @@ def asked(action, **params):
     return status, body
 
 
+def run_names():
+    """The civ name dialog in multiplayer, which needs no relay."""
+    print('the civ name dialog in multiplayer')
+    cs_server.MP_STORE = lambda: object()
+    try:
+        check('no names are offered', asked('listcivnames'), (200, ''))
+        check('a chosen name is answered OK',
+              asked('uploadcivname', civname="'Star Kingdom'"), (200, 'OK'))
+        check('and not kept for single player',
+              cs_server._get_civ('1')['civname'] != 'Star Kingdom')
+    finally:
+        cs_server.MP_STORE = None
+    check('single player still offers its stored name',
+          asked('listcivnames')[1].startswith(
+              cs_server._get_civ('1')['civname'] + '#SPC#'))
+
+
 def main():
+    run_names()
     if not os.environ.get('FIRESTORE_EMULATOR_HOST'):
         print('SKIPPED: no FIRESTORE_EMULATOR_HOST. This run says nothing '
               'about coats of arms.')
-        return 0
+        print(f'\n{len(PASS)} passed, {len(FAIL)} failed')
+        return 1 if FAIL else 0
 
     stamp = int(time.time())
     galaxy = f'arms_{stamp}'
@@ -105,7 +124,7 @@ def main():
     try:
         run(store, galaxy, player_a, player_b, account, made, (a, b, c, gone))
     finally:
-        cs_server.ARMS_STORE = None
+        cs_server.MP_STORE = None
         httpd.shutdown()
         httpd.server_close()
         for n in made:
@@ -162,7 +181,7 @@ def run(store, galaxy, player_a, player_b, account, made, uids):
     check('nothing was kept', player_a.list_arms(), [])
 
     print('an upload is numbered across the project and kept pending')
-    cs_server.ARMS_STORE = lambda: player_a
+    cs_server.MP_STORE = lambda: player_a
     red = png(shade=200)
     status, first = asked('uploadcoa', data=base64.b64encode(red).decode())
     first = int(first)
@@ -183,7 +202,7 @@ def run(store, galaxy, player_a, player_b, account, made, uids):
            if r['galaxy'] == galaxy], [first, second])
 
     print('another player sees it only once it is approved')
-    cs_server.ARMS_STORE = lambda: player_b
+    cs_server.MP_STORE = lambda: player_b
     check('pending, another client is answered FAIL',
           asked('getapprovedcoa', coaid=first), (200, 'FAIL'))
     check('another player lists none of it', asked('listcoa'), (200, ''))
@@ -219,7 +238,7 @@ def run(store, galaxy, player_a, player_b, account, made, uids):
     class Folder:
         pass
 
-    cs_server.ARMS_STORE = lambda: Folder()
+    cs_server.MP_STORE = lambda: Folder()
     check('uploading is refused', asked(
         'uploadcoa', data=base64.b64encode(red).decode()), (200, '-1'))
     check('nothing is listed', asked('listcoa'), (200, ''))

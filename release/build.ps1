@@ -919,19 +919,15 @@ foreach ($m in $playable) {
 # A session mode names no EXE, so the copy above never reaches its client. A
 # player's client must never compute a turn the referee has not.
 #
-# Player is TestBed plus one byte that silences the coat-of-arms prompt. Every
-# build makes it from the tracked TestBed into release\build, so the release
-# depends on no gitignored file. client\CosmicSupremacy_Player.exe is neither
-# read nor written, and game_cycle.resolve_exe's choice for dev runs is left
-# as it was.
+# Player is the tracked TestBed under the name the launcher looks for, so the
+# release depends on no gitignored file. Its civ name and coat-of-arms prompt
+# (dialog 225) opens as shipped, and the referee carries the choice.
+# client\CosmicSupremacy_Player.exe is neither read nor written.
 $mpModes = @($modes | Where-Object { $_.session -eq 'multiplayer' })
 if ($mpModes.Count -gt 0) {
     Write-Step "Adding the multiplayer client"
-    $PlayerExe = Join-Path $BuildDir 'CosmicSupremacy_Player.exe'
-    & $VenvPy (Join-Path $ClientTools 'patch_hide_setup_prompts.py') --build --out $PlayerExe | Out-Null
-    if ($LASTEXITCODE -ne 0) { throw 'patch_hide_setup_prompts failed to build the player client' }
-    Copy-Client $PlayerExe (Join-Path $GameDir 'CosmicSupremacy_Player.exe')
-    Write-Ok 'game\CosmicSupremacy_Player.exe, built from CosmicSupremacy_TestBed.exe'
+    Copy-Client (Join-Path $ClientDir 'CosmicSupremacy_TestBed.exe') (Join-Path $GameDir 'CosmicSupremacy_Player.exe')
+    Write-Ok 'game\CosmicSupremacy_Player.exe, from CosmicSupremacy_TestBed.exe'
 }
 
 # ── 7c. No loose bytecode ─────────────────────────────────────────────────────
