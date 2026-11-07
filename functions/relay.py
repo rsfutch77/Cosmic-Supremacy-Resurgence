@@ -32,6 +32,9 @@ What it enforces:
   * a guest is refused every galaxy route where the document says
     `guests: refuse`
   * a guest's seats move only to an account, on both tokens
+  * a coat of arms is uploaded only by an account seated on the galaxy, as a
+    small PNG, and up to `ARMS_PER_UID` of them; it is shown to its owner at
+    once and to anyone else only once the operator approves it
 
 A submission records the caller's `sign_in_provider` under `seat_providers`,
 in the batch that stores it, so the operator view can say who still plays as
@@ -1038,6 +1041,115 @@ def _move_guest(account: dict, body: bytes):
     return _json({'moved': moved, 'kept': kept})
 
 
+# Coats of arms. The client draws one at 56 by 66 pixels; `cs_server.py`
+# forwards what the dialog uploads as `{"png": <base64>}`.
+ARMS_MAX_BYTES = 256 * 1024          # equals `cs_server.COA_MAX_BYTES`
+ARMS_BODY_MAX = ARMS_MAX_BYTES * 4 // 3 + 1024
+ARMS_SIDE_MAX = 256                  # widest and tallest image accepted, in pixels
+ARMS_PER_UID = 20                    # uploads per sign-in, refused ones included
+PNG_SIGNATURE = b'\x89PNG\r\n\x1a\n'
+ARMS_GUEST = 'log in to upload a coat of arms'
+
+
+def _arms_id(text: str) -> int:
+    try:
+        n = int(text)
+    except (TypeError, ValueError):
+        raise Refused(400, f'{text!r} is not a coat-of-arms id')
+    if n <= 0:
+        raise Refused(404, f'no coat of arms {n}')
+    return n
+
+
+def _arms_png(body: bytes) -> tuple:
+    """(png, width, height) from an upload body, checked, or a refusal."""
+    import struct
+    if len(body or b'') > ARMS_BODY_MAX:
+        raise Refused(413, f'a coat of arms may be {ARMS_MAX_BYTES:,} bytes')
+    try:
+        req = json.loads(body or b'{}')
+        png = base64.b64decode(req['png'], validate=True)
+    except Exception:                                           # noqa: BLE001
+        raise Refused(400, 'a coat of arms is sent as `png`, the image in '
+                           'base64')
+    if len(png) > ARMS_MAX_BYTES:
+        raise Refused(413, f'a coat of arms may be {ARMS_MAX_BYTES:,} bytes '
+                           f'and this one is {len(png):,}')
+    # The first chunk of a PNG is IHDR, which starts with the width and height.
+    if not png.startswith(PNG_SIGNATURE) or png[12:16] != b'IHDR' \
+            or len(png) < 24:
+        raise Refused(400, 'a coat of arms is a PNG image')
+    width, height = struct.unpack('>II', png[16:24])
+    if not (0 < width <= ARMS_SIDE_MAX and 0 < height <= ARMS_SIDE_MAX):
+        raise Refused(400, f'a coat of arms may be {ARMS_SIDE_MAX} pixels '
+                           f'each way and this one is {width} by {height}')
+    return png, width, height
+
+
+def _take_arms(store, doc: dict, claims: dict, body: bytes):
+    """Number and keep one upload, pending until the operator decides.
+
+    The counter, the owner's list and the upload are written in one
+    transaction, so two uploads never share an id.
+    """
+    from google.cloud import firestore
+    if provider_of(claims) == GUEST:
+        raise Refused(403, ARMS_GUEST)
+    verified_or_refuse(claims)
+    uid = claims['uid']
+    civ = seat_of(doc, uid)
+    if civ is None:
+        raise Refused(403, f'no seat in {store.galaxy} is bound to this '
+                           f'sign-in')
+    if civ not in (doc.get('civs') or []):
+        raise reclaimed_refusal(store, doc, civ)
+    png, width, height = _arms_png(body)
+    fs, prefix = store.fs, store.prefix
+    counter = firebase_store.arms_counter_doc(fs, prefix)
+    owner = firebase_store.arms_owner_doc(fs, prefix, uid)
+
+    @firestore.transactional
+    def _put(tx):
+        last = int((counter.get(transaction=tx).to_dict() or {}).get('last')
+                   or 0)
+        ids = list((owner.get(transaction=tx).to_dict() or {}).get('ids')
+                   or [])
+        if len(ids) >= ARMS_PER_UID:
+            raise Refused(429, f'this sign-in has uploaded {len(ids)} coats '
+                               f'of arms, which is the most one may')
+        n = last + 1
+        tx.set(counter, {'last': n})
+        tx.set(owner, {'ids': ids + [n]}, merge=True)
+        tx.set(firebase_store.arms_collection(fs, prefix).document(str(n)), {
+            'id': n, 'uid': uid, 'galaxy': store.galaxy, 'civ': civ,
+            'status': firebase_store.ARMS_PENDING, 'png': png,
+            'bytes': len(png), 'width': width, 'height': height,
+            'uploaded_at': _wall(),
+        })
+        return n
+
+    return _json({'id': _put(fs.transaction())})
+
+
+def _list_arms(store, uid: str):
+    """This sign-in's uploads that were not refused, oldest first."""
+    snap = firebase_store.arms_owner_doc(store.fs, store.prefix, uid).get()
+    return _json({'ids': firebase_store.usable_arms(
+        snap.to_dict() if snap.exists else None)})
+
+
+def _serve_arms(store, uid: str, arms_id: int):
+    """One coat of arms: approved to anyone, pending only to its owner."""
+    snap = firebase_store.arms_collection(store.fs, store.prefix).document(
+        str(arms_id)).get()
+    rec = snap.to_dict() if snap.exists else None
+    status = (rec or {}).get('status')
+    if rec is None or status == firebase_store.ARMS_REFUSED or (
+            status != firebase_store.ARMS_APPROVED and rec.get('uid') != uid):
+        raise Refused(404, f'coat of arms {arms_id} is not approved')
+    return _text(bytes(rec['png']), ctype='image/png')
+
+
 REFEREE_ONLY = ('only the referee publishes a turn, and it does not come '
                 'through here')
 
@@ -1091,6 +1203,13 @@ def _route(method: str, path: str, headers: dict, body: bytes):
             guest_or_refuse(doc, claims)
             return _json(store.submitted_civs(_turn_number(parts[1]),
                                               doc=doc))
+        if parts and parts[0] == 'arms' and len(parts) <= 2:
+            # About the sign-in, not the galaxy, which only says whether a
+            # guest may ask.
+            guest_or_refuse(public_doc(store), claims)
+            if len(parts) == 1:
+                return _list_arms(store, uid)
+            return _serve_arms(store, uid, _arms_id(parts[1]))
         if len(parts) == 4 and parts[:2] == ['upload', 'submission']:
             # No document read: the POST it names checks everything afresh.
             return _upload_ticket(_turn_number(parts[2]), parts[3])
@@ -1150,6 +1269,8 @@ def _route(method: str, path: str, headers: dict, body: bytes):
             verified_or_refuse(claims)
         if parts == ['join']:
             return _lodge_join(store, doc, uid, body)
+        if parts == ['arms']:
+            return _take_arms(store, doc, claims, body)
         if parts and parts[0] in ('join', 'joins'):
             raise Refused(403, 'a join request is answered by the worker at a '
                                'turn boundary, and it does not come through '

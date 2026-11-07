@@ -78,6 +78,53 @@ COA_DIR = os.path.join(DATA_DIR, 'coa')
 COA_MAX_BYTES = 256 * 1024
 PNG_SIGNATURE = b'\x89PNG\r\n\x1a\n'
 
+# Set by the launcher while it plays a multiplayer galaxy: a zero-argument
+# callable returning that galaxy's store, or None. The coats of arms are then
+# the relay's, numbered across every galaxy and shown to other players once
+# the operator approves them. A store that keeps none (a folder, a LAN
+# `turn_server.py`) offers none, since its referee would refuse them.
+ARMS_STORE = None
+
+
+def _arms_store():
+    """The multiplayer galaxy's store, or None in single player."""
+    try:
+        return ARMS_STORE() if ARMS_STORE else None
+    except Exception:                                           # noqa: BLE001
+        return None
+
+
+def _relay_arms(store, action: str, coaid: int = 0, png: bytes = b''):
+    """The answer to one coat-of-arms action, through the galaxy's store."""
+    import base64
+    try:
+        if action == 'listcoa':
+            ids = store.list_arms() if hasattr(store, 'list_arms') else []
+            log(f'  -> listcoa: relay ids={ids}')
+            return ' '.join(str(i) for i in ids)
+        if action == 'uploadcoa':
+            if not hasattr(store, 'upload_arms'):
+                log('  !! uploadcoa: this galaxy keeps no coats of arms, '
+                    'refused')
+                return '-1'
+            coaid = store.upload_arms(png)
+            log(f'  -> uploadcoa: relay coaid={coaid} ({len(png)} bytes), '
+                f'pending approval')
+            return str(coaid)
+        got = (store.arms_png(coaid)
+               if coaid > 0 and hasattr(store, 'arms_png') else None)
+    except Exception as exc:                                    # noqa: BLE001
+        log(f'  !! {action}: the relay refused or did not answer, '
+            f'{type(exc).__name__}: {exc}')
+        return '-1' if action == 'uploadcoa' else (
+            '' if action == 'listcoa' else 'FAIL')
+    if not got:
+        # Not cached by the client, so it asks again and an approval shows.
+        log(f'  -> {action}: relay coaid={coaid} not approved')
+        return 'FAIL'
+    log(f'  -> {action}: relay coaid={coaid} ({len(got)} bytes)')
+    return base64.b64encode(got).decode('ascii')
+
 
 def _next_coa_id() -> int:
     try:
@@ -374,6 +421,9 @@ def handle_action(action: str, params: dict, raw_body: str = '') -> tuple[int, s
     # operator>> until one fails (0x497b90). Empty for none. The dialog then
     # calls getcoa for each.
     if action == 'listcoa':
+        store = _arms_store()
+        if store is not None:
+            return 200, 'text/plain', _relay_arms(store, action)
         userid = params.get('userid', ['1'])[0]
         ids = _get_civ(userid).get('coas', [])
         log(f'  -> listcoa: userid={userid} ids={ids}')
@@ -386,6 +436,9 @@ def handle_action(action: str, params: dict, raw_body: str = '') -> tuple[int, s
             coaid = int(params.get('coaid', ['0'])[0])
         except ValueError:
             coaid = 0
+        store = _arms_store()
+        if store is not None:
+            return 200, 'text/plain', _relay_arms(store, action, coaid=coaid)
         path = os.path.join(COA_DIR, f'{coaid}.png')
         if coaid <= 0 or not os.path.exists(path):
             log(f'  -> {action}: coaid={coaid} unknown')
@@ -411,6 +464,9 @@ def handle_action(action: str, params: dict, raw_body: str = '') -> tuple[int, s
             log(f'  !! uploadcoa: userid={userid} not a PNG within '
                 f'{COA_MAX_BYTES} bytes ({len(png)} bytes), refused')
             return 200, 'text/plain', '-1'
+        store = _arms_store()
+        if store is not None:
+            return 200, 'text/plain', _relay_arms(store, action, png=png)
         coaid = _next_coa_id()
         os.makedirs(COA_DIR, exist_ok=True)
         with open(os.path.join(COA_DIR, f'{coaid}.png'), 'wb') as f:

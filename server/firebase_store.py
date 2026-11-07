@@ -101,7 +101,35 @@ JOIN_DONE_COLLECTION = 'joins_done'
 # `.`, `..` and `__reserved__` ids.
 ID_SAFE = frozenset(string.ascii_letters + string.digits + '-~')
 
+# Coats of arms, beside the galaxies and about none of them. Ids count up
+# across the whole project, since a client keeps every id's picture for as
+# long as it runs. An upload is shown to its owner at once and to everyone
+# else once the operator approves it.
+ARMS_SUFFIX = '_arms'                # <prefix>_arms/<id>: one upload
+ARMS_OWNER_SUFFIX = '_arms_owners'   # <prefix>_arms_owners/<uid>: ids, refused
+ARMS_META_SUFFIX = '_arms_meta'      # <prefix>_arms_meta/counter: the last id
+ARMS_PENDING, ARMS_APPROVED, ARMS_REFUSED = 'pending', 'approved', 'refused'
+
 _BUCKETS = {}
+
+
+def arms_collection(fs, prefix: str):
+    return fs.collection(prefix + ARMS_SUFFIX)
+
+
+def arms_owner_doc(fs, prefix: str, uid: str):
+    return fs.collection(prefix + ARMS_OWNER_SUFFIX).document(uid)
+
+
+def arms_counter_doc(fs, prefix: str):
+    return fs.collection(prefix + ARMS_META_SUFFIX).document('counter')
+
+
+def usable_arms(owner: dict) -> list:
+    """The ids an owner document holds that were not refused, in order."""
+    owner = owner or {}
+    refused = set(owner.get('refused') or [])
+    return [int(i) for i in owner.get('ids') or [] if i not in refused]
 
 
 def join_doc_id(key: str) -> str:
@@ -623,6 +651,21 @@ class FirebaseTurnStore:
         if not snap.exists:
             return None
         return json.loads((snap.to_dict() or {}).get('json') or 'null')
+
+    def arms(self) -> dict:
+        """{civ: {id}} for the coats of arms each seated civ may choose: its
+        sign-in's uploads, pending or approved."""
+        seats = (self.doc.get().to_dict() or {}).get('seats') or {}
+        if not seats:
+            return {}
+        refs = [arms_owner_doc(self.fs, self.prefix, uid) for uid in seats]
+        out = {}
+        for snap in self.fs.get_all(refs):
+            civ = seats.get(snap.id)
+            ids = usable_arms(snap.to_dict()) if snap.exists else []
+            if civ and ids:
+                out.setdefault(civ, set()).update(ids)
+        return out
 
     def put_note(self, civ: str, turn: int, lines) -> None:
         """Leave one player the referee's reasons for refusing part of a turn."""

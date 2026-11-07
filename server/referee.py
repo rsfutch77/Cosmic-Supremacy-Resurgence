@@ -57,7 +57,8 @@ def turn_of(blob: bytes) -> int:
     return turn_store.turn_of(blob)
 
 
-def apply_orders(blob: bytes, submissions, log=print, notes=None) -> bytes:
+def apply_orders(blob: bytes, submissions, log=print, notes=None,
+                 arms=None) -> bytes:
     """Take each player's orders out of the state they returned.
 
     submissions: [(civ_name, submitted_blob)]. Only changes on objects the
@@ -65,15 +66,36 @@ def apply_orders(blob: bytes, submissions, log=print, notes=None) -> bytes:
     and named. See merge_orders.py for what "orders" currently covers.
 
     `notes` is an optional `{civ: [reason]}` filled with every refusal.
+    `arms` is an optional `{civ: {coat-of-arms id}}` each civ may choose from.
 
     Each submitting civ is marked active for the tick, so its Inactivity
     penalty does not grow.
     """
     if not submissions:
         return blob
-    merged = merge_orders.merge(blob, submissions, log=log, notes=notes)
+    merged = merge_orders.merge(blob, submissions, log=log, notes=notes,
+                                arms=arms)
     return activity.mark_present(merged, [civ for civ, _sub in submissions],
                                  log=log)
+
+
+def arms_of(store: TurnStore, civs, log=print) -> dict:
+    """{civ: [coat-of-arms id]} for the civs given, from a store that keeps
+    uploads (the relay's), or {} from one that does not.
+
+    A store that cannot be read gives {}, so a civ choosing arms this turn is
+    refused and asked again, and the turn still closes.
+    """
+    read = getattr(store, "arms", None)
+    if read is None or not civs:
+        return {}
+    try:
+        got = read()
+    except Exception as exc:                                    # noqa: BLE001
+        log(f"  referee: could not read the coats of arms, "
+            f"{type(exc).__name__}: {exc}")
+        return {}
+    return {civ: sorted(got[civ]) for civ in civs if got.get(civ)}
 
 
 def galaxy_id(blob: bytes):
@@ -290,7 +312,8 @@ def resolve_turn(store: TurnStore, save_dir=None, log=print) -> int:
 
     log(f"  referee: closing turn {turn} with {len(taken)} submission(s)"
         + (f", {len(refused)} dropped" if refused else ""))
-    merged = apply_orders(blob, taken, log=log, notes=notes)
+    arms = arms_of(store, [civ for civ, _sub in taken], log=log)
+    merged = apply_orders(blob, taken, log=log, notes=notes, arms=arms)
 
     # Refusal notes are written before the tick, appended to any note the turn
     # already holds (such as a welcome note).
@@ -349,6 +372,8 @@ def resolve_turn(store: TurnStore, save_dir=None, log=print) -> int:
         "hash_out": canonical.canonical_hash(nxt),
         "hash_submissions": {civ: canonical.canonical_hash(s)
                              for civ, s in taken},
+        # The coats of arms each civ could choose, for `verify_turn`.
+        "arms": arms,
     })
     log(f"  referee: published turn {new_turn}, "
         f"canonical {canonical.canonical_hash(nxt)[:16]}")
@@ -404,7 +429,8 @@ def verify_turn(store: TurnStore, turn: int, recompute: bool = True,
 
     taken = [(civ, subs[civ]) for civ in sorted(rec.get("hash_submissions", {}))]
     log(f"  verify: recomputing turn {turn} with {len(taken)} submission(s)")
-    merged = apply_orders(blob, taken, log=log)
+    arms = {civ: set(ids) for civ, ids in (rec.get("arms") or {}).items()}
+    merged = apply_orders(blob, taken, log=log, arms=arms)
     again = tick(merged, turns=1, save_dir=save_dir, log=log)
     got = canonical.canonical_hash(again)
     same = got == rec["hash_out"]

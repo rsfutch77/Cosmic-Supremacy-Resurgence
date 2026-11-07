@@ -989,6 +989,25 @@ class HttpTurnStore:
         return self._get(
             f'/join/{urllib.parse.quote(key, safe="")}/answer')
 
+    # Coats of arms, which only the relay keeps. A `turn_server.py` answers
+    # 404, which reads as none uploaded.
+    def list_arms(self) -> list:
+        """This sign-in's coat-of-arms ids that were not refused."""
+        got = self._get('/arms')
+        return [int(i) for i in (got or {}).get('ids') or []]
+
+    def arms_png(self, arms_id: int):
+        """One coat of arms as PNG bytes, or None until it is approved."""
+        return self._get(f'/arms/{int(arms_id)}', want_json=False)
+
+    def upload_arms(self, png: bytes) -> int:
+        """Upload a coat of arms and return the id the relay gave it."""
+        import base64
+        body = json.dumps({'png': base64.b64encode(png).decode('ascii')})
+        got = self._send('/arms', body.encode('ascii'),
+                         headers={'Content-Type': 'application/json'})
+        return int(got['id'])
+
 
 def open_store(spec: str, token=None):
     """A store from a directory path, a base URL or a Firebase project.
