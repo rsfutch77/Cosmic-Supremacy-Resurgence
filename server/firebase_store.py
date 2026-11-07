@@ -317,6 +317,9 @@ class FirebaseTurnStore:
     def note_object(self, civ: str, turn: int) -> str:
         return self._object('notes', f'{turn:04d}', f'{civ}.txt')
 
+    def view_object(self, civ: str, turn: int) -> str:
+        return self._object('views', f'{turn:04d}', f'{civ}.b64')
+
     def _put(self, name: str, data: bytes, content_type: str) -> None:
         self.bucket.blob(name).upload_from_string(data,
                                                   content_type=content_type)
@@ -420,18 +423,37 @@ class FirebaseTurnStore:
     def has_turn(self, turn: int) -> bool:
         return self._has(self.turn_object(turn))
 
-    def publish(self, turn: int, blob: bytes, turn_seconds: int = None) -> None:
+    def view_blob(self, civ: str, turn: int):
+        """`civ`'s own view of a turn, or None when it is served the turn."""
+        snap = self.doc.get()
+        doc = (snap.to_dict() or {}) if snap.exists else {}
+        if civ not in (doc.get(turn_store.VIEWS_KEY) or {}).get(str(int(turn)),
+                                                               ()):
+            return None
+        data = self._get(self.view_object(civ, turn))
+        return sp.decode_save(data) if data is not None else None
+
+    def publish(self, turn: int, blob: bytes, turn_seconds: int = None,
+                views: dict = None) -> None:
         """The referee's move: a new turn exists, and the clock restarts.
 
         Merges only the fields it names, so status and name survive and
-        `SUBMITTED_KEY` is replaced whole. Sets `SUBMISSIONS_FROM_KEY` on a
-        galaxy that lacks it, then prunes submissions older than
-        `SUBMISSION_TURNS_KEPT` turns.
+        `SUBMITTED_KEY` and `VIEWS_KEY` are replaced whole. Sets
+        `SUBMISSIONS_FROM_KEY` on a galaxy that lacks it, then prunes
+        submissions older than `SUBMISSION_TURNS_KEPT` turns.
+
+        `views` is `{civ: blob}` for the civs served their own view. They are
+        written before the turn, and the previous turn's views are deleted
+        after it.
         """
         import canonical
         snap = self.doc.get()
         doc = (snap.to_dict() or {}) if snap.exists else {}
         seconds = turn_seconds or doc['turn_seconds']
+        views = views or {}
+        for civ, view in views.items():
+            self._put(self.view_object(civ, turn), sp.encode_save(view),
+                      'text/plain')
         self._put(self.turn_object(turn), sp.encode_save(blob), 'text/plain')
         fields = {
             'turn': int(turn),
@@ -439,11 +461,25 @@ class FirebaseTurnStore:
             'turn_seconds': int(seconds),
             'hash': canonical.canonical_hash(blob),
             SUBMITTED_KEY: {str(int(turn)): []},
+            turn_store.VIEWS_KEY: {str(int(turn)): sorted(views)},
         }
         if doc.get(SUBMISSIONS_FROM_KEY) is None:
             fields[SUBMISSIONS_FROM_KEY] = int(turn)
         self.doc.set(fields, merge=list(fields))
         self.prune_submissions(int(turn) - SUBMISSION_TURNS_KEPT + 1)
+        self._drop_views(doc.get(turn_store.VIEWS_KEY) or {}, int(turn))
+
+    def _drop_views(self, named: dict, keep: int) -> None:
+        """Delete the view objects `named` lists for every turn but `keep`."""
+        from google.api_core import exceptions
+        for t, civs in named.items():
+            if not str(t).isdigit() or int(t) == keep:
+                continue
+            for civ in civs:
+                try:
+                    self.bucket.blob(self.view_object(civ, int(t))).delete()
+                except exceptions.NotFound:
+                    pass
 
     def submit(self, civ: str, turn: int, blob: bytes) -> str:
         """Hand a player's state back. A later submission replaces an earlier

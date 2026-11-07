@@ -76,8 +76,8 @@ def round_once(store, civs, dry_run=False, replace=False, log=print):
             if not replace and store.submission(civ, turn) is not None:
                 log(f"[{civ}] turn {turn}: already submitted, skipping")
                 continue
-            if blob is None:
-                blob = store.turn_blob(turn)
+            # Each civ is served its own view of the turn.
+            blob = player_turn.served_blob(store, civ, turn)
             try:
                 play(store, civ, turn, blob, dry_run=dry_run, log=log)
             except Exception as exc:                        # noqa: BLE001

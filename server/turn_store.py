@@ -41,6 +41,7 @@ import base64
 import hashlib
 import json
 import os
+import shutil
 import struct
 import sys
 import threading
@@ -83,6 +84,11 @@ RECLAIMED_KEY = 'reclaimed'
 # `release/launcher.py` holds its own `MIN_BUILD_KEY`; the two must agree.
 JOINED_KEY = 'joined'
 MIN_BUILD_KEY = 'min_build'
+
+# The civs served their own view of a turn (`fog.project`), as
+# `{"<turn>": [civ, ...]}`. `publish` replaces the whole map; a civ not named
+# is served the turn itself, which is its view.
+VIEWS_KEY = 'views'
 WARN_KEY, RECLAIM_KEY = 'warn_after_misses', 'reclaim_after_misses'
 
 # Player name rules: the engine's civ name is a 15-character ASCII buffer, and a
@@ -319,6 +325,9 @@ class TurnStore:
     def submission_dir(self, turn: int) -> str:
         return os.path.join(self.root, 'submissions', f'{turn:04d}')
 
+    def view_path(self, civ: str, turn: int) -> str:
+        return os.path.join(self.root, 'views', f'{turn:04d}', f'{civ}.b64')
+
     def submission_path(self, civ: str, turn: int) -> str:
         return os.path.join(self.submission_dir(turn), f'{civ}.b64')
 
@@ -430,17 +439,44 @@ class TurnStore:
     def has_turn(self, turn: int) -> bool:
         return os.path.exists(self.turn_path(turn))
 
-    def publish(self, turn: int, blob: bytes, turn_seconds: int = None) -> None:
-        """The referee's move: a new turn exists, and the clock restarts."""
+    def view_blob(self, civ: str, turn: int):
+        """`civ`'s own view of a turn, or None when it is served the turn."""
+        if civ not in (self.state().get(VIEWS_KEY) or {}).get(str(int(turn)), ()):
+            return None
+        try:
+            return sp.load_any(self.view_path(civ, turn))
+        except FileNotFoundError:
+            return None
+
+    def publish(self, turn: int, blob: bytes, turn_seconds: int = None,
+                views: dict = None) -> None:
+        """The referee's move: a new turn exists, and the clock restarts.
+
+        `views` is `{civ: blob}` for the civs served their own view. They are
+        written before the turn, and earlier turns' views are removed.
+        """
         import canonical
         state = self.state()
         seconds = turn_seconds or state['turn_seconds']
+        views = views or {}
+        for civ, view in views.items():
+            _atomic_write(self.view_path(civ, turn), sp.encode_save(view))
         _atomic_write(self.turn_path(turn), sp.encode_save(blob))
         state.update(turn=int(turn), deadline=time.time() + seconds,
                      turn_seconds=int(seconds),
                      hash=canonical.canonical_hash(blob))
+        state[VIEWS_KEY] = {str(int(turn)): sorted(views)}
         self._put_state(state)
         os.makedirs(self.submission_dir(turn), exist_ok=True)
+        self._prune_views(int(turn))
+
+    def _prune_views(self, before: int) -> None:
+        root = os.path.join(self.root, 'views')
+        if not os.path.isdir(root):
+            return
+        for name in os.listdir(root):
+            if name.isdigit() and int(name) < before:
+                shutil.rmtree(os.path.join(root, name), ignore_errors=True)
 
     def submit(self, civ: str, turn: int, blob: bytes) -> str:
         """Hand a player's state back. A later submission replaces an earlier
@@ -864,7 +900,9 @@ class HttpTurnStore:
     def has_turn(self, turn: int) -> bool:
         return self._get(f'/turn/{turn}', want_json=False) is not None
 
-    def publish(self, turn: int, blob: bytes, turn_seconds: int = None) -> None:
+    def publish(self, turn: int, blob: bytes, turn_seconds: int = None,
+                views: dict = None) -> None:
+        # `turn_server` serves every caller the turn, so `views` is not sent.
         q = f'?seconds={int(turn_seconds)}' if turn_seconds else ''
         self._post(f'/turn/{turn}{q}', blob)
 
