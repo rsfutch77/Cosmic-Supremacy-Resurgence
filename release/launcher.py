@@ -4125,8 +4125,8 @@ class Launcher:
         when = f"turn {g.turn + 1}" if g.turn is not None else "its first turn"
         who = f" as {civ}" if civ else ""
         lead = (f"You are about to join {g.name or g.id}{who}. New players "
-                "arrive at a turn boundary, so your empire appears at "
-                f"{when}, and its row here gets a Play button then.")
+                "arrive at a turn boundary, your empire appears at "
+                f"{when}.")
         return self.view.beta_notice(heading, lead, body)
 
     def on_join(self, g):
@@ -4311,9 +4311,7 @@ class Launcher:
                 self.say(f"multiplayer: opening {where} again, with the "
                          f"orders you already sent")
             else:
-                self.warn(f"You are already playing {here}.\n\nIts turns "
-                          "are being followed now, and the readout on "
-                          "the home page is this galaxy's.")
+                self.warn(f"You are already playing {here}.")
             return False
 
         there = (g.name or g.id) if g is not None else "another galaxy"
