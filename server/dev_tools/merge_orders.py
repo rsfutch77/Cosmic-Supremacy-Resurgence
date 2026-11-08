@@ -168,6 +168,15 @@ step, applied to both civs at once:
 A step on a treaty that the other party already changed in this merge is
 refused. Per-turn payments and a treaty running out are the engine's.
 
+**Market trades**, `GLOB > RSMA`: five `i32` counts of the units the market
+holds, which a sale raises and a purchase lowers. How far each count moved is
+the civ's net trade in that resource. The referee prices it from the market as
+served, the one the player traded against, with the civ's trait 42, then moves the
+credits, stock and count itself; the submitted credits and stocks are not read.
+Sales go first. A sale of more than the civ holds, or a purchase it cannot pay
+for, is refused. Several trades in one resource are priced as one, so the
+credits can differ from the client's by a few when a player splits them.
+
 **Fleets**, `GLXY > FLET`: the object header (object id, x, z, y, owner), a
 `DYNO` with the fleet's orders, and `FLDT`, a `u32`-length name, a `u32` count
 and one `SHPR` per ship. Ships leave `GLXY` while in a fleet. A `SHPR` ends
@@ -3113,6 +3122,110 @@ def take_treaty_step(blob, served_treaties, step, oid, record, civ_oid, turn,
     return blob, line, '', oid
 
 
+# The resource market is GLOB's RSMA, right after a four-byte TMGX: five i32
+# counts in resource order, the units the market holds (written by 0x512250,
+# read by 0x5122B0). A sale adds to its count and a purchase takes from it,
+# and each tick takes 1,000 off every positive count (0x511C30). Every civ
+# trades at the same counts.
+MARKET = b'RSMA'
+MARKET_BEFORE = b'TMGX'
+MARKET_BEFORE_SIZE = 4
+RESOURCE_NAMES = ('metal', 'deuterium', 'radioactives', 'crystal', 'exotics')
+# The engine's table at 0x7FC9E8, one row per resource.
+MARKET_BASE = (100.0, 150.0, 200.0, 300.0, 900.0)   # sale price per 100 units
+MARKET_DIVISOR = 100.0          # held units that take one credit off the price
+MARKET_BUY_FACTOR = 8.0         # a purchase costs this times the sale price
+MARKET_LOT = 100                # units priced at one count before it moves
+# The quotes' curve constants, floats the engine widens to double.
+MARKET_FALLOFF = 4.999999987376214e-07
+MARKET_SOFT = 0.800000011920929
+MARKET_HARD = 0.20000000298023224
+# Trait 42 adds its percentage to a sale and takes it off a purchase. The
+# civ-trait dialog does not offer it; only Doctrine: Trade grants it.
+MARKET_TRAIT_GRANTS = {49: 50}
+
+
+def _market_at(blob):
+    """Where RSMA's counts start, or None unless GLOB holds it after TMGX."""
+    glob = next(sp.parse_blob(blob)[0].find('GLOB'), None)
+    if glob is None:
+        return None
+    at = blob.find(MARKET, glob.payload + 8 + MARKET_BEFORE_SIZE, glob.end)
+    while at >= 0:
+        size = sp.read_header(blob, at)[2]
+        before = sp.read_header(blob, at - 8 - MARKET_BEFORE_SIZE)
+        if (size == RESOURCE_KINDS * 4 and at + 8 + size <= glob.end
+                and before[0] == MARKET_BEFORE
+                and before[2] == MARKET_BEFORE_SIZE):
+            return at + 8
+        at = blob.find(MARKET, at + 1, glob.end)
+    return None
+
+
+def market_of(blob):
+    """The units the market holds, metal first, or None when unreadable."""
+    at = _market_at(blob)
+    if at is None:
+        return None
+    return list(struct.unpack_from(f'<{RESOURCE_KINDS}i', blob, at))
+
+
+def set_market(blob, counts):
+    """Write the market's counts. Sizes do not change."""
+    out = bytearray(blob)
+    struct.pack_into(f'<{RESOURCE_KINDS}i', out, _market_at(blob), *counts)
+    return bytes(out)
+
+
+def _f32(x):
+    return struct.unpack('<f', struct.pack('<f', x))[0]
+
+
+def _rounded(x):
+    """The engine's rounding: half away from zero."""
+    return int(x + 0.5) if x >= 0 else int(x - 0.5)
+
+
+def market_price(kind, held, buying=False):
+    """The engine's price for 100 units while the market holds `held`,
+    before trait 42 (the lot loop of 0x511EF0 and 0x512090)."""
+    base = _f32(MARKET_BASE[kind])
+    if held > 0:
+        t = _f32(float(held))
+        held = _rounded(_f32(t * (MARKET_SOFT / (t * MARKET_FALLOFF * t + 1)
+                                  + MARKET_HARD)))
+    price = max(int(base - held / MARKET_DIVISOR), _rounded(_f32(base / 3)))
+    return int(price * MARKET_BUY_FACTOR) if buying else price
+
+
+def market_total(kind, units, held, trait, buying=False):
+    """What `units` fetch or cost, as the engine quotes them: one lot at a
+    time, each priced at the count the lots before it leave."""
+    total = done = 0
+    while units > done:
+        lot = min(units - done, MARKET_LOT)
+        total += market_price(kind, held - done if buying else held + done,
+                              buying) * lot // 100
+        done += lot
+    return total + _rounded(_f32((-trait if buying else trait) * total / 100))
+
+
+def market_trait(completed):
+    """A civ's trait 42 from its completed research."""
+    return sum(MARKET_TRAIT_GRANTS.get(t, 0) for t in completed)
+
+
+def market_orders(served, sub):
+    """([(resource, units)], refusals) for a civ's market trades: how far each
+    count moved between the state served and the submission, positive sold.
+    A submission never ticks, so only the submitter's trades move them."""
+    was, now = market_of(served), market_of(sub)
+    if was is None or now is None:
+        return [], ([] if was == now else
+                    ['market trades DROPPED, RSMA cannot be read'])
+    return [(k, n - w) for k, (w, n) in enumerate(zip(was, now)) if n != w], []
+
+
 # A civ's production queues are in its `OWNR > DATA > SPQS`: a u32 count, then
 # one `SPRQ` per queue:
 #
@@ -3434,6 +3547,7 @@ def merge(blob, submissions, log=print, notes=None, arms=None):
                         for o in icv.owner_records(blob)}
     names = {o['oid']: o['name'] for o in icv.owner_records(blob)}
     served_treaties = treaties(blob) or {}
+    served_market = market_of(blob)
     served = blob
     accepted = dropped = 0
 
@@ -3935,6 +4049,51 @@ def merge(blob, submissions, log=print, notes=None, arms=None):
                 else:
                     log(f"    {line}")
                     accepted += 1
+
+            # Market trades, after the lump sums. Each is priced from the
+            # market as served, the one the player traded against, and the
+            # referee moves the credits, stocks and counts itself. Sales go
+            # first, so their credits can pay for purchases.
+            trades, refusals = market_orders(served, sub)
+            for why in refusals:
+                drop(why)
+            credits, stock = credits_of(blob, mine), resources_of(blob, mine)
+            if trades and (credits is None or stock is None):
+                drop("market trades DROPPED, the civ's credits or resources "
+                     "cannot be read")
+                trades = []
+            if trades:
+                counts = market_of(blob)
+                trait = market_trait(served_completed.get(mine, ()))
+                for kind, units in sorted(trades, key=lambda t: t[1] < 0):
+                    name = RESOURCE_NAMES[kind]
+                    held = served_market[kind]
+                    if units > 0:
+                        if units > stock[kind]:
+                            drop(f"market: sale of {units} {name} DROPPED, "
+                                 f"{stock[kind]} held")
+                            continue
+                        paid = market_total(kind, units, held, trait)
+                        credits += paid
+                        log(f"    market: {units} {name} sold for {paid} "
+                            f"credits")
+                    else:
+                        paid = market_total(kind, -units, held, trait,
+                                            buying=True)
+                        if paid > credits:
+                            drop(f"market: purchase of {-units} {name} "
+                                 f"DROPPED, {paid} credits needed and "
+                                 f"{credits} held")
+                            continue
+                        credits -= paid
+                        log(f"    market: {-units} {name} bought for {paid} "
+                            f"credits")
+                    stock[kind] -= units
+                    counts[kind] += units
+                    accepted += 1
+                blob = set_credits(blob, mine, credits)
+                blob = set_resources(blob, mine, stock)
+                blob = set_market(blob, counts)
 
             # Research belonging to anyone else, against the state as served.
             for other in (o for o in icv.owner_records(blob)
