@@ -207,7 +207,7 @@ def cells(g):
 
 open_row = cells(row(deadline=now + 3660))
 check("an open row still counts down", open_row["left"],
-      f"1h 01m left, due {L.fmt_due(now + 3660, now)}")
+      f"1h 01m, due {L.fmt_due(now + 3660, now)}")
 check("and says it is open", open_row["status"], "open")
 shut = cells(row(status="closed", deadline=now + 3660))
 check("a closed row says it is closed", shut["status"], "closed")

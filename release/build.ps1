@@ -753,6 +753,8 @@ $piArgs = @(
     '--hidden-import', 'gamectl',
     # updater finds, checks and installs a newer release.
     '--hidden-import', 'updater',
+    # netstate asks Windows whether this machine is online, from the 1 s tick.
+    '--hidden-import', 'netstate',
     # The multiplayer turn machinery, every module reached from inside a
     # function once a galaxy is configured.
     '--paths', $ServerTools,

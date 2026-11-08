@@ -123,7 +123,7 @@ check("turn prints 9, 11, 100 and 110 in the order the rows are in",
       printed("turn"), ["9", "110", "11", "", "100"])
 check("time left prints a mixture of formats",
       [s.split(", due ")[0] for s in printed("left")],
-      ["10:00 left", "", "1h 04m left", "", "0:59 left"])
+      ["10:00", "", "1h 04m", "", "0:59"])
 check("each with the local time it runs out",
       [", due " in s for s in printed("left")],
       [True, False, True, False, True])

@@ -1134,6 +1134,34 @@ OUTAGE_NOTES = {
 # How the turn note opens while a final send is retried through an outage.
 RETRYING_LEAD = "orders not sent yet: "
 
+# The status line and the capture indicator while that send is retried. The
+# status bar holds both beside the build line, so each is a few words.
+OUTAGE_SHORT = {
+    "network": "no internet",
+    "service": "galaxy server not answering",
+    "storage": "file storage not answering",
+}
+UNREACHABLE_SHORT = "cannot reach the galaxy"
+UNSENT_CAPTURE = "turn not sent yet"
+
+# The Galaxies page line while that send is retried, keyed the same way.
+OUTAGE_REASONS = {
+    "network": "no internet connection",
+    "service": "the galaxy server is not answering",
+    "storage": "the game's file storage is not answering",
+}
+UNREACHABLE_REASON = "the galaxy cannot be reached"
+
+# Seconds between asks of Windows whether this machine is online.
+NET_CHECK_EVERY = 2.0
+
+
+def unsent_hint(outage: str = None) -> str:
+    """The Galaxies page line while a final send is retried."""
+    reason = OUTAGE_REASONS.get(outage, UNREACHABLE_REASON)
+    return (f"Your turn is not sent yet: {reason}. It goes as soon as it "
+            f"can; keep the launcher open.")
+
 
 def outage_note(outage: str = None) -> str:
     """What to say for an outage `outage_of` named, or UNREACHABLE_NOTE."""
@@ -2295,8 +2323,9 @@ def _left_text(g, view):
     left = _left_value(g, view)
     if left is None:
         return ""
-    return (fmt_countdown(g.deadline, view.clock) if left > 0
-            else "time is up")
+    # The heading says it is the time left, so the cell leaves out "left".
+    return (f"{fmt_left(left)}, due {fmt_due(g.deadline, view.clock)}"
+            if left > 0 else "time is up")
 
 
 def _players_value(g, view):
@@ -3088,6 +3117,9 @@ class Launcher:
         # the UI says until the client is back up.
         self.mp_reopen = threading.Event()
         self.mp_reopening = False
+        # Set when this machine's internet connection comes or goes, so the
+        # loop reads the galaxy at once (see `_watch_network`).
+        self.mp_check_now = threading.Event()
         # Whether the galaxy being followed has been found closed, and the
         # deadline a stall last sent a probe for. See `_mp_probe_closed`.
         self.mp_closed = False
@@ -3979,7 +4011,9 @@ class Launcher:
         ended = [g for g, a in zip(rows, actions) if a == ENDED]
         text = ""
         busy = self.turn_busy()
-        if busy:
+        if busy == TURN_SENDING and self._mp_retrying():
+            text = unsent_hint(self._mp_retry_outage())
+        elif busy:
             text = TURN_BUSY_HINT[busy]
         elif stalled:
             text = stall_hint(stalled)
@@ -4508,6 +4542,7 @@ class Launcher:
         self.mp_turn_open = False
         self.mp_send_now.clear()
         self.mp_reopen.clear()
+        self.mp_check_now.clear()
         self.mp_reopening = False
         self.running_mode = mode
         joined = cfg.get("joined")
@@ -4536,6 +4571,7 @@ class Launcher:
                     stop=lambda: self.mp_stop,
                     send_now=self.mp_send_now,
                     reopen=self.mp_reopen,
+                    check_now=self.mp_check_now,
                     log=self.say_threadsafe)
             except BaseException as exc:            # noqa: BLE001
                 # A dead worker must say so. A relay refusal is said in the
@@ -4646,6 +4682,7 @@ class Launcher:
             # The final send failed on an outage and is retried until the
             # turn closes, so the orders are still on their way.
             self.mp_sending = True
+            self.mp_retry_outage = facts.get("outage")
         if kind in ("serving", "playing", "reopening"):
             self.mp_turn_open = True
         if kind == "serving":
@@ -5172,6 +5209,26 @@ class Launcher:
         """
         return getattr(self, "mp_unreachable", None) is not None
 
+    def _mp_retrying(self) -> bool:
+        """Whether the final send failed on an outage and is being retried."""
+        return bool(getattr(self, "mp_sending", False)
+                    and (getattr(self, "mp_note", "") or "")
+                    .startswith(RETRYING_LEAD))
+
+    def _sending_status(self) -> str:
+        """The status line while the turn is being sent with the game closed.
+
+        The capture indicator beside it says "sending your turn", or "turn not
+        sent yet" while the send is retried, so this says what to do or why.
+        """
+        if self._mp_retrying():
+            return OUTAGE_SHORT.get(self._mp_retry_outage(), UNREACHABLE_SHORT)
+        return "keep this window open"
+
+    def _mp_retry_outage(self):
+        """The outage the retried send last ran into, or None."""
+        return getattr(self, "mp_retry_outage", None)
+
     def _mp_outage(self):
         """Which part `turn_store.outage_of` said is down while the galaxy
         cannot be read, or None when it could not say."""
@@ -5209,7 +5266,11 @@ class Launcher:
             if self.mp_client_gone and not self.mp_sending:
                 if age > CAPTURE_HOLD:
                     state = None
-            self._show_capture(state, age, client_open=not self.mp_client_gone)
+            if self.mp_client_gone and self._mp_retrying():
+                self.view.show_capture(UNSENT_CAPTURE, WARN)
+            else:
+                self._show_capture(state, age,
+                                   client_open=not self.mp_client_gone)
             if self.mp_client_gone:
                 # With the client gone, the turn number and countdown are
                 # replaced by what the launcher is doing. A stopped galaxy is
@@ -5498,10 +5559,33 @@ class Launcher:
         only, so the line goes through the queue that thread drains."""
         self.msgs.put(msg)
 
+    def _watch_network(self, now: float = None):
+        """Asks Windows every NET_CHECK_EVERY seconds whether this machine is
+        online, and has the turn loop read the galaxy when the answer changes.
+
+        Far from the deadline the loop reads every few minutes, so a lost
+        connection would otherwise show only at the next read. The read, not
+        Windows' answer, decides what is shown.
+        """
+        now = time.time() if now is None else now
+        if now < getattr(self, "_net_next", 0.0):
+            return
+        self._net_next = now + NET_CHECK_EVERY
+        import netstate
+        online = netstate.online()
+        was = getattr(self, "_net_online", None)
+        self._net_online = online
+        if (online is not None and was is not None and online != was
+                and self.mp_thread is not None and self.mp_thread.is_alive()):
+            self.say(f"multiplayer: this machine went "
+                     f"{'online' if online else 'offline'}, reading the galaxy")
+            self.mp_check_now.set()
+
     def _watch_game(self):
         # The table's countdowns tick between listings.
         if self.page == "galaxies":
             self._tick_clocks()
+        self._watch_network()
 
         if self.child is not None and self.child.poll() is not None:
             name = _short(self.running_mode) if self.running_mode else "the game"
@@ -5527,8 +5611,7 @@ class Launcher:
             if mp_live:
                 self._watch_mp_client(bool(busy))
             if mp_live and self.mp_sending:
-                self._status_if_changed(
-                    "sending your turn, keep this window open", WARN)
+                self._status_if_changed(self._sending_status(), WARN)
             elif mp_live and self.mp_reopening:
                 self._status_if_changed(
                     "Multiplayer: opening the game again", OK)

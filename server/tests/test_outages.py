@@ -8,6 +8,10 @@ machine's network, the galaxy's server, or the file storage a turn is fetched
 from. `HttpTurnStore` records the host a request was at when it failed, so a
 redirect to Storage is told apart from the relay.
 
+A read asked for outside the schedule (`check_now`, set by the launcher when
+this machine's connection comes or goes) happens at once, while playing and
+while waiting for the next turn.
+
 When the final send of a turn fails on an outage, `follow` keeps the capture
 and sends it again until it lands or the turn closes, since the relay takes
 orders until the turn changes. A refusal is not retried.
@@ -151,6 +155,48 @@ def run(window, error, edits_at=(30, 580), **kw):
         cadence.Store = saved
 
 
+class Timed(cadence.Store):
+    """A store that records when each read of the clock happened."""
+
+    def current(self):
+        Timed.at.append(self.clock.now())
+        return super().current()
+
+
+def read_times(**kw):
+    """`cadence.run_turn` against a `Timed` store; the read times, in seconds
+    from the start of the turn."""
+    saved = cadence.Store
+    Timed.at = []
+    cadence.Store = Timed
+    try:
+        r = cadence.run_turn(**kw)
+    finally:
+        cadence.Store = saved
+    return [t - r.start for t in Timed.at], r
+
+
+def test_read_on_request():
+    print('a read asked for outside the schedule')
+    start = cadence.Clock().now()
+    plain, _ = read_times(seconds=3600.0, edits_at=(30,))
+    check('unasked, no read falls at 1000 s',
+          [round(t) for t in plain if 1000 <= t <= 1001], [])
+    asked, _ = read_times(seconds=3600.0, edits_at=(30,),
+                          check_at=start + 1000.0)
+    check('asked for at 1000 s, a read follows within a second',
+          [round(t) for t in asked if 1000 <= t <= 1001], [1000])
+    check('and the schedule carries on after it',
+          len(asked), lambda n: n <= len(plain) + 2)
+    # Two rounds, since one ends before the wait for the next turn.
+    waited, r = read_times(seconds=600.0, close_at=100, next_turn_at=4000,
+                           rounds=2, check_at=start + 2000.0)
+    check('while waiting for the next turn too',
+          [round(t) for t in waited if 2000 <= t <= 2001], [2000])
+    check('and a request made once is answered once',
+          len([t for t in waited if 2000 <= t <= 2010]), 1)
+
+
 def kinds(r):
     return [k for _t, k, _f in r.states
             if k in ('retrying', 'submitted', 'lost', 'waiting')]
@@ -194,6 +240,7 @@ def test_retried():
 if __name__ == '__main__':
     test_names()
     test_real_connections()
+    test_read_on_request()
     test_retried()
     print(f'\n{len(PASS)} passed, {len(FAIL)} failed')
     for n in FAIL:

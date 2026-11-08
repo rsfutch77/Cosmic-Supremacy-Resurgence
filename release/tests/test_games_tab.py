@@ -280,7 +280,7 @@ check("the name cell", live["name"], "Sandbox")
 check("the status cell", live["status"], "open")
 check("the turn cell", live["turn"], "4")
 check("the countdown cell", live["left"],
-      f"1h 01m left, due {L.fmt_due(now + 3660, now)}")
+      f"1h 01m, due {L.fmt_due(now + 3660, now)}")
 check("the player count cell", live["players"], "5")
 forming = cells(row(status="forming", turn=None, deadline=None, players=0))
 check("a forming galaxy prints no turn", forming["turn"], "")

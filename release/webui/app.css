@@ -76,7 +76,9 @@ main { flex: 1; min-width: 0; padding: 10px 8px; display: flex; flex-direction: 
 .blurb { color: #b9c6d2; line-height: 16px; }
 .hint { margin-top: auto; color: #8ea2b3; font-size: 11px; }
 
-.turn { font-weight: bold; color: #e8eef2; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+/* Up to two lines: an outage note beside the turn number is long. */
+.turn { font-weight: bold; color: #e8eef2; line-height: 15px; min-width: 0; overflow: hidden;
+        display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
 .btnrow { display: flex; gap: 6px; flex: 0 0 auto; }
 .toolbar { display: flex; align-items: center; gap: 6px; min-height: 20px; }
 .source { font-size: 11px; color: #93a6b5; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
@@ -85,8 +87,8 @@ main { flex: 1; min-width: 0; padding: 10px 8px; display: flex; flex-direction: 
 .note { padding: 8px; color: #93a6b5; }
 
 /* Column widths follow launcher.GALAXY_COLUMNS: the name stretches, the rest
-   are as wide as their heading needs, then the action button. */
-.grid { display: grid; grid-template-columns: minmax(0,1fr) 66px 44px 92px 56px 128px 78px; align-items: center; }
+   are as wide as their heading or longest cell needs, then the action button. */
+.grid { display: grid; grid-template-columns: minmax(0,1fr) 66px 44px 160px 56px 112px 78px; align-items: center; }
 .colhead > div.sorted { color: #ffffff; }
 .colhead { background: #5a7381; color: #eef3f6; font-weight: bold; font-size: 11px; }
 .colhead > div { padding: 4px 8px; border-right: 1px solid #435a68; cursor: pointer; }

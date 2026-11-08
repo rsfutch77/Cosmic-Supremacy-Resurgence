@@ -342,7 +342,7 @@ def follow(store: TurnStore, civ: str, poll: float = 5.0, rounds: int = 0,
            capture_every: float = CAPTURE_EVERY,
            uploads_per_turn: int = UPLOADS_PER_TURN,
            submit_every: float = None, send_now=None, reopen=None,
-           log=print, clock=time.time, sleep=time.sleep):
+           check_now=None, log=print, clock=time.time, sleep=time.sleep):
     """Play one civ's turns as the store publishes them.
 
     One pass is: serve the current turn, wait until its deadline, take the
@@ -361,6 +361,8 @@ def follow(store: TurnStore, civ: str, poll: float = 5.0, rounds: int = 0,
     captures and sends at once (the launcher's Save button). `reopen` ends the
     wait for the referee and serves the turn again, from the player's own
     submission. Both go through this loop because it owns the client.
+    `check_now` reads the store at once, outside the schedule (the launcher
+    sets it when this machine's internet connection comes or goes).
 
     The state is captured every `capture_every` seconds and uploaded
     `uploads_per_turn` times across the turn, the last at the deadline.
@@ -390,8 +392,13 @@ def follow(store: TurnStore, civ: str, poll: float = 5.0, rounds: int = 0,
         return bool(not playing[0] and reopen is not None
                     and reopen.is_set())
 
+    def checking():
+        """Has a read of the store been asked for outside the schedule?"""
+        return bool(check_now is not None and check_now.is_set())
+
     def nap(seconds, until=None):
-        """Sleep, but wake early if asked to stop, to send now, or for `until`.
+        """Sleep, but wake early if asked to stop, to send now, to read the
+        store, or for `until`.
 
         `until` is an extra wake condition. The naps that retry an unreadable
         store must not pass one, or the retry would spin. Sleeps in half-second
@@ -399,7 +406,8 @@ def follow(store: TurnStore, civ: str, poll: float = 5.0, rounds: int = 0,
         """
         end = clock() + seconds
         while clock() < end:
-            if halted() or asked() or (until is not None and until()):
+            if (halted() or asked() or checking()
+                    or (until is not None and until())):
                 return
             sleep(min(0.5, max(0.0, end - clock())))
 
@@ -410,6 +418,9 @@ def follow(store: TurnStore, civ: str, poll: float = 5.0, rounds: int = 0,
 
     def read_current():
         """`store.current()`, saying when the store is lost and found again."""
+        if check_now is not None:
+            # This read answers any request for one.
+            check_now.clear()
         try:
             got = store.current()
         except OSError as exc:
@@ -619,7 +630,7 @@ def follow(store: TurnStore, civ: str, poll: float = 5.0, rounds: int = 0,
 
         while not halted():
             left = deadline - clock()
-            if clock() >= next_read:
+            if clock() >= next_read or checking():
                 # A failed read is retried; the loop must not exit on it.
                 try:
                     cur, deadline = read_current()
