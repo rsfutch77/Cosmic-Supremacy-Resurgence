@@ -62,6 +62,9 @@ def make_app(player, **answers):
     app.view = FakeView(**answers)
     app.said = []
     app.say = app.said.append
+    # A change of sign-in lists galaxies again (test_galaxy_list_kept.py).
+    app.relisted = []
+    app.relist_games = lambda: app.relisted.append(True)
     for name in ("on_account", "_account_locked", "_log_in", "_google",
                  "_create_account", "_email_ready", "_guest_ready",
                  "_account_panel", "_guest_games", "_move_guest_seats",

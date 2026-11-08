@@ -1125,7 +1125,7 @@ UNREACHABLE_NOTE = "cannot reach the galaxy, retrying"
 # The same, once `turn_store.outage_of` has said which part is down. Keyed by
 # its OUTAGE_* values; release\tests checks the keys against them.
 OUTAGE_NOTES = {
-    "network": "no internet connection, check yours; retrying",
+    "network": "no internet connection; retrying",
     "service": "the galaxy server is not answering, retrying",
     "storage": "the game's file storage is not answering, retrying",
 }
@@ -2209,6 +2209,9 @@ def row_stalled_for(g, view=None) -> float:
 
     A row may not carry `turn_seconds`; a missing length uses the ceiling.
     """
+    if view is not None and view.stale:
+        # Rows held over a failed listing say nothing about the referee now.
+        return 0.0
     if view is not None and view.listed is not None:
         # A listing older than the floor (held over a sleep, a minimised
         # window or a stalled refresh) cannot show that the referee is behind.
@@ -2252,13 +2255,15 @@ class View(typing.NamedTuple):
     seated in; a missing entry means not asked. `own`: the store
     multiplayer.json names, played whatever the listing says. `listed`: when
     the rows were read, or None; only a recent listing can call a galaxy
-    stopped.
+    stopped. `stale`: the last listing failed, so these rows are from the one
+    before it.
     """
     now: "float | None" = None
     recs: "dict | None" = None
     submitted: "dict | None" = None
     own: "str | None" = None
     listed: "float | None" = None
+    stale: bool = False
 
     @property
     def clock(self) -> float:
@@ -2386,6 +2391,19 @@ GALAXY_LEFT = galaxy_column("left")
 # The cells whose text depends on the clock, rewritten between listings.
 GALAXY_STATUS = galaxy_column("status")
 LIVE_COLUMNS = (GALAXY_STATUS, GALAXY_LEFT)
+
+# The cells a failed listing cannot vouch for, drawn as STALE_TEXT over the
+# rows kept from the listing before it.
+STALE_KEYS = ("status", "turn", "left", "players")
+STALE_TEXT = "?"
+
+
+def cell_text(col, g, view) -> str:
+    """What one cell prints: the column's text, or STALE_TEXT when the rows
+    are held over a failed listing."""
+    if view.stale and col.key in STALE_KEYS:
+        return STALE_TEXT
+    return col.text(g, view)
 
 
 def sort_galaxies(rows, key: str = DEFAULT_SORT, reverse: bool = False,
@@ -3142,10 +3160,15 @@ class Launcher:
         self.games_dir = None
         self.own_store = None
         self.games_busy = False
+        # Set when the sign-in changes while a listing is in flight, so its
+        # answer is replaced by a new one (see `relist_games`).
+        self.games_again = False
         # The last listing, kept so sorting repaints without a new query. None
         # until one has been asked for.
         self.games_rows = None
         self.games_listed = None
+        # Whether the last listing failed and `games_rows` is the one before.
+        self.games_stale = False
         self.games_extra = {}
         self.games_err = None
         self.games_recs = {}
@@ -3477,12 +3500,15 @@ class Launcher:
         if ident is None:
             self.warn("This build cannot log in.")
             return
+        before = (ident.uid, (ident.account or {}).get("email"))
         if ident.account:
             self._account_panel(ident)
         else:
             self._log_in(ident)
         self._show_account()
         self._show_player_code()
+        if (ident.uid, (ident.account or {}).get("email")) != before:
+            self.relist_games()
 
     def _log_in(self, ident):
         """The log in dialog, until the player logs in, creates an account or
@@ -3770,6 +3796,20 @@ class Launcher:
         if self.page == "galaxies":
             self.refresh_games()
 
+    def relist_games(self):
+        """List again because the sign-in changed, so a galaxy this account is
+        in reads Play: now, or once the listing in flight answers, since that
+        one asked under the old sign-in. The old rows are dropped first, so a
+        failed listing cannot keep another sign-in's galaxies."""
+        self.games_rows = None
+        self.games_stale = False
+        if self.page == "galaxies":
+            self._draw_galaxies()
+        if self.games_busy:
+            self.games_again = True
+        else:
+            self.refresh_games()
+
     def refresh_games(self):
         """List off the UI thread and repaint when it answers.
 
@@ -3887,14 +3927,26 @@ class Launcher:
         write that file from this thread too.
         """
         self.games_busy = False
+        if getattr(self, "games_again", False):
+            # Asked under the sign-in before a log in or out, so asked again.
+            self.games_again = False
+            self.refresh_games()
+            return
         try:
             record_join_answers(self.data_dir, (extra or {}).get("answers"))
             record_reclaims(self.data_dir, (extra or {}).get("reclaims"))
         except OSError as exc:
             self.say(f"games   could not keep a join answer ({exc})")
-        self.games_rows = list(rows)
-        self.games_listed = time.time()
-        self.games_extra = extra or {}
+        if err and self.games_rows:
+            # A failed listing keeps the rows from the last one, with the cells
+            # it cannot vouch for drawn as STALE_TEXT, instead of emptying the
+            # table. `games_listed` stays the time those rows were read.
+            self.games_stale = True
+        else:
+            self.games_rows = list(rows)
+            self.games_listed = time.time()
+            self.games_extra = extra or {}
+            self.games_stale = False
         self.games_err = err
         if err:
             self.say(f"games   {err}")
@@ -3935,6 +3987,7 @@ class Launcher:
         """What a cell needs to know that its own row does not carry."""
         return View(now=time.time(), recs=self.games_recs,
                     listed=getattr(self, "games_listed", None),
+                    stale=getattr(self, "games_stale", False),
                     submitted=self.games_extra.get("submitted"),
                     own=self.own_store)
 
@@ -3965,7 +4018,7 @@ class Launcher:
                         or pending_join(g, view.recs))
             cells = []
             for i, col in enumerate(GALAXY_COLUMNS):
-                cells.append((col.text(g, view),
+                cells.append((cell_text(col, g, view),
                               self._cell_colour(col, g, view, near)))
                 if col in LIVE_COLUMNS:
                     self._clocks.append((r, i, col, g, near))
@@ -3983,7 +4036,12 @@ class Launcher:
         An unreachable directory is reported here and the table is still drawn,
         since the galaxy multiplayer.json names is listed regardless.
         """
-        if self.games_err:
+        listed = getattr(self, "games_listed", None)
+        if self.games_err and getattr(self, "games_stale", False) and listed:
+            self.view.set_games_status(
+                f"{self.games_err} Last listed {fmt_ago(time.time() - listed)}.",
+                WARN)
+        elif self.games_err:
             self.view.set_games_status(self.games_err, WARN)
         elif self.games_rows is None:
             self.view.set_games_status("listing galaxies…", DIM)
@@ -4052,10 +4110,14 @@ class Launcher:
             return
         view = self._galaxy_view()
         for r, i, col, g, near in self._clocks:
-            self.view.set_cell(r, i, col.text(g, view),
+            self.view.set_cell(r, i, cell_text(col, g, view),
                                self._cell_colour(col, g, view, near))
-        self._show_hint(sort_galaxies(self.games_rows or [], self.sort_key,
-                                      self.sort_desc, view), view)
+        rows = sort_galaxies(self.games_rows or [], self.sort_key,
+                             self.sort_desc, view)
+        if view.stale:
+            # Its "last listed" age moves with the clock.
+            self._show_source(rows)
+        self._show_hint(rows, view)
 
     def on_row(self, g, action: str):
         """What a row's one button does. View reads, Play plays, Review

@@ -509,7 +509,7 @@ paint = js[js.index("function drawRows"):js.index("// ── prompts")]
 check("the table's buttons are the ones row_action names",
       "row_action(" in draw and "ACTION_TEXT[action]" in draw, True)
 check("and the cells are the ones the columns name",
-      "col.text(g, view)" in draw, True)
+      "cell_text(col, g, view)" in draw, True)
 check("and the window is handed the rows rather than drawing its own",
       "self.view.draw_galaxies(drawn)" in draw, True)
 check("a repaint replaces the rows it drew and nothing else",
