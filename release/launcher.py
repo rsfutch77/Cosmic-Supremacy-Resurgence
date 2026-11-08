@@ -1123,6 +1123,13 @@ GALAXY_ENDED_NOTE = "this galaxy has ended"
 UNREACHABLE_NOTE = "cannot reach the galaxy, retrying"
 
 
+def unreachable_note(since: float, now: float = None) -> str:
+    """UNREACHABLE_NOTE with how long ago the galaxy was last reached, which
+    is how old the turn on hand may be. `since` is the first failed read."""
+    now = time.time() if now is None else now
+    return f"{UNREACHABLE_NOTE}; last reached {fmt_ago(now - since)}"
+
+
 # server\abandonment.py warns a player who has missed too many turns in a row
 # through `put_note`, each turn until they play or the seat goes. The warning
 # is found by `warning_note`'s opening line, which sets it apart from refusal
@@ -1415,6 +1422,24 @@ def fmt_left(seconds: float) -> str:
     if seconds >= 3600:
         return f"{seconds // 3600}h {seconds % 3600 // 60:02d}m"
     return f"{seconds // 60}:{seconds % 60:02d}"
+
+
+def fmt_due(deadline: float, now: float = None) -> str:
+    """A deadline as the player's local clock time: the time alone today,
+    with the weekday within six days, with the date further out."""
+    now = time.time() if now is None else now
+    due = time.localtime(deadline)
+    if due[:3] == time.localtime(now)[:3]:
+        return time.strftime("%H:%M", due)
+    if abs(deadline - now) < 6 * 86400:
+        return time.strftime("%a %H:%M", due)
+    return time.strftime("%d %b %H:%M", due)
+
+
+def fmt_countdown(deadline: float, now: float = None) -> str:
+    """Time remaining and the local time it runs out, as one phrase."""
+    now = time.time() if now is None else now
+    return f"{fmt_left(deadline - now)} left, due {fmt_due(deadline, now)}"
 
 
 def fmt_ago(seconds: float) -> str:
@@ -2238,7 +2263,8 @@ def _left_text(g, view):
     left = _left_value(g, view)
     if left is None:
         return ""
-    return f"{fmt_left(left)} left" if left > 0 else "time is up"
+    return (fmt_countdown(g.deadline, view.clock) if left > 0
+            else "time is up")
 
 
 def _players_value(g, view):
@@ -2491,12 +2517,33 @@ def beta_notice_module():
     return beta_notice
 
 
-def beta_notice_text(state):
+def reclaim_line(state, galaxy: str = None):
+    """The sentence under the notice saying when this galaxy removes an
+    empire for missed turns, or None when this build cannot tell.
+
+    The count is `abandonment.thresholds`, the referee's own reading of the
+    galaxy's state.
+    """
+    multiplayer_modules()
+    try:
+        import abandonment
+    except ImportError:
+        return None
+    _warn, reclaim = abandonment.thresholds(state)
+    where = f"In {galaxy}" if galaxy else "In this galaxy"
+    if not reclaim:
+        return f"{where}, missed turns never remove an empire."
+    return (f"{where}, an empire that misses {reclaim} turns in a row is "
+            "removed. Playing any turn resets the count.")
+
+
+def beta_notice_text(state, galaxy: str = None):
     """(notice, None) as this galaxy's player must read it, or (None, reason).
 
     `state` is the galaxy being joined, for any per-galaxy value the notice
-    states. A missing module, a missing file and an unfilled marker each
-    refuse with their own reason, which is meant to be shown.
+    states, and `galaxy` its name. A missing module, a missing file and an
+    unfilled marker each refuse with their own reason, which is meant to be
+    shown. The reclaim count follows the notice as written.
     """
     notice = beta_notice_module()
     if notice is None:
@@ -2510,6 +2557,9 @@ def beta_notice_text(state):
     if missing:
         return None, ("the notice still has nothing to say for "
                       + ", ".join(missing))
+    line = reclaim_line(state, galaxy)
+    if line:
+        body = f"{body.rstrip()}\n\n{line}\n"
     return body, None
 
 
@@ -4084,7 +4134,7 @@ class Launcher:
             return
 
         # The notice is the last step before the request.
-        notice, why = beta_notice_text(state)
+        notice, why = beta_notice_text(state, g.name or g.id)
         if notice is None:
             self.say(f"join: the beta notice is not showable ({why})")
             self.warn("This build cannot show you what you are joining.\n\n"
@@ -5073,7 +5123,8 @@ class Launcher:
                 stopped = self._mp_stalled()
                 label = ("sending your turn" if self.mp_sending
                          else "opening the game again" if self.mp_reopening
-                         else UNREACHABLE_NOTE if self._mp_cut_off()
+                         else unreachable_note(self.mp_unreachable)
+                         if self._mp_cut_off()
                          else f"turns have stopped, due {fmt_ago(stopped)}"
                          if stopped
                          else self.mp_note or "waiting for the next turn")
@@ -5089,13 +5140,14 @@ class Launcher:
                         # and is kept.
                         self.mp_turn, self.mp_deadline = self.mp_store.current()
                     turn = self.mp_turn
-                    left = self.mp_deadline - time.time()
-                    label = f"turn {turn} \u00b7 {fmt_left(left)} left"
+                    label = (f"turn {turn} \u00b7 "
+                             f"{fmt_countdown(self.mp_deadline)}")
                     # An overdue turn says it has stopped, not "0:00 left".
                     stopped = stalled_for(self.mp_deadline,
                                           self.mp_turn_seconds)
                     if self._mp_cut_off():
-                        label = f"turn {turn} \u00b7 {UNREACHABLE_NOTE}"
+                        label = (f"turn {turn} \u00b7 "
+                                 f"{unreachable_note(self.mp_unreachable)}")
                     elif stopped:
                         label = (f"turn {turn} \u00b7 turns have stopped, due "
                                  f"{fmt_ago(stopped)}")

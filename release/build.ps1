@@ -765,6 +765,8 @@ $piArgs = @(
     '--hidden-import', 'firebase_store',
     # beta_notice carries the text a player must see before joining.
     '--hidden-import', 'beta_notice',
+    # abandonment gives the reclaim count stated under the notice.
+    '--hidden-import', 'abandonment',
     '--hidden-import', 'save_parser',
     '--hidden-import', 'set_blob_player',
     '--hidden-import', 'inject_civ',

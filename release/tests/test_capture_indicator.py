@@ -336,7 +336,7 @@ check("a new turn reaches it from the loop rather than from a read",
       (app.view.turn_label.startswith("turn 15"), store.reads),
       (True, 1))
 check("with the loop's own clock on it",
-      app.view.turn_label, lambda t: t.endswith("left"))
+      app.view.turn_label, lambda t: " left, due " in t)
 
 print("\n8. a foreign server on the port is refused, not reused")
 boot = inspect.getsource(L.Launcher._boot)

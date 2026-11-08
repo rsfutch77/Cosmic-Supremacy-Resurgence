@@ -206,7 +206,8 @@ def cells(g):
 
 
 open_row = cells(row(deadline=now + 3660))
-check("an open row still counts down", open_row["left"], "1h 01m left")
+check("an open row still counts down", open_row["left"],
+      f"1h 01m left, due {L.fmt_due(now + 3660, now)}")
 check("and says it is open", open_row["status"], "open")
 shut = cells(row(status="closed", deadline=now + 3660))
 check("a closed row says it is closed", shut["status"], "closed")
@@ -230,6 +231,21 @@ check("and no reason not to show it", why, None)
 check("nothing in it is still unfilled", beta_notice.unfilled(body), [])
 check("no marker survives", "SET BEFORE THE BETA OPENS" in (body or ""), False)
 check("it names itself", beta_notice.title(body), "Before you join the beta")
+import abandonment                                          # noqa: E402
+check("it ends with when this galaxy removes an empire",
+      L.beta_notice_text({}, "Sandbox")[0].rstrip().endswith(
+          f"In Sandbox, an empire that misses {abandonment.RECLAIM_AFTER} "
+          "turns in a row is removed. Playing any turn resets the count."),
+      True)
+check("from the galaxy's own setting",
+      f"misses 10 turns" in L.beta_notice_text(
+          {abandonment.RECLAIM_KEY: 10}, "Sandbox")[0], True)
+check("and a galaxy that never reclaims says so",
+      L.beta_notice_text({abandonment.RECLAIM_KEY: 0}, "Sandbox")[0].rstrip()
+      .endswith("In Sandbox, missed turns never remove an empire."), True)
+check("the notice as written still comes first",
+      L.beta_notice_text({}, "Sandbox")[0].startswith(beta_notice.text().rstrip()),
+      True)
 # The notice states no turn limits and no per-galaxy value. It exists, it is
 # readable, and nothing in it is a placeholder.
 check("no key is left without a marker to fill",
