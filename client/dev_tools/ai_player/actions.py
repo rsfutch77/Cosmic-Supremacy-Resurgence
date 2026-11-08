@@ -922,8 +922,9 @@ class Actuator:
         return ok
 
     # N: conscript a citizen into the military (engine call).
-    # Never a farmer, so drafts do not undo S-01's farm assignments.
-    DRAFT_PREFERENCE = (6, 2, 5, 1)        # banker, scientist, miner, worker
+    # Never a farmer, so drafts do not undo S-01's farm assignments. Scientists
+    # go last: they are often a civ's only research, which R-XPL-01 keeps.
+    DRAFT_PREFERENCE = (6, 5, 1, 2)        # banker, miner, worker, scientist
 
     def draft_cost(self, civ, count=1):
         """The engine's own price for `count` conscripts. Read-only."""
