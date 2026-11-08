@@ -20,7 +20,8 @@ BEGIN, END = "<!-- constants:begin -->", "<!-- constants:end -->"
 
 # Fixed by the game or the memory layout, not chosen.
 ENGINE_FACTS = {"DEFAULT_LENGTH", "TROOP_BAY", "WAR", "SHIPYARD", "NEWS_VECTOR",
-                "NEWS_RECORD", "KIND_BATTLE", "OFF_POS", "MAX_TEXT"}
+                "NEWS_RECORD", "KIND_BATTLE", "OFF_POS", "MAX_TEXT",
+                "FARM_BONUS", "FOOD_PER_CITIZEN", "FOOD_TRAIT"}
 
 ASSIGN = re.compile(r"^([A-Z][A-Z0-9_]*)\s*=\s*(-?[0-9][0-9._]*(?:\s*\*\s*[0-9]+)?)"
                     r"\s*(?:#\s*(.*))?$")
