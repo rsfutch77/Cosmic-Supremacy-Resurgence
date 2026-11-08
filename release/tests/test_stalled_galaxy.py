@@ -588,6 +588,43 @@ check("an unreachable galaxy says how long ago it was last reached",
       L.unreachable_note(1000.0, 1300.0),
       f"{L.UNREACHABLE_NOTE}; last reached 5m ago")
 
+print("\n   and says which part is down")
+import turn_store                                               # noqa: E402
+check("the notes are keyed by turn_store's outage names",
+      sorted(L.OUTAGE_NOTES), sorted([turn_store.OUTAGE_NETWORK,
+                                      turn_store.OUTAGE_SERVICE,
+                                      turn_store.OUTAGE_STORAGE]))
+check("the network is named, with something to do",
+      L.unreachable_note(1000.0, 1300.0, outage="network"),
+      lambda t: t.startswith("no internet connection, check yours"))
+check("an unknown outage keeps the general note",
+      L.outage_note(None), L.UNREACHABLE_NOTE)
+app = bare(mp_store=Store(turn=12, left=900.0), mp_thread=Thread())
+app._mp_state("playing", turn=12, civ="DemoPlayer", seconds_left=900.0)
+app._mp_state("unreachable", civ="DemoPlayer", error="refused",
+              outage="service")
+app._refresh_turn()
+check("beside the turn number the galaxy server is named",
+      app.view.turn_label,
+      lambda t: t.startswith(f"turn 12 · {L.OUTAGE_NOTES['service']}"))
+app = bare(mp_store=Store(turn=12, left=-30.0), mp_thread=Thread())
+app.mp_client_gone = True
+app._mp_state("retrying", turn=12, civ="DemoPlayer", error="offline",
+              outage="network")
+app._refresh_turn()
+check("a final send being retried says the orders are not sent yet",
+      app.view.turn_label,
+      f"{L.RETRYING_LEAD}{L.OUTAGE_NOTES['network']}")
+check("and keeps them counted as on their way", app.mp_sending, True)
+import urllib.error                                             # noqa: E402
+import socket                                                   # noqa: E402
+check("a galaxy listing that fails offline names the network",
+      L.listing_problem(urllib.error.URLError(socket.gaierror(11001, "x"))),
+      f"Could not list galaxies: {L.OUTAGE_NOTES['network']}.")
+check("and anything else keeps the old line",
+      L.listing_problem(ValueError("bad answer")),
+      "Could not reach the galaxy directory: bad answer")
+
 
 for d in dirs:
     shutil.rmtree(d, ignore_errors=True)

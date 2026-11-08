@@ -1122,12 +1122,44 @@ GALAXY_ENDED_NOTE = "this galaxy has ended"
 # the galaxy's store: a connection or service problem, not the galaxy stopping.
 UNREACHABLE_NOTE = "cannot reach the galaxy, retrying"
 
+# The same, once `turn_store.outage_of` has said which part is down. Keyed by
+# its OUTAGE_* values; release\tests checks the keys against them.
+OUTAGE_NOTES = {
+    "network": "no internet connection, check yours; retrying",
+    "service": "the galaxy server is not answering, retrying",
+    "storage": "the game's file storage is not answering, retrying",
+}
 
-def unreachable_note(since: float, now: float = None) -> str:
-    """UNREACHABLE_NOTE with how long ago the galaxy was last reached, which
-    is how old the turn on hand may be. `since` is the first failed read."""
+
+# How the turn note opens while a final send is retried through an outage.
+RETRYING_LEAD = "orders not sent yet: "
+
+
+def outage_note(outage: str = None) -> str:
+    """What to say for an outage `outage_of` named, or UNREACHABLE_NOTE."""
+    return OUTAGE_NOTES.get(outage, UNREACHABLE_NOTE)
+
+
+def listing_problem(exc) -> str:
+    """The line above the galaxy table when listing failed: the outage in a
+    player's words when `turn_store.outage_of` can name it."""
+    try:
+        multiplayer_modules()
+        from turn_store import outage_of
+        outage = outage_of(exc)
+    except Exception:                                   # noqa: BLE001
+        outage = None
+    if outage in OUTAGE_NOTES:
+        return f"Could not list galaxies: {OUTAGE_NOTES[outage]}."
+    return f"Could not reach the galaxy directory: {exc}"
+
+
+def unreachable_note(since: float, now: float = None,
+                     outage: str = None) -> str:
+    """`outage_note` with how long ago the galaxy was last reached, which is
+    how old the turn on hand may be. `since` is the first failed read."""
     now = time.time() if now is None else now
-    return f"{UNREACHABLE_NOTE}; last reached {fmt_ago(now - since)}"
+    return f"{outage_note(outage)}; last reached {fmt_ago(now - since)}"
 
 
 # server\abandonment.py warns a player who has missed too many turns in a row
@@ -2480,7 +2512,7 @@ def galaxy_rows(data_dir: str, spec, player: "str | None" = None):
             else:
                 rows = list(directory.galaxies(player=player))
         except Exception as exc:    # any directory; unreachable is usual
-            problem = f"Could not reach the galaxy directory: {exc}"
+            problem = listing_problem(exc)
     cfg = multiplayer_config(data_dir)
     # Unless the directory already listed it. `row_action` matches that row by
     # its store, so it is still played from the store multiplayer.json names.
@@ -4553,6 +4585,7 @@ class Launcher:
         if kind == "unreachable":
             if getattr(self, "mp_unreachable", None) is None:
                 self.mp_unreachable = time.time()
+            self.mp_outage = facts.get("outage")
             return
         if kind == "reachable":
             self.mp_unreachable = None
@@ -4611,6 +4644,10 @@ class Launcher:
             # Closing the window after this must not report the turn as
             # still sending (see `_watch_mp_client`).
             self.mp_turn_open = False
+        elif kind == "retrying":
+            # The final send failed on an outage and is retried until the
+            # turn closes, so the orders are still on their way.
+            self.mp_sending = True
         if kind in ("serving", "playing", "reopening"):
             self.mp_turn_open = True
         if kind == "serving":
@@ -4622,6 +4659,7 @@ class Launcher:
             "playing": "",
             "collecting": "time is up, orders are in",
             "submitted": "orders sent",
+            "retrying": RETRYING_LEAD + outage_note(facts.get("outage")),
             "reopening": "opening the game again",
             "waiting": "waiting for the next turn",
             "overtaken": "that turn closed without you",
@@ -5136,6 +5174,11 @@ class Launcher:
         """
         return getattr(self, "mp_unreachable", None) is not None
 
+    def _mp_outage(self):
+        """Which part `turn_store.outage_of` said is down while the galaxy
+        cannot be read, or None when it could not say."""
+        return getattr(self, "mp_outage", None) if self._mp_cut_off() else None
+
     def _mp_stalled(self) -> float:
         """How long the galaxy being followed has been stopped, or 0.
 
@@ -5175,9 +5218,12 @@ class Launcher:
                 # reported only over the wait; this launcher's own work
                 # outranks it.
                 stopped = self._mp_stalled()
-                label = ("sending your turn" if self.mp_sending
+                retrying = (self.mp_note or "").startswith(RETRYING_LEAD)
+                label = (self.mp_note if self.mp_sending and retrying
+                         else "sending your turn" if self.mp_sending
                          else "opening the game again" if self.mp_reopening
-                         else unreachable_note(self.mp_unreachable)
+                         else unreachable_note(self.mp_unreachable,
+                                               outage=self._mp_outage())
                          if self._mp_cut_off()
                          else f"turns have stopped, due {fmt_ago(stopped)}"
                          if stopped
@@ -5201,7 +5247,8 @@ class Launcher:
                                           self.mp_turn_seconds)
                     if self._mp_cut_off():
                         label = (f"turn {turn} \u00b7 "
-                                 f"{unreachable_note(self.mp_unreachable)}")
+                                 + unreachable_note(self.mp_unreachable,
+                                                    outage=self._mp_outage()))
                     elif stopped:
                         label = (f"turn {turn} \u00b7 turns have stopped, due "
                                  f"{fmt_ago(stopped)}")
@@ -5493,7 +5540,8 @@ class Launcher:
                 # the galaxy has stopped (in that order).
                 stopped = self._mp_stalled()
                 if self._mp_cut_off():
-                    self._status_if_changed(UNREACHABLE_NOTE, WARN)
+                    self._status_if_changed(outage_note(self._mp_outage()),
+                                            WARN)
                 elif stopped:
                     self._status_if_changed(
                         f"the galaxy has stopped; its turn was due "

@@ -679,9 +679,55 @@ def _drop_auth_on_redirect(base: str = None):
             if new is not None and not _same_host(req.full_url, newurl):
                 new.headers = {k: v for k, v in new.headers.items()
                                if k.lower() != 'authorization'}
+            if new is not None:
+                # Where the request went last, for `outage_of`.
+                first = getattr(req, 'cs_first', req)
+                new.cs_first = first
+                first.cs_last_url = newurl
             return new
 
     return Handler
+
+
+# What a failed store call was, in terms a player can act on. `outage_of`
+# answers one of these, or None for a refusal or anything else.
+OUTAGE_NETWORK = 'network'      # this machine reaches nothing
+OUTAGE_SERVICE = 'service'      # the galaxy's server does not answer
+OUTAGE_STORAGE = 'storage'      # the file storage a turn is fetched from
+
+# Socket errors that mean this machine's own network is down: ENETDOWN,
+# ENETUNREACH, EHOSTUNREACH, and the same as Windows numbers them.
+NETWORK_ERRNOS = {100, 101, 113, 10050, 10051, 10065}
+
+
+def outage_of(exc):
+    """OUTAGE_NETWORK, OUTAGE_SERVICE or OUTAGE_STORAGE for a failed store
+    call, or None when it is not an outage.
+
+    A failed name lookup, a timeout and an unreachable network are this
+    machine's network. A refused or dropped connection and an HTTP 5xx, 408 or
+    429 are the far end: Storage when the request had been sent on to a
+    `TRUSTED_BLOB_HOSTS` host (`HttpTurnStore` records it as `cs_host`), the
+    galaxy's server otherwise. Any other HTTP status is a refusal.
+    """
+    import socket
+    import urllib.error
+    far = (OUTAGE_STORAGE if getattr(exc, 'cs_host', None) in TRUSTED_BLOB_HOSTS
+           else OUTAGE_SERVICE)
+    if isinstance(exc, urllib.error.HTTPError):
+        code = exc.code
+        return far if code >= 500 or code in (408, 429) else None
+    reason = getattr(exc, 'reason', exc)
+    if isinstance(reason, socket.gaierror) or isinstance(reason, TimeoutError):
+        return OUTAGE_NETWORK
+    if not isinstance(reason, OSError):
+        return None
+    if (getattr(reason, 'winerror', None) in NETWORK_ERRNOS
+            or getattr(reason, 'errno', None) in NETWORK_ERRNOS):
+        return OUTAGE_NETWORK
+    if isinstance(reason, ConnectionError):
+        return far
+    return None
 
 
 class HttpTurnStore:
@@ -741,7 +787,13 @@ class HttpTurnStore:
         if self._opener is None:
             self._opener = urllib.request.build_opener(
                 _drop_auth_on_redirect(self.base))
-        return self._opener.open(req, timeout=self.timeout)
+        try:
+            return self._opener.open(req, timeout=self.timeout)
+        except OSError as exc:
+            # The host the request was at when it failed, for `outage_of`.
+            url = getattr(req, 'cs_last_url', None) or req.full_url
+            exc.cs_host = urllib.parse.urlparse(url).hostname
+            raise
 
     def _get(self, path, want_json=True, headers=None, answer=None):
         """One GET, None for a 404.
