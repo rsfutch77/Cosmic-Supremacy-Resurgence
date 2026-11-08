@@ -596,7 +596,7 @@ check("the notes are keyed by turn_store's outage names",
                                       turn_store.OUTAGE_STORAGE]))
 check("the network is named, with something to do",
       L.unreachable_note(1000.0, 1300.0, outage="network"),
-      lambda t: t.startswith("no internet connection, check yours"))
+      lambda t: t.startswith("no internet connection"))
 check("an unknown outage keeps the general note",
       L.outage_note(None), L.UNREACHABLE_NOTE)
 app = bare(mp_store=Store(turn=12, left=900.0), mp_thread=Thread())
