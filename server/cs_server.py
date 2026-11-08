@@ -121,7 +121,8 @@ def _relay_arms(store, action: str, coaid: int = 0, png: bytes = b''):
         return '-1' if action == 'uploadcoa' else (
             '' if action == 'listcoa' else 'FAIL')
     if not got:
-        # Not cached by the client, so it asks again and an approval shows.
+        # Not cached by the client, so its next launch asks again and an
+        # approval shows.
         log(f'  -> {action}: relay coaid={coaid} not approved')
         return 'FAIL'
     log(f'  -> {action}: relay coaid={coaid} ({len(got)} bytes)')

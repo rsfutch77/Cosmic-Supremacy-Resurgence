@@ -3337,10 +3337,10 @@ class Launcher:
         player by the sign-in it was joined with."""
         if self.mp_thread is None or not self.mp_thread.is_alive():
             return False
-        self.warn("You are playing a galaxy right now.\n\nIt knows you by "
-                  "the login you joined it with. Close "
-                  f"{self.cfg['product']} to leave the galaxy, then log in "
-                  "or out.")
+        self.warn("You are playing a galaxy right now.\n\nThe launcher "
+                  "follows it until the launcher closes, even with the game "
+                  f"closed. Close {self.cfg['product']} to leave the galaxy, "
+                  "then log in or out.")
         return True
 
     def on_account(self):
