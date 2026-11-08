@@ -927,10 +927,17 @@ foreach ($m in $playable) {
 # release depends on no gitignored file. Its civ name and coat-of-arms prompt
 # (dialog 225) opens as shipped, and the referee carries the choice.
 # client\CosmicSupremacy_Player.exe is neither read nor written.
+# patch_status_bar.py cuts its status bar down to the turn number: the in-game
+# countdown runs off the clock the launcher holds, and the launcher shows the
+# deadline and the connection instead.
+$PatchStatusBar = Join-Path $ClientDir 'dev_tools\patch_status_bar.py'
 $mpModes = @($modes | Where-Object { $_.session -eq 'multiplayer' })
 if ($mpModes.Count -gt 0) {
     Write-Step "Adding the multiplayer client"
-    Copy-Client (Join-Path $ClientDir 'CosmicSupremacy_TestBed.exe') (Join-Path $GameDir 'CosmicSupremacy_Player.exe')
+    $player = Join-Path $GameDir 'CosmicSupremacy_Player.exe'
+    Copy-Client (Join-Path $ClientDir 'CosmicSupremacy_TestBed.exe') $player
+    & $VenvPy $PatchStatusBar --source $player --out $player | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "patch_status_bar failed for CosmicSupremacy_Player.exe" }
     Write-Ok 'game\CosmicSupremacy_Player.exe, from CosmicSupremacy_TestBed.exe'
 }
 

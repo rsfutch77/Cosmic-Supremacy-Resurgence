@@ -61,7 +61,7 @@ M = [
           'Submitting early, and resubmitting before the deadline, both work; the last submission counts.']),
         ('M6', 'A player knows, without opening the game, whether they have submitted this turn and whether the galaxy has moved on.',
          'Pinelle heuristic 5 (meaningful awareness information); Xbox XR-067, XR-070 (recently-played and friends presence, by analogy)',
-         ['The galaxy row shows "submitted" or "not yet" for this turn, and who else has submitted.',
+         ['The galaxy row shows "submitted" or "not yet" for this turn.',
           'A new turn is noticed by the launcher without a restart.']),
         ('M7', 'A player who stops playing is warned before their empire is reclaimed, and a reclaimed player can come back.',
          'Fair Play Alliance, "Building a Penalty and Reporting System" (warnings before penalties; a path back)',
