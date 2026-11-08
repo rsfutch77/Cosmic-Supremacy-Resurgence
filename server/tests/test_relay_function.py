@@ -231,6 +231,8 @@ def main():
             {'a': (uid_a, token_a), 'b': (uid_b, token_b),
              'c': (uid_c, token_c), 'd': (uid_d, token_d)})
         run_catalog(referee, galaxy, root, token_a, token_c)
+        run_guests()
+        run_views(referee, galaxy, token_a, token_b)
     finally:
         httpd.shutdown()
         httpd.server_close()
@@ -607,6 +609,36 @@ def run(referee, galaxy, base, player_a, player_b, player_c, anonymous, ids):
     run_joins(referee, galaxy, call, ids)
 
 
+def run_views(referee, galaxy, token_a, token_b):
+    """A seat named in a turn's views is served its own; see `fog`."""
+    def location(token, turn):
+        code, headers, _body = relay.handle(
+            'GET', f'/{galaxy}/turn/{turn}',
+            {'Authorization': f'Bearer {token}'}, b'')
+        return code, urllib.parse.unquote(headers.get('Location', ''))
+
+    print('each seat is served its own view of a turn')
+    turn = referee.state()['turn'] + 1
+    shared, view = make_blob(turn), make_blob(turn, filler=b'v')
+    referee.publish(turn, shared, views={'DemoPlayer': view})
+    code, where = location(token_a, turn)
+    check('a seat with a view is sent to it',
+          (code, referee.view_object('DemoPlayer', turn) in where), (302, True))
+    code, where = location(token_b, turn)
+    check('a seat without one is sent to the turn',
+          (code, referee.turn_object(turn) in where), (302, True))
+    check('the referee reads the view back',
+          referee.view_blob('DemoPlayer', turn), view)
+    check('and None for a civ given none', referee.view_blob('Neighbor', turn),
+          None)
+    referee.publish(turn + 1, make_blob(turn + 1))
+    check('the next publish deletes the last turn\'s views',
+          referee._has(referee.view_object('DemoPlayer', turn)), False)
+    code, where = location(token_a, turn + 1)
+    check('and a turn with no views sends every seat to the turn',
+          referee.turn_object(turn + 1) in where, True)
+
+
 def run_catalog(referee, galaxy, root, token_a, token_c):
     """The galaxy listing route and the directory over it.
 
@@ -670,6 +702,165 @@ def run_catalog(referee, galaxy, root, token_a, token_c):
     check('another signed-in caller sees the same galaxies',
           sorted(r.id for r in other.galaxies()),
           sorted(r.id for r in directory.galaxies()))
+
+
+def run_guests():
+    """How each seat signed in, the switch that turns guests away, and a
+    guest's seats and waiting joins moving to an account. On three galaxies
+    of its own."""
+    stamp = int(time.time())
+    one, two = f'guests1_{stamp}', f'guests2_{stamp}'
+    three = f'guests3_{stamp}'
+    ref1 = FirebaseTurnStore(PROJECT, one, bucket=BUCKET)
+    ref2 = FirebaseTurnStore(PROJECT, two, bucket=BUCKET)
+    ref3 = FirebaseTurnStore(PROJECT, three, bucket=BUCKET)
+    ref1.start(BLOB7, ['Alpha', 'Beta'], turn_seconds=1800)
+    ref2.start(BLOB7, ['Gamma', 'Delta'], turn_seconds=1800)
+    ref3.start(BLOB7, ['Epsilon'], turn_seconds=1800)
+    guest_uid, guest = sign_up()
+    linked_uid, linked_guest = sign_up()
+    acct_uid = f'acct{stamp}'
+    google = {'sign_in_provider': 'google.com'}
+    account = craft_token(sub=acct_uid, user_id=acct_uid, firebase=google)
+    # The same uid after its guest linked Google.
+    linked = craft_token(sub=linked_uid, user_id=linked_uid, firebase=google)
+    unverified = craft_token(sub=f'pw{stamp}', user_id=f'pw{stamp}',
+                             email_verified=False,
+                             firebase={'sign_in_provider': 'password'})
+    ref1.doc.set({'seats': {guest_uid: 'Alpha', linked_uid: 'Beta'}},
+                 merge=True)
+    ref2.doc.set({'seats': {guest_uid: 'Gamma', acct_uid: 'Delta'}},
+                 merge=True)
+
+    def lodge(name):
+        ref3.request_join({'name': name, 'uid': guest_uid,
+                           'requested_at': time.time(),
+                           'requested_turn': TURN})
+
+    lodge('Newbie')
+
+    def call(method, path, token=None, body=b''):
+        headers = {'Authorization': f'Bearer {token}'} if token else {}
+        return relay.handle(method, path, headers, body)
+
+    def doc(ref):
+        return ref.doc.get().to_dict() or {}
+
+    def move(token, body):
+        return call('POST', f'/{relay.GUEST_ROUTE}', token, body)
+
+    try:
+        print('guests: how each seat signed in')
+        check('a guest\'s submission is taken',
+              call('POST', f'/{one}/submission/{TURN}/Alpha', guest,
+                   MINE)[0], 200)
+        check('and its provider is recorded with the seat',
+              doc(ref1).get(relay.PROVIDERS_KEY, {}).get(guest_uid),
+              'anonymous')
+        check('the record is not served with the state',
+              relay.PROVIDERS_KEY in json.loads(
+                  call('GET', f'/{one}/state', guest)[2]), False)
+        call('POST', f'/{one}/submission/{TURN}/Beta', linked_guest, THEIRS)
+        check('a guest that linked Google keeps its uid and seat',
+              call('POST', f'/{one}/submission/{TURN}/Beta', linked,
+                   THEIRS)[0], 200)
+        check('and the record follows it to the new provider',
+              doc(ref1).get(relay.PROVIDERS_KEY, {}).get(linked_uid),
+              'google.com')
+
+        print('guests: the switch')
+        ref1.doc.update({relay.GUESTS_KEY: relay.GUESTS_REFUSE})
+        code, _h, body = call('GET', f'/{one}/state', guest)
+        check('with `guests: refuse` a guest is refused the state', code, 403)
+        check('in the sentence the launcher looks for',
+              'log in to play' in json.loads(body).get('error', ''), True)
+        before = ref1.submission('Alpha', TURN)
+        check('and a guest\'s submission is refused',
+              call('POST', f'/{one}/submission/{TURN}/Alpha', guest,
+                   make_blob(TURN, b'z'))[0], 403)
+        check('leaving the stored one as it was',
+              ref1.submission('Alpha', TURN), before)
+        check('an account still plays there',
+              call('GET', f'/{one}/state', linked)[0], 200)
+        check('a guest still plays a galaxy without the switch',
+              call('GET', f'/{two}/state', guest)[0], 200)
+        check('and still gets the listing', call('GET', '/', guest)[0], 200)
+        ref1.doc.update({relay.GUESTS_KEY: 'allow'})
+        check('any other value lets guests back',
+              call('GET', f'/{one}/state', guest)[0], 200)
+
+        print('guests: moving a guest\'s seats to an account')
+        body = json.dumps({'guest': guest}).encode('utf-8')
+        check('a guest bearer is refused', move(guest, body)[0], 403)
+        check('an unverified email account is refused',
+              move(unverified, body)[0], 403)
+        check('a body naming an account, not a guest, is refused',
+              move(account, json.dumps({'guest': linked}).encode())[0], 403)
+        check('a body that is not JSON is refused',
+              move(account, b'not json')[0], 400)
+        check('one naming no guest is refused',
+              move(account, b'{}')[0], 400)
+        check('and none of those moved a seat',
+              (doc(ref1)['seats'].get(guest_uid),
+               doc(ref2)['seats'].get(guest_uid)), ('Alpha', 'Gamma'))
+        code, _h, out = move(account, body)
+        got = json.loads(out)
+        check('both tokens move the seats', code, 200)
+        check('the answer names each seat moved, and each waiting join',
+              got.get('moved'), [{'galaxy': one, 'civ': 'Alpha'},
+                                 {'galaxy': three, 'civ': 'Newbie',
+                                  'waiting': True}])
+        check('and each kept, with why',
+              [(k['galaxy'], k['civ']) for k in got.get('kept') or []],
+              [(two, 'Gamma')])
+        after = doc(ref1)
+        check('the account holds the seat and the guest does not',
+              (after['seats'].get(acct_uid), guest_uid in after['seats']),
+              ('Alpha', False))
+        check('the move is recorded as the relay\'s',
+              {k: after['seats_rebound']['Alpha'].get(k)
+               for k in ('from', 'to', 'by')},
+              {'from': guest_uid, 'to': acct_uid, 'by': 'relay'})
+        check('and the seat now reads as the account\'s provider',
+              (after[relay.PROVIDERS_KEY].get(acct_uid),
+               guest_uid in after[relay.PROVIDERS_KEY]),
+              ('google.com', False))
+        check('a galaxy where the account already plays is left alone',
+              doc(ref2)['seats'],
+              {guest_uid: 'Gamma', acct_uid: 'Delta'})
+        check('the guest can no longer submit the moved seat',
+              call('POST', f'/{one}/submission/{TURN}/Alpha', guest,
+                   MINE)[0], 403)
+        check('the account can',
+              call('POST', f'/{one}/submission/{TURN}/Alpha', account,
+                   MINE)[0], 200)
+        again = json.loads(move(account, body)[2])
+        check('a second move finds nothing more to move',
+              (again.get('moved'), len(again.get('kept') or [])), ([], 1))
+        check('the waiting join is filed under the account now',
+              (ref3.join_request(guest_uid),
+               (ref3.join_request(acct_uid) or {}).get('name'),
+               (ref3.join_request(acct_uid) or {}).get('uid')),
+              (None, 'Newbie', acct_uid))
+        check('and the account reads it back through the relay',
+              json.loads(call('GET', f'/{three}/join',
+                              account)[2]).get('state'), 'waiting')
+        lodge('Newbie2')
+        third = json.loads(move(account, body)[2])
+        check('a guest join where the account is already waiting is kept',
+              [(k['galaxy'], k['civ'], k['why'])
+               for k in third.get('kept') or [] if k['galaxy'] == three],
+              [(three, 'Newbie2',
+                'this account is already waiting to join here')])
+        check('and both requests stay where they were',
+              ((ref3.join_request(guest_uid) or {}).get('name'),
+               (ref3.join_request(acct_uid) or {}).get('name')),
+              ('Newbie2', 'Newbie'))
+        check('the route takes only a POST',
+              call('GET', f'/{relay.GUEST_ROUTE}', account)[0], 404)
+    finally:
+        for ref in (ref1, ref2, ref3):
+            ref.delete_everything()
 
 
 def run_joins(referee, galaxy, call, ids):

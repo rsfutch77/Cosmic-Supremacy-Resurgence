@@ -107,6 +107,9 @@ class FakeView:
     def show_build(self, text):
         self.build = text
 
+    def show_update(self, text):
+        self.update = text
+
     # status
     def set_status(self, text, colour):
         self.status = (text, colour)

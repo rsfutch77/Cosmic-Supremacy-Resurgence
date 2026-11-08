@@ -982,6 +982,39 @@ UNSTAMPED_MARK = "unstamped"    # packaged, but the stamp did not reach the bund
 # Where a launcher that is too old is told to go.
 UPDATE_URL = "https://cosmicresurgence.com/download_client.php.html"
 
+# How often a running launcher looks for a newer release, after the first look
+# shortly after it starts.
+UPDATE_CHECK_FIRST_MS = 15_000
+UPDATE_CHECK_EVERY_MS = 6 * 3600 * 1000
+# A checkout may name a stand-in release feed and download prefix.
+UPDATE_FEED_ENV = "CS_UPDATE_FEED"
+UPDATE_DOWNLOADS_ENV = "CS_UPDATE_DOWNLOADS"
+
+
+def update_source() -> "tuple[str, str, bool]":
+    """The release feed and download prefix this build trusts, and whether
+    they are a test's.
+
+    A release build trusts updater.FEED. A test build carries its own in
+    build.json, written by build.ps1 -UpdateFeed; a checkout may name one in
+    the environment. A packaged build never reads the environment.
+    """
+    import updater
+    info = build_info()
+    feed, downloads = info.get("update_feed"), info.get("update_downloads")
+    if not getattr(sys, "frozen", False):
+        feed = os.environ.get(UPDATE_FEED_ENV) or feed
+        downloads = os.environ.get(UPDATE_DOWNLOADS_ENV) or downloads
+    if isinstance(feed, str) and isinstance(downloads, str) and feed and downloads:
+        return feed, downloads, True
+    return updater.FEED, updater.DOWNLOADS, False
+
+
+def can_self_update() -> bool:
+    """Only a packaged launcher replaces its own folder. A checkout's folder is
+    release\\ in the repository, so a checkout only looks."""
+    return bool(getattr(sys, "frozen", False))
+
 # The galaxy state key for its minimum build. A galaxy without one is played
 # by any build.
 MIN_BUILD_KEY = "min_build"
@@ -1089,6 +1122,45 @@ GALAXY_ENDED_NOTE = "this galaxy has ended"
 # the galaxy's store: a connection or service problem, not the galaxy stopping.
 UNREACHABLE_NOTE = "cannot reach the galaxy, retrying"
 
+# The same, once `turn_store.outage_of` has said which part is down. Keyed by
+# its OUTAGE_* values; release\tests checks the keys against them.
+OUTAGE_NOTES = {
+    "network": "no internet connection, check yours; retrying",
+    "service": "the galaxy server is not answering, retrying",
+    "storage": "the game's file storage is not answering, retrying",
+}
+
+
+# How the turn note opens while a final send is retried through an outage.
+RETRYING_LEAD = "orders not sent yet: "
+
+
+def outage_note(outage: str = None) -> str:
+    """What to say for an outage `outage_of` named, or UNREACHABLE_NOTE."""
+    return OUTAGE_NOTES.get(outage, UNREACHABLE_NOTE)
+
+
+def listing_problem(exc) -> str:
+    """The line above the galaxy table when listing failed: the outage in a
+    player's words when `turn_store.outage_of` can name it."""
+    try:
+        multiplayer_modules()
+        from turn_store import outage_of
+        outage = outage_of(exc)
+    except Exception:                                   # noqa: BLE001
+        outage = None
+    if outage in OUTAGE_NOTES:
+        return f"Could not list galaxies: {OUTAGE_NOTES[outage]}."
+    return f"Could not reach the galaxy directory: {exc}"
+
+
+def unreachable_note(since: float, now: float = None,
+                     outage: str = None) -> str:
+    """`outage_note` with how long ago the galaxy was last reached, which is
+    how old the turn on hand may be. `since` is the first failed read."""
+    now = time.time() if now is None else now
+    return f"{outage_note(outage)}; last reached {fmt_ago(now - since)}"
+
 
 # server\abandonment.py warns a player who has missed too many turns in a row
 # through `put_note`, each turn until they play or the seat goes. The warning
@@ -1122,10 +1194,21 @@ def warning_text(galaxy: str, lines) -> str:
 # sentence, `{"error": ...}`. `urllib`'s HTTPError text is only the status line.
 # A seat is refused in one of two sentences: SEAT_HELD where the galaxy lets a
 # sign-in claim a seat on first use, NOT_SEATED where it does not. An email
-# account is refused in UNVERIFIED until its address is verified.
+# account is refused in UNVERIFIED until its address is verified. A guest is
+# refused in GUESTS_REFUSED where the galaxy is played by account only.
 SEAT_HELD = "already held by another sign-in"
 NOT_SEATED = "is bound to this sign-in"
 UNVERIFIED = "verify the email address of this account"
+GUESTS_REFUSED = "log in to play"
+LOG_IN_TO_PLAY_TEXT = ("This galaxy is played by account only. Log in, or "
+                       "create an account, to play it.\n\nThe galaxies this "
+                       "install joined as a guest come with you when you log "
+                       "in.")
+
+
+def guest_refused(text) -> bool:
+    """Whether a refusal's text says this galaxy turns guests away."""
+    return GUESTS_REFUSED in str(text or "")
 
 
 def seat_refused(text) -> bool:
@@ -1201,6 +1284,8 @@ def refusal_box(text, civ: str, data_dir: str):
     if email_unverified(text):
         return VERIFY_LOOP_TEXT.format(
             email=account_email(data_dir) or "your address")
+    if guest_refused(text):
+        return LOG_IN_TO_PLAY_TEXT
     return None
 
 
@@ -1371,6 +1456,24 @@ def fmt_left(seconds: float) -> str:
     return f"{seconds // 60}:{seconds % 60:02d}"
 
 
+def fmt_due(deadline: float, now: float = None) -> str:
+    """A deadline as the player's local clock time: the time alone today,
+    with the weekday within six days, with the date further out."""
+    now = time.time() if now is None else now
+    due = time.localtime(deadline)
+    if due[:3] == time.localtime(now)[:3]:
+        return time.strftime("%H:%M", due)
+    if abs(deadline - now) < 6 * 86400:
+        return time.strftime("%a %H:%M", due)
+    return time.strftime("%d %b %H:%M", due)
+
+
+def fmt_countdown(deadline: float, now: float = None) -> str:
+    """Time remaining and the local time it runs out, as one phrase."""
+    now = time.time() if now is None else now
+    return f"{fmt_left(deadline - now)} left, due {fmt_due(deadline, now)}"
+
+
 def fmt_ago(seconds: float) -> str:
     """How long ago something happened, for a line that is repainted every
     second.
@@ -1538,6 +1641,71 @@ VERIFY_LOOP_TEXT = ("Your turn was not sent, because the email address of "
                     "Play again.")
 GUEST_GAMES_TEXT = ("Notify an Admin if you would like to merge your account with your email. "
                     "Send player code {code} in your message.")
+GUEST_MOVED_TEXT = ("The galaxies this install joined as a guest are now your "
+                    "account's: {names}.")
+GUEST_KEPT_TEXT = ("{galaxy} stays with this install's guest, because {why}. "
+                   "Log out to play it as the guest.")
+
+
+# A guest's seats move to the account the install logged in to, through the
+# relay's GUEST_ROUTE, on both sign-ins' tokens.
+GUEST_ROUTE = "_guest"
+
+# A guest is warned before it joins or plays a galaxy behind the relay, again
+# after GUEST_WARN_EVERY seconds, until galaxies refuse guests.
+GUEST_ONLY_TITLE = "Playing as a guest"
+GUEST_ONLY_TEXT = ("You are playing as this install's guest.\n\nGalaxies "
+                   "will soon be played by account only, and a guest will not "
+                   "be let in. Log in, or create an account, to keep playing. "
+                   "The galaxies this install joined as a guest come with you "
+                   "when you log in.")
+GUEST_WARN_EVERY = 24 * 3600
+
+
+def guest_relays(records, uid) -> list:
+    """The relays the guest's joined galaxies are played through, each once."""
+    out = []
+    for rec in (records or {}).values():
+        if rec.get("uid") != uid:
+            continue
+        spec = str(rec.get("store") or "").strip().rstrip("/")
+        if not spec.startswith(("http://", "https://")):
+            continue
+        if not store_wants_token(dict(rec, store=spec)):
+            continue
+        base = spec.rsplit("/", 1)[0]
+        if base not in out:
+            out.append(base)
+    return out
+
+
+def move_guest_seats(base: str, account_token: str, guest_token: str,
+                     timeout: float = 30.0) -> dict:
+    """Ask the relay to move the guest's seats to the account. Its reply,
+    `{"moved": [...], "kept": [...]}`, or the HTTPError it refused with."""
+    import urllib.request
+    req = urllib.request.Request(
+        f"{base.rstrip('/')}/{GUEST_ROUTE}",
+        data=json.dumps({"guest": guest_token}).encode("utf-8"),
+        method="POST",
+        headers={"Content-Type": "application/json",
+                 "Authorization": f"Bearer {account_token}"})
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return json.loads(resp.read() or b"{}")
+
+
+def adopt_moved_seats(data_dir: str, guest_uid: str, account_uid: str,
+                      moved) -> None:
+    """Rewrite the joined records the relay moved, so they name the account."""
+    galaxies = {str(m.get("galaxy")) for m in moved or []}
+    records = load_joined(data_dir)
+    changed = False
+    for gid, rec in records.items():
+        if gid in galaxies and rec.get("uid") == guest_uid:
+            rec["uid"] = account_uid
+            changed = True
+    if changed:
+        write_joined(data_dir, records)
 DROPPED_TEXT = ("You have been logged out.")
 LOG_OUT_TEXT = ("Log out?")
 GOOGLE_WAIT_TEXT = ("A login window should be open in your browser now.")
@@ -1726,6 +1894,17 @@ def seat_claim_problem(name: str, seats, held: str = None):
             "this one cannot take it over.\n\nChoose a different name, or if "
             "that seat is yours on another machine, ask whoever runs the "
             "galaxy to move it.")
+
+
+def seat_to_play(name: str, seats, joined=None) -> str:
+    """The seat Play follows: the player's name, or the name this install
+    joined the galaxy as when only that one is in the roster. A rename or a
+    login can change the player's name after the join."""
+    seats = [str(c) for c in (seats or [])]
+    held = (joined or {}).get("name")
+    if name not in seats and held in seats:
+        return held
+    return name
 
 
 def pending_join(g, recs) -> bool:
@@ -2116,7 +2295,8 @@ def _left_text(g, view):
     left = _left_value(g, view)
     if left is None:
         return ""
-    return f"{fmt_left(left)} left" if left > 0 else "time is up"
+    return (fmt_countdown(g.deadline, view.clock) if left > 0
+            else "time is up")
 
 
 def _players_value(g, view):
@@ -2332,7 +2512,7 @@ def galaxy_rows(data_dir: str, spec, player: "str | None" = None):
             else:
                 rows = list(directory.galaxies(player=player))
         except Exception as exc:    # any directory; unreachable is usual
-            problem = f"Could not reach the galaxy directory: {exc}"
+            problem = listing_problem(exc)
     cfg = multiplayer_config(data_dir)
     # Unless the directory already listed it. `row_action` matches that row by
     # its store, so it is still played from the store multiplayer.json names.
@@ -2369,12 +2549,33 @@ def beta_notice_module():
     return beta_notice
 
 
-def beta_notice_text(state):
+def reclaim_line(state, galaxy: str = None):
+    """The sentence under the notice saying when this galaxy removes an
+    empire for missed turns, or None when this build cannot tell.
+
+    The count is `abandonment.thresholds`, the referee's own reading of the
+    galaxy's state.
+    """
+    multiplayer_modules()
+    try:
+        import abandonment
+    except ImportError:
+        return None
+    _warn, reclaim = abandonment.thresholds(state)
+    where = f"In {galaxy}" if galaxy else "In this galaxy"
+    if not reclaim:
+        return f"{where}, missed turns never remove an empire."
+    return (f"{where}, an empire that misses {reclaim} turns in a row is "
+            "removed. Playing any turn resets the count.")
+
+
+def beta_notice_text(state, galaxy: str = None):
     """(notice, None) as this galaxy's player must read it, or (None, reason).
 
     `state` is the galaxy being joined, for any per-galaxy value the notice
-    states. A missing module, a missing file and an unfilled marker each
-    refuse with their own reason, which is meant to be shown.
+    states, and `galaxy` its name. A missing module, a missing file and an
+    unfilled marker each refuse with their own reason, which is meant to be
+    shown. The reclaim count follows the notice as written.
     """
     notice = beta_notice_module()
     if notice is None:
@@ -2388,6 +2589,9 @@ def beta_notice_text(state):
     if missing:
         return None, ("the notice still has nothing to say for "
                       + ", ".join(missing))
+    line = reclaim_line(state, galaxy)
+    if line:
+        body = f"{body.rstrip()}\n\n{line}\n"
     return body, None
 
 
@@ -2764,6 +2968,18 @@ class GalaxyRow(typing.NamedTuple):
     cells: list
     action: "str | None" = None
     on_action: "typing.Callable | None" = None
+    enabled: bool = True
+
+
+# What the followed galaxy's turn is doing while every row's Play is greyed
+# out (`Launcher.turn_busy`), and the line the Galaxies page says then.
+TURN_SENDING = "sending"
+TURN_PROCESSING = "processing"
+TURN_BUSY_HINT = {
+    TURN_SENDING: "Your turn is being sent. Play comes back once it has gone.",
+    TURN_PROCESSING: ("The turn is being processed. Play comes back when the "
+                      "next turn opens."),
+}
 
 # The capture indicator: what the turn loop last did with the player's work,
 # shown beside the server dot.
@@ -2931,9 +3147,15 @@ class Launcher:
         # startup still records where the game was looked for.
         self._logfh = None
         self._pending: "list[str]" = []
+        # A newer release that is downloaded, staged and verified, as
+        # (Release, staged folder), and whether a look for one is in flight.
+        self.update_ready = None
+        self.update_busy = False
 
         view.build(self)
         self._boot()
+        self._update_boot()
+        view.after(UPDATE_CHECK_FIRST_MS, self._update_tick)
         view.after(120, self._drain)
         view.after(1000, self._watch_game)
 
@@ -3209,10 +3431,10 @@ class Launcher:
         player by the sign-in it was joined with."""
         if self.mp_thread is None or not self.mp_thread.is_alive():
             return False
-        self.warn("You are playing a galaxy right now.\n\nIt knows you by "
-                  "the login you joined it with. Close "
-                  f"{self.cfg['product']} to leave the galaxy, then log in "
-                  "or out.")
+        self.warn("You are playing a galaxy right now.\n\nThe launcher "
+                  "follows it until the launcher closes, even with the game "
+                  f"closed. Close {self.cfg['product']} to leave the galaxy, "
+                  "then log in or out.")
         return True
 
     def on_account(self):
@@ -3264,6 +3486,7 @@ class Launcher:
                     problem = ""
                     continue
                 guest = self._guest_games(ident)
+                guest_uid = ident.uid
                 code = player_code(ident.uid)
                 if value == "google":
                     linked, info = self._google(ident, secret)
@@ -3280,9 +3503,45 @@ class Launcher:
             if linked:
                 self.warn(GOOGLE_LINKED_TEXT)
             elif guest:
-                self.warn(GUEST_GAMES_TEXT.format(names=", ".join(guest),
-                                                  code=code))
+                self._move_guest_seats(ident, guest_uid, guest, code)
             return
+
+    def _move_guest_seats(self, ident, guest_uid, names, code):
+        """Move the guest's seats to the account just logged in to, and say
+        what moved. Anything the relay could not move falls back to sending
+        the operator the player code."""
+        bases = guest_relays(load_joined(self.data_dir), guest_uid)
+
+        def work():
+            got, account = ident.guest(), ident.token()
+            if not got or not account or got[0] != guest_uid:
+                return None
+            return [move_guest_seats(base, account, got[1]) for base in bases]
+
+        replies = None
+        if bases:
+            try:
+                replies = self.view.wait_for("Moving your galaxies…", work)
+            except Exception as exc:                # noqa: BLE001
+                said = relay_refusal(exc)
+                self.say(f"account: guest seats not moved, "
+                         f"{said[1] if said else exc}")
+        moved = [m for r in replies or [] for m in r.get("moved") or []]
+        kept = [k for r in replies or [] for k in r.get("kept") or []]
+        if not moved and not kept:
+            self.warn(GUEST_GAMES_TEXT.format(names=", ".join(names),
+                                              code=code))
+            return
+        adopt_moved_seats(self.data_dir, guest_uid, ident.uid, moved)
+        lines = []
+        if moved:
+            lines.append(GUEST_MOVED_TEXT.format(
+                names=", ".join(str(m.get("galaxy")) for m in moved)))
+        lines.extend(GUEST_KEPT_TEXT.format(galaxy=k.get("galaxy"),
+                                            why=k.get("why"))
+                     for k in kept)
+        self.say(f"account: {len(moved)} guest seat(s) moved, {len(kept)} kept")
+        self.warn("\n\n".join(lines))
 
     def _google(self, ident, secret):
         """Log in with Google in the player's browser, with a Cancel button
@@ -3379,6 +3638,30 @@ class Launcher:
             else:
                 self.say("account: email not verified, not joining or playing")
                 return False
+
+    def _guest_ready(self) -> bool:
+        """Whether a guest goes on to join or play, after it is warned that
+        galaxies are going account only. An account goes on unasked, and so
+        does a guest warned within GUEST_WARN_EVERY. A guest that logs in from
+        the warning goes on as the account."""
+        ident = account_identity(self.data_dir)
+        if ident is None or ident.account:
+            return True
+        now = time.monotonic()
+        last = getattr(self, "_guest_warned_at", None)
+        if last is not None and now - last < GUEST_WARN_EVERY:
+            return True
+        value = self.view.choose(
+            GUEST_ONLY_TITLE, GUEST_ONLY_TEXT,
+            [("Play as guest", "guest", False), ("Log in", "log_in", True)])
+        if value is None:
+            self.say("account: guest warning closed, not joining or playing")
+            return False
+        self._guest_warned_at = now
+        if value == "log_in":
+            self.on_account()
+            return self._email_ready()
+        return True
 
     def _guest_games(self, ident):
         """The names of the galaxies this install's guest joined, while the
@@ -3639,6 +3922,9 @@ class Launcher:
             self._show_hint(rows, view)
             return
         drawn = []
+        # Every row's Play waits out a turn being sent or processed.
+        busy = self.turn_busy()
+        self._drawn_busy = busy
         for r, g in enumerate(rows):
             action = row_action(g, view.recs, view.own)
             # Lit rows are this player's business: in it, asked to join it, or
@@ -3651,10 +3937,11 @@ class Launcher:
                               self._cell_colour(col, g, view, near)))
                 if col in LIVE_COLUMNS:
                     self._clocks.append((r, i, col, g, near))
+            live = action is not None and not (busy and action == PLAY)
             drawn.append(GalaxyRow(
                 cells, ACTION_TEXT[action] if action is not None else None,
-                (lambda gg=g, a=action: self.on_row(gg, a))
-                if action is not None else None))
+                (lambda gg=g, a=action: self.on_row(gg, a)) if live else None,
+                enabled=live or action is None))
         self.view.draw_galaxies(drawn)
         self._show_hint(rows, view)
 
@@ -3691,7 +3978,10 @@ class Launcher:
         reclaimed = [g for g, a in zip(rows, actions) if a == RECLAIMED]
         ended = [g for g, a in zip(rows, actions) if a == ENDED]
         text = ""
-        if stalled:
+        busy = self.turn_busy()
+        if busy:
+            text = TURN_BUSY_HINT[busy]
+        elif stalled:
             text = stall_hint(stalled)
         elif refused:
             names = ", ".join(g.name or g.id for g in refused)
@@ -3721,6 +4011,11 @@ class Launcher:
         do not move under the pointer. The hint is redrawn too, since a galaxy
         becomes stopped by the clock.
         """
+        if (self.games_rows is not None
+                and self.turn_busy() != getattr(self, "_drawn_busy", None)):
+            # Play greys out or comes back as the turn is sent and processed.
+            self._draw_galaxies()
+            return
         view = self._galaxy_view()
         for r, i, col, g, near in self._clocks:
             self.view.set_cell(r, i, col.text(g, view),
@@ -3732,6 +4027,11 @@ class Launcher:
         """What a row's one button does. View reads, Play plays, Review
         explains a refusal, an ended galaxy or a seat taken back."""
         if action == PLAY:
+            busy = self.turn_busy()
+            if busy:
+                # A press that raced the greying out.
+                self.say(f"multiplayer: Play waits, the turn is {busy}")
+                return
             self.play_galaxy(g)
         elif action == REASON:
             self.show_refusal(g)
@@ -3825,8 +4125,8 @@ class Launcher:
         when = f"turn {g.turn + 1}" if g.turn is not None else "its first turn"
         who = f" as {civ}" if civ else ""
         lead = (f"You are about to join {g.name or g.id}{who}. New players "
-                "arrive at a turn boundary, so your empire appears at "
-                f"{when}, and its row here gets a Play button then.")
+                "arrive at a turn boundary, your empire appears at "
+                f"{when}.")
         return self.view.beta_notice(heading, lead, body)
 
     def on_join(self, g):
@@ -3855,7 +4155,8 @@ class Launcher:
         _player_turn, turn_store = mods
 
         cfg = {"store": g.store}
-        if store_wants_token(cfg) and not self._email_ready():
+        if store_wants_token(cfg) and not (self._email_ready()
+                                          and self._guest_ready()):
             return
         token = player_token(self.data_dir) if store_wants_token(cfg) else None
         try:
@@ -3873,7 +4174,7 @@ class Launcher:
             if problem:
                 self.say(f"join: build {build_id()} is below {g.id}'s minimum "
                          f"{state.get(MIN_BUILD_KEY)!r}")
-                self.warn(problem)
+                self._below_minimum(problem, state.get(MIN_BUILD_KEY))
                 return
             # The listing may predate the galaxy closing.
             problem = closed_problem(state)
@@ -3894,7 +4195,7 @@ class Launcher:
             return
 
         # The notice is the last step before the request.
-        notice, why = beta_notice_text(state)
+        notice, why = beta_notice_text(state, g.name or g.id)
         if notice is None:
             self.say(f"join: the beta notice is not showable ({why})")
             self.warn("This build cannot show you what you are joining.\n\n"
@@ -3956,6 +4257,31 @@ class Launcher:
             return None
         return self.mp_playing or {}
 
+    def turn_busy(self):
+        """TURN_SENDING while the followed galaxy's orders are going,
+        TURN_PROCESSING from its deadline until the next turn opens, else None.
+
+        Before the deadline Play reopens the game to change the orders sent,
+        so a player who closed the game early is not busy. A stopped or
+        unreachable galaxy is not either: the relay takes orders until the
+        turn changes, so reopening still counts.
+        """
+        if (getattr(self, "mp_thread", None) is None
+                or self.playing_now() is None
+                or not getattr(self, "mp_client_gone", False)):
+            return None
+        if getattr(self, "mp_sending", False):
+            return TURN_SENDING
+        deadline = getattr(self, "mp_deadline", None)
+        if (not getattr(self, "mp_waiting", False) or deadline is None
+                or getattr(self, "mp_reopening", False)
+                or getattr(self, "mp_closed", False)
+                or self._mp_cut_off() or time.time() < deadline
+                or stalled_for(deadline, getattr(self, "mp_turn_seconds",
+                                                 None))):
+            return None
+        return TURN_PROCESSING
+
     def _take_turn_loop(self, g) -> bool:
         """Whether the turn loop is free for this galaxy, asking to switch.
 
@@ -3985,9 +4311,7 @@ class Launcher:
                 self.say(f"multiplayer: opening {where} again, with the "
                          f"orders you already sent")
             else:
-                self.warn(f"You are already playing {here}.\n\nIts turns "
-                          "are being followed now, and the readout on "
-                          "the home page is this galaxy's.")
+                self.warn(f"You are already playing {here}.")
             return False
 
         there = (g.name or g.id) if g is not None else "another galaxy"
@@ -4078,7 +4402,8 @@ class Launcher:
         # behind the Cloud Function gets this install's Firebase identity; a
         # folder or LAN turn_server gets none. An identity that cannot be
         # minted is a missing header, not a refusal to start.
-        if store_wants_token(cfg) and not self._email_ready():
+        if store_wants_token(cfg) and not (self._email_ready()
+                                          and self._guest_ready()):
             return
         token = player_token(self.data_dir) if store_wants_token(cfg) else None
         if token is not None and token() is None:
@@ -4101,7 +4426,7 @@ class Launcher:
             if problem:
                 self.say(f"multiplayer: build {build_id()} is below this "
                          f"galaxy's minimum {state.get(MIN_BUILD_KEY)!r}")
-                self.warn(problem)
+                self._below_minimum(problem, state.get(MIN_BUILD_KEY))
                 return
             # Also ahead of the roster: a closed galaxy refuses submissions.
             problem = closed_problem(state)
@@ -4119,6 +4444,7 @@ class Launcher:
             seats = None
             self.say(f"multiplayer: could not read the roster ({exc})")
         if seats is not None:
+            civ = seat_to_play(civ, seats, cfg.get("joined"))
             taken = reclaimed_seat(state, civ)
             problem = roster_problem(civ, seats, taken)
             if problem:
@@ -4154,6 +4480,12 @@ class Launcher:
                                    else store_label(cfg["store"]), warning))
 
         self.mp_store = store
+        # Coats of arms go to this galaxy's relay while multiplayer is played.
+        server = sys.modules.get("cs_server")
+        if server is not None:
+            server.MP_STORE = lambda: (
+                self.mp_store if (self.running_mode or {}).get("id")
+                == "multiplayer" else None)
         self.mp_civ = civ
         self.mp_closed = False
         self.mp_probed = None
@@ -4251,6 +4583,7 @@ class Launcher:
         if kind == "unreachable":
             if getattr(self, "mp_unreachable", None) is None:
                 self.mp_unreachable = time.time()
+            self.mp_outage = facts.get("outage")
             return
         if kind == "reachable":
             self.mp_unreachable = None
@@ -4309,6 +4642,10 @@ class Launcher:
             # Closing the window after this must not report the turn as
             # still sending (see `_watch_mp_client`).
             self.mp_turn_open = False
+        elif kind == "retrying":
+            # The final send failed on an outage and is retried until the
+            # turn closes, so the orders are still on their way.
+            self.mp_sending = True
         if kind in ("serving", "playing", "reopening"):
             self.mp_turn_open = True
         if kind == "serving":
@@ -4320,6 +4657,7 @@ class Launcher:
             "playing": "",
             "collecting": "time is up, orders are in",
             "submitted": "orders sent",
+            "retrying": RETRYING_LEAD + outage_note(facts.get("outage")),
             "reopening": "opening the game again",
             "waiting": "waiting for the next turn",
             "overtaken": "that turn closed without you",
@@ -4834,6 +5172,11 @@ class Launcher:
         """
         return getattr(self, "mp_unreachable", None) is not None
 
+    def _mp_outage(self):
+        """Which part `turn_store.outage_of` said is down while the galaxy
+        cannot be read, or None when it could not say."""
+        return getattr(self, "mp_outage", None) if self._mp_cut_off() else None
+
     def _mp_stalled(self) -> float:
         """How long the galaxy being followed has been stopped, or 0.
 
@@ -4873,9 +5216,13 @@ class Launcher:
                 # reported only over the wait; this launcher's own work
                 # outranks it.
                 stopped = self._mp_stalled()
-                label = ("sending your turn" if self.mp_sending
+                retrying = (self.mp_note or "").startswith(RETRYING_LEAD)
+                label = (self.mp_note if self.mp_sending and retrying
+                         else "sending your turn" if self.mp_sending
                          else "opening the game again" if self.mp_reopening
-                         else UNREACHABLE_NOTE if self._mp_cut_off()
+                         else unreachable_note(self.mp_unreachable,
+                                               outage=self._mp_outage())
+                         if self._mp_cut_off()
                          else f"turns have stopped, due {fmt_ago(stopped)}"
                          if stopped
                          else self.mp_note or "waiting for the next turn")
@@ -4891,13 +5238,15 @@ class Launcher:
                         # and is kept.
                         self.mp_turn, self.mp_deadline = self.mp_store.current()
                     turn = self.mp_turn
-                    left = self.mp_deadline - time.time()
-                    label = f"turn {turn} \u00b7 {fmt_left(left)} left"
+                    label = (f"turn {turn} \u00b7 "
+                             f"{fmt_countdown(self.mp_deadline)}")
                     # An overdue turn says it has stopped, not "0:00 left".
                     stopped = stalled_for(self.mp_deadline,
                                           self.mp_turn_seconds)
                     if self._mp_cut_off():
-                        label = f"turn {turn} \u00b7 {UNREACHABLE_NOTE}"
+                        label = (f"turn {turn} \u00b7 "
+                                 + unreachable_note(self.mp_unreachable,
+                                                    outage=self._mp_outage()))
                     elif stopped:
                         label = (f"turn {turn} \u00b7 turns have stopped, due "
                                  f"{fmt_ago(stopped)}")
@@ -4991,14 +5340,132 @@ class Launcher:
                     "until it finishes, or your orders may not arrive.\n\n"
                     "Close anyway?"):
                 return
-        self.stop_multiplayer("the launcher is closing")
-        self.stop_ai("the launcher is closing")
+        self._shut_down("the launcher is closing")
+
+    def _shut_down(self, why: str):
+        self.stop_multiplayer(why)
+        self.stop_ai(why)
         for srv in self.servers:
             try:
                 srv.shutdown()
             except Exception:
                 pass
         self.view.close()
+
+    def _update_boot(self):
+        """Tell the helper that started this launcher it is up, or report an
+        update that was put back, and clear what an update left behind."""
+        if not can_self_update():
+            return
+        import updater
+        here = app_dir()
+        if len(sys.argv) == 3 and sys.argv[1] == "--updated":
+            updater.confirm_started(here)
+            self.say(f"update: this launcher is now build {build_id()}")
+            helper = int(sys.argv[2]) if sys.argv[2].isdigit() else 0
+
+            def tidy():
+                updater.wait_for_exit(helper, updater.START_WAIT + 30)
+                updater.clean(here)
+            threading.Thread(target=tidy, daemon=True, name="update-clean").start()
+            return
+        why = updater.take_failure(here)
+        updater.clean(here)
+        if why:
+            self.say(f"update: put back the old build ({why})")
+            self.warn("The update could not be installed, so this launcher is "
+                      f"still build {build_id()}: {why}.\n\nThe current "
+                      f"release is at\n{UPDATE_URL}")
+
+    def _update_tick(self):
+        """Look for a newer release, off the UI thread. A packaged launcher
+        also downloads, stages and verifies it."""
+        self.view.after(UPDATE_CHECK_EVERY_MS, self._update_tick)
+        if self.update_busy or self.update_ready is not None:
+            return
+        self.update_busy = True
+        feed, downloads, test = update_source()
+        current, here, install = build_id(), app_dir(), can_self_update()
+
+        def work():
+            import updater
+            found, err = None, None
+            try:
+                if install:
+                    found = updater.prepare(here, current, feed, downloads)
+                else:
+                    release = updater.check(current, feed, downloads)
+                    found = (release, None) if release else None
+            except updater.UpdateError as exc:
+                err = str(exc)
+            except Exception as exc:
+                err = f"the update check failed ({exc!r})"
+            self.msgs.put(("__update__", found, err, feed if test else None))
+        threading.Thread(target=work, daemon=True, name="update").start()
+
+    def _on_update_checked(self, found, err, test_feed):
+        self.update_busy = False
+        where = f" (test feed {test_feed})" if test_feed else ""
+        if err:
+            self.say(f"update: not updated, {err}{where}")
+            return
+        if found is None:
+            self.say(f"update: no release newer than {build_id()}{where}")
+            return
+        release, staged = found
+        if staged is None:
+            self.say(f"update: v{release.version} is out{where}; a checkout "
+                     "does not install it")
+            return
+        self.update_ready = found
+        self.say(f"update: v{release.version} is downloaded and its "
+                 f"signatures checked{where}")
+        self.view.show_update(f"Update to v{release.version}")
+
+    def _below_minimum(self, problem: str, minimum):
+        """A galaxy needs a newer build: offer the downloaded one if it is new
+        enough, or say where to get one."""
+        ready = self.update_ready
+        if ready is None or build_is_below(ready[0].version, str(minimum)):
+            self.warn(problem)
+            return
+        if self.view.ask_ok_cancel(
+                "Update needed",
+                f"This galaxy needs build {minimum} or newer, and this "
+                f"launcher is build {build_id()}.\n\nv{ready[0].version} is "
+                "downloaded and checked. Update now?"):
+            self.on_update(confirm=False)
+
+    def on_update(self, confirm: bool = True):
+        """Restart into the downloaded release, when nothing would be lost."""
+        if self.update_ready is None:
+            return
+        release, staged = self.update_ready
+        if running_clients(self.client_exes):
+            self.warn("Close the game first.\n\nThe update replaces the game's "
+                      "files, so it waits until the game is closed.")
+            return
+        if self.mp_thread is not None and self.mp_thread.is_alive():
+            self._watch_mp_client(False)
+            if self.mp_sending:
+                self.warn("Your turn is still being sent.\n\nUpdate once it "
+                          "has gone.")
+                return
+        if confirm and not self.view.ask_ok_cancel(
+                "Update",
+                f"Restart into v{release.version}?\n\nThe launcher will close and "
+                "open again on its own."):
+            return
+        import updater
+        self.say(f"update: restarting into v{release.version}")
+        try:
+            updater.hand_off(app_dir(), staged)
+        except OSError as exc:
+            self.say(f"update: could not start the new launcher ({exc})")
+            self.warn(f"The update could not start ({exc}).\n\nThe current "
+                      f"release is at\n{UPDATE_URL}")
+            return
+        self._shut_down("the launcher is updating")
 
     def say(self, msg: str):
         self.view.append_log(msg)
@@ -5071,7 +5538,8 @@ class Launcher:
                 # the galaxy has stopped (in that order).
                 stopped = self._mp_stalled()
                 if self._mp_cut_off():
-                    self._status_if_changed(UNREACHABLE_NOTE, WARN)
+                    self._status_if_changed(outage_note(self._mp_outage()),
+                                            WARN)
                 elif stopped:
                     self._status_if_changed(
                         f"the galaxy has stopped; its turn was due "
@@ -5168,6 +5636,8 @@ class Launcher:
                 elif isinstance(msg, tuple) and msg and msg[0] == "__mp_played__":
                     _tag, gid, turn = msg
                     self._on_mp_played(gid, turn)
+                elif isinstance(msg, tuple) and msg and msg[0] == "__update__":
+                    self._on_update_checked(*msg[1:])
                 elif isinstance(msg, tuple) and msg and msg[0] == "__mp_refused__":
                     self.warn(msg[1])
                 elif isinstance(msg, tuple) and msg and msg[0] == "__log_offer__":
@@ -5215,6 +5685,15 @@ def main() -> int:
     # web_view imports this module by name. Run as a script it is __main__,
     # and without this the import would load a second copy beside it.
     sys.modules.setdefault("launcher", sys.modules[__name__])
+    # The updater asks a staged launcher for its build, and starts it to
+    # finish the swap. Neither opens a window.
+    if len(sys.argv) == 3 and sys.argv[1] == "--print-build":
+        with open(sys.argv[2], "w", encoding="utf-8") as fh:
+            json.dump(build_info(), fh)
+        return 0
+    if len(sys.argv) == 4 and sys.argv[1] == "--finish-update":
+        import updater
+        return updater.finish_main(sys.argv[2:])
     with open(bundled("manifest.json"), "r", encoding="utf-8") as fh:
         cfg = json.load(fh)
     set_app_user_model_id()     # must precede the first window

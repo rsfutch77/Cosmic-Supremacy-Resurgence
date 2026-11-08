@@ -170,9 +170,8 @@ def resolve_exe(which=None):
 
         resurgence   ticks without a server, gates the prompts as shipped
         testbed      waits for a server tick, gates the prompts as shipped
-        player       testbed, plus one byte that silences the coat-of-arms
-                     prompt; built by patch_hide_setup_prompts.py --build
-                     and gitignored
+        player       testbed under the name a release ships it as; a
+                     checkout has none and uses testbed
 
     A player's client must never compute a turn, so it uses player or testbed.
     The referee uses resurgence.
@@ -180,8 +179,7 @@ def resolve_exe(which=None):
     if which is None:
         which = "resurgence"
     if which == "player" and not os.path.exists(PLAYER_EXE):
-        log("  no CosmicSupremacy_Player.exe; falling back to testbed. Run "
-            "patch_hide_setup_prompts.py --build to silence the last prompt.")
+        log("  no CosmicSupremacy_Player.exe; using testbed, the same client")
         return TESTBED_EXE
     if which in BUILDS:
         return BUILDS[which]

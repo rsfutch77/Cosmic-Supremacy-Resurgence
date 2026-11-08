@@ -122,7 +122,11 @@ check("the countdown column is the one the clock rewrites",
 check("turn prints 9, 11, 100 and 110 in the order the rows are in",
       printed("turn"), ["9", "110", "11", "", "100"])
 check("time left prints a mixture of formats",
-      printed("left"), ["10:00 left", "", "1h 04m left", "", "0:59 left"])
+      [s.split(", due ")[0] for s in printed("left")],
+      ["10:00 left", "", "1h 04m left", "", "0:59 left"])
+check("each with the local time it runs out",
+      [", due " in s for s in printed("left")],
+      [True, False, True, False, True])
 check("and your own state prints three different things",
       printed("you"),
       ["", "", "joining next turn", "", "you are in"])

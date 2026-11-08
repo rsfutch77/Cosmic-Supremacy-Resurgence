@@ -128,13 +128,12 @@ modified, not unmodified. Its name is historical and misleading.
 | `CosmicSupremacy_TestBed.exe` | `127.0.0.1:8888` | TestBed galaxy join and load paths | TestBed galaxies |
 | `CosmicSupremacy_Resurgence.exe` | `127.0.0.1:8888` | no "analyzing system" popup; works with custom turn lengths and the AI harness | Sandbox galaxy, AI harness |
 
-A fourth exists but is not tracked: **`CosmicSupremacy_Player.exe`**, built by
-`client/dev_tools/patch_hide_setup_prompts.py --build`. It is
-`CosmicSupremacy_TestBed.exe` plus one byte that stops the coat-of-arms prompt
-opening, and it is what a served multiplayer turn runs on. It is gitignored
-because a patched client in the working tree is one `git commit -a` away from
-entering the history. `build.ps1` makes its own from TestBed into
-`release/build/` on every build and does not read the one in `client/`.
+A release also ships **`CosmicSupremacy_Player.exe`**, which `build.ps1` makes
+from `CosmicSupremacy_TestBed.exe` under that name. It is what a served
+multiplayer turn runs on, and its civ name and coat-of-arms prompt (dialog
+225) opens as shipped, since the referee carries the choice. A checkout has
+none and uses TestBed. A `client/CosmicSupremacy_Player.exe` left from an
+older checkout is patched to hide dialog 225 and should be deleted.
 
 **Resurgence is TestBed plus exactly 14 bytes at four sites** and nothing else,
 measured by whole-file comparison. Those four are the turn-pipeline bypasses,

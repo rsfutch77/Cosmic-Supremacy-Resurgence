@@ -116,6 +116,9 @@ class Bridge:
     def send_log(self):
         self._post(lambda app: app.offer_log())
 
+    def update(self):
+        self._post(lambda app: app.on_update())
+
     def log_refs(self):
         self._post(lambda app: app.show_log_refs())
 
@@ -336,6 +339,10 @@ class WebView:
         if self._changed("build", text):
             self._set(build=text)
 
+    def show_update(self, text: str) -> None:
+        if self._changed("update", text or ""):
+            self._set(update=text or "")
+
     def set_status(self, text: str, colour: str) -> None:
         self._set(status={"text": text,
                           "colour": ON_LIGHT.get(colour, ON_LIGHT_TEXT)})
@@ -382,13 +389,15 @@ class WebView:
             self._row_actions = []
             self._set(galaxies={"rows": None, "note": note})
             return
-        self._row_actions = [row.on_action for row in rows]
+        # A greyed-out button presses nothing, whatever the page sends.
+        self._row_actions = [row.on_action if row.enabled else None
+                             for row in rows]
         drawn = []
         for r, row in enumerate(rows):
             for i, cell in enumerate(row.cells):
                 self._sent[("cell", r, i)] = tuple(cell)
             drawn.append({"cells": [[t, ON_DARK.get(c, c)] for t, c in row.cells],
-                          "action": row.action})
+                          "action": row.action, "enabled": row.enabled})
         self._set(galaxies={"rows": drawn, "note": ""})
 
     def row_pressed(self, index: int) -> None:

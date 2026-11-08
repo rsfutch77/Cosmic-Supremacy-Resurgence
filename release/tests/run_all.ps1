@@ -17,6 +17,9 @@
                            certificate when signtool is installed. No game.
       test_ai_state_reset  The opponent's fog-of-war map and pass marker are
                            cleared on a new game and kept on a load. No game.
+      test_updater         Self-update: the release listing, download and
+                           unpack limits, the signing identity, the swap
+                           and putting the old build back. No game.
       test_save_protocol   The wire protocol to cs_server: slot allocation,
                            savegamelist format, blob round-trip. No game.
       test_save_message_path
@@ -86,6 +89,7 @@ Invoke-Test 'test_account.py'
 Invoke-Test 'test_packaging.py'
 Invoke-Test 'test_signing.py'
 Invoke-Test 'test_build_and_log.py'
+Invoke-Test 'test_updater.py'
 Invoke-Test 'test_ai_state_reset.py'
 Invoke-Test 'test_save_protocol.py'
 Invoke-Test 'test_save_message_path.py'

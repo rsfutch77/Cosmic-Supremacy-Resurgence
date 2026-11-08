@@ -9,6 +9,7 @@ fb_auth.py: the launcher's Firebase identity
     me.log_in(email, password)            # an existing account, its own uid
     me.log_in_google(fb_auth.google_id_token(secret))   # either, by the Google account
     me.log_out()                          # back to this install's guest
+    me.guest()                            # the guest's (uid, token) while logged in
 
 An install plays as one of two Firebase users:
   * its guest, an anonymous user minted on first use and kept in
@@ -484,6 +485,24 @@ class FirebaseIdentity:
         with self._lock:
             self._expires_at = 0.0
             return self.token()
+
+    def guest(self):
+        """(uid, ID token) of this install's guest while an account is logged
+        in, or None when there is no guest on disk, it cannot sign in, or the
+        guest is who is playing. Nothing is kept: the account stays current."""
+        with self._lock:
+            if self.account is None:
+                return None
+            uid, refresh = self._load()
+            if not refresh:
+                return None
+            try:
+                got = self._call(REFRESH_URL, {"grant_type": "refresh_token",
+                                               "refresh_token": refresh})
+            except NETWORK_ERRORS:
+                return None
+            token = got.get("id_token") or got.get("idToken")
+            return (uid, token) if token else None
 
     def _drop_account(self) -> None:
         """Forget the account on disk and in memory, and load the guest."""

@@ -34,7 +34,7 @@ sys.path.insert(0, os.path.join(HERE, "dev_tools"))
 
 import save_parser as sp
 import set_blob_player
-from turn_store import TurnStore, open_store
+from turn_store import TurnStore, open_store, outage_of
 
 HOLD_SECONDS = 86400          # a day; long enough that no boundary arrives
 PLAYER_BUILD = "player"       # see game_cycle.resolve_exe for why
@@ -175,6 +175,15 @@ def serve(blob: bytes, civ: str, work_dir=None, hold=HOLD_SECONDS,
     if hold:
         hold_clock(hold, log=log)
     return dat
+
+
+def served_blob(store, civ: str, turn: int) -> bytes:
+    """The turn as `civ` is served it: its own view where the store keeps one
+    (`fog.project`), otherwise the turn. The relay's turn route already answers
+    with the caller's view."""
+    view = getattr(store, 'view_blob', None)
+    blob = view(civ, turn) if view is not None else None
+    return blob if blob is not None else store.turn_blob(turn)
 
 
 def collect(name="player", save_dir=None, log=print, announce=True) -> str:
@@ -406,7 +415,8 @@ def follow(store: TurnStore, civ: str, poll: float = 5.0, rounds: int = 0,
         except OSError as exc:
             if not cut_off[0]:
                 cut_off[0] = True
-                emit("unreachable", civ=civ, error=failure_text(exc))
+                emit("unreachable", civ=civ, error=failure_text(exc),
+                     outage=outage_of(exc))
             raise
         if cut_off[0]:
             cut_off[0] = False
@@ -432,9 +442,10 @@ def follow(store: TurnStore, civ: str, poll: float = 5.0, rounds: int = 0,
             break
         turn, deadline = got
 
-        blob = store.turn_blob(turn)
+        blob = served_blob(store, civ, turn)
 
-        # `blob` is the authoritative turn and the baseline for every diff.
+        # `blob` is the turn as this civ is served it, and the baseline for
+        # every diff.
         # `to_load` is what goes into the client, which on a restart is the
         # player's own submission.
         to_load = blob
@@ -544,6 +555,48 @@ def follow(store: TurnStore, civ: str, poll: float = 5.0, rounds: int = 0,
                     raise
             return send(final)
 
+        def lost(why):
+            log(f"[{civ}] turn {turn}: LOST, {why}")
+            emit("lost", turn=turn, civ=civ, error=why)
+
+        def final_failed(exc):
+            """The reason a final send failed, kept to retry while the turn
+            is open when it was an outage; None once the turn is lost."""
+            why = failure_text(exc)
+            kind = outage_of(exc)
+            if kind is None:
+                lost(why)
+                return None
+            log(f"[{civ}] turn {turn}: not sent yet, {why}; retrying while "
+                f"the turn is open")
+            emit("retrying", turn=turn, civ=civ, error=why, outage=kind)
+            return why
+
+        def keep_sending(why):
+            """Send the last capture until it lands or the turn closes, which
+            the relay allows: it takes orders until the turn changes."""
+            while not halted():
+                got = current_or_wait()
+                if got is None:
+                    return
+                if got[0] != turn:
+                    lost(f"the turn closed before the orders could be sent "
+                         f"({why})")
+                    return
+                try:
+                    send(final=True)
+                    log(f"[{civ}] turn {turn}: sent after retrying")
+                    return
+                except Exception as exc:                    # noqa: BLE001
+                    why = failure_text(exc)
+                    if outage_of(exc) is None:
+                        lost(why)
+                        return
+                nap(poll)
+
+        # A final send that failed on an outage, kept for `keep_sending`.
+        unsent = None
+
         # The upload interval divides the time left in the turn by the budget.
         left0 = deadline - clock() if deadline else None
         if submit_every is not None:
@@ -588,10 +641,7 @@ def follow(store: TurnStore, civ: str, poll: float = 5.0, rounds: int = 0,
                 try:
                     push(final=True)
                 except Exception as exc:                    # noqa: BLE001
-                    # This turn is lost; log it and carry on to the next.
-                    why = failure_text(exc)
-                    log(f"[{civ}] turn {turn}: LOST, {why}")
-                    emit("lost", turn=turn, civ=civ, error=why)
+                    unsent = final_failed(exc)
                 break
 
             now = clock()
@@ -618,9 +668,7 @@ def follow(store: TurnStore, civ: str, poll: float = 5.0, rounds: int = 0,
                             # `send` emits `submitted` itself.
                             send(final=True)
                         except Exception as bad:            # noqa: BLE001
-                            why = failure_text(bad)
-                            log(f"[{civ}] turn {turn}: LOST, {why}")
-                            emit("lost", turn=turn, civ=civ, error=why)
+                            unsent = final_failed(bad)
                         break
                     log(f"[{civ}] turn {turn}: could not capture, {exc}")
                     emit("capture_failed", turn=turn, civ=civ, error=str(exc))
@@ -633,7 +681,8 @@ def follow(store: TurnStore, civ: str, poll: float = 5.0, rounds: int = 0,
                     # A failed interim write is logged; the next one retries.
                     why = failure_text(exc)
                     log(f"[{civ}] turn {turn}: interim submit failed, {why}")
-                    emit("send_failed", turn=turn, civ=civ, error=why)
+                    emit("send_failed", turn=turn, civ=civ, error=why,
+                         outage=outage_of(exc))
 
             emit("playing", turn=turn, civ=civ, seconds_left=left)
             # Wake for the next capture, the next store read, or the deadline,
@@ -647,6 +696,8 @@ def follow(store: TurnStore, civ: str, poll: float = 5.0, rounds: int = 0,
             # A send request must not carry into the next turn.
             send_now.clear()
         close()
+        if unsent is not None:
+            keep_sending(unsent)
         played += 1
         if rounds and played >= rounds:
             emit("done", turns=played)

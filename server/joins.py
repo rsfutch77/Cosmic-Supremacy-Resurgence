@@ -47,6 +47,7 @@ for _d in (HERE, os.path.join(HERE, 'dev_tools'),
     if _d not in sys.path:
         sys.path.insert(0, _d)
 
+import activity
 import inject_civ as icv
 import turn_store
 
@@ -310,6 +311,14 @@ def _grant(store, blob, req: dict, roster, turn: int, log=print,
     except Exception as exc:                                # noqa: BLE001
         # The join stands; the failure is logged.
         log(f'  joins: {name} kept the donor\'s explored map, '
+            f'{type(exc).__name__}: {exc}')
+
+    try:
+        # As if the newcomer had played the turn just closed.
+        joined = activity.set_baseline(joined, name, int(turn) - 1)
+    except Exception as exc:                                # noqa: BLE001
+        # The join stands; the civ starts with the donor's Inactivity.
+        log(f'  joins: {name} kept the donor\'s Inactivity baseline, '
             f'{type(exc).__name__}: {exc}')
 
     sun, system = home_system(joined, planet)

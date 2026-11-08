@@ -77,6 +77,19 @@ def main():
           activity.mark_present(blob, ['Nobody'], log=said.append), blob)
     check('and named in the log', len(said), 1)
 
+    print('\nset_baseline')
+    based = activity.set_baseline(blob, 'BadGuy', 73)
+    check('sets that civ\'s baseline', activity.state(based)['BadGuy'], (73, 0))
+    check('leaves the other civ', activity.state(based)['DemoPlayer'],
+          before['DemoPlayer'])
+    check('and no size', len(based), len(blob))
+    try:
+        activity.set_baseline(blob, 'Nobody', 73)
+        raised = False
+    except ValueError:
+        raised = True
+    check('a civ the galaxy does not hold raises', raised)
+
     print('\nreferee.apply_orders')
     out = referee.apply_orders(blob, [('DemoPlayer', blob)], log=quiet)
     check('marks the civ that submitted', activity.state(out)['DemoPlayer'][1], 1)

@@ -183,5 +183,17 @@ check("a changed cell is sent with the colour for the slate",
       [a["cell"] for f, a in view.window.sent if "cell" in a],
       [{"row": 0, "column": 1, "text": "stopped", "colour": W.ON_DARK[L.WARN]}])
 
+print("\n7. a greyed-out button is drawn disabled and presses nothing")
+view = fresh()
+pressed = []
+view.draw_galaxies([L.GalaxyRow([("Andromeda", L.TEXT)], "Play",
+                                 lambda: pressed.append("andromeda"),
+                                 enabled=False)])
+view.row_pressed(0)
+check("pressing it does nothing", pressed, [])
+check("and the page is told it is disabled",
+      [a["galaxies"]["rows"][0]["enabled"] for f, a in view.window.sent
+       if "galaxies" in a], [False])
+
 print("\n" + ("ALL PASSED" if not fails else f"FAILURES: {fails}"))
 sys.exit(1 if fails else 0)
