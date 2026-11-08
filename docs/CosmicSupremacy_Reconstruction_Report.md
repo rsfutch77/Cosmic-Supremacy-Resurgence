@@ -1884,13 +1884,17 @@ What is left for after the beta is kept here.
   - [x] A governor made in the client UI goes through a live galaxy. Robert, 2 November: a hurry
     governor in tmog66's empire works.
 
-- [ ] **Play stays live on the galaxies page while a turn is processing.** `row_action` offers
+- [x] **Play stays live on the galaxies page while a turn is processing.** `row_action` offers
   Play on every seated row whatever the turn loop is doing, and the guard is only in
   `_take_turn_loop` once pressed: Play on the processing galaxy asks the loop to reopen the
   game, and Play on another galaxy with the game closed switches without asking, holding the
   window for up to 20 s in `stop_multiplayer`. Done when, from orders sent until the next turn
   opens, the followed galaxy's Play and every other row's Play are greyed out with a line saying
-  the turn is being processed.
+  the turn is being processed. `Launcher.turn_busy` greys every row's Play while the orders are
+  sending and from the deadline until the next turn opens, and the line under the table says
+  which. Before the deadline Play stays live, since it reopens the game to change the orders
+  sent, and a stopped or unreachable galaxy keeps it, since the relay takes orders until the turn
+  changes. `test_turn_busy.py`; not yet seen on screen.
 
 **Measured in one Single Player session at turn 0 (October 2026,
 `server/tests/fixtures/tier4`):**

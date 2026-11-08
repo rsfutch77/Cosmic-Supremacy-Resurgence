@@ -389,13 +389,15 @@ class WebView:
             self._row_actions = []
             self._set(galaxies={"rows": None, "note": note})
             return
-        self._row_actions = [row.on_action for row in rows]
+        # A greyed-out button presses nothing, whatever the page sends.
+        self._row_actions = [row.on_action if row.enabled else None
+                             for row in rows]
         drawn = []
         for r, row in enumerate(rows):
             for i, cell in enumerate(row.cells):
                 self._sent[("cell", r, i)] = tuple(cell)
             drawn.append({"cells": [[t, ON_DARK.get(c, c)] for t, c in row.cells],
-                          "action": row.action})
+                          "action": row.action, "enabled": row.enabled})
         self._set(galaxies={"rows": drawn, "note": ""})
 
     def row_pressed(self, index: int) -> None:

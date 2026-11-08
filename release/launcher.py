@@ -2936,6 +2936,18 @@ class GalaxyRow(typing.NamedTuple):
     cells: list
     action: "str | None" = None
     on_action: "typing.Callable | None" = None
+    enabled: bool = True
+
+
+# What the followed galaxy's turn is doing while every row's Play is greyed
+# out (`Launcher.turn_busy`), and the line the Galaxies page says then.
+TURN_SENDING = "sending"
+TURN_PROCESSING = "processing"
+TURN_BUSY_HINT = {
+    TURN_SENDING: "Your turn is being sent. Play comes back once it has gone.",
+    TURN_PROCESSING: ("The turn is being processed. Play comes back when the "
+                      "next turn opens."),
+}
 
 # The capture indicator: what the turn loop last did with the player's work,
 # shown beside the server dot.
@@ -3878,6 +3890,9 @@ class Launcher:
             self._show_hint(rows, view)
             return
         drawn = []
+        # Every row's Play waits out a turn being sent or processed.
+        busy = self.turn_busy()
+        self._drawn_busy = busy
         for r, g in enumerate(rows):
             action = row_action(g, view.recs, view.own)
             # Lit rows are this player's business: in it, asked to join it, or
@@ -3890,10 +3905,11 @@ class Launcher:
                               self._cell_colour(col, g, view, near)))
                 if col in LIVE_COLUMNS:
                     self._clocks.append((r, i, col, g, near))
+            live = action is not None and not (busy and action == PLAY)
             drawn.append(GalaxyRow(
                 cells, ACTION_TEXT[action] if action is not None else None,
-                (lambda gg=g, a=action: self.on_row(gg, a))
-                if action is not None else None))
+                (lambda gg=g, a=action: self.on_row(gg, a)) if live else None,
+                enabled=live or action is None))
         self.view.draw_galaxies(drawn)
         self._show_hint(rows, view)
 
@@ -3930,7 +3946,10 @@ class Launcher:
         reclaimed = [g for g, a in zip(rows, actions) if a == RECLAIMED]
         ended = [g for g, a in zip(rows, actions) if a == ENDED]
         text = ""
-        if stalled:
+        busy = self.turn_busy()
+        if busy:
+            text = TURN_BUSY_HINT[busy]
+        elif stalled:
             text = stall_hint(stalled)
         elif refused:
             names = ", ".join(g.name or g.id for g in refused)
@@ -3960,6 +3979,11 @@ class Launcher:
         do not move under the pointer. The hint is redrawn too, since a galaxy
         becomes stopped by the clock.
         """
+        if (self.games_rows is not None
+                and self.turn_busy() != getattr(self, "_drawn_busy", None)):
+            # Play greys out or comes back as the turn is sent and processed.
+            self._draw_galaxies()
+            return
         view = self._galaxy_view()
         for r, i, col, g, near in self._clocks:
             self.view.set_cell(r, i, col.text(g, view),
@@ -3971,6 +3995,11 @@ class Launcher:
         """What a row's one button does. View reads, Play plays, Review
         explains a refusal, an ended galaxy or a seat taken back."""
         if action == PLAY:
+            busy = self.turn_busy()
+            if busy:
+                # A press that raced the greying out.
+                self.say(f"multiplayer: Play waits, the turn is {busy}")
+                return
             self.play_galaxy(g)
         elif action == REASON:
             self.show_refusal(g)
@@ -4195,6 +4224,31 @@ class Launcher:
         if self.mp_thread is None or not self.mp_thread.is_alive():
             return None
         return self.mp_playing or {}
+
+    def turn_busy(self):
+        """TURN_SENDING while the followed galaxy's orders are going,
+        TURN_PROCESSING from its deadline until the next turn opens, else None.
+
+        Before the deadline Play reopens the game to change the orders sent,
+        so a player who closed the game early is not busy. A stopped or
+        unreachable galaxy is not either: the relay takes orders until the
+        turn changes, so reopening still counts.
+        """
+        if (getattr(self, "mp_thread", None) is None
+                or self.playing_now() is None
+                or not getattr(self, "mp_client_gone", False)):
+            return None
+        if getattr(self, "mp_sending", False):
+            return TURN_SENDING
+        deadline = getattr(self, "mp_deadline", None)
+        if (not getattr(self, "mp_waiting", False) or deadline is None
+                or getattr(self, "mp_reopening", False)
+                or getattr(self, "mp_closed", False)
+                or self._mp_cut_off() or time.time() < deadline
+                or stalled_for(deadline, getattr(self, "mp_turn_seconds",
+                                                 None))):
+            return None
+        return TURN_PROCESSING
 
     def _take_turn_loop(self, g) -> bool:
         """Whether the turn loop is free for this galaxy, asking to switch.

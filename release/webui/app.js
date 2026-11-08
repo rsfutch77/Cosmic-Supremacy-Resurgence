@@ -130,7 +130,11 @@ function drawRows(galaxies) {
       line.appendChild(cell);
     });
     const act = el("div");
-    if (row.action) act.appendChild(gbtn(row.action, () => call("row", r), "small"));
+    if (row.action) {
+      const b = gbtn(row.action, () => call("row", r), "small");
+      b.disabled = row.enabled === false;
+      act.appendChild(b);
+    }
     line.appendChild(act);
     box.appendChild(line);
   });
