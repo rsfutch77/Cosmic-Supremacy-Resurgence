@@ -81,7 +81,7 @@ M = [
           'Stop the relay (emulator): the launcher says the service is unavailable.']),
         ('M10', 'When the referee is down or late, players are told the turn is late rather than left guessing, and nothing they submitted is lost.',
          'Xbox XR-074 test case 074-08 (pre-launch downtime), by analogy; Xbox XR-003 (multiplayer stable regardless of the number of players)',
-         ['A turn more than one turn length overdue is shown as late on the galaxy row.',
+         ['A turn overdue by a quarter of its turn length (at least 5 minutes, at most an hour) shows "stopped" on the galaxy row.',
           'Submissions made while the referee is down are counted when it returns.']),
         ('M11', 'A sleeping or hibernating PC, or one that was off for days, comes back to the right turn with its seat intact.',
          'Xbox XR-074 test cases 074-03, 074-04 (suspend, sleep and hibernate)',

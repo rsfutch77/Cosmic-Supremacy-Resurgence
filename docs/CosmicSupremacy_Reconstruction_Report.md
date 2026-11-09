@@ -1017,7 +1017,7 @@ Two things make this easy to get wrong, and both cost this project a false concl
 * **At LOAD the live value at `0x0080AA08` reads 3600 regardless of the config.** Reading it there and stopping says the setting does nothing. The refresh runs at a turn BOUNDARY, and on a 3600-second galaxy the first boundary is an hour away, so nothing can be observed without driving turns first.
 * **Below 60 the value never appears at all.** Two sites in the binary clamp it, `cmp esi, 60 ; mov [0x0080AA08], esi ; jg skip ; mov [0x0080AA08], 60`, so a galaxy configured at 10 presents as 60 every turn, which reads like the engine ignoring the config rather than honouring it and rounding up.
 
-- [x] **The in-game countdown disagrees with the launcher.** It is tied to neither the config nor the live value: a blob carrying `turnlength = 43200` came up with `0x0080AA08` reading 3600 and the UI showing 45 minutes. Nothing was found that reads back what the display is derived from, so the launcher's deadline is the only clock to trust. Either find what the UI reads and feed it the server's deadline, or hide or replace the in-game countdown. Done when the in-game clock matches the launcher's deadline for a whole turn, or no longer shows. Hidden, 8 Nov 2026: the status bar is built from format strings in `.rdata`, each read once in the function at `0x00405D00`, and `client/dev_tools/patch_status_bar.py` cuts the multiplayer client's to "Turn: %d" and blanks its Connected and Disconnected label (`test_status_bar_patch.py`). The build applies it to `CosmicSupremacy_Player.exe` only. Not seen on screen.
+- [x] **The in-game countdown disagrees with the launcher.** It is tied to neither the config nor the live value: a blob carrying `turnlength = 43200` came up with `0x0080AA08` reading 3600 and the UI showing 45 minutes. Nothing was found that reads back what the display is derived from, so the launcher's deadline is the only clock to trust. Either find what the UI reads and feed it the server's deadline, or hide or replace the in-game countdown. Done when the in-game clock matches the launcher's deadline for a whole turn, or no longer shows. Hidden, 8 Nov 2026: the status bar is built from format strings in `.rdata`, each read once in the function at `0x00405D00`, and `client/dev_tools/patch_status_bar.py` cuts the multiplayer client's to "Turn: %d" and blanks its Connected and Disconnected label (patches 42–45). The build applies it to `CosmicSupremacy_Player.exe` only. Not seen on screen.
 
 **60 seconds is therefore the engine's real minimum turn**, which is worth knowing independently: the original game had no reason to support anything faster, and a training loop does. Lowering it is one byte per site (`3c` → `01`), keeping the clamp and moving its floor.
 
@@ -1406,6 +1406,23 @@ Dialog 225, "Pick your Civilization Name and Coat of Arms", is a modeless single
 
 [x] **Confirm the coat of arms on screen:** a dragged image survives OK, is listed next session, and is drawn beside the civ's planets. Seen in the sandbox on 8 November 2026, through the relay. The listing is checked by `test_relay_arms.py`, since the dialog does not come back once a name is set.
 
+### Patches 42–45, Multiplayer status bar shows only the turn (81 bytes, November 2026)
+
+**Release only**: `client/dev_tools/patch_status_bar.py`, applied to `CosmicSupremacy_Player.exe`, the TestBed copy `release/build.ps1` stages for multiplayer. It runs after patches 28–35 and, like them, refuses an `--out` that git tracks.
+
+Under the launcher the client's countdown is wrong (see the in-game countdown item in the todo list) and its Connected or Disconnected label says nothing the launcher does not say better. The status bar is built in the function at `0x00405D00` from four format strings in `.rdata`, each read at one site there, and the formatter at `0x005E35E0` ignores an argument its format no longer prints. So each string is rewritten in its own slot: a label keeps its colour tags and its word becomes spaces, and a countdown string ends after the turn number, NUL-filled to its old length.
+
+| # | file | VA | read at | original | patched |
+|---|---|---|---|---|---|
+| 42 | `0x34E990` | `0x00750190` | `0x004060CF` | `\r<%s>Disconnected    \r<000000>` | the word as spaces |
+| 43 | `0x34E9B0` | `0x007501B0` | `0x00406082` | `\r<000000>Connected    \r<000000>` | the word as spaces |
+| 44 | `0x34E9E8` | `0x007501E8` | `0x00405FB1` | `Turn: %d%s     Next Turn in \r<000000>%s` | `Turn: %d%s` |
+| 45 | `0x34EA10` | `0x00750210` | `0x00405F5E` | `Turn: %d     Game Starts in \r<000000>%s` | `Turn: %d` |
+
+`test_status_bar_patch.py` checks that only these 81 bytes change, that each string is read once near `0x00405D00`, and that the build's chain of patches leaves them patched.
+
+[ ] Not yet seen on screen. Done when a 0.5 multiplayer client under the launcher shows "Turn: N" and no countdown or connection label.
+
 ### Summary
 
 Patches 1–4 (54 bytes) redirect all network traffic from the dead production servers (`www.cosmicsupremacy.com`, `cosmicsupremacy.com`, and a hardcoded IP) to `127.0.0.1:8888`, where the local stub server (`cs_server.py`) listens. Patch 1 converts a conditional branch (JZ) to an unconditional jump (JMP), forcing the client to always take the "success" path past a connection-validation check.
@@ -1421,6 +1438,8 @@ Patches 32–35 (16 bytes) open the main window 10% larger by default. Applied t
 Patches 36–40 fix the Tutorial: a larger panel, early orders that count, a one-turn Scout Ship with a free soldier, and coloured tasks in a new `.tutor` section. Applied only to `CosmicSupremacy.exe` in a release.
 
 Patch 41 (6 bytes) makes Single Player's civ name dialog send the name on every OK. Applied only to `CosmicSupremacy_Resurgence.exe` in a release.
+
+Patches 42–45 (81 bytes) cut the multiplayer status bar to the turn number, dropping its countdown and connection label. Applied only to `CosmicSupremacy_Player.exe` in a release.
 
 ### EXE Variants
 
