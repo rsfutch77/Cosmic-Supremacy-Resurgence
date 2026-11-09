@@ -54,7 +54,7 @@ new signature takes time to earn Windows' trust. Click **More info**, then click
 
 ## Verifying the download
 
-    SHA-256  <filled in after the build>
+    SHA-256  7a588c025aa99e9e8ac546c1dc5eaf19b751c56b5bf5097f088f4a807cc2a97b
 
     Get-FileHash CosmicSupremacy-Resurgence-v0.5.0.zip -Algorithm SHA256
 
