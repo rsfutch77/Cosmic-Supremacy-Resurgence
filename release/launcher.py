@@ -3023,9 +3023,8 @@ class GalaxyRow(typing.NamedTuple):
 TURN_SENDING = "sending"
 TURN_PROCESSING = "processing"
 TURN_BUSY_HINT = {
-    TURN_SENDING: "Your turn is being sent. Play comes back once it has gone.",
-    TURN_PROCESSING: ("The turn is being processed. Play comes back when the "
-                      "next turn opens."),
+    TURN_SENDING: "Your turn is being sent. Please wait.",
+    TURN_PROCESSING: ("The turn is being processed. Please wait."),
 }
 
 # The capture indicator: what the turn loop last did with the player's work,
