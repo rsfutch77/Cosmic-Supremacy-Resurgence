@@ -8,12 +8,12 @@ This is the last update you have to download by hand.
 ## New in v0.5.0
 
 **The launcher updates itself.** When a newer release is out, the launcher
-offers it. 
+offers it and installs it in place, so later updates need no download by hand.
 
 **Diplomacy and admirals.** In a multiplayer galaxy you can propose, accept and
 refuse treaties, declare war and change stances, and an accepted lump sum moves
 once. Admirals you create and give rules to stay assigned to their ships and act
-on them. Governors act on planets. 
+on them. Governors act on planets.
 
 **The market.** Sales and purchases you make in a multiplayer galaxy go through.
 
