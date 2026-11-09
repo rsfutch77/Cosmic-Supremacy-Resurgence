@@ -1017,7 +1017,7 @@ Two things make this easy to get wrong, and both cost this project a false concl
 * **At LOAD the live value at `0x0080AA08` reads 3600 regardless of the config.** Reading it there and stopping says the setting does nothing. The refresh runs at a turn BOUNDARY, and on a 3600-second galaxy the first boundary is an hour away, so nothing can be observed without driving turns first.
 * **Below 60 the value never appears at all.** Two sites in the binary clamp it, `cmp esi, 60 ; mov [0x0080AA08], esi ; jg skip ; mov [0x0080AA08], 60`, so a galaxy configured at 10 presents as 60 every turn, which reads like the engine ignoring the config rather than honouring it and rounding up.
 
-- [x] **The in-game countdown disagrees with the launcher.** It is tied to neither the config nor the live value: a blob carrying `turnlength = 43200` came up with `0x0080AA08` reading 3600 and the UI showing 45 minutes. Nothing was found that reads back what the display is derived from, so the launcher's deadline is the only clock to trust. Either find what the UI reads and feed it the server's deadline, or hide or replace the in-game countdown. Done when the in-game clock matches the launcher's deadline for a whole turn, or no longer shows. Hidden, 8 Nov 2026: the status bar is built from format strings in `.rdata`, each read once in the function at `0x00405D00`, and `client/dev_tools/patch_status_bar.py` cuts the multiplayer client's to "Turn: %d" and blanks its Connected and Disconnected label (patches 42–45). The build applies it to `CosmicSupremacy_Player.exe` only. Not seen on screen.
+- [x] **The in-game countdown disagrees with the launcher.** It is tied to neither the config nor the live value: a blob carrying `turnlength = 43200` came up with `0x0080AA08` reading 3600 and the UI showing 45 minutes. Nothing was found that reads back what the display is derived from, so the launcher's deadline is the only clock to trust. Either find what the UI reads and feed it the server's deadline, or hide or replace the in-game countdown. Done when the in-game clock matches the launcher's deadline for a whole turn, or no longer shows. Hidden, 8 Nov 2026: the status bar is built from format strings in `.rdata`, each read once in the function at `0x00405D00`, and `client/dev_tools/patch_status_bar.py` cuts the multiplayer client's to "Turn: %d" and blanks its Connected and Disconnected label (patches 42–45). The build applies it to `CosmicSupremacy_Player.exe` only. Seen on screen in 0.5.0.5.
 
 **60 seconds is therefore the engine's real minimum turn**, which is worth knowing independently: the original game had no reason to support anything faster, and a training loop does. Lowering it is one byte per site (`3c` → `01`), keeping the clamp and moving its floor.
 
@@ -1421,7 +1421,7 @@ Under the launcher the client's countdown is wrong (see the in-game countdown it
 
 `test_status_bar_patch.py` checks that only these 81 bytes change, that each string is read once near `0x00405D00`, and that the build's chain of patches leaves them patched.
 
-[ ] Not yet seen on screen. Done when a 0.5 multiplayer client under the launcher shows "Turn: N" and no countdown or connection label.
+[x] Seen on screen on 8 November 2026 in 0.5.0.5: under the launcher the bar shows "Turn: N" and no countdown or connection label.
 
 ### Summary
 
