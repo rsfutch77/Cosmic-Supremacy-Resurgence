@@ -8,48 +8,24 @@ This is the last update you have to download by hand.
 ## New in v0.5.0
 
 **The launcher updates itself.** When a newer release is out, the launcher
-offers it. It downloads the release, checks its signature, and replaces itself
-without asking for administrator rights. Your `data` folder is not touched, and
-if the new version fails to start, the old one comes back.
+offers it. 
 
 **Diplomacy and admirals.** In a multiplayer galaxy you can propose, accept and
 refuse treaties, declare war and change stances, and an accepted lump sum moves
 once. Admirals you create and give rules to stay assigned to their ships and act
-on them.
+on them. Governors act on planets. 
 
-**The market.** Sales and purchases you make in a multiplayer galaxy go through,
-priced from the market as you saw it.
+**The market.** Sales and purchases you make in a multiplayer galaxy go through.
 
 **Coats of arms.** A coat of arms you drag into the civilization name dialog is
-uploaded and shown to other players once it is approved. Your civilization's
-name and its reveal checkbox are kept too.
-
-**Logging in keeps your guest empire.** Galaxies this install joined as a guest
-move to your account when you log in.
-
-## Better in v0.5.0
-
-**Outages are named.** When your turn cannot be read or sent, the launcher says
-whether the problem is your internet connection, the galaxy server or file
-storage. It notices a lost connection within seconds. A turn you finish while
-offline is kept and sent once the connection is back, and the launcher says
-"turn not sent yet" until then.
-
-**The Galaxies page.**
-
-- Each row shows the deadline in your local time as well as the time left.
-- Play greys out while your turn is being sent and processed.
-- A galaxy whose turns are overdue reads "stopped".
-- If a listing fails, the last rows stay with "?" where the numbers were.
-- Logging in or out lists the galaxies again straight away.
-- The join notice says how many missed turns in a row remove an empire.
+uploaded and shown to other players once it is approved.
 
 **The game window under the launcher.** The status bar shows only the turn
 number. Its countdown was wrong under the launcher, and the launcher shows the
 deadline instead.
 
 **Systems you have left.** A system you no longer see is shown as you last saw
-it, instead of disappearing.
+it, instead of disappearing or showing data you shouldn't be able to see if out of range.
 
 **The Single Player opponent.** It spends its starting traits, keeps its
 research going, and stops farming once its planets have enough food.
