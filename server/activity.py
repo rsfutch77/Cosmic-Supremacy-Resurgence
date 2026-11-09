@@ -20,6 +20,9 @@ The flag and the baseline are saved in the civ's `OWNR > DATA > SERV`:
 The referee sets the flag for each civ whose submission it took. The engine
 then writes the baseline itself, `turn - 1`, and clears the flag again, so a
 civ that stops playing starts to decay 72 turns after its last turn.
+
+A civ seated by a join is cloned from a donor, baseline and all. `joins` sets
+its baseline to the turn just closed, so it starts at 0%.
 """
 import argparse
 import os
@@ -91,6 +94,20 @@ def mark_present(blob: bytes, civs, log=print) -> bytes:
                 f"not marked")
             continue
         out[serv.payload + SERV_FLAG] = 1
+    return bytes(out)
+
+
+def set_baseline(blob: bytes, civ: str, baseline: int) -> bytes:
+    """The blob with one civ's baseline set, as the engine would write it for a
+    civ seen active at that turn. Raises ValueError when the civ has no SERV
+    that carries a baseline."""
+    serv = _servs(blob).get(civ)
+    if serv is None:
+        raise ValueError(f'{civ} has no SERV')
+    if serv.version < SERV_MIN_VERSION or serv.size <= SERV_FLAG:
+        raise ValueError(f"{civ}'s SERV v{serv.version} has no baseline")
+    out = bytearray(blob)
+    struct.pack_into('<I', out, serv.payload + SERV_BASELINE, baseline)
     return bytes(out)
 
 

@@ -348,7 +348,7 @@ So the score list holds one row per distinct `Owner:4`, and the collision, not t
 
 [ ] **Homeworld placement is one hardcoded policy.** New civs are placed as far from every claimed planet as possible, which is the right default for testing an AI (contact becomes something it has to earn) but not the only one worth having, random placement is what a real generator does and is the only way to test a hostile neighbour two systems away, and clustered or per-team placement follow from it. Wants a `--placement` option rather than a second function.
 
-- [ ] **A galaxy injected with a colonisation in flight is verified on disk only.** The colony ships' `ROUT` sections come out byte-identical after injection, and across the tick archive the planet a colonise order names is the planet that changes hands two ticks later, 7 times out of 7. Done when such a galaxy is loaded in the client and the colony ship still arrives.
+- [x] **A galaxy injected with a colonisation in flight plays on in the client.** The colony ships' `ROUT` sections come out byte-identical after injection, and across the tick archive the planet a colonise order names is the planet that changes hands two ticks later, 7 times out of 7. In the client (`join_acceptance.py k1`, 2 November 2026), DemoPlayer's two colony ships were sent from turn 11 of the demo galaxy and Joiner was added at the same turn; played 60 turns with and without the join, the near target #141 went to DemoPlayer on turn 13 and the far target #6 on turn 63 in both, with no divergence in any ship's orders, and Joiner's homeworld grew from 7 to 28. `k1load` opened the joined galaxy as Joiner, in the TestBed build, since this checkout has no `CosmicSupremacy_Player.exe`.
 
 ### Audit: is memory editing still needed for multiplayer? (August 2026)
 
@@ -627,7 +627,9 @@ than rebuilding what was removed.
 **The engine hides more than a full-state blob suggests.** A client holding the whole galaxy still
 draws only the planets in systems that civ has entered, ownership included, and another civ's ships
 only within scan range, about 30 units. So what full-state distribution leaks is what a modified
-client could draw, not what the stock one does.
+client could draw, not what the stock one does, with one exception: in a system the civ has entered
+and left, the stock client draws the live planets, so a player watches it grow. See "Each civ is
+served the systems it has left as it last saw them".
 
 ### `NEWS`, how an engagement is established, and who is told about it
 
@@ -749,11 +751,14 @@ matters:
 
     u32   system count
     per system:
-        u32 system id, u32 sun id, str sun name, u32 undecoded, u32 planet count
+        u32 system id, u32 sun id, str sun name, u32 turn last looked, u32 planet count
         per planet:
-            u32   last known owner civ id, 0 for never seen
-            u32   an observed quantity, undecoded
+            u32   owner civ id when last looked, 0 for none
+            u32   population when last looked
             str   planet name
+
+The two `u32`s that were undecoded here are decoded in "Each civ is served the
+systems it has left as it last saw them" below.
 
 `parse` raises unless the walk lands exactly on the end, and `build(parse(x))`
 is byte-identical, verified 21 of 21 tables across 7 blobs.
@@ -782,6 +787,84 @@ capital marker, misleads a player about the board rather than about history. The
 fog-correct version clears only the wiped civ's own table and lets rivals keep
 theirs until they re-scout. Not attempted, and it needs a rule for what a rival
 sees when they do look again.
+
+The "206 against the correct 202" above is not staleness. In `galaxy_demo`
+Neighbor (206) joined as a clone of BadGuy (202), before `joins` emptied a
+joiner's `EXSY`, and its inherited table names BadGuy's capital as Neighbor's
+own planet.
+
+#### Each civ is served the systems it has left as it last saw them (November 2026)
+
+Reported by a player: planets in a system they had visited and left kept
+growing on their map, and new colonies appeared there. The manual's Recon
+Screen page says scouted information is from the last time the system was
+scouted and may be outdated, and that the sun's tooltip names that turn. So the
+original game showed a left system as it was last seen.
+
+**The two undecoded `EXSY` fields are that memory: per system the turn last
+looked, per planet the population then.** Measured across 44 local blobs and
+the tracked `admirals` and `diplomacy` fixtures. Every row whose turn equals the
+blob's turn matches the live owner and population exactly, except in
+tool-edited forks and turn-0 generator output, where the client had not yet
+refreshed the table. In `diplomacy/d9.b64` (turn 181) BadGuy last looked at
+GoodGuy's home at turn 34 and remembers populations 8, 0, 8, 0, 10, 0 against
+live 15, 8, 14, 0, 17, 12; the two zeros are colonies founded since.
+
+**A system a civ holds a planet in is not refreshed.** In `galaxy_demo`
+DemoPlayer's home row reads turn 2 at turn 11.
+
+**The client draws population and ownership from the live record, and the
+referee published one blob for everyone.** So the engine held the right answer
+and nothing served it.
+
+`server/fog.py` serves it. A system is stale for a civ when its `EXSY` turn is
+before the blob's turn and the civ holds no planet in it. Each planet there
+whose live owner or population differs from memory is rewritten:
+
+- remembered empty: owner 0, name cleared, no citizens, soldiers or
+  facilities, and the `PROD` of a never-colonised planet
+- remembered owned: owner set to the remembered civ, citizens cut or padded
+  to the remembered population; soldiers and facilities go when the owner
+  changed, and the name becomes the remembered one
+
+A planet is left live when the viewer owns it or has citizens on it, when
+memory names the viewer (the joiner case above) or a civ the galaxy does not
+hold, or when its `PLPR` does not walk.
+
+Nothing is added or removed, so a view keeps every object id, system and
+planet. It passes `screen_submission`'s galaxy check, the high-water id is
+unchanged, and the client's `min_suns` guard sees every sun. That is what the
+system-dropping `project_blob.py` above could not do.
+
+The referee projects each civ after the tick and publishes a view only for a
+civ whose view differs (`publish(..., views=)`, recorded under `views` on the
+galaxy document or in `state.json`). The relay's turn route sends a seated
+caller to its own view; `player_turn.served_blob` reads it from a folder store.
+Before the merge, `fog.restore` puts the authoritative planets back into each
+submission. A civ cannot order another civ's planet, so nothing is lost, and
+the merge then takes a fogged civ's orders exactly as an unfogged one's
+(`server/tests/test_fog.py`).
+
+**A view loads in the real client and holds the remembered planets.** BadGuy's
+view of `d9` came up at turn 181, and client memory read GoodGuy's home planets
+as populations 8, 0, 8, 0, 10, 0, with the two later colonies unowned.
+
+[ ] **Confirm on screen that the map draws them**, and that the planet sphere's
+size follows population.
+
+[ ] **A view keeps the live header fields of a rewritten `PLPR`**: the output
+rates at `+4`, food and production counters, and, when the owner is
+unchanged, the facility list. Whether the stock client shows any of them for
+another civ's planet is not known.
+
+[ ] **A caller without a seat is served the whole turn.** Under `first-use`
+that is every player before their first submission, and any signed-in user who
+asks. An older turn is also served whole, since views are kept for the current
+turn only.
+
+[ ] **The folder store and `turn_server` do not enforce views.** A folder
+store's player reads the files directly, and `turn_server` serves every caller
+the turn.
 
 #### The trailing dword of every `KNPL` payload is unreliable
 
@@ -934,7 +1017,7 @@ Two things make this easy to get wrong, and both cost this project a false concl
 * **At LOAD the live value at `0x0080AA08` reads 3600 regardless of the config.** Reading it there and stopping says the setting does nothing. The refresh runs at a turn BOUNDARY, and on a 3600-second galaxy the first boundary is an hour away, so nothing can be observed without driving turns first.
 * **Below 60 the value never appears at all.** Two sites in the binary clamp it, `cmp esi, 60 ; mov [0x0080AA08], esi ; jg skip ; mov [0x0080AA08], 60`, so a galaxy configured at 10 presents as 60 every turn, which reads like the engine ignoring the config rather than honouring it and rounding up.
 
-* **The in-game countdown is tied to neither the config nor the live value.** A blob carrying `turnlength = 43200` came up with `0x0080AA08` reading 3600 and the UI showing 45 minutes. Nothing was found that reads back what the display is derived from, so a turn clock that has to be trusted belongs outside the client.
+- [x] **The in-game countdown disagrees with the launcher.** It is tied to neither the config nor the live value: a blob carrying `turnlength = 43200` came up with `0x0080AA08` reading 3600 and the UI showing 45 minutes. Nothing was found that reads back what the display is derived from, so the launcher's deadline is the only clock to trust. Either find what the UI reads and feed it the server's deadline, or hide or replace the in-game countdown. Done when the in-game clock matches the launcher's deadline for a whole turn, or no longer shows. Hidden, 8 Nov 2026: the status bar is built from format strings in `.rdata`, each read once in the function at `0x00405D00`, and `client/dev_tools/patch_status_bar.py` cuts the multiplayer client's to "Turn: %d" and blanks its Connected and Disconnected label (patches 42–45). The build applies it to `CosmicSupremacy_Player.exe` only. Seen on screen in 0.5.0.5.
 
 **60 seconds is therefore the engine's real minimum turn**, which is worth knowing independently: the original game had no reason to support anything faster, and a training loop does. Lowering it is one byte per site (`3c` → `01`), keeping the clamp and moving its floor.
 
@@ -1172,11 +1255,21 @@ All three are called in turn from the main loop at `0x00579C3D`, and each also w
 
 **`Owner:359` and `Owner:360` are one-byte flags, set by the prompts' own OK.** `0x005716E3` sets 359 and `0x00571878` sets 360, on the offline path of each OK handler (`[0x86F1A0]` set and no live server connection). The online path sends `CUCV` (218) to the server and sets nothing locally, leaving the flag to the server's reply. Both flags are written to `OWPR` by `0x0053B230`, after the research fields: the homeworld flag 29 bytes past the end of the second research field and the civ flag 30. `0x00537D00` derives 360 from galaxy settings for a new civ and for an `OWPR` older than version 12.
 
-**`Owner:384` is the length of the civ name, not a count of records.** The chosen name is a VC9 `std::string` at `session+0x1A0`, whose size field is `session+0x1B4`, so `OWPR` is `138 + Owner:384` bytes because the name's characters are written into it. `0x00538470`, the civ's display name, returns that string when the length is non-zero and the player name otherwise. Prompt 225 is therefore offered until a name has been chosen. Measured across saves: `testname4` stores 9. Writing the length without the characters does silence the prompt, and it is still the wrong fix, because it fabricates a name. `client/dev_tools/patch_hide_setup_prompts.py` returns from `0x0056E700` instead, one byte, fabricating nothing.
+**`Owner:384` is the length of the civ name, not a count of records.** The chosen name is a VC9 `std::string` at `session+0x1A0`, whose size field is `session+0x1B4`, so `OWPR` is `138 + Owner:384` bytes because the name's characters are written into it. `0x00538470`, the civ's display name, returns that string when the length is non-zero and the player name otherwise. Prompt 225 is therefore offered until a name has been chosen. Measured across saves: `testname4` stores 9. Writing the length without the characters does silence the prompt, and it is still the wrong fix, because it fabricates a name. Returning from `0x0056E700`, one byte, silences it without fabricating anything; a patch did that for the player client until the referee could carry the dialog's choice.
+
+**Prompt 225's OK stores three things through `0x00579230`:** the name, the "Reveal True Player Name" checkbox and the coat-of-arms id. Online it sends them as an `ACNC` message and changes nothing locally. Offline it trims spaces and tabs, then refuses a name outside 3 to 30 characters ("Civilization Name needs to be between 3 and 30 characters long") or one that matches another civ's player name or chosen name ("A similar Civilization Name already exists"). The match ignores case: `0x00404B30` upper-cases both names with `toupper` before comparing, and the civ's own player name is not checked. A name it accepts goes to `civ+0x1A0`, the checkbox to `+0x19D` and the id to `+0x1C0`. The dialog also has a "Decide Later" button.
+
+**`OWPR` (version 19) ends with those three fields.** `0x0053B230` writes them last: the name as a `u32` length and its characters, the checkbox as one byte, the id as an `i32`, −1 for none. Every civ in the local saves and sandbox captures ends `00 00 00 00 | 00 | ff ff ff ff`: no name, player name hidden, no arms.
+
+**A coat-of-arms id only means something to the server that issued it.** The client draws another civ's arms by asking its own server for `getapprovedcoa` with that id. In multiplayer each install's `cs_server.py` numbers its own uploads from 1, so two players' ids collide, and nothing carries an image to the other installs. In the original, the server kept every image, and the action's name suggests it approved them before other players saw them. The archived forum calls the name and arms a Premium feature, with the arms drawn beside every planet the civ owns.
+
+**A refused fetch is not cached, so arms approved later appear at the next launch.** `0x00517590` walks every civ and calls `0x00517260` with its `+0x1C0` id: `getcoa` for the local civ, `getapprovedcoa` for the rest. An id of 0 or less fetches nothing. An id already in the texture cache (`0x857820`) with a texture is not fetched again, and a `FAIL` answer returns without adding the id to the cache. It runs once as the client loads a galaxy (its one caller is `0x0056D9F4`): in the sandbox on 8 November 2026 a client asked for an id once at load, asked nothing more while it stayed open, and drew the arms after a restart. In multiplayer the launcher restarts the client every turn, so an approval shows from the next turn.
+
+**In multiplayer the relay keeps the coats of arms.** While the launcher plays a galaxy it sets `cs_server.MP_STORE`, and `uploadcoa`, `listcoa`, `getcoa` and `getapprovedcoa` go to the relay's `/<galaxy>/arms` routes instead of `data/coa`. The relay numbers uploads across the whole project (`<prefix>_arms_meta/counter`), so no two galaxies share an id. Each upload is kept in `<prefix>_arms/<id>`, pending, and listed under its sign-in in `<prefix>_arms_owners/<uid>`. Only an account seated on the galaxy may upload, as a PNG of at most 256 KiB and 256 pixels each way, and at most 20 per sign-in. The owner is served a pending upload, and anyone else is served it only once `server/dev_tools/arms_tool.py` approves it. A refused upload is served to nobody. The referee reads each seated civ's uploads that were not refused and passes them to the merge, and records them in the turn's archive so `verify_turn` can rerun the turn. A folder or LAN galaxy keeps no arms, so its `cs_server.py` lists none and refuses an upload. In multiplayer `listcivnames` answers nothing, so the dialog offers no stored name, and `uploadcivname` is not kept: the referee carries the name.
 
 **The homeworld click counters are not `.data` globals.** `0x00842AE4` through `0x00842AF0` have no absolute references in `.text`. They are fields of the prompt's own singleton, which lives at `0x00840BC8`, at offsets `0x1F1C` through `0x1F28`, and `0x00498E10` zeroes all four every time the prompt is prepared. So they read zero after a load because the dialog is constructed once per process and cleared on every open, not because a save failed to carry them.
 
-- [ ] **A one-time civilisation setup step should replace `patch_hide_setup_prompts.py`.** In the original, a player chose a name and coat of arms once and the blob carried it, which kept `Owner:384`, the name's length, non-zero and the prompt away. Locally generated galaxies never go through that flow, so the patch stands in for it and the name is left unset. Done when the launcher or the site offers the setup step and the patch is no longer applied.
+- [x] **A one-time civilisation setup step should replace `patch_hide_setup_prompts.py`.** In the original, a player chose a name and coat of arms once and the blob carried it, which kept `Owner:384`, the name's length, non-zero and the prompt away. Locally generated galaxies never go through that flow, so the patch stands in for it and the name is left unset. The setup step is the game's own dialog 225. Done when the patch is no longer applied, the merge carries a name, its checkbox and an arms id once, and only as the dialog could have made them, and other players see arms only once the operator approves them: the relay keeps each upload under a galaxy-wide id, and every install's `cs_server.py` asks the relay for `getapprovedcoa`. In the sandbox on 8 November 2026 a v0.5 build showed dialog 225, the referee carried `'tmog66-'` and arms 1 into turn 135, and the name showed with the dialog gone. Elder Race's client was answered `FAIL` for arms 1 while it was pending and drew none, and drew it after approval and a restart.
 
 **Side effect:** Applying T1–T5 removes the Next Turn button from the UI. This is intentional for the multiplayer build, turns are advanced externally via `fast_turns.py`, not by player clicks.
 
@@ -1311,7 +1404,24 @@ Dialog 225, "Pick your Civilization Name and Coat of Arms", is a modeless single
 
 **Coats of arms.** `listcoa` is read with `operator>>` until a read fails (`0x00497B90`), so its answer is space-separated ids. `getcoa`, and `getapprovedcoa` for another civ's id (`0x00517260`), are base64-decoded (`0x005F5F10`), with `FAIL` for none. An image dragged into the dialog (`0x004981A0`) is scaled to 56 by 66 through GDI+ (`0x004977A0`), saved as PNG and sent with `uploadcoa`, whose answer is the new id. The client caches each id's texture and never refetches it, so ids are not reused.
 
-[ ] **Confirm the coat of arms on screen:** a dragged image survives OK, is listed next session, and is drawn beside the civ's planets.
+[x] **Confirm the coat of arms on screen:** a dragged image survives OK, is listed next session, and is drawn beside the civ's planets. Seen in the sandbox on 8 November 2026, through the relay. The listing is checked by `test_relay_arms.py`, since the dialog does not come back once a name is set.
+
+### Patches 42–45, Multiplayer status bar shows only the turn (81 bytes, November 2026)
+
+**Release only**: `client/dev_tools/patch_status_bar.py`, applied to `CosmicSupremacy_Player.exe`, the TestBed copy `release/build.ps1` stages for multiplayer. It runs after patches 28–35 and, like them, refuses an `--out` that git tracks.
+
+Under the launcher the client's countdown is wrong (see the in-game countdown item in the todo list) and its Connected or Disconnected label says nothing the launcher does not say better. The status bar is built in the function at `0x00405D00` from four format strings in `.rdata`, each read at one site there, and the formatter at `0x005E35E0` ignores an argument its format no longer prints. So each string is rewritten in its own slot: a label keeps its colour tags and its word becomes spaces, and a countdown string ends after the turn number, NUL-filled to its old length.
+
+| # | file | VA | read at | original | patched |
+|---|---|---|---|---|---|
+| 42 | `0x34E990` | `0x00750190` | `0x004060CF` | `\r<%s>Disconnected    \r<000000>` | the word as spaces |
+| 43 | `0x34E9B0` | `0x007501B0` | `0x00406082` | `\r<000000>Connected    \r<000000>` | the word as spaces |
+| 44 | `0x34E9E8` | `0x007501E8` | `0x00405FB1` | `Turn: %d%s     Next Turn in \r<000000>%s` | `Turn: %d%s` |
+| 45 | `0x34EA10` | `0x00750210` | `0x00405F5E` | `Turn: %d     Game Starts in \r<000000>%s` | `Turn: %d` |
+
+`test_status_bar_patch.py` checks that only these 81 bytes change, that each string is read once near `0x00405D00`, and that the build's chain of patches leaves them patched.
+
+[x] Seen on screen on 8 November 2026 in 0.5.0.5: under the launcher the bar shows "Turn: N" and no countdown or connection label.
 
 ### Summary
 
@@ -1329,6 +1439,8 @@ Patches 36–40 fix the Tutorial: a larger panel, early orders that count, a one
 
 Patch 41 (6 bytes) makes Single Player's civ name dialog send the name on every OK. Applied only to `CosmicSupremacy_Resurgence.exe` in a release.
 
+Patches 42–45 (81 bytes) cut the multiplayer status bar to the turn number, dropping its countdown and connection label. Applied only to `CosmicSupremacy_Player.exe` in a release.
+
 ### EXE Variants
 
 | EXE | Patches | Next Turn Button | Galaxy File | Purpose |
@@ -1337,7 +1449,7 @@ Patch 41 (6 bytes) makes Single Player's civ name dialog send the name on every 
 | `CosmicSupremacy_TestBed.exe` | 1–11 | Yes | `TestBedGalaxy_local.csgalaxy` | Manual testing with interactive turn button |
 | `CosmicSupremacy_Resurgence.exe` | 1–17 (incl. T1–T5) | No | `SandboxGalaxy_local.csgalaxy` | Production multiplayer, turns controlled by `fast_turns.py` |
 | `CosmicSupremacy_Resurgence.exe` | + 18–27 (optional) | No | any | AI development, sub-60s turns. **Do not ship**: it changes a game rule, not plumbing, and a galaxy built on it runs faster than the original ever allowed |
-| `CosmicSupremacy_Player.exe` | 1–11, plus the one byte for prompt 225 | Never created | a pushed `.dat` | Multiplayer player build. TestBed without T1–T5, so it cannot compute a turn and the setup prompts stay gated |
+| `CosmicSupremacy_Player.exe` | 1–11 | Never created | a pushed `.dat` | Multiplayer player build, made from TestBed by `build.ps1`. Without T1–T5 it cannot compute a turn, and the setup prompts, 225 included, open as shipped |
 
 Every client in a release's `game\` folder also carries patches 28–31, the unmodified original included.
 
@@ -1719,32 +1831,44 @@ What is left for after the beta is kept here.
   technology the civ cannot research, or a queue entry it cannot afford, is copied as given. Done
   when the merge applies the rule the UI enforces for each order type it accepts.
 
-- [ ] **Logging in has not been played through the live relay.** The relay knows a player by
-  uid, and creating an account or linking Google keeps the guest's, so nothing in it changed;
-  `fb_auth` is tested against the Auth emulator only. Done when an account logged in from a
-  checkout launcher lists galaxies, joins one and submits a turn, logs out and back in and
-  submits again, and the same for a Google login.
+- [x] **Logging in is played through the live relay.** The relay knows a player by uid, and
+  creating an account or linking Google keeps the guest's. On 4 November 2026 an email login
+  and a Google login from a checkout launcher each listed the sandbox, submitted, logged out
+  and back in, and submitted again. A login adopts the account's stored name; Play follows the
+  seat the install joined as (`seat_to_play`), so a rename does not lose the seat.
 
-- [ ] **Nobody can see who still plays as a guest.** The relay accepts every verified token
-  alike. Done when it records each caller's `firebase.sign_in_provider` (`anonymous`,
-  `password`, `google.com`) with the seat, and the operator view lists which seated players
-  are still guests.
+- [x] **The operator view shows who still plays as a guest.** A submission records the
+  caller's `firebase.sign_in_provider` under `seat_providers`, and the operator view lists each
+  seat's provider and the seated guests. On 4 November 2026 the sandbox showed every seat on
+  Google and no seated guests.
 
-- [ ] **Play by name has no end switch.** Done when a relay setting, off by default, refuses a
-  token whose provider is `anonymous` with a refusal the launcher turns into "log in to play".
-  Turned on once the operator view shows no seated guests.
+- [x] **Play by name has an end switch.** `seat_tool.py <galaxy> guests refuse` makes the
+  relay refuse a token whose provider is `anonymous`, and the launcher shows "log in to play".
+  It ships off; the sandbox still allows guests.
 
-- [ ] **A guest's seats stay behind when its install logs in to an existing account.** The
-  launcher tells the player to send the operator the guest's player code, and `seat_tool.py`
-  moves the seats by hand. Done when the relay moves them itself, on proof of both the guest's
-  and the account's tokens.
+- [ ] **The sandbox still lets guests in.** A guest is warned before it joins or plays, once a
+  day, that galaxies will soon be played by account only (`GUEST_ONLY_TEXT` in the launcher).
+  Done when `seat_tool.py firebase://cs-resurgence/sandbox guests refuse` is set, after the operator view shows
+  no seated guests, and the launcher update that follows rewords the warning to say guests are
+  refused.
 
-- [ ] **The launcher does not update itself.** A launcher below a galaxy's `min_build` links the
-  release page, and the player unzips the new build by hand, keeping `data`. Done when the
-  launcher finds a newer release on its own, downloads it, checks the signature and SHA-256,
-  replaces itself in its folder without elevation and without touching `data`, and goes back to
-  the old build if the new one fails to start. The TUF items in `5 - Release_Checklist.md` and
-  Multiplayer_Checklist M12 are its acceptance list.
+- [x] **A guest's seats follow its install to an existing account.** On login the launcher
+  posts both the guest's and the account's tokens, and the relay moves each seat and each
+  waiting join to the account, keeping any the account already holds in that galaxy. On
+  3 November 2026 the sandbox seat `guest-test` moved from a guest to a Google account, and on
+  4 November a waiting guest join moved before its turn.
+
+- [x] **The launcher updates itself** (`release/updater.py`, `test_updater.py`). It reads the
+  latest release on GitHub, downloads its one zip within the listed size, checks the SHA-256
+  against both the asset digest and the release notes, and requires every `.exe` and `.dll` to
+  carry a valid Artifact Signing signature with the pinned subject, issuer and identity EKU. The
+  staged launcher must report the release's build, newer than the running one. Update waits for
+  the game to close, swaps every entry but `data` and `update` into `update\previous`, and puts
+  the old build back when the new one does not report its window within 90 s. A signed 0.5.0
+  replaced itself with 0.5.0.1 from a local feed on 1 November 2026, keeping the login, and
+  refused an unsigned build; the no-start rollback is covered only by `test_updater.py`. A
+  launcher built without `-UpdateFeed` reads only the real release page. The TUF items in
+  `5 - Release_Checklist.md` and Multiplayer_Checklist M12 are its acceptance list.
 
 - [x] **Order types nobody has measured are not merged:** admirals and diplomacy proposals.
   Both are refused with a note naming what was dropped (`test_admirals_diplomacy_merge.py`); until
@@ -1753,9 +1877,43 @@ What is left for after the beta is kept here.
   made in the UI is refused with a note, or taken when it is only an order. Carrying diplomacy
   means changing both civs at once, since accepting a treaty moves its lump sums immediately.
 
-- [ ] **Governors are carried, but no governor has run through the live referee.** Measured in
-  Single Player and merged in `test_governors_merge.py`. Done when a governor assigned in a live
-  galaxy is still assigned after the tick and its rule has acted on the planet.
+- [x] **Admirals and diplomacy run through the live referee.**
+  `merge_orders.py` carries a civ's own admirals and their ships, and each diplomacy step the
+  client was seen to take, applying an acceptance's lump sums and both stances itself; every
+  step of the admiral and diplomacy sessions merges to what the client wrote
+  (`test_admirals_diplomacy_merge.py`). On the sandbox galaxy (1 November 2026, turns 93 to
+  97), with bot civs submitting bytes built from the client's recorded records: Beta's Scout
+  admiral stayed assigned across two ticks and gave its idle ship an engine scout order; Beta
+  proposed a trade of 5 metal for 1 credit a turn over 10 turns, Sir Blorpington accepted it the
+  next turn, and after the tick it was in force from turn 96 with the metal moved once (630 to
+  625 and 635). The two civs had not met, so their contact was written into turn 95 at the
+  publish. Still refused: an admiral on a fleet. Built on the UI's word, not a save: a peace
+  binding for 50 turns and an alliance for 100, a credit lump sum as one `u32`, and no war while
+  a cease-fire or peace binds.
+  - [ ] An admiral made in the client UI and a treaty answered in it go through a live galaxy
+  - [ ] A per-turn credit payment is seen moving after an accepted trade
+
+- [x] **Governors run through the live referee.** Measured in Single Player and merged in
+  `test_governors_merge.py`. On the sandbox galaxy (2 November 2026, turns 97 to 98), Beta
+  submitted governor 260 "g3", built from the Single Player record of a "Set Recruitment Rate"
+  rule at 10%, on home planet 186. After the tick 186 still names governor 260 and its
+  recruitment rate reads 10%; Beta's other planets have no governor and stay at 0%. When Beta's
+  bot set 186 back to 0% on turn 99, the governor restored 10% by turn 103, so the rule acts
+  every tick, not only on assignment.
+  - [x] A governor made in the client UI goes through a live galaxy. Robert, 2 November: a hurry
+    governor in tmog66's empire works.
+
+- [x] **Play stays live on the galaxies page while a turn is processing.** `row_action` offers
+  Play on every seated row whatever the turn loop is doing, and the guard is only in
+  `_take_turn_loop` once pressed: Play on the processing galaxy asks the loop to reopen the
+  game, and Play on another galaxy with the game closed switches without asking, holding the
+  window for up to 20 s in `stop_multiplayer`. Done when, from orders sent until the next turn
+  opens, the followed galaxy's Play and every other row's Play are greyed out with a line saying
+  the turn is being processed. `Launcher.turn_busy` greys every row's Play while the orders are
+  sending and from the deadline until the next turn opens, and the line under the table says
+  which. Before the deadline Play stays live, since it reopens the game to change the orders
+  sent, and a stopped or unreachable galaxy keeps it, since the relay takes orders until the turn
+  changes. `test_turn_busy.py`; not yet seen on screen.
 
 **Measured in one Single Player session at turn 0 (October 2026,
 `server/tests/fixtures/tier4`):**
@@ -1965,9 +2123,23 @@ either ignores the setting on load or the capture rewrites it.
 - **Not measured:** peace and alliance acceptance, the per-turn payments over a turn, a treaty
   running out, and the other item types.
 
-- [x] **Admirals and diplomacy are refused by name.** `merge_orders.py` carries none of it and
-  says what it dropped: an admiral created, edited or deleted in any civ's `ADMS`; a ship or
-  fleet naming a different admiral (its orders are still taken, naming the admiral served); a
-  treaty added, changed or removed; and a stance moved in a `KNPL`. A ship leaving a fleet may
-  keep the fleet's admiral or have none. No step of the governor, tier4 or tier5 sessions trips
-  any of these.
+- [x] **Admirals and diplomacy are carried as measured** (`merge_orders.py`,
+  `test_admirals_diplomacy_merge.py`). An admiral is judged like a governor: a new id, a printable
+  name, a type below 4 and only the 24 rule tags the reader knows. A ship names 0 or an admiral its
+  civ holds as merged, following a renumbering; deleting one still in command is refused; the
+  referee recounts each `ADML`'s ships. A treaty step is taken only as the client takes it,
+  against the treaty as served, and refused when the other party changed that treaty earlier in
+  the merge. On acceptance the referee moves the lump sums from the merged `OWPR` resources (a
+  `u32` count of 5 at the second research field `+55`, then a resource byte and a `u32` per
+  resource) and credits, and refuses it when the payer is short. Refused: an admiral on a fleet,
+  another civ's admirals, a treaty ended any other way, and a stance moved without a treaty.
+- [ ] **A rival's colour and its territory checkbox are lost at every turn.** The diplomacy
+  screen's Change Color (right-click a civ) and the checkbox beside each civ, which shows or
+  hides its sphere of control on the map, do not survive to the next served turn (Robert, 6
+  November 2026). `merge_orders.py` carries only what it lists, so whatever the client saves for
+  them is dropped, and silently, since only a moved stance is named. Neither field is located:
+  the undecoded rest of the 36-byte `KNPL` record is the likely place, and the memory report's
+  open "change color" item is the same field. Both are the viewer's own display choices, so
+  carrying them needs no legality check beyond the record being the submitter's own. Done when
+  a Single Player capture pair locates both fields, the merge carries them for the submitter's
+  own `KNPL`, and a colour and a hidden territory set on one turn are still there on the next.

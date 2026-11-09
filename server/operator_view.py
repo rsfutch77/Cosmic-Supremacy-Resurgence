@@ -64,8 +64,15 @@ WORKER_FAILURES_KEY = 'worker_failures'
 SEATS_KEY = 'seats'
 SEAT_CLAIM_KEY = 'seat_claim'
 REBOUND_KEY = 'seats_rebound'
+PROVIDERS_KEY = 'seat_providers'    # uid -> sign_in_provider, written by the relay
+GUESTS_KEY = 'guests'               # 'refuse' when the relay turns guests away
 DOCUMENT_FIELDS = (WORKER_SEEN_KEY, WORKER_FAILURES_KEY, SEATS_KEY,
-                   SEAT_CLAIM_KEY, REBOUND_KEY)
+                   SEAT_CLAIM_KEY, REBOUND_KEY, PROVIDERS_KEY, GUESTS_KEY)
+
+# How each sign_in_provider reads in the seat map.
+PROVIDER_NAMES = {'anonymous': 'guest', 'password': 'email',
+                  'google.com': 'Google'}
+GUEST = 'anonymous'
 
 STOPPED_AFTER = 120   # seconds past the deadline with no heartbeat before a worker is called stopped
 
@@ -185,14 +192,28 @@ def short_uid(uid) -> str:
 
 
 def _seat_rows(fields: dict, civs: list) -> list:
-    """One row per civ on the roster: who holds it and when it last moved."""
+    """One row per civ on the roster: who holds it, how they last signed in,
+    and when it last moved."""
     by_civ = {c: u for u, c in (fields.get(SEATS_KEY) or {}).items()}
     moved = fields.get(REBOUND_KEY) or {}
     joined = fields.get(getattr(turn_store, 'JOINED_KEY', 'joined')) or {}
+    providers = fields.get(PROVIDERS_KEY) or {}
     return [{'civ': c, 'uid': by_civ.get(c),
+             'provider': providers.get(by_civ.get(c)) if by_civ.get(c) else None,
              'rebound_at': (moved.get(c) or {}).get('at'),
              'joined_uid': (joined.get(c) or {}).get('uid')}
             for c in civs]
+
+
+def seated_guests(rows) -> list:
+    """The civs whose holder last wrote as a guest."""
+    return [r['civ'] for r in rows or [] if r['uid'] and r.get('provider') == GUEST]
+
+
+def provider_name(provider) -> str:
+    if not provider:
+        return 'sign-in not seen yet'
+    return PROVIDER_NAMES.get(provider, provider)
 
 
 def galaxy_report(store, gid: str = None, name: str = None, status: str = None,
@@ -212,7 +233,7 @@ def galaxy_report(store, gid: str = None, name: str = None, status: str = None,
         'civs': [], 'submitted': [], 'waiting': [],
         'last_tick': None, 'history': [],
         'worker': {'seen': None, 'failures': None},
-        'seats': None, 'seat_claim': None,
+        'seats': None, 'seat_claim': None, 'guests': None,
         'read_at': time.time(),
     }
     try:
@@ -261,6 +282,7 @@ def galaxy_report(store, gid: str = None, name: str = None, status: str = None,
     # Seats are shown wherever there is a seat map, and always for Firebase.
     if SEATS_KEY in fields or out['kind'] == 'FirebaseTurnStore':
         out['seat_claim'] = fields.get(SEAT_CLAIM_KEY) or None
+        out['guests'] = fields.get(GUESTS_KEY) or None
         out['seats'] = _seat_rows(fields, civs)
 
     try:
@@ -337,6 +359,11 @@ def _problems(r: dict) -> list:
                        f'its seat, and first-use claiming is off, so nobody '
                        f'can play it through the relay; `seat_tool.py bind` '
                        f'seats it.{asked}')
+    if r.get('guests') == 'refuse':
+        for civ in seated_guests(r.get('seats')):
+            out.append(f'{civ} last played as a guest and guests are refused '
+                       f'here, so it cannot play until it logs in to an '
+                       f'account')
 
     if last is None:
         out.append(f'no archive record for any of the {LOOK_BACK} turns before '
@@ -378,7 +405,7 @@ def _error_row(gid, name, store_spec, exc, note, **extra) -> dict:
            'turn_seconds': None, 'hash': None, 'civs': [], 'submitted': [],
            'waiting': [], 'last_tick': None, 'history': [],
            'worker': {'seen': None, 'failures': None},
-           'seats': None, 'seat_claim': None,
+           'seats': None, 'seat_claim': None, 'guests': None,
            'read_at': time.time()}
     row.update(extra)
     return row
@@ -489,10 +516,20 @@ def _seat_lines(r: dict) -> list:
     if r.get('seats') is None:
         return []
     claim = 'on' if r.get('seat_claim') == 'first-use' else 'off'
-    lines = [f'first-use claiming {claim}']
+    guests = 'refused' if r.get('guests') == 'refuse' else 'allowed'
+    lines = [f'first-use claiming {claim}, guests {guests}']
+    still = seated_guests(r['seats'])
+    unseen = [row['civ'] for row in r['seats']
+              if row['uid'] and not row.get('provider')]
+    line = f'seated guests: {", ".join(still) if still else "none"}'
+    if unseen:
+        line += (f'; {len(unseen)} seat(s) have not written since sign-ins '
+                 f'were recorded')
+    lines.append(line)
     for row in r['seats']:
         if row['uid']:
-            line = f'{row["civ"]:<16} {short_uid(row["uid"])}'
+            line = (f'{row["civ"]:<16} {short_uid(row["uid"])}  '
+                    f'{provider_name(row.get("provider"))}')
             if row.get('rebound_at'):
                 line += f'  moved {fmt_when(row["rebound_at"])}'
         else:

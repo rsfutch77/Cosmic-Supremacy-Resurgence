@@ -41,6 +41,7 @@ import base64
 import hashlib
 import json
 import os
+import shutil
 import struct
 import sys
 import threading
@@ -83,6 +84,11 @@ RECLAIMED_KEY = 'reclaimed'
 # `release/launcher.py` holds its own `MIN_BUILD_KEY`; the two must agree.
 JOINED_KEY = 'joined'
 MIN_BUILD_KEY = 'min_build'
+
+# The civs served their own view of a turn (`fog.project`), as
+# `{"<turn>": [civ, ...]}`. `publish` replaces the whole map; a civ not named
+# is served the turn itself, which is its view.
+VIEWS_KEY = 'views'
 WARN_KEY, RECLAIM_KEY = 'warn_after_misses', 'reclaim_after_misses'
 
 # Player name rules: the engine's civ name is a 15-character ASCII buffer, and a
@@ -319,6 +325,9 @@ class TurnStore:
     def submission_dir(self, turn: int) -> str:
         return os.path.join(self.root, 'submissions', f'{turn:04d}')
 
+    def view_path(self, civ: str, turn: int) -> str:
+        return os.path.join(self.root, 'views', f'{turn:04d}', f'{civ}.b64')
+
     def submission_path(self, civ: str, turn: int) -> str:
         return os.path.join(self.submission_dir(turn), f'{civ}.b64')
 
@@ -430,17 +439,44 @@ class TurnStore:
     def has_turn(self, turn: int) -> bool:
         return os.path.exists(self.turn_path(turn))
 
-    def publish(self, turn: int, blob: bytes, turn_seconds: int = None) -> None:
-        """The referee's move: a new turn exists, and the clock restarts."""
+    def view_blob(self, civ: str, turn: int):
+        """`civ`'s own view of a turn, or None when it is served the turn."""
+        if civ not in (self.state().get(VIEWS_KEY) or {}).get(str(int(turn)), ()):
+            return None
+        try:
+            return sp.load_any(self.view_path(civ, turn))
+        except FileNotFoundError:
+            return None
+
+    def publish(self, turn: int, blob: bytes, turn_seconds: int = None,
+                views: dict = None) -> None:
+        """The referee's move: a new turn exists, and the clock restarts.
+
+        `views` is `{civ: blob}` for the civs served their own view. They are
+        written before the turn, and earlier turns' views are removed.
+        """
         import canonical
         state = self.state()
         seconds = turn_seconds or state['turn_seconds']
+        views = views or {}
+        for civ, view in views.items():
+            _atomic_write(self.view_path(civ, turn), sp.encode_save(view))
         _atomic_write(self.turn_path(turn), sp.encode_save(blob))
         state.update(turn=int(turn), deadline=time.time() + seconds,
                      turn_seconds=int(seconds),
                      hash=canonical.canonical_hash(blob))
+        state[VIEWS_KEY] = {str(int(turn)): sorted(views)}
         self._put_state(state)
         os.makedirs(self.submission_dir(turn), exist_ok=True)
+        self._prune_views(int(turn))
+
+    def _prune_views(self, before: int) -> None:
+        root = os.path.join(self.root, 'views')
+        if not os.path.isdir(root):
+            return
+        for name in os.listdir(root):
+            if name.isdigit() and int(name) < before:
+                shutil.rmtree(os.path.join(root, name), ignore_errors=True)
 
     def submit(self, civ: str, turn: int, blob: bytes) -> str:
         """Hand a player's state back. A later submission replaces an earlier
@@ -643,9 +679,55 @@ def _drop_auth_on_redirect(base: str = None):
             if new is not None and not _same_host(req.full_url, newurl):
                 new.headers = {k: v for k, v in new.headers.items()
                                if k.lower() != 'authorization'}
+            if new is not None:
+                # Where the request went last, for `outage_of`.
+                first = getattr(req, 'cs_first', req)
+                new.cs_first = first
+                first.cs_last_url = newurl
             return new
 
     return Handler
+
+
+# What a failed store call was, in terms a player can act on. `outage_of`
+# answers one of these, or None for a refusal or anything else.
+OUTAGE_NETWORK = 'network'      # this machine reaches nothing
+OUTAGE_SERVICE = 'service'      # the galaxy's server does not answer
+OUTAGE_STORAGE = 'storage'      # the file storage a turn is fetched from
+
+# Socket errors that mean this machine's own network is down: ENETDOWN,
+# ENETUNREACH, EHOSTUNREACH, and the same as Windows numbers them.
+NETWORK_ERRNOS = {100, 101, 113, 10050, 10051, 10065}
+
+
+def outage_of(exc):
+    """OUTAGE_NETWORK, OUTAGE_SERVICE or OUTAGE_STORAGE for a failed store
+    call, or None when it is not an outage.
+
+    A failed name lookup, a timeout and an unreachable network are this
+    machine's network. A refused or dropped connection and an HTTP 5xx, 408 or
+    429 are the far end: Storage when the request had been sent on to a
+    `TRUSTED_BLOB_HOSTS` host (`HttpTurnStore` records it as `cs_host`), the
+    galaxy's server otherwise. Any other HTTP status is a refusal.
+    """
+    import socket
+    import urllib.error
+    far = (OUTAGE_STORAGE if getattr(exc, 'cs_host', None) in TRUSTED_BLOB_HOSTS
+           else OUTAGE_SERVICE)
+    if isinstance(exc, urllib.error.HTTPError):
+        code = exc.code
+        return far if code >= 500 or code in (408, 429) else None
+    reason = getattr(exc, 'reason', exc)
+    if isinstance(reason, socket.gaierror) or isinstance(reason, TimeoutError):
+        return OUTAGE_NETWORK
+    if not isinstance(reason, OSError):
+        return None
+    if (getattr(reason, 'winerror', None) in NETWORK_ERRNOS
+            or getattr(reason, 'errno', None) in NETWORK_ERRNOS):
+        return OUTAGE_NETWORK
+    if isinstance(reason, ConnectionError):
+        return far
+    return None
 
 
 class HttpTurnStore:
@@ -705,7 +787,13 @@ class HttpTurnStore:
         if self._opener is None:
             self._opener = urllib.request.build_opener(
                 _drop_auth_on_redirect(self.base))
-        return self._opener.open(req, timeout=self.timeout)
+        try:
+            return self._opener.open(req, timeout=self.timeout)
+        except OSError as exc:
+            # The host the request was at when it failed, for `outage_of`.
+            url = getattr(req, 'cs_last_url', None) or req.full_url
+            exc.cs_host = urllib.parse.urlparse(url).hostname
+            raise
 
     def _get(self, path, want_json=True, headers=None, answer=None):
         """One GET, None for a 404.
@@ -864,7 +952,9 @@ class HttpTurnStore:
     def has_turn(self, turn: int) -> bool:
         return self._get(f'/turn/{turn}', want_json=False) is not None
 
-    def publish(self, turn: int, blob: bytes, turn_seconds: int = None) -> None:
+    def publish(self, turn: int, blob: bytes, turn_seconds: int = None,
+                views: dict = None) -> None:
+        # `turn_server` serves every caller the turn, so `views` is not sent.
         q = f'?seconds={int(turn_seconds)}' if turn_seconds else ''
         self._post(f'/turn/{turn}{q}', blob)
 
@@ -988,6 +1078,25 @@ class HttpTurnStore:
         """What was decided about one request, or None while it is waiting."""
         return self._get(
             f'/join/{urllib.parse.quote(key, safe="")}/answer')
+
+    # Coats of arms, which only the relay keeps. A `turn_server.py` answers
+    # 404, which reads as none uploaded.
+    def list_arms(self) -> list:
+        """This sign-in's coat-of-arms ids that were not refused."""
+        got = self._get('/arms')
+        return [int(i) for i in (got or {}).get('ids') or []]
+
+    def arms_png(self, arms_id: int):
+        """One coat of arms as PNG bytes, or None until it is approved."""
+        return self._get(f'/arms/{int(arms_id)}', want_json=False)
+
+    def upload_arms(self, png: bytes) -> int:
+        """Upload a coat of arms and return the id the relay gave it."""
+        import base64
+        body = json.dumps({'png': base64.b64encode(png).decode('ascii')})
+        got = self._send('/arms', body.encode('ascii'),
+                         headers={'Content-Type': 'application/json'})
+        return int(got['id'])
 
 
 def open_store(spec: str, token=None):

@@ -129,7 +129,7 @@ def run_turn(capture_every=5.0, uploads_per_turn=2, submit_every=None,
              seconds=600.0, edits_at=(), close_at=None, ask_at=None,
              prior=None, orders=True, poll=2.0, poll_max=None, rounds=1,
              reopen_at=None, next_turn_at=None, loses_orders=False,
-             stop_after=None):
+             stop_after=None, check_at=None):
     """One whole turn against a fake clock. Returns what it did.
 
     `edits_at` is when the player changes something, in seconds from the start
@@ -145,6 +145,9 @@ def run_turn(capture_every=5.0, uploads_per_turn=2, submit_every=None,
 
     `stop_after` is the player pressing stop that many seconds in. With
     `rounds` of 0 it is the only thing that ends the loop.
+
+    `check_at` is the launcher asking for a read outside the schedule, as a
+    clock time like `ask_at`.
     """
     clock = Clock()
     store = Store(clock, seconds=seconds)
@@ -218,6 +221,7 @@ def run_turn(capture_every=5.0, uploads_per_turn=2, submit_every=None,
             capture_every=capture_every, uploads_per_turn=uploads_per_turn,
             submit_every=submit_every, send_now=Ask(clock, ask_at),
             reopen=Ask(clock, reopen_at),
+            check_now=Ask(clock, check_at),
             stop=(None if stop_after is None
                   else lambda: clock.now() - start >= stop_after),
             log=lambda *a: None, clock=clock.now, sleep=clock.sleep)

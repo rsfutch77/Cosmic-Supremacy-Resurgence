@@ -73,6 +73,15 @@
     the signing step with a self-signed certificate; a release is not built
     with it.
 
+.PARAMETER UpdateFeed
+    A test build's release feed: a URL answering like GitHub's latest-release
+    API. Needs -UpdateDownloads. Written into build.json, so the frozen
+    launcher updates from it and from nowhere else. A release is not built
+    with it.
+
+.PARAMETER UpdateDownloads
+    The prefix every zip a test feed offers is downloaded from.
+
 .EXAMPLE
     powershell -ExecutionPolicy Bypass -File .\release\build.ps1
 
@@ -96,7 +105,9 @@ param(
                                                  ForEach-Object { $_.Trim() } | Where-Object { $_ })
                                            } else { @('InteractiveBrowserCredential') }),
     [switch]$SkipGameExecutables,
-    [switch]$SignAllowUntrusted
+    [switch]$SignAllowUntrusted,
+    [string]$UpdateFeed,
+    [string]$UpdateDownloads
 )
 
 $ErrorActionPreference = 'Stop'
@@ -710,11 +721,15 @@ Write-Step "Freezing launcher (PyInstaller)"
 
 # The build name is decided here. stamp_build writes it to build.json, which
 # launcher.build_info() reads back through bundled().
-& $VenvPy (Join-Path $ReleaseDir 'stamp_build.py') $Version $BuildDir | Out-Null
+if ([bool]$UpdateFeed -ne [bool]$UpdateDownloads) { throw '-UpdateFeed and -UpdateDownloads go together' }
+$stampArgs = @($Version, $BuildDir)
+if ($UpdateFeed) { $stampArgs += @($UpdateFeed, $UpdateDownloads) }
+& $VenvPy (Join-Path $ReleaseDir 'stamp_build.py') @stampArgs | Out-Null
 if ($LASTEXITCODE -ne 0) { throw 'stamp_build failed' }
 $BuildStamp = Join-Path $BuildDir 'build.json'
 if (-not (Test-Path $BuildStamp)) { throw "stamp_build reported success but $BuildStamp is missing" }
 Write-Ok "stamped build $Version"
+if ($UpdateFeed) { Write-Warn2 "TEST BUILD: updates only from $UpdateFeed. Never publish it." }
 
 $piArgs = @(
     '--noconfirm', '--onefile', '--windowed',
@@ -736,6 +751,10 @@ $piArgs = @(
     '--hidden-import', 'cs_server',
     # gamectl backs Next Turn / Save / Load and is imported inside the handlers.
     '--hidden-import', 'gamectl',
+    # updater finds, checks and installs a newer release.
+    '--hidden-import', 'updater',
+    # netstate asks Windows whether this machine is online, from the 1 s tick.
+    '--hidden-import', 'netstate',
     # The multiplayer turn machinery, every module reached from inside a
     # function once a galaxy is configured.
     '--paths', $ServerTools,
@@ -748,6 +767,8 @@ $piArgs = @(
     '--hidden-import', 'firebase_store',
     # beta_notice carries the text a player must see before joining.
     '--hidden-import', 'beta_notice',
+    # abandonment gives the reclaim count stated under the notice.
+    '--hidden-import', 'abandonment',
     '--hidden-import', 'save_parser',
     '--hidden-import', 'set_blob_player',
     '--hidden-import', 'inject_civ',
@@ -902,19 +923,22 @@ foreach ($m in $playable) {
 # A session mode names no EXE, so the copy above never reaches its client. A
 # player's client must never compute a turn the referee has not.
 #
-# Player is TestBed plus one byte that silences the coat-of-arms prompt. Every
-# build makes it from the tracked TestBed into release\build, so the release
-# depends on no gitignored file. client\CosmicSupremacy_Player.exe is neither
-# read nor written, and game_cycle.resolve_exe's choice for dev runs is left
-# as it was.
+# Player is the tracked TestBed under the name the launcher looks for, so the
+# release depends on no gitignored file. Its civ name and coat-of-arms prompt
+# (dialog 225) opens as shipped, and the referee carries the choice.
+# client\CosmicSupremacy_Player.exe is neither read nor written.
+# patch_status_bar.py cuts its status bar down to the turn number: the in-game
+# countdown runs off the clock the launcher holds, and the launcher shows the
+# deadline and the connection instead.
+$PatchStatusBar = Join-Path $ClientDir 'dev_tools\patch_status_bar.py'
 $mpModes = @($modes | Where-Object { $_.session -eq 'multiplayer' })
 if ($mpModes.Count -gt 0) {
     Write-Step "Adding the multiplayer client"
-    $PlayerExe = Join-Path $BuildDir 'CosmicSupremacy_Player.exe'
-    & $VenvPy (Join-Path $ClientTools 'patch_hide_setup_prompts.py') --build --out $PlayerExe | Out-Null
-    if ($LASTEXITCODE -ne 0) { throw 'patch_hide_setup_prompts failed to build the player client' }
-    Copy-Client $PlayerExe (Join-Path $GameDir 'CosmicSupremacy_Player.exe')
-    Write-Ok 'game\CosmicSupremacy_Player.exe, built from CosmicSupremacy_TestBed.exe'
+    $player = Join-Path $GameDir 'CosmicSupremacy_Player.exe'
+    Copy-Client (Join-Path $ClientDir 'CosmicSupremacy_TestBed.exe') $player
+    & $VenvPy $PatchStatusBar --source $player --out $player | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "patch_status_bar failed for CosmicSupremacy_Player.exe" }
+    Write-Ok 'game\CosmicSupremacy_Player.exe, from CosmicSupremacy_TestBed.exe'
 }
 
 # ── 7c. No loose bytecode ─────────────────────────────────────────────────────

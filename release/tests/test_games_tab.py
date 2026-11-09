@@ -6,6 +6,7 @@ Headless and offline: a galaxy directory and a turn store in a temporary
 folder. A folder galaxy must never mint an identity or reach Firebase. A join
 request is written and read back as a file; no check claims a seat was granted.
 """
+import inspect
 import json
 import os
 import shutil
@@ -278,7 +279,8 @@ live = cells(row(deadline=now + 3660, players=5))
 check("the name cell", live["name"], "Sandbox")
 check("the status cell", live["status"], "open")
 check("the turn cell", live["turn"], "4")
-check("the countdown cell", live["left"], "1h 01m left")
+check("the countdown cell", live["left"],
+      f"1h 01m, due {L.fmt_due(now + 3660, now)}")
 check("the player count cell", live["players"], "5")
 forming = cells(row(status="forming", turn=None, deadline=None, players=0))
 check("a forming galaxy prints no turn", forming["turn"], "")
@@ -367,6 +369,19 @@ check("this install's own seat is not a refusal",
       L.seat_claim_problem("Bob", seats, held="Bob"), None)
 check("but somebody else's still is",
       bool(L.seat_claim_problem("Alice", seats, held="Bob")), True)
+
+print("\n10b. Play follows the seat this install joined as")
+joined = {"galaxy": "sandbox", "name": "Bob"}
+check("the player's own name, when it is a seat",
+      L.seat_to_play("Alice", seats, joined), "Alice")
+check("the joined name, when the player's name changed since",
+      L.seat_to_play("Dave", seats, joined), "Bob")
+check("the player's name, when the joined name is not a seat either",
+      L.seat_to_play("Dave", seats, {"name": "Erin"}), "Dave")
+check("and with no joined record", L.seat_to_play("Dave", seats), "Dave")
+mp = inspect.getsource(L.Launcher.start_multiplayer)
+check("Play picks the seat before the roster check",
+      0 <= mp.find("seat_to_play(") < mp.find("roster_problem("), True)
 
 print("\n11. the request a Join writes")
 req = L.join_request("Alice", "uid-1", "0.1.2", turn=4, now=1000.0)
@@ -491,6 +506,19 @@ finally:
     sys.modules["galaxy_directory"] = saved
 check("and the directory opens again once it is there",
       L.open_galaxy_directory(root) is not None, True)
+
+print("\nthe deadline as a local clock time")
+noon = time.mktime((2026, 11, 9, 12, 0, 0, 0, 0, -1))
+check("today it is the time alone",
+      L.fmt_due(noon + 3 * 3600, noon), "15:00")
+check("tomorrow it carries the weekday",
+      L.fmt_due(noon + 18 * 3600, noon),
+      time.strftime("%a ", time.localtime(noon + 18 * 3600)) + "06:00")
+check("a week out it carries the date",
+      L.fmt_due(noon + 8 * 86400, noon),
+      time.strftime("%d %b ", time.localtime(noon + 8 * 86400)) + "12:00")
+check("the countdown says both",
+      L.fmt_countdown(noon + 3 * 3600 + 300, noon), "3h 05m left, due 15:05")
 
 for d in dirs:
     shutil.rmtree(d, ignore_errors=True)

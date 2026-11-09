@@ -318,6 +318,10 @@ check("and nothing else is",
        L.seat_refused(None)], [False, False])
 check("the relay's refusal of an unverified email is the sentence matched",
       L.email_unverified(relay.UNVERIFIED), True)
+check("and so is its refusal of a guest where guests are refused",
+      L.guest_refused(relay.GUESTS_REFUSED), True)
+check("the relay's seat move route is the one the launcher calls",
+      L.GUEST_ROUTE, relay.GUEST_ROUTE)
 src = inspect.getsource(L.Launcher.start_multiplayer)
 check("the turn loop's failure turns a held seat into that box",
       "refusal_box(said[1]" in src

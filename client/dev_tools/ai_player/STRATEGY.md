@@ -176,10 +176,9 @@ claimed by one rule is not reconsidered by a later one.
 
 **S-01, Famine: reassign to farmers**
 ```
-WHEN   foodDelta[P] < 0  AND  Planet:112[P] < 2 turns of deficit
-THEN   for each citizen in Planet:144[P] whose +0 is not 0, cheapest role first
-       (banker 6 → scientist 2 → miner 5 → worker 1), set +0 = 0 (farmer)
-       until foodDelta[P] >= 0 is projected
+WHEN   foodDelta[P] < 0
+THEN   convert ceil(-foodDelta / farmerYield) citizens, cheapest role first
+       (banker 6 → scientist 2 → miner 5 → worker 1), to farmers
 LIMIT  reassign at most ceil(pop/4) citizens per turn, the delta is only
        re-measurable next turn, so over-correcting is not recoverable this turn
 USES   A
@@ -194,11 +193,26 @@ USES   B, C
 
 **S-03, Surplus: release farmers**
 ```
-WHEN   foodDelta[P] > 0  AND  Planet:112[P] >= 0.9 * Planet:116[P]
-THEN   reassign farmers to the role the current phase wants (§4.3 R-XPL-01)
-LIMIT  never below the farmer count that made foodDelta >= 0
+WHEN   foodDelta[P] > margin, where margin is GROWTH_MARGIN_PER_POP x pop,
+       or 0 at the population ceiling
+THEN   release floor((foodDelta - margin) / farmerYield) farmers, each to the
+       role the current phase wants (§4.3 R-XPL-01)
+OR     at the ceiling with Planet:112 >= Planet:116, release farmers down to
+       ceil(10 x pop / farmerYield), at least one
+LIMIT  ceil(pop/4) a turn, never below MIN_FARMERS
 USES   A
 ```
+farmerYield is `Planet:96` byte 0 x (1 + 0.25 per farm + the civ's food trait / 100), before
+corruption, which only lowers it. Each citizen eats 10 food a turn (the memory report's controlled
+experiment: `delta = farmers x rate - pop x 10`, exact on two homeworlds).
+
+The store at `Planet:112` is not a reserve. It is the growth meter: when it reaches `Planet:116`
+a citizen is born and the store empties by that size, so a growing planet often reads near 0%
+whatever its surplus. An earlier version released a farmer only at 50% full, and Beta's #185 held
+20 of 22 citizens on the farms at +939 food a turn. At the ceiling the store fills and stays full,
+the measured delta reads about 0, and the planet looked both "not rising" and short of farms. That
+left #187 at 25 of 25 farming with a farm build that could not advance. Births arrive as farmers,
+so a planet that releases one a turn falls further behind as it grows.
 
 **S-04, Insolvency**, COVERED by R-XPL-03's stopgap (§4.3, Cash policy), not by bankers.
 A player covers a short treasury with wealth mode until banking centers come online; bankers
@@ -312,14 +326,19 @@ USES   A
 The scientist share is held under the science wastage ceiling, §2.5: above about 7,600
 total output it steps down and the surplus scientists become workers.
 
+Research comes only from scientists, and the WORKER_FLOOR of two workers leaves a planet
+with two non-farmers none. So a civ keeps SCIENCE_FLOOR scientists whatever the share says:
+one below it takes a scientist on its unclaimed planet with the most non-farmers, and
+elsewhere the floor only keeps the ones it has. A farmer S-03 releases follows the same
+worker floor, so the next pass does not turn it back.
+
 **R-XPL-02, Facility build order**
 ```
 priority, first match among types research has unlocked (`exploit.buildable_types`):
   defence ag. 8   if the civ has none, R-XTM-10 wants a scan type, and this is
                   its planet without a shipyard that has the most workers;
                   ahead of farms, which a big planet nearly always wants
-  farm 0          if there is none, the store is under 25%, or the surplus is
-                  below GROWTH_MARGIN_PER_POP per citizen
+  farm 0          if there is none or the surplus is below the S-03 margin
                   (never past MAX_FARMS, 5)
   military camp 6 if there is none and pop >= 6
   light turret 9  if turrets < BORDER_TURRETS and a visible rival planet is
@@ -331,6 +350,8 @@ priority, first match among types research has unlocked (`exploit.buildable_type
   banking ctr 16  if there is none and pop >= BANK_POP
   mine 13         if there is none and miners >= MINE_MINERS (R-XPL-11)
 THEN   Planet:284[P] = that id, Planet:344[P] = 1
+UNLESS the planet has no workers: production comes only from workers, so the
+       build would never advance
 USES   B, C
 ```
 `exploit.wanted_facility` is the authority. One defence agency is built, for scans. Factory and
@@ -366,6 +387,21 @@ USES   A, then B/C for the mine
 Only miners produce resources (plus a flat trait-41 metal bonus); a planet has exactly one
 deposit, and a resource with no planet of ours is bought (R-XPL-10). One miner on a base-10
 metal world makes 10 a turn, more than a banker's income at the market's buy price.
+
+**R-XPL-12, Confirm the setup prompts**, IMPLEMENTED in `server/dev_tools/bot_setup.py`, run by `bot_seats`
+```
+WHEN   the served turn still offers the civ-trait prompt (Owner:360 clear)
+THEN   spend civilization_changes on production output, then food output,
+       each change where the next click adds most; science only once both are full
+WHEN   it still offers the homeworld prompt (Owner:359 clear)
+THEN   spend homeworld_changes alternating the homeworld's production and food
+       rates, production first; space takes no clicks and rises to 350
+USES   an edit of the captured save, before it is submitted
+```
+The prompts are dialogs 218 and 210, offered every turn until each is confirmed once. The
+bot writes what the dialog's OK writes, and the referee carries it only as the dialog could
+have made it (`merge_orders.setup_orders`). At the shipped budgets of 5 and 30 this is
+production +21%, food +15%, and homeworld rates food 47, production 45, science 40.
 
 **R-XPL-03, Wealth mode**, IMPLEMENTED in `exploit.run_wealth`
 ```
@@ -417,6 +453,8 @@ THEN   call HurryProduction by tier (military at war, expansion, other), cheapes
        first within a tier, spending everything above cash.reserve()
 USES   K
 ```
+When cash is spare but no build is half done, the rule logs each build's progress, so a hoard
+shows up in the log rather than as silence.
 
 **R-XPL-09, Conscript crew for a grounded ship**, IMPLEMENTED in
 `exploit.run_conscript`, and it does the migration by FIELD WRITE rather than by
@@ -426,7 +464,7 @@ to get there.
 WHEN   a ship is BUILT, short of ShipDesign:76 crew, in orbit of our planet P,
        P has fewer trained units than it needs, and cash above cash.reserve();
        a warship or troop hull only while the civ is at war
-THEN   draft ONE citizen on P (cheapest role first, never a farmer)
+THEN   draft ONE citizen on P (banker → miner → worker → scientist, never a farmer)
 USES   N
 ```
 
@@ -614,10 +652,10 @@ Generated by `constants.py --write`; edit the code, not this table.
 | `MIN_RESERVE` | 1000 | `cash.py` | the reserve is never smaller than this |
 | `UNIT_UPKEEP` | 3 | `cash.py` | Upkeep of one stationed military unit, the Planet:168 record's +0, which read 3 on every unit the memory report observed. Crew aboard a ship are left to the ship's own ShipDesign:48. |
 | `SHORT_HORIZON` | 5 | `cash.py` | The treasury is short when income is negative and this many turns of it would take cash inside the reserve. R-XPL-03 and R-XPL-01 both act on it. |
-| `SURPLUS_AT` | 0.50 | `exploit.py` | Fraction of food capacity a colony must already hold before a farmer is released. |
 | `GROWTH_MARGIN_PER_POP` | 10.0 | `exploit.py` | Food gained per turn, per citizen, that must remain after releasing a farmer. Growth is fed by the surplus, so a merely positive delta stops it. |
 | `MIN_FARMERS` | 1 | `exploit.py` | Never drop below this many farmers, whatever the food reading says. |
 | `SCIENTIST_SHARE` | 0.5 | `exploit.py` | of non-farmers, in the Growth phase |
+| `SCIENCE_FLOOR` | 1 | `exploit.py` | scientists a civ keeps where the worker floor leaves none |
 | `REASSIGN_CAP_DIV` | 4 | `exploit.py` | at most ceil(pop / 4) job changes per planet per turn |
 | `BANKER_POP_SHARE` | 0.75 | `exploit.py` | of its population cap a planet must hold to take bankers |
 | `SCIENCE_MARGIN_FLOOR` | 0.75 | `exploit.py` | A scientist is kept while one more point of science output still banks at least this much of a point after wastage. 0.75 is where a scientist stops out-producing a worker at the default homeworld rates, 40 science to 30 production, and is reached at about 7,600 output, 11% wastage. |

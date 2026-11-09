@@ -39,6 +39,7 @@ for d in (os.path.join(ROOT, 'server'),
         sys.path.insert(0, d)
 
 import save_parser as sp
+import activity
 import inject_civ as icv
 import inject_design as idg
 import inject_ship as ish
@@ -284,6 +285,10 @@ def test_a_join_lands(blob):
           systems_known(after, 'Ada'), [])
     check('while the donor kept its own',
           systems_known(after, donor), systems_known(before, donor))
+    check('the newcomer starts with no Inactivity, as if it played the turn '
+          'just closed', activity.state(after)['Ada'], (TURN, 0))
+    check('and the donor\'s baseline is its own',
+          activity.state(after)[donor], activity.state(before)[donor])
 
     check('the request has been taken out of joins/',
           joins.pending(store, log=lambda *a: None), [])

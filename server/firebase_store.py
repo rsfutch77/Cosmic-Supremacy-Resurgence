@@ -101,7 +101,35 @@ JOIN_DONE_COLLECTION = 'joins_done'
 # `.`, `..` and `__reserved__` ids.
 ID_SAFE = frozenset(string.ascii_letters + string.digits + '-~')
 
+# Coats of arms, beside the galaxies and about none of them. Ids count up
+# across the whole project, since a client keeps every id's picture for as
+# long as it runs. An upload is shown to its owner at once and to everyone
+# else once the operator approves it.
+ARMS_SUFFIX = '_arms'                # <prefix>_arms/<id>: one upload
+ARMS_OWNER_SUFFIX = '_arms_owners'   # <prefix>_arms_owners/<uid>: ids, refused
+ARMS_META_SUFFIX = '_arms_meta'      # <prefix>_arms_meta/counter: the last id
+ARMS_PENDING, ARMS_APPROVED, ARMS_REFUSED = 'pending', 'approved', 'refused'
+
 _BUCKETS = {}
+
+
+def arms_collection(fs, prefix: str):
+    return fs.collection(prefix + ARMS_SUFFIX)
+
+
+def arms_owner_doc(fs, prefix: str, uid: str):
+    return fs.collection(prefix + ARMS_OWNER_SUFFIX).document(uid)
+
+
+def arms_counter_doc(fs, prefix: str):
+    return fs.collection(prefix + ARMS_META_SUFFIX).document('counter')
+
+
+def usable_arms(owner: dict) -> list:
+    """The ids an owner document holds that were not refused, in order."""
+    owner = owner or {}
+    refused = set(owner.get('refused') or [])
+    return [int(i) for i in owner.get('ids') or [] if i not in refused]
 
 
 def join_doc_id(key: str) -> str:
@@ -289,6 +317,9 @@ class FirebaseTurnStore:
     def note_object(self, civ: str, turn: int) -> str:
         return self._object('notes', f'{turn:04d}', f'{civ}.txt')
 
+    def view_object(self, civ: str, turn: int) -> str:
+        return self._object('views', f'{turn:04d}', f'{civ}.b64')
+
     def _put(self, name: str, data: bytes, content_type: str) -> None:
         self.bucket.blob(name).upload_from_string(data,
                                                   content_type=content_type)
@@ -392,18 +423,37 @@ class FirebaseTurnStore:
     def has_turn(self, turn: int) -> bool:
         return self._has(self.turn_object(turn))
 
-    def publish(self, turn: int, blob: bytes, turn_seconds: int = None) -> None:
+    def view_blob(self, civ: str, turn: int):
+        """`civ`'s own view of a turn, or None when it is served the turn."""
+        snap = self.doc.get()
+        doc = (snap.to_dict() or {}) if snap.exists else {}
+        if civ not in (doc.get(turn_store.VIEWS_KEY) or {}).get(str(int(turn)),
+                                                               ()):
+            return None
+        data = self._get(self.view_object(civ, turn))
+        return sp.decode_save(data) if data is not None else None
+
+    def publish(self, turn: int, blob: bytes, turn_seconds: int = None,
+                views: dict = None) -> None:
         """The referee's move: a new turn exists, and the clock restarts.
 
         Merges only the fields it names, so status and name survive and
-        `SUBMITTED_KEY` is replaced whole. Sets `SUBMISSIONS_FROM_KEY` on a
-        galaxy that lacks it, then prunes submissions older than
-        `SUBMISSION_TURNS_KEPT` turns.
+        `SUBMITTED_KEY` and `VIEWS_KEY` are replaced whole. Sets
+        `SUBMISSIONS_FROM_KEY` on a galaxy that lacks it, then prunes
+        submissions older than `SUBMISSION_TURNS_KEPT` turns.
+
+        `views` is `{civ: blob}` for the civs served their own view. They are
+        written before the turn, and the previous turn's views are deleted
+        after it.
         """
         import canonical
         snap = self.doc.get()
         doc = (snap.to_dict() or {}) if snap.exists else {}
         seconds = turn_seconds or doc['turn_seconds']
+        views = views or {}
+        for civ, view in views.items():
+            self._put(self.view_object(civ, turn), sp.encode_save(view),
+                      'text/plain')
         self._put(self.turn_object(turn), sp.encode_save(blob), 'text/plain')
         fields = {
             'turn': int(turn),
@@ -411,11 +461,25 @@ class FirebaseTurnStore:
             'turn_seconds': int(seconds),
             'hash': canonical.canonical_hash(blob),
             SUBMITTED_KEY: {str(int(turn)): []},
+            turn_store.VIEWS_KEY: {str(int(turn)): sorted(views)},
         }
         if doc.get(SUBMISSIONS_FROM_KEY) is None:
             fields[SUBMISSIONS_FROM_KEY] = int(turn)
         self.doc.set(fields, merge=list(fields))
         self.prune_submissions(int(turn) - SUBMISSION_TURNS_KEPT + 1)
+        self._drop_views(doc.get(turn_store.VIEWS_KEY) or {}, int(turn))
+
+    def _drop_views(self, named: dict, keep: int) -> None:
+        """Delete the view objects `named` lists for every turn but `keep`."""
+        from google.api_core import exceptions
+        for t, civs in named.items():
+            if not str(t).isdigit() or int(t) == keep:
+                continue
+            for civ in civs:
+                try:
+                    self.bucket.blob(self.view_object(civ, int(t))).delete()
+                except exceptions.NotFound:
+                    pass
 
     def submit(self, civ: str, turn: int, blob: bytes) -> str:
         """Hand a player's state back. A later submission replaces an earlier
@@ -433,13 +497,14 @@ class FirebaseTurnStore:
         return f'firestore://{self.project}/{ref.path}'
 
     def write_submission(self, civ: str, turn: int, blob: bytes,
-                         doc: dict = None) -> str:
+                         doc: dict = None, extra: dict = None) -> str:
         """Store one civ's submission as a document, and say its tag.
 
         The bytes are not checked here. The civ is added to `SUBMITTED_KEY` in
         the same batch unless `doc` (the galaxy document as the caller read it)
-        already records them. Raises `SubmissionTooLarge` past
-        `MAX_SUBMISSION_DATA`.
+        already records them. `extra` is merged into the galaxy document in
+        that batch, in the same write when there is one. Raises
+        `SubmissionTooLarge` past `MAX_SUBMISSION_DATA`.
         """
         data = base64.b64decode(sp.encode_save(blob))
         if len(data) > MAX_SUBMISSION_DATA:
@@ -456,10 +521,13 @@ class FirebaseTurnStore:
             'bytes': len(blob),
             'at': time.time(),
         })
+        fields = dict(extra or {})
         if doc is None or civ not in (submitted_of(doc, turn) or []):
             from google.cloud import firestore
-            batch.set(self.doc, {SUBMITTED_KEY: {
-                str(int(turn)): firestore.ArrayUnion([civ])}}, merge=True)
+            fields[SUBMITTED_KEY] = {
+                str(int(turn)): firestore.ArrayUnion([civ])}
+        if fields:
+            batch.set(self.doc, fields, merge=True)
         batch.commit()
         return tag
 
@@ -619,6 +687,21 @@ class FirebaseTurnStore:
         if not snap.exists:
             return None
         return json.loads((snap.to_dict() or {}).get('json') or 'null')
+
+    def arms(self) -> dict:
+        """{civ: {id}} for the coats of arms each seated civ may choose: its
+        sign-in's uploads, pending or approved."""
+        seats = (self.doc.get().to_dict() or {}).get('seats') or {}
+        if not seats:
+            return {}
+        refs = [arms_owner_doc(self.fs, self.prefix, uid) for uid in seats]
+        out = {}
+        for snap in self.fs.get_all(refs):
+            civ = seats.get(snap.id)
+            ids = usable_arms(snap.to_dict()) if snap.exists else []
+            if civ and ids:
+                out.setdefault(civ, set()).update(ids)
+        return out
 
     def put_note(self, civ: str, turn: int, lines) -> None:
         """Leave one player the referee's reasons for refusing part of a turn."""

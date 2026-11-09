@@ -85,6 +85,9 @@ class Page:
     def say(self, line):
         self.said.append(line)
 
+    def turn_busy(self):
+        return None            # no turn loop behind this page
+
     def _draw_galaxies(self):
         self.drawn += 1
         self.games_recs = L.load_joined(self.data_dir)

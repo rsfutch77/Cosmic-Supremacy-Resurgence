@@ -6,7 +6,9 @@ bot_seats.py: the Python AI plays named civs in a galaxy, one turn at a time
 
 For each civ: serve the current turn into the client as that civ, run one pass
 of `ai.py`'s rules, capture the client's state and submit it. The client is
-closed after the last civ. `--follow` repeats at every published turn.
+closed after the last civ. `--follow` repeats at every published turn. A civ
+that has not confirmed its setup prompts confirms them in the capture
+(`bot_setup.py`).
 
 Submissions go straight to the store with this machine's credentials, not
 through the relay, so a bot civ needs no seat. A civ that already has a
@@ -30,6 +32,7 @@ for d in (os.path.join(ROOT, "server"),
         sys.path.insert(0, d)
 
 import ai
+import bot_setup
 import player_turn
 import save_parser as sp
 from turn_store import open_store
@@ -50,7 +53,7 @@ def play(store, civ, turn, blob, dry_run=False, log=print):
         log(f"[{civ}] turn {turn}: dry run, nothing submitted")
         return None
     capture = player_turn.collect(f"{civ[:8]}t{turn}", log=log)
-    mine = sp.load_any(capture)
+    mine = bot_setup.confirm(blob, sp.load_any(capture), civ, log=log)
     store.submit(civ, turn, mine)
     if store.submission(civ, turn) != mine:
         raise RuntimeError(f"[{civ}] turn {turn}: the submission did not "
@@ -73,8 +76,8 @@ def round_once(store, civs, dry_run=False, replace=False, log=print):
             if not replace and store.submission(civ, turn) is not None:
                 log(f"[{civ}] turn {turn}: already submitted, skipping")
                 continue
-            if blob is None:
-                blob = store.turn_blob(turn)
+            # Each civ is served its own view of the turn.
+            blob = player_turn.served_blob(store, civ, turn)
             try:
                 play(store, civ, turn, blob, dry_run=dry_run, log=log)
             except Exception as exc:                        # noqa: BLE001

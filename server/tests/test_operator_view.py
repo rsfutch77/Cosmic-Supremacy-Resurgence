@@ -399,6 +399,41 @@ def check_seats(root: str, tmp: str):
     check('seats CONTROL: a folder galaxy with no seat map shows none',
           (clean['seats'], 'seats' in ov.render_text([clean])), (None, False))
 
+    print('seats: who still plays as a guest')
+    guest, acct = 'GUESTuid000000000000000000000', 'ACCTuid0000000000000000000000'
+    store.update_state({
+        ov.SEATS_KEY: {guest: first, acct: second},
+        ov.PROVIDERS_KEY: {guest: 'anonymous', acct: 'google.com'}})
+    r = ov.galaxy_report(store)
+    rows = {row['civ']: row for row in r['seats'] or []}
+    check('guests: each seat carries the provider its holder last wrote with',
+          (rows[first]['provider'], rows[second]['provider']),
+          ('anonymous', 'google.com'))
+    check('guests: the seated guests are listed', ov.seated_guests(r['seats']),
+          [first])
+    text = ov.render_text([r])
+    check('guests: the text names them, and how each seat signed in',
+          (f'seated guests: {first}' in text, 'guest' in text,
+           'Google' in text), (True, True, True))
+    check('guests: and says guests are allowed', 'guests allowed' in text)
+    check('guests: a seated guest is no problem while guests are allowed',
+          any('last played as a guest' in p for p in r['problems']), False)
+    store.update_state({ov.GUESTS_KEY: 'refuse'})
+    r = ov.galaxy_report(store)
+    check('guests: with guests refused, a seated guest is a problem',
+          [p for p in r['problems'] if 'last played as a guest' in p
+           and p.startswith(first)] != [], True)
+    check('guests: and the text says guests are refused',
+          'guests refused' in ov.render_text([r]))
+    store.update_state({ov.PROVIDERS_KEY: {acct: 'google.com'}})
+    r = ov.galaxy_report(store)
+    text = ov.render_text([r])
+    check('guests: a seat that has not written since is counted, not named '
+          'a guest',
+          ('seated guests: none' in text,
+           '1 seat(s) have not written since' in text,
+           'sign-in not seen yet' in text), (True, True, True))
+
 
 def check_firebase_document(tmp: str):
     """A Firebase galaxy costs the view one document `get` and nothing else.

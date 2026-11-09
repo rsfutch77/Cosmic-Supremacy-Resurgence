@@ -38,6 +38,20 @@ def _fingerprint(snap):
     return f"{len(snap.suns)}_{abs(hash(key)) & 0xFFFFFFFF:08x}"
 
 
+# Attributes a rule keeps from one pass to the next. Saved with the readings so
+# a loop that runs one pass per process decides as a long-running one does.
+CARRIED = ("scientist_share", "_banker_share", "_our_cash_effect", "raid",
+           "deficit_since", "liquidated_turn", "_mil_stall", "_rate_written",
+           "_ship_seen")
+# Of those, the ones keyed by planet or ship id, which JSON stores as strings.
+CARRIED_BY_ID = ("_mil_stall", "_rate_written", "_ship_seen")
+
+
+def _by_id(d):
+    """A JSON object keyed by id, with its keys back as ints."""
+    return {int(k): v for k, v in d.items()}
+
+
 class History:
     """Turn-over-turn observation, plus the persistent fog-of-war map and intel.
 
@@ -45,6 +59,13 @@ class History:
     `state/discovered_<galaxy>_<civ>.json` and reloaded on construction, with
     the intel this civ has gathered. The game empties a battle report's text
     a few turns after the battle, so intel is kept here once read.
+
+    The same file carries the last pass: the reading it compared against, the
+    planets it distrusted, and the `CARRIED` controllers, as they stood at the
+    pass's start and end. A loop started fresh resumes from the end on a later
+    turn and from the start on the same turn, so a rerun repeats the pass
+    instead of stacking on it. An earlier turn is an older save, and nothing
+    carries.
     """
 
     def __init__(self, snap=None, civ_name=None, persist=True):
@@ -67,6 +88,10 @@ class History:
         self._path = None
         self._persisted = None    # what is already on disk, to avoid rewriting
         self._want_persist = persist
+        self._carry_in = None     # the last pass as loaded from disk
+        self._resumed = False     # whether this process has applied it
+        self._start = None        # this pass as it began, for a rerun
+        self._end = None          # this pass as it ended, for the next turn
         if persist and snap is not None:
             self._bind(snap, civ_name)
 
@@ -89,15 +114,67 @@ class History:
                 self.intel.setdefault(int(k), v)
             for k, v in data.get("quiet", {}).items():
                 self.quiet.setdefault(int(k), v)
+            carry = data.get("carry")
+            self._carry_in = carry if isinstance(carry, dict) else None
             self._persisted = self._state()
         except (OSError, ValueError, TypeError):
             # A missing or corrupt file means nothing explored yet.
             pass
 
     def _state(self):
-        return {"discovered": sorted(self.discovered),
-                "intel": {str(k): v for k, v in sorted(self.intel.items())},
-                "quiet": {str(k): v for k, v in sorted(self.quiet.items())}}
+        state = {"discovered": sorted(self.discovered),
+                 "intel": {str(k): v for k, v in sorted(self.intel.items())},
+                 "quiet": {str(k): v for k, v in sorted(self.quiet.items())}}
+        if self._start is not None:
+            state["carry"] = {"turn": self._cur["turn"], "start": self._start,
+                              "end": self._end}
+        return state
+
+    def _carry(self, prev, stale):
+        """The pass state a later pass resumes from, as JSON."""
+        out = {"prev": prev, "stale": sorted(stale)}
+        for name in CARRIED:
+            if hasattr(self, name):
+                out[name] = getattr(self, name)
+        if hasattr(self, "wealth_stopgap"):
+            out["wealth_stopgap"] = sorted(self.wealth_stopgap)
+        if hasattr(self, "liquidated"):
+            out["liquidated"] = {k: sorted(v)
+                                 for k, v in self.liquidated.items()}
+        # The round trip is also the copy, so later rules cannot change it.
+        return json.loads(json.dumps(out))
+
+    def _resume(self, turn):
+        """Apply the loaded pass for a loop reading `turn`."""
+        rec = self._carry_in or {}
+        saved = rec.get("turn")
+        if not isinstance(saved, int) or not isinstance(turn, int) or saved > turn:
+            return
+        # A pass that died before its end resumes from its start.
+        state = (rec.get("end") if saved < turn else None) or rec.get("start")
+        if not isinstance(state, dict):
+            return
+        try:
+            prev = state.get("prev")
+            if prev is not None:
+                prev = dict(prev, planets=_by_id(prev["planets"]))
+            acted = {int(i) for i in state.get("stale", [])}
+            carried = {name: state[name] for name in CARRIED if name in state}
+            for name in CARRIED_BY_ID:
+                if name in carried:
+                    carried[name] = _by_id(carried[name])
+            if "wealth_stopgap" in state:
+                carried["wealth_stopgap"] = {int(i)
+                                             for i in state["wealth_stopgap"]}
+            if "liquidated" in state:
+                carried["liquidated"] = {int(k): set(v) for k, v
+                                         in state["liquidated"].items()}
+        except (KeyError, ValueError, TypeError, AttributeError):
+            return                        # an unreadable pass carries nothing
+        # `observe` moves `_acted` into `_stale` and `prev` into the pass.
+        self.prev, self._acted = prev, acted
+        for name, value in carried.items():
+            setattr(self, name, value)
 
     def save(self):
         """Write the map and intel, only when they changed."""
@@ -119,6 +196,8 @@ class History:
         cur = {
             "turn": snap.turn,
             "planets": {p.id: {"food": p.food or 0,
+                               # The store's size, which a birth spends.
+                               "cap": p.food_cap or 0,
                                "pop": len(p.population),
                                "progress": p.build_progress or 0,
                                # Planet:124, the military food store. A unit
@@ -136,14 +215,25 @@ class History:
                     "science": (civ.research or 0)
                                + sum(cost for _tid, cost in civ.completed)},
         }
+        if self._path is None and self._want_persist:
+            self._bind(snap, civ.civ_name)
+        if not self._resumed:
+            self._resumed = True
+            self._resume(snap.turn)
         self._stale, self._acted = self._acted, set()
         self._cur, self._prev_for_pass = cur, self.prev
         self.prev = cur
-        if self._path is None and self._want_persist:
-            self._bind(snap, civ.civ_name)
+        self._start = self._carry(self._prev_for_pass, self._stale)
+        self._end = None
         self._discover(snap, civ)
         self.save()
         return self
+
+    def end_pass(self):
+        """Record the pass as it ended and save it. Call after the rules."""
+        if self._start is not None:
+            self._end = self._carry(self.prev, self._acted)
+        self.save()
 
     def _discover(self, snap, civ):
         """Grow the set of systems this civ is entitled to see inside.
@@ -199,7 +289,8 @@ class History:
         d = self._cur["turn"] - p["turn"]
         return d if d > 0 else None
 
-    def _delta(self, planet_id, key):
+    def _pair(self, planet_id):
+        """(last reading, this reading, turns between) for a planet, or None."""
         p = getattr(self, "_prev_for_pass", None)
         n = self.turns
         if not p or not n or planet_id in self._stale:
@@ -207,11 +298,31 @@ class History:
         a, b = p["planets"].get(planet_id), self._cur["planets"].get(planet_id)
         if a is None or b is None:
             return None                # newly founded, or lost
+        return a, b, n
+
+    def _delta(self, planet_id, key):
+        pair = self._pair(planet_id)
+        if pair is None:
+            return None
+        a, b, n = pair
         return (b[key] - a[key]) / n
 
     def food_delta(self, planet_id):
-        """Food gained per turn. Negative means the colony is starving."""
-        return self._delta(planet_id, "food")
+        """Food gained per turn. Negative means the colony is starving.
+
+        A birth empties the store by its size, so each citizen born puts that
+        size back. Food that rose is left alone, since a citizen can also
+        arrive without being born.
+        """
+        pair = self._pair(planet_id)
+        if pair is None:
+            return None
+        a, b, n = pair
+        food, born = b["food"] - a["food"], b["pop"] - a["pop"]
+        if born > 0 and food < 0:
+            # A reading saved before the store size was kept falls back to now.
+            food += born * (a.get("cap") or b.get("cap") or 0)
+        return food / n
 
     def pop_growth(self, planet_id):
         return self._delta(planet_id, "pop")

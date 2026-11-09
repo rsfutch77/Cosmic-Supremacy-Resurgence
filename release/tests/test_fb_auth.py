@@ -282,8 +282,19 @@ check("as the account's uid", two.uid, guest_uid)
 check("keeping its own guest on disk",
       json.load(open(os.path.join(other, fb_auth.STATE_FILE),
                      encoding="utf-8"))["uid"], second_guest)
+account_token = two.token()
+got = two.guest()
+check("the guest signs in beside the account, for a seat move",
+      (got[0] if got else None, bool(got and got[1]),
+       got[1] != account_token if got else None), (second_guest, True, True))
+check("and the account stays current", (two.uid, two.token()),
+      (guest_uid, account_token))
 two.log_out()
 check("and logging out returns to that guest", two.uid, second_guest)
+check("with no account logged in there is no separate guest", two.guest(),
+      None)
+check("nor after creating one, since the guest became it",
+      again.guest() if again.account else None, None)
 
 print("\n9b. what the player is told")
 check("a wrong password",
