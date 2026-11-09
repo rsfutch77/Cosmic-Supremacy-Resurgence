@@ -537,11 +537,24 @@ A design is a self-contained subtree under the owning civ's `OWNR > DATA`.
       +0    u32     the design's own object id
       SDPR  section, v0
             u32     name length, then the name, unpadded
-            ...     six part lists
+            six part lists, each a u32 count then that many u32 part ids:
+                    chassis, scanners, engines, weapons, modules, shields
             u32     the owning civ's object id, at the end
       +1    u8      zero, counted by the DSGN length word
 
     the civ's design count, a u32 in DATA's own bytes before its first DSGN
+
+**The part lists are in the order of the `ShipDesign` vectors** (`:128` chassis, `:152` scanners,
+`:176` engines, `:200` weapons, `:224` modules), and a part id is the record's position in its
+component table (Stat Tables §3). An engine fitted three times is listed three times. Read across
+1,081 designs on disk in November 2026, and checked against the parts each design was built from:
+a Colony Ship is `[0] [0] [0,0,0] [] [0] []`, a Shuttle with a Neutron Scanner, three Nuclear Drives
+and a Colony Module, which fills the Shuttle's 120 space exactly; `b1` lists weapon 10, the Fusion
+Bomb; the hand-made `e1x2` and `e1x4` list engine 1 twice and four times. `inject_design.read_design`
+and `sim/load.py` read them.
+
+[ ] The sixth list is taken to be shields, the one category left, but it is empty in all 1,081
+designs on disk. Confirm by capturing a design with a shield fitted.
 
 **The trailing byte is uniform.** Surveyed across every blob on disk in September 2026, 327 blobs
 and 1015 `DSGN` records: every record is v4 with an `SDPR` v0 child, in all 1015 the byte after the
@@ -1933,6 +1946,25 @@ What is left for after the beta is kept here.
   one-ship fleet survives until disbanded. A `SHPR` ends with a `f32`, the id of the last fleet
   its ship was in (`SHPR+30` with two crew), kept after the ship leaves, and the ship's own id.
   Carried (`test_fleets_merge.py`).
+- **A `SHPR` begins with the ship's design id** (`+0`), then the crew count at `+4`. The tail's
+  `f32` reads 1.0 on all 1,034 ships in the 263 blobs on disk (November 2026), which fits
+  `Ship:136`, the 0.0 to 1.0 condition, but no capture holds a damaged ship, so the reading is
+  unconfirmed. `sim/load.py` loads it as condition.
+- **A ship cloned before 27 September 2026 can name its donor in that tail.** 115 ships in 86
+  blobs end with another ship's id: the third civ's Colony Ship 208 in the `referee_work` galaxy
+  names 200, and the staged `bgf1` hulls 203 and 204 in `battle_a.dat` name 193. `inject_ship.py`
+  copied the donor's record whole until `f4fb9f7`; since then it rewrites the trailing id, and
+  `inject_civ.starting_kit` clones through it. The engine carries the stale id forward every tick
+  without complaint, so the galaxies made earlier still hold it. The object header's id is the
+  ship's. `merge_orders.read_ship` refuses such a ship as unreadable, which leaves it out of the
+  fleet merge; `sim/load.py` reads it by the header.
+
+[ ] Confirm the `SHPR` tail's `f32` is condition. Done when a capture taken after a battle shows a
+damaged ship's condition there.
+
+[ ] Decide whether `merge_orders.read_ship` should accept a ship whose tail names its donor. As it
+stands a player in an older galaxy cannot put such a ship in a fleet. Check first whether any live
+galaxy holds one.
 - **Individual ships cannot be renamed**; only fleets can.
 
 **Measured in one Single Player session at turn 0 (23 October 2026,
