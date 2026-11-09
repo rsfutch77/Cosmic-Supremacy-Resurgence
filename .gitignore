@@ -85,3 +85,6 @@ referee_task.xml
 # Tailored verification checklists that are not published: security lists that
 # map the attack surface, and adaptations of no-derivatives sources.
 docs/verification/private/
+
+# The oracle corpus: blob pairs before and after an engine tick
+sim/corpus/

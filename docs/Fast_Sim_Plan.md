@@ -139,6 +139,29 @@ the oracle always uses load, tick once, capture.
 - `sim/load.py`: a blob into that state, through the `server/dev_tools` readers.
   `python -m sim.load <blob>` prints a summary. Every one of the 263 blobs on disk loads
   with nothing unread, at about 0.1 s for a two-civ galaxy and 0.5 s for 547 planets.
+- `sim/tick.py`: one turn, as steps in the manual's order. No step is written yet, so it
+  only advances the turn.
+- `sim/oracle.py`: the harness of §5. `archive` pairs referee inputs one turn apart,
+  `capture` ticks a blob once on the client, and `score` compares the simulator's tick
+  with the engine's per module. The corpus is `sim/corpus/`, kept out of git.
+
+**What a tick changes**, from 29 archive pairs (`score --null`, November 2026): the share
+of fields an unchanged galaxy still matches after one engine tick.
+
+| Module | Fields | Unchanged | Most moved |
+|---|---|---|---|
+| economy | 968 | 80.6% | food 89, credits 58, metal 21, progress 10 |
+| growth | 352 | 68.8% | population history 85, citizens 19, crew 3, military 3 |
+| research | 102 | 100% | |
+| market | 145 | 100% | |
+| movement | 340 | 86.2% | position 25, route progress 14, orbit 5, order 3 |
+| colonisation | 4870 | 99.9% | owner 6 |
+| combat | 170 | 96.5% | ship gone 3 |
+| orders | 657 | 94.5% | jobs 20, builds 7 (players' orders between the pair) |
+
+Food, credits and population are where the first rules pay. No research completed and no
+market trade happened across these pairs, so they cannot test those modules; captured pairs
+from a longer game will.
 
 A design's `SDPR` holds six part lists, each a `u32` count then `u32` part ids: chassis,
 scanners, engines, weapons, modules, shields. The sixth has been empty in all 1,081
@@ -165,7 +188,9 @@ designs on disk.
       then the loader reads them that way
 - [ ] Locate the research stockpile (`Owner:12`) and score in the blob, which the loader
       does not read yet
-- [ ] Build the oracle harness and scoreboard (§5)
+- [x] Build the oracle harness and scoreboard (§5)
+- [ ] Capture clean pairs on the client (`oracle capture --run-game`): a few hundred
+      turns of an AI-played galaxy, so research, market and combat appear in the corpus
 - [ ] Economy module: production, food, income, upkeep, growth, corruption
 - [ ] Research and market modules
 - [ ] Movement and colonisation modules
