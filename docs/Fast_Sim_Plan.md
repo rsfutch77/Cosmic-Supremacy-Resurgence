@@ -149,10 +149,12 @@ the oracle always uses load, tick once, capture.
 - `sim/traits.py`: a civ's engine traits, its custom-civ values plus research grants.
 - `sim/orders.py`: the actions a civ may take, refused where the client's screens refuse
   them: jobs, facility, ship, Wealth, hurry, research, recruit, crew, move, colonise, scout,
-  trade and war.
+  trade, war and design.
 - `sim/reward.py`: dominance `D` (§1a).
 - `sim/env.py`: `reset` and `step` for training, with a fog-limited observation.
 - `sim/baseline.py`: a scripted civ to train against and to smoke-test with.
+- `sim/warlike.py`: the baseline plus a fleet and an invasion on a chosen turn, for
+  checking the reward against who actually wins.
 - `sim/viewer.py`: `python -m sim.viewer <blob> --turns N -o run.html` writes a replay page.
 - `sim/oracle.py`: the harness of §5. `archive` pairs referee inputs one turn apart,
   `capture` ticks a blob on the client, chained with `--chain`, and `score` compares the
@@ -374,7 +376,26 @@ What remains, by cause:
 - **Jobs and builds:** governor choices.
 
 A simulated tick takes about 11 ms on a 547-planet galaxy and 3 ms on the Single Player
-galaxy, against about 10 s for the engine's tick through the client.
+galaxy when it copies the galaxy first, and about 0.3 ms on the Single Player galaxy in
+place, as the training loop runs it. The engine's tick through the client takes about 10 s.
+
+**Conquest**, from the manual, with no capture to check it. A planet whose defence
+hitpoints are bombed to nothing loses its turrets and shield generators. Once no defending
+ship is left in orbit (an unmanned one still counts), the crew beyond each ship's minimum
+lands. Each soldier has 1 health and 2 firepower, and each rank adds 10% health and 20%
+firepower. Bunkers and fortresses add 100% and 200% for the best-ranked soldiers. The
+defenders shoot first in each of five sub-rounds, and the winning troops stay as the
+planet's soldiers.
+
+**First check of the reward** (`sim/warlike.py` against the baseline on the Single Player
+galaxy, 16 games of 400 turns, about 5 s in all). An eight-ship fleet bombed out a colony's
+turret and landed 8 troopers. Against the 21 soldiers the baseline's 10% recruitment had
+stationed there, the landing failed. With no garrison, the same attack took the planet at
+turn 213. In both games D rated the attacker far above the defender, 0.698 against 0.003.
+So **D as defined ignores troops and garrisons, which decide conquests**: a civ with
+soldiers on every planet is harder to destroy than its fleet suggests, and a fleet without
+troop capacity cannot take anything. The baseline also builds warships it never crews, and
+those count for nothing in `S` although they must be destroyed before a landing.
 
 ## 6. Open items
 
@@ -382,8 +403,10 @@ galaxy, against about 10 s for the engine's tick through the client.
       simulator and the client use the same released tables
 - [x] Settle the research cost model: the probes confirmed `round(800 x factor) x done`
       for every one of 31 technologies, so the AI player's table holds at 565
-- [ ] Check that `D` predicts who wins: pit civs of known `D` against each other in the
-      simulator and confirm the higher one wins most wars (§1a)
+- [ ] Check that `D` predicts who wins: the first 16 self-play games show it does not see
+      garrisons or troop capacity (§5b, "First check of the reward"). Decide whether `S` adds
+      ground strength (troops a civ can land, soldiers holding its planets), then repeat with
+      a learned policy
 - [ ] Choose `K` from measured fleet travel times between rival homeworlds
 - [ ] Decide whether planetary defence counts toward `S`, and at what weight: it holds a
       planet but cannot attack
