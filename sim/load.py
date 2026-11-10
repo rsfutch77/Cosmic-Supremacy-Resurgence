@@ -12,7 +12,7 @@ import struct
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-for _d in (os.path.join(ROOT, 'server', 'dev_tools'),):
+for _d in (os.path.join(ROOT, 'server', 'dev_tools'), os.path.join(ROOT, 'server')):
     if _d not in sys.path:
         sys.path.insert(0, _d)
 
@@ -22,6 +22,7 @@ import inject_civ as icv                                        # noqa: E402
 import inject_design as idg                                     # noqa: E402
 import set_blob_player as sbp                                   # noqa: E402
 import facility_rules as fr                                     # noqa: E402
+import activity                                                 # noqa: E402
 
 from . import state as st                                       # noqa: E402
 
@@ -34,6 +35,8 @@ DYNO_SHCO_AT = 4                    # SHCO section, payload byte 0 the order typ
 SHCO_SIZE = 8 + 9
 DYNO_ADMIRAL_FROM_SHCO = 5          # u32, has-orders u8, then the admiral
 ROUT_FIXED_HEAD = 2 + 24            # kind, flag, origin and target
+HISTORY_SLOTS = 8                   # settled block +0: past populations, newest first
+PLPR_MILITARY_COST = 28             # u32 food per soldier, then u32 the military store
 
 
 def _people(records):
@@ -168,7 +171,7 @@ def _planets(blob, tree, galaxy):
             planet.citizens = [(j, w) for j, w, _e, _r in cz or []]
             planet.military = _people(mil or [])
             planet.facilities = dict(fac or [])
-            planet.food = mo.food_of(plpr)
+            planet.food = struct.unpack_from('<II', plpr, mo.FOOD_STORE_OFF)
             planet.recruit = mo.recruit_of(plpr)
             planet.base_space = struct.unpack_from('<H', plpr,
                                                    fr.PLPR_BASE_SPACE_OFF)[0]
@@ -185,15 +188,18 @@ def _planets(blob, tree, galaxy):
                     planet.production.progress = mo.progress_of(plpr) or 0
             at = mo._settled_at(blob, plpr_sec)
             if at is not None:
-                planet.pop_history = [
-                    struct.unpack_from('<H', blob, at + mo.SETTLED_HISTORY_OFF
-                                       + 2 * i)[0]
-                    for i in range(mo.SETTLED_HISTORY_LEN)]
+                planet.pop_history = list(struct.unpack_from(
+                    f'<{HISTORY_SLOTS}H', blob, at + mo.SETTLED_POP_OFF))
+                planet.history_len = struct.unpack_from(
+                    '<I', blob, at + mo.SETTLED_COUNTER_OFF)[0]
+            planet.military_cost, planet.military_food = struct.unpack_from(
+                '<II', plpr, PLPR_MILITARY_COST)
 
 
 def _civs(blob, galaxy):
     gaps = galaxy.gaps
     stances = mo.stances(blob)
+    active = activity.state(blob)
     for rec in icv.owner_records(blob):
         oid = rec['oid']
         civ = st.Civ(oid, rec['name'])
@@ -203,6 +209,9 @@ def _civs(blob, galaxy):
         research = mo.research_of(blob, oid)
         civ.topic = struct.unpack('<i', research[0])[0] if research else None
         civ.traits = mo.traits_of(blob, oid)
+        if rec['name'] in active:
+            civ.active_turn, flag = active[rec['name']]
+            civ.active = bool(flag)
         civ.stances = {other: code for (me, other), code in stances.items()
                        if me == oid}
         for what in ('credits', 'resources', 'completed', 'topic', 'traits'):

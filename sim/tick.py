@@ -14,6 +14,7 @@ from . import economy
 
 STEPS = (                           # (name, function(galaxy)), in tick order
     ('planets', economy.planets),
+    ('activity', economy.activity),
 )
 
 

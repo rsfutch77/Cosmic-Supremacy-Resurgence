@@ -73,9 +73,14 @@ Two consequences worth keeping in mind:
 ### What a planet's `PLPR` holds (September 2026, partial)
 
     +4            the per-unit output rates, `Planet:96` on the object
+    +15           u32 food store
+    +19           u32 food store size, what fills it once
     +23           u32 production points accumulated toward the current item
     +27           u8  recruitment rate, a percentage of food diverted into
                       military growth each turn
+    +28           u32 food per soldier, 300 in every capture
+    +32           u32 the military store; a soldier is made when it reaches
+                      the cost above, and the excess carries
     +36           u32 population count
     +40 .. +40+9n nine-byte citizen records, one per unit of population:
                       +0  u8   job id, 0 farmer, 1 worker, 2 scientist,
@@ -113,6 +118,24 @@ Two consequences worth keeping in mind:
     +255          ENLI, 4 bytes
 
 `WLTH` appears inside `PROD`'s payload rather than beside it, and is replaced by `FCLT` when a facility is queued. The rest of `PLPR` is undecoded and mixes the planet's population, stores and derived economy with the job decision, which is why a submitted job change is carried as the citizen array alone and never as the whole section.
+
+**The settled block**, the 51 bytes between `PROD` and `ENLI` on a colonised planet, opens with
+the population history the food store is sized from (November 2026, from chained engine ticks):
+
+    +0            8 × u16  past populations, newest first; bit 12 (0x1000)
+                           marks an entry older than the last birth
+    +16           u32      slots filled, 1 at founding, 8 from turn 7
+    +24           u32      the owning civ
+    +28           f32      turns since founded
+    +32           u32      the turn it was founded
+
+Each tick pushes the population after any birth, and a birth sets bit 12 on every older entry.
+The store size is the manual's `40 + 40 × floor((n − 1)^1.5)` for `n` the average of the
+unflagged filled entries, rounded up, so a birth resizes it at once and a loss walks it down
+over the following turns: 18 to 15 citizens gave 2840, 2600, 2600, 2600, 2600, 2360. On the
+Single Player galaxy the slot count rises 1 to 8 from founding. In the referee archive galaxy,
+whose homeworlds the join tools rewrote, it falls at a birth instead (5 to 4, 6 to 4), and what
+it counts there is not established.
 
 #### Section framing, read out of the archive class, not inferred from blobs
 
@@ -1946,10 +1969,11 @@ What is left for after the beta is kept here.
   one-ship fleet survives until disbanded. A `SHPR` ends with a `f32`, the id of the last fleet
   its ship was in (`SHPR+30` with two crew), kept after the ship leaves, and the ship's own id.
   Carried (`test_fleets_merge.py`).
-- **A `SHPR` begins with the ship's design id** (`+0`), then the crew count at `+4`. The tail's
-  `f32` reads 1.0 on all 1,034 ships in the 263 blobs on disk (November 2026), which fits
-  `Ship:136`, the 0.0 to 1.0 condition, but no capture holds a damaged ship, so the reading is
-  unconfirmed. `sim/load.py` loads it as condition.
+- **A `SHPR` begins with the ship's design id** (`+0`), then the crew count at `+4`. **The
+  tail's `f32` is the ship's condition**, `Ship:136`, 0.0 to 1.0. CONFIRMED November 2026 on
+  the war blobs ticked by `sim/oracle.py capture`: ship 678 reads 1.0 before the turn-110
+  battle, 0.9238 after it, and 1.0 again a turn later, repaired. Every other ship on disk
+  reads 1.0.
 - **A ship cloned before 27 September 2026 can name its donor in that tail.** 115 ships in 86
   blobs end with another ship's id: the third civ's Colony Ship 208 in the `referee_work` galaxy
   names 200, and the staged `bgf1` hulls 203 and 204 in `battle_a.dat` name 193. `inject_ship.py`
@@ -1958,9 +1982,6 @@ What is left for after the beta is kept here.
   without complaint, so the galaxies made earlier still hold it. The object header's id is the
   ship's. `merge_orders.read_ship` refuses such a ship as unreadable, which leaves it out of the
   fleet merge; `sim/load.py` reads it by the header.
-
-[ ] Confirm the `SHPR` tail's `f32` is condition. Done when a capture taken after a battle shows a
-damaged ship's condition there.
 
 [ ] Decide whether `merge_orders.read_ship` should accept a ship whose tail names its donor. As it
 stands a player in an older galaxy cannot put such a ship in a fleet. Check first whether any live

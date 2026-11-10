@@ -64,6 +64,35 @@ def main():
     ec.food(small, st.Civ(9, 'c', traits=(0,) * 10, completed=[]), 0, one)
     check('a lone planet loses nothing to rounding', small.food, (180, 760))
 
+    # Planet 384 in the war blobs: 18 citizens fall to 15 and the store size
+    # walks down over the following turns, as the engine ticked it.
+    old = ec.HISTORY_OLD
+    lost = planet(15, 15, 32, 0, (0, 2840))
+    lost.pop_history = [16, 18, 18, 18, 17 | old, 17 | old, 17 | old, 17 | old]
+    lost.history_len = 8
+    sizes = [ec.push_history(lost, False) for _ in range(6)]
+    check('a loss walks the store size down', sizes,
+          [2600, 2600, 2600, 2600, 2360, 2360])
+    check('the ring keeps eight entries, newest first', lost.pop_history,
+          [15, 15, 15, 15, 15, 15, 16, 18])
+    lost.citizens.insert(0, (0, 9))
+    check('a birth sizes the store for the new population',
+          ec.push_history(lost, True), ec.food_capacity(16))
+    check('a birth flags every older entry',
+          [w & old for w in lost.pop_history], [0] + [old] * 7)
+
+    founded = planet(7, 7, 32, 0, (0, 600))
+    founded.pop_history, founded.history_len = [7, 0, 0, 0, 0, 0, 0, 0], 1
+    ec.push_history(founded, False)
+    check('a new colony fills its slots one a turn',
+          (founded.history_len, founded.pop_history[:3]), (2, [7, 7, 0]))
+
+    soldiers = planet(17, 7, 72, 0, (0, 2600))
+    soldiers.military, soldiers.military_cost, soldiers.military_food = [], 300, 278
+    ec.recruit(soldiers, 25)
+    check('a full military store makes a soldier and carries the rest',
+          (len(soldiers.military), soldiers.military_food), (1, 3))
+
     print(f'\n{len(PASS)} passed, {len(FAIL)} failed')
     return 1 if FAIL else 0
 

@@ -182,20 +182,44 @@ gross         farmers × y
 corruption    empire = 100 × atan(planets × 0.025) / (π/2) × (1.5^((rep − 25) / 25) − 1)
               planet = empire × min(1, pop / (0.75 × max pop)), a negative percent
               max pop = (space + R(space × space bonus / 100) − lost space) // 10
-food made     gross − R(gross × −planet / 100)
-store         + food made − 10 × pop; full at 40 + 40 × floor((pop − 1)^1.5)
-birth         a full store makes a farmer, carries the excess, and resizes the store
+after corr    c = gross − R(gross × −planet / 100)
+inactivity    p = (turn + 1 − 72 − last active turn) / 2 percent, from SERV
+food made     c − R(c × p / 100)
+store         + food made − 10 × pop
+birth         a full store makes a farmer and carries the excess
+store size    40 + 40 × floor((n − 1)^1.5), n the average of the population history
+              entries since the last birth, rounded up (Reconstruction Report, the
+              settled block)
+recruitment   share = trunc(surplus × rate / 100) leaves the civilian store; the military
+              store gets share less the inactivity cut at the full rate, 2p, and makes a
+              soldier each time it reaches PLPR+28 (300)
 ```
 
 Reputation reads as 0 for these civs, none of which has fought. The formula is the manual's
-corruption page, with planets counted per civ. Capacity follows the current population on
-all 108 planets checked, including just after a birth. The manual's 8-turn average shows
-in the settled block instead: each history word is a past population with bit 12
-(`0x1000`) set on every entry when the planet grows, which reads as "left out of the
-average". A planet that shrinks would tell the two apart.
+corruption page, with planets counted per civ.
 
-With this step the 29 archive pairs go from 89 food misses to none, and from 19 citizen
-misses to 3.
+Inactivity in food runs at half the tooltip's point a turn. It was fitted on the turn-42
+chain, where nobody plays and the penalty starts at turn 72: 36 planet-turns from 68 to 85
+match exactly. At about 20%, on the war blobs, one planet comes out 1 food high in 33 of 60
+turns, a rounding step not yet found. A civ the policy plays is active every turn and never
+reaches it.
+
+Recruitment is approximate. On the one recruiting planet in the corpus, an inactive civ at
+turn 110, the military store matches and the civilian store comes out 1 to 3 food under the
+engine's.
+
+**Score on the 214 captured pairs**, simulator tick against the null tick:
+
+| Field | Null misses | Simulator misses |
+|---|---|---|
+| food | 704 | 89 |
+| citizens | 103 | 3 |
+| population history | 595 | 64 |
+| military | 4 | 0 |
+| jobs, a new farmer | 103 | 3 |
+
+The 89 food misses are the two planets above. Credits (427), production progress (155) and
+metal (105) are the next economy rules; movement (164 positions) after them.
 
 ## 6. Open items
 
@@ -213,16 +237,18 @@ misses to 3.
 - [ ] Set a speed target after profiling the first economy-only tick
 - [x] Build the blob loader for the simulator's state subset: `GLOB`, owners, planets,
       ships and fleets, designs, treaties
-- [ ] Confirm the `SHPR` tail `f32` is condition, and the sixth `SDPR` part list is shields.
-      Both are open items in the Reconstruction Report (the fleets list and `DSGN`); until
-      then the loader reads them that way
+- [x] Confirm the `SHPR` tail `f32` is condition: a ship damaged at turn 110 read 0.9238
+- [ ] Confirm the sixth `SDPR` part list is shields (Reconstruction Report, `DSGN`)
 - [ ] Locate the research stockpile (`Owner:12`) and score in the blob, which the loader
       does not read yet
 - [x] Build the oracle harness and scoreboard (§5)
-- [ ] Capture clean pairs on the client (`oracle capture --run-game`): a few hundred
-      turns of an AI-played galaxy, so research, market and combat appear in the corpus
-- [x] Food, corruption and births (§5b)
-- [ ] Economy module: production, income, upkeep, mining, science, military recruitment
+- [x] Capture clean pairs on the client: 214 pairs, from the 35 distinct referee inputs, an
+      80-turn chain, four war blobs and the Single Player start, none failed
+- [ ] Capture a game with research completing and market trades: no pair in the corpus has
+      either, since nobody gives orders in a chained capture
+- [ ] Find the inactivity rounding step and the exact civilian share under recruitment (§5b)
+- [x] Food, corruption, inactivity, births, the store size and recruitment (§5b)
+- [ ] Economy module: production, income, upkeep, mining, science
 - [ ] Locate reputation in the blob, so corruption reads it instead of taking 0
 - [ ] Research and market modules
 - [ ] Movement and colonisation modules

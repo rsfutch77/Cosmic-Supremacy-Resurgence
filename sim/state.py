@@ -147,7 +147,10 @@ class Planet:
     lost_space: int = None          # battle damage
     production: Production = None
     founded: int = None             # turn
-    pop_history: list = None
+    pop_history: list = None        # 8 words, newest first; bit 12 marks pre-growth
+    history_len: int = 0            # filled slots
+    military_cost: int = None       # food per soldier
+    military_food: int = None       # the military store
     governor: int = 0
 
     def jobs(self):
@@ -166,6 +169,8 @@ class Civ:
     completed: list = None          # technology ids
     topic: int = None               # technology being researched, -1 none
     traits: tuple = None
+    active_turn: int = None         # SERV baseline, the turn last seen active
+    active: bool = False            # SERV flag, set while active this turn
     stances: dict = field(default_factory=dict)     # other civ -> STANCES code
 
 
