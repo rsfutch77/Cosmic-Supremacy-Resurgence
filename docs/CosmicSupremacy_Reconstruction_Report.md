@@ -682,6 +682,60 @@ against that civ, and read the newcomer's tab. If the items come across, a playe
 somebody else's battles happened, which is a smaller version of the `EXSY` map leak and the same
 class of bug. If they do not, something clears it and that something is worth naming.
 
+#### The `NEWS` record and player messages, read off the client (November 2026)
+
+Read from the `NEWS` v3 writer (`0x5355B0`) and reader (`0x535E70`). No capture holding a message
+has checked it yet.
+
+| Offset, with empty strings | Type | Field |
+|---|---|---|
+| `+0` | `u32` | type: 1 a received message, 6 the sender's copy, 8 a player's note |
+| `+4` | `u32` | flags, bit 0 "Mark As Important" |
+| `+8` | `u32` | turn |
+| `+12` | `u32` length, then bytes | title, ANSI, no terminator, empty when the title id is set |
+| `+16` | `u32` length, then bytes | body, the same |
+| `+20` | `u32` | title id, a string-table entry, 0 for a message |
+| `+24` | `u32` | body id, the same |
+| `+28` | `u32` count, then `u32` ids | the civs the item names |
+| `+32` | 3 × `f32` | position, zero for a message |
+
+Everything after the title moves by the title's length, and everything after the body by the
+body's. With both strings empty and no ids the record is the 44 bytes measured above, so the
+unsettled `+20` and `+24` are the two string-table ids. The reader turns a type 7 into a type 1
+marked important, and a type 5 into `0x43`. A civ's list is in its `OWNR > DATA`, a `u32` count and
+one `NEWS` per item, after the designs and before `GOVS` (writer `0x539C90`, reader `0x5427B0`).
+
+**Sending a message** (OK handler `0x4BAB40`) needs a subject, a body and at least one recipient.
+The body is refused above 18 rows, each line counting its length divided by 64, plus one. The
+subject has no limit and neither field is filtered. Offline (`0x575970`) the client appends a
+type 1 item titled `Message from <sender> - Subject: <subject>` to each recipient's list and sets
+that civ's new-news byte, and a type 6 item titled `Message to <recipients> - Subject: <subject>`
+to the sender's. A sender's save therefore changes other civs' `OWNR > DATA`. The add
+(`0x543720`) drops the item when `Owner+0x38` is 0, a field not decoded. Online the client sends
+`SDNW` v0 holding one `NEWS` instead. No item has a read flag: the civ's new-news byte,
+`Owner+0x198`, is in `OWPR` v19 after the 8-byte fields at `Owner+0xC4` and `+0xCC`, and opening
+the news clears it.
+
+**The reader trusts its input.** A count sizes a vector, and a string length sizes the string,
+before anything is read, so a huge value fails the load. A length past the section's end leaves
+the rest of the record misread. An id is not checked to name a civ. The text controls treat `|`,
+`>`, `<` and `%` as markup (inferred from the delimiters at `0x750E10`).
+
+- [ ] **Player messages are carried.** The merge takes nothing from any civ's news list, so a
+  message is dropped with no note, the sender's own copy too. Done when the merge carries, from a
+  submission, the type 1 items it appends to the civs the send dialog offers and the matching
+  type 6 item in its own list, each with no title or body id and no position, a title in the
+  client's own format naming the submitter, printable text within the dialog's 18 rows, a
+  bounded subject, and ids that are civs, together with each recipient's new-news byte; anything
+  else is refused with a note, and a message sent each way on the sandbox arrives with the next
+  turn.
+- [ ] **Each civ is served only its own news.** `fog.project` keeps every civ's `OWNR > DATA`, so
+  each player's copy of a turn holds every other civ's news: its battle reports now, and its
+  private messages once they are carried. The client shows only its own civ's list. Done when a
+  served view empties every other civ's news list, `fog.restore` puts them back before the merge,
+  a served view still loads and sends a message to a civ whose list it was served empty, and the
+  privacy page says messages reach only the players they were sent to.
+
 ### `SERV`, the Inactivity penalty and what keeps it at zero (October 2026)
 
     SERV v5   u32  Owner:652
@@ -880,6 +934,10 @@ The **low three bytes are carried faithfully** through a save and load; the **to
 or `0x09` in a client that played and `0xFF` in one that loaded, whatever the blob held. The AI civ's
 low bytes also vary between otherwise identical runs, and that is the only nondeterminism found
 anywhere in the format.
+
+**The dword is the last record's custom colour** (`KNPL` record `+32`, below). The record's
+constructor (`0x532E60`) never sets it, so a civ that never picked a colour carries whatever was
+in memory, and the reader forces the top byte to `0xFF` (`0x533365`).
 
 Consequences. **Any blob comparison has to mask this dword**, or two honest computations of the same
 turn look different, which is exactly what a canonical hash must not do. The
@@ -2137,9 +2195,13 @@ either ignores the setting on load or the capture rewrites it.
   screen's Change Color (right-click a civ) and the checkbox beside each civ, which shows or
   hides its sphere of control on the map, do not survive to the next served turn (Robert, 6
   November 2026). `merge_orders.py` carries only what it lists, so whatever the client saves for
-  them is dropped, and silently, since only a moved stance is named. Neither field is located:
-  the undecoded rest of the 36-byte `KNPL` record is the likely place, and the memory report's
-  open "change color" item is the same field. Both are the viewer's own display choices, so
+  them is dropped, and silently, since only a moved stance is named. Both are in the 36-byte
+  `KNPL` record, read off the client (writer `0x532F20`, reader `0x5332E0`): `+29` a `u8`, the
+  territory shown (the toggle `0x574930`), `+30` a `u8` likely the rival's ships shown, `+31` a
+  `u8`, 1 to colour the civ by stance and 0 to use `+32`, a `u32` colour as `B, G, R, A` (Change
+  Color's OK, `0x489B23`, through `0x5342D0`). The constructor sets `+29` to 0, `+30` and `+31`
+  to 1. The player's own colour, territory and ships flag are `OWPR` fields at `Owner+0x210`,
+  `+0x214` and `+0x215`. Both are the viewer's own display choices, so
   carrying them needs no legality check beyond the record being the submitter's own. Done when
   a Single Player capture pair locates both fields, the merge carries them for the submitter's
   own `KNPL`, and a colour and a hidden territory set on one turn are still there on the next.
