@@ -193,16 +193,21 @@ def planets(g, reputation=None):
         empire = empire_corruption(len(civ_planets), reputation.get(civ_oid, 0))
         idle = inactivity(g.turn, civ.active_turn)
         share = idle_share(g.turn, civ.active_turn)
-        income = points = 0
+        # Ships finished this tick are charged from the next one.
+        income, points = -fleet_upkeep(g, civ_oid), 0
         for p in civ_planets:
             corruption = (planet_corruption(empire, len(p.citizens), max_pop(p, bonus))
                           + loyalty_bonus(p))
             points += science(p, civ, corruption, idle)
+            start = dict(p.facilities)
             income += work(p, civ, corruption, share, g)
+            # A facility finished this tick works from the next one.
+            built, p.facilities = p.facilities, start
             food(p, civ, bonus, empire, idle, corruption)
+            p.facilities = built
             train(p)
         if civ.credits is not None:
-            civ.credits += income - fleet_upkeep(g, civ_oid)
+            civ.credits += income
         if civ.uid and civ.research is not None:
             civ.research += points
 
@@ -235,10 +240,10 @@ def work(p, civ, corruption, share, g=None):
                  if f < len(tb.FACILITIES)) + CREW_UPKEEP * len(p.military)
     made = after_idle(corrupted(jobs.get(WORKER, 0) * worker_yield(p, civ),
                                 corruption), share)
-    wealth = build(p, made, g)
     if p.ore is not None and civ.resources is not None and jobs.get(MINER):
         civ.resources[p.ore] += after_idle(
             corrupted(jobs[MINER] * miner_yield(p, civ), corruption), share)
+    wealth = build(p, made, g)
     gross = (INCOME_PER_CITIZEN * len(p.citizens)
              + INCOME_PER_BANKER * jobs.get(BANKER, 0))
     gross = boosted(gross, (BANKING_BONUS, p.facilities.get(BANKING_CENTER, 0)))

@@ -76,11 +76,22 @@ def next_system(g, civ, here):
 
 
 def ships(g):
+    """A fleet's ships share one order and move at the slowest one's speed."""
+    pace = {}
+    for s in g.ships.values():
+        if s.order is not None:
+            v = speed(g, s)
+            pace[id(s.order)] = min(pace.get(id(s.order), v), v)
+    moved = set()
     for s in list(g.ships.values()):
         o = s.order
         if o is None or not o.legs:
             continue
-        o.progress += speed(g, s)
+        if id(o) in moved:
+            s.pos, s.orbit = along(o.legs, o.progress), 0
+            continue
+        moved.add(id(o))
+        o.progress += pace[id(o)]
         total = sum(length for *_e, length in o.legs)
         if o.progress < total:
             s.pos = along(o.legs, o.progress)

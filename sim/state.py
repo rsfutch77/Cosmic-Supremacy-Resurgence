@@ -93,6 +93,7 @@ class Order:
     progress: float = 0.0
     legs: list = field(default_factory=list)    # [(origin, dest, length)]
     ref: int = 0                    # object behind the order, 0 for a point
+    flown: list = field(default_factory=list)   # legs already behind the ship
 
 
 @dataclass
@@ -128,6 +129,7 @@ class Production:
     progress: int = 0               # production points toward the item
     hurried: bool = False
     queue: int = 0                  # production queue id, 0 for none
+    entry: int = 0                  # the queue entry being built
 
 
 @dataclass

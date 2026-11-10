@@ -76,10 +76,11 @@ def _order(dyno, gaps, what):
     more, q = sp._read_legs(dyno, q)
     progress = struct.unpack_from('<f', dyno, q)[0]
     ref = struct.unpack_from('<I', dyno, q + 16)[0]
-    legs = [((g['origin_x'], g['origin_y'], g['origin_z']),
-             (g['dest_x'], g['dest_y'], g['dest_z']), g['length'])
-            for g in legs + more]
-    return orbit, st.Order(kind, target, progress, legs, ref), admiral
+    # The second list is the path already flown; progress runs along the first.
+    def tri(gs):
+        return [((g['origin_x'], g['origin_y'], g['origin_z']),
+                 (g['dest_x'], g['dest_y'], g['dest_z']), g['length']) for g in gs]
+    return orbit, st.Order(kind, target, progress, tri(legs), ref, tri(more)), admiral
 
 
 def _ship(oid, owner, pos, shpr, dyno, fleet, gaps):
@@ -138,11 +139,28 @@ def _production(prod):
     if kind is None:
         return None
     kind = kind.decode('latin-1')
+    # PROD's length varies with its list of queue hops; a ship build's design
+    # is always the payload of the SHIP section that ends it.
     item = (mo.prod_facility(prod) if kind == 'FCLT'
-            else mo.prod_builds(prod) if kind == 'SHIP' else None)
+            else struct.unpack_from('<I', prod, len(prod) - 4)[0] if kind == 'SHIP'
+            else None)
     link = mo.queue_link(prod)
+    linked = link is not None and link[0]
     return st.Production(kind, item, 0, mo.is_hurried(prod),
-                         link[1] if link and link[0] else 0)
+                         link[1] if linked else 0, link[2] if linked else 0)
+
+
+def _queue_items(blob, galaxy):
+    """Fill in the item a queued build names only through its queue entry."""
+    entries = {}
+    for queues in (mo.queues_by_civ(blob) or {}).values():
+        for oid, record in queues or ():
+            got, _why = mo.read_queue(record)
+            entries[oid] = {eid: item for eid, _t, item, _a in got or ()}
+    for p in galaxy.planets.values():
+        prod = p.production
+        if prod and prod.item is None and prod.queue and prod.kind in ('SHIP', 'FCLT'):
+            prod.item = entries.get(prod.queue, {}).get(prod.entry)
 
 
 def _planets(blob, tree, galaxy):
@@ -326,6 +344,7 @@ def _load(blob):
     _space_objects(blob, galaxy)
     _treaties(blob, galaxy)
     _explored(blob, tree, galaxy)
+    _queue_items(blob, galaxy)
     for ship in galaxy.ships.values():
         if ship.design not in galaxy.designs:
             galaxy.gaps.append(f'ship {ship.oid}: design {ship.design} not held')
