@@ -168,6 +168,12 @@ step, applied to both civs at once:
 A step on a treaty that the other party already changed in this merge is
 refused. Per-turn payments and a treaty running out are the engine's.
 
+**Display choices**, in the civ's own `KNPL` record for each civ it has met:
+whether that civ's territory (`+29`) and ships (`+30`) are drawn, and its
+colour, by stance (`+31` set) or the `B, G, R, A` colour at `+32`. Carried for
+the records the civ was served, each flag 0 or 1. They change only what the
+submitter's own map shows.
+
 **Market trades**, `GLOB > RSMA`: five `i32` counts of the units the market
 holds, which a sale raises and a purchase lowers. How far each count moved is
 the civ's net trade in that resource. The referee prices it from the market as
@@ -2659,6 +2665,13 @@ TRDT_FIXED = 30             # parties, kind, status, length, start, proposed, by
 KNPL_COUNT = 4
 KNPL_RECORD = 36
 KNPL_STANCE_AT = 12
+# The viewer's display choices for the civ a KNPL record names, read off the
+# client's writer (0x532F20) and reader (0x5332E0).
+KNPL_SHOW_TERRITORY_AT = 29     # u8, 1 draws the civ's territory
+KNPL_SHOW_SHIPS_AT = 30         # u8, likely 1 draws the civ's ships
+KNPL_BY_STANCE_AT = 31          # u8, 1 colours the civ by stance, 0 by its colour
+KNPL_COLOUR_AT = 32             # u32, B, G, R, A; the reader forces A to 0xFF
+KNPL_FLAGS = (KNPL_SHOW_TERRITORY_AT, KNPL_SHOW_SHIPS_AT, KNPL_BY_STANCE_AT)
 STANCES = {0: 'Neutral', 1: 'War', 2: 'Cease-Fire', 3: 'Peace', 4: 'Alliance'}
 KINDS = {0: 'trade', 1: 'war', 2: 'cease-fire', 3: 'peace', 4: 'alliance'}
 WAR = 1
@@ -2833,6 +2846,73 @@ def set_stance(blob, civ_oid, other, code):
             struct.pack_into('<I', out, at + KNPL_STANCE_AT, int(code))
             return bytes(out)
     raise SystemExit(f'civ {civ_oid} has not met {other}')
+
+
+def knpl_records(blob, civ_oid):
+    """{other civ: (record offset, 36 record bytes)} from a civ's KNPL, or None
+    when it does not read as a count of whole records."""
+    _tree, knpl = _civ_section(blob, civ_oid, 'KNPL')
+    if knpl is None or knpl.size < KNPL_COUNT:
+        return None
+    count = struct.unpack_from('<I', blob, knpl.payload)[0]
+    if knpl.size != KNPL_COUNT + count * KNPL_RECORD:
+        return None
+    out = {}
+    for i in range(count):
+        at = knpl.payload + KNPL_COUNT + i * KNPL_RECORD
+        out[struct.unpack_from('<I', blob, at)[0]] = (
+            at, blob[at:at + KNPL_RECORD])
+    return out
+
+
+def display_of(record):
+    """A KNPL record's display choices: the three flags and the colour."""
+    return record[KNPL_SHOW_TERRITORY_AT:KNPL_RECORD]
+
+
+def describe_display(raw):
+    """"territory shown, ships hidden, colour 0x00FF00" for a log line."""
+    terr, ships, by_stance = raw[0], raw[1], raw[2]
+    b, g, r = raw[3], raw[4], raw[5]
+    colour = 'by stance' if by_stance else f'colour 0x{r:02X}{g:02X}{b:02X}'
+    return (f"territory {'shown' if terr else 'hidden'}, ships "
+            f"{'shown' if ships else 'hidden'}, {colour}")
+
+
+def display_orders(served, sub, civ_oid, names):
+    """([(other civ, display bytes)], refusals) for the submitter's display
+    choices in its own KNPL, judged against the state served.
+
+    Only records the civ was served are read, and each flag must be 0 or 1.
+    """
+    was, now = knpl_records(served, civ_oid), knpl_records(sub, civ_oid)
+    if was is None or now is None:
+        if was is not None:
+            return [], ['display choices DROPPED, the KNPL does not hold its '
+                        'count of records']
+        return [], []
+    changes, refusals = [], []
+    for other in sorted(set(was) & set(now)):
+        old, new = display_of(was[other][1]), display_of(now[other][1])
+        if old == new:
+            continue
+        bad = [new[k - KNPL_SHOW_TERRITORY_AT] for k in KNPL_FLAGS
+               if new[k - KNPL_SHOW_TERRITORY_AT] not in (0, 1)]
+        if bad:
+            refusals.append(f'display of {names.get(other, other)} DROPPED, '
+                            f'a flag reads {bad[0]}')
+            continue
+        changes.append((other, new))
+    return changes, refusals
+
+
+def set_display(blob, civ_oid, other, raw):
+    """Write a civ's display choices for another it has met. Sizes do not
+    change."""
+    at, _record = knpl_records(blob, civ_oid)[other]
+    out = bytearray(blob)
+    out[at + KNPL_SHOW_TERRITORY_AT:at + KNPL_RECORD] = raw
+    return bytes(out)
 
 
 def _resources_at(blob, civ_oid):
@@ -4049,6 +4129,16 @@ def merge(blob, submissions, log=print, notes=None, arms=None):
                 else:
                     log(f"    {line}")
                     accepted += 1
+
+            # The submitter's own display choices for each civ it has met.
+            shown, refusals = display_orders(served, sub, mine, names)
+            for why in refusals:
+                drop(why)
+            for other, raw in shown:
+                blob = set_display(blob, mine, other, raw)
+                log(f"    display of {names.get(other, other)}: "
+                    f"{describe_display(raw)}")
+                accepted += 1
 
             # Market trades, after the lump sums. Each is priced from the
             # market as served, the one the player traded against, and the
