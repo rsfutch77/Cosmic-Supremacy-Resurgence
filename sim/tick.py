@@ -10,7 +10,11 @@ for them and the oracle scores what they leave unchanged.
 """
 import copy
 
-STEPS = ()                          # (name, function(galaxy)), in tick order
+from . import economy
+
+STEPS = (                           # (name, function(galaxy)), in tick order
+    ('planets', economy.planets),
+)
 
 
 def tick(galaxy, steps=None):

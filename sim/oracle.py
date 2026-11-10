@@ -30,6 +30,7 @@ import json
 import math
 import os
 import sys
+import time
 
 from . import load as sl
 from . import tick as st_tick
@@ -193,21 +194,57 @@ def archive(tick_dir, corpus, log=print):
     return made
 
 
-def capture(corpus, paths, log=print):
-    """Tick each blob once on the client and keep both sides as a pair."""
+def distinct(paths):
+    """The paths whose blobs differ once canonical, first of each kept."""
+    sys.path.insert(0, os.path.join(sl.ROOT, 'server'))
+    import canonical
+    seen, out = set(), []
+    for path in paths:
+        h = canonical.canonical_hash(sl.sp.load_any(path))
+        if h not in seen:
+            seen.add(h)
+            out.append(path)
+    return out
+
+
+def capture(corpus, paths, chain=1, log=print, progress=print):
+    """Tick each blob `chain` times on the client, one restart per tick, and
+    keep every tick as a pair. A pair already in the corpus is skipped, so an
+    interrupted batch resumes. A failed tick ends that blob's chain only."""
     sys.path.insert(0, os.path.join(sl.ROOT, 'server'))
     import referee
     import set_blob_player as sbp
     os.makedirs(corpus, exist_ok=True)
+    quiet = lambda *_a: None                                    # noqa: E731
+    done = failed = 0
     for path in paths:
-        blob = sbp.set_content_version(sl.sp.load_any(path), log=log)
-        name = f'capture_{os.path.splitext(os.path.basename(path))[0]}'
-        after = referee.tick(blob, turns=1, log=log)
-        open(os.path.join(corpus, f'{name}.before.dat'), 'wb').write(blob)
-        open(os.path.join(corpus, f'{name}.after.dat'), 'wb').write(after)
-        json.dump({'source': 'capture', 'from': path, 'orders_between': False},
-                  open(os.path.join(corpus, f'{name}.json'), 'w'), indent=1)
-        log(f'  {name}: turn {sl.icv.turn_of(blob)} -> {sl.icv.turn_of(after)}')
+        stem = os.path.splitext(os.path.basename(path))[0].replace(' ', '_')
+        blob = sbp.set_content_version(sl.sp.load_any(path), log=quiet)
+        for step in range(chain):
+            turn = sl.icv.turn_of(blob)
+            name = f'capture_{stem}_t{turn:04d}'
+            out_after = os.path.join(corpus, f'{name}.after.dat')
+            if os.path.exists(out_after):
+                blob = open(out_after, 'rb').read()
+                continue
+            started = time.time()
+            try:
+                after = referee.tick(blob, turns=1, log=log)
+            except (Exception, SystemExit) as exc:              # noqa: BLE001
+                failed += 1
+                progress(f'FAILED {name}: {exc}')
+                break
+            open(os.path.join(corpus, f'{name}.before.dat'), 'wb').write(blob)
+            open(out_after, 'wb').write(after)
+            json.dump({'source': 'capture', 'from': path, 'step': step,
+                       'orders_between': False},
+                      open(os.path.join(corpus, f'{name}.json'), 'w'), indent=1)
+            done += 1
+            progress(f'captured {name}: turn {turn} -> '
+                     f'{sl.icv.turn_of(after)} in {time.time() - started:.0f}s')
+            blob = after
+    progress(f'DONE {done} captured, {failed} failed')
+    return done, failed
 
 
 def main(argv=None):
@@ -223,6 +260,11 @@ def main(argv=None):
     c = sub.add_parser('capture')
     c.add_argument('corpus')
     c.add_argument('blobs', nargs='+')
+    c.add_argument('--chain', type=int, default=1,
+                   help='ticks per blob, each from the one before')
+    c.add_argument('--distinct', action='store_true',
+                   help='skip blobs identical to an earlier one')
+    c.add_argument('--log', help='append the referee log here, not to stdout')
     c.add_argument('--run-game', action='store_true',
                    help='required: this starts the shared client')
     args = ap.parse_args(argv)
@@ -234,7 +276,15 @@ def main(argv=None):
         raise SystemExit('capture starts the shared client; pass --run-game '
                          'once nobody else is using the game')
     else:
-        capture(args.corpus, args.blobs)
+        paths = distinct(args.blobs) if args.distinct else args.blobs
+        if args.log:
+            sink = open(args.log, 'a', encoding='utf-8')
+            log = lambda *a: print(*a, file=sink, flush=True)  # noqa: E731
+        else:
+            log = print
+        print(f'{len(paths)} blobs, {args.chain} tick(s) each', flush=True)
+        capture(args.corpus, paths, args.chain, log=log,
+                progress=lambda m: print(m, flush=True))
 
 
 if __name__ == '__main__':
