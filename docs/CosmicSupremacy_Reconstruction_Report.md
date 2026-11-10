@@ -735,15 +735,20 @@ the rest of the record misread. An id is not checked to name a civ.
   type 6 item names civs it has met and each holds a matching type 1 item, renumbers the strings
   into the merged `NWDB`, stores the text with the markup characters swapped for `(`, `)`, `/`
   and `pct`, and sets each recipient's new-news flag; its own important marks and its read flag
-  are carried too, and anything else is refused with a note (`test_messages_merge.py`). Done when
-  a message sent each way on the sandbox arrives with the next turn.
-- [ ] **Each civ is served only its own news.** `fog.project` keeps every civ's `OWNR > DATA` and
-  the whole `NWDB`, so each player's copy of a turn holds every other civ's news and its strings:
-  battle reports now, and private messages once they are carried. The client shows only its own
-  civ's list. Done when a served view empties every other civ's news list and keeps only the
-  strings its own list names, with the next id unchanged, the merge judges a submission against
-  that view, a served view still loads and sends a message to a civ whose list it was served
-  empty, and the privacy page says messages reach only the players they were sent to.
+  are carried too, and anything else is refused with a note (`test_messages_merge.py`). On
+  9 November 2026 a round trip on `fixtures/messages/m0` went through the referee's path in the
+  client: GoodGuy's message from its served view, merged, read by BadGuy from its view as
+  `(b)hi(/b) from the merge/test 100pct` and `Zoë`, a reply restored and merged with no note, and
+  the reply read by GoodGuy from its view with the news tab marked new (Robert). Done when a
+  message sent each way on the sandbox arrives with the next turn.
+- [x] **Each civ is served only its own news.** `fog.project` empties every other civ's news list
+  and keeps only the strings its own list names, with the next id unchanged (`news.own_view`),
+  and `fog.restore` puts them back ahead of anything the submission added, so a restored view is
+  the authoritative blob (`test_fog.py`, `test_messages_merge.py`). Before, each player's copy of
+  a turn held every civ's news and every string. Both served views in the round trip above
+  loaded in the client and sent a message to a civ whose list they held empty. The privacy page
+  says each message travels only in its sender's and recipients' copies; it is live once the
+  site is deployed.
 
 ### `SERV`, the Inactivity penalty and what keeps it at zero (October 2026)
 
