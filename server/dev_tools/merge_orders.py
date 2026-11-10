@@ -144,8 +144,9 @@ rules the client's reader knows, each a `RULE` byte and its section; the rules
 are the engine's to run. A ship may name 0 or any admiral its civ holds as
 merged. Deleting one that still commands a ship is refused, as the client
 greys it out. Each `ADML` counts the ships and fleets naming it, and the
-referee recounts that. An admiral on a fleet, or given to a ship as it leaves
-one, is refused: no fleet has been measured under an admiral.
+referee recounts that. A fleet names its admiral in its own `DYNO` as a ship
+does, and may name 0 or any admiral its civ holds. A ship leaving a fleet keeps
+the fleet's admiral or has none.
 
 **Diplomacy**, the treaty list after SAVE's last section and each civ's stance
 toward the civs it has met, in its `KNPL`. Carried as the client takes each
@@ -558,8 +559,11 @@ def fleet_index(blob):
     return {o['oid']: o for o in space_objects(blob)[2] if o['tag'] == b'FLET'}
 
 
-def fleet_orders(served, sub, civ_oid, names):
+def fleet_orders(served, sub, civ_oid, names, admirals=(), remap=None):
     """(layout, refusals) for one civ's fleets, judged against the state served.
+
+    `admirals` are the ids of the admirals the civ holds as merged, and `remap`
+    the new ones renumbered, {submitted id: merged id}.
 
     layout is None when nothing changes, else how the civ's ships and fleets
     end the turn:
@@ -723,7 +727,7 @@ def fleet_orders(served, sub, civ_oid, names):
                 log.append(f'fleet {fid}: disbanded, no ship is left in it')
             continue
         if was is None:
-            dyno, why = admiral_kept(now['dyno'], (0,))
+            dyno, why = ship_admiral(now['dyno'], 0, admirals, remap or {})
             if why:
                 refusals.append(f'fleet {fid}: {why}')
             fleets[fid] = {'name': now['name'], 'dyno': dyno,
@@ -748,8 +752,9 @@ def fleet_orders(served, sub, civ_oid, names):
                 else:
                     refusals.append(f'fleet {fid}: rename DROPPED, {why}')
             if now['dyno'] != was['dyno']:
-                taken, why = admiral_kept(
-                    now['dyno'], (dyno_admiral(was['dyno']) or 0,))
+                taken, why = ship_admiral(
+                    now['dyno'], dyno_admiral(was['dyno']) or 0, admirals,
+                    remap or {})
                 if why:
                     refusals.append(f'fleet {fid}: {why}')
                 if taken != was['dyno']:
@@ -2606,7 +2611,7 @@ def with_dyno_admiral(dyno, oid):
     return bytes(out)
 
 
-def admiral_kept(dyno, allowed, why='an admiral on a fleet is not carried yet'):
+def admiral_kept(dyno, allowed, why):
     """(dyno, refusal): a submitted DYNO naming one of the `allowed` admiral
     ids, the first of them the one served, or the same DYNO naming that one
     and the refusal of the change."""
@@ -3744,7 +3749,8 @@ def merge(blob, submissions, log=print, notes=None, arms=None):
             # Fleets, against the state served, before the ship orders and
             # crews that look for ships where the fleets leave them. A new
             # fleet takes a free id like a design.
-            layout, refusals = fleet_orders(served, sub, mine, names)
+            layout, refusals = fleet_orders(served, sub, mine, names,
+                                            mine_admirals, admiral_remap)
             for why in refusals:
                 drop(why)
             if layout is not None:

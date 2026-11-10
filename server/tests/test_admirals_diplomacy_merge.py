@@ -349,18 +349,36 @@ def admirals():
           (ships_of(out, ME), ship_admiral(out, ship), notes.get('DemoPlayer')),
           ({232: 0}, 0, None))
 
-    print('an admiral on a fleet is not carried yet')
+    print('a fleet names an admiral its civ holds')
     f0c, f1, f4 = load('f0c'), load('f1'), load('f4')
+    demo = mo.civ_by_name(f1, 'DemoPlayer')['oid']
+
+    def fleet_admiral(blob):
+        fleet, = mo.fleet_index(blob).values()
+        return mo.dyno_admiral(fleet['dyno'])
+
     out, notes = merged(f1, ('DemoPlayer', with_fleet_admiral(f1, 202, 230)))
-    check('assigning one to a fleet is named', notes.get('DemoPlayer'),
-          ['fleet 202: admiral 230 assignment DROPPED, an admiral on a fleet is '
-           'not carried yet'])
+    check('one the civ does not hold is named', notes.get('DemoPlayer'),
+          ['fleet 202: admiral 230 assignment DROPPED, 230 is not an admiral '
+           'this civ holds'])
     check('and the fleet is as served', out, f1)
-    out, notes = merged(f0c, ('DemoPlayer', with_fleet_admiral(f1, 202, 230)))
-    check('a new fleet naming one is formed without it',
-          (sorted(mo.fleet_index(out)),
-           mo.dyno_admiral(mo.fleet_index(out)[202]['dyno']),
-           len(notes.get('DemoPlayer', []))), ([202], 0, 1))
+    f1h = made(f1, demo, [adml(230, b'a1')], 230)
+    out, notes = merged(f1h, ('DemoPlayer', with_fleet_admiral(f1h, 202, 230)))
+    check('one it holds is taken and counts the fleet',
+          (fleet_admiral(out), mo.admiral_commands(out, demo)[230],
+           notes.get('DemoPlayer')), (230, 1, None))
+    sub = with_fleet_admiral(made(f1, demo, [adml(230, b'a1')], 230), 202, 230)
+    out, notes = merged(f0c, ('DemoPlayer', sub))
+    check('a new fleet and a new admiral in one submission',
+          (len(mo.fleet_index(out)), fleet_admiral(out),
+           mo.admiral_commands(out, demo)[230], notes.get('DemoPlayer')),
+          (1, 230, 1, None))
+    af0, af1 = adm('af0'), adm('af1')
+    out, notes = merged(af0, ('DemoPlayer', af1))
+    check("the client's own fleet assignment merges to what it wrote",
+          (mo.fleet_index(out)[202]['dyno'], mo.admirals_of(out, demo),
+           notes.get('DemoPlayer')),
+          (mo.fleet_index(af1)[202]['dyno'], mo.admirals_of(af1, demo), None))
     left = next(s for s in (193, 194)
                 if s not in [m for m, *_ in mo.fleet_index(f4)[202]['members']])
     out, notes = merged(f1, ('DemoPlayer', with_ship_admiral(f4, left, 230)))
