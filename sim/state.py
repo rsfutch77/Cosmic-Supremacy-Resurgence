@@ -137,7 +137,9 @@ class Planet:
     system: int                     # the SUN's object id
     pos: tuple
     name: str
-    rates: tuple = None             # PLPR+4..+6, the per-unit output rates
+    rates: tuple = None             # PLPR+4..+6, food, production and science per worker
+    ore: int = None                 # the ship resource it mines, tables.RESOURCES index
+    ore_rate: int = None            # ship resource per miner
     citizens: list = field(default_factory=list)    # [(job, owner)]
     military: list = field(default_factory=list)    # [(job, owner)]
     facilities: dict = field(default_factory=dict)  # type -> count

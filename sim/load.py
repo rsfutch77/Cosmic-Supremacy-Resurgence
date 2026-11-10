@@ -37,6 +37,7 @@ DYNO_ADMIRAL_FROM_SHCO = 5          # u32, has-orders u8, then the admiral
 ROUT_FIXED_HEAD = 2 + 24            # kind, flag, origin and target
 HISTORY_SLOTS = 8                   # settled block +0: past populations, newest first
 PLPR_MILITARY_COST = 28             # u32 food per soldier, then u32 the military store
+ORE_BEFORE_ENLI = 5                 # u8 resource type then u32 rate, just before ENLI
 
 
 def _people(records):
@@ -178,6 +179,10 @@ def _planets(blob, tree, galaxy):
             planet.lost_space = struct.unpack_from('<h', plpr,
                                                    fr.PLPR_LOST_SPACE_OFF)[0]
             planet.founded = struct.unpack_from('<I', plpr, mo.FOUNDED_OFF)[0]
+            enli = next(plpr_sec.find('ENLI'), None)
+            if enli is not None:
+                planet.ore, planet.ore_rate = struct.unpack_from(
+                    '<BI', blob, enli.start - ORE_BEFORE_ENLI)
             prod_sec = next(plpr_sec.find('PROD'), None)
             if prod_sec is not None:
                 planet.production = _production(

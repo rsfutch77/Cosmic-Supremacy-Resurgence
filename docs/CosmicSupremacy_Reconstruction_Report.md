@@ -128,6 +128,13 @@ the population history the food store is sized from (November 2026, from chained
     +24           u32      the owning civ
     +28           f32      turns since founded
     +32           u32      the turn it was founded
+    ENLI −5       u8       the ship resource the planet mines, 0 metal to 4 exotics
+    ENLI −4       u32      ship resource per miner, before mines and traits
+
+The ore fields hold on every planet, owned or not: across a 547-planet galaxy the type takes
+all five values, metal most often (266 planets), and the rate runs 1 to 25. A miner on a
+rate-10 planet adds 10 metal a turn and one on a rate-6 planet adds 6, on every mining tick in
+the oracle corpus (November 2026).
 
 Each tick pushes the population after any birth, and a birth sets bit 12 on every older entry.
 The store size is the manual's `40 + 40 × floor((n − 1)^1.5)` for `n` the average of the

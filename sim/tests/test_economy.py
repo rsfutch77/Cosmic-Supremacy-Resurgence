@@ -1,5 +1,5 @@
 """
-test_economy.py: the planet step's food, corruption and growth rules
+test_economy.py: the planet step's food, growth, production and income rules
 ====================================================================
     server\\.venv\\Scripts\\python.exe sim\\tests\\test_economy.py
 
@@ -92,6 +92,46 @@ def main():
     ec.recruit(soldiers, 25)
     check('a full military store makes a soldier and carries the rest',
           (len(soldiers.military), soldiers.military_food), (1, 3))
+
+    check('the manual\'s facility cost example', ec.facility_cost(2, 5), 5500)
+    check('a third farm costs the escalated price', ec.facility_cost(0, 2), 700)
+
+    # The Single Player homeworld: 4 farmers, 2 workers and a scientist on
+    # Wealth, with a shipyard, a military camp and a light turret.
+    home = planet(7, 4, 32, 0, (0, 280))
+    home.citizens = [(0, 9)] * 4 + [(1, 9)] * 2 + [(2, 9)]
+    home.facilities = {2: 1, 6: 1, 9: 1}
+    home.production = st.Production('WLTH')
+    plain = st.Civ(9, 'c', traits=(0,) * 10, completed=[], resources=[0] * 5)
+    check('workers make the base rate without factories',
+          ec.worker_yield(home, plain), 30)
+    check('ten a citizen and a quarter of Wealth, less facility upkeep',
+          ec.work(home, plain, 0, 0.0), 70 + 15 - 37)
+    home.facilities[1] = 2
+    check('two factories add a fifth of the rate each', ec.worker_yield(home, plain), 42)
+    del home.facilities[1]
+
+    home.production = st.Production('FCLT', 0, 180)
+    check('upkeep is for the facilities held when the turn began',
+          ec.work(home, plain, 0, 0.0), 70 - 37)
+    check('a paid-for farm is built and the excess carries to Wealth',
+          (home.facilities.get(0), home.production.kind, home.production.progress),
+          (1, 'WLTH', 40))
+
+    mining = planet(9, 7, 32, 0, (0, 920))
+    mining.citizens = [(0, 9)] * 7 + [(5, 9), (6, 9)]
+    mining.ore, mining.ore_rate = 0, 10
+    mining.production = st.Production('WLTH')
+    civ = st.Civ(9, 'c', traits=(0,) * 10, completed=[], resources=[0] * 5)
+    check('a banker adds fifty', ec.work(mining, civ, 0, 0.0), 90 + 50)
+    check('a miner digs the planet\'s rate of its ore', civ.resources[0], 10)
+    mining.facilities = {13: 1}
+    check('a mine adds two fifths', ec.miner_yield(mining, civ), 14)
+
+    # Planet 2 in the 80-turn chain: one miner at rate 10, its civ idle.
+    dug = [ec.after_idle(10, ec.idle_share(t, 0)) for t in (76, 77, 98, 99)]
+    check('mining loses 0.9% a turn once a civ is idle', dug, [10, 9, 8, 7])
+    check('nothing is lost in the first 72 turns', ec.idle_share(70, 0), 0.0)
 
     print(f'\n{len(PASS)} passed, {len(FAIL)} failed')
     return 1 if FAIL else 0

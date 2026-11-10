@@ -217,9 +217,39 @@ engine's.
 | population history | 595 | 64 |
 | military | 4 | 0 |
 | jobs, a new farmer | 103 | 3 |
+| credits | 427 | 75 |
+| production progress | 155 | 0 |
+| ship resources | 105 | 0 |
 
-The 89 food misses are the two planets above. Credits (427), production progress (155) and
-metal (105) are the next economy rules; movement (164 positions) after them.
+The 89 food misses are the two planets above. Movement (164 positions) is next.
+
+**Production, mining and income** match every active civ exactly, and idle civs to within a
+credit or two (November 2026). They run before food, on the citizens the turn began with.
+
+```
+worker yield  y = b + R(20 × factories × b / 100) + R(50 × automated × b / 100),
+                  then y + R(production trait × y / 100); b at PLPR+5, trait CVTR 3
+miner yield   the same shape on the planet's ore rate, mines +40%, robo mines +100%,
+                  mining trait CVTR 5; the ore type and rate sit just before ENLI
+made          workers × y, less corruption, less the idle cut i = 0.9% a turn
+mined         miners × yield the same way, into the civ's store of that ore
+progress      + made; a facility costs (4 + (3 + k) × k) × base / 4 with k already
+              built, the excess carries, and an empty queue falls to Wealth
+Wealth        R(made / 4) credits instead of progress
+income        10 a citizen + 50 a banker, banking centres +40% each, less corruption
+              and the idle cut at 1/144 a turn, taken in one rounding
+credits       + income + Wealth − upkeep of the facilities held at the start of the turn,
+              − each ship's design upkeep − 3 a crew member
+```
+
+The idle cuts start where food's does, 72 turns after the civ was last active. Mining pins
+production's rate: one miner at rate 10 falls to 9 at 6 idle turns and to 7 at 28, and 0.9%
+reproduces all 34 production steps of the idle war-blob civ where 1/110 and 1/111 do not.
+Income's 1/144 is fitted, and lands 1 or 2 credits off on some idle turns. A civ the policy
+plays never meets either. Stationed soldiers cost nothing in any capture.
+
+Not covered yet: ship and scan completion, queues past their first item, hurrying, and
+science, none of which a chained capture exercises.
 
 ## 6. Open items
 
@@ -248,7 +278,10 @@ metal (105) are the next economy rules; movement (164 positions) after them.
       either, since nobody gives orders in a chained capture
 - [ ] Find the inactivity rounding step and the exact civilian share under recruitment (§5b)
 - [x] Food, corruption, inactivity, births, the store size and recruitment (§5b)
-- [ ] Economy module: production, income, upkeep, mining, science
+- [x] Production, mining, income and upkeep (§5b)
+- [ ] Science, ship and scan completion, queues past the first item and hurrying: needs a
+      capture where orders are given
+- [ ] Find income's exact idle step: 1/144 a turn leaves idle civs 1 or 2 credits off
 - [ ] Locate reputation in the blob, so corruption reads it instead of taking 0
 - [ ] Research and market modules
 - [ ] Movement and colonisation modules
