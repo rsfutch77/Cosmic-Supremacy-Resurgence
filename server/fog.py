@@ -29,6 +29,11 @@ names the viewer or a civ the galaxy does not hold, and one whose `PLPR` does
 not walk. Systems a civ has never entered are left alone; the client already
 hides them.
 
+Every other civ's news is withheld: its list is served empty, and the news
+string table holds only the strings the civ's own list names, with its next id
+kept (`news.own_view`). `restore` puts the withheld items and strings back
+ahead of anything the submission added (`news.restore_view`).
+
 Object ids, systems and planets are all kept, so a view passes the referee's
 galaxy check and its new objects are numbered as in the authoritative blob.
 `restore` puts the authoritative planets back into a submission. A civ cannot
@@ -47,6 +52,7 @@ for _d in (HERE, os.path.join(HERE, 'dev_tools')):
 import save_parser as sp
 import inject_civ as icv
 import exsy
+import news
 
 PLNT_OWNER = 16         # u32, the owning civ's object id
 PLNT_NAME = 24          # u32 length, then the name
@@ -233,7 +239,21 @@ def _rewritten(blob, pl, owner, pop, name, blank_prod):
 
 
 def project(blob: bytes, civ: str, log=print) -> bytes:
-    """The blob as `civ` is served it: every stale planet as remembered."""
+    """The blob as `civ` is served it: every stale planet as remembered, and
+    only its own news."""
+    blob = _remembered(blob, civ, log)
+    oid = next((o['oid'] for o in icv.owner_records(blob) if o['name'] == civ),
+               None)
+    if oid is None:
+        return blob
+    view = news.own_view(blob, oid)
+    if view != blob:
+        log(f"  fog: {civ}: other civs' news withheld")
+    return view
+
+
+def _remembered(blob: bytes, civ: str, log=print) -> bytes:
+    """`blob` with every planet stale for `civ` as remembered."""
     tree = sp.parse_blob(blob)
     plan, turn = _plan(blob, civ, tree)
     if not plan:
@@ -259,7 +279,12 @@ def project(blob: bytes, civ: str, log=print) -> bytes:
 
 def restore(blob: bytes, civ: str, sub: bytes) -> bytes:
     """`sub` with each planet `project` rewrote for `civ` put back as `blob`
-    holds it. A planet missing from `sub` is left to the merge to refuse."""
+    holds it, and the news withheld from it. A planet missing from `sub` is
+    left to the merge to refuse."""
+    oid = next((o['oid'] for o in icv.owner_records(blob) if o['name'] == civ),
+               None)
+    if oid is not None:
+        sub = news.restore_view(blob, oid, sub)
     ids = stale_planets(blob, civ)
     if not ids:
         return sub

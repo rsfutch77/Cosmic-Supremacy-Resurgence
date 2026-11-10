@@ -682,59 +682,68 @@ against that civ, and read the newcomer's tab. If the items come across, a playe
 somebody else's battles happened, which is a smaller version of the `EXSY` map leak and the same
 class of bug. If they do not, something clears it and that something is worth naming.
 
-#### The `NEWS` record and player messages, read off the client (November 2026)
+#### The `NEWS` record and player messages (November 2026)
 
-Read from the `NEWS` v3 writer (`0x5355B0`) and reader (`0x535E70`). No capture holding a message
-has checked it yet.
+Read from the `NEWS` v3 writer (`0x5355B0`) and reader (`0x535E70`), and measured in one Single
+Player session on 9 November 2026 (`server/tests/fixtures/messages`).
 
 | Offset, with empty strings | Type | Field |
 |---|---|---|
 | `+0` | `u32` | type: 1 a received message, 6 the sender's copy, 8 a player's note |
 | `+4` | `u32` | flags, bit 0 "Mark As Important" |
 | `+8` | `u32` | turn |
-| `+12` | `u32` length, then bytes | title, ANSI, no terminator, empty when the title id is set |
+| `+12` | `u32` length, then bytes | title, empty when the title id names a string |
 | `+16` | `u32` length, then bytes | body, the same |
-| `+20` | `u32` | title id, a string-table entry, 0 for a message |
-| `+24` | `u32` | body id, the same |
+| `+20` | `u32` | title id in `NWDB` |
+| `+24` | `u32` | body id in `NWDB` |
 | `+28` | `u32` count, then `u32` ids | the civs the item names |
 | `+32` | 3 × `f32` | position, zero for a message |
 
 Everything after the title moves by the title's length, and everything after the body by the
-body's. With both strings empty and no ids the record is the 44 bytes measured above, so the
-unsettled `+20` and `+24` are the two string-table ids. The reader turns a type 7 into a type 1
+body's. Every item measured names its title and body by id and writes both strings empty, so the
+unsettled `+20` and `+24` above are the two string ids. The reader turns a type 7 into a type 1
 marked important, and a type 5 into `0x43`. A civ's list is in its `OWNR > DATA`, a `u32` count and
-one `NEWS` per item, after the designs and before `GOVS` (writer `0x539C90`, reader `0x5427B0`).
+one `NEWS` per item, between the designs and `GOVS` (writer `0x539C90`, reader `0x5427B0`).
+
+**`NWDB` v1**, after `GLOB`, holds the strings: a `u32` next id, a `u32` count, then per string a
+`u32` id, a `u32` hash, a `u32` length and the text, Latin-1 with no terminator (writer
+`0x5371C0`, reader `0x536CF0`). The hash is Jenkins' one-at-a-time over the bytes as signed chars,
+with A to Z lowered and `\` read as `/` (`0x5E5230`); it matches all 39 strings in the captures.
+Interning a string (`0x5370A0`) returns the id of an equal string already held, so two items with
+one text share an id. A save holds the strings of every civ's news, not only its own.
 
 **Sending a message** (OK handler `0x4BAB40`) needs a subject, a body and at least one recipient.
 The body is refused above 18 rows, each line counting its length divided by 64, plus one. The
-subject has no limit and neither field is filtered. Offline (`0x575970`) the client appends a
-type 1 item titled `Message from <sender> - Subject: <subject>` to each recipient's list and sets
-that civ's new-news byte, and a type 6 item titled `Message to <recipients> - Subject: <subject>`
-to the sender's. A sender's save therefore changes other civs' `OWNR > DATA`. The add
-(`0x543720`) drops the item when `Owner+0x38` is 0, a field not decoded. Online the client sends
-`SDNW` v0 holding one `NEWS` instead. No item has a read flag: the civ's new-news byte,
-`Owner+0x198`, is in `OWPR` v19 after the 8-byte fields at `Owner+0xC4` and `+0xCC`, and opening
-the news clears it.
+subject has no limit and neither field is filtered. The client appends a type 1 item titled
+`Message from <sender> - Subject: <subject>` to each recipient's list, naming the sender, and a
+type 6 item titled `Message to <recipients> - Subject: <subject>` to the sender's, naming the
+recipients; both name one body string. `GoodGuy` sending `s1` added strings 9 to 11; `BadGuy`'s
+reply was titled `Re: s1`. The text is stored as typed: `ë` as one Latin-1 byte, line breaks as
+`\r\n`, and `<b>` and `|` raw. The news tab hides `<b>` (Robert, 9 November 2026), and copying
+the text shows it, so the text controls read `<` as markup; the delimiters at `0x750E10` are
+`|`, `>`, `<` and `%`. Marking an item important sets bit 0 of its flags. Online the client sends
+`SDNW` v0 holding one `NEWS` instead.
+
+**The new-news flag** is a byte in `OWPR`, 81 bytes before the civ name's length field. The reply
+set GoodGuy's to 1, and opening the news cleared BadGuy's, along with the byte two after it.
 
 **The reader trusts its input.** A count sizes a vector, and a string length sizes the string,
 before anything is read, so a huge value fails the load. A length past the section's end leaves
-the rest of the record misread. An id is not checked to name a civ. The text controls treat `|`,
-`>`, `<` and `%` as markup (inferred from the delimiters at `0x750E10`).
+the rest of the record misread. An id is not checked to name a civ.
 
-- [ ] **Player messages are carried.** The merge takes nothing from any civ's news list, so a
-  message is dropped with no note, the sender's own copy too. Done when the merge carries, from a
-  submission, the type 1 items it appends to the civs the send dialog offers and the matching
-  type 6 item in its own list, each with no title or body id and no position, a title in the
-  client's own format naming the submitter, printable text within the dialog's 18 rows, a
-  bounded subject, and ids that are civs, together with each recipient's new-news byte; anything
-  else is refused with a note, and a message sent each way on the sandbox arrives with the next
-  turn.
-- [ ] **Each civ is served only its own news.** `fog.project` keeps every civ's `OWNR > DATA`, so
-  each player's copy of a turn holds every other civ's news: its battle reports now, and its
-  private messages once they are carried. The client shows only its own civ's list. Done when a
-  served view empties every other civ's news list, `fog.restore` puts them back before the merge,
-  a served view still loads and sends a message to a civ whose list it was served empty, and the
-  privacy page says messages reach only the players they were sent to.
+- [ ] **Player messages are carried.** `merge_orders.py` takes a message when the submitter's new
+  type 6 item names civs it has met and each holds a matching type 1 item, renumbers the strings
+  into the merged `NWDB`, stores the text with the markup characters swapped for `(`, `)`, `/`
+  and `pct`, and sets each recipient's new-news flag; its own important marks and its read flag
+  are carried too, and anything else is refused with a note (`test_messages_merge.py`). Done when
+  a message sent each way on the sandbox arrives with the next turn.
+- [ ] **Each civ is served only its own news.** `fog.project` keeps every civ's `OWNR > DATA` and
+  the whole `NWDB`, so each player's copy of a turn holds every other civ's news and its strings:
+  battle reports now, and private messages once they are carried. The client shows only its own
+  civ's list. Done when a served view empties every other civ's news list and keeps only the
+  strings its own list names, with the next id unchanged, the merge judges a submission against
+  that view, a served view still loads and sends a message to a civ whose list it was served
+  empty, and the privacy page says messages reach only the players they were sent to.
 
 ### `SERV`, the Inactivity penalty and what keeps it at zero (October 2026)
 
@@ -2151,8 +2160,10 @@ layout read off the client above held.
   is greyed out while the admiral commands a ship.
 - **A turn** leaves the admiral record as it was. The `SHPR` of the colony ship under "man ships
   fully" grew by 9 bytes in the tick, likely crew the rule brought aboard.
-- **Not measured:** an admiral on a fleet, since GoodGuy had no two ships together; the other
-  choices in each rule; and the other rule types.
+- **An admiral on a fleet** (9 November 2026, `fixtures/admirals` `af0` and `af1`, DemoPlayer's
+  fleet 202 on `tier5/f1`): assigning admiral 203 wrote its id into the `FLET`'s own `DYNO`, the
+  `u32` after the has-orders byte as for a ship, and the `ADML` counts one command, the fleet.
+- **Not measured:** the other choices in each rule, and the other rule types.
 
 **Measured in one Single Player session on 27 and 28 October 2026
 (`server/tests/fixtures/diplomacy`):** diplomacy on `control_fork_played.dat` written with
@@ -2197,9 +2208,12 @@ either ignores the setting on load or the capture rewrites it.
   November 2026). `merge_orders.py` carries only what it lists, so whatever the client saves for
   them is dropped, and silently, since only a moved stance is named. Both are in the 36-byte
   `KNPL` record, read off the client (writer `0x532F20`, reader `0x5332E0`): `+29` a `u8`, the
-  territory shown (the toggle `0x574930`), `+30` a `u8` likely the rival's ships shown, `+31` a
-  `u8`, 1 to colour the civ by stance and 0 to use `+32`, a `u32` colour as `B, G, R, A` (Change
-  Color's OK, `0x489B23`, through `0x5342D0`). The constructor sets `+29` to 0, `+30` and `+31`
+  territory shown (the toggle `0x574930`), `+30` a `u8`, the rival's ships shown, `+31` a `u8`, 1
+  to colour the civ by stance and 0 to use `+32`, a `u32` colour as `B, G, R, A` (Change Color's
+  OK, `0x489B23`, through `0x5342D0`). Measured on 9 November 2026 (`fixtures/messages` `m3` to
+  `m6`): Change Color to green wrote `+31` 0 and `+32` `01 F8 0D FF`, ticking the territory box
+  wrote `+29` 1, and turning ship display off wrote `+30` 0, each in GoodGuy's record for BadGuy
+  only. The merge carries all four for the submitter's own records (`test_display_merge.py`). The constructor sets `+29` to 0, `+30` and `+31`
   to 1. The player's own colour, territory and ships flag are `OWPR` fields at `Owner+0x210`,
   `+0x214` and `+0x215`. Both are the viewer's own display choices, so
   carrying them needs no legality check beyond the record being the submitter's own. Done when

@@ -175,6 +175,18 @@ colour, by stance (`+31` set) or the `B, G, R, A` colour at `+32`. Carried for
 the records the civ was served, each flag 0 or 1. They change only what the
 submitter's own map shows.
 
+**Messages**, news items naming their title and body in `NWDB`, the galaxy's
+string table (`news.py`). A message is taken when the submitter's new `SENT`
+item names civs it has met, each once, and each of them holds a new
+`RECEIVED` item with the same body, titled `Message from <submitter> -
+Subject: <subject>` and naming the submitter, all dated this turn with no
+position. Its strings are renumbered into the merged table, its text is kept
+to the send dialog's rows and a bounded subject, holds no control character
+but line breaks and tabs in the body, and has its markup characters replaced
+by plain stand-ins. Each recipient's new-news flag is set. The submitter's own
+items may change their important mark, and its new-news flag may be cleared;
+any other change to a news list is refused.
+
 **Market trades**, `GLOB > RSMA`: five `i32` counts of the units the market
 holds, which a sale raises and a purchase lowers. How far each count moved is
 the civ's net trade in that resource. The referee prices it from the market as
@@ -223,6 +235,7 @@ import save_parser as sp
 import inject_civ as icv
 import inject_design as idg
 import facility_rules
+import news
 
 # The research topic is written twice in a civ's OWPR, 8 bytes apart, after a
 # map (u32 count at +8, 8-byte pairs) and the completed technologies (u32 count,
@@ -3300,6 +3313,240 @@ def market_trait(completed):
     return sum(MARKET_TRAIT_GRANTS.get(t, 0) for t in completed)
 
 
+# Messages between players. The send dialog (0x4BAB40) needs a subject, a body
+# and a recipient, and refuses a body over MESSAGE_ROWS rows, each line counting
+# its length // MESSAGE_ROW + 1. Offline the client appends a RECEIVED item to
+# each recipient's list and a SENT item to the sender's, both naming their
+# title and body in the string table.
+MESSAGE_ROWS = 18
+MESSAGE_ROW = 64
+SUBJECT_MAX = 80            # the dialog sets none
+FROM_TITLE = b'Message from %s - Subject: '
+TO_TITLE = b'Message to '
+SUBJECT_SEP = b' - Subject: '
+NO_POSITION = b'\0' * 12
+# The text controls read these as markup, so each is stored as a plain stand-in.
+MARKUP = {ord('<'): b'(', ord('>'): b')', ord('|'): b'/', ord('%'): b'pct'}
+BODY_CONTROLS = b'\r\n\t'
+
+
+def message_rows(body):
+    """Rows the send dialog counts for a body."""
+    return sum(len(line) // MESSAGE_ROW + 1 for line in body.split(b'\n'))
+
+
+def plain_text(text, controls=b''):
+    """`text` with markup stand-ins, or None when it holds a byte the client
+    cannot show: a control other than `controls`, or 0x7F to 0x9F."""
+    out = bytearray()
+    for c in text:
+        if c in MARKUP:
+            out += MARKUP[c]
+        elif (c < 0x20 and c not in controls) or 0x7F <= c <= 0x9F:
+            return None
+        else:
+            out.append(c)
+    return bytes(out)
+
+
+def _same_item(a, b, ignore_flags=0):
+    keys = ('type', 'turn', 'title', 'body', 'title_id', 'body_id', 'ids',
+            'position')
+    return (all(a[k] == b[k] for k in keys)
+            and (a['flags'] & ~ignore_flags) == (b['flags'] & ~ignore_flags))
+
+
+def _new_news_at(blob, civ_oid):
+    """Offset of a civ's new-news flag, or None when its OWPR does not read."""
+    owpr = _owpr(blob, civ_oid)
+    at = _identity_at(blob, owpr) if owpr is not None else None
+    if at is None:
+        return None
+    return at - news.NEW_NEWS_BACK
+
+
+def message_orders(served, sub, civ_oid, names):
+    """(orders, refusals) for a civ's news, judged against the state served.
+
+    `orders` holds `flags`, [(index, flags)] for its own items marked or
+    unmarked important, `read` when it opened its news, and `messages`, each
+    {'to', 'subject', 'body', 'sent_title', 'sent_flags', 'ids'}: a message as
+    sent, its text not yet made plain.
+    """
+    orders = {'flags': [], 'read': False, 'messages': []}
+    refusals = []
+
+    def who(civ):
+        return names.get(civ, civ)
+
+    was_table, now_table = news.read_table(served), news.read_table(sub)
+    civs = [o['oid'] for o in icv.owner_records(served)]
+    was = {c: news.items_of(served, c) for c in civs}
+    now = {c: news.items_of(sub, c) for c in civs}
+    if was_table is None or any(v is None for v in was.values()):
+        return orders, refusals
+    if now_table is None or any(now[c] is None for c in civs):
+        return orders, ['news DROPPED, a news list or the string table does '
+                        'not read']
+    first_new, served_strings = was_table
+    strings = now_table[1]
+
+    mine_was, mine_now = was[civ_oid], now[civ_oid]
+    if (len(mine_now) < len(mine_was)
+            or not all(_same_item(a, b, news.IMPORTANT)
+                       for a, b in zip(mine_was, mine_now))):
+        return orders, ['news DROPPED, its list does not begin with the items '
+                        'served']
+    for i, (a, b) in enumerate(zip(mine_was, mine_now)):
+        if a['flags'] != b['flags']:
+            orders['flags'].append((i, b['flags']))
+
+    identity = civ_identity(served, civ_oid)
+    me = {str(names.get(civ_oid, '')).encode('latin-1')}
+    if identity and identity[0]:
+        me.add(identity[0])
+    met = {other for civ, other in stances(served) if civ == civ_oid}
+    turn = icv.turn_of(served)
+
+    def text_of(sid):
+        """The submitted text of a string id, or None when the id is neither
+        served with that text nor new in this submission."""
+        if sid in served_strings:
+            if strings.get(sid) == served_strings[sid]:
+                return served_strings[sid]
+            return None
+        return strings.get(sid) if sid >= first_new else None
+
+    def plain_item(item):
+        return (item['title'] == item['body'] == b'' and item['turn'] == turn
+                and item['position'] == NO_POSITION)
+
+    received = []                       # (recipient, item, title, body)
+    for civ in civs:
+        if civ == civ_oid:
+            continue
+        # Another civ's list is served empty (`news.own_view`), or whole to a
+        # submitter given the full galaxy. Items past either are new.
+        a, b = was[civ], now[civ]
+        if len(b) >= len(a) and all(_same_item(x, y) for x, y in zip(a, b)):
+            b = b[len(a):]
+        for item in b:
+            title, body = text_of(item['title_id']), text_of(item['body_id'])
+            if (item['type'] != news.RECEIVED or item['flags'] or title is None
+                    or body is None or not plain_item(item)):
+                refusals.append(f"news item for {who(civ)} DROPPED, it is not "
+                                f"a message as the client writes one")
+                continue
+            received.append((civ, item, title, body))
+
+    for item in mine_now[len(mine_was):]:
+        title, body = text_of(item['title_id']), text_of(item['body_id'])
+        to = item['ids']
+        why = None
+        if (item['type'] != news.SENT or title is None or body is None
+                or not plain_item(item) or item['flags'] & ~news.IMPORTANT):
+            why = 'it is not a message as the client writes one'
+        elif not to or len(set(to)) != len(to) or civ_oid in to:
+            why = 'its recipients are not other civs, each once'
+        elif not set(to) <= met:
+            why = (f"it names a civ {who(civ_oid)} has not met: "
+                   f"{', '.join(str(who(c)) for c in sorted(set(to) - met))}")
+        elif not title.startswith(TO_TITLE) or SUBJECT_SEP not in title:
+            why = "its title is not the client's"
+        if why:
+            refusals.append(f'message DROPPED, {why}')
+            continue
+        subject = title.split(SUBJECT_SEP, 1)[1]
+        heads = {FROM_TITLE % name + subject for name in me}
+        matched = []
+        for civ in to:
+            hit = next((r for r in received if r[0] == civ and r[3] == body
+                        and r[2] in heads and civ_oid in r[1]['ids']
+                        and set(r[1]['ids']) <= set(to) | {civ_oid}), None)
+            if hit is None:
+                break
+            matched.append(hit)
+        if len(matched) != len(to):
+            refusals.append(f'message {subject!r} DROPPED, a recipient does '
+                            f'not hold it as the client writes it')
+            continue
+        for hit in matched:
+            received.remove(hit)
+        orders['messages'].append({
+            'to': to, 'subject': subject, 'body': body, 'sent_title': title,
+            'sent_flags': item['flags'],
+            'ids': {civ: hit[1]['ids'] for civ, hit in zip(to, matched)}})
+    for civ, _item, _title, _body in received:
+        refusals.append(f"news item for {who(civ)} DROPPED, no message "
+                        f"{who(civ_oid)} sent matches it")
+
+    flag_at, sub_flag_at = _new_news_at(served, civ_oid), _new_news_at(sub, civ_oid)
+    if (flag_at is not None and sub_flag_at is not None
+            and served[flag_at] == 1 and sub[sub_flag_at] == 0):
+        orders['read'] = True
+    return orders, refusals
+
+
+def take_messages(blob, civ_oid, orders, turn, names):
+    """(blob, refusals, log lines) with a civ's news orders applied to the
+    galaxy being built."""
+    refusals, lines = [], []
+    for index, flags in orders['flags']:
+        blob = news.set_flags(blob, civ_oid, index, flags)
+        lines.append(f"news item {index}: "
+                     f"{'important' if flags & news.IMPORTANT else 'not important'}")
+    if orders['read']:
+        at = _new_news_at(blob, civ_oid)
+        if at is not None:
+            out = bytearray(blob)
+            out[at] = 0
+            blob = bytes(out)
+            lines.append('news read')
+    sender = str(names.get(civ_oid, civ_oid)).encode('latin-1')
+    for m in orders['messages']:
+        subject = plain_text(m['subject'])
+        body = plain_text(m['body'], BODY_CONTROLS)
+        sent = plain_text(m['sent_title'])
+        label = f"message {m['subject'][:30]!r}"
+        why = None
+        if subject is None or body is None or sent is None:
+            why = 'it holds characters the client cannot show'
+        elif not subject.strip() or not body.strip():
+            why = 'its subject or body is empty'
+        elif len(subject) > SUBJECT_MAX:
+            why = f'its subject is over {SUBJECT_MAX} characters'
+        elif message_rows(body) > MESSAGE_ROWS:
+            why = f"its body is over the send dialog's {MESSAGE_ROWS} rows"
+        elif any(_new_news_at(blob, c) is None for c in m['to']):
+            why = 'a recipient cannot be read'
+        if why:
+            refusals.append(f'{label} DROPPED, {why}')
+            continue
+        next_id, strings = news.read_table(blob)
+        from_id, next_id = news.intern(next_id, strings,
+                                       FROM_TITLE % sender + subject)
+        body_id, next_id = news.intern(next_id, strings, body)
+        to_id, next_id = news.intern(next_id, strings, sent)
+        blob = news.write_table(blob, next_id, strings)
+        for civ in m['to']:
+            blob = news.append_item(blob, civ, news.build_item({
+                'type': news.RECEIVED, 'flags': 0, 'turn': turn,
+                'title': b'', 'body': b'', 'title_id': from_id,
+                'body_id': body_id, 'ids': m['ids'][civ],
+                'position': NO_POSITION}))
+            at = _new_news_at(blob, civ)
+            out = bytearray(blob)
+            out[at] = 1
+            blob = bytes(out)
+        blob = news.append_item(blob, civ_oid, news.build_item({
+            'type': news.SENT, 'flags': m['sent_flags'], 'turn': turn,
+            'title': b'', 'body': b'', 'title_id': to_id, 'body_id': body_id,
+            'ids': m['to'], 'position': NO_POSITION}))
+        lines.append(f"{label} to "
+                     f"{', '.join(str(names.get(c, c)) for c in m['to'])}")
+    return blob, refusals, lines
+
+
 def market_orders(served, sub):
     """([(resource, units)], refusals) for a civ's market trades: how far each
     count moved between the state served and the submission, positive sold.
@@ -4144,6 +4391,19 @@ def merge(blob, submissions, log=print, notes=None, arms=None):
                 blob = set_display(blob, mine, other, raw)
                 log(f"    display of {names.get(other, other)}: "
                     f"{describe_display(raw)}")
+                accepted += 1
+
+            # News: messages to other civs, and its own items marked
+            # important or read.
+            orders, refusals = message_orders(served, sub, mine, names)
+            for why in refusals:
+                drop(why)
+            blob, refusals, lines = take_messages(
+                blob, mine, orders, icv.turn_of(served), names)
+            for why in refusals:
+                drop(why)
+            for line in lines:
+                log(f"    {line}")
                 accepted += 1
 
             # Market trades, after the lump sums. Each is priced from the
