@@ -8,8 +8,11 @@ its radius; a ship's position is its progress along them.
 """
 import math
 
+from . import economy
+from . import state as st
+from . import traits
+
 ORBIT_CLEARANCE = 1.02          # radii between a body's centre and a route's end
-SPEED_TRAIT = 6                 # CVTR index, percent; no capture has a nonzero one
 MOVE, SCOUT, COLONISE = 1, 2, 3
 
 
@@ -20,7 +23,7 @@ def speed(g, ship):
         return 0.0
     v = d.thrust / d.units
     civ = g.civs.get(ship.owner)
-    pct = civ.traits[SPEED_TRAIT] if civ and civ.traits else 0
+    pct = traits.value(civ, traits.SHIP_SPEED) if civ else 0
     return v * (1 + pct / 100) if pct else v
 
 
@@ -73,7 +76,7 @@ def next_system(g, civ, here):
 
 
 def ships(g):
-    for s in g.ships.values():
+    for s in list(g.ships.values()):
         o = s.order
         if o is None or not o.legs:
             continue
@@ -107,5 +110,29 @@ def arrive(g, s):
     elif o.kind == MOVE:
         # Assumed: the client clears a finished move; no capture has one.
         s.order = None
-    # A colonise order waits at the target for the colonisation step, which
-    # no capture has shown yet.
+    elif o.kind == COLONISE:
+        p = g.planets.get(here)
+        if p is not None and not p.owner:
+            colonise(g, s, p)
+
+
+def colonise(g, s, p):
+    """The ship lands its crew as farmers and is gone, in the tick it arrives."""
+    p.owner = s.owner
+    p.citizens = [(economy.FARMER, s.owner)] * len(s.crew)
+    p.military = []
+    p.military_xp = []
+    p.food = (0, economy.food_capacity(len(p.citizens)))
+    p.production = st.Production('WLTH')
+    p.pop_history = [len(p.citizens)] + [0] * (economy.HISTORY_SLOTS - 1)
+    p.history_len = 1
+    p.founded = g.turn + 1
+    p.recruit = 0
+    remove_ship(g, s)
+
+
+def remove_ship(g, s):
+    g.ships.pop(s.oid, None)
+    f = g.fleets.get(s.fleet)
+    if f is not None and s.oid in f.ships:
+        f.ships.remove(s.oid)

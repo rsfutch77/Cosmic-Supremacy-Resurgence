@@ -38,6 +38,8 @@ DYNO_ADMIRAL_FROM_SHCO = 5          # u32, has-orders u8, then the admiral
 ROUT_FIXED_HEAD = 2 + 24            # kind, flag, origin and target
 HISTORY_SLOTS = 8                   # settled block +0: past populations, newest first
 PLPR_MILITARY_COST = 28             # u32 food per soldier, then u32 the military store
+SOLDIER_XP_AT = 1                   # f16 experience in a nine-byte soldier record
+RESEARCH_AFTER_CREDITS = 4          # u32 research store, right after credits
 RADIUS_AT = 20                      # f32 in both SUN and PLNT payloads
 ORE_BEFORE_ENLI = 5                 # u8 resource type then u32 rate, just before ENLI
 
@@ -177,6 +179,8 @@ def _planets(blob, tree, galaxy):
                 gaps.append(f'planet {oid}: people or facilities do not read')
             planet.citizens = [(j, w) for j, w, _e, _r in cz or []]
             planet.military = _people(mil or [])
+            planet.military_xp = [struct.unpack_from('<e', r, SOLDIER_XP_AT)[0]
+                                  for r in mil or []]
             planet.facilities = dict(fac or [])
             planet.food = struct.unpack_from('<II', plpr, mo.FOOD_STORE_OFF)
             planet.recruit = mo.recruit_of(plpr)
@@ -215,10 +219,14 @@ def _civs(blob, galaxy):
         oid = rec['oid']
         civ = st.Civ(oid, rec['name'])
         civ.credits = mo.credits_of(blob, oid)
+        at = rec['id_at'] + mo.CREDITS_AFTER_ID + RESEARCH_AFTER_CREDITS
+        civ.research = struct.unpack_from('<I', blob, at)[0]
+        civ.uid = struct.unpack_from('<I', blob, rec['end'] - 4)[0]
         civ.resources = mo.resources_of(blob, oid)
         civ.completed = mo.completed_research(blob, oid)
         research = mo.research_of(blob, oid)
         civ.topic = struct.unpack('<i', research[0])[0] if research else None
+        civ.goal = struct.unpack('<i', research[1])[0] if research else None
         civ.traits = mo.traits_of(blob, oid)
         if rec['name'] in active:
             civ.active_turn, flag = active[rec['name']]

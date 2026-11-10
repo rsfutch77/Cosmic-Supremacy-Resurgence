@@ -56,7 +56,9 @@ def snapshot(g):
         for i, r in enumerate(civ.resources or []):
             put('economy', e, f'resource {i}', r)
         put('research', e, 'completed', tuple(civ.completed or ()))
-        put('orders', e, 'topic', civ.topic)
+        put('research', e, 'points', civ.research)
+        put('research', e, 'topic', civ.topic)
+        put('research', e, 'goal', civ.goal)
         for other, code in civ.stances.items():
             put('orders', e, f'stance {other}', code)
     for p in g.planets.values():

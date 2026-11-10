@@ -10,12 +10,18 @@ for them and the oracle scores what they leave unchanged.
 """
 import copy
 
+from . import combat
 from . import economy
 from . import movement
+from . import research
 
 STEPS = (                           # (name, function(galaxy)), in tick order
     ('planets', economy.planets),
+    # The turn's science is banked before a topic is checked: a store of
+    # 4706 with 407 coming in paid a 4800 topic in the same tick.
+    ('research', research.civs),
     ('movement', movement.ships),
+    ('combat', combat.battles),
     ('activity', economy.activity),
 )
 

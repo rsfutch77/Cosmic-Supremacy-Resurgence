@@ -142,6 +142,7 @@ class Planet:
     ore_rate: int = None            # ship resource per miner
     citizens: list = field(default_factory=list)    # [(job, owner)]
     military: list = field(default_factory=list)    # [(job, owner)]
+    military_xp: list = field(default_factory=list)  # experience, one per soldier
     facilities: dict = field(default_factory=dict)  # type -> count
     food: tuple = None              # (store, capacity)
     recruit: int = None             # percent of food diverted to recruitment
@@ -167,6 +168,9 @@ class Civ:
     oid: int
     name: str
     credits: int = None
+    research: int = None            # points banked toward the topic, Owner:12
+    uid: int = None                 # Owner:4; 0 leaves research unticked
+    goal: int = None                # second research field, the topic aimed for
     resources: list = None          # tables.RESOURCES order
     completed: list = None          # technology ids
     topic: int = None               # technology being researched, -1 none
