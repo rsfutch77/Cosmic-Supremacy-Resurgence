@@ -140,6 +140,25 @@ def combat_checks():
     check('a light ship at its shipyard mends 15% a turn', g.ships[913].condition, 1.0)
 
 
+def conquest_checks():
+    """The manual's ground combat; no capture has a conquest yet."""
+    for soldiers, want in ((0, (BAD, 2)), (4, (DEMO, 4))):
+        g = galaxy()
+        home = g.planets[HOME]
+        home.facilities = {k: v for k, v in home.facilities.items() if k not in (9, 10, 11)}
+        home.military, home.military_xp = [(3, DEMO)] * soldiers, [0.0] * soldiers
+        for oid in [s.oid for s in g.ships.values() if s.orbit == HOME]:
+            del g.ships[oid]        # any ship in orbit, even unmanned, guards the planet
+        g.designs[903] = st.Design(903, BAD, 'troops', {'chassis': [1], 'scanners': [], 'engines': [0],
+                                                        'weapons': [], 'modules': [], 'shields': []})
+        g.ships[920] = st.Ship(920, BAD, home.pos, 903, [(3, BAD)] * 3, 1.0, orbit=HOME,
+                               crew_xp=[0.0] * 3)
+        g.civs[DEMO].stances[BAD] = g.civs[BAD].stances[DEMO] = combat.WAR
+        combat.battles(g)
+        check(f'troops beyond the crew minimum land against {soldiers} soldiers',
+              (home.owner, len(home.military)), want)
+
+
 def order_checks():
     g = galaxy()
     check('every citizen must be placed', od.set_jobs(g, DEMO, HOME, {0: 1})[0], False)
@@ -177,7 +196,7 @@ def main():
     global BASE
     BASE = sl.load_path(GALAXY)
     for part in (research_checks, colonise_checks, build_checks, loyalty_checks,
-                 combat_checks, order_checks, env_checks):
+                 combat_checks, conquest_checks, order_checks, env_checks):
         part()
     print(f'\n{len(PASS)} passed, {len(FAIL)} failed')
     return 1 if FAIL else 0

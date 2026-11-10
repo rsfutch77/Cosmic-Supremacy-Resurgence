@@ -10,14 +10,20 @@ last; this module reproduces those numbers.
 
 Approximate where the manual is vague and the corpus is silent: fire goes to
 one target at a time, weakest first, where the engine spreads it at random;
-mid-space battles from attack orders, collateral damage and ground combat are
-not modelled yet, and no captured battle had a ranked crew.
+mid-space battles from attack orders and collateral damage are not modelled,
+no captured battle had a ranked crew, and conquest follows the manual with no
+capture to check it: a planet whose defence is bombed to nothing loses its
+turrets and shield generators, and with no defending ships left the crew
+beyond each ship's minimum lands and fights the stationed soldiers.
 """
 from . import economy
 from . import movement
+from . import state as st
 from . import tables as tb
 
 SUB_ROUNDS = 100
+GROUND_ROUNDS = 5
+BUNKER, FORTRESS = 15, 17
 OFF_CLASS = 0.5                 # light fire on heavy ships, and the reverse
 RANK_BONUS = 0.10               # firepower per rank of the ship's crew
 WAR = 1                         # state.STANCES
@@ -111,6 +117,80 @@ def fight(g, p, friends, foes):
             movement.remove_ship(g, u.ship)
         else:
             u.ship.condition = u.hp / u.max
+    if planet.max and planet.hp <= 1e-9:
+        for kind in (LIGHT_TURRET, HEAVY_TURRET, SHIELD_GENERATOR):
+            p.facilities.pop(kind, None)
+    defended = planet.hp > 1e-9 or alive(home)
+    if not defended and alive(away):
+        invade(g, p, [u.ship for u in alive(away)])
+
+
+def troops_aboard(g, ship):
+    """Crew beyond the ship's minimum, the most experienced staying aboard."""
+    d = g.designs[ship.design]
+    need = tb.CHASSIS[d.chassis].crew[0] if d.chassis is not None else 0
+    xp = sorted(ship.crew_xp or [0.0] * len(ship.crew), reverse=True)
+    return xp[need:]
+
+
+def ground_side(xps, bunkers, fortresses):
+    """[(health, fire)] per soldier: 1 and 2, +10% and +20% a rank, and the
+    best-ranked get +100% from each bunker's 4 places and +200% from each
+    fortress's 8."""
+    out = []
+    for i, x in enumerate(sorted(xps, reverse=True)):
+        r = economy.rank(x)
+        boost = 1.0
+        if i < 8 * fortresses:
+            boost = 3.0
+        elif i < 8 * fortresses + 4 * bunkers:
+            boost = 2.0
+        out.append([(1 + 0.1 * r) * boost, (2 + 0.4 * r) * boost])
+    return out
+
+
+def strike(shooters, targets):
+    """A fifth of each side's fire, weakest target first."""
+    fire = sum(f for h, f in shooters if h > 0) / GROUND_ROUNDS
+    for t in sorted((t for t in targets if t[0] > 0), key=lambda t: t[0]):
+        if fire <= 0:
+            break
+        dealt = min(t[0], fire)
+        t[0] -= dealt
+        fire -= dealt
+
+
+def invade(g, p, ships):
+    """Ground combat once the planet's defence and ships are gone, the
+    manual's rules; no capture has shown one. Defenders shoot first in each
+    of five sub-rounds. Winning troops stay as the planet's soldiers."""
+    landing = [(s, x) for s in ships for x in troops_aboard(g, s)]
+    if not landing:
+        return
+    attack = ground_side([x for _s, x in landing], 0, 0)
+    defend = ground_side(p.military_xp or [0.0] * len(p.military),
+                         p.facilities.get(BUNKER, 0), p.facilities.get(FORTRESS, 0))
+    for _round in range(GROUND_ROUNDS):
+        strike(defend, attack)
+        strike(attack, defend)
+    for s in ships:
+        d = g.designs[s.design]
+        need = tb.CHASSIS[d.chassis].crew[0] if d.chassis is not None else 0
+        keep = sorted(s.crew_xp or [0.0] * len(s.crew), reverse=True)[:need]
+        s.crew, s.crew_xp = s.crew[:len(keep)], keep
+    survivors = [x for (_s, x), (h, _f) in zip(landing, attack) if h > 0]
+    held = [x for x, (h, _f) in zip(sorted(p.military_xp or [0.0] * len(p.military),
+                                           reverse=True), defend) if h > 0]
+    if held or not survivors:
+        p.military, p.military_xp = [(economy.MILITARY, p.owner)] * len(held), held
+        return
+    owner = ships[0].owner
+    p.owner = owner
+    p.citizens = [(job, owner) for job, _w in p.citizens]
+    p.military = [(economy.MILITARY, owner)] * len(survivors)
+    p.military_xp = survivors
+    p.production = st.Production('WLTH')
+    p.recruit = 0
 
 
 def alive(units):

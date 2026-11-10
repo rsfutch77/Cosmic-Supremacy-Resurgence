@@ -284,6 +284,37 @@ def trade(g, civ, kind, units):
     return True, ''
 
 
+PART_GRANTS = {1: 'chassis', 2: 'modules', 3: 'weapons', 4: 'engines', 5: 'shields',
+               6: 'scanners'}                   # research grant kind -> part list
+
+
+def unlocked_parts(g, civ):
+    out = {cat: set() for cat in tb.CATEGORIES}
+    for t in g.civs[civ].completed or ():
+        for kind, oid, _v in traits.GRANTS.get(t, ()):
+            if kind in PART_GRANTS:
+                out[PART_GRANTS[kind]].add(oid)
+    return out
+
+
+def design(g, civ, name, parts):
+    """A new design from researched parts that fit one chassis's space. The
+    client gives it the next object id."""
+    if len(parts.get('chassis') or ()) != 1:
+        return False, 'a design takes exactly one chassis'
+    have = unlocked_parts(g, civ)
+    for cat, ids in parts.items():
+        if cat not in have or any(i not in have[cat] for i in ids):
+            return False, f'{cat} not researched'
+    d = st.Design(g.high_water + 1, civ, name,
+                  {cat: list(parts.get(cat) or ()) for cat in tb.CATEGORIES})
+    if d.space_used > d.space:
+        return False, f'the parts need {d.space_used} space and the chassis has {d.space}'
+    g.high_water += 1
+    g.designs[d.oid] = d
+    return True, ''
+
+
 def declare_war(g, civ, other):
     """War is the one stance a civ takes alone; peace needs a treaty."""
     if other not in g.civs or other == civ:
@@ -297,7 +328,7 @@ ACTIONS = {
     'jobs': set_jobs, 'facility': build_facility, 'ship': build_ship,
     'wealth': wealth, 'hurry': hurry, 'research': research, 'recruit': recruit,
     'crew': crew, 'move': move, 'colonise': colonise, 'scout': scout,
-    'trade': trade, 'war': declare_war,
+    'trade': trade, 'war': declare_war, 'design': design,
 }
 
 
