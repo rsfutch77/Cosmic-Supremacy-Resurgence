@@ -1679,12 +1679,12 @@ GUEST_KEPT_TEXT = ("{galaxy} stays with this install's guest, because {why}. "
 # relay's GUEST_ROUTE, on both sign-ins' tokens.
 GUEST_ROUTE = "_guest"
 
-# A guest is warned before it joins or plays a galaxy behind the relay, again
-# after GUEST_WARN_EVERY seconds, until galaxies refuse guests.
+# A guest is warned that galaxies are played by account only before it joins
+# or plays one behind the relay, and again after GUEST_WARN_EVERY seconds.
 GUEST_ONLY_TITLE = "Playing as a guest"
 GUEST_ONLY_TEXT = ("You are playing as this install's guest.\n\nGalaxies "
-                   "will soon be played by account only, and a guest will not "
-                   "be let in. Log in, or create an account, to keep playing. "
+                   "are played by account only, and a guest is not let in. "
+                   "Log in, or create an account, to keep playing. "
                    "The galaxies this install joined as a guest come with you "
                    "when you log in.")
 GUEST_WARN_EVERY = 24 * 3600
@@ -3698,7 +3698,7 @@ class Launcher:
 
     def _guest_ready(self) -> bool:
         """Whether a guest goes on to join or play, after it is warned that
-        galaxies are going account only. An account goes on unasked, and so
+        galaxies are played by account only. An account goes on unasked, and so
         does a guest warned within GUEST_WARN_EVERY. A guest that logs in from
         the warning goes on as the account."""
         ident = account_identity(self.data_dir)

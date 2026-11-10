@@ -310,7 +310,7 @@ check("a galaxy played by account only tells a guest to log in",
 check("and other refusals have none",
       L.refusal_box("this galaxy is closed", "Hal", hal.data_dir), None)
 
-print("\n5d. a guest is warned that galaxies are going account only")
+print("\n5d. a guest is warned that galaxies are played by account only")
 gus, gus_id = make_app("Gus", choose="guest")
 check("a guest is warned before it joins or plays", gus._guest_ready(), True)
 check("in the warning's own words",

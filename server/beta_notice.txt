@@ -6,3 +6,6 @@ Before you join the beta
 - The galaxy may be restarted at any time while we fix bugs
 - There may be game breaking bugs, submit them here:
 https://github.com/rsfutch77/Cosmic-Supremacy-Resurgence
+- The game is for players aged 13 and up
+- What the game keeps about you, and for how long:
+https://cosmicresurgence.com/support_terms.php.html#privacy
