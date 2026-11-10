@@ -108,6 +108,7 @@ class Ship:
     order: Order = None
     admiral: int = 0
     fleet: int = 0                  # the fleet it is in, 0 for none
+    crew_xp: list = field(default_factory=list)     # experience, one per crew member
 
 
 @dataclass

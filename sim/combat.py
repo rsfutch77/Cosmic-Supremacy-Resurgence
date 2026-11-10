@@ -10,15 +10,16 @@ last; this module reproduces those numbers.
 
 Approximate where the manual is vague and the corpus is silent: fire goes to
 one target at a time, weakest first, where the engine spreads it at random;
-mid-space battles from attack orders, ship rank, collateral damage and ground
-combat are not modelled yet.
+mid-space battles from attack orders, collateral damage and ground combat are
+not modelled yet, and no captured battle had a ranked crew.
 """
+from . import economy
 from . import movement
 from . import tables as tb
 
 SUB_ROUNDS = 100
 OFF_CLASS = 0.5                 # light fire on heavy ships, and the reverse
-RANK_BONUS = 0.10               # firepower per crew rank; ranks not read yet
+RANK_BONUS = 0.10               # firepower per rank of the ship's crew
 WAR = 1                         # state.STANCES
 SHIPYARD = 2
 LIGHT_TURRET, HEAVY_TURRET, SHIELD_GENERATOR = 9, 10, 11
@@ -39,9 +40,18 @@ class Unit:
         self.max = d.hitpoints
         self.hp = self.max * ship.condition
         light, heavy, bomb = d.firepower
-        crewed = d.chassis is not None and len(ship.crew) >= tb.CHASSIS[d.chassis].crew[0]
-        self.fire = (light, heavy, bomb) if crewed else (0, 0, 0)
+        need = tb.CHASSIS[d.chassis].crew[0] if d.chassis is not None else 0
+        crewed = d.chassis is not None and len(ship.crew) >= need
+        boost = 1 + RANK_BONUS * ship_rank(ship, need)
+        self.fire = (light * boost, heavy * boost, bomb * boost) if crewed else (0, 0, 0)
         self.armed = crewed and (light or heavy)
+
+
+def ship_rank(ship, need):
+    """The crew's total experience over the crew the ship needs, as a rank."""
+    if not need or not ship.crew_xp:
+        return 0
+    return economy.rank(sum(ship.crew_xp) / need)
 
 
 class Planet:

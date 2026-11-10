@@ -1,7 +1,9 @@
 """
-One simulated turn, in the order the manual's tick page gives:
+One simulated turn, in the order the manual's tick page gives, except that
+research follows the planets because the engine banks a turn's science before
+it checks the topic:
 
-    research, planets (production, growth, food, income), ship movement, combat
+    planets (production, growth, food, income), research, ship movement, combat
 
 Governors and admirals run before and after in the client; the policy stands in
 for both, so the simulator runs neither. Each step is a module that mutates the
@@ -26,9 +28,10 @@ STEPS = (                           # (name, function(galaxy)), in tick order
 )
 
 
-def tick(galaxy, steps=None):
-    """The galaxy one turn later, as a new object."""
-    g = copy.deepcopy(galaxy)
+def tick(galaxy, steps=None, copy_first=True):
+    """The galaxy one turn later, as a new object unless `copy_first` is off,
+    when it is ticked in place, which the training loop does to save the copy."""
+    g = copy.deepcopy(galaxy) if copy_first else galaxy
     for _name, step in (STEPS if steps is None else steps):
         step(g)
     g.turn += 1

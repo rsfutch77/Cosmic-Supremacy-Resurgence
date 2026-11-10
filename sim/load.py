@@ -92,8 +92,10 @@ def _ship(oid, owner, pos, shpr, dyno, fleet, gaps):
                                    len(shpr) - SHPR_CONDITION_FROM_END)[0]
     orbit, order, admiral = (_order(dyno, gaps, f'ship {oid}') if dyno
                              else (0, None, 0))
-    return st.Ship(oid, owner, pos, design, _people(crew or []), condition,
+    ship = st.Ship(oid, owner, pos, design, _people(crew or []), condition,
                    orbit, order, admiral, fleet)
+    ship.crew_xp = [struct.unpack_from('<e', r, SOLDIER_XP_AT)[0] for r in crew or []]
+    return ship
 
 
 def _donor_named(blob, o):
