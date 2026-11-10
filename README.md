@@ -34,15 +34,18 @@ the AI should play, see
 2. **Double-click `CosmicSupremacyLauncher.exe`**
 3. **Pick a mode and click it.**
 
-That's the whole thing. No account, no installer, no internet connection for offline play, and
-nothing to configure. Leave the launcher window open while you play, it is also
-the local game server.
+That's the whole thing. No installer and nothing to configure. The Tutorial,
+the Demo and Single Player need no account and no internet connection. Leave
+the launcher window open while you play, it is also the local game server.
 
-> **You will see "Windows protected your PC" the first time.** That is expected.
-> It appears because the launcher isn't code-signed, which costs a few hundred
-> dollars a year and this is a free fan project. Click **More info**, then
-> **Run anyway**. If you'd rather not take my word for it, the launcher's
-> source is [right here](release/launcher.py) and you can build it yourself.
+The launcher updates itself. When a new release is out, it offers it and
+installs it in place, keeping your login and your saved games.
+
+> **You may see "Windows protected your PC" the first time.** The launcher and
+> the game are code-signed, but a new signature takes time to earn Windows'
+> trust. Click **More info**, then **Run anyway**. If you'd rather not take my
+> word for it, the launcher's source is [right here](release/launcher.py) and
+> you can build it yourself.
 
 ### What you can play
 
@@ -51,26 +54,25 @@ the local game server.
 | **Play the Tutorial** | The original guided walkthrough. Start here if you've never played, it teaches colonising, research, ship design and combat. |
 | **View the Demo** | The original demo galaxy. A look at an advanced game. |
 | **Play Single Player** | A full single-player galaxy against the computer, resolving turns on your own machine at your own pace. Now with the new, smarter Resurgence AI. |
-| **Multiplayer** | Coming soon. Persistent galaxies against other players, the way the original was played. |
+| **Multiplayer** | Persistent galaxies against other players, the way the original was played. Turns resolve every few hours, and the launcher sends your orders. Log in with an email address or a Google account to join one. |
 
 ### Something went wrong?
 
-Click **show log** at the bottom of the launcher, and grab `data\launcher.log`
-and `data\cs_server.log` from the release folder. Those three things are exactly
-what we need, please include them when you
-[open an issue](https://github.com/rsfutch77/Cosmic-Supremacy-Resurgence/issues).
+On the launcher's **Log** tab, press **Send Log** and copy the log reference it
+shows. [Open an issue](https://github.com/rsfutch77/Cosmic-Supremacy-Resurgence/issues)
+with the reference and what you were doing.
 
 ---
 
 ## Status
 
-The client and stub server support fully playable single-player gameplay: ships
-move, turns tick, and saves round-trip correctly. The server handles all 15 game
-API actions with response formats confirmed by binary analysis. Civilisation
-customisation and save/load persistence work. A heuristic AI capable of playing a
-full 4X game is in beta.
+The Tutorial, the Demo and Single Player run entirely on your own PC. Single
+Player is played against the Resurgence AI, a rules-based opponent written for
+this project.
 
-Multiplayer and hosted galaxies are not part of this release. All play is local.
+Multiplayer is in beta on one sandbox galaxy. Fleets, production queues,
+governors, admirals, diplomacy and the market all go through. Messages between
+players do not yet.
 
 ## Help bring it back
 
