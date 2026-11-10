@@ -139,11 +139,14 @@ the oracle always uses load, tick once, capture.
 - `sim/load.py`: a blob into that state, through the `server/dev_tools` readers.
   `python -m sim.load <blob>` prints a summary. Every one of the 263 blobs on disk loads
   with nothing unread, at about 0.1 s for a two-civ galaxy and 0.5 s for 547 planets.
-- `sim/tick.py`: one turn, as steps in the manual's order. No step is written yet, so it
-  only advances the turn.
+- `sim/tick.py`: one turn, as steps in the manual's order. Only the planet step is
+  written.
+- `sim/economy.py`: the planet step: food, corruption and births (§5b).
 - `sim/oracle.py`: the harness of §5. `archive` pairs referee inputs one turn apart,
-  `capture` ticks a blob once on the client, and `score` compares the simulator's tick
-  with the engine's per module. The corpus is `sim/corpus/`, kept out of git.
+  `capture` ticks a blob on the client, chained with `--chain`, and `score` compares the
+  simulator's tick with the engine's per module. The corpus is `sim/corpus/`, kept out of
+  git. A capture takes about 10 s, and ticking the same blob twice gave byte-identical
+  output.
 
 **What a tick changes**, from 29 archive pairs (`score --null`, November 2026): the share
 of fields an unchanged galaxy still matches after one engine tick.
@@ -166,6 +169,33 @@ from a longer game will.
 A design's `SDPR` holds six part lists, each a `u32` count then `u32` part ids: chassis,
 scanners, engines, weapons, modules, shields. The sixth has been empty in all 1,081
 designs on disk.
+
+## 5b. Rules measured
+
+**Food, corruption and births** match every owned planet in the 29 archive pairs exactly,
+26 distinct planet-turns (November 2026). `R` rounds half away from zero.
+
+```
+farmer yield  y = b + R(25 × farms × b / 100), then y + R(food trait × y / 100)
+                  b the planet's base food rate, PLPR+4; food trait CVTR index 2
+gross         farmers × y
+corruption    empire = 100 × atan(planets × 0.025) / (π/2) × (1.5^((rep − 25) / 25) − 1)
+              planet = empire × min(1, pop / (0.75 × max pop)), a negative percent
+              max pop = (space + R(space × space bonus / 100) − lost space) // 10
+food made     gross − R(gross × −planet / 100)
+store         + food made − 10 × pop; full at 40 + 40 × floor((pop − 1)^1.5)
+birth         a full store makes a farmer, carries the excess, and resizes the store
+```
+
+Reputation reads as 0 for these civs, none of which has fought. The formula is the manual's
+corruption page, with planets counted per civ. Capacity follows the current population on
+all 108 planets checked, including just after a birth. The manual's 8-turn average shows
+in the settled block instead: each history word is a past population with bit 12
+(`0x1000`) set on every entry when the planet grows, which reads as "left out of the
+average". A planet that shrinks would tell the two apart.
+
+With this step the 29 archive pairs go from 89 food misses to none, and from 19 citizen
+misses to 3.
 
 ## 6. Open items
 
@@ -191,7 +221,9 @@ designs on disk.
 - [x] Build the oracle harness and scoreboard (§5)
 - [ ] Capture clean pairs on the client (`oracle capture --run-game`): a few hundred
       turns of an AI-played galaxy, so research, market and combat appear in the corpus
-- [ ] Economy module: production, food, income, upkeep, growth, corruption
+- [x] Food, corruption and births (§5b)
+- [ ] Economy module: production, income, upkeep, mining, science, military recruitment
+- [ ] Locate reputation in the blob, so corruption reads it instead of taking 0
 - [ ] Research and market modules
 - [ ] Movement and colonisation modules
 - [ ] Combat from the manual, checked against the Battle Calculator (§4)
