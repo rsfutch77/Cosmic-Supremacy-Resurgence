@@ -215,6 +215,18 @@ The conditional tail is the tell: an unordered ship's DYNO is `4 + 17 + 4 + 1 + 
 
 So pushing an order takes **three coordinated edits**, not one: the SHCO order-type byte, the has-orders byte, and the appended `ROUT` + `u32`. Writing only the `ROUT` leaves the order type at 0. `server/dev_tools/inject_order.py` does all three.
 
+**A scout is the exception: its has-orders byte reads 0 and its `ROUT` is there anyway**
+(November 2026, the Single Player scout from turn 0 and two others). The SHCO byte reads 2,
+the route holds one leg to the next system, and the engine rewrites it on the tick the scout
+arrives. A reader that trusts the has-orders byte misses every scout's route.
+
+**A route's legs stand off each body by 1.02 radii.** The radius is the `f32` at `SUN` and
+`PLNT` own payload `+20`: a sun of radius 3.9276 starts a leg 4.0062 out, and a planet of 1.6
+starts one 1.632 out. The `ROUT` tail after progress holds the ship's position and, while it
+orbits, the id of the body it orbits, 0 once it is moving. Progress is the distance travelled
+along the legs, and the ship's position is exactly that point, so a ship placed off its route
+jumps onto it at the next tick.
+
 **Colonising is a ship order, not an immediate-effect action.** It is the same three edits with the SHCO byte reading **3** where a move writes **1**, so both come off one extraction path. A human given a turn-2 galaxy and asked for one move changed exactly one section of a 37,851-byte blob, that ship's `DYNO`, 38 bytes to 132.
 
 If the owner check at `0x004DA310+0x52` fails, the writer emits a short `INFO` form instead of the full one, which is what the `'INFO'` branch in the reader at `0x004DBBB2` consumes.

@@ -23,6 +23,7 @@ import inject_design as idg                                     # noqa: E402
 import set_blob_player as sbp                                   # noqa: E402
 import facility_rules as fr                                     # noqa: E402
 import activity                                                 # noqa: E402
+import exsy                                                     # noqa: E402
 
 from . import state as st                                       # noqa: E402
 
@@ -37,6 +38,7 @@ DYNO_ADMIRAL_FROM_SHCO = 5          # u32, has-orders u8, then the admiral
 ROUT_FIXED_HEAD = 2 + 24            # kind, flag, origin and target
 HISTORY_SLOTS = 8                   # settled block +0: past populations, newest first
 PLPR_MILITARY_COST = 28             # u32 food per soldier, then u32 the military store
+RADIUS_AT = 20                      # f32 in both SUN and PLNT payloads
 ORE_BEFORE_ENLI = 5                 # u8 resource type then u32 rate, just before ENLI
 
 
@@ -60,10 +62,10 @@ def _order(dyno, gaps, what):
         return orbit, None, 0
     kind = dyno[shco + 8]
     at = shco + SHCO_SIZE + 4
-    has_orders = dyno[at]
     admiral = struct.unpack_from('<I', dyno, at + 1)[0]
     rout = at + DYNO_ADMIRAL_FROM_SHCO
-    if not has_orders or dyno[rout:rout + 4] != b'ROUT':
+    # A scout's has-orders byte reads 0 and its ROUT is there all the same.
+    if dyno[rout:rout + 4] != b'ROUT':
         return orbit, (st.Order(kind) if kind else None), admiral
     version = struct.unpack_from('<I', dyno, rout + 4)[0] >> sp.VERSION_SHIFT
     q = rout + 8 + (2 if version >= 1 else 1)
@@ -149,6 +151,8 @@ def _planets(blob, tree, galaxy):
         sun_id = struct.unpack_from('<I', blob, sun.payload)[0] if sun else 0
         if sun:
             galaxy.suns[sun_id] = struct.unpack_from('<3f', blob, sun.payload + 4)
+            galaxy.radius[sun_id] = struct.unpack_from('<f', blob,
+                                                       sun.payload + RADIUS_AT)[0]
         for sec in sola.find('PLNT'):
             oid, x, z, y, owner = struct.unpack_from('<IfffI', blob, sec.payload)
             nlen = struct.unpack_from('<I', blob, sec.payload + PLNT_NAME_AT)[0]
@@ -159,6 +163,8 @@ def _planets(blob, tree, galaxy):
                                governor=struct.unpack_from('<I', blob,
                                                            sec.end - 4)[0])
             galaxy.planets[oid] = planet
+            galaxy.radius[oid] = struct.unpack_from('<f', blob,
+                                                    sec.payload + RADIUS_AT)[0]
             plpr_sec = next(sec.find('PLPR'), None)
             if plpr_sec is None:
                 continue
@@ -225,6 +231,20 @@ def _civs(blob, galaxy):
         galaxy.civs[oid] = civ
 
 
+def _explored(blob, tree, galaxy):
+    by_offset = {rec['off']: rec['oid'] for rec in icv.owner_records(blob)}
+    for ownr in tree[0].find('OWNR'):
+        civ = galaxy.civs.get(by_offset.get(ownr.start))
+        if civ is None:
+            continue
+        for sec in ownr.find('EXSY'):
+            try:
+                civ.explored = {r['system'] for r in
+                                exsy.parse(bytes(blob[sec.payload:sec.end]))}
+            except ValueError:
+                galaxy.gaps.append(f'civ {civ.oid}: EXSY does not read')
+
+
 def _designs(blob, galaxy):
     for oid, d in mo.design_index(blob).items():
         if d['parts'] is None:
@@ -288,8 +308,8 @@ def _load(blob):
         content_version=sbp.get_content_version(blob),
         market=mo.market_of(blob),
         high_water=struct.unpack_from('<I', blob, HIGH_WATER_AT)[0],
-        suns={}, civs={}, planets={}, ships={}, fleets={}, designs={},
-        treaties={})
+        suns={}, radius={}, civs={}, planets={}, ships={}, fleets={},
+        designs={}, treaties={})
     if galaxy.market is None:
         galaxy.gaps.append('market does not read')
     _civs(blob, galaxy)
@@ -297,6 +317,7 @@ def _load(blob):
     _planets(blob, tree, galaxy)
     _space_objects(blob, galaxy)
     _treaties(blob, galaxy)
+    _explored(blob, tree, galaxy)
     for ship in galaxy.ships.values():
         if ship.design not in galaxy.designs:
             galaxy.gaps.append(f'ship {ship.oid}: design {ship.design} not held')

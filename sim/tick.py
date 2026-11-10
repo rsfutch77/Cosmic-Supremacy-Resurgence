@@ -11,9 +11,11 @@ for them and the oracle scores what they leave unchanged.
 import copy
 
 from . import economy
+from . import movement
 
 STEPS = (                           # (name, function(galaxy)), in tick order
     ('planets', economy.planets),
+    ('movement', movement.ships),
     ('activity', economy.activity),
 )
 

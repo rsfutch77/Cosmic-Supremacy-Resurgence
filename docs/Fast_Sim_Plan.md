@@ -220,8 +220,10 @@ engine's.
 | credits | 427 | 75 |
 | production progress | 155 | 0 |
 | ship resources | 105 | 0 |
+| ship positions | 164 | 6 |
 
-The 89 food misses are the two planets above. Movement (164 positions) is next.
+The 89 food misses are the two planets above. The 6 position misses are two ships the
+engine destroyed in battle at turn 110, which the simulator, having no combat yet, moves.
 
 **Production, mining and income** match every active civ exactly, and idle civs to within a
 credit or two (November 2026). They run before food, on the citizens the turn began with.
@@ -251,6 +253,33 @@ plays never meets either. Stationed soldiers cost nothing in any capture.
 Not covered yet: ship and scan completion, queues past their first item, hurrying, and
 science, none of which a chained capture exercises.
 
+**Movement** matches every ship the engine kept, on every pair (November 2026).
+
+```
+speed         thrust / hull units, the design screen's figure; ship-speed trait CVTR 6
+              as a percent, untested
+route         straight legs in ROUT; each leg ends 1.02 radii off its body's centre,
+              the radius at SUN and PLNT payload +20
+progress      + speed each tick; the position is that far along the legs, wherever the
+              ship stood before
+arrival       when progress reaches the route's length the ship sits at the body's
+              centre and orbits it
+scout         on arrival it enters the system (EXSY) and sets out for the nearest
+              system its civ has not entered, starting at progress 0 from the centre
+```
+
+A scout carries its `ROUT` with the has-orders byte at 0, which is why the loader missed it
+before. The three scouts in the corpus chose four systems inside captures, and each was the
+nearest one their civ had not entered. The Single Player scout's first target was set before
+turn 0 and is not the nearest.
+
+Not covered yet: what a finished move or colonise order leaves behind. The only ships in the
+corpus that reach the end of a route are destroyed in the same tick. The simulator clears a
+finished move and holds a colonise order at its target.
+
+A simulated tick takes about 11 ms on a 547-planet galaxy and 3 ms on the Single Player
+galaxy, against about 10 s for the engine's tick through the client.
+
 ## 6. Open items
 
 - [ ] Stamp a content version below 639 into served blobs (Stat Tables §8.1), so the
@@ -264,7 +293,8 @@ science, none of which a chained capture exercises.
       planet but cannot attack
 - [ ] Find what the engine does when a civ cannot pay upkeep, with an oracle run, so `S`
       discounts an unpaid fleet the way the game does
-- [ ] Set a speed target after profiling the first economy-only tick
+- [ ] Set a speed target: an economy-and-movement tick takes 11 ms on 547 planets (§5b),
+      most of it the galaxy copy
 - [x] Build the blob loader for the simulator's state subset: `GLOB`, owners, planets,
       ships and fleets, designs, treaties
 - [x] Confirm the `SHPR` tail `f32` is condition: a ship damaged at turn 110 read 0.9238
@@ -284,7 +314,9 @@ science, none of which a chained capture exercises.
 - [ ] Find income's exact idle step: 1/144 a turn leaves idle civs 1 or 2 credits off
 - [ ] Locate reputation in the blob, so corruption reads it instead of taking 0
 - [ ] Research and market modules
-- [ ] Movement and colonisation modules
+- [x] Movement: speed, routes, arrival and the scout's next system (§5b)
+- [ ] Capture finished move and colonise orders, and fit colonisation: needs orders given
+      on the client
 - [ ] Combat from the manual, checked against the Battle Calculator (§4)
 - [ ] Minimal reputation and loyalty, fitted against conquest captures
 - [ ] Fog: what each civ's observation may contain, matching the client's scan rules

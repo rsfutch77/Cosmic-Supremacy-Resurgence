@@ -173,6 +173,7 @@ class Civ:
     traits: tuple = None
     active_turn: int = None         # SERV baseline, the turn last seen active
     active: bool = False            # SERV flag, set while active this turn
+    explored: set = field(default_factory=set)      # EXSY, system ids entered
     stances: dict = field(default_factory=dict)     # other civ -> STANCES code
 
 
@@ -194,6 +195,7 @@ class Galaxy:
     market: list                    # units the market holds, tables.RESOURCES order
     high_water: int                 # highest object id in use
     suns: dict                      # sun id -> pos
+    radius: dict                    # sun or planet id -> radius
     civs: dict
     planets: dict
     ships: dict                     # every ship, in a fleet or not
