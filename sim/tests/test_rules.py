@@ -153,6 +153,11 @@ def order_checks():
           (od.crew(g, DEMO, 193, 2), sorted(g.ships[193].crew_xp), len(g.planets[HOME].military)),
           ((True, ''), [1.0, 2.5], 1))
     check('someone else\'s ship takes no orders', od.move(g, DEMO, 197, HOME)[0], False)
+    metal, credits, held = g.civs[DEMO].resources[0], g.civs[DEMO].credits, g.market[0]
+    ok, _ = od.trade(g, DEMO, 0, 100)
+    check('selling 100 metal pays the engine\'s quote and fills the market',
+          (ok, g.civs[DEMO].credits - credits, g.civs[DEMO].resources[0], g.market[0]),
+          (True, sl.mo.market_total(0, 100, held, 0), metal - 100, held + 100))
 
 
 def env_checks():

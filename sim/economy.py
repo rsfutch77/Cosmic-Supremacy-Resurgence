@@ -359,9 +359,8 @@ def food(p, civ, bonus, empire, idle=0.0, corruption=None):
 
 def recruit(p, food):
     """The recruitment share goes to the military store, which makes a soldier
-    each time it fills. Approximate: on a civ inactive for 38 turns this
-    matches the military store, and the civilian store comes out 1 to 3 food
-    under the engine's."""
+    each time it fills. Both stores match on 67 of 72 recruiting planet-turns;
+    the rest are 1 food off on an idle civ."""
     p.military_food += food
     while p.military_cost and p.military_food >= p.military_cost:
         p.military_food -= p.military_cost

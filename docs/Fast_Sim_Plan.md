@@ -139,9 +139,21 @@ the oracle always uses load, tick once, capture.
 - `sim/load.py`: a blob into that state, through the `server/dev_tools` readers.
   `python -m sim.load <blob>` prints a summary. Every one of the 263 blobs on disk loads
   with nothing unread, at about 0.1 s for a two-civ galaxy and 0.5 s for 547 planets.
-- `sim/tick.py`: one turn, as steps in the manual's order. Only the planet step is
-  written.
-- `sim/economy.py`: the planet step: food, corruption and births (§5b).
+- `sim/tick.py`: one turn: planets, research, movement, combat, then the activity flag.
+  `copy_first=False` ticks in place for the training loop.
+- `sim/economy.py`: the planet step: food, corruption and loyalty, births, recruitment and
+  training, production and builds, mining, science, income and upkeep (§5b).
+- `sim/research.py`: completion, costs and the walk toward a goal, with the technology table.
+- `sim/movement.py`: routes, arrival, scouting and colonisation.
+- `sim/combat.py`: battles at hostile planets and repair at shipyards.
+- `sim/traits.py`: a civ's engine traits, its custom-civ values plus research grants.
+- `sim/orders.py`: the actions a civ may take, refused where the client's screens refuse
+  them: jobs, facility, ship, Wealth, hurry, research, recruit, crew, move, colonise, scout,
+  trade and war.
+- `sim/reward.py`: dominance `D` (§1a).
+- `sim/env.py`: `reset` and `step` for training, with a fog-limited observation.
+- `sim/baseline.py`: a scripted civ to train against and to smoke-test with.
+- `sim/viewer.py`: `python -m sim.viewer <blob> --turns N -o run.html` writes a replay page.
 - `sim/oracle.py`: the harness of §5. `archive` pairs referee inputs one turn apart,
   `capture` ticks a blob on the client, chained with `--chain`, and `score` compares the
   simulator's tick with the engine's per module. The corpus is `sim/corpus/`, kept out of
@@ -204,9 +216,9 @@ match exactly. At about 20%, on the war blobs, one planet comes out 1 food high 
 turns, a rounding step not yet found. A civ the policy plays is active every turn and never
 reaches it.
 
-Recruitment is approximate. On the one recruiting planet in the corpus, an inactive civ at
-turn 110, the military store matches and the civilian store comes out 1 to 3 food under the
-engine's.
+Recruitment matches. The civilian store's 1 to 3 food shortfall on the turn-110 recruiting
+planet was the loyalty bonus from its stationed soldiers (below). With that in, both stores
+match on 67 of 72 recruiting planet-turns, and the other 5 are 1 food off on an idle civ.
 
 **Score on the 214 captured pairs**, simulator tick against the null tick:
 
@@ -273,9 +285,93 @@ before. The three scouts in the corpus chose four systems inside captures, and e
 nearest one their civ had not entered. The Single Player scout's first target was set before
 turn 0 and is not the nearest.
 
-Not covered yet: what a finished move or colonise order leaves behind. The only ships in the
-corpus that reach the end of a route are destroyed in the same tick. The simulator clears a
-finished move and holds a colonise order at its target.
+A finished move leaves the ship in orbit of its target with no order. A finished colonise
+order founds the colony in the same tick (below). A ship's `ROUT` holds two leg lists: the
+route still to fly, which progress runs along, and the path already flown. A fleet's ships
+share one order and move at the slowest member's speed.
+
+Speed is thrust over units, raised by the civ's ship-speed trait as a percent: engine trait
+18, the custom trait at `CVTR` 6 plus research grants. A +13 trait moved ships 1.13 times as
+far, and +9 with Doctrine: Mobility's +20 moved them 1.29 times.
+
+**Order-driven captures** (November 2026): 168 more engine ticks with no failures. 55 turns
+of the referee archive's join galaxy, with two colonisations and a finished move. 20 turns
+of the live Beta galaxy, with six civs, governors, shared production queues, ship builds
+and hurries. Fixtures with ship and scan builds. Four research probes, in which each civ
+held 5,000,000 research points and a deep goal, so every tick paid for one technology.
+
+**Colonisation.** The ship lands its crew as farmers and is gone. The planet takes the
+civ, an empty store sized for the crew, no facilities, Wealth, one history slot, and the
+next turn as its founding.
+
+**Research.** The research store sits 4 bytes after credits in the civ's record and grows
+by the turn's science: scientists times the planet's science rate, universities +25% and
+science labs +60% each, engine trait 4, corruption, and inactivity at food's half rate.
+Science is banked before the topic is checked: a store of 4,706 with 407 coming in paid a
+4,800 topic in the same tick. A civ finishes at most one technology a tick. The cost is
+`round(800 x factor) x technologies done`, and the probes confirmed the factor of every
+technology they reached, 31 of them. With a goal deeper in the tree, the topic walks the
+goal's missing prerequisites, cheapest available first and the lower id on a tie, and topic
+and goal both clear when the goal is done. A doctrine needs one doctrine from each tier
+its list names: the probe went Mobility, then Knowledge, then Stealth. A civ whose last
+`OWNR` word (`Owner:4`) is 0 gains no research at all.
+
+**Ship builds.** A ship costs its design's production, plus, for a design with a colony
+module, 100 for every planet and colony ship the civ has, less one. That fits four builds
+exactly and one at 100 over. Resources are charged when the build is ordered, not when it
+finishes. A finished ship appears in orbit with no crew, full condition and no order, under
+the next object id, and the planet falls to Wealth with the excess. Its upkeep starts the
+next tick. A ship build's design is the payload of the `SHIP` section that ends `PROD`,
+whose length varies with its queue links. Hurrying costs 4 credits per point left and fixes
+progress at the cost, so the item finishes the next tick with that tick's production carried
+over: the Beta governor's three hurries charged exactly 1,660, 852 and 1,228.
+
+**Facilities a planet finishes work from the next tick**: food, mining and upkeep use the
+facilities the turn began with.
+
+**Stationed soldiers.** Each costs 3 credits a turn, as a crew member does. A soldier's
+experience is the 16-bit float in bytes 1 and 2 of its record. It grows 0.1 a turn, doubled
+by a Military Camp and again by an Academy, up to 2^4 or 2^6. Rank is 1 at 2 experience and
+doubles from there. Soldiers raise a loyal planet's output by the manual's formula: with `n`
+soldiers, each counting 1 + 0.2 x rank, the effective number is
+`n x (0.2 + 0.8 / (1 + 0.0005 n^2)) / 2`. That gives a bonus of 10% x effective /
+population, added to the planet's corruption. Four soldiers on 24 farmers gave the 20 food
+the engine made beyond the simulator's earlier figure, and the war blobs' recruitment
+mismatch was this bonus.
+
+**Combat.** The manual's mechanics, checked against the one battle in the corpus. Each side
+fires a hundredth of its firepower in each of 100 sub-rounds. Light fire hits light ships
+first and heavy ships at half effect, and heavy fire the reverse. A planet's turrets fire
+with the defenders. Unarmed ships, which includes bombers and ships short of crew, are hit
+last. Bombs wear down the planet's defence hitpoints. The defenders killed the armed
+fighter in its 8th sub-round, and its 0.4 a sub-round took 3.2 off a 42-unit defender,
+leaving 0.9238, as the engine had it. The simulator aims at one target at a time, weakest
+first, where the engine spreads fire at random. A light ship at its own shipyard mends 15%
+a turn, from the tick after the battle. Rank adds 10% firepower per rank of the crew's
+experience over the crew the ship needs.
+
+**Governors** move jobs and set builds at the end of a tick, after production. They are
+policy, which the agent replaces, so their choices show up as `orders` misses.
+
+**Score on all 411 pairs**, simulator against no change at all:
+
+| Module | Fields | No change | Simulator |
+|---|---|---|---|
+| economy | 15,482 | 77.4% | 98.6% |
+| growth | 9,708 | 76.9% | 96.1% |
+| research | 5,164 | 83.1% | 98.4% |
+| movement | 7,888 | 83.2% | 99.8% |
+| colonisation | 100,179 | 100.0% | 100.0% |
+| combat | 3,944 | 98.7% | 99.8% |
+| orders | 11,394 | 95.6% | 99.1% |
+
+What remains, by cause:
+- **Population history:** 364 misses in the referee galaxies, whose rewritten homeworlds
+  keep the history differently.
+- **Credits:** 144 misses, all idle civs, 1 to 3 credits each.
+- **Research points:** 84 misses, idle-civ rounding and doctrine science effects.
+- **Food:** 55 misses, idle-civ rounding.
+- **Jobs and builds:** governor choices.
 
 A simulated tick takes about 11 ms on a 547-planet galaxy and 3 ms on the Single Player
 galaxy, against about 10 s for the engine's tick through the client.
@@ -284,8 +380,8 @@ galaxy, against about 10 s for the engine's tick through the client.
 
 - [ ] Stamp a content version below 639 into served blobs (Stat Tables §8.1), so the
       simulator and the client use the same released tables
-- [ ] Re-dump the research table on a released-version client and settle the cost model
-      (Stat Tables §8.2)
+- [x] Settle the research cost model: the probes confirmed `round(800 x factor) x done`
+      for every one of 31 technologies, so the AI player's table holds at 565
 - [ ] Check that `D` predicts who wins: pit civs of known `D` against each other in the
       simulator and confirm the higher one wins most wars (§1a)
 - [ ] Choose `K` from measured fleet travel times between rival homeworlds
@@ -293,33 +389,45 @@ galaxy, against about 10 s for the engine's tick through the client.
       planet but cannot attack
 - [ ] Find what the engine does when a civ cannot pay upkeep, with an oracle run, so `S`
       discounts an unpaid fleet the way the game does
-- [ ] Set a speed target: an economy-and-movement tick takes 11 ms on 547 planets (§5b),
-      most of it the galaxy copy
+- [ ] Set a speed target: a full tick in place takes about 0.3 ms on the Single Player
+      galaxy; with a copy, 11 ms on 547 planets
 - [x] Build the blob loader for the simulator's state subset: `GLOB`, owners, planets,
       ships and fleets, designs, treaties
 - [x] Confirm the `SHPR` tail `f32` is condition: a ship damaged at turn 110 read 0.9238
 - [ ] Confirm the sixth `SDPR` part list is shields (Reconstruction Report, `DSGN`)
-- [ ] Locate the research stockpile (`Owner:12`) and score in the blob, which the loader
-      does not read yet
+- [x] Locate the research store: 4 bytes after credits in the civ's record
+- [ ] Locate score (`Owner:28`) and the +10-a-planet-a-turn accumulator (`Owner:24`) in the
+      blob
 - [x] Build the oracle harness and scoreboard (§5)
 - [x] Capture clean pairs on the client: 214 pairs, from the 35 distinct referee inputs, an
       80-turn chain, four war blobs and the Single Player start, none failed
-- [ ] Capture a game with research completing and market trades: no pair in the corpus has
-      either, since nobody gives orders in a chained capture
-- [ ] Find the inactivity rounding step and the exact civilian share under recruitment (§5b)
+- [x] Capture a game with research completing: the four probes and the Beta galaxy
+- [x] Market trades as an order, priced by `merge_orders.market_total`; the referee settles
+      them between ticks, so the engine tick has no market rule to capture
+- [ ] Find the inactivity rounding step: idle civs land 1 food off on some turns, and 5 of
+      72 recruiting planet-turns; the civilian share itself was the loyalty bonus (§5b)
 - [x] Food, corruption, inactivity, births, the store size and recruitment (§5b)
 - [x] Production, mining, income and upkeep (§5b)
-- [ ] Science, ship and scan completion, queues past the first item and hurrying: needs a
-      capture where orders are given
+- [x] Science, ship completion and hurrying (§5b)
+- [ ] Scan builds, and queues past their first item (the agent sets builds each turn, so
+      only the oracle needs these)
+- [ ] Doctrine and golden-age effects on science: 3 to 24 points a turn on one probe civ
+- [ ] Pin the colony ship surcharge: one build of five came out 100 over
 - [ ] Find income's exact idle step: 1/144 a turn leaves idle civs 1 or 2 credits off
 - [ ] Locate reputation in the blob, so corruption reads it instead of taking 0
-- [ ] Research and market modules
+- [x] Research module (§5b)
 - [x] Movement: speed, routes, arrival and the scout's next system (§5b)
-- [ ] Capture finished move and colonise orders, and fit colonisation: needs orders given
-      on the client
-- [ ] Combat from the manual, checked against the Battle Calculator (§4)
-- [ ] Minimal reputation and loyalty, fitted against conquest captures
-- [ ] Fog: what each civ's observation may contain, matching the client's scan rules
-- [ ] Shared observation and action interface, client backend included
-- [ ] Viewer page for checking a run by eye
+- [x] Finished move and colonise orders, and colonisation (§5b)
+- [x] Combat from the manual, checked against the corpus's one battle (§5b)
+- [ ] More battles: heavy ships, shields, ranked crews, bombing that destroys turrets,
+      conquest and ground combat, mid-space attacks; the Battle Calculator can supply them
+- [x] Loyalty from stationed soldiers, their training and upkeep (§5b)
+- [ ] Reputation, conquered planets' loyalty and rebellion
+- [ ] Fog to the client's rules: the observation shows explored systems as they stand now
+      and other ships within scanner range, where the client shows a system as last seen
+- [x] Observation and action interface on the simulator (`sim/env.py`, `sim/orders.py`)
+- [ ] The client backend of the same interface: actions to `merge_orders` submissions
+- [x] Viewer page for checking a run by eye (`sim/viewer.py`)
+- [ ] Recruitment cap: 20% plus 20% with a Military Camp fits the captured rates, unconfirmed
+- [ ] Drafting citizens into soldiers for credits, retiring soldiers, peace treaties
 - [ ] First real-client evaluation of a sim-trained policy

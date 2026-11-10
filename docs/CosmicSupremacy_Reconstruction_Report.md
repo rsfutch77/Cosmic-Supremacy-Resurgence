@@ -110,11 +110,20 @@ Two consequences worth keeping in mind:
     +40+9n        u32 stationed-military count, then that many records of the
                   same nine-byte shape. A ship carries its crew in the same
                   form, SHPR+4 the count and SHPR+8 the records, and a record
-                  moves between the two byte for byte.
-    +167          PROD, the production queue, 29 bytes; its payload carries
-                  the queue's own fields, at +29 the object id of what is
-                  being built, and a nested section naming it, FCLT for a
-                  facility
+                  moves between the two byte for byte. In a soldier's or crew
+                  member's record, `+1..+2` is an f16, its experience: it
+                  rose 0.2 a turn on a planet with a Military Camp, the
+                  manual's 0.1 doubled, and a new soldier's reads 0
+                  (November 2026, the live Beta galaxy). It reads zero in a
+                  citizen's record because citizens do not train.
+    +167          PROD, the production queue, 29 bytes when the planet is in
+                  no queue; its payload carries the queue's own fields, the
+                  object id of what is being built, and a nested section
+                  naming it, FCLT for a facility. A queued planet's PROD is
+                  longer (41, 49 and 53 bytes seen) by fields not decoded, so
+                  no fixed offset finds the design: a ship build's design id
+                  is the payload of the SHIP section that ends PROD, its last
+                  4 bytes
     +255          ENLI, 4 bytes
 
 `WLTH` appears inside `PROD`'s payload rather than beside it, and is replaced by `FCLT` when a facility is queued. The rest of `PLPR` is undecoded and mixes the planet's population, stores and derived economy with the job decision, which is why a submitted job change is carried as the citizen array alone and never as the whole section.
@@ -192,7 +201,7 @@ Fixed part 54 bytes; total `54 + 28 × (both leg counts)`. Each leg is `[originX
 
 This also **resolves two previously separate readings of the order object into one structure.** The writer hands both `+28` and `+52` to the *same* helper `0x004E5200`, which reads `_Myfirst`/`_Mylast` at `+0xC`/`+0x10` of whatever it is given and divides the span by 28. So `+28` and `+52` are two objects of the same type, each holding a 28-byte-element vector 12 bytes into itself, which is exactly why the known route-leg vector sits at `+40/+44/+48`.
 
-- **Falsifiable prediction, not yet tested:** there is a **second leg vector at `+64/+68/+72`**. On a live order, `(_Mylast − _Myfirst)` there should be a multiple of 28.
+- **Confirmed: the second leg vector is the path already flown** (November 2026, the live Beta galaxy). A colony ship with a 183.95 leg in the first list and a 76.27 leg in the second stood exactly 183.06 from the first leg's origin at progress 183.06, and the second leg ended where the first began. Progress runs along the first list alone, so a ship arrives when progress reaches the first list's length.
 - **The intrusive list nodes are not persisted.** The helper touches only the vector, and the reader constructs both `+28` and `+52` from scratch via `0x004A6D30`. An injected `ROUT` therefore supplies leg vectors only, and the engine rebuilds the node chains that make this object impossible to fabricate by hand.
 - **One asymmetry to watch:** the writer emits the reference id raw, but the reader **adds the global at `0x00857C58`** to any non-zero id before resolving it through the object registry (`0x004D9CA0`). Injected ids may need to be written relative to that base.
 

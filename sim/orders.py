@@ -11,6 +11,7 @@ for crew.
 Rules a capture has not confirmed say so where they are applied.
 """
 from . import economy as ec
+from . import load as sl
 from . import movement as mv
 from . import research as rs
 from . import state as st
@@ -255,6 +256,34 @@ def scout(g, civ, ship):
     return _go(g, civ, ship, nxt, mv.SCOUT)
 
 
+def trade(g, civ, kind, units):
+    """Sell (units > 0) or buy (units < 0) a ship resource at the market,
+    priced lot by lot as the engine quotes it (merge_orders.market_total)."""
+    mo = sl.mo
+    c = g.civs[civ]
+    if g.market is None or not 0 <= kind < len(g.market) or not units:
+        return False, 'no such trade'
+    held = g.market[kind]
+    bonus = mo.market_trait(c.completed or [])
+    if units > 0:
+        if c.resources[kind] < units:
+            return False, 'not that much in store'
+        c.credits += mo.market_total(kind, units, held, bonus)
+        c.resources[kind] -= units
+        g.market[kind] = held + units
+    else:
+        n = -units
+        if held < n:
+            return False, 'the market does not hold that much'
+        price = mo.market_total(kind, n, held, bonus, buying=True)
+        if c.credits < price:
+            return False, f'it costs {price} credits'
+        c.credits -= price
+        c.resources[kind] += n
+        g.market[kind] = held - n
+    return True, ''
+
+
 def declare_war(g, civ, other):
     """War is the one stance a civ takes alone; peace needs a treaty."""
     if other not in g.civs or other == civ:
@@ -268,7 +297,7 @@ ACTIONS = {
     'jobs': set_jobs, 'facility': build_facility, 'ship': build_ship,
     'wealth': wealth, 'hurry': hurry, 'research': research, 'recruit': recruit,
     'crew': crew, 'move': move, 'colonise': colonise, 'scout': scout,
-    'war': declare_war,
+    'trade': trade, 'war': declare_war,
 }
 
 
