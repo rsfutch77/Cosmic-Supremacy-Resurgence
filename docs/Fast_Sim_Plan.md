@@ -156,6 +156,10 @@ the oracle always uses load, tick once, capture.
 - `sim/warlike.py`: the baseline plus a fleet and an invasion on a chosen turn, for
   checking the reward against who actually wins.
 - `sim/viewer.py`: `python -m sim.viewer <blob> --turns N -o run.html` writes a replay page.
+- `sim/traits.py`: all 46 engine traits by name, from `client/dev_tools/ejbo_annotations.json`.
+- `sim/renown.py`: score, reputation and crew experience from battles.
+- `sim/fog.py`: what each civ has seen, refreshed as the client refreshes `EXSY`.
+- `sim/scans.py`: scans built at a Central Defense Agency and spent for reports.
 - `sim/oracle.py`: the harness of §5. `archive` pairs referee inputs one turn apart,
   `capture` ticks a blob on the client, chained with `--chain`, and `score` compares the
   simulator's tick with the engine's per module. The corpus is `sim/corpus/`, kept out of
@@ -381,8 +385,10 @@ place, as the training loop runs it. The engine's tick through the client takes 
 
 **Conquest**, from the manual, with no capture to check it. A planet whose defence
 hitpoints are bombed to nothing loses its turrets and shield generators. Once no defending
-ship is left in orbit (an unmanned one still counts), the crew beyond each ship's minimum
-lands. Each soldier has 1 health and 2 firepower, and each rank adds 10% health and 20%
+ship is left in orbit (an unmanned one still counts), the soldiers aboard ships with a Troop
+Bay land, everyone beyond the crew the ship needs to fly. Pilots of other ships never land:
+the ship components page says a Troop Bay "allows you to conquer hostile planets" and seats
+5 troopers, and a Large Pilot Cabin seats 4 more crew, who only raise the ship's rank. Each soldier has 1 health and 2 firepower, and each rank adds 10% health and 20%
 firepower. Bunkers and fortresses add 100% and 200% for the best-ranked soldiers. The
 defenders shoot first in each of five sub-rounds, and the winning troops stay as the
 planet's soldiers.
@@ -397,16 +403,69 @@ soldiers on every planet is harder to destroy than its fleet suggests, and a fle
 troop capacity cannot take anything. The baseline also builds warships it never crews, and
 those count for nothing in `S` although they must be destroyed before a landing.
 
+**Ground strength in D** (November 2026). D is now the geometric mean of three shares:
+fleet strength `S`, ground strength `T` (soldiers' firepower times health, on planets and
+aboard troop ships, by the ground combat rules) and surge `G`. Ten games with troop ships:
+landings took ungarrisoned colonies three times in four and failed against 10% recruitment
+every time, and an attacker without troopers took nothing. **D still rated the attacker near
+0.78 and the defender near 0.008 in every game**, because a defender with no crewed fleet
+has a share of `S` near zero, and a geometric mean multiplies that into everything. D
+measures standing across the galaxy; whether a given attack succeeds is a pairwise question
+of troops against garrison that shares do not answer. The options are in the open items.
+
+**Traits.** The client's trait list named all 46 engine traits by offset
+(`client/dev_tools/ejbo_annotations.json`), and `sim/traits.py` applies each where its name
+says. The custom-civ traits are engine traits 0 to 9 in order, so ship speed is engine 6 for
+every ship, and engine 18 is light ships only. Measured: science wastage is trait 39, and
+Doctrine: Knowledge's -7 turned the probe's 40 science into 43. A golden age adds 50 to the
+food, production, science and mining traits, and the probe's 40 science became 64 (40 x 1.5
+x 1.07). The golden age's turns left are the `u32` at `CVTR` payload `+12`, which read 99,
+98, 97 on the turns after the doctrine. Every other trait's effect follows its name and is
+unchecked: food eaten and income per citizen add to 10, the rest are percents.
+
+**Loyalty of conquered planets**, from the manual. A conquered planet's people stay loyal
+to their old ruler in proportion to how long it held them, up to 100 turns. Loyalty grows 1
+point a turn plus 10% of the planet's effective soldiers per citizen, and a citizen born
+there is wholly loyal. A resisting planet loses its shortfall below 100% from its output,
+and below 30% for more than three turns it may rebel back. The client's loyalty field was
+never found, so a loaded planet reads 100%. Propaganda offices raise a loyal planet's output
+10% for 10 citizens each.
+
+**Score, reputation and crew experience**, from the manual. Crew experience is measured:
+the turn-110 battle's defending fighters gained 1.847 each, 2 x 545 / 590, which is every kind
+of firepower the enemy had over every kind its own side had, its turret included, and the
+unarmed colony ship's crew gained nothing. Score and reputation follow the manual's page and
+are counted for the reward. They change no rule: the client keeps reputation per relation
+and never reads it in play (Memory Reconstruction Report), so corruption stays as the client
+computes it.
+
+**Fog** (measured on `EXSY`). A civ's row for a system is refreshed every turn it owns a
+planet there, and every turn a planet of the system is within the scanner range of one of
+its ships: the scout's 30-unit scanner refreshed a system from a planet 19.3 away and not
+from 32.6 away. Otherwise the row keeps the turn and the owners and populations it last
+saw. A civ whose `Owner:4` is 0 keeps its rows frozen unless it is the civ the client plays
+as, read from `GLOB`; its research freezes either way. Scored as the `fog` module on all
+pairs, 99.6%. Ships are seen within scanner range, cloaked ones at 40% of it, from the
+manual.
+
+**Scans**, from the manual. They're built at a Central Defense Agency for 3,500 to 20,000
+production and kept in stock. A planetary scan shows facilities, production, jobs and
+soldiers. A technology scan shows research. Military, route and fleet scans show ships. A
+system scan gives 8 turns of sight. A scan is spotted half the time, and half of those the
+target learns who sent it. Which research unlocks which scan id is the technology table's;
+which id is which scan is inferred beyond route (2) and fleet (3).
+
 ## 6. Open items
 
 - [ ] Stamp a content version below 639 into served blobs (Stat Tables §8.1), so the
       simulator and the client use the same released tables
 - [x] Settle the research cost model: the probes confirmed `round(800 x factor) x done`
       for every one of 31 technologies, so the AI player's table holds at 565
-- [ ] Check that `D` predicts who wins: the first 16 self-play games show it does not see
-      garrisons or troop capacity (§5b, "First check of the reward"). Decide whether `S` adds
-      ground strength (troops a civ can land, soldiers holding its planets), then repeat with
-      a learned policy
+- [x] Add ground strength to D (§5b, "Ground strength in D")
+- [ ] Decide how D combines its parts: the geometric mean still rates a fleetless but
+      garrisoned civ near zero. Options: weighted sum of shares; pairwise attack and defence
+      against each rival; a reputation or score factor (§5b)
+- [ ] Repeat the D check with a learned policy
 - [ ] Choose `K` from measured fleet travel times between rival homeworlds
 - [ ] Decide whether planetary defence counts toward `S`, and at what weight: it holds a
       planet but cannot attack
@@ -419,8 +478,8 @@ those count for nothing in `S` although they must be destroyed before a landing.
 - [x] Confirm the `SHPR` tail `f32` is condition: a ship damaged at turn 110 read 0.9238
 - [ ] Confirm the sixth `SDPR` part list is shields (Reconstruction Report, `DSGN`)
 - [x] Locate the research store: 4 bytes after credits in the civ's record
-- [ ] Locate score (`Owner:28`) and the +10-a-planet-a-turn accumulator (`Owner:24`) in the
-      blob
+- [ ] Locate score and the +10-a-planet-a-turn accumulator in the blob: the civ record after
+      the research store holds 0, the completed count and small fields, not either
 - [x] Build the oracle harness and scoreboard (§5)
 - [x] Capture clean pairs on the client: 214 pairs, from the 35 distinct referee inputs, an
       80-turn chain, four war blobs and the Single Player start, none failed
@@ -432,12 +491,15 @@ those count for nothing in `S` although they must be destroyed before a landing.
 - [x] Food, corruption, inactivity, births, the store size and recruitment (§5b)
 - [x] Production, mining, income and upkeep (§5b)
 - [x] Science, ship completion and hurrying (§5b)
-- [ ] Scan builds, and queues past their first item (the agent sets builds each turn, so
-      only the oracle needs these)
-- [ ] Doctrine and golden-age effects on science: 3 to 24 points a turn on one probe civ
-- [ ] Pin the colony ship surcharge: one build of five came out 100 over
+- [x] Scans (§5b), with the scan ids beyond route and fleet inferred
+- [ ] Queues past their first item: skipped, the agent sets builds each turn
+- [x] Doctrine and golden-age effects on science (§5b, "Traits")
+- [ ] Check the traits whose effect follows only their name, starting with those doctrines
+      grant, with a probe per doctrine
+- [x] Colony ship surcharge: the manual gives the fitted formula,
+      `(planets + colony ships - 1) x 100`; one build of five came out 100 over
 - [ ] Find income's exact idle step: 1/144 a turn leaves idle civs 1 or 2 credits off
-- [ ] Locate reputation in the blob, so corruption reads it instead of taking 0
+- [ ] Read reputation from the relation records (`KNPL` +0x10) into the loader
 - [x] Research module (§5b)
 - [x] Movement: speed, routes, arrival and the scout's next system (§5b)
 - [x] Finished move and colonise orders, and colonisation (§5b)
@@ -445,9 +507,11 @@ those count for nothing in `S` although they must be destroyed before a landing.
 - [ ] More battles: heavy ships, shields, ranked crews, bombing that destroys turrets,
       conquest and ground combat, mid-space attacks; the Battle Calculator can supply them
 - [x] Loyalty from stationed soldiers, their training and upkeep (§5b)
-- [ ] Reputation, conquered planets' loyalty and rebellion
-- [ ] Fog to the client's rules: the observation shows explored systems as they stand now
-      and other ships within scanner range, where the client shows a system as last seen
+- [x] Reputation, score and crew experience (§5b)
+- [x] Conquered planets' loyalty and rebellion (§5b), with the rebellion chance invented
+- [ ] Find a planet's loyalty in the save, on a conquered planet
+- [x] Fog to the client's rules (§5b)
+- [ ] Bio-bombs: 20 soldiers or citizens a set, 5 space lost for a while, -0.1 reputation
 - [x] Observation and action interface on the simulator (`sim/env.py`, `sim/orders.py`)
 - [ ] The client backend of the same interface: actions to `merge_orders` submissions
 - [x] Viewer page for checking a run by eye (`sim/viewer.py`)

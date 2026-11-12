@@ -794,6 +794,21 @@ penalty.
 A three-civ galaxy gave tables of 111, 159 and 266 bytes, one per civ, holding
 `Unnamed` for things nobody has renamed and `BadGuy's HQ` for one that has been.
 
+**When the engine refreshes a row** (November 2026, the Single Player chain). Every turn
+the civ owns a planet in the system, and every turn any planet of the system is within the
+scanner range of one of the civ's ships. A scout with a 30-unit scanner refreshed system 135
+from a planet 19.3 away, then left it at turn 22 once the nearest planet was 32.6 away. A
+refresh stamps the new turn and each planet's owner and population. The row's planets are
+the system's in the order `SOLA` holds them. A civ whose `Owner:4` is 0 keeps its rows
+frozen unless it is the local player, the id in `GLOB` that `set_blob_player` reads. The
+DemoPlayer seat's rows froze at turn 2 in the referee's ticks, where another civ was local,
+and refreshed in a capture where DemoPlayer was. Its research store stayed at 0 in both.
+
+**The golden age's turns left are in `CVTR`**, the `u32` at payload `+12` in the header
+before the trait pairs. After Doctrine: Golden Age completed it read 99, 98, 97 on
+successive turns, and 0 before. `Owner:744` was the live object's counter, with 9999 as its
+idle value.
+
 **These are cached, not authored.** One civ's table gained `Neighbor's HQ`
 purely from loading a turn, with that player having taken no action, so `EXSY`
 records what a civ has seen rather than what it has decided. A rename is
