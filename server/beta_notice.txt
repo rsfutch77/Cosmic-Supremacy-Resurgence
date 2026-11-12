@@ -1,7 +1,8 @@
 Before you join the beta
 ========================
 
-- Please don't cheat on purpose
+- Please don't cheat on purpose, and treat other players with respect:
+https://cosmicresurgence.com/support_guidelines.php.html
 - If you miss a bunch of days, your empire may be removed
 - The galaxy may be restarted at any time while we fix bugs
 - There may be game breaking bugs, submit them here:
