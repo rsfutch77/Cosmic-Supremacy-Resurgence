@@ -1922,7 +1922,10 @@ What is left for after the beta is kept here.
   day, that galaxies will soon be played by account only (`GUEST_ONLY_TEXT` in the launcher).
   Done when `seat_tool.py firebase://cs-resurgence/sandbox guests refuse` is set, after the operator view shows
   no seated guests, and the launcher update that follows rewords the warning to say guests are
-  refused.
+  refused. Set on 12 November 2026 with `--anyway` (Robert): every seated civ on the roster
+  signs in with Google, and the one seat the check stopped on, Sygor, is not on the roster and
+  has not submitted since sign-ins were recorded. The bot civs submit with the operator's
+  credentials, not through the relay, and are not affected. The reworded warning is on `v0.6`.
 
 - [x] **A guest's seats follow its install to an existing account.** On login the launcher
   posts both the guest's and the account's tokens, and the relay moves each seat and each
