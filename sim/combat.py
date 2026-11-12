@@ -13,10 +13,11 @@ one target at a time, weakest first, where the engine spreads it at random;
 mid-space battles from attack orders and collateral damage are not modelled,
 no captured battle had a ranked crew, and conquest follows the manual with no
 capture to check it: a planet whose defence is bombed to nothing loses its
-turrets and shield generators, and with no defending ships left the crew
-beyond each ship's minimum lands and fights the stationed soldiers.
+turrets and shield generators, and with no defending ships left the soldiers
+aboard ships with a Troop Bay land and fight the stationed soldiers.
 """
 from . import economy
+from . import traits
 from . import movement
 from . import state as st
 from . import tables as tb
@@ -42,15 +43,30 @@ class Unit:
 
     def __init__(self, g, ship):
         d = g.designs[ship.design]
+        civ = g.civs.get(ship.owner)
         self.ship, self.heavy = ship, d.heavy
-        self.max = d.hitpoints
+        self.max = hitpoints(civ, d)
         self.hp = self.max * ship.condition
         light, heavy, bomb = d.firepower
         need = tb.CHASSIS[d.chassis].crew[0] if d.chassis is not None else 0
         crewed = d.chassis is not None and len(ship.crew) >= need
-        boost = 1 + RANK_BONUS * ship_rank(ship, need)
+        boost = (1 + RANK_BONUS * ship_rank(ship, need)) * fire_bonus(civ, d)
         self.fire = (light * boost, heavy * boost, bomb * boost) if crewed else (0, 0, 0)
         self.armed = crewed and (light or heavy)
+
+
+def hitpoints(civ, d):
+    """Units raised by trait 11, shields by the design's strength plus trait
+    10's points, then trait 17. The order the client applies them in is not
+    checked; no captured battle had any of these traits."""
+    units = traits.pct(civ, 11, d.units)
+    return traits.pct(civ, 17, units * (100 + d.shield + traits.value(civ, 10)) / 100)
+
+
+def fire_bonus(civ, d):
+    """Trait 7 for every ship and trait 19 on top for a heavy one, as percents."""
+    pct = traits.value(civ, 7) + (traits.value(civ, 19) if d.heavy else 0)
+    return 1 + pct / 100
 
 
 def ship_rank(ship, need):
@@ -75,7 +91,8 @@ class Planet:
         shields = p.facilities.get(SHIELD_GENERATOR, 0)
         units += shields * SHIELD_UNITS
         shield = PD_SHIELD[max(level, 1) - 1] if shields else 0
-        self.planet, self.fire = p, (light, heavy)
+        civ = g.civs.get(p.owner)
+        self.planet, self.fire = p, (traits.pct(civ, 8, light), traits.pct(civ, 8, heavy))
         self.max = self.hp = units * (1 + shield / 100)
 
 
@@ -126,8 +143,12 @@ def fight(g, p, friends, foes):
 
 
 def troops_aboard(g, ship):
-    """Crew beyond the ship's minimum, the most experienced staying aboard."""
+    """Soldiers a ship can land: only a ship with a Troop Bay lands any, and it
+    lands everyone beyond the crew it needs to fly, the most experienced staying
+    aboard. Pilots of other ships never land."""
     d = g.designs[ship.design]
+    if economy.TROOP_BAY not in (d.parts.get('modules') or ()):
+        return []
     need = tb.CHASSIS[d.chassis].crew[0] if d.chassis is not None else 0
     xp = sorted(ship.crew_xp or [0.0] * len(ship.crew), reverse=True)
     return xp[need:]
@@ -173,7 +194,7 @@ def invade(g, p, ships):
     for _round in range(GROUND_ROUNDS):
         strike(defend, attack)
         strike(attack, defend)
-    for s in ships:
+    for s in {id(s): s for s, _x in landing}.values():
         d = g.designs[s.design]
         need = tb.CHASSIS[d.chassis].crew[0] if d.chassis is not None else 0
         keep = sorted(s.crew_xp or [0.0] * len(s.crew), reverse=True)[:need]
@@ -230,4 +251,4 @@ def repairs(g):
         d = g.designs.get(s.design)
         if p is None or d is None or p.owner != s.owner or not p.facilities.get(SHIPYARD):
             continue
-        s.condition = min(1.0, s.condition + REPAIR[d.heavy])
+        s.condition = min(1.0, s.condition + traits.pct(g.civs.get(s.owner), 22, REPAIR[d.heavy]))

@@ -35,13 +35,16 @@ SCIENCE_LAB_BONUS = 60
 SCIENCE_TRAIT = 4
 PRODUCTION_TRAIT = 3            # engine trait ids, traits.py
 MINING_TRAIT = 5
-INCOME_PER_CITIZEN = 10
-INCOME_PER_BANKER = 50          # on top of the citizen's own
+INCOME_PER_CITIZEN = 10         # plus trait 1, an amount
+INCOME_PER_BANKER = 50          # on top of the citizen's own, raised by trait 37 as a percent
+EXTRA_METAL_TRAIT = 41          # taken as metal a turn; Metallurgy's 50, unconfirmed
+WASTAGE_CAP, WASTAGE_SCALE, WASTAGE_FROM = 30.0, 14427.0, 1000
 WEALTH_PER_CREDIT = 4           # production points a credit costs on Wealth
 CREW_UPKEEP = 3                 # credits per crew member aboard a ship or soldier stationed
-COLONY_MODULE = 0               # module id
+COLONY_MODULE, TROOP_BAY, PILOT_CABIN, CLOAKING_DEVICE = 0, 1, 2, 3     # module ids
+BATTLESHIP = 5
 COLONY_SURCHARGE = 100          # per planet and colony ship the civ has, less one; approximate
-FOOD_PER_CITIZEN = 10           # eaten by every citizen each turn
+FOOD_PER_CITIZEN = 10           # eaten by every citizen each turn, plus trait 0
 FARM_BONUS = 25                 # percent of the base rate, per farm
 FOOD_TRAIT = 2                  # engine trait id of the food output bonus
 CORRUPTION_PLANETS = 0.025      # the manual's empire-wide corruption terms
@@ -141,9 +144,16 @@ def miner_yield(planet, civ):
     return y + R(trait(civ, MINING_TRAIT) * y / 100)
 
 
-def facility_cost(kind, built):
-    """Production points for one more of a facility, the manual's escalation."""
-    return (4 + (3 + built) * built) * tb.FACILITIES[kind].cost // 4
+FACILITY_COST_TRAIT = {0: 26, 1: 27, 3: 27, 4: 28, 5: 28, 13: 29, 14: 29,
+                       9: 30, 10: 30, 11: 30}   # by name; the upgrades' share is assumed
+
+
+def facility_cost(kind, built, civ=None):
+    """Production points for one more of a facility, the manual's escalation,
+    then the civ's production cost trait for that building."""
+    cost = (4 + (3 + built) * built) * tb.FACILITIES[kind].cost // 4
+    t = FACILITY_COST_TRAIT.get(kind)
+    return R(traits.pct(civ, t, cost)) if t is not None and civ is not None else cost
 
 
 def corrupted(gross, corruption):
@@ -156,23 +166,32 @@ def rank(xp):
     return max(0, int(math.log2(xp))) if xp >= 2 else 0
 
 
-def loyalty_bonus(p):
+def effective_soldiers(p, civ=None):
+    """The manual's soldier count for loyalty: each counts 1 + 0.2 a rank, and
+    the more there are the less each adds; military-induced loyalty (trait 34)
+    scales it."""
+    xps = p.military_xp or [0.0] * len(p.military)
+    count = sum(1 + RANK_LOYALTY * rank(x) for x in xps)
+    return traits.pct(civ, 34, count * (0.2 + 0.8 / (1.0 + 0.0005 * count * count)))
+
+
+def loyalty_bonus(p, civ=None):
     """Percent stationed soldiers add to a loyal planet's output, the manual's
     formula with loyalty already at 100%, so the effect is halved."""
     if not p.military or not p.citizens:
         return 0.0
-    xps = p.military_xp or [0.0] * len(p.military)
-    count = sum(1 + RANK_LOYALTY * rank(x) for x in xps)
-    effective = count * (0.2 + 0.8 / (1.0 + 0.0005 * count * count)) / 2
-    return LOYALTY_PER_SOLDIER * effective / len(p.citizens)
+    return LOYALTY_PER_SOLDIER * effective_soldiers(p, civ) / 2 / len(p.citizens)
 
 
-def train(p):
+def train(p, civ=None):
+    """Training speed takes traits 9 and 31 as percents; no capture had either."""
     if not p.military:
         return
     camp = 1 if p.facilities.get(MILITARY_CAMP) else 0
     academy = 1 if p.facilities.get(MILITARY_ACADEMY) else 0
     rate = TRAINING * 2 ** (camp + academy)
+    bonus = traits.value(civ, 9) + traits.value(civ, 31) if civ is not None else 0
+    rate = rate * (100 + bonus) / 100
     cap = 2.0 ** RANK_CAP[2 if academy else camp]
     xps = p.military_xp or [0.0] * len(p.military)
     p.military_xp = [min(cap, x + rate) if x < cap else x for x in xps]
@@ -197,7 +216,7 @@ def planets(g, reputation=None):
         income, points = -fleet_upkeep(g, civ_oid), 0
         for p in civ_planets:
             corruption = (planet_corruption(empire, len(p.citizens), max_pop(p, bonus))
-                          + loyalty_bonus(p))
+                          + loyalty_bonus(p, civ))
             points += science(p, civ, corruption, idle)
             start = dict(p.facilities)
             income += work(p, civ, corruption, share, g)
@@ -205,11 +224,25 @@ def planets(g, reputation=None):
             built, p.facilities = p.facilities, start
             food(p, civ, bonus, empire, idle, corruption)
             p.facilities = built
-            train(p)
+            train(p, civ)
         if civ.credits is not None:
             civ.credits += income
         if civ.uid and civ.research is not None:
-            civ.research += points
+            civ.research += points - R(points * wastage(points, civ) / 100)
+        extra = traits.value(civ, EXTRA_METAL_TRAIT)
+        if extra and civ.resources is not None:
+            civ.resources[0] += extra
+        if getattr(civ, 'golden_age', 0) > 0:
+            civ.golden_age -= 1
+
+
+def wastage(points, civ):
+    """Percent of a turn's science lost: the manual's curve, nothing to speak
+    of below 1,000 points, 15% at 10,000, 27% at 30,000 and never above 30,
+    plus trait 39. The curve is fitted to those three figures; trait 39 is
+    measured: Doctrine: Knowledge's -7 turned 40 points into 43."""
+    base = WASTAGE_CAP * (1 - math.exp(-points / WASTAGE_SCALE)) if points > WASTAGE_FROM else 0.0
+    return min(WASTAGE_CAP, base + traits.value(civ, 39))
 
 
 def idle_share(turn, active_turn):
@@ -237,15 +270,15 @@ def work(p, civ, corruption, share, g=None):
     when the turn began."""
     jobs = p.jobs()
     upkeep = sum(tb.FACILITIES[f].upkeep * n for f, n in p.facilities.items()
-                 if f < len(tb.FACILITIES)) + CREW_UPKEEP * len(p.military)
+                 if f < len(tb.FACILITIES)) + R(traits.pct(civ, 32, CREW_UPKEEP * len(p.military)))
     made = after_idle(corrupted(jobs.get(WORKER, 0) * worker_yield(p, civ),
                                 corruption), share)
     if p.ore is not None and civ.resources is not None and jobs.get(MINER):
         civ.resources[p.ore] += after_idle(
             corrupted(jobs[MINER] * miner_yield(p, civ), corruption), share)
-    wealth = build(p, made, g)
-    gross = (INCOME_PER_CITIZEN * len(p.citizens)
-             + INCOME_PER_BANKER * jobs.get(BANKER, 0))
+    wealth = build(p, made, g, civ)
+    gross = ((INCOME_PER_CITIZEN + traits.value(civ, 1)) * len(p.citizens)
+             + R(traits.pct(civ, 37, INCOME_PER_BANKER * jobs.get(BANKER, 0))))
     gross = boosted(gross, (BANKING_BONUS, p.facilities.get(BANKING_CENTER, 0)))
     return income_after(gross, corruption, share) + wealth - upkeep
 
@@ -253,8 +286,18 @@ def work(p, civ, corruption, share, g=None):
 def ship_cost(g, owner, design):
     """Production points for a ship. A colony ship costs more the bigger the
     empire: fitted on five builds, four exactly and one 100 short."""
+    civ = g.civs.get(owner)
     cost = design.cost
-    if COLONY_MODULE in (design.parts.get('modules') or ()):
+    modules = design.parts.get('modules') or ()
+    for m, t in ((COLONY_MODULE, 23), (CLOAKING_DEVICE, 24)):
+        if m in modules and civ is not None:
+            part = tb.MODULES[m].cost * modules.count(m)
+            cost += R(traits.pct(civ, t, part)) - part
+    if civ is not None:
+        cost = R(traits.pct(civ, 14, cost))
+        if design.chassis == BATTLESHIP:
+            cost = R(traits.pct(civ, 21, cost))
+    if COLONY_MODULE in modules:
         planets = sum(1 for q in g.planets.values() if q.owner == owner)
         colony = sum(1 for s in g.ships.values() if s.owner == owner and s.design in g.designs
                      and COLONY_MODULE in (g.designs[s.design].parts.get('modules') or ()))
@@ -270,17 +313,17 @@ def launch(g, p, design):
                                     orbit=p.oid)
 
 
-def build(p, made, g=None):
+def build(p, made, g=None, civ=None):
     """Add this turn's production to the current item and finish it when paid
     for. Returns the credits a planet on Wealth makes instead."""
     prod = p.production
     if prod is None:
         return 0
     if prod.kind == 'WLTH':
-        return R(made / WEALTH_PER_CREDIT)
+        return R(traits.pct(civ, 40, made / WEALTH_PER_CREDIT))
     prod.progress += made
     if prod.kind == 'FCLT' and prod.item is not None:
-        cost = facility_cost(prod.item, p.facilities.get(prod.item, 0))
+        cost = facility_cost(prod.item, p.facilities.get(prod.item, 0), civ)
         if prod.progress >= cost:
             prod.progress -= cost
             p.facilities[prod.item] = p.facilities.get(prod.item, 0) + 1
@@ -297,13 +340,19 @@ def build(p, made, g=None):
 
 
 def fleet_upkeep(g, civ_oid):
-    total = 0
+    """Design upkeep, raised by trait 15 (and 21 for battleships), and 3 a
+    crew member, raised by trait 32 like stationed soldiers."""
+    civ = g.civs.get(civ_oid)
+    ships = crew = 0
     for s in g.ships.values():
         if s.owner != civ_oid:
             continue
         d = g.designs.get(s.design)
-        total += (d.upkeep if d else 0) + CREW_UPKEEP * len(s.crew)
-    return total
+        if d is not None:
+            u = traits.pct(civ, 15, d.upkeep)
+            ships += traits.pct(civ, 21, u) if d.chassis == BATTLESHIP else u
+        crew += len(s.crew)
+    return R(ships) + R(traits.pct(civ, 32, CREW_UPKEEP * crew))
 
 
 def inactivity(turn, active_turn):
@@ -337,7 +386,7 @@ def food(p, civ, bonus, empire, idle=0.0, corruption=None):
         corruption = planet_corruption(empire, pop, max_pop(p, bonus))
     made = after_inactivity(
         corrupted(farmers * farmer_yield(p, civ), corruption), idle)
-    surplus = made - FOOD_PER_CITIZEN * pop
+    surplus = made - (FOOD_PER_CITIZEN + traits.value(civ, 0)) * pop
     store, cap = p.food
     if p.recruit and surplus > 0 and p.military_food is not None:
         share = int(surplus * p.recruit / 100)

@@ -11,6 +11,8 @@ the topic walks the goal's missing prerequisites, cheapest available first and
 the lower id on a tie; topic and goal both clear when the goal is done.
 """
 
+from . import traits
+
 COST_SCALE = 800
 NO_TOPIC = -1
 
@@ -171,5 +173,8 @@ def civs(g):
             continue
         civ.research -= price
         civ.completed.append(civ.topic)
+        if civ.topic == traits.GOLDEN_AGE:
+            # The probe read 99 the turn after and took the +50 from then on.
+            civ.golden_age = traits.GOLDEN_AGE_TURNS - 1
         civ.topic = next_topic(goal, civ.completed)
         civ.goal = goal if civ.topic >= 0 else NO_TOPIC

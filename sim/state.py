@@ -181,6 +181,7 @@ class Civ:
     active_turn: int = None         # SERV baseline, the turn last seen active
     active: bool = False            # SERV flag, set while active this turn
     explored: set = field(default_factory=set)      # EXSY, system ids entered
+    golden_age: int = 0             # turns left, CVTR+12
     stances: dict = field(default_factory=dict)     # other civ -> STANCES code
 
 

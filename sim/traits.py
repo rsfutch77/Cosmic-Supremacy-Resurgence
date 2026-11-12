@@ -1,19 +1,41 @@
 """
-A civ's traits as the engine applies them: its custom-civ trait values (CVTR)
-plus every completed technology's trait grant.
+A civ's traits as the engine applies them (GetTrait 0x00516180): its
+custom-civ trait values (CVTR, engine traits 0 to 9), plus every completed
+technology's trait grant, plus 50 on the four output traits in a golden age.
 
-Engine trait ids are the client's (Owner:748 + 4t). The ten CVTR traits fill
-some of them; the map below is measured for speed (CVTR 6 is engine 18: a +13
-trait moved ships 1.13 times as far) and taken at face value for 0 to 5, whose
-names match. Firepower, planetary defence and troops are not placed yet.
+Engine trait t is Owner:(748 + 4t). The names are the ones the client's trait
+list showed for each offset (client/dev_tools/ejbo_annotations.json). Where a
+trait applies is checked against a capture only where its comment says so.
 
 GRANTS is client/dev_tools/ai_player/research.py's table, read from a client
 at a content version other than the released one.
 """
 FACILITY, TRAIT = 0, 11                 # grant kinds
-SHIP_SPEED = 18
+NAMES = {
+    0: 'food eaten per citizen, added to 10',
+    1: 'income per citizen, added to 10',
+    2: 'food output %', 3: 'production output %', 4: 'science output %', 5: 'mining output %',
+    6: 'ship speed %', 7: 'ship firepower %', 8: 'planetary defence firepower %',
+    9: 'stationed military training %',
+    10: 'ship shield strength, points', 11: 'ship units %', 12: 'ship cloaking %',
+    13: 'ship scanner range %', 14: 'ship production cost %', 15: 'ship upkeep %',
+    16: 'ship hull space %', 17: 'ship hitpoints %', 18: 'light ship speed %',
+    19: 'heavy ship firepower %', 20: 'battleship hull space %', 21: 'battleship cost and upkeep %',
+    22: 'ship repair per turn %', 23: 'colony module production cost %',
+    24: 'cloaking module production cost %', 25: 'scan production cost %',
+    26: 'farm production cost %', 27: 'factory production cost %',
+    28: 'university production cost %', 29: 'mine production cost %',
+    30: 'planetary defence building production cost %', 31: 'military training speed %',
+    32: 'military upkeep %', 33: 'military food cost %', 34: 'military-induced loyalty %',
+    35: 'propaganda office loyalty %', 36: 'population loyalty %', 37: 'income per banker %',
+    38: 'planet space %', 39: 'science wastage, points', 40: 'Wealth output %',
+    41: 'extra metal per turn', 42: 'market price %', 43: 'golden age', 44: 'dark age',
+}
+SHIP_SPEED, LIGHT_SHIP_SPEED = 6, 18
 PLANET_SPACE = 38
-CVTR_TO_ENGINE = (0, 1, 2, 3, 4, 5, SHIP_SPEED, None, None, None)
+OUTPUTS = (2, 3, 4, 5)
+GOLDEN_AGE_BONUS = 50
+GOLDEN_AGE, GOLDEN_AGE_TURNS = 67, 100     # the doctrine, and the 100 its grant carries
 
 # technology id: ((kind, object id, value), ...)
 GRANTS = {
@@ -97,11 +119,19 @@ GRANTS = {
 
 
 def value(civ, t):
-    """Engine trait `t` for a civ, in its own units (a percent for outputs)."""
-    base = 0
-    if civ.traits:
-        for i, eng in enumerate(CVTR_TO_ENGINE):
-            if eng == t and i < len(civ.traits):
-                base += civ.traits[i]
+    """Engine trait `t` for a civ, in its own units."""
+    if civ is None:
+        return 0
+    base = civ.traits[t] if civ.traits and t < len(civ.traits) else 0
+    if t in OUTPUTS and getattr(civ, 'golden_age', 0) > 0:
+        base += GOLDEN_AGE_BONUS
+    if t in (43, 44):
+        return base
     return base + sum(v for tech in (civ.completed or ())
                       for kind, oid, v in GRANTS.get(tech, ()) if kind == TRAIT and oid == t)
+
+
+def pct(civ, t, amount):
+    """`amount` raised or lowered by trait `t` as a percent."""
+    v = value(civ, t)
+    return amount * (100 + v) / 100 if v else amount

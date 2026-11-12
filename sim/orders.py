@@ -173,6 +173,16 @@ def recruit(g, civ, planet, rate):
     return True, ''
 
 
+def seats_of(d):
+    """The chassis's crew maximum, 4 more per Large Pilot Cabin and 5 troopers
+    per Troop Bay, the ship components page's figures."""
+    if d.chassis is None:
+        return 0
+    modules = d.parts.get('modules') or ()
+    return (tb.CHASSIS[d.chassis].crew[1] + 4 * modules.count(ec.PILOT_CABIN)
+            + 5 * modules.count(ec.TROOP_BAY))
+
+
 def crew(g, civ, ship, count):
     """Move soldiers between a ship and the own planet it orbits, the most
     experienced first, up to the chassis's seats; a negative count lands them."""
@@ -182,8 +192,7 @@ def crew(g, civ, ship, count):
     p = g.planets.get(s.orbit)
     if p is None or p.owner != civ:
         return False, 'the ship is not in orbit of one of the civ\'s planets'
-    d = g.designs[s.design]
-    seats = tb.CHASSIS[d.chassis].crew[1] if d.chassis is not None else 0
+    seats = seats_of(g.designs[s.design])
     xp = list(p.military_xp or [0.0] * len(p.military))
     cxp = list(s.crew_xp or [0.0] * len(s.crew))
     if count >= 0:

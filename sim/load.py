@@ -39,6 +39,8 @@ ROUT_FIXED_HEAD = 2 + 24            # kind, flag, origin and target
 HISTORY_SLOTS = 8                   # settled block +0: past populations, newest first
 PLPR_MILITARY_COST = 28             # u32 food per soldier, then u32 the military store
 SOLDIER_XP_AT = 1                   # f16 experience in a nine-byte soldier record
+GOLDEN_AGE_IN_CVTR = 12            # u32 turns left, in CVTR's header before the trait pairs
+NO_GOLDEN_AGE = 9999                # the idle value the live object held
 RESEARCH_AFTER_CREDITS = 4          # u32 research store, right after credits
 RADIUS_AT = 20                      # f32 in both SUN and PLNT payloads
 ORE_BEFORE_ENLI = 5                 # u8 resource type then u32 rate, just before ENLI
@@ -248,6 +250,10 @@ def _civs(blob, galaxy):
         civ.topic = struct.unpack('<i', research[0])[0] if research else None
         civ.goal = struct.unpack('<i', research[1])[0] if research else None
         civ.traits = mo.traits_of(blob, oid)
+        cvtr = mo._cvtr(blob, oid)
+        if cvtr is not None and cvtr.size >= GOLDEN_AGE_IN_CVTR + 4:
+            left = struct.unpack_from('<I', blob, cvtr.payload + GOLDEN_AGE_IN_CVTR)[0]
+            civ.golden_age = 0 if left == NO_GOLDEN_AGE else left
         if rec['name'] in active:
             civ.active_turn, flag = active[rec['name']]
             civ.active = bool(flag)

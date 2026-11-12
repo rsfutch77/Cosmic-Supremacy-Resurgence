@@ -23,7 +23,9 @@ def speed(g, ship):
         return 0.0
     v = d.thrust / d.units
     civ = g.civs.get(ship.owner)
-    pct = traits.value(civ, traits.SHIP_SPEED) if civ else 0
+    pct = traits.value(civ, traits.SHIP_SPEED)
+    if not d.heavy:
+        pct += traits.value(civ, traits.LIGHT_SHIP_SPEED)
     return v * (1 + pct / 100) if pct else v
 
 
