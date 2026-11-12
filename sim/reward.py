@@ -3,9 +3,16 @@ Dominance, the training reward (docs/Fast_Sim_Plan.md, section 1a).
 
     S   fleet strength: effective firepower times effective hitpoints, counting
         only the share of the fleet the civ's income can keep paying for
+    T   ground strength: the same product for soldiers, stationed on the civ's
+        planets and aboard its troop ships, by the manual's ground combat
     G   surge capacity: the strength the civ could add in K turns, building its
         best design with its production, ship resources and upkeep headroom
-    D   sqrt(share of S x share of G), each share of the galaxy's total
+    D   the geometric mean of the shares of S, T and G, each of the galaxy's
+        total
+
+T is there because the first self-play check (docs/Fast_Sim_Plan.md, 5b) saw
+a fleet that D rated far above its target fail to take a planet held by 21
+soldiers: space strength wins orbit, and soldiers decide who keeps a planet.
 
 Strength is a product so that a fleet twice the size counts four times, as it
 does in the manual's combat, where each side takes the other's hitpoints off at
@@ -91,13 +98,39 @@ def surge(g, civ, k=K_TURNS):
     return (n * _fire(d)) * (n * d.hitpoints)
 
 
+def ground(g, civ):
+    """Soldiers' total firepower times total health, the manual's ground
+    combat: 1 health and 2 firepower each, +10% and +20% a rank, bunkers and
+    fortresses for the best of a planet's garrison, and troops aboard ships
+    with a Troop Bay, who are the ones that can take a planet."""
+    fire = health = 0.0
+    for p in g.planets.values():
+        if p.owner != civ or not p.military:
+            continue
+        side = combat.ground_side(p.military_xp or [0.0] * len(p.military),
+                                  p.facilities.get(combat.BUNKER, 0),
+                                  p.facilities.get(combat.FORTRESS, 0))
+        health += sum(h for h, _f in side)
+        fire += sum(f for _h, f in side)
+    for s in g.ships.values():
+        if s.owner == civ and s.design in g.designs:
+            side = combat.ground_side(combat.troops_aboard(g, s), 0, 0)
+            health += sum(h for h, _f in side)
+            fire += sum(f for _h, f in side)
+    return fire * health
+
+
 def dominance(g, civs=None):
     """{civ: D} for the given civs, shares taken over every civ in the galaxy."""
     everyone = list(g.civs)
-    s = {c: strength(g, c) + EPSILON for c in everyone}
-    gr = {c: surge(g, c) + EPSILON for c in everyone}
-    ts, tg = sum(s.values()), sum(gr.values())
+    terms = [{c: fn(g, c) + EPSILON for c in everyone} for fn in (strength, ground, surge)]
+    totals = [sum(t.values()) for t in terms]
     alive = {c for c in everyone if any(p.owner == c for p in g.planets.values())
              or any(x.owner == c for x in g.ships.values())}
-    return {c: (math.sqrt(s[c] / ts * gr[c] / tg) if c in alive else 0.0)
-            for c in (civs or everyone)}
+    out = {}
+    for c in (civs or everyone):
+        product = 1.0
+        for t, total in zip(terms, totals):
+            product *= t[c] / total
+        out[c] = product ** (1 / len(terms)) if c in alive else 0.0
+    return out
