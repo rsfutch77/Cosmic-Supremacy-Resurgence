@@ -55,6 +55,11 @@ TRAINING = 0.1                  # experience a turn; each camp or academy double
 RANK_CAP = (2, 4, 6)            # without either, with a camp, with an academy
 RANK_LOYALTY = 0.2              # a soldier counts 1.2 at rank 1, 1.4 at rank 2...
 LOYALTY_PER_SOLDIER = 10        # percent, per effective soldier per citizen
+PROPAGANDA_OFFICE = 12
+PROPAGANDA_LOYALTY, PROPAGANDA_CITIZENS = 10, 10    # +10% for 10 citizens each
+LOYALTY_GROWTH = 1.0            # points a turn on a resisting planet
+REBELLION_LINE, REBELLION_GRACE = 30, 3
+REBELLION_CHANCE = 20           # percent a turn once the grace is up; not given anywhere
 SPACE_PER_CITIZEN = 10
 HISTORY_SLOTS = 8
 HISTORY_OLD = 0x1000            # set on every entry older than a birth
@@ -176,11 +181,53 @@ def effective_soldiers(p, civ=None):
 
 
 def loyalty_bonus(p, civ=None):
-    """Percent stationed soldiers add to a loyal planet's output, the manual's
-    formula with loyalty already at 100%, so the effect is halved."""
-    if not p.military or not p.citizens:
+    """Percent added to (or, below 100% loyalty, taken from) a planet's output.
+
+    A loyal planet's soldiers add the manual's formula, halved because loyalty
+    is already full; that is measured (4 soldiers on 24 farmers). Propaganda
+    offices add 10% for 10 citizens each and trait 36 adds its percent; those
+    follow the manual and the trait list. A resisting planet loses its shortfall
+    below 100%, the manual's 'a lot less productive' read as one for one."""
+    if not p.citizens:
         return 0.0
-    return LOYALTY_PER_SOLDIER * effective_soldiers(p, civ) / 2 / len(p.citizens)
+    if p.loyalty < 100:
+        return p.loyalty - 100
+    bonus = 0.0
+    if p.military:
+        bonus += LOYALTY_PER_SOLDIER * effective_soldiers(p, civ) / 2 / len(p.citizens)
+    offices = p.facilities.get(PROPAGANDA_OFFICE, 0)
+    if offices:
+        swayed = min(len(p.citizens), PROPAGANDA_CITIZENS * offices)
+        bonus += traits.pct(civ, 35, PROPAGANDA_LOYALTY * swayed / len(p.citizens))
+    return bonus + traits.value(civ, 36)
+
+
+def conquered(g, p, owner):
+    """The people stay loyal to the ruler they lived under for as long as it
+    held them, up to all of them after 100 turns (the manual's example)."""
+    held = g.turn - (p.founded or 0)
+    p.prior_owner, p.unrest = p.owner, 0
+    p.loyalty = max(0.0, 100.0 - min(100, held))
+    p.founded = g.turn
+
+
+def settle(g, p, civ):
+    """A resisting planet comes round 1 point a turn plus 10% of its
+    effective soldiers per citizen, unhalved; below 30% for more than 3 turns
+    it may rebel back to the ruler it was taken from."""
+    if p.loyalty >= 100 or not p.citizens:
+        return
+    p.loyalty = min(100.0, p.loyalty + LOYALTY_GROWTH
+                    + LOYALTY_PER_SOLDIER * effective_soldiers(p, civ) / len(p.citizens))
+    p.unrest = p.unrest + 1 if p.loyalty < REBELLION_LINE else 0
+    if p.unrest > REBELLION_GRACE and p.prior_owner in g.civs:
+        if (hash((g.turn, p.oid)) % 100) < REBELLION_CHANCE:
+            # Untested: the chance is not given anywhere; the defection is.
+            p.owner, p.prior_owner = p.prior_owner, p.owner
+            p.citizens = [(job, p.owner) for job, _w in p.citizens]
+            p.military, p.military_xp = [], []
+            p.loyalty, p.unrest = 100.0, 0
+            p.production = st.Production('WLTH')
 
 
 def train(p, civ=None):
@@ -225,6 +272,7 @@ def planets(g, reputation=None):
             food(p, civ, bonus, empire, idle, corruption)
             p.facilities = built
             train(p, civ)
+            settle(g, p, civ)
         if civ.credits is not None:
             civ.credits += income
         if civ.uid and civ.research is not None:
@@ -397,6 +445,9 @@ def food(p, civ, bonus, empire, idle=0.0, corruption=None):
     if grew:
         store -= cap
         p.citizens.insert(0, (FARMER, p.owner))
+        if p.loyalty < 100:
+            # A citizen born under the ruler is wholly loyal to it.
+            p.loyalty += (100 - p.loyalty) / len(p.citizens)
     elif store < 0:
         # The manual's starvation rule; no capture has shown it yet.
         store = 0

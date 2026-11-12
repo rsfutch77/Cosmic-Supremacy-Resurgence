@@ -19,6 +19,7 @@ aboard ships with a Troop Bay land and fight the stationed soldiers.
 from . import economy
 from . import traits
 from . import movement
+from . import renown
 from . import state as st
 from . import tables as tb
 
@@ -129,6 +130,14 @@ def fight(g, p, friends, foes):
             u.hp -= dmg
         if planet.max:
             planet.hp = max(0.0, planet.hp - bombs)
+    attacker = foes[0].owner
+    killed_home = sum(g.designs[u.ship.design].units for u in home if u.hp <= 1e-9)
+    killed_away = sum(g.designs[u.ship.design].units for u in away if u.hp <= 1e-9)
+    if planet.max and planet.hp <= 1e-9:
+        killed_home += defence_units(p)
+    renown.battle(g, attacker, p.owner, killed_away, killed_home,
+                  power(g, p.owner), power(g, attacker))
+    renown.experience(home, away, sum(Planet(g, p).fire))
     for u in home + away:
         if u.hp <= 1e-9:
             movement.remove_ship(g, u.ship)
@@ -140,6 +149,18 @@ def fight(g, p, friends, foes):
     defended = planet.hp > 1e-9 or alive(home)
     if not defended and alive(away):
         invade(g, p, [u.ship for u in alive(away)])
+
+
+def defence_units(p):
+    return (sum(p.facilities.get(k, 0) * u for k, (u, _l, _h) in TURRETS.items())
+            + p.facilities.get(SHIELD_GENERATOR, 0) * SHIELD_UNITS)
+
+
+def power(g, civ):
+    """The manual's physical power: a civ's ship units and defence units."""
+    return (sum(g.designs[s.design].units for s in g.ships.values()
+                if s.owner == civ and s.design in g.designs)
+            + sum(defence_units(p) for p in g.planets.values() if p.owner == civ))
 
 
 def troops_aboard(g, ship):
@@ -206,6 +227,7 @@ def invade(g, p, ships):
         p.military, p.military_xp = [(economy.MILITARY, p.owner)] * len(held), held
         return
     owner = ships[0].owner
+    economy.conquered(g, p, owner)
     p.owner = owner
     p.citizens = [(job, owner) for job, _w in p.citizens]
     p.military = [(economy.MILITARY, owner)] * len(survivors)

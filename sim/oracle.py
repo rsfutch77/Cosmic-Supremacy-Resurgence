@@ -82,6 +82,7 @@ def snapshot(g):
         e = f'ship {s.oid}'
         put('combat', e, 'exists', True)
         put('combat', e, 'condition', s.condition)
+        put('combat', e, 'crew xp', tuple(round(x, 2) for x in s.crew_xp or ()))
         put('colonisation', e, 'owner', s.owner)
         put('growth', e, 'crew', len(s.crew))
         put('movement', e, 'pos', s.pos)

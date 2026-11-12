@@ -158,6 +158,9 @@ class Planet:
     military_cost: int = None       # food per soldier
     military_food: int = None       # the military store
     governor: int = 0
+    loyalty: float = 100.0          # percent; not found in a save, so loaded planets read 100
+    prior_owner: int = 0            # who held it before a conquest
+    unrest: int = 0                 # turns in a row below the rebellion line
 
     def jobs(self):
         out = {}
@@ -182,6 +185,8 @@ class Civ:
     active: bool = False            # SERV flag, set while active this turn
     explored: set = field(default_factory=set)      # EXSY, system ids entered
     golden_age: int = 0             # turns left, CVTR+12
+    score: float = 0.0              # battle score the simulator has counted; the save's is not read
+    reputation: float = 0.0         # the manual's, counted by the simulator
     stances: dict = field(default_factory=dict)     # other civ -> STANCES code
 
 
@@ -211,6 +216,8 @@ class Galaxy:
     designs: dict
     treaties: dict
     gaps: list = field(default_factory=list)    # what the loader could not read
+    declared: set = field(default_factory=set)  # (declarer, target) wars declared in the simulator
+    fought: set = field(default_factory=set)    # pairs past their first significant battle
 
     def civ_planets(self, civ):
         return [p for p in self.planets.values() if p.owner == civ]

@@ -330,6 +330,7 @@ def declare_war(g, civ, other):
         return False, 'no such civ'
     g.civs[civ].stances[other] = WAR
     g.civs[other].stances[civ] = WAR
+    g.declared.add((civ, other))
     return True, ''
 
 
