@@ -66,7 +66,7 @@ def main():
     del gone.ships[oid]
     result = misses(oracle.compare(oracle.snapshot(gone), snap))
     check('a lost ship is missed by combat', result.get('combat'),
-          {'exists': 1, 'condition': 1})
+          {'exists': 1, 'condition': 1, 'crew xp': 1})
 
     after = st_tick.tick(g)
     check('the tick advances the turn', after.turn, g.turn + 1)

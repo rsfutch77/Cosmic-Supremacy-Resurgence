@@ -43,6 +43,7 @@ WEALTH_PER_CREDIT = 4           # production points a credit costs on Wealth
 CREW_UPKEEP = 3                 # credits per crew member aboard a ship or soldier stationed
 COLONY_MODULE, TROOP_BAY, PILOT_CABIN, CLOAKING_DEVICE = 0, 1, 2, 3     # module ids
 BATTLESHIP = 5
+SCAN_COSTS = {2: 3500, 3: 5000, 0: 9000, 6: 12000, 4: 16000, 1: 20000, 5: 20000, 7: 20000}  # scans.SCANS
 COLONY_SURCHARGE = 100          # per planet and colony ship the civ has, less one; approximate
 FOOD_PER_CITIZEN = 10           # eaten by every citizen each turn, plus trait 0
 FARM_BONUS = 25                 # percent of the base rate, per farm
@@ -377,6 +378,12 @@ def build(p, made, g=None, civ=None):
             p.facilities[prod.item] = p.facilities.get(prod.item, 0) + 1
             # Queues are not modelled; a finished item falls to Wealth.
             prod.kind, prod.item = 'WLTH', None
+    elif prod.kind == 'SCAN' and prod.item in SCAN_COSTS and civ is not None:
+        cost = round(traits.pct(civ, 25, SCAN_COSTS[prod.item]))
+        if prod.progress >= cost:
+            prod.progress -= cost
+            civ.scans[prod.item] = civ.scans.get(prod.item, 0) + 1
+            prod.kind, prod.item, prod.hurried = 'WLTH', None, False
     elif prod.kind == 'SHIP' and g is not None and prod.item in g.designs:
         design = g.designs[prod.item]
         cost = ship_cost(g, p.owner, design)

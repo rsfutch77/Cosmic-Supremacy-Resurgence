@@ -187,6 +187,7 @@ def _planets(blob, tree, galaxy):
                                governor=struct.unpack_from('<I', blob,
                                                            sec.end - 4)[0])
             galaxy.planets[oid] = planet
+            galaxy.system_planets.setdefault(sun_id, []).append(oid)
             galaxy.radius[oid] = struct.unpack_from('<f', blob,
                                                     sec.payload + RADIUS_AT)[0]
             plpr_sec = next(sec.find('PLPR'), None)
@@ -273,10 +274,17 @@ def _explored(blob, tree, galaxy):
             continue
         for sec in ownr.find('EXSY'):
             try:
-                civ.explored = {r['system'] for r in
-                                exsy.parse(bytes(blob[sec.payload:sec.end]))}
+                rows = exsy.parse(bytes(blob[sec.payload:sec.end]))
             except ValueError:
                 galaxy.gaps.append(f'civ {civ.oid}: EXSY does not read')
+                continue
+            civ.explored = {r['system'] for r in rows}
+            for r in rows:
+                # A row's planets are the system's, in the order SOLA holds them.
+                ids = galaxy.system_planets.get(r['system'], [])
+                civ.seen[r['system']] = (r['turn'], {
+                    oid: (p['owner'], p['population'])
+                    for oid, p in zip(ids, r['planets'])})
 
 
 def _designs(blob, galaxy):
@@ -346,6 +354,10 @@ def _load(blob):
         designs={}, treaties={})
     if galaxy.market is None:
         galaxy.gaps.append('market does not read')
+    try:
+        galaxy.player = sbp.get_player(blob)
+    except SystemExit:
+        galaxy.gaps.append('the local player does not read')
     _civs(blob, galaxy)
     _designs(blob, galaxy)
     _planets(blob, tree, galaxy)

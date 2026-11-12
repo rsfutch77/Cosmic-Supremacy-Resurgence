@@ -10,18 +10,17 @@ played, counts as active, so the engine's inactivity penalty never reaches it.
 The reward is the change in dominance D over the step (potential-based
 shaping), and D itself on the last step.
 
-The observation is fog-limited, approximately: everything the civ owns, the
-planets of every system it has entered as they stand now, and other civs'
-ships within its ships' scanner range or in orbit of its planets. The client
-shows a system as it was when last seen; that staleness is not modelled.
+The observation is what the client would show the civ: everything it owns,
+every system it has looked at as it was when it last looked (sim/fog.py,
+measured against EXSY), other civs' ships its scanners reach, and its scan
+reports and news.
 """
 import copy
-import math
 
+from . import fog
 from . import load as sl
 from . import orders as od
 from . import reward as rw
-from . import tables as tb
 from . import tick as tk
 
 
@@ -60,24 +59,10 @@ class Env:
         return {c: observe(self.g, c) for c in self.played}, rewards, done, info
 
 
-def scan_range(g, ship):
-    d = g.designs.get(ship.design)
-    if d is None:
-        return 0
-    return max((tb.SCANNERS[i].stat for i in d.parts.get('scanners') or ()), default=0)
-
-
 def observe(g, civ):
     c = g.civs[civ]
     mine = [p for p in g.planets.values() if p.owner == civ]
     ships = [s for s in g.ships.values() if s.owner == civ]
-    seen_systems = set(c.explored) | {p.system for p in mine}
-    eyes = [(s.pos, scan_range(g, s)) for s in ships]
-    held = {p.oid for p in mine}
-
-    def visible(s):
-        return s.orbit in held or any(math.dist(s.pos, at) <= r for at, r in eyes)
-
     return {
         'turn': g.turn,
         'civ': {'credits': c.credits, 'resources': list(c.resources or ()),
@@ -96,12 +81,15 @@ def observe(g, civ):
                    'order': s.order and (s.order.kind, s.order.target, s.order.progress)}
                   for s in ships],
         'designs': [d.oid for d in g.designs.values() if d.owner == civ and not d.inactive],
-        'known_planets': [{'id': p.oid, 'system': p.system, 'pos': p.pos, 'owner': p.owner,
-                           'population': len(p.citizens), 'rates': p.rates}
-                          for p in g.planets.values()
-                          if p.owner != civ and p.system in seen_systems],
+        'known_planets': [{'id': oid, 'system': sid, 'seen': turn, 'owner': owner,
+                           'population': pop, 'pos': g.planets[oid].pos,
+                           'rates': g.planets[oid].rates, 'ore': g.planets[oid].ore,
+                           'ore_rate': g.planets[oid].ore_rate}
+                          for sid, (turn, rows) in c.seen.items()
+                          for oid, (owner, pop) in rows.items() if owner != civ],
         'contacts': [{'id': s.oid, 'owner': s.owner, 'design': s.design, 'pos': s.pos,
-                      'orbit': s.orbit}
-                     for s in g.ships.values() if s.owner != civ and visible(s)],
+                      'orbit': s.orbit} for s in fog.visible_ships(g, civ)],
+        'scans': dict(c.scans), 'intel': list(c.intel[-20:]), 'news': list(c.news[-20:]),
+        'score': c.score, 'reputation': c.reputation,
         'suns': {sid: pos for sid, pos in g.suns.items()},
     }

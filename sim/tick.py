@@ -14,6 +14,7 @@ import copy
 
 from . import combat
 from . import economy
+from . import fog
 from . import movement
 from . import research
 
@@ -35,4 +36,7 @@ def tick(galaxy, steps=None, copy_first=True):
     for _name, step in (STEPS if steps is None else steps):
         step(g)
     g.turn += 1
+    if steps is None:
+        # What each civ saw is stamped with the new turn, as EXSY rows are.
+        fog.update(g)
     return g

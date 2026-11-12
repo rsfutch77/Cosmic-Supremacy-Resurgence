@@ -36,7 +36,7 @@ from . import load as sl
 from . import tick as st_tick
 
 MODULES = ('economy', 'growth', 'research', 'market', 'movement',
-           'colonisation', 'combat', 'orders')
+           'colonisation', 'combat', 'fog', 'orders')
 FLOAT_TOLERANCE = 1e-3              # relative, for positions, progress, condition
 MISSING = '<missing>'
 
@@ -59,6 +59,8 @@ def snapshot(g):
         put('research', e, 'points', civ.research)
         put('research', e, 'topic', civ.topic)
         put('research', e, 'goal', civ.goal)
+        for sid, (turn, planets) in civ.seen.items():
+            put('fog', e, f'system {sid}', (turn, tuple(sorted(planets.items()))))
         for other, code in civ.stances.items():
             put('orders', e, f'stance {other}', code)
     for p in g.planets.values():

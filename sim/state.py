@@ -184,6 +184,11 @@ class Civ:
     active_turn: int = None         # SERV baseline, the turn last seen active
     active: bool = False            # SERV flag, set while active this turn
     explored: set = field(default_factory=set)      # EXSY, system ids entered
+    seen: dict = field(default_factory=dict)  # EXSY: system -> (turn, {planet: (owner, pop)})
+    scans: dict = field(default_factory=dict)  # scan kind -> built and unused
+    watching: dict = field(default_factory=dict)  # system -> turns of a system scan left
+    intel: list = field(default_factory=list)  # scan reports, newest last
+    news: list = field(default_factory=list)   # (turn, what) the civ was told
     golden_age: int = 0             # turns left, CVTR+12
     score: float = 0.0              # battle score the simulator has counted; the save's is not read
     reputation: float = 0.0         # the manual's, counted by the simulator
@@ -218,6 +223,8 @@ class Galaxy:
     gaps: list = field(default_factory=list)    # what the loader could not read
     declared: set = field(default_factory=set)  # (declarer, target) wars declared in the simulator
     fought: set = field(default_factory=set)    # pairs past their first significant battle
+    system_planets: dict = field(default_factory=dict)  # sun id -> planet ids in SOLA order
+    player: int = 0                 # the civ the client plays as when it loads the save, GLOB
 
     def civ_planets(self, civ):
         return [p for p in self.planets.values() if p.owner == civ]

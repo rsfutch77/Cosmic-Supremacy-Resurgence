@@ -17,12 +17,14 @@ sys.path.insert(0, ROOT)
 
 from sim import combat                                          # noqa: E402
 from sim import economy as ec                                   # noqa: E402
+from sim import fog                                             # noqa: E402
 from sim import env as ev                                       # noqa: E402
 from sim import load as sl                                      # noqa: E402
 from sim import movement as mv                                  # noqa: E402
 from sim import orders as od                                    # noqa: E402
 from sim import research as rs                                  # noqa: E402
 from sim import state as st                                     # noqa: E402
+from sim import traits                                          # noqa: E402
 
 GALAXY = os.path.join(ROOT, 'client', 'SinglePlayerGalaxy.dat')
 DEMO, BAD = 191, 195
@@ -136,8 +138,64 @@ def combat_checks():
     check('both attackers die and one defender keeps 92.38%',
           (910 in g.ships, 911 in g.ships, round(g.ships[912].condition, 4),
            round(g.ships[913].condition, 4)), (False, False, 1.0, 0.9238))
+    check('defending crews gain 2 x 545 / 590 experience, the capture\'s 1.85',
+          [round(x, 3) for x in g.ships[913].crew_xp], [1.847, 1.847])
+    check('the defender gains score and reputation for the attackers it killed',
+          (g.civs[DEMO].score > 0, g.civs[DEMO].reputation > 0, g.civs[BAD].reputation), (True, True, 0.0))
     combat.battles(g)
     check('a light ship at its shipyard mends 15% a turn', g.ships[913].condition, 1.0)
+
+
+def trait_checks():
+    g = galaxy()
+    c = g.civs[BAD]
+    check('Doctrine: Knowledge\'s -7 wastage turns 40 science into 43',
+          40 - ec.R(40 * ec.wastage(40, st.Civ(0, '', completed=[47])) / 100), 43)
+    c.golden_age = 5
+    check('a golden age adds 50 to the four output traits',
+          [traits.value(c, t) for t in (2, 3, 4, 5, 6)], [50, 50, 50, 50, 0])
+    c.golden_age = 0
+    c.completed = list(c.completed) + [43]
+    check('Mobility speeds light ships 20%', round(mv.speed(g, g.ships[197]), 3), 16.2)
+    check('a doctrine finished in research starts a 99-turn golden age',
+          traits.GOLDEN_AGE_TURNS - 1, 99)
+
+
+def unrest_checks():
+    g = galaxy()
+    home = g.planets[HOME]
+    home.founded, g.turn = 0, 40
+    ec.conquered(g, home, BAD)
+    check('a planet held 40 turns is 60% loyal to its taker', (home.loyalty, home.prior_owner), (60.0, DEMO))
+    check('a resisting planet loses its shortfall', ec.loyalty_bonus(home), -40.0)
+    home.owner, home.military, home.military_xp = BAD, [], []
+    ec.settle(g, home, g.civs[BAD])
+    check('it comes round a point a turn with no soldiers', home.loyalty, 61.0)
+
+
+def fog_checks():
+    g = galaxy()
+    scout = g.ships[197]
+    sun = 140
+    planet = g.planets[g.system_planets[sun][0]]
+    scout.pos = tuple(c + d for c, d in zip(planet.pos, (29.0, 0, 0)))
+    g.turn += 1
+    fog.update(g)
+    check('a planet 29 away from a 30-range scanner refreshes its system',
+          g.civs[BAD].seen.get(sun, (None,))[0], g.turn)
+    scout.pos = tuple(c + d for c, d in zip(planet.pos, (300.0, 0, 0)))
+    g.turn += 1
+    fog.update(g)
+    check('out of range the row keeps the turn it was last seen', g.civs[BAD].seen[sun][0], g.turn - 1)
+    c = g.civs[BAD]
+    check('a scan needs a Central Defense Agency', od.build_scan(g, BAD, 186, 2)[0], False)
+    c.scans[1] = 1
+    check('a system scan watches a system for 8 turns',
+          (od.scan(g, BAD, 1, 135), c.watching.get(135)), ((True, ''), 8))
+    c.scans[0] = 1
+    ok, _ = od.scan(g, BAD, 0, HOME)
+    check('a planetary scan reports facilities and soldiers',
+          (ok, sorted(c.intel[-1]['facilities']), c.intel[-1]['soldiers']), (True, [2, 6, 9], 0))
 
 
 def conquest_checks():
@@ -202,7 +260,8 @@ def main():
     global BASE
     BASE = sl.load_path(GALAXY)
     for part in (research_checks, colonise_checks, build_checks, loyalty_checks,
-                 combat_checks, conquest_checks, order_checks, env_checks):
+                 combat_checks, conquest_checks, trait_checks, unrest_checks, fog_checks,
+                 order_checks, env_checks):
         part()
     print(f'\n{len(PASS)} passed, {len(FAIL)} failed')
     return 1 if FAIL else 0

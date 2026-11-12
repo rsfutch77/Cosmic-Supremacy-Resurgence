@@ -14,6 +14,7 @@ from . import economy as ec
 from . import load as sl
 from . import movement as mv
 from . import research as rs
+from . import scans as sc
 from . import state as st
 from . import tables as tb
 from . import traits
@@ -103,6 +104,24 @@ def build_ship(g, civ, planet, design):
     return True, ''
 
 
+def build_scan(g, civ, planet, kind):
+    """Start a scan: the planet needs a Central Defense Agency and the civ the
+    research that unlocks that kind."""
+    p, why = _own_planet(g, civ, planet)
+    if p is None:
+        return False, why
+    if not p.facilities.get(sc.CDA):
+        return False, 'the planet has no Central Defense Agency'
+    if kind not in sc.SCANS or kind not in sc.unlocked(g.civs[civ]):
+        return False, 'that scan is not researched'
+    _switch(p, 'SCAN', kind)
+    return True, ''
+
+
+def scan(g, civ, kind, target):
+    return sc.use(g, civ, kind, target)
+
+
 def wealth(g, civ, planet):
     p, why = _own_planet(g, civ, planet)
     if p is None:
@@ -128,6 +147,8 @@ def cost_of(g, p):
         return ec.facility_cost(prod.item, p.facilities.get(prod.item, 0))
     if prod.kind == 'SHIP' and prod.item in g.designs:
         return ec.ship_cost(g, p.owner, g.designs[prod.item])
+    if prod.kind == 'SCAN' and prod.item in sc.SCANS:
+        return sc.cost(g.civs[p.owner], prod.item)
     return None
 
 
@@ -339,6 +360,7 @@ ACTIONS = {
     'wealth': wealth, 'hurry': hurry, 'research': research, 'recruit': recruit,
     'crew': crew, 'move': move, 'colonise': colonise, 'scout': scout,
     'trade': trade, 'war': declare_war, 'design': design,
+    'build_scan': build_scan, 'scan': scan,
 }
 
 
