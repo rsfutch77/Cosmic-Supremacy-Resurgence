@@ -69,7 +69,7 @@ STATE_FIELDS = ('turn', 'deadline', 'turn_seconds', 'civs', 'hash',
                 turn_store.STATUS_KEY, turn_store.CLOSED_REASON_KEY,
                 turn_store.RECLAIMED_KEY, turn_store.JOINED_KEY,
                 turn_store.MIN_BUILD_KEY, turn_store.WARN_KEY,
-                turn_store.RECLAIM_KEY)
+                turn_store.RECLAIM_KEY, turn_store.BOTS_KEY)
 
 # Who has submitted, as `{"<turn>": [civ, ...]}` on the galaxy document. Keyed
 # by turn so a commit racing a publish lands under its own turn; `publish`
@@ -178,6 +178,23 @@ def parse_spec(spec: str):
             urllib.parse.unquote(parts[0]) if parts else None,
             q.get('bucket', [None])[0],
             q.get('prefix', [PREFIX])[0])
+
+
+def galaxy_specs(spec: str) -> list:
+    """The spec of every galaxy in `spec`'s project and prefix, sorted.
+
+    `spec` names the tree, as `firebase://project/*`; its galaxy segment is
+    ignored and its query is kept on each spec returned. A document with no
+    fields, left behind by a removed galaxy's subcollections, is not listed.
+    """
+    project, _galaxy, _bucket, prefix = parse_spec(spec)
+    query = urllib.parse.urlparse(spec).query
+    tail = f'?{query}' if query else ''
+    fs = FirebaseTurnStore(project, '*', prefix=prefix).fs
+    ids = sorted(snap.id for snap in
+                 fs.collection(prefix.strip('/')).select(['turn']).stream()
+                 if snap.exists)
+    return [f'firebase://{project}/{urllib.parse.quote(g)}{tail}' for g in ids]
 
 
 def default_bucket(project: str, client) -> str:

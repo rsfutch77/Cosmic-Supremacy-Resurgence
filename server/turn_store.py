@@ -91,6 +91,10 @@ MIN_BUILD_KEY = 'min_build'
 VIEWS_KEY = 'views'
 WARN_KEY, RECLAIM_KEY = 'warn_after_misses', 'reclaim_after_misses'
 
+# The civs the AI plays, as a list of names. Written by `bot_worker.py --add`;
+# a civ not named is never played by a bot.
+BOTS_KEY = 'bots'
+
 # Player name rules: the engine's civ name is a 15-character ASCII buffer, and a
 # folder store names files for the civ, so Windows-forbidden characters and a
 # trailing full stop are refused. `release/launcher.py` `validate_player_name`
@@ -194,6 +198,13 @@ def status_of(state) -> str:
     """`open` or `closed` for a galaxy's state. Absent means open."""
     value = (state or {}).get(STATUS_KEY)
     return CLOSED if value == CLOSED else OPEN
+
+
+def bots_of(state) -> list:
+    """The bot civs a galaxy's state names that are also in its roster."""
+    state = state or {}
+    roster = set(state.get('civs') or [])
+    return [c for c in (state.get(BOTS_KEY) or []) if c in roster]
 
 
 def reclaimed_of(state, civ: str = None):

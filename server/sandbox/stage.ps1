@@ -39,6 +39,11 @@
 .PARAMETER Once
     The worker makes one pass and the sandbox stays open for inspection.
 
+.PARAMETER NoBots
+    Run the referee alone. By default the sandbox also runs bot_worker.py, which
+    plays every galaxy's bot civs: each galaxy in -Store's project, or the seed
+    galaxy. A galaxy names its bots with bot_worker.py --add.
+
 .PARAMETER Unsigned
     Stage the client unsigned. By default the staged patched clients are signed
     with release\build.ps1's signer and CS_SIGN_* variables, because Smart App
@@ -55,6 +60,7 @@ param(
     [string]$Bucket,
     [string]$Root = 'C:\CSReferee',
     [switch]$Once,
+    [switch]$NoBots,
     [switch]$Unsigned
 )
 
@@ -153,7 +159,8 @@ if ($KeyFile) {
     Copy-Item $KeyFile (Join-Path $KeyDir 'referee.json')
 }
 
-$Config = [ordered]@{ store = $Store; seed = $SeedName; bucket = $Bucket; once = [bool]$Once }
+$Config = [ordered]@{ store = $Store; seed = $SeedName; bucket = $Bucket; once = [bool]$Once
+                      bots = -not $NoBots }
 $Config | ConvertTo-Json | Set-Content -Encoding utf8 (Join-Path $Stage 'config.json')
 
 $Commit = (& git -C $Repo rev-parse --short HEAD 2>$null)
@@ -198,4 +205,5 @@ Write-Host "  store: $(if ($Seed) { "seed $Seed" } else { $Store })"
 Write-Host "  key:   $(if (Get-ChildItem $KeyDir -Filter '*.json') { 'present' } else { 'none' })"
 Write-Host "  out:   $Out"
 Write-Host "  client: $(if ($Unsigned) { 'unsigned' } else { 'signed' })"
+Write-Host "  bots:  $(if ($NoBots) { 'off' } else { 'on, every galaxy' })"
 Write-Host "Start it with: WindowsSandbox.exe $WsbPath"
