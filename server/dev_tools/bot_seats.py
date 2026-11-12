@@ -63,8 +63,13 @@ def play(store, civ, turn, blob, dry_run=False, log=print):
     return mine
 
 
-def round_once(store, civs, dry_run=False, replace=False, log=print):
-    """Play every civ in `civs` on the current turn. Returns the turn played."""
+def round_once(store, civs, dry_run=False, replace=False, may_start=None,
+               log=print):
+    """Play every civ in `civs` on the current turn. Returns the turn played.
+
+    `may_start`, when given, is asked before each civ; a false answer leaves
+    that civ and the rest unplayed.
+    """
     turn, _deadline = store.current()
     roster = store.civs()
     blob = None
@@ -76,9 +81,13 @@ def round_once(store, civs, dry_run=False, replace=False, log=print):
             if not replace and store.submission(civ, turn) is not None:
                 log(f"[{civ}] turn {turn}: already submitted, skipping")
                 continue
-            # Each civ is served its own view of the turn.
-            blob = player_turn.served_blob(store, civ, turn)
+            if may_start is not None and not may_start():
+                log(f"[{civ}] turn {turn}: not started, the client is "
+                    f"needed elsewhere")
+                break
             try:
+                # Each civ is served its own view of the turn.
+                blob = player_turn.served_blob(store, civ, turn)
                 play(store, civ, turn, blob, dry_run=dry_run, log=log)
             except Exception as exc:                        # noqa: BLE001
                 # One civ's failure leaves the others to play.
