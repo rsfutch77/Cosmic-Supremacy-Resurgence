@@ -3,9 +3,10 @@ A civ's traits as the engine applies them (GetTrait 0x00516180): its
 custom-civ trait values (CVTR, engine traits 0 to 9), plus every completed
 technology's trait grant, plus 50 on the four output traits in a golden age.
 
-Engine trait t is Owner:(748 + 4t). The names are the ones the client's trait
-list showed for each offset (client/dev_tools/ejbo_annotations.json). Where a
-trait applies is checked against a capture only where its comment says so.
+Engine trait t is Owner:(748 + 4t). The names are the client's own trait list,
+which its string table holds in trait order with a tooltip for each. Where a
+trait applies is checked against a capture only where docs/Fast_Sim_Plan.md
+section 5b says so.
 
 GRANTS is client/dev_tools/ai_player/research.py's table, read from a client
 at a content version other than the released one.
@@ -16,7 +17,7 @@ NAMES = {
     1: 'income per citizen, added to 10',
     2: 'food output %', 3: 'production output %', 4: 'science output %', 5: 'mining output %',
     6: 'ship speed %', 7: 'ship firepower %', 8: 'planetary defence firepower %',
-    9: 'stationed military training, effect not found: training ignores it',
+    9: 'troops and stationed military ground-combat strength %',
     10: 'ship shield strength, points', 11: 'ship units %', 12: 'ship cloaking %',
     13: 'ship scanner range %', 14: 'ship production cost %', 15: 'ship upkeep %',
     16: 'ship hull space %', 17: 'ship hitpoints %', 18: 'light ship speed %',
@@ -26,16 +27,24 @@ NAMES = {
     26: 'farm production cost %', 27: 'factory production cost %',
     28: 'university production cost %', 29: 'mine production cost %',
     30: 'planetary defence building production cost %', 31: 'military training speed %',
-    32: 'military upkeep, credits a soldier added to 3', 33: 'military food cost %', 34: 'military-induced loyalty %',
+    32: 'military upkeep, credits a soldier added to 3',
+    33: 'food to recruit a soldier %', 34: 'military-induced loyalty %',
     35: 'propaganda office loyalty %', 36: 'population loyalty %', 37: 'income per banker %',
     38: 'planet space %', 39: 'science wastage, points', 40: 'Wealth output %',
-    41: 'extra metal per turn', 42: 'market price %', 43: 'golden age', 44: 'dark age',
+    41: 'extra metal per turn', 42: 'market price %', 43: 'golden age',
+    44: 'dark age, -20 on the four outputs; nothing grants it',
+    45: 'anonymous scanning, on above 0',
 }
 SHIP_SPEED, LIGHT_SHIP_SPEED = 6, 18
-PLANET_SPACE = 38
+GROUND_STRENGTH = 9
+HULL_SPACE, BATTLESHIP_HULL_SPACE = 16, 20
+RECRUIT_FOOD = 33
+ANONYMOUS_SCANNING = 45
 OUTPUTS = (2, 3, 4, 5)
 GOLDEN_AGE_BONUS = 50
 GOLDEN_AGE, GOLDEN_AGE_TURNS = 67, 100     # the doctrine, and the 100 its grant carries
+# A golden age that runs out leaves no dark age: the four outputs drop by the 50
+# and no more (the dark age probe).
 
 # technology id: ((kind, object id, value), ...)
 GRANTS = {

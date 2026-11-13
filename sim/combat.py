@@ -226,11 +226,12 @@ def troops_aboard(g, ship):
     return xp[need:]
 
 
-def ground_side(xps, bunkers, fortresses):
-    """[(health, fire)] per soldier: 1 and 2, +10% and +20% a rank, and the
+def ground_side(xps, bunkers, fortresses, civ=None):
+    """[(health, fire)] per soldier: 1 and 2, +10% and +20% a rank, the
     best-ranked get +100% from each bunker's 4 places and +200% from each
-    fortress's 8."""
+    fortress's 8, and trait 9 raises both as a percent."""
     out = []
+    strength = traits.pct(civ, traits.GROUND_STRENGTH, 1.0)
     for i, x in enumerate(sorted(xps, reverse=True)):
         r = economy.rank(x)
         boost = 1.0
@@ -238,7 +239,7 @@ def ground_side(xps, bunkers, fortresses):
             boost = 3.0
         elif i < 8 * fortresses + 4 * bunkers:
             boost = 2.0
-        out.append([(1 + 0.1 * r) * boost, (2 + 0.4 * r) * boost])
+        out.append([(1 + 0.1 * r) * boost * strength, (2 + 0.4 * r) * boost * strength])
     return out
 
 
@@ -260,9 +261,10 @@ def invade(g, p, ships):
     landing = [(s, x) for s in ships for x in troops_aboard(g, s)]
     if not landing:
         return
-    attack = ground_side([x for _s, x in landing], 0, 0)
+    attack = ground_side([x for _s, x in landing], 0, 0, g.civs.get(ships[0].owner))
     defend = ground_side(p.military_xp or [0.0] * len(p.military),
-                         p.facilities.get(BUNKER, 0), p.facilities.get(FORTRESS, 0))
+                         p.facilities.get(BUNKER, 0), p.facilities.get(FORTRESS, 0),
+                         g.civs.get(p.owner))
     for _round in range(GROUND_ROUNDS):
         strike(defend, attack)
         strike(attack, defend)

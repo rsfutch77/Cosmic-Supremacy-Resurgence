@@ -6,7 +6,8 @@ costs, a planetary scan's view of facilities, production, jobs and soldiers
 (not ships in orbit), a technology scan's research, a military scan's ship
 statistics, a route scan's destination and ETA, a fleet scan's ship count,
 and a system scan's 8 turns of sight. A scan is spotted half the time, and
-half of those the target learns who sent it.
+half of those the target learns who sent it, never with anonymous scanning
+(trait 45, Doctrine: Intelligence).
 
 Which research unlocks which scan id is the technology table's (kind 9
 grants). Which id is which scan is inferred: 2 route and 3 fleet are the
@@ -96,6 +97,8 @@ def use(g, civ_id, kind, target):
     civ.scans[kind] -= 1
     civ.intel.append(report)
     if owner and chance(g, civ_id, kind, target) < SPOTTED:
-        who = civ_id if chance(g, target, kind, civ_id) < NAMED else None
+        named = (not traits.value(civ, traits.ANONYMOUS_SCANNING)
+                 and chance(g, target, kind, civ_id) < NAMED)
+        who = civ_id if named else None
         g.civs[owner].news.append((g.turn, ('scanned', name, target, who)))
     return True, ''

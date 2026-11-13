@@ -314,7 +314,7 @@ def trade(g, civ, kind, units):
     if g.market is None or not 0 <= kind < len(g.market) or not units:
         return False, 'no such trade'
     held = g.market[kind]
-    bonus = mo.market_trait(c.completed or [])
+    bonus = traits.value(c, 42)
     if units > 0:
         if c.resources[kind] < units:
             return False, 'not that much in store'
@@ -347,6 +347,15 @@ def unlocked_parts(g, civ):
     return out
 
 
+def hull_space(civ, d):
+    """The chassis's space raised by trait 16, and by trait 20 on a
+    battleship, added as percents like the speed traits."""
+    pct = traits.value(civ, traits.HULL_SPACE)
+    if d.chassis == ec.BATTLESHIP:
+        pct += traits.value(civ, traits.BATTLESHIP_HULL_SPACE)
+    return ec.R(d.space * (100 + pct) / 100)
+
+
 def design(g, civ, name, parts):
     """A new design from researched parts that fit one chassis's space. The
     client gives it the next object id."""
@@ -358,8 +367,9 @@ def design(g, civ, name, parts):
             return False, f'{cat} not researched'
     d = st.Design(g.high_water + 1, civ, name,
                   {cat: list(parts.get(cat) or ()) for cat in tb.CATEGORIES})
-    if d.space_used > d.space:
-        return False, f'the parts need {d.space_used} space and the chassis has {d.space}'
+    space = hull_space(g.civs[civ], d)
+    if d.space_used > space:
+        return False, f'the parts need {d.space_used} space and the chassis has {space}'
     g.high_water += 1
     g.designs[d.oid] = d
     return True, ''

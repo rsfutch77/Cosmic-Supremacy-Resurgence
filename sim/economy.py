@@ -41,6 +41,7 @@ EXTRA_METAL_TRAIT = 41          # taken as metal a turn; Metallurgy's 50, unconf
 WASTAGE_CAP, WASTAGE_SCALE, WASTAGE_FROM = 30.0, 14427.0, 1000
 WEALTH_PER_CREDIT = 4           # production points a credit costs on Wealth
 CREW_UPKEEP = 3                 # credits per crew member aboard a ship or soldier stationed
+SOLDIER_FOOD = 300              # food to recruit a soldier, trait 33 as a percent; 255 at -15
 COLONY_MODULE, TROOP_BAY, PILOT_CABIN, CLOAKING_DEVICE = 0, 1, 2, 3     # module ids
 BATTLESHIP = 5
 SCAN_COSTS = {2: 3500, 3: 5000, 0: 9000, 6: 12000, 4: 16000, 1: 20000, 5: 20000, 7: 20000}  # scans.SCANS
@@ -84,7 +85,8 @@ def food_capacity(pop):
 
 
 def space_bonus(civ):
-    """The percent the civ's research adds to every planet's space."""
+    """The percent the civ's research adds to every planet's space: trait 38's
+    grants, Stronghold's 10 and Habitat's 20 among them."""
     return fr.unlocked(civ.completed or [])[1]
 
 
@@ -427,10 +429,14 @@ def fleet_upkeep(g, civ_oid):
             continue
         d = g.designs.get(s.design)
         if d is not None:
-            u = traits.pct(civ, 15, d.upkeep)
-            ships += traits.pct(civ, 21, u) if d.chassis == BATTLESHIP else u
+            ships += design_upkeep(civ, d)
         crew += len(s.crew)
     return R(ships) + CREW_UPKEEP * crew
+
+
+def design_upkeep(civ, d):
+    u = traits.pct(civ, 15, d.upkeep)
+    return traits.pct(civ, 21, u) if d.chassis == BATTLESHIP else u
 
 
 def inactivity(turn, active_turn):
@@ -466,6 +472,8 @@ def food(p, civ, bonus, empire, idle=0.0, corruption=None):
         corrupted(farmers * farmer_yield(p, civ), corruption), idle)
     surplus = made - (FOOD_PER_CITIZEN + traits.value(civ, 0)) * pop
     store, cap = p.food
+    if p.military_food is not None:
+        p.military_cost = R(traits.pct(civ, traits.RECRUIT_FOOD, SOLDIER_FOOD))
     if p.recruit and surplus > 0 and p.military_food is not None:
         share = int(surplus * p.recruit / 100)
         surplus -= share

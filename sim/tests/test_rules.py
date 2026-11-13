@@ -23,6 +23,8 @@ from sim import load as sl                                      # noqa: E402
 from sim import movement as mv                                  # noqa: E402
 from sim import orders as od                                    # noqa: E402
 from sim import research as rs                                  # noqa: E402
+from sim import reward as rw                                    # noqa: E402
+from sim import scans as sc                                     # noqa: E402
 from sim import state as st                                     # noqa: E402
 from sim import traits                                          # noqa: E402
 
@@ -201,6 +203,35 @@ def doctrine_checks():
     g = galaxy()
     g.civs[BAD].completed = list(g.civs[BAD].completed) + [65]
     check('Lightweight\'s -25 units speeds a ship by a third', round(mv.speed(g, g.ships[197]), 3), 18.0)
+    plain = st.Civ(BAD, '', completed=[])
+    check('Stronghold adds 10% planet space and Habitat 20%',
+          [ec.space_bonus(st.Civ(BAD, '', completed=[t])) - ec.space_bonus(plain) for t in (54, 62)],
+          [10, 20])
+    g = galaxy()
+    g.civs[BAD].completed = list(g.civs[BAD].completed) + [44]
+    g = ev.tk.tick(g)
+    check('Colonization\'s -15 makes a soldier cost 255 food', g.planets[186].military_cost, 255)
+    check('Elite\'s +20 makes a green soldier 1.2 health and 2.4 fire',
+          [[round(v, 3) for v in s] for s in combat.ground_side([0.0], 0, 0, st.Civ(BAD, '', completed=[56]))],
+          [[1.2, 2.4]])
+    d = st.Design(1, BAD, 'b', {'chassis': [ec.BATTLESHIP]})
+    check('Versatility adds 5% hull space, and Titan 25% more to a battleship',
+          [od.hull_space(st.Civ(BAD, '', completed=c), d) for c in ([], [58], [58, 68])],
+          [d.space, ec.R(d.space * 1.05), ec.R(d.space * 1.30)])
+    g = galaxy()
+    c = g.civs[BAD]
+    c.completed = list(c.completed) + [57]
+    c.scans[0] = 1
+    draw = sc.chance
+    sc.chance = lambda *_a: 0
+    try:
+        od.scan(g, BAD, 0, HOME)
+    finally:
+        sc.chance = draw
+    check('Intelligence scans are spotted but never named', g.civs[DEMO].news[-1][1][-1], None)
+    armed = next(d for d in galaxy().designs.values() if rw._fire(d))
+    check('the reward counts Bio-Armor\'s +5% hitpoints',
+          round(rw._armed(st.Civ(BAD, '', completed=[66]), armed)[1] / rw._armed(plain, armed)[1], 3), 1.05)
 
 
 def unrest_checks():

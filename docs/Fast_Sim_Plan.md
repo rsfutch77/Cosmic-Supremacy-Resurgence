@@ -435,9 +435,8 @@ skipped by the oracle. Findings:
 - **Trait 32 is a flat amount**: Doctrine: Elite's +1 makes a stationed soldier cost 4 credits
   a turn instead of 3. A civ with 2 soldiers paid exactly 2 more.
 - **Training speed is trait 31 as a percent**, nothing else: Elite's +70 trained at 0.34 a
-  turn with a Military Camp (0.2 x 1.7) and Police State's +50 more at 0.44. Trait 9, the
-  custom-civ "stationed military training" trait, left training alone, and its effect is
-  not found.
+  turn with a Military Camp (0.2 x 1.7) and Police State's +50 more at 0.44. Trait 9 left
+  training alone: the client's trait list names it ground-combat strength (below).
 - **Ship units (trait 11) set speed**: Lightweight's -25 units moved a Colony Ship a third
   faster, exactly the engine's 5.085 more a turn.
 - With those, the ten doctrines of the Single Player probe and the six of the Beta probe's
@@ -445,12 +444,32 @@ skipped by the oracle. Findings:
   only the idle civ's known 1 to 5 credits of rounding remains. One Beta civ holding Elite,
   Juggernaut and Lightweight stays 1 to 3 credits high, which fits Elite's +1 also reaching
   its 3 crew members. The other Beta civ that holds Elite has a crewed ship too and does not
-  fit that, so it is left open.
+  fit that. It is small enough to leave.
+- **No dark age follows a golden age.** A golden age staged at 2 turns left counted 2, 1, 0
+  and stayed at 0; science fell from 635 a turn to 430, and the simulator with no penalty
+  matched the engine for the four turns after. No technology grants trait 44.
 
-Not exercised by the probes, because no battle, build or loyalty change happened while a
+**Every doctrine trait is applied.** The client's string table holds the trait list in
+trait order, each with its tooltip, which names the traits the offsets left unclear: 9 is
+the ground-combat strength of troops and stationed soldiers, 33 the food to recruit a
+soldier, 16 and 20 hull space, 45 anonymous scanning. Each is applied as its tooltip says:
+
+| trait | doctrines | applied |
+|---|---|---|
+| 9 ground strength % | Stronghold -5, Elite +20, Bio-Armor +10 | health and fire of every soldier in `combat.ground_side` |
+| 16 hull space %, 20 battleship hull space % | Versatility +5, Invisibility +25 and -50, Titan +25 | `orders.hull_space`, added like the speed traits |
+| 33 recruitment food % | Colonization -15 | a soldier costs 300 food, 255 at -15, which every corpus planet shows |
+| 38 planet space % | Stronghold +10, Habitat +20 | already in the facility rules' space bonus |
+| 42 market price % | Trade +50 | already in the server's market quote |
+| 45 anonymous scanning | Intelligence | a spotted scan never names the scanner |
+
+The reward uses the same trait-adjusted firepower, hitpoints, ship cost and upkeep as
+combat and the economy, so a doctrine that strengthens a fleet raises D as well.
+
+The probes did not exercise, because no battle, build or loyalty change happened while a
 doctrine was held: firepower, hitpoints, shields, cloaking, scanner range, hull space,
-building, scan and ship cost modifiers, repair, market price and the loyalty traits. These
-follow their names.
+ground strength, building, scan and ship cost modifiers, repair and the loyalty traits.
+These follow their tooltips.
 
 **Loyalty of conquered planets**, from the manual. A conquered planet's people stay loyal
 to their old ruler in proportion to how long it held them, up to 100 turns. Loyalty grows 1
@@ -538,8 +557,8 @@ which id is which scan is inferred beyond route (2) and fleet (3).
 - [x] Probe every doctrine (§5b, "Doctrine probes")
 - [ ] Probe the doctrine traits a quiet galaxy does not exercise: battles for firepower,
       hitpoints, shields and cloaking, builds for the cost modifiers, a conquest for loyalty
-- [ ] Find what trait 9 (the custom "stationed military" trait) does: not training speed
-- [ ] Settle whether Elite's +1 a soldier also reaches ship crews
+- [x] Find what trait 9 does: ground-combat strength, from the client's trait list
+- [x] Apply every doctrine trait (§5b, "Every doctrine trait is applied")
 - [x] Colony ship surcharge: the manual gives the fitted formula,
       `(planets + colony ships - 1) x 100`; one build of five came out 100 over
 - [ ] Find income's exact idle step: 1/144 a turn leaves idle civs 1 or 2 credits off

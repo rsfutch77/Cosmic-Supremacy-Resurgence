@@ -24,6 +24,7 @@ import math
 from . import combat
 from . import economy as ec
 from . import tables as tb
+from . import traits
 
 K_TURNS = 20                    # until a rival fleet arrives; open in the plan
 EPSILON = 1.0                   # keeps shares defined before anyone arms
@@ -34,24 +35,34 @@ def _fire(design):
     return light + heavy
 
 
+def _armed(civ, d):
+    """(firepower, hitpoints) of a design with the civ's traits, as combat
+    fights it."""
+    return _fire(d) * combat.fire_bonus(civ, d), combat.hitpoints(civ, d)
+
+
 def fleet_upkeep(g, civ):
     return ec.fleet_upkeep(g, civ)
 
 
 def income_before_fleet(g, civ):
     """A civ's credits a turn before fleet upkeep, without corruption."""
+    c = g.civs.get(civ)
+    citizen = ec.INCOME_PER_CITIZEN + traits.value(c, 1)
+    soldier = ec.CREW_UPKEEP + traits.value(c, 32)
     total = 0
     for p in g.planets.values():
         if p.owner != civ:
             continue
         jobs = p.jobs()
-        total += ec.INCOME_PER_CITIZEN * len(p.citizens) + ec.INCOME_PER_BANKER * jobs.get(ec.BANKER, 0)
+        total += citizen * len(p.citizens) + traits.pct(c, 37, ec.INCOME_PER_BANKER * jobs.get(ec.BANKER, 0))
         total -= sum(tb.FACILITIES[f].upkeep * n for f, n in p.facilities.items() if f < len(tb.FACILITIES))
-        total -= ec.CREW_UPKEEP * len(p.military)
+        total -= soldier * len(p.military)
     return total
 
 
 def strength(g, civ):
+    c = g.civs.get(civ)
     fire = hp = 0.0
     for s in g.ships.values():
         if s.owner != civ or s.design not in g.designs:
@@ -59,8 +70,9 @@ def strength(g, civ):
         d = g.designs[s.design]
         need = tb.CHASSIS[d.chassis].crew[0] if d.chassis is not None else 0
         if len(s.crew) >= need and _fire(d):
-            fire += _fire(d) * (1 + combat.RANK_BONUS * combat.ship_rank(s, need))
-            hp += d.hitpoints * s.condition
+            f, h = _armed(c, d)
+            fire += f * (1 + combat.RANK_BONUS * combat.ship_rank(s, need))
+            hp += h * s.condition
     upkeep = fleet_upkeep(g, civ)
     budget = income_before_fleet(g, civ)
     sustain = 1.0 if upkeep <= max(budget, 0) else max(budget, 0) / upkeep
@@ -69,11 +81,13 @@ def strength(g, civ):
 
 def best_design(g, civ):
     """The armed design giving the most strength per production point squared."""
+    c = g.civs.get(civ)
     best, score = None, 0.0
     for d in g.designs.values():
         if d.owner != civ or d.inactive or not _fire(d) or not d.cost:
             continue
-        v = _fire(d) * d.hitpoints / d.cost ** 2
+        f, h = _armed(c, d)
+        v = f * h / ec.ship_cost(g, civ, d) ** 2
         if v > score:
             best, score = d, v
     return best
@@ -87,15 +101,17 @@ def surge(g, civ, k=K_TURNS):
     made = sum(p.jobs().get(ec.WORKER, 0) * ec.worker_yield(p, c)
                for p in g.planets.values() if p.owner == civ
                and p.facilities.get(combat.SHIPYARD))
-    n = made * k / d.cost
+    n = made * k / ec.ship_cost(g, civ, d)
     store = c.resources or [0] * 5
     for have, need in zip(store, d.resources):
         if need:
             n = min(n, have / need)
     headroom = income_before_fleet(g, civ) - fleet_upkeep(g, civ)
-    if d.upkeep:
-        n = min(n, max(0.0, headroom) / d.upkeep)
-    return (n * _fire(d)) * (n * d.hitpoints)
+    upkeep = ec.design_upkeep(c, d)
+    if upkeep:
+        n = min(n, max(0.0, headroom) / upkeep)
+    f, h = _armed(c, d)
+    return (n * f) * (n * h)
 
 
 def ground(g, civ):
@@ -109,12 +125,12 @@ def ground(g, civ):
             continue
         side = combat.ground_side(p.military_xp or [0.0] * len(p.military),
                                   p.facilities.get(combat.BUNKER, 0),
-                                  p.facilities.get(combat.FORTRESS, 0))
+                                  p.facilities.get(combat.FORTRESS, 0), g.civs.get(civ))
         health += sum(h for h, _f in side)
         fire += sum(f for _h, f in side)
     for s in g.ships.values():
         if s.owner == civ and s.design in g.designs:
-            side = combat.ground_side(combat.troops_aboard(g, s), 0, 0)
+            side = combat.ground_side(combat.troops_aboard(g, s), 0, 0, g.civs.get(civ))
             health += sum(h for h, _f in side)
             fire += sum(f for _h, f in side)
     return fire * health
