@@ -180,6 +180,29 @@ def trait_checks():
           traits.GOLDEN_AGE_TURNS - 1, 99)
 
 
+def doctrine_checks():
+    """The doctrine probes: a doctrine bought in a tick already shapes that
+    tick's output, Elite's +70 trains 1.7 times as fast, and Lightweight's
+    -25 units speeds a ship by a third."""
+    runs = {}
+    for topic in (-1, 49):
+        g = galaxy()
+        c = g.civs[BAD]
+        c.completed, c.research, c.topic, c.goal = list(c.completed) + [46], 5_000_000, topic, topic
+        before = c.credits
+        g = ev.tk.tick(g)
+        runs[topic] = g.civs[BAD].credits - before
+    check('Doctrine: Trade pays its +4 a citizen in the tick it is bought',
+          runs[49] - runs[-1], 4 * len(BASE.planets[186].citizens))
+    p = st.Planet(1, BAD, 0, (0, 0, 0), 'p', military=[(3, BAD)], military_xp=[0.0],
+                  facilities={ec.MILITARY_CAMP: 1})
+    ec.train(p, st.Civ(BAD, '', completed=[56]))
+    check('Elite trains at 0.2 x 1.7', round(p.military_xp[0], 3), 0.34)
+    g = galaxy()
+    g.civs[BAD].completed = list(g.civs[BAD].completed) + [65]
+    check('Lightweight\'s -25 units speeds a ship by a third', round(mv.speed(g, g.ships[197]), 3), 18.0)
+
+
 def unrest_checks():
     g = galaxy()
     home = g.planets[HOME]
@@ -279,7 +302,7 @@ def main():
     global BASE
     BASE = sl.load_path(GALAXY)
     for part in (research_checks, colonise_checks, build_checks, loyalty_checks,
-                 combat_checks, conquest_checks, bio_checks, trait_checks, unrest_checks, fog_checks,
+                 combat_checks, conquest_checks, bio_checks, trait_checks, doctrine_checks, unrest_checks, fog_checks,
                  order_checks, env_checks):
         part()
     print(f'\n{len(PASS)} passed, {len(FAIL)} failed')

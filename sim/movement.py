@@ -22,7 +22,8 @@ def speed(g, ship):
     d = g.designs.get(ship.design)
     if d is None or not d.units:
         return 0.0
-    v = d.thrust / d.units
+    # Units take trait 11: Lightweight's -25 sped a Colony Ship up by a third.
+    v = d.thrust / traits.pct(g.civs.get(ship.owner), 11, d.units)
     civ = g.civs.get(ship.owner)
     pct = traits.value(civ, traits.SHIP_SPEED)
     if not d.heavy:

@@ -152,6 +152,10 @@ def pairs(corpus):
 
 def score_pair(before, after, null=False):
     g0, g1 = sl.load_path(before), sl.load_path(after)
+    if g1.turn != g0.turn + 1:
+        # The referee once advanced two turns in one capture; such a pair is
+        # not one tick and is left out.
+        return {}, [f'turn {g0.turn} became {g1.turn}, not one tick; skipped']
     got = g0 if null else st_tick.tick(g0)
     return compare(snapshot(got), snapshot(g1)), g0.gaps + g1.gaps
 

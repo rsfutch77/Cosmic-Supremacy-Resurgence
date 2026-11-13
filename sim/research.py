@@ -174,7 +174,7 @@ def civs(g):
         civ.research -= price
         civ.completed.append(civ.topic)
         if civ.topic == traits.GOLDEN_AGE:
-            # The probe read 99 the turn after and took the +50 from then on.
-            civ.golden_age = traits.GOLDEN_AGE_TURNS - 1
+            # The planet step counts it down to the 99 the probe read after.
+            civ.golden_age = traits.GOLDEN_AGE_TURNS
         civ.topic = next_topic(goal, civ.completed)
         civ.goal = goal if civ.topic >= 0 else NO_TOPIC

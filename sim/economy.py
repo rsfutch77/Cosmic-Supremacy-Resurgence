@@ -233,22 +233,22 @@ def settle(g, p, civ):
 
 
 def train(p, civ=None):
-    """Training speed takes traits 9 and 31 as percents; no capture had either."""
+    """Training speed takes trait 31 as a percent: Elite's 70 trained 1.7 times as
+    fast and Police State's 50 more 2.2 times. Trait 9 left training alone."""
     if not p.military:
         return
     camp = 1 if p.facilities.get(MILITARY_CAMP) else 0
     academy = 1 if p.facilities.get(MILITARY_ACADEMY) else 0
     rate = TRAINING * 2 ** (camp + academy)
-    bonus = traits.value(civ, 9) + traits.value(civ, 31) if civ is not None else 0
-    rate = rate * (100 + bonus) / 100
+    rate = traits.pct(civ, 31, rate)
     cap = 2.0 ** RANK_CAP[2 if academy else camp]
     xps = p.military_xp or [0.0] * len(p.military)
     p.military_xp = [min(cap, x + rate) if x < cap else x for x in xps]
 
 
-def planets(g, reputation=None):
-    """Food, corruption and growth on every owned planet."""
-    reputation = reputation or {}
+def empires(g):
+    """(civ, its planets, space bonus, empire corruption, food idle percent,
+    output idle share) for every civ that owns a working planet."""
     owned = {}
     for p in g.planets.values():
         if p.owner and p.food is not None and p.rates:
@@ -257,18 +257,37 @@ def planets(g, reputation=None):
         civ = g.civs.get(civ_oid)
         if civ is None:
             continue
-        bonus = space_bonus(civ)
         # The manual's reputation term. The client never reads reputation, so
         # loaded civs start at 0 and only the simulator's own battles move it.
-        empire = empire_corruption(len(civ_planets), reputation.get(civ_oid, civ.reputation))
-        idle = inactivity(g.turn, civ.active_turn)
-        share = idle_share(g.turn, civ.active_turn)
+        empire = empire_corruption(len(civ_planets), civ.reputation)
+        yield (civ, civ_planets, space_bonus(civ), empire,
+               inactivity(g.turn, civ.active_turn), idle_share(g.turn, civ.active_turn))
+
+
+def corruption_of(p, civ, bonus, empire):
+    return planet_corruption(empire, len(p.citizens), max_pop(p, bonus)) + loyalty_bonus(p, civ)
+
+
+def bank_science(g):
+    """The turn's science goes into each civ's store first: the research step
+    pays a topic from it in the same tick, and a doctrine bought then shapes
+    the rest of the tick's output (the doctrine probes)."""
+    for civ, civ_planets, bonus, empire, idle, _share in empires(g):
+        points = sum(science(p, civ, corruption_of(p, civ, bonus, empire), idle)
+                     for p in civ_planets)
+        if civ.uid and civ.research is not None:
+            civ.research += points - R(points * wastage(points, civ) / 100)
+
+
+def planets(g):
+    """Production, mining, income, food and growth on every owned planet,
+    after the research step."""
+    for civ, civ_planets, bonus, empire, idle, share in empires(g):
+        civ_oid = civ.oid
         # Ships finished this tick are charged from the next one.
-        income, points = -fleet_upkeep(g, civ_oid), 0
+        income = -fleet_upkeep(g, civ_oid)
         for p in civ_planets:
-            corruption = (planet_corruption(empire, len(p.citizens), max_pop(p, bonus))
-                          + loyalty_bonus(p, civ))
-            points += science(p, civ, corruption, idle)
+            corruption = corruption_of(p, civ, bonus, empire)
             start = dict(p.facilities)
             income += work(p, civ, corruption, share, g)
             # A facility finished this tick works from the next one.
@@ -282,8 +301,6 @@ def planets(g, reputation=None):
                 p.blight -= BLIGHT_RECOVERY
         if civ.credits is not None:
             civ.credits += income
-        if civ.uid and civ.research is not None:
-            civ.research += points - R(points * wastage(points, civ) / 100)
         extra = traits.value(civ, EXTRA_METAL_TRAIT)
         if extra and civ.resources is not None:
             civ.resources[0] += extra
@@ -325,7 +342,7 @@ def work(p, civ, corruption, share, g=None):
     when the turn began."""
     jobs = p.jobs()
     upkeep = sum(tb.FACILITIES[f].upkeep * n for f, n in p.facilities.items()
-                 if f < len(tb.FACILITIES)) + R(traits.pct(civ, 32, CREW_UPKEEP * len(p.military)))
+                 if f < len(tb.FACILITIES)) + (CREW_UPKEEP + traits.value(civ, 32)) * len(p.military)
     made = after_idle(corrupted(jobs.get(WORKER, 0) * worker_yield(p, civ),
                                 corruption), share)
     if p.ore is not None and civ.resources is not None and jobs.get(MINER):
@@ -402,7 +419,7 @@ def build(p, made, g=None, civ=None):
 
 def fleet_upkeep(g, civ_oid):
     """Design upkeep, raised by trait 15 (and 21 for battleships), and 3 a
-    crew member, raised by trait 32 like stationed soldiers."""
+    crew member."""
     civ = g.civs.get(civ_oid)
     ships = crew = 0
     for s in g.ships.values():
@@ -413,7 +430,7 @@ def fleet_upkeep(g, civ_oid):
             u = traits.pct(civ, 15, d.upkeep)
             ships += traits.pct(civ, 21, u) if d.chassis == BATTLESHIP else u
         crew += len(s.crew)
-    return R(ships) + R(traits.pct(civ, 32, CREW_UPKEEP * crew))
+    return R(ships) + CREW_UPKEEP * crew
 
 
 def inactivity(turn, active_turn):
