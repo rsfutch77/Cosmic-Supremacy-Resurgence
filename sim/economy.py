@@ -358,6 +358,30 @@ def pay_debt(g, civ):
             p.military = [m for i, m in enumerate(p.military) if i not in gone]
             p.military_xp = [x for i, x in enumerate(xp) if i not in gone]
             civ.credits += n * soldier
+    # Debt the home losses leave costs ships anywhere, then more facilities,
+    # so a civ cannot keep a fleet it does not pay for.
+    away = sorted((s for s in g.ships.values() if s.owner == oid),
+                  key=lambda s: (s.design in g.designs and g.designs[s.design].upkeep, s.oid))
+    for s in away:
+        if civ.credits >= 0:
+            break
+        d = g.designs.get(s.design)
+        civ.credits += (R(design_upkeep(civ, d)) if d is not None else 0) + CREW_UPKEEP * len(s.crew)
+        g.ships.pop(s.oid, None)
+        f = g.fleets.get(s.fleet)
+        if f is not None and s.oid in f.ships:
+            f.ships.remove(s.oid)
+    while civ.credits < 0:
+        built = [(tb.FACILITIES[k].cost, p.oid, k) for p in owned for k, n in p.facilities.items()
+                 if n and k < len(tb.FACILITIES)]
+        if not built:
+            break
+        cost, poid, k = max(built)
+        p = g.planets[poid]
+        p.facilities[k] -= 1
+        if not p.facilities[k]:
+            del p.facilities[k]
+        civ.credits += tb.FACILITIES[k].upkeep + cost // LOST_FACILITY_REFUND
     civ.credits = max(0, civ.credits)
 
 
@@ -453,7 +477,7 @@ def build(p, made, g=None, civ=None):
             prod.progress -= cost
             p.facilities[prod.item] = p.facilities.get(prod.item, 0) + 1
             # Queues are not modelled; a finished item falls to Wealth.
-            prod.kind, prod.item = 'WLTH', None
+            prod.kind, prod.item, prod.hurried = 'WLTH', None, False
     elif prod.kind == 'SCAN' and prod.item in SCAN_COSTS and civ is not None:
         cost = round(traits.pct(civ, 25, SCAN_COSTS[prod.item]))
         if prod.progress >= cost:
@@ -530,7 +554,12 @@ def food(p, civ, bonus, empire, idle=0.0, corruption=None):
         surplus -= share
         recruit(p, after_inactivity(share, 2 * idle))
     store += surplus
-    grew = store >= cap
+    full = pop >= max_pop(p, bonus)
+    if full:
+        # The manual's limit: no births past the planet's space, and the
+        # store holds at its size.
+        store = min(store, cap)
+    grew = store >= cap and not full
     if grew:
         store -= cap
         p.citizens.insert(0, (FARMER, p.owner))

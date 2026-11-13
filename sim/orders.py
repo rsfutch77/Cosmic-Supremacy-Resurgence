@@ -96,6 +96,9 @@ def build_ship(g, civ, planet, design):
     d = g.designs.get(design)
     if d is None or d.owner != civ or d.inactive:
         return False, 'not an active design of the civ\'s'
+    prod = p.production
+    if prod is not None and prod.kind == 'SHIP' and prod.item == design:
+        return False, 'the planet is already building that design'
     store = g.civs[civ].resources or [0] * 5
     if any(have < need for have, need in zip(store, d.resources)):
         return False, 'not enough ship resources'
@@ -144,7 +147,7 @@ def cost_of(g, p):
     if prod is None or prod.item is None:
         return None
     if prod.kind == 'FCLT':
-        return ec.facility_cost(prod.item, p.facilities.get(prod.item, 0))
+        return ec.facility_cost(prod.item, p.facilities.get(prod.item, 0), g.civs.get(p.owner))
     if prod.kind == 'SHIP' and prod.item in g.designs:
         return ec.ship_cost(g, p.owner, g.designs[prod.item])
     if prod.kind == 'SCAN' and prod.item in sc.SCANS:
@@ -187,7 +190,8 @@ def recruit(g, civ, planet, rate):
     p, why = _own_planet(g, civ, planet)
     if p is None:
         return False, why
-    cap = RECRUIT_BASE + RECRUIT_CAMP * (1 if p.facilities.get(ec.MILITARY_CAMP) else 0)
+    # Every Military Camp adds 20, the client's recruitment tooltip says.
+    cap = RECRUIT_BASE + RECRUIT_CAMP * p.facilities.get(ec.MILITARY_CAMP, 0)
     if not 0 <= rate <= cap:
         return False, f'the rate runs 0 to {cap}'
     p.recruit = rate
@@ -248,6 +252,10 @@ def _go(g, civ, ship, target, kind):
     else:
         return False, 'no such sun or planet'
     start_r = g.radius.get(s.orbit, 0) if s.orbit else 0
+    d = g.designs.get(s.design)
+    need = tb.CHASSIS[d.chassis].crew[0] if d is not None and d.chassis is not None else 0
+    if len(s.crew) < need:
+        return False, f'the ship needs {need} crew to fly'
     if s.fleet:
         return False, 'the ship is in a fleet; order the fleet'
     s.order = st.Order(kind, end, 0.0, [mv.leg(s.pos, start_r, end, end_r)], s.orbit)
