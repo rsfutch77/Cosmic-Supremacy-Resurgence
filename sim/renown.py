@@ -14,9 +14,10 @@ score-reputation-and-rank page, with no capture to check them against.
                   an armed ship; measured once: 2 x 545 / 590 = 1.85 on the turn-110
                   battle's two defending fighters, and nothing for its colony ship
 
-The client keeps reputation per relation and never reads it in play (Memory
-Reconstruction Report), so it changes no rule here: corruption stays as the
-client computes it. It is counted so the reward can weigh it. Scores start at
+The engine ignores reputation: one save ticked with every relation of a civ
+at 0, +100 and -100, set by the engine's own AddReputation, came out the same
+to the credit. The simulator still applies the manual's reputation term to
+corruption (economy.empires), a rule the engine does not have. Scores start at
 0, since the save's score is not read.
 """
 import math

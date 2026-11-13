@@ -6,7 +6,8 @@ Dominance, the training reward (docs/Fast_Sim_Plan.md, section 1a).
     T   ground strength: the same product for soldiers, stationed on the civ's
         planets and aboard its troop ships, by the manual's ground combat
     G   surge capacity: the strength the civ could add in K turns, building its
-        best design with its production, ship resources and upkeep headroom
+        best design with its production after corruption, ship resources and
+        upkeep headroom; reputation reaches it through corruption
     D   the geometric mean of the shares of S, T and G, each of the galaxy's
         total
 
@@ -45,17 +46,31 @@ def fleet_upkeep(g, civ):
     return ec.fleet_upkeep(g, civ)
 
 
+def corruption(g, civ):
+    """{planet: percent} as the economy step applies it, reputation and
+    loyalty included; negative is output lost."""
+    c = g.civs.get(civ)
+    mine = [p for p in g.planets.values() if p.owner == civ and p.food is not None and p.rates]
+    if c is None or not mine:
+        return {}
+    empire = ec.empire_corruption(len(mine), c.reputation)
+    bonus = ec.space_bonus(c)
+    return {p.oid: ec.corruption_of(p, c, bonus, empire) for p in mine}
+
+
 def income_before_fleet(g, civ):
-    """A civ's credits a turn before fleet upkeep, without corruption."""
+    """A civ's credits a turn before fleet upkeep, after corruption."""
     c = g.civs.get(civ)
     citizen = ec.INCOME_PER_CITIZEN + traits.value(c, 1)
     soldier = ec.CREW_UPKEEP + traits.value(c, 32)
+    lost = corruption(g, civ)
     total = 0
     for p in g.planets.values():
         if p.owner != civ:
             continue
         jobs = p.jobs()
-        total += citizen * len(p.citizens) + traits.pct(c, 37, ec.INCOME_PER_BANKER * jobs.get(ec.BANKER, 0))
+        gross = citizen * len(p.citizens) + traits.pct(c, 37, ec.INCOME_PER_BANKER * jobs.get(ec.BANKER, 0))
+        total += ec.corrupted(gross, lost.get(p.oid, 0.0))
         total -= sum(tb.FACILITIES[f].upkeep * n for f, n in p.facilities.items() if f < len(tb.FACILITIES))
         total -= soldier * len(p.military)
     return total
@@ -69,7 +84,7 @@ def strength(g, civ):
             continue
         d = g.designs[s.design]
         need = tb.CHASSIS[d.chassis].crew[0] if d.chassis is not None else 0
-        if len(s.crew) >= need and _fire(d):
+        if len(s.crew) >= combat.crew_needed(d) and _fire(d):
             f, h = _armed(c, d)
             fire += f * (1 + combat.RANK_BONUS * combat.ship_rank(s, need))
             hp += h * s.condition
@@ -98,7 +113,8 @@ def surge(g, civ, k=K_TURNS):
     if d is None:
         return 0.0
     c = g.civs[civ]
-    made = sum(p.jobs().get(ec.WORKER, 0) * ec.worker_yield(p, c)
+    lost = corruption(g, civ)
+    made = sum(ec.corrupted(p.jobs().get(ec.WORKER, 0) * ec.worker_yield(p, c), lost.get(p.oid, 0.0))
                for p in g.planets.values() if p.owner == civ
                and p.facilities.get(combat.SHIPYARD))
     n = made * k / ec.ship_cost(g, civ, d)
