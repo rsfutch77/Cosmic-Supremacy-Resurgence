@@ -31,6 +31,7 @@ import inject_civ as icv                                        # noqa: E402
 import merge_orders as mo                                       # noqa: E402
 import news                                                     # noqa: E402
 import fog                                                      # noqa: E402
+import joins                                                    # noqa: E402
 
 FIX = os.path.join(HERE, 'fixtures', 'messages')
 GOOD, BAD = 656, 660
@@ -161,6 +162,24 @@ def main():
           (b'Message from GoodGuy - Subject: 100pct (b)',
            b'a/b (i)x(/i)\r\nZo\xeb'))
     check('with no note', notes, {})
+
+    print('\na joiner starts with no news')
+    joined, _planet = icv.add_civ(m2, 'Newcomer', log=quiet)
+    new = next(o['oid'] for o in icv.owner_records(joined)
+               if o['name'] == 'Newcomer')
+    inherited = messages(joined, new)
+    check('the clone inherits a donor\'s messages', bool(inherited), True)
+    forgot = joins.forget_inherited_news(joined, 'Newcomer', log=quiet)
+    check('and joins.forget_inherited_news empties its list',
+          news.items_of(forgot, new), [])
+    check('and clears its new-news flag', flag(forgot, new), 0)
+    check('while GoodGuy and BadGuy keep theirs',
+          (messages(forgot, GOOD), messages(forgot, BAD)),
+          (messages(m2, GOOD), messages(m2, BAD)))
+    check('and the table is untouched', news.read_table(forgot),
+          news.read_table(joined))
+    check('a civ with no news is left alone',
+          joins.forget_inherited_news(forgot, 'Newcomer', log=quiet), forgot)
 
     print('\na sender with a chosen civ name')
     named = mo.set_civ_identity(m0, GOOD, b'Goody', 0, -1)

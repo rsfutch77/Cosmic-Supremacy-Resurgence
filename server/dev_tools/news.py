@@ -214,22 +214,26 @@ def new_news_at(blob, civ_oid, identity_at):
     return identity_at - NEW_NEWS_BACK
 
 
+def clear_list(blob, civ_oid):
+    """`blob` with a civ's list emptied. A list that does not read is left."""
+    found = list_of(blob, civ_oid)
+    if found is None or not found[1]:
+        return blob
+    count_at, secs = found
+    tree = sp.parse_blob(blob)
+    data = _data_of(blob, civ_oid, tree)
+    payload = (blob[data.payload:count_at] + U32.pack(0)
+               + blob[secs[-1].end:data.end])
+    return sp.replace_payload(blob, tree, data, payload)
+
+
 def own_view(blob, civ_oid):
     """`blob` with every other civ's list empty and the string table holding
     only the strings `civ_oid`'s own list names. The next id is kept, so a
     string the civ adds is numbered as in the full table."""
     for o in icv.owner_records(blob):
-        if o['oid'] == civ_oid:
-            continue
-        found = list_of(blob, o['oid'])
-        if found is None or not found[1]:
-            continue
-        count_at, secs = found
-        tree = sp.parse_blob(blob)
-        data = _data_of(blob, o['oid'], tree)
-        payload = (blob[data.payload:count_at] + U32.pack(0)
-                   + blob[secs[-1].end:data.end])
-        blob = sp.replace_payload(blob, tree, data, payload)
+        if o['oid'] != civ_oid:
+            blob = clear_list(blob, o['oid'])
     own = items_of(blob, civ_oid) or []
     named = {i['title_id'] for i in own} | {i['body_id'] for i in own}
     table = read_table(blob)
