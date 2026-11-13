@@ -1915,9 +1915,12 @@ What is left for after the beta is kept here.
   describes a ruler's influence over a planet's population growing each turn; whether the citizen
   owner field itself ever changes to the planet's owner is not measured.
 
-- [ ] **Nothing checks that a submitted order is legal**, only that it is the player's own. A
-  technology the civ cannot research, or a queue entry it cannot afford, is copied as given. Done
-  when the merge applies the rule the UI enforces for each order type it accepts.
+**The merge checks that an order is the player's own, not that the UI would allow it.** A
+technology the civ cannot research, or a queue entry it cannot afford, is copied as given. The
+client enforces those rules itself, so only an edited client or a memory edit gets past them,
+and the merge never takes a civ's credits or stocks from a submission: the referee charges
+hurries, trades and treaty sums itself. Checking every order type is not planned; it is taken up if cheating shows up in a galaxy
+(Robert, 13 November 2026).
 
 - [x] **Logging in is played through the live relay.** The relay knows a player by uid, and
   creating an account or linking Google keeps the guest's. On 4 November 2026 an email login
