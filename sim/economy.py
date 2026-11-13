@@ -59,6 +59,7 @@ LOYALTY_PER_SOLDIER = 10        # percent, per effective soldier per citizen
 PROPAGANDA_OFFICE = 12
 PROPAGANDA_LOYALTY, PROPAGANDA_CITIZENS = 10, 10    # +10% for 10 citizens each
 LOYALTY_GROWTH = 1.0            # points a turn on a resisting planet
+BLIGHT_RECOVERY = 1             # bio-blighted space that recovers a turn
 REBELLION_LINE, REBELLION_GRACE = 30, 3
 REBELLION_CHANCE = 20           # percent a turn once the grace is up; not given anywhere
 SPACE_PER_CITIZEN = 10
@@ -89,7 +90,7 @@ def space_bonus(civ):
 
 def max_pop(planet, bonus):
     space = planet.base_space + (R(planet.base_space * bonus / 100) if bonus else 0)
-    return (space - (planet.lost_space or 0)) // SPACE_PER_CITIZEN
+    return (space - (planet.lost_space or 0) - planet.blight) // SPACE_PER_CITIZEN
 
 
 def empire_corruption(planets, reputation=0):
@@ -257,7 +258,9 @@ def planets(g, reputation=None):
         if civ is None:
             continue
         bonus = space_bonus(civ)
-        empire = empire_corruption(len(civ_planets), reputation.get(civ_oid, 0))
+        # The manual's reputation term. The client never reads reputation, so
+        # loaded civs start at 0 and only the simulator's own battles move it.
+        empire = empire_corruption(len(civ_planets), reputation.get(civ_oid, civ.reputation))
         idle = inactivity(g.turn, civ.active_turn)
         share = idle_share(g.turn, civ.active_turn)
         # Ships finished this tick are charged from the next one.
@@ -274,6 +277,8 @@ def planets(g, reputation=None):
             p.facilities = built
             train(p, civ)
             settle(g, p, civ)
+            if p.blight:
+                p.blight -= BLIGHT_RECOVERY
         if civ.credits is not None:
             civ.credits += income
         if civ.uid and civ.research is not None:

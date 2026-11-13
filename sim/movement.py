@@ -14,6 +14,7 @@ from . import traits
 
 ORBIT_CLEARANCE = 1.02          # radii between a body's centre and a route's end
 MOVE, SCOUT, COLONISE = 1, 2, 3
+BIO_BOMB = 6                    # inferred: inject_order lists 1 to 5 and 7
 
 
 def speed(g, ship):

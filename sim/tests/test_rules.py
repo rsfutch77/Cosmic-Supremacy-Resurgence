@@ -146,6 +146,25 @@ def combat_checks():
     check('a light ship at its shipyard mends 15% a turn', g.ships[913].condition, 1.0)
 
 
+def bio_checks():
+    """The manual's bio-bombing; no capture has one."""
+    g = galaxy()
+    home = g.planets[HOME]
+    home.military, home.military_xp = [(3, DEMO)] * 5, [0.0] * 5
+    pop = len(home.citizens)
+    g.designs[904] = st.Design(904, BAD, 'bio', {'chassis': [1], 'scanners': [], 'engines': [0],
+                                                 'weapons': [], 'modules': [4], 'shields': []})
+    g.ships[930] = st.Ship(930, BAD, home.pos, 904, [(3, BAD)], 1.0, crew_xp=[0.0])
+    g.civs[DEMO].stances[BAD] = g.civs[BAD].stances[DEMO] = combat.WAR
+    check('a ship with bio-bombs takes the order', od.bio_bomb(g, BAD, 930, HOME, 2, 1), (True, ''))
+    g.ships[930].orbit = HOME
+    combat.bio_bomb(g, home, [g.ships[930]])
+    check('one set kills 20, soldiers first, blights 5 space and costs 0.1 reputation',
+          (len(home.military), pop - len(home.citizens), home.blight,
+           round(g.civs[BAD].reputation, 2), g.ships[930].order.runs),
+          (0, min(pop, 15), 5, -0.1, 1))
+
+
 def trait_checks():
     g = galaxy()
     c = g.civs[BAD]
@@ -260,7 +279,7 @@ def main():
     global BASE
     BASE = sl.load_path(GALAXY)
     for part in (research_checks, colonise_checks, build_checks, loyalty_checks,
-                 combat_checks, conquest_checks, trait_checks, unrest_checks, fog_checks,
+                 combat_checks, conquest_checks, bio_checks, trait_checks, unrest_checks, fog_checks,
                  order_checks, env_checks):
         part()
     print(f'\n{len(PASS)} passed, {len(FAIL)} failed')

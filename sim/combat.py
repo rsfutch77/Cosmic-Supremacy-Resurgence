@@ -114,6 +114,7 @@ def battles(g):
             continue
         friends = [s for s in here if s.owner == p.owner]
         fight(g, p, friends, foes)
+        bio_bomb(g, p, [s for s in foes if s.oid in g.ships])
 
 
 def fight(g, p, friends, foes):
@@ -147,8 +148,58 @@ def fight(g, p, friends, foes):
         for kind in (LIGHT_TURRET, HEAVY_TURRET, SHIELD_GENERATOR):
             p.facilities.pop(kind, None)
     defended = planet.hp > 1e-9 or alive(home)
-    if not defended and alive(away):
+    bombing = any(u.ship.order and u.ship.order.kind == movement.BIO_BOMB and u.ship.order.runs
+                  for u in alive(away))
+    if not defended and alive(away) and not bombing:
         invade(g, p, [u.ship for u in alive(away)])
+
+
+BIO_BOMBS = 4                   # module id
+BIO_KILLS = 20                  # soldiers or citizens a bomb set kills a turn
+BIO_BLIGHT = 5                  # space a set makes uninhabitable
+BIO_REPUTATION = 0.1            # lost per set dropped
+BIO_SHELTER = (2, 3)            # 1 in 2 in a bunker, 1 in 3 in a fortress is killed
+
+
+def bio_bomb(g, p, ships):
+    """The manual's bio-bombing, after conventional bombing: each set kills 20,
+    soldiers first, those sheltered in bunkers and fortresses less often; it
+    blights 5 space, costs the bomber 0.1 reputation, and turns the victim's
+    former people on the bomber's planets 1 loyalty point against it. No
+    capture has shown one."""
+    for s in ships:
+        o = s.order
+        if o is None or o.kind != movement.BIO_BOMB or not o.runs or s.orbit != p.oid:
+            continue
+        d = g.designs.get(s.design)
+        sets = min(o.bombs or 1, (d.parts.get('modules') or ()).count(BIO_BOMBS)) if d else 0
+        if not sets:
+            continue
+        kills = BIO_KILLS * sets
+        bunkered = 4 * p.facilities.get(BUNKER, 0)
+        fortified = 8 * p.facilities.get(FORTRESS, 0)
+        xp = sorted(p.military_xp or [0.0] * len(p.military), reverse=True)
+        sheltered = min(len(xp), fortified + bunkered)
+        open_ = len(xp) - sheltered
+        dead = min(open_, kills)
+        kills -= dead
+        if kills:
+            dead_f = min(min(fortified, sheltered), kills // BIO_SHELTER[1])
+            dead_b = min(sheltered - min(fortified, sheltered), (kills - dead_f) // BIO_SHELTER[0])
+            kills -= dead_f * BIO_SHELTER[1] + dead_b * BIO_SHELTER[0]
+            dead += dead_f + dead_b
+        keep = len(xp) - dead
+        p.military, p.military_xp = p.military[:keep], xp[:keep]
+        if kills > 0:
+            p.citizens = p.citizens[min(len(p.citizens), kills):]
+        p.blight += BIO_BLIGHT * sets
+        g.civs[s.owner].reputation -= BIO_REPUTATION * sets
+        for q in g.planets.values():
+            if q.owner == s.owner and q.prior_owner == p.owner:
+                q.loyalty = max(0.0, q.loyalty - sets)
+        o.runs -= 1
+        if not o.runs:
+            s.order = None
 
 
 def defence_units(p):

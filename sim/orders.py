@@ -254,6 +254,26 @@ def _go(g, civ, ship, target, kind):
     return True, ''
 
 
+def bio_bomb(g, civ, ship, planet, runs, bombs):
+    """Send a ship with Bio Bombs to bomb a planet for `runs` turns, `bombs`
+    sets a turn."""
+    s, why = _own_ship(g, civ, ship)
+    if s is None:
+        return False, why
+    sets = (g.designs[s.design].parts.get('modules') or ()).count(4)
+    if not sets:
+        return False, 'the ship carries no bio-bombs'
+    p = g.planets.get(planet)
+    if p is None or not p.owner or p.owner == civ:
+        return False, 'not another civ\'s planet'
+    if runs < 1 or not 1 <= bombs <= sets:
+        return False, f'1 or more runs of 1 to {sets} sets'
+    ok, why = _go(g, civ, ship, planet, mv.BIO_BOMB)
+    if ok:
+        s.order.runs, s.order.bombs = runs, bombs
+    return ok, why
+
+
 def move(g, civ, ship, target):
     """Fly to a sun or planet. Into orbit of a planet at war with the civ, the
     ship is the aggressor and the planet's defence fights it."""
@@ -360,7 +380,7 @@ ACTIONS = {
     'wealth': wealth, 'hurry': hurry, 'research': research, 'recruit': recruit,
     'crew': crew, 'move': move, 'colonise': colonise, 'scout': scout,
     'trade': trade, 'war': declare_war, 'design': design,
-    'build_scan': build_scan, 'scan': scan,
+    'build_scan': build_scan, 'scan': scan, 'bio_bomb': bio_bomb,
 }
 
 

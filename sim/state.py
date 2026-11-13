@@ -94,6 +94,8 @@ class Order:
     legs: list = field(default_factory=list)    # [(origin, dest, length)]
     ref: int = 0                    # object behind the order, 0 for a point
     flown: list = field(default_factory=list)   # legs already behind the ship
+    runs: int = 0                   # bio-bombing turns left
+    bombs: int = 0                  # bio-bomb sets dropped a turn
 
 
 @dataclass
@@ -161,6 +163,7 @@ class Planet:
     loyalty: float = 100.0          # percent; not found in a save, so loaded planets read 100
     prior_owner: int = 0            # who held it before a conquest
     unrest: int = 0                 # turns in a row below the rebellion line
+    blight: int = 0                 # space bio-bombs have made uninhabitable
 
     def jobs(self):
         out = {}
