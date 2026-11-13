@@ -741,6 +741,13 @@ the rest of the record misread. An id is not checked to name a civ.
   `(b)hi(/b) from the merge/test 100pct` and `Zoë`, a reply restored and merged with no note, and
   the reply read by GoodGuy from its view with the news tab marked new (Robert). Done when a
   message sent each way on the sandbox arrives with the next turn.
+- [ ] **Messages arrive between ticks, close to instantly.** A message travels inside its
+  sender's submission, so it reaches the recipient with the next tick, up to a whole turn later.
+  Per tick is acceptable for now (Robert, 13 November 2026). The client's online path sends
+  `SDNW` v0 holding one `NEWS` the moment a message is sent; nothing answers it, because the
+  launcher runs the client offline. Done when a message sent in the client reaches a recipient
+  whose launcher is open within a minute, shows in the recipient's news without waiting for the
+  tick, and is still in the turn the referee publishes.
 - [x] **Each civ is served only its own news.** `fog.project` empties every other civ's news list
   and keeps only the strings its own list names, with the next id unchanged (`news.own_view`),
   and `fog.restore` puts them back ahead of anything the submission added, so a restored view is
