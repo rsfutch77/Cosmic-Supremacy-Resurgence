@@ -434,10 +434,22 @@ never found, so a loaded planet reads 100%. Propaganda offices raise a loyal pla
 **Score, reputation and crew experience**, from the manual. Crew experience is measured:
 the turn-110 battle's defending fighters gained 1.847 each, 2 x 545 / 590, which is every kind
 of firepower the enemy had over every kind its own side had, its turret included, and the
-unarmed colony ship's crew gained nothing. Score and reputation follow the manual's page and
-are counted for the reward. They change no rule: the client keeps reputation per relation
-and never reads it in play (Memory Reconstruction Report), so corruption stays as the client
-computes it.
+unarmed colony ship's crew gained nothing. Score and reputation follow the manual's page.
+
+**Reputation raises or lowers corruption**, the manual's formula, as the original server
+applied it. The client keeps reputation per relation and never reads it in play (Memory
+Reconstruction Report), so a loaded civ starts at 0, the value every corruption fit so far
+assumed, and only battles in the simulator move it. The score ratio divides by 80% of one's
+own score. So attacking a civ of one's own size gains about 1.6 reputation (5 x log2 1.25),
+and only attacking a civ under 80% of one's own score loses it.
+
+**Bio-bombing**, from the manual, with no capture to check it. A ship with Bio Bombs takes
+a bio-bomb order for a number of runs and sets a turn, inferred as order kind 6 (the order
+injector lists 1 to 5 and 7). Each set kills 20 a turn, soldiers first, and soldiers in
+bunkers and fortresses are killed 1 in 2 and 1 in 3 as often. Each set blights 5 space, which
+recovers 1 a turn, and costs the bomber 0.1 reputation. It also turns the victim's former
+people on the bomber's planets 1 loyalty point against it. Bio-bombing comes after
+conventional bombing, and invasions wait while any bio-bombing ship is in orbit.
 
 **Fog** (measured on `EXSY`). A civ's row for a system is refreshed every turn it owns a
 planet there, and every turn a planet of the system is within the scanner range of one of
@@ -511,7 +523,9 @@ which id is which scan is inferred beyond route (2) and fleet (3).
 - [x] Conquered planets' loyalty and rebellion (§5b), with the rebellion chance invented
 - [ ] Find a planet's loyalty in the save, on a conquered planet
 - [x] Fog to the client's rules (§5b)
-- [ ] Bio-bombs: 20 soldiers or citizens a set, 5 space lost for a while, -0.1 reputation
+- [x] Bio-bombs (§5b), from the manual
+- [ ] Facilities lost to blighted space: the manual says bio-bombing destroys them
+      indirectly, and the simulator destroys none
 - [x] Observation and action interface on the simulator (`sim/env.py`, `sim/orders.py`)
 - [ ] The client backend of the same interface: actions to `merge_orders` submissions
 - [x] Viewer page for checking a run by eye (`sim/viewer.py`)
