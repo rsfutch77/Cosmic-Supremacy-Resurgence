@@ -89,6 +89,9 @@ MIN_BUILD_KEY = 'min_build'
 # `{"<turn>": [civ, ...]}`. `publish` replaces the whole map; a civ not named
 # is served the turn itself, which is its view.
 VIEWS_KEY = 'views'
+# The view a caller with none of its own is served: the turn with every civ's
+# news withheld. Longer than NAME_LIMIT, so no civ can hold the name.
+PUBLIC_VIEW = 'public-without-news'
 WARN_KEY, RECLAIM_KEY = 'warn_after_misses', 'reclaim_after_misses'
 
 # The civs the AI plays, as a list of names. Written by `bot_worker.py --add`;

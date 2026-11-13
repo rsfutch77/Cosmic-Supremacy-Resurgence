@@ -618,25 +618,36 @@ def run_views(referee, galaxy, token_a, token_b):
         return code, urllib.parse.unquote(headers.get('Location', ''))
 
     print('each seat is served its own view of a turn')
+    public = turn_store.PUBLIC_VIEW
     turn = referee.state()['turn'] + 1
     shared, view = make_blob(turn), make_blob(turn, filler=b'v')
-    referee.publish(turn, shared, views={'DemoPlayer': view})
+    referee.publish(turn, shared, views={'DemoPlayer': view,
+                                         public: make_blob(turn, filler=b'p')})
     code, where = location(token_a, turn)
     check('a seat with a view is sent to it',
           (code, referee.view_object('DemoPlayer', turn) in where), (302, True))
     code, where = location(token_b, turn)
-    check('a seat without one is sent to the turn',
-          (code, referee.turn_object(turn) in where), (302, True))
+    check('a seat without one is sent to the view without news',
+          (code, referee.view_object(public, turn) in where), (302, True))
     check('the referee reads the view back',
           referee.view_blob('DemoPlayer', turn), view)
     check('and None for a civ given none', referee.view_blob('Neighbor', turn),
           None)
     referee.publish(turn + 1, make_blob(turn + 1))
-    check('the next publish deletes the last turn\'s views',
-          referee._has(referee.view_object('DemoPlayer', turn)), False)
+    check('the next publish keeps the last turn\'s views',
+          referee._has(referee.view_object('DemoPlayer', turn)), True)
+    code, where = location(token_a, turn)
+    check('so a launcher asking for it as the turn changes still gets its own',
+          (code, referee.view_object('DemoPlayer', turn) in where), (302, True))
     code, where = location(token_a, turn + 1)
-    check('and a turn with no views sends every seat to the turn',
-          referee.turn_object(turn + 1) in where, True)
+    check('a current turn published with no views sends every seat to the turn',
+          (code, referee.turn_object(turn + 1) in where), (302, True))
+    referee.publish(turn + 2, make_blob(turn + 2))
+    check('the publish after that deletes them',
+          (referee._has(referee.view_object('DemoPlayer', turn)),
+           referee._has(referee.view_object(public, turn))), (False, False))
+    code, _where = location(token_a, turn + 1)
+    check('and an earlier turn with no views is not served whole', code, 403)
 
 
 def run_catalog(referee, galaxy, root, token_a, token_c):

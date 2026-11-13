@@ -336,15 +336,15 @@ So the score list holds one row per distinct `Owner:4`, and the collision, not t
 
 [ ] **The score list also feeds battle scoring.** `0x4430F0` reads it for the score ratio and skips a civ with no row, so a missing row changed battle scoring too, not only the display. Check whether any other caller reads the map at `0x857940`.
 
-[ ] **A clone inherits its donor's display name and score.** The `OWPR` display-name override (`civ+0x1A0`) and `Owner:28`/`Owner:32` are copied, so from the first boundary an injected clone of a renamed donor shows under the donor's display name, and a joiner starts with the donor's score. Same kind of inheritance as `EXSY` below.
+[x] **A clone inherits its donor's display name and score.** The `OWPR` display-name override (`civ+0x1A0`) and `Owner:28`/`Owner:32` are copied, so from the first boundary an injected clone of a renamed donor shows under the donor's display name, and a joiner starts with the donor's score. Same kind of inheritance as `EXSY` below. **Fixed for joins** (`joins.fresh_start`, `test_fair_start.py`, 13 November 2026): a joiner's score is set to zero in its score row and in `OWPR`, where `Owner:28` sits 78 bytes before the length field of the civ name dialog 225 chose (measured against every civ's score row on the sandbox at turn 163), and the civ name and arms are cleared, so the client offers dialog 225 and the merge takes the joiner's own choice.
 
-[ ] **`EXSY` is cloned, not reset, and that is a cheat rather than a cosmetic defect.** An injected civ inherits the donor's explored-systems map, so cloning a developed donor tells the newcomer where the home planets are. Two things keep it from mattering yet and neither is a fix: the AI player does not read `EXSY` (it keeps its own discovery set, persisted per civ name), and cloning from a turn-1 capture inherits an empty map, so only the developed-donor fixture leaks. The fix needs the record layout, which is not decoded, the leading `u32` reads 63 on a civ that had explored 105 systems, so it is not a plain count and the obvious guess is already falsified. **That `EXSY` is the explored-systems map is itself inferred** from the tag and from its size tracking exploration across two civs; confirm it while decoding it.
+[x] **`EXSY` is cloned, not reset, and that is a cheat rather than a cosmetic defect.** An injected civ inherits the donor's explored-systems map, so cloning a developed donor tells the newcomer where the home planets are. Two things keep it from mattering yet and neither is a fix: the AI player does not read `EXSY` (it keeps its own discovery set, persisted per civ name), and cloning from a turn-1 capture inherits an empty map, so only the developed-donor fixture leaks. The fix needs the record layout, which is not decoded, the leading `u32` reads 63 on a civ that had explored 105 systems, so it is not a plain count and the obvious guess is already falsified. **That `EXSY` is the explored-systems map is itself inferred** from the tag and from its size tracking exploration across two civs; confirm it while decoding it. **Fixed for joins:** `joins.forget_inherited_map` empties the joiner's `EXSY`.
 
-[ ] **A joiner inherits the donor's civ traits, bonuses included.** Seen on screen 28 September 2026: a civ that joined at turn 11 carried the donor's food-output trait bonus. `add_civ` clones the donor's `OWNR` whole and the traits are inside it, so this is the same mechanism as `EXSY` and the food stores rather than a separate defect. Accepted for the beta, where everybody starts with the same extra anyway, and wrong afterwards: a new civ should get the homeworld button back and choose its own traits. Everything the fix needs is now located: the trait values are `OWNR > CVTR`, (index, value) pairs after a 20-byte header (`merge_orders.TRAIT_RULES`), and the two prompts are offered while `Owner:359` (homeworld) and `Owner:360` (traits) are clear, both one-byte flags in `OWPR` (see "The three one-time setup prompts"). So `add_civ` should give the joiner the untouched trait values and clear both flags, and the referee then takes the joiner's confirm like anyone else's.
+[x] **A joiner inherits the donor's civ traits, bonuses included.** Seen on screen 28 September 2026: a civ that joined at turn 11 carried the donor's food-output trait bonus. `add_civ` clones the donor's `OWNR` whole and the traits are inside it, so this is the same mechanism as `EXSY` and the food stores rather than a separate defect. Accepted for the beta, where everybody starts with the same extra anyway, and wrong afterwards: a new civ should get the homeworld button back and choose its own traits. Everything the fix needs is now located: the trait values are `OWNR > CVTR`, (index, value) pairs after a 20-byte header (`merge_orders.TRAIT_RULES`), and the two prompts are offered while `Owner:359` (homeworld) and `Owner:360` (traits) are clear, both one-byte flags in `OWPR` (see "The three one-time setup prompts"). So `add_civ` should give the joiner the untouched trait values and clear both flags, and the referee then takes the joiner's confirm like anyone else's. **Fixed for joins** (`joins.fresh_start`, 13 November 2026): every trait is set to 0, the value a civ holds before its first confirm, and `Owner:360` is cleared. Given the galaxy's turn 0, the joiner's homeworld takes the dialog fields of a homeworld whose prompt was never confirmed there, and `Owner:359` is cleared; without turn 0 the homeworld stays as cloned and the join log says so.
 
 [ ] **Does a joiner inherit the donor's corruption?** Unknown, and it matters more than it looks. A civ joining a galaxy whose seat one is failing late would take on that civ's corruption along with its warehouses, which could cripple a newcomer at the moment they arrive. Corruption has **resisted location in memory entirely** (see the memory report) and is plausibly derived at display time from population, buildings and military rather than stored, in which case copying the planet copies the corruption and there is no field to clear. `GSET.corruption_multiplier = 100` is a galaxy-level knob and the cheapest way to make it vary. Settle whether it is stored or derived first: the two answers need completely different fixes, and only one of them has a field to blank. Observed at −0.5% on a turn-11 joiner, which is unremarkable on its own and says nothing about a late-game donor.
 
-[ ] **An injected civ gets no ships.** `SHIP`/`DYNO` records are galaxy-level rather than per-civ, so a starting colony ship is a separate job. Against civs that start with two, that is a real handicap at turn 1, the civ can build its own only if the donor's homeworld had a shipyard.
+[x] **An injected civ gets no ships.** `SHIP`/`DYNO` records are galaxy-level rather than per-civ, so a starting colony ship is a separate job. Against civs that start with two, that is a real handicap at turn 1, the civ can build its own only if the donor's homeworld had a shipyard. **Fixed:** `starting_kit` adds `STARTING_SHIPS` hulls, two, as a generated civ starts with.
 
 [ ] **Homeworld placement is one hardcoded policy.** New civs are placed as far from every claimed planet as possible, which is the right default for testing an AI (contact becomes something it has to earn) but not the only one worth having, random placement is what a real generator does and is the only way to test a hostile neighbour two systems away, and clustered or per-team placement follow from it. Wants a `--placement` option rather than a second function.
 
@@ -670,12 +670,12 @@ was destroyed there and its owner still received nothing. **Not discovery**, sin
 about where is a bad enough experience to be worth knowing whether it is the engine's rule or an
 artefact of how these galaxies are made.
 
-[ ] **Does a joined civ inherit its donor's `NEWS`?** `inject_civ.add_civ` clones a donor's `OWNR`
+[x] **Does a joined civ inherit its donor's `NEWS`?** `inject_civ.add_civ` clones a donor's `OWNR`
 whole, and `NEWS` lives inside that `OWNR`'s `DATA` block, so the same reasoning that made a joiner
 inherit the donor's `EXSY` applies here and nothing empties `NEWS` the way `joins` now empties
 `EXSY`. Observed on 28 September in a real client: a civ joined at turn 11 of `galaxy_demo` and its
 news tab was **empty**, which is consistent with the donor having no news to inherit rather than with
-the field being cleared. The donor in that galaxy is seat one at turn 11 and has fought nothing.
+the field being cleared. The donor in that galaxy is seat one at turn 11 and has fought nothing. **It does, and joins now empty it** (`joins.forget_inherited_news`, `test_messages_merge.py`, 13 November 2026): the clone holds the donor's list, messages included, and the join empties it and clears the new-news flag. The strings stay in `NWDB`; no item names them, and the served view drops them.
 
 The test is a donor that **does** have news: take a galaxy where a civ holds `NEWS` records, inject
 against that civ, and read the newcomer's tab. If the items come across, a player joins knowing where
@@ -941,10 +941,18 @@ rates at `+4`, food and production counters, and, when the owner is
 unchanged, the facility list. Whether the stock client shows any of them for
 another civ's planet is not known.
 
-[ ] **A caller without a seat is served the whole turn.** Under `first-use`
+[x] **A caller without a seat is served the whole turn.** Under `first-use`
 that is every player before their first submission, and any signed-in user who
 asks. An older turn is also served whole, since views are kept for the current
-turn only.
+turn only. **Fixed** (13 November 2026): the referee publishes, beside each
+civ's view, `turn_store.PUBLIC_VIEW`, the turn with every civ's news withheld,
+and the relay sends a caller with no view of its own there. The store keeps the
+previous turn's views, so a launcher that asks for a turn as the next is
+published still gets its own, and the relay serves a turn whole only while it
+is current and was published with no views. Any other turn is refused
+(`test_relay_function.py`). The referee has to be restaged before the relay is
+deployed: a relay that refuses earlier turns while the referee still deletes the
+previous turn's views would stop a launcher caught in that window.
 
 [ ] **The folder store and `turn_server` do not enforce views.** A folder
 store's player reads the files directly, and `turn_server` serves every caller
