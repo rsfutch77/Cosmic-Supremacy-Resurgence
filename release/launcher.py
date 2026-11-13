@@ -1736,6 +1736,15 @@ def adopt_moved_seats(data_dir: str, guest_uid: str, account_uid: str,
         write_joined(data_dir, records)
 DROPPED_TEXT = ("You have been logged out.")
 LOG_OUT_TEXT = ("Log out?")
+# Log in or out while a galaxy is followed.
+ACCOUNT_STOP_TEXT = ("You are following {galaxy}, which knows you by the "
+                     "sign-in you joined it with.\n\nStop following {galaxy} "
+                     "to log in or out? Orders already sent stay sent, and "
+                     "Play follows it again.")
+ACCOUNT_BUSY_TEXT = ("You are playing {galaxy} right now.\n\nClose the game "
+                     "and let your turn finish sending, then log in or out.")
+ACCOUNT_FINISHING_TEXT = ("{galaxy} is still finishing a turn.\n\nLog in or "
+                          "out again in a moment.")
 GOOGLE_WAIT_TEXT = ("A login window should be open in your browser now.")
 GOOGLE_LINKED_TEXT = ("You are logged in with Google.")
 
@@ -3472,24 +3481,35 @@ class Launcher:
         submissions to the roster by exact name.
         """
         if self.mp_thread is not None and self.mp_thread.is_alive():
-            self.warn("You are playing a galaxy right now.\n\nYour name "
-                      "is the name of your civilisation in it, and a "
-                      "galaxy's "
-                      f"roster cannot be renamed from here. Close {self.cfg['product']} "
-                      "to leave the galaxy, then change it.")
+            self.warn("You are playing a galaxy right now. Close before any changes.")
             return
         self.ask_player_name()
 
     def _account_locked(self) -> bool:
-        """Refuse to log in or out under a live galaxy, which knows this
-        player by the sign-in it was joined with."""
+        """Whether a followed galaxy keeps the sign-in it was joined with.
+
+        With the game open or a turn still sending, it does. Otherwise the
+        player may stop following and go on.
+        """
         if self.mp_thread is None or not self.mp_thread.is_alive():
             return False
-        self.warn("You are playing a galaxy right now.\n\nThe launcher "
-                  "follows it until the launcher closes, even with the game "
-                  f"closed. Close {self.cfg['product']} to leave the galaxy, "
-                  "then log in or out.")
-        return True
+        here = (self.mp_playing or {}).get("name") or "this galaxy"
+        if not running_clients(self.client_exes):
+            # The game may have closed since the last status tick.
+            self._watch_mp_client(False)
+        if running_clients(self.client_exes) or self.mp_sending:
+            self.warn(ACCOUNT_BUSY_TEXT.format(galaxy=here))
+            return True
+        if not self.view.ask_yes_no(ACCOUNT_STOP_TEXT.format(galaxy=here)):
+            self.say(f"account: still following {here}, not logging in or out")
+            return True
+        # stop_multiplayer clears the handle whether or not the loop finished.
+        thread = self.mp_thread
+        self.stop_multiplayer("logging in or out")
+        if thread.is_alive():
+            self.warn(ACCOUNT_FINISHING_TEXT.format(galaxy=here))
+            return True
+        return False
 
     def on_account(self):
         """Log in, create an account, or show the account that is logged in."""
