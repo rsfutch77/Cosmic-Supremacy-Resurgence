@@ -3370,8 +3370,9 @@ def message_orders(served, sub, civ_oid, names):
 
     `orders` holds `flags`, [(index, flags)] for its own items marked or
     unmarked important, `read` when it opened its news, and `messages`, each
-    {'to', 'subject', 'body', 'sent_title', 'sent_flags', 'ids'}: a message as
-    sent, its text not yet made plain.
+    {'to', 'subject', 'body', 'sent_title', 'from_title', 'sent_flags', 'ids'}:
+    a message as sent, its text not yet made plain. `from_title` is the
+    recipients' title, naming the submitter as its client did.
     """
     orders = {'flags': [], 'read': False, 'messages': []}
     refusals = []
@@ -3474,7 +3475,7 @@ def message_orders(served, sub, civ_oid, names):
             received.remove(hit)
         orders['messages'].append({
             'to': to, 'subject': subject, 'body': body, 'sent_title': title,
-            'sent_flags': item['flags'],
+            'from_title': matched[0][2], 'sent_flags': item['flags'],
             'ids': {civ: hit[1]['ids'] for civ, hit in zip(to, matched)}})
     for civ, _item, _title, _body in received:
         refusals.append(f"news item for {who(civ)} DROPPED, no message "
@@ -3502,14 +3503,14 @@ def take_messages(blob, civ_oid, orders, turn, names):
             out[at] = 0
             blob = bytes(out)
             lines.append('news read')
-    sender = str(names.get(civ_oid, civ_oid)).encode('latin-1')
     for m in orders['messages']:
         subject = plain_text(m['subject'])
         body = plain_text(m['body'], BODY_CONTROLS)
         sent = plain_text(m['sent_title'])
+        received = plain_text(m['from_title'])
         label = f"message {m['subject'][:30]!r}"
         why = None
-        if subject is None or body is None or sent is None:
+        if None in (subject, body, sent, received):
             why = 'it holds characters the client cannot show'
         elif not subject.strip() or not body.strip():
             why = 'its subject or body is empty'
@@ -3523,8 +3524,7 @@ def take_messages(blob, civ_oid, orders, turn, names):
             refusals.append(f'{label} DROPPED, {why}')
             continue
         next_id, strings = news.read_table(blob)
-        from_id, next_id = news.intern(next_id, strings,
-                                       FROM_TITLE % sender + subject)
+        from_id, next_id = news.intern(next_id, strings, received)
         body_id, next_id = news.intern(next_id, strings, body)
         to_id, next_id = news.intern(next_id, strings, sent)
         blob = news.write_table(blob, next_id, strings)

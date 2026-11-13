@@ -162,6 +162,15 @@ def main():
            b'a/b (i)x(/i)\r\nZo\xeb'))
     check('with no note', notes, {})
 
+    print('\na sender with a chosen civ name')
+    named = mo.set_civ_identity(m0, GOOD, b'Goody', 0, -1)
+    sub = send(named, GOOD, [BAD], b'hi', b'there',
+               title_from=b'Message from Goody - Subject: ')
+    out, notes = merged(named, ('GoodGuy', sub))
+    check('the title keeps the name its client used',
+          messages(out, BAD)[-1][1], b'Message from Goody - Subject: hi')
+    check('with no note', notes, {})
+
     print('\nrefused')
     cases = [
         ('a body over 18 rows', send(m0, GOOD, [BAD], b'long',
