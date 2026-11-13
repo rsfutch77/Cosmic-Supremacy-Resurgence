@@ -731,7 +731,7 @@ set GoodGuy's to 1, and opening the news cleared BadGuy's, along with the byte t
 before anything is read, so a huge value fails the load. A length past the section's end leaves
 the rest of the record misread. An id is not checked to name a civ.
 
-- [ ] **Player messages are carried.** `merge_orders.py` takes a message when the submitter's new
+- [x] **Player messages are carried.** `merge_orders.py` takes a message when the submitter's new
   type 6 item names civs it has met and each holds a matching type 1 item, renumbers the strings
   into the merged `NWDB`, stores the text with the markup characters swapped for `(`, `)`, `/`
   and `pct`, and sets each recipient's new-news flag; its own important marks and its read flag
@@ -740,7 +740,16 @@ the rest of the record misread. An id is not checked to name a civ.
   client: GoodGuy's message from its served view, merged, read by BadGuy from its view as
   `(b)hi(/b) from the merge/test 100pct` and `Zoë`, a reply restored and merged with no note, and
   the reply read by GoodGuy from its view with the news tab marked new (Robert). Done when a
-  message sent each way on the sandbox arrives with the next turn.
+  message sent each way on the sandbox arrives with the next turn. On the
+  sandbox galaxy, referee staged at `00d7548` (13 November 2026, turns 161 to 163, deadlines
+  brought forward): tmog66 sent `sandbox s1` to guest-test and `sandbox s2` to guest-test and
+  Elder Race, guest-test read both on screen and replied, and the reply reached tmog66; every
+  step was taken with no change dropped, and each civ's served view held only its own news. A
+  message to two recipients is as inferred: each recipient's item names the sender and the
+  other recipients, and the sender's title joins their names with `, ` (an unmet civ shows as
+  `Stranger`). The client titles a message with the sender's chosen civ name (`tmog66-`); the
+  referee at `00d7548` wrote the player name, and the merge keeps the client's title from
+  `ab2e6d3`.
 - [ ] **Messages arrive between ticks, close to instantly.** A message travels inside its
   sender's submission, so it reaches the recipient with the next tick, up to a whole turn later.
   Per tick is acceptable for now (Robert, 13 November 2026). The client's online path sends
