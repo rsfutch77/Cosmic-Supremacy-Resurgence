@@ -234,6 +234,24 @@ def doctrine_checks():
           round(rw._armed(st.Civ(BAD, '', completed=[66]), armed)[1] / rw._armed(plain, armed)[1], 3), 1.05)
 
 
+def debt_checks():
+    """The upkeep probes: debt dismantles a ship at home, then the costliest
+    facility, then soldiers, and credits never go below 0."""
+    g = galaxy()
+    c, p = g.civs[BAD], g.planets[186]
+    c.credits = 0
+    p.military = list(p.military) + [(ec.MILITARY, BAD)] * 200
+    p.military_xp = [0.0] * len(p.military)
+    home = [s.oid for s in g.ships.values() if s.owner == BAD and g.planets.get(s.orbit) is p]
+    built = sum(p.facilities.values())
+    g = ev.tk.tick(g)
+    q = g.planets[186]
+    check('a civ in debt ends the turn at 0 or above', g.civs[BAD].credits >= 0)
+    check('it loses a ship orbiting its own planet', any(o not in g.ships for o in home) or not home)
+    check('then its costliest facility, then soldiers',
+          (sum(q.facilities.values()) == built - 1, len(q.military) < 200), (True, True))
+
+
 def unrest_checks():
     g = galaxy()
     home = g.planets[HOME]
@@ -333,7 +351,7 @@ def main():
     global BASE
     BASE = sl.load_path(GALAXY)
     for part in (research_checks, colonise_checks, build_checks, loyalty_checks,
-                 combat_checks, conquest_checks, bio_checks, trait_checks, doctrine_checks, unrest_checks, fog_checks,
+                 combat_checks, conquest_checks, bio_checks, trait_checks, doctrine_checks, debt_checks, unrest_checks, fog_checks,
                  order_checks, env_checks):
         part()
     print(f'\n{len(PASS)} passed, {len(FAIL)} failed')

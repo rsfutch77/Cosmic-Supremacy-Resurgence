@@ -42,6 +42,7 @@ WASTAGE_CAP, WASTAGE_SCALE, WASTAGE_FROM = 30.0, 14427.0, 1000
 WEALTH_PER_CREDIT = 4           # production points a credit costs on Wealth
 CREW_UPKEEP = 3                 # credits per crew member aboard a ship or soldier stationed
 SOLDIER_FOOD = 300              # food to recruit a soldier, trait 33 as a percent; 255 at -15
+LOST_FACILITY_REFUND = 20       # a facility lost to debt returns its cost over this; fits 70 and 29
 COLONY_MODULE, TROOP_BAY, PILOT_CABIN, CLOAKING_DEVICE = 0, 1, 2, 3     # module ids
 BATTLESHIP = 5
 SCAN_COSTS = {2: 3500, 3: 5000, 0: 9000, 6: 12000, 4: 16000, 1: 20000, 5: 20000, 7: 20000}  # scans.SCANS
@@ -303,11 +304,61 @@ def planets(g):
                 p.blight -= BLIGHT_RECOVERY
         if civ.credits is not None:
             civ.credits += income
+            if civ.credits < 0:
+                pay_debt(g, civ)
         extra = traits.value(civ, EXTRA_METAL_TRAIT)
         if extra and civ.resources is not None:
             civ.resources[0] += extra
         if getattr(civ, 'golden_age', 0) > 0:
             civ.golden_age -= 1
+
+
+def pay_debt(g, civ):
+    """A civ whose credits would go negative loses a ship orbiting its own
+    planet, whose crew lands as soldiers, then its costliest facility, then
+    soldiers, each only while still in debt, and ends at 0 or above. The
+    upkeep probes saw these losses; the engine sometimes retires more
+    soldiers than the debt needs."""
+    oid = civ.oid
+    ships = sorted((s for s in g.ships.values() if s.owner == oid and s.orbit
+                    and g.planets.get(s.orbit) is not None and g.planets[s.orbit].owner == oid),
+                   key=lambda s: (s.design in g.designs and g.designs[s.design].upkeep, s.oid))
+    if ships:
+        s = ships[0]
+        d = g.designs.get(s.design)
+        civ.credits += R(design_upkeep(civ, d)) if d is not None else 0
+        p = g.planets[s.orbit]
+        p.military = p.military + [(MILITARY, oid)] * len(s.crew)
+        p.military_xp = (p.military_xp or [0.0] * (len(p.military) - len(s.crew))) + list(
+            s.crew_xp or [0.0] * len(s.crew))
+        g.ships.pop(s.oid, None)
+        f = g.fleets.get(s.fleet)
+        if f is not None and s.oid in f.ships:
+            f.ships.remove(s.oid)
+    owned = [p for p in g.planets.values() if p.owner == oid]
+    if civ.credits < 0:
+        built = [(tb.FACILITIES[k].cost, p.oid, k) for p in owned for k, n in p.facilities.items()
+                 if n and k < len(tb.FACILITIES)]
+        if built:
+            cost, poid, k = max(built)
+            p = g.planets[poid]
+            p.facilities[k] -= 1
+            if not p.facilities[k]:
+                del p.facilities[k]
+            civ.credits += tb.FACILITIES[k].upkeep + cost // LOST_FACILITY_REFUND
+    soldier = CREW_UPKEEP + traits.value(civ, 32)
+    for p in sorted(owned, key=lambda p: -len(p.military)):
+        if civ.credits >= 0:
+            break
+        n = min(len(p.military), -(civ.credits // soldier))
+        if n:
+            order = sorted(range(len(p.military)), key=lambda i: (p.military_xp or [0.0] * len(p.military))[i])
+            gone = set(order[:n])
+            xp = p.military_xp or [0.0] * len(p.military)
+            p.military = [m for i, m in enumerate(p.military) if i not in gone]
+            p.military_xp = [x for i, x in enumerate(xp) if i not in gone]
+            civ.credits += n * soldier
+    civ.credits = max(0, civ.credits)
 
 
 def wastage(points, civ):
