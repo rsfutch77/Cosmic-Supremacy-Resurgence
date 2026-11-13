@@ -10,11 +10,21 @@ import math
 
 from . import economy
 from . import state as st
+from . import tables as tb
 from . import traits
 
 ORBIT_CLEARANCE = 1.02          # radii between a body's centre and a route's end
 MOVE, SCOUT, COLONISE = 1, 2, 3
 ATTACK, CONQUER = 4, 5          # inject_order.py's kinds; both stay given on arrival
+HEAVY_EXTRA_CREW = 1            # a Destroyer idled with 3 crew and fought with 4
+
+
+def crew_needed(d):
+    """Crew a ship needs to fly and fight. Cruisers and Battleships are
+    assumed to want one more than the manual, as the Destroyer does."""
+    if d is None or d.chassis is None:
+        return 0
+    return tb.CHASSIS[d.chassis].crew[0] + (HEAVY_EXTRA_CREW if d.heavy else 0)
 BIO_BOMB = 6                    # inferred: inject_order lists 1 to 5 and 7
 
 
@@ -91,6 +101,10 @@ def ships(g):
     for s in list(g.ships.values()):
         o = s.order
         if o is None or not o.legs:
+            continue
+        if not s.fleet and len(s.crew) < crew_needed(g.designs.get(s.design)):
+            # Undermanned Destroyers sat still and lost their orders.
+            s.order = None
             continue
         if id(o) in moved:
             s.pos, s.orbit = along(o.legs, o.progress), 0

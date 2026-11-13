@@ -10,6 +10,7 @@ for crew.
 
 Rules a capture has not confirmed say so where they are applied.
 """
+from . import combat
 from . import economy as ec
 from . import load as sl
 from . import movement as mv
@@ -253,7 +254,7 @@ def _go(g, civ, ship, target, kind):
         return False, 'no such sun or planet'
     start_r = g.radius.get(s.orbit, 0) if s.orbit else 0
     d = g.designs.get(s.design)
-    need = tb.CHASSIS[d.chassis].crew[0] if d is not None and d.chassis is not None else 0
+    need = combat.crew_needed(d)
     if len(s.crew) < need:
         return False, f'the ship needs {need} crew to fly'
     if s.fleet:

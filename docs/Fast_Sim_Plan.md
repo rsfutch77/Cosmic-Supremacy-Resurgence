@@ -484,12 +484,16 @@ the turn-110 battle's defending fighters gained 1.847 each, 2 x 545 / 590, which
 of firepower the enemy had over every kind its own side had, its turret included, and the
 unarmed colony ship's crew gained nothing. Score and reputation follow the manual's page.
 
-**Reputation raises or lowers corruption**, the manual's formula, as the original server
-applied it. The client keeps reputation per relation and never reads it in play (Memory
-Reconstruction Report), so a loaded civ starts at 0, the value every corruption fit so far
-assumed, and only battles in the simulator move it. The score ratio divides by 80% of one's
-own score. So attacking a civ of one's own size gains about 1.6 reputation (5 x log2 1.25),
-and only attacking a civ under 80% of one's own score loses it.
+**Reputation raises or lowers corruption** in the simulator, the manual's formula. The
+engine does not apply it: one q7 save ticked with every relation record of GoodGuy's at 0,
++100 and -100, each set through the engine's own AddReputation, gave the same credits,
+research, food and production to the unit (`capture_rep*`). Every corruption fit so far
+matches the formula at reputation 0, so the engine behaves as if reputation were always 0.
+A loaded civ starts at 0 and only battles in the simulator move it. The score ratio divides
+by 80% of one's own score, so attacking a civ of one's own size gains about 1.6 reputation
+(5 x log2 1.25), and only attacking a civ under 80% of one's own score loses it. The reward
+counts income and surge production after corruption, so a reputation gain shows up in `D`
+through the economy rather than as a term of its own.
 
 **Bio-bombing**, from the manual, with no capture to check it. A ship with Bio Bombs takes
 a bio-bomb order for a number of runs and sets a turn, inferred as order kind 6 (the order
@@ -538,20 +542,44 @@ corpus:
   other matched population, planets, facilities, soldiers and research completion turn for
   turn, science 31 off in 6,400; its credits drift 7 a turn because the engine kept
   building Colony Ships from a repeating production queue, which the simulator skips.
-- **Battles** (10 staged ticks, `capture_battle_*`). Heavy destroyers with ranked crews and
-  bombers against shielded corvettes and a turret, a fleet meeting in open space, and a
-  conquest force against 10 soldiers. With no order given, the attacking destroyers held
-  their fire, there was no battle in open space, and nothing landed, because an unarmed ship
-  of the defender stayed in orbit. The rules that fit every tick: a planet's defence and its
-  owner's ships always fire at hostile ships in orbit; bombs always fall; the attacker's guns
-  fire at ships only under an Attack or Conquer order or in the tick it arrives (the
-  turn-110 capture's fighter arrived on a move order and fired); ships taking no part are
-  shot last; experience counts only the ships taking part, bombs included, which matched
-  5.73 and 0.70 exactly. Bombing 1,000 off the defence killed 4 citizens in both runs, so
-  the simulator kills one per 250. With these rules ship conditions match to 0.001 after
-  the first tick and to 0.024 on it, where the engine spreads fire at random. An Attack
-  order injected with a null target reference did nothing in the engine, so the client
-  backend will need the order's target reference.
+- **Battles** (10 staged ticks, `capture_battle_*`, then 56 live ticks, `capture_live_*`).
+  The first staging gave its destroyers 3 crew, the manual's minimum, and they neither
+  fired nor moved, which first read as "idle attackers hold fire". The live probes load a
+  staged save into the client and give orders through the engine's own ShipCommand and
+  Ship::SetCommand, the AI player's `set_command`, the path the UI takes. What they showed:
+  - A Destroyer needs 4 crew. With 3 it did nothing under any order, shield or none, and the
+    defending corvettes did not engage it; with 4, 5, 6 and 7 it fought. Light hulls act at
+    the manual's minimum. Cruisers and Battleships are assumed to need one more, like the
+    Destroyer.
+  - A planet's defence and its owner's ships always fire at hostile ships in orbit, and
+    bombs always fall.
+  - An attacking ship fires when it holds an Attack or Conquer order, arrived this tick, or
+    faces an armed defending ship. Idle frigates and a destroyer placed in orbit killed both
+    armed corvettes and the colony ship in one tick. Once nothing armed was left, idle
+    destroyers sat under turret fire for three ticks and never touched the colony ship. A
+    trooper's Conquer order did not make its escorts fire.
+  - Arriving alone shoots armed ships only. Under an order, or against armed defenders,
+    unarmed ships are shot too.
+  - In open space there is no battle without an Attack order, as the manual says. With one,
+    aimed at a gunboat, two frigates destroyed four gunboats in two ticks.
+  - An Attack or Conquer order given to a ship already in that orbit is gone after one tick.
+  - Troops land only from a ship that arrives under a Conquer order, with the defence at
+    nothing and no hostile ship in orbit. Troopers sitting in a cleared orbit with a Conquer
+    order never landed. Two arriving troopers with 6 and 4 aboard landed 6 and kept 2 each,
+    one more than a frigate's minimum. 6 soldiers at rank 0 against 3 at rank 1 left 5, which
+    fits both sides firing at once, not defenders first (that leaves 4). The 5 gained 0.5
+    experience, the defenders' count over their own. The Military Camp was lost with the
+    planet; the Academy is assumed to go too.
+  - The turret passed over troopers holding a Conquer order to shoot an idle armed frigate:
+    unarmed ships taking no part are shot last.
+  - Shields: corvettes with a Magneto Shield in the sixth part list (`list6`) fought in
+    every probe; their losses fit within the engine's random spread.
+  Experience counts only the ships taking part, bombs included, which matched 5.73 and 0.70
+  exactly in the first staging. Bombing kills about one citizen per 250 of defence damage;
+  the live probes land within one citizen of that, 3 killed where the simulator kills 2 or
+  4. Scored on the live pairs, 47 of 56 match every ship, crew and planet field; the rest
+  differ by the engine's random spread of fire, by that one citizen, and in one tick where a
+  destroyer still flying, inside the planet's radius, was drawn into the battle.
 
 The scripted warlike opponent stalls in the Single Player galaxy, both before and after
 these changes: the baseline's job choice starves its homeworld from turn 195, and with no
@@ -577,7 +605,8 @@ soldiers to crew them its ships never fill. It is a probe, not a training oppone
 - [x] Build the blob loader for the simulator's state subset: `GLOB`, owners, planets,
       ships and fleets, designs, treaties
 - [x] Confirm the `SHPR` tail `f32` is condition: a ship damaged at turn 110 read 0.9238
-- [ ] Confirm the sixth `SDPR` part list is shields (Reconstruction Report, `DSGN`)
+- [x] Confirm the sixth `SDPR` part list is shields: `list6` carried the live probes'
+      Magneto Shields
 - [x] Locate the research store: 4 bytes after credits in the civ's record
 - [ ] Locate score and the +10-a-planet-a-turn accumulator in the blob: the civ record after
       the research store holds 0, the completed count and small fields, not either
@@ -610,10 +639,14 @@ soldiers to crew them its ships never fill. It is a probe, not a training oppone
 - [x] Combat from the manual, checked against the corpus's one battle (§5b)
 - [x] Battles with heavy ships, ranked crews, bombing, open space and a conquest force
       (§5b, "Pre-training checks")
-- [ ] A ground battle on the client: needs an Attack order with its target reference, so
-      the defender's ships in orbit can be cleared first
-- [ ] Shields in a captured battle: `inject_design` names the sixth part list `list6`, so
-      the staged designs carried none
+- [x] A ground battle on the client (§5b, "Pre-training checks", Battles)
+- [x] Shields in a captured battle, through `list6`
+- [ ] Decide whether the simulator keeps the manual's reputation term, which the engine
+      does not apply, or Resurgence adds it to the game (§5b, reputation)
+- [ ] Probe a Cruiser and a Battleship for the crew they need; one more than the manual is
+      assumed
+- [ ] Find whether a ship inside a planet's radius but not yet in orbit joins its battle
+- [ ] Find whether conquest destroys the Military Academy, as it did the Camp
 - [ ] Fix the warlike opponent's starving homeworld, if it is kept as a probe
 - [x] Loyalty from stationed soldiers, their training and upkeep (§5b)
 - [x] Reputation, score and crew experience (§5b)

@@ -152,14 +152,15 @@ def combat_checks():
 
 
 def participation_checks():
-    """The staged battle probes: idle attackers hold fire, an Attack order or
-    an arrival opens it, open space needs an order, bombing kills citizens and
-    a bombed defence stays bombed while the attackers stay."""
-    def staged(order=None, orbit=HOME):
+    """The live battle probes: an idle attacker fires back at an armed guard
+    and spares an unarmed one, an Attack order opens fire, open space needs an
+    order, a Destroyer needs 4 crew, bombing kills citizens and a bombed
+    defence stays bombed while the attackers stay."""
+    def staged(order=None, orbit=HOME, armed=True):
         g = galaxy()
         gun = st.Design(900, BAD, 'g', {'chassis': [1], 'scanners': [], 'engines': [0],
                                         'weapons': [1, 1, 1], 'modules': [], 'shields': []})
-        guard = st.Design(902, DEMO, 'd', dict(gun.parts))
+        guard = st.Design(902, DEMO, 'd', dict(gun.parts, weapons=[1, 1, 1] if armed else []))
         g.designs.update({900: gun, 902: guard})
         at = g.planets[HOME].pos if orbit else (1.0, 2.0, 3.0)
         g.ships[910] = st.Ship(910, BAD, at, 900, [(3, BAD)], 1.0, orbit=orbit, crew_xp=[0.0])
@@ -170,10 +171,23 @@ def participation_checks():
         return g
     g = staged()
     combat.battles(g)
-    check('an idle attacker in orbit holds its fire', g.ships[912].condition, 1.0)
-    g = staged(mv.ATTACK)
+    check('an idle attacker in orbit fires back at an armed guard', g.ships[912].condition < 1.0)
+    def guards(g):
+        return sum(s.condition for s in g.ships.values() if s.owner == DEMO and s.orbit == HOME)
+    g = staged(armed=False)
+    whole = guards(g)
     combat.battles(g)
-    check('an Attack order opens fire on the guards', g.ships[912].condition < 1.0)
+    check('and spares unarmed ones', guards(g), whole)
+    g = staged(mv.ATTACK, armed=False)
+    combat.battles(g)
+    check('an Attack order opens fire on them', guards(g) < whole)
+    g = staged()
+    g.designs[900] = st.Design(900, BAD, 'dd', {'chassis': [3], 'scanners': [], 'engines': [1],
+                                               'weapons': [5, 5], 'modules': [], 'shields': []})
+    g.ships[910].crew, g.ships[910].crew_xp = [(3, BAD)] * 3, [0.0] * 3
+    combat.battles(g)
+    check('a Destroyer with 3 crew does not fight', (g.ships[912].condition, od.move(g, BAD, 910, HOME)[0]),
+          (1.0, False))
     g = staged(None, 0)
     combat.battles(g)
     check('in open space there is no battle without an order',
@@ -342,10 +356,13 @@ def fog_checks():
 
 
 def conquest_checks():
-    """The manual's ground combat; no capture has a conquest yet. Only a ship
-    with a Troop Bay lands soldiers, and it keeps the crew it needs to fly."""
-    for modules, crew, soldiers, want in (([1], 6, 0, (BAD, 5)), ([1], 6, 8, (DEMO, 8)),
-                                          ([], 3, 0, (DEMO, 0))):
+    """The manual's ground combat and the live invasion probe. Only a ship
+    with a Troop Bay that arrives under a Conquer order lands soldiers, and it
+    keeps one more than its minimum crew aboard."""
+    for modules, crew, soldiers, order, want in (([1], 6, 0, mv.CONQUER, (BAD, 4)),
+                                                 ([1], 6, 8, mv.CONQUER, (DEMO, 6)),
+                                                 ([1], 6, 0, None, (DEMO, 0)),
+                                                 ([], 3, 0, mv.CONQUER, (DEMO, 0))):
         g = galaxy()
         home = g.planets[HOME]
         home.facilities = {k: v for k, v in home.facilities.items() if k not in (9, 10, 11)}
@@ -356,10 +373,14 @@ def conquest_checks():
                                                         'weapons': [], 'modules': modules, 'shields': []})
         g.ships[920] = st.Ship(920, BAD, home.pos, 903, [(3, BAD)] * crew, 1.0, orbit=HOME,
                                crew_xp=[0.0] * crew)
+        if order:
+            g.ships[920].order = st.Order(order, home.pos, 0.0, [], 0)
+            g.ships[920].arrived = g.turn
         g.civs[DEMO].stances[BAD] = g.civs[BAD].stances[DEMO] = combat.WAR
         combat.battles(g)
         bay = 'a troop ship' if modules else 'a ship without a Troop Bay'
-        check(f'{bay} with {crew} aboard against {soldiers} soldiers',
+        how = 'arriving under Conquer' if order else 'idle in orbit'
+        check(f'{bay} {how} with {crew} aboard against {soldiers} soldiers',
               (home.owner, len(home.military)), want)
     check('a Troop Bay seats 5 more and a Pilot Cabin 4',
           [od.seats_of(st.Design(0, 0, '', {'chassis': [1], 'modules': m})) for m in ([], [1], [2], [1, 2])],
@@ -386,6 +407,18 @@ def order_checks():
           (True, sl.mo.market_total(0, 100, held, 0), metal - 100, held + 100))
 
 
+def reputation_checks():
+    """The manual's reputation term reaches the reward through corruption."""
+    g = galaxy()
+    by = {}
+    for rep in (-20, 0, 20):
+        g.civs[DEMO].reputation = rep
+        by[rep] = (rw.corruption(g, DEMO)[HOME], rw.income_before_fleet(g, DEMO))
+    check('reputation lowers the corruption the reward counts',
+          by[-20][0] < by[0][0] < by[20][0] <= 0)
+    check('and income follows it', by[-20][1] <= by[0][1] <= by[20][1])
+
+
 def env_checks():
     e = ev.Env(BASE, horizon=5)
     obs = e.reset()
@@ -404,7 +437,7 @@ def main():
     BASE = sl.load_path(GALAXY)
     for part in (research_checks, colonise_checks, build_checks, loyalty_checks,
                  combat_checks, conquest_checks, bio_checks, trait_checks, doctrine_checks, debt_checks, unrest_checks, fog_checks,
-                 order_checks, env_checks):
+                 order_checks, reputation_checks, env_checks):
         part()
     print(f'\n{len(PASS)} passed, {len(FAIL)} failed')
     return 1 if FAIL else 0

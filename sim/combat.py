@@ -8,21 +8,25 @@ engine killed the fighter in its 8th of 100 sub-rounds, the fighter's 0.4 a
 round took 3.2 off one defender, and the bomber, unarmed against ships, died
 last; this module reproduces those numbers.
 
-The staged battle probes (turn 123 of the q7 galaxy) showed who takes part.
-A planet's defence and its owner's ships always fire at hostile ships in
-orbit, and ships with bombs always bomb it. The attacker's guns fire at ships
-only when one of its ships there holds an Attack or Conquer order or arrived
-this tick, and in open space there is no battle without one. Ships that do not take part are shot
-last, as unarmed ships are: the defence killed the bombers before it touched
-the idle destroyers. Experience counts only the ships taking part, bombs
-included; that matched both sides' gains in the probe.
+Battle probes on the live client (turn 123 of the q7 galaxy, orders built by
+the engine's own ShipCommand) showed who takes part. A planet's defence and
+its owner's ships always fire at hostile ships in orbit, and ships with bombs
+always bomb it. An attacking ship's guns join when it holds an Attack or Conquer
+order, arrived this tick, or faces an armed defending ship; idle ships sat
+under turret fire and spared an unarmed colony ship once nothing armed was
+left, and a trooper's Conquer order did not make its escorts fire. Arriving
+alone shoots armed ships only. In open space
+there is no battle without an Attack order, as the manual says. A ship with
+less crew than `crew_needed` neither moves nor fights. Unarmed ships taking no
+part are shot last: the turret passed over troopers holding a Conquer order
+for an idle armed frigate. Experience counts only the ships taking part,
+bombs included.
 
-Approximate where the manual is vague: fire goes to one target at a time,
-weakest first, where the engine spreads it at random, and collateral damage is
-not modelled. A planet whose defence is bombed to nothing loses its turrets
-and shield generators, and once no hostile ship of any kind is left in orbit
-the soldiers aboard ships with a Troop Bay land and fight the stationed
-soldiers.
+Troops land only from a ship that arrives under a Conquer order with the
+defence at nothing and no hostile ship left in orbit; troopers already in
+orbit never landed. A finished Attack or Conquer order at a planet is
+cleared after the battle. Fire goes to one target at a time, weakest first,
+where the engine spreads it at random.
 """
 from . import economy
 from . import traits
@@ -46,6 +50,8 @@ PD_BONUS = (0, 30, 60, 120, 240, 450, 750, 1200)     # percent, per level
 PD_SHIELD = (40, 52, 64, 88, 136, 220, 340, 520)     # shield generator percent
 REPAIR = {False: 0.15, True: 0.08}                   # per turn, light and heavy
 COLLATERAL = 250                # defence damage a citizen killed; 1000 killed 4 in the probes
+LANDING_KEEP_EXTRA = 1          # a Frigate trooper kept 2 aboard, its minimum is 1
+crew_needed = movement.crew_needed
 
 
 class Unit:
@@ -59,7 +65,7 @@ class Unit:
         self.hp = self.max * ship.condition
         light, heavy, bomb = d.firepower
         need = tb.CHASSIS[d.chassis].crew[0] if d.chassis is not None else 0
-        crewed = d.chassis is not None and len(ship.crew) >= need
+        crewed = d.chassis is not None and len(ship.crew) >= crew_needed(d)
         boost = (1 + RANK_BONUS * ship_rank(ship, need)) * fire_bonus(civ, d)
         self.fire = (light * boost, heavy * boost, bomb * boost) if crewed else (0, 0, 0)
         self.armed = crewed and (light or heavy)
@@ -135,14 +141,23 @@ def battles(g):
         fight(g, p, friends, foes)
         bio_bomb(g, p, [s for s in foes if s.oid in g.ships])
     space_battles(g)
+    for s in g.ships.values():
+        if holds_order(s) and s.orbit and s.order.progress >= sum(x[-1] for x in s.order.legs):
+            s.order = None
+
+
+def holds_order(s):
+    return s.order is not None and s.order.kind in (movement.ATTACK, movement.CONQUER)
+
+
+def ordered(ships):
+    return any(s.order is not None and s.order.kind in (movement.ATTACK, movement.CONQUER)
+               for s in ships)
 
 
 def attacking(g, ships):
-    """A side fires its guns when one of its ships holds an Attack or Conquer
-    order, or moved in this tick: the turn-110 capture's fighter arrived on a
-    move order and fired, and ships placed in orbit with no order did not."""
-    return any((s.order is not None and s.order.kind in (movement.ATTACK, movement.CONQUER))
-               or s.arrived == g.turn for s in ships)
+    """An Attack or Conquer order, or a ship that moved in this tick."""
+    return ordered(ships) or any(s.arrived == g.turn for s in ships)
 
 
 def space_battles(g):
@@ -171,15 +186,20 @@ def fight(g, p, friends, foes):
     home = [Unit(g, s) for s in friends if s.design in g.designs]
     away = [Unit(g, s) for s in foes if s.design in g.designs]
     planet = Planet(g, p) if p is not None else Planet.none()
-    guns = attacking(g, foes)
-    # Taking part: guns under an order, and bombs over a planet.
-    active = [u for u in away if (guns and u.armed) or (p is not None and u.fire[2] > 0)]
+    opposed = p is not None and any(u.armed for u in home)
+    shooters = [u for u in away if u.armed and (opposed or holds_order(u.ship)
+                                                 or u.ship.arrived == g.turn)]
+    every = opposed or any(holds_order(u.ship) for u in shooters)
+    # Taking part: guns under an order, on arrival or against armed ships,
+    # and bombs over a planet.
+    active = shooters + [u for u in away if u not in shooters and p is not None and u.fire[2] > 0]
+    marks = home if every else [u for u in home if u.armed]
     for _round in range(SUB_ROUNDS):
         if not alive(away):
             break
         pfire = planet.fire if planet.hp > 0 else (0, 0)
-        hits_home = volley(home, pfire, away, first=active)
-        hits_away = volley([u for u in away if guns], (0, 0), home)
+        hits_home = volley(home, pfire, away, first=active + [u for u in away if u.armed])
+        hits_away = volley(shooters, (0, 0), marks) if alive(marks) else []
         for u, dmg in hits_home + hits_away:
             u.hp -= dmg
         if planet.max:
@@ -214,8 +234,10 @@ def fight(g, p, friends, foes):
     defended = planet.hp > 1e-9 or alive(home)
     bombing = any(u.ship.order and u.ship.order.kind == movement.BIO_BOMB and u.ship.order.runs
                   for u in alive(away))
-    if not defended and alive(away) and not bombing:
-        invade(g, p, [u.ship for u in alive(away)])
+    landing = [u.ship for u in alive(away) if u.ship.arrived == g.turn
+               and u.ship.order is not None and u.ship.order.kind == movement.CONQUER]
+    if not defended and landing and not bombing:
+        invade(g, p, landing)
 
 
 BIO_BOMBS = 4                   # module id
@@ -280,14 +302,17 @@ def power(g, civ):
 
 def troops_aboard(g, ship):
     """Soldiers a ship can land: only a ship with a Troop Bay lands any, and it
-    lands everyone beyond the crew it needs to fly, the most experienced staying
+    lands everyone beyond the crew it keeps, the most experienced staying
     aboard. Pilots of other ships never land."""
     d = g.designs[ship.design]
     if economy.TROOP_BAY not in (d.parts.get('modules') or ()):
         return []
-    need = tb.CHASSIS[d.chassis].crew[0] if d.chassis is not None else 0
     xp = sorted(ship.crew_xp or [0.0] * len(ship.crew), reverse=True)
-    return xp[need:]
+    return xp[crew_kept(d):]
+
+
+def crew_kept(d):
+    return tb.CHASSIS[d.chassis].crew[0] + LANDING_KEEP_EXTRA if d.chassis is not None else 0
 
 
 def ground_side(xps, bunkers, fortresses, civ=None):
@@ -307,9 +332,13 @@ def ground_side(xps, bunkers, fortresses, civ=None):
     return out
 
 
-def strike(shooters, targets):
-    """A fifth of each side's fire, weakest target first."""
-    fire = sum(f for h, f in shooters if h > 0) / GROUND_ROUNDS
+def volume(side):
+    """A fifth of a side's fire, from those still standing."""
+    return sum(f for h, f in side if h > 0) / GROUND_ROUNDS
+
+
+def strike(fire, targets):
+    """Fire on the weakest target first."""
     for t in sorted((t for t in targets if t[0] > 0), key=lambda t: t[0]):
         if fire <= 0:
             break
@@ -320,8 +349,10 @@ def strike(shooters, targets):
 
 def invade(g, p, ships):
     """Ground combat once the planet's defence and ships are gone, the
-    manual's rules; no capture has shown one. Defenders shoot first in each
-    of five sub-rounds. Winning troops stay as the planet's soldiers."""
+    manual's rules over five sub-rounds, both sides firing at once: 6 landed
+    on 3 in the one capture and 5 were left, where the defenders shooting
+    first leaves 4. Survivors gain the other side's count over their own in
+    experience (0.5 there), and winning troops stay as the planet's soldiers."""
     landing = [(s, x) for s in ships for x in troops_aboard(g, s)]
     if not landing:
         return
@@ -330,20 +361,23 @@ def invade(g, p, ships):
                          p.facilities.get(BUNKER, 0), p.facilities.get(FORTRESS, 0),
                          g.civs.get(p.owner))
     for _round in range(GROUND_ROUNDS):
-        strike(defend, attack)
-        strike(attack, defend)
+        a_fire, d_fire = volume(attack), volume(defend)
+        strike(d_fire, attack)
+        strike(a_fire, defend)
+    a_gain, d_gain = len(defend) / len(attack), len(attack) / max(1, len(defend))
     for s in {id(s): s for s, _x in landing}.values():
-        d = g.designs[s.design]
-        need = tb.CHASSIS[d.chassis].crew[0] if d.chassis is not None else 0
-        keep = sorted(s.crew_xp or [0.0] * len(s.crew), reverse=True)[:need]
+        keep = sorted(s.crew_xp or [0.0] * len(s.crew), reverse=True)[:crew_kept(g.designs[s.design])]
         s.crew, s.crew_xp = s.crew[:len(keep)], keep
-    survivors = [x for (_s, x), (h, _f) in zip(landing, attack) if h > 0]
-    held = [x for x, (h, _f) in zip(sorted(p.military_xp or [0.0] * len(p.military),
-                                           reverse=True), defend) if h > 0]
+    survivors = [x + a_gain for (_s, x), (h, _f) in zip(landing, attack) if h > 0]
+    held = [x + d_gain for x, (h, _f) in zip(sorted(p.military_xp or [0.0] * len(p.military),
+                                                    reverse=True), defend) if h > 0]
     if held or not survivors:
         p.military, p.military_xp = [(economy.MILITARY, p.owner)] * len(held), held
         return
     owner = ships[0].owner
+    # The Military Camp went with the planet; the Academy is assumed to.
+    for kind in (economy.MILITARY_CAMP, economy.MILITARY_ACADEMY):
+        p.facilities.pop(kind, None)
     economy.conquered(g, p, owner)
     p.owner = owner
     p.citizens = [(job, owner) for job, _w in p.citizens]
