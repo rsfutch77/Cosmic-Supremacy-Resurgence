@@ -14,6 +14,7 @@ from . import traits
 
 ORBIT_CLEARANCE = 1.02          # radii between a body's centre and a route's end
 MOVE, SCOUT, COLONISE = 1, 2, 3
+ATTACK, CONQUER = 4, 5          # inject_order.py's kinds; both stay given on arrival
 BIO_BOMB = 6                    # inferred: inject_order lists 1 to 5 and 7
 
 
@@ -110,6 +111,7 @@ def arrive(g, s):
     here = body_at(g, o.target)
     s.pos = body_pos(g, here)
     s.orbit = here
+    s.arrived = g.turn
     if o.kind == SCOUT:
         civ = g.civs.get(s.owner)
         if civ is not None and here in g.suns:

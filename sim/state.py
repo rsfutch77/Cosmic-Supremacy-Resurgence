@@ -111,6 +111,7 @@ class Ship:
     admiral: int = 0
     fleet: int = 0                  # the fleet it is in, 0 for none
     crew_xp: list = field(default_factory=list)     # experience, one per crew member
+    arrived: int = -1               # the turn it last reached its order's target
 
 
 @dataclass
@@ -164,6 +165,7 @@ class Planet:
     prior_owner: int = 0            # who held it before a conquest
     unrest: int = 0                 # turns in a row below the rebellion line
     blight: int = 0                 # space bio-bombs have made uninhabitable
+    defence_damage: float = 0.0     # bombed off the defence while attackers stay in orbit
 
     def jobs(self):
         out = {}

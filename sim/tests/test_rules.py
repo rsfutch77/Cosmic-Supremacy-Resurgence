@@ -132,6 +132,8 @@ def combat_checks():
                                 (912, DEMO, 902, 2), (913, DEMO, 902, 2)):
         g.ships[oid] = st.Ship(oid, owner, home.pos, d, [(3, owner)] * crew, 1.0,
                                orbit=HOME, crew_xp=[0.0] * crew)
+        if owner == BAD:
+            g.ships[oid].arrived = g.turn          # they flew in on a move order
     g.civs[DEMO].stances[BAD] = g.civs[BAD].stances[DEMO] = combat.WAR
     check('the designs are the captured ones', (fighter.hitpoints, fighter.firepower,
                                                 bomber.hitpoints, bomber.firepower),
@@ -146,6 +148,56 @@ def combat_checks():
           (g.civs[DEMO].score > 0, g.civs[DEMO].reputation > 0, g.civs[BAD].reputation), (True, True, 0.0))
     combat.battles(g)
     check('a light ship at its shipyard mends 15% a turn', g.ships[913].condition, 1.0)
+    participation_checks()
+
+
+def participation_checks():
+    """The staged battle probes: idle attackers hold fire, an Attack order or
+    an arrival opens it, open space needs an order, bombing kills citizens and
+    a bombed defence stays bombed while the attackers stay."""
+    def staged(order=None, orbit=HOME):
+        g = galaxy()
+        gun = st.Design(900, BAD, 'g', {'chassis': [1], 'scanners': [], 'engines': [0],
+                                        'weapons': [1, 1, 1], 'modules': [], 'shields': []})
+        guard = st.Design(902, DEMO, 'd', dict(gun.parts))
+        g.designs.update({900: gun, 902: guard})
+        at = g.planets[HOME].pos if orbit else (1.0, 2.0, 3.0)
+        g.ships[910] = st.Ship(910, BAD, at, 900, [(3, BAD)], 1.0, orbit=orbit, crew_xp=[0.0])
+        g.ships[912] = st.Ship(912, DEMO, at, 902, [(3, DEMO)], 1.0, orbit=orbit, crew_xp=[0.0])
+        if order:
+            g.ships[910].order = st.Order(order, at, 0.0, [], 0)
+        g.civs[DEMO].stances[BAD] = g.civs[BAD].stances[DEMO] = combat.WAR
+        return g
+    g = staged()
+    combat.battles(g)
+    check('an idle attacker in orbit holds its fire', g.ships[912].condition, 1.0)
+    g = staged(mv.ATTACK)
+    combat.battles(g)
+    check('an Attack order opens fire on the guards', g.ships[912].condition < 1.0)
+    g = staged(None, 0)
+    combat.battles(g)
+    check('in open space there is no battle without an order',
+          (g.ships[910].condition, g.ships[912].condition), (1.0, 1.0))
+    g = staged(mv.ATTACK, 0)
+    combat.battles(g)
+    check('with one both sides fire', (g.ships[910].condition < 1.0, g.ships[912].condition < 1.0),
+          (True, True))
+    g = galaxy()
+    p = g.planets[HOME]
+    bomber = st.Design(901, BAD, 'b', {'chassis': [0], 'scanners': [], 'engines': [0],
+                                       'weapons': [10], 'modules': [], 'shields': []})
+    g.designs[901] = bomber
+    g.ships[911] = st.Ship(911, BAD, p.pos, 901, [(3, BAD)], 1.0, orbit=HOME, crew_xp=[0.0])
+    g.civs[DEMO].stances[BAD] = g.civs[BAD].stances[DEMO] = combat.WAR
+    p.facilities.pop(combat.LIGHT_TURRET, None)
+    p.facilities[combat.SHIELD_GENERATOR] = 1
+    pop = len(p.citizens)
+    combat.battles(g)
+    first = p.defence_damage
+    combat.battles(g)
+    check('a bombed defence stays bombed while the bomber stays', p.defence_damage > first > 0)
+    check('bombing kills a citizen per 250 of defence damage',
+          pop - len(p.citizens), int(first // 250) + int((p.defence_damage - first) // 250))
 
 
 def bio_checks():

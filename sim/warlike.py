@@ -93,5 +93,5 @@ class Warlike:
         for s in ships:
             if s.oid in self.launch and self.launch[s.oid] <= g.turn and s.order is None \
                     and s.orbit != self.target.oid:
-                out.append(('move', s.oid, self.target.oid))
+                out.append(('conquer', s.oid, self.target.oid))
         return out

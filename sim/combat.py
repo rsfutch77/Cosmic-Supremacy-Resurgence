@@ -8,13 +8,21 @@ engine killed the fighter in its 8th of 100 sub-rounds, the fighter's 0.4 a
 round took 3.2 off one defender, and the bomber, unarmed against ships, died
 last; this module reproduces those numbers.
 
-Approximate where the manual is vague and the corpus is silent: fire goes to
-one target at a time, weakest first, where the engine spreads it at random;
-mid-space battles from attack orders and collateral damage are not modelled,
-no captured battle had a ranked crew, and conquest follows the manual with no
-capture to check it: a planet whose defence is bombed to nothing loses its
-turrets and shield generators, and with no defending ships left the soldiers
-aboard ships with a Troop Bay land and fight the stationed soldiers.
+The staged battle probes (turn 123 of the q7 galaxy) showed who takes part.
+A planet's defence and its owner's ships always fire at hostile ships in
+orbit, and ships with bombs always bomb it. The attacker's guns fire at ships
+only when one of its ships there holds an Attack or Conquer order or arrived
+this tick, and in open space there is no battle without one. Ships that do not take part are shot
+last, as unarmed ships are: the defence killed the bombers before it touched
+the idle destroyers. Experience counts only the ships taking part, bombs
+included; that matched both sides' gains in the probe.
+
+Approximate where the manual is vague: fire goes to one target at a time,
+weakest first, where the engine spreads it at random, and collateral damage is
+not modelled. A planet whose defence is bombed to nothing loses its turrets
+and shield generators, and once no hostile ship of any kind is left in orbit
+the soldiers aboard ships with a Troop Bay land and fight the stationed
+soldiers.
 """
 from . import economy
 from . import traits
@@ -37,6 +45,7 @@ PD_TECHS = (27, 28, 29, 30, 31, 32, 33, 34)          # Planetary Defense Lvl 1 t
 PD_BONUS = (0, 30, 60, 120, 240, 450, 750, 1200)     # percent, per level
 PD_SHIELD = (40, 52, 64, 88, 136, 220, 340, 520)     # shield generator percent
 REPAIR = {False: 0.15, True: 0.08}                   # per turn, light and heavy
+COLLATERAL = 250                # defence damage a citizen killed; 1000 killed 4 in the probes
 
 
 class Unit:
@@ -94,7 +103,15 @@ class Planet:
         shield = PD_SHIELD[max(level, 1) - 1] if shields else 0
         civ = g.civs.get(p.owner)
         self.planet, self.fire = p, (traits.pct(civ, 8, light), traits.pct(civ, 8, heavy))
-        self.max = self.hp = units * (1 + shield / 100)
+        self.max = units * (1 + shield / 100)
+        self.hp = max(0.0, self.max - p.defence_damage)
+
+    @classmethod
+    def none(cls):
+        """The open-space battle's stand-in: no defence."""
+        x = cls.__new__(cls)
+        x.planet, x.fire, x.max, x.hp = None, (0, 0), 0, 0
+        return x
 
 
 def at_war(g, a, b):
@@ -111,39 +128,86 @@ def battles(g):
         here = [s for s in g.ships.values() if s.orbit == p.oid]
         foes = [s for s in here if s.owner != p.owner and at_war(g, s.owner, p.owner)]
         if not foes:
+            # The manual: a defence the attackers leave is repaired at once.
+            p.defence_damage = 0.0
             continue
         friends = [s for s in here if s.owner == p.owner]
         fight(g, p, friends, foes)
         bio_bomb(g, p, [s for s in foes if s.oid in g.ships])
+    space_battles(g)
+
+
+def attacking(g, ships):
+    """A side fires its guns when one of its ships holds an Attack or Conquer
+    order, or moved in this tick: the turn-110 capture's fighter arrived on a
+    move order and fired, and ships placed in orbit with no order did not."""
+    return any((s.order is not None and s.order.kind in (movement.ATTACK, movement.CONQUER))
+               or s.arrived == g.turn for s in ships)
+
+
+def space_battles(g):
+    """Ships away from an owned planet fight only when one side holds an
+    Attack order and the other is at war with it, at the same spot."""
+    spots = {}
+    for s in g.ships.values():
+        p = g.planets.get(s.orbit)
+        if p is not None and p.owner:
+            continue
+        key = s.orbit or tuple(round(c, 1) for c in s.pos)
+        spots.setdefault(key, []).append(s)
+    for here in spots.values():
+        for civ in sorted({s.owner for s in here}):
+            mine = [s for s in here if s.owner == civ and s.oid in g.ships]
+            if not attacking(g, mine):
+                continue
+            foes = [s for s in here if s.oid in g.ships and s.owner != civ and at_war(g, civ, s.owner)]
+            if foes:
+                fight(g, None, foes, mine)
 
 
 def fight(g, p, friends, foes):
+    """`friends` defend (the planet's owner's ships, or the attacked side in
+    open space) and always fire; `foes` attack."""
     home = [Unit(g, s) for s in friends if s.design in g.designs]
     away = [Unit(g, s) for s in foes if s.design in g.designs]
-    planet = Planet(g, p)
+    planet = Planet(g, p) if p is not None else Planet.none()
+    guns = attacking(g, foes)
+    # Taking part: guns under an order, and bombs over a planet.
+    active = [u for u in away if (guns and u.armed) or (p is not None and u.fire[2] > 0)]
     for _round in range(SUB_ROUNDS):
         if not alive(away):
             break
-        hits_home = volley(home, planet.fire if planet.hp > 0 else (0, 0), away)
-        hits_away = volley(away, (0, 0), home)
-        bombs = sum(u.fire[2] for u in away if u.hp > 0) / SUB_ROUNDS
+        pfire = planet.fire if planet.hp > 0 else (0, 0)
+        hits_home = volley(home, pfire, away, first=active)
+        hits_away = volley([u for u in away if guns], (0, 0), home)
         for u, dmg in hits_home + hits_away:
             u.hp -= dmg
         if planet.max:
+            bombs = sum(u.fire[2] for u in away if u.hp > 0) / SUB_ROUNDS
             planet.hp = max(0.0, planet.hp - bombs)
+    if p is not None and planet.max:
+        dealt = planet.max - p.defence_damage - planet.hp
+        p.defence_damage = planet.max - planet.hp if planet.hp > 1e-9 else 0.0
+        # Bombing kills citizens as it hits the defence: 4 for 1000 in both
+        # probes, none once the defence was gone.
+        for _ in range(min(int(dealt // COLLATERAL), len(p.citizens))):
+            p.citizens.pop()
     attacker = foes[0].owner
+    defender = p.owner if p is not None else friends[0].owner
     killed_home = sum(g.designs[u.ship.design].units for u in home if u.hp <= 1e-9)
     killed_away = sum(g.designs[u.ship.design].units for u in away if u.hp <= 1e-9)
     if planet.max and planet.hp <= 1e-9:
         killed_home += defence_units(p)
-    renown.battle(g, attacker, p.owner, killed_away, killed_home,
-                  power(g, p.owner), power(g, attacker))
-    renown.experience(home, away, sum(Planet(g, p).fire))
+    renown.battle(g, attacker, defender, killed_away, killed_home,
+                  power(g, defender), power(g, attacker))
+    renown.experience(home, active, sum(Planet(g, p).fire) if p is not None else 0.0)
     for u in home + away:
         if u.hp <= 1e-9:
             movement.remove_ship(g, u.ship)
         else:
             u.ship.condition = u.hp / u.max
+    if p is None:
+        return
     if planet.max and planet.hp <= 1e-9:
         for kind in (LIGHT_TURRET, HEAVY_TURRET, SHIELD_GENERATOR):
             p.facilities.pop(kind, None)
@@ -293,12 +357,16 @@ def alive(units):
     return [u for u in units if u.hp > 1e-9]
 
 
-def volley(shooters, extra, targets):
-    """One sub-round of a side's fire: [(target, damage)]."""
+def volley(shooters, extra, targets, first=None):
+    """One sub-round of a side's fire: [(target, damage)]. Ships taking part
+    (`first`, or every armed one) are shot before the rest."""
     light = sum(u.fire[0] for u in shooters if u.hp > 1e-9 and u.armed) + extra[0]
     heavy = sum(u.fire[1] for u in shooters if u.hp > 1e-9 and u.armed) + extra[1]
     light, heavy = light / SUB_ROUNDS, heavy / SUB_ROUNDS
-    pool = [u for u in alive(targets) if u.armed] or alive(targets)
+    if first is None:
+        first = [u for u in targets if u.armed]
+    ids = {id(u) for u in first}
+    pool = [u for u in alive(targets) if id(u) in ids] or alive(targets)
     left = {id(u): u.hp for u in pool}
     hits = []
     for fire, prefer_heavy in ((light, False), (heavy, True)):

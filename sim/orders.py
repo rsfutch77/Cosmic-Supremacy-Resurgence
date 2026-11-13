@@ -262,6 +262,17 @@ def _go(g, civ, ship, target, kind):
     return True, ''
 
 
+def attack(g, civ, ship, target):
+    """Send a ship to a sun or planet with the Attack order: its guns fire at
+    the ships of civs it is at war with there."""
+    return _go(g, civ, ship, target, mv.ATTACK)
+
+
+def conquer(g, civ, ship, target):
+    """The Conquer order: Attack, to take the planet."""
+    return _go(g, civ, ship, target, mv.CONQUER)
+
+
 def bio_bomb(g, civ, ship, planet, runs, bombs):
     """Send a ship with Bio Bombs to bomb a planet for `runs` turns, `bombs`
     sets a turn."""
@@ -398,7 +409,7 @@ ACTIONS = {
     'wealth': wealth, 'hurry': hurry, 'research': research, 'recruit': recruit,
     'crew': crew, 'move': move, 'colonise': colonise, 'scout': scout,
     'trade': trade, 'war': declare_war, 'design': design,
-    'build_scan': build_scan, 'scan': scan, 'bio_bomb': bio_bomb,
+    'build_scan': build_scan, 'scan': scan, 'bio_bomb': bio_bomb, 'attack': attack, 'conquer': conquer,
 }
 
 
