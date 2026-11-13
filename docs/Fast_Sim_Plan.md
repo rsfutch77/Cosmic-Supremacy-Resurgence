@@ -420,8 +420,37 @@ every ship, and engine 18 is light ships only. Measured: science wastage is trai
 Doctrine: Knowledge's -7 turned the probe's 40 science into 43. A golden age adds 50 to the
 food, production, science and mining traits, and the probe's 40 science became 64 (40 x 1.5
 x 1.07). The golden age's turns left are the `u32` at `CVTR` payload `+12`, which read 99,
-98, 97 on the turns after the doctrine. Every other trait's effect follows its name and is
-unchecked: food eaten and income per citizen add to 10, the rest are percents.
+98, 97 on the turns after the doctrine.
+
+**Doctrine probes** (November 2026, `sim/probes.py`). There were 29 engine ticks in three
+galaxies, eight civs, and every one of the 23 doctrines was taken at least once, one a tick,
+each paid from a 5,000,000-point store. Two captures advanced two turns in one tick and are
+skipped by the oracle. Findings:
+
+- **A doctrine shapes the tick it is bought in.** Doctrine: Trade's +4 a citizen paid 32
+  credits that tick, its +5% food added 10, Stronghold's +2 a citizen paid 16, Habitat's +7%
+  food added 10, and Metallurgy's +50 metal arrived at once. Science, though, is banked
+  before the topic is paid. So the tick runs science, then research, then the rest of the
+  planet step.
+- **Trait 32 is a flat amount**: Doctrine: Elite's +1 makes a stationed soldier cost 4 credits
+  a turn instead of 3. A civ with 2 soldiers paid exactly 2 more.
+- **Training speed is trait 31 as a percent**, nothing else: Elite's +70 trained at 0.34 a
+  turn with a Military Camp (0.2 x 1.7) and Police State's +50 more at 0.44. Trait 9, the
+  custom-civ "stationed military training" trait, left training alone, and its effect is
+  not found.
+- **Ship units (trait 11) set speed**: Lightweight's -25 units moved a Colony Ship a third
+  faster, exactly the engine's 5.085 more a turn.
+- With those, the ten doctrines of the Single Player probe and the six of the Beta probe's
+  cleanest civ match the engine on every field on every tick. In the governor-free q7 probe
+  only the idle civ's known 1 to 5 credits of rounding remains. One Beta civ holding Elite,
+  Juggernaut and Lightweight stays 1 to 3 credits high, which fits Elite's +1 also reaching
+  its 3 crew members. The other Beta civ that holds Elite has a crewed ship too and does not
+  fit that, so it is left open.
+
+Not exercised by the probes, because no battle, build or loyalty change happened while a
+doctrine was held: firepower, hitpoints, shields, cloaking, scanner range, hull space,
+building, scan and ship cost modifiers, repair, market price and the loyalty traits. These
+follow their names.
 
 **Loyalty of conquered planets**, from the manual. A conquered planet's people stay loyal
 to their old ruler in proportion to how long it held them, up to 100 turns. Loyalty grows 1
@@ -506,8 +535,11 @@ which id is which scan is inferred beyond route (2) and fleet (3).
 - [x] Scans (§5b), with the scan ids beyond route and fleet inferred
 - [ ] Queues past their first item: skipped, the agent sets builds each turn
 - [x] Doctrine and golden-age effects on science (§5b, "Traits")
-- [ ] Check the traits whose effect follows only their name, starting with those doctrines
-      grant, with a probe per doctrine
+- [x] Probe every doctrine (§5b, "Doctrine probes")
+- [ ] Probe the doctrine traits a quiet galaxy does not exercise: battles for firepower,
+      hitpoints, shields and cloaking, builds for the cost modifiers, a conquest for loyalty
+- [ ] Find what trait 9 (the custom "stationed military" trait) does: not training speed
+- [ ] Settle whether Elite's +1 a soldier also reaches ship crews
 - [x] Colony ship surcharge: the manual gives the fitted formula,
       `(planets + colony ships - 1) x 100`; one build of five came out 100 over
 - [ ] Find income's exact idle step: 1/144 a turn leaves idle civs 1 or 2 credits off
