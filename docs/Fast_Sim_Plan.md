@@ -515,6 +515,48 @@ system scan gives 8 turns of sight. A scan is spotted half the time, and half of
 target learns who sent it. Which research unlocks which scan id is the technology table's;
 which id is which scan is inferred beyond route (2) and fleet (3).
 
+**Pre-training checks** (November 2026). Four checks before training, each with pairs in the
+corpus:
+
+- **Exploit sweep** (`sim/tests/test_exploits.py`, 37 checks). Random legal orders for every
+  civ for 100 to 120 turns in three galaxies, and targeted round trips, look for anything an
+  agent could gain for nothing. Market round trips, Wealth against hurry, switching work,
+  boarding and landing, and orders on other civs' assets are all clean. It found and the
+  simulator now closes: growth past a planet's space, debt written off while a remote
+  fleet stays, ships flying without their minimum crew, a hurried facility locking its
+  planet, a re-ordered ship charged twice, hurry ignoring cost traits, and one Military Camp
+  counted where each adds 20%.
+- **Unpaid upkeep** (8 staged ticks of the q7 galaxy, `capture_upkeep*`). The engine never
+  lets credits go negative. A civ that would end the turn in debt loses a ship orbiting its
+  own planet, whose crew lands as soldiers, its costliest facility, which returns about a
+  twentieth of its cost (70 for a Military Camp, 29 for a Light Turret), and soldiers. The
+  engine sometimes retires about 20 more soldiers than the debt needs; the simulator
+  retires only what it must. Credits land within a few of the engine's otherwise.
+- **Free-running drift** (51 turns of the q7 galaxy, `capture_rollout_q7*`). The simulator
+  ran from turn 112 to 163 without being reset to the engine. One civ stayed exact on
+  population, food, science, facilities and research and 18 credits off over the run. The
+  other matched population, planets, facilities, soldiers and research completion turn for
+  turn, science 31 off in 6,400; its credits drift 7 a turn because the engine kept
+  building Colony Ships from a repeating production queue, which the simulator skips.
+- **Battles** (10 staged ticks, `capture_battle_*`). Heavy destroyers with ranked crews and
+  bombers against shielded corvettes and a turret, a fleet meeting in open space, and a
+  conquest force against 10 soldiers. With no order given, the attacking destroyers held
+  their fire, there was no battle in open space, and nothing landed, because an unarmed ship
+  of the defender stayed in orbit. The rules that fit every tick: a planet's defence and its
+  owner's ships always fire at hostile ships in orbit; bombs always fall; the attacker's guns
+  fire at ships only under an Attack or Conquer order or in the tick it arrives (the
+  turn-110 capture's fighter arrived on a move order and fired); ships taking no part are
+  shot last; experience counts only the ships taking part, bombs included, which matched
+  5.73 and 0.70 exactly. Bombing 1,000 off the defence killed 4 citizens in both runs, so
+  the simulator kills one per 250. With these rules ship conditions match to 0.001 after
+  the first tick and to 0.024 on it, where the engine spreads fire at random. An Attack
+  order injected with a null target reference did nothing in the engine, so the client
+  backend will need the order's target reference.
+
+The scripted warlike opponent stalls in the Single Player galaxy, both before and after
+these changes: the baseline's job choice starves its homeworld from turn 195, and with no
+soldiers to crew them its ships never fill. It is a probe, not a training opponent.
+
 ## 6. Open items
 
 - [ ] Stamp a content version below 639 into served blobs (Stat Tables §8.1), so the
@@ -529,8 +571,7 @@ which id is which scan is inferred beyond route (2) and fleet (3).
 - [ ] Choose `K` from measured fleet travel times between rival homeworlds
 - [ ] Decide whether planetary defence counts toward `S`, and at what weight: it holds a
       planet but cannot attack
-- [ ] Find what the engine does when a civ cannot pay upkeep, with an oracle run, so `S`
-      discounts an unpaid fleet the way the game does
+- [x] Find what the engine does when a civ cannot pay upkeep (§5b, "Pre-training checks")
 - [ ] Set a speed target: a full tick in place takes about 0.3 ms on the Single Player
       galaxy; with a copy, 11 ms on 547 planets
 - [x] Build the blob loader for the simulator's state subset: `GLOB`, owners, planets,
@@ -567,8 +608,13 @@ which id is which scan is inferred beyond route (2) and fleet (3).
 - [x] Movement: speed, routes, arrival and the scout's next system (§5b)
 - [x] Finished move and colonise orders, and colonisation (§5b)
 - [x] Combat from the manual, checked against the corpus's one battle (§5b)
-- [ ] More battles: heavy ships, shields, ranked crews, bombing that destroys turrets,
-      conquest and ground combat, mid-space attacks; the Battle Calculator can supply them
+- [x] Battles with heavy ships, ranked crews, bombing, open space and a conquest force
+      (§5b, "Pre-training checks")
+- [ ] A ground battle on the client: needs an Attack order with its target reference, so
+      the defender's ships in orbit can be cleared first
+- [ ] Shields in a captured battle: `inject_design` names the sixth part list `list6`, so
+      the staged designs carried none
+- [ ] Fix the warlike opponent's starving homeworld, if it is kept as a probe
 - [x] Loyalty from stationed soldiers, their training and upkeep (§5b)
 - [x] Reputation, score and crew experience (§5b)
 - [x] Conquered planets' loyalty and rebellion (§5b), with the rebellion chance invented
@@ -580,6 +626,6 @@ which id is which scan is inferred beyond route (2) and fleet (3).
 - [x] Observation and action interface on the simulator (`sim/env.py`, `sim/orders.py`)
 - [ ] The client backend of the same interface: actions to `merge_orders` submissions
 - [x] Viewer page for checking a run by eye (`sim/viewer.py`)
-- [ ] Recruitment cap: 20% plus 20% with a Military Camp fits the captured rates, unconfirmed
+- [x] Recruitment cap: 20% plus 20% for each Military Camp, the client's tooltip
 - [ ] Drafting citizens into soldiers for credits, retiring soldiers, peace treaties
 - [ ] First real-client evaluation of a sim-trained policy
