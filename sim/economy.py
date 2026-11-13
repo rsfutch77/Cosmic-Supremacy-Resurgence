@@ -273,9 +273,10 @@ def planets(g, reputation=None):
             income += work(p, civ, corruption, share, g)
             # A facility finished this tick works from the next one.
             built, p.facilities = p.facilities, start
+            # Soldiers train before recruitment: a new one starts next tick.
+            train(p, civ)
             food(p, civ, bonus, empire, idle, corruption)
             p.facilities = built
-            train(p, civ)
             settle(g, p, civ)
             if p.blight:
                 p.blight -= BLIGHT_RECOVERY

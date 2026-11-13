@@ -71,6 +71,7 @@ def snapshot(g):
         put('growth', e, 'citizens', len(p.citizens))
         put('growth', e, 'military', len(p.military))
         put('growth', e, 'military food', p.military_food)
+        put('growth', e, 'military xp', tuple(round(x, 1) for x in p.military_xp or ()))
         put('growth', e, 'history', tuple(p.pop_history or ()))
         put('orders', e, 'jobs', tuple(sorted(p.jobs().items())))
         put('orders', e, 'recruit', p.recruit)
