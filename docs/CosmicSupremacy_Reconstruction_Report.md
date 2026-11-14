@@ -1945,14 +1945,21 @@ hurries, trades and treaty sums itself. Checking every order type is not planned
   relay refuse a token whose provider is `anonymous`, and the launcher shows "log in to play".
   It ships off; the sandbox still allows guests.
 
-- [ ] **The sandbox still lets guests in.** A guest is warned before it joins or plays, once a
+- [x] **The sandbox still lets guests in.** A guest is warned before it joins or plays, once a
   day, that galaxies will soon be played by account only (`GUEST_ONLY_TEXT` in the launcher).
   Done when `seat_tool.py firebase://cs-resurgence/sandbox guests refuse` is set, after the operator view shows
   no seated guests, and the launcher update that follows rewords the warning to say guests are
   refused. Set on 12 November 2026 with `--anyway` (Robert): every seated civ on the roster
   signs in with Google, and the one seat the check stopped on, Sygor, is not on the roster and
   has not submitted since sign-ins were recorded. The bot civs submit with the operator's
-  credentials, not through the relay, and are not affected. The reworded warning is on `v0.6`.
+  credentials, not through the relay, and are not affected. The reworded warning is in v0.6.0.
+
+- [ ] **The merge parses the whole blob again for nearly every read.** Each accessor in
+  `merge_orders.py` and `news.py` calls `sp.parse_blob` itself, so one merge of a 38 KB test blob
+  parses it 83 times (13 November 2026, `test_admirals_diplomacy_merge.py` under `cProfile`).
+  v0.6's display, message and news reads added about a dozen, and the admirals and queues merge
+  tests now take over 30 minutes. A live tick is still dominated by the game client. Done when
+  a merge parses each blob it holds once per change, and both tests run in a few minutes.
 
 - [x] **A guest's seats follow its install to an existing account.** On login the launcher
   posts both the guest's and the account's tokens, and the relay moves each seat and each
