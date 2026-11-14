@@ -450,6 +450,13 @@ class FirebaseTurnStore:
         data = self._get(self.view_object(civ, turn))
         return sp.decode_save(data) if data is not None else None
 
+    def served_turn(self, civ: str, turn: int) -> bytes:
+        """The turn as a caller playing `civ` is served it
+        (`turn_store.served_copy`)."""
+        snap = self.doc.get()
+        doc = (snap.to_dict() or {}) if snap.exists else {}
+        return turn_store.serve(self, doc, civ, turn)
+
     def publish(self, turn: int, blob: bytes, turn_seconds: int = None,
                 views: dict = None) -> None:
         """The referee's move: a new turn exists, and the clock restarts.

@@ -275,7 +275,8 @@ def test_a_follow_poll_is_one_request():
          player_turn.sp) = saved
         svc.close()
 
-    first_turn = order.index(f'/turn/{TURN}')
+    first_turn = next(i for i, p in enumerate(order)
+                      if p.split('?')[0] == f'/turn/{TURN}')
     check('the reads before the turn is fetched are one /state request',
           order[:first_turn].count('/state'), 1)
     scheduled = [net for (t, net), (p, _) in zip(trace[1:], trace)

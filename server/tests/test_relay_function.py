@@ -627,7 +627,11 @@ def run_views(referee, galaxy, token_a, token_b):
     check('a seat with a view is sent to it',
           (code, referee.view_object('DemoPlayer', turn) in where), (302, True))
     code, where = location(token_b, turn)
-    check('a seat without one is sent to the view without news',
+    check('a roster seat the views do not name is sent to the turn, which is '
+          'its view', (code, referee.turn_object(turn) in where), (302, True))
+    _uid, token_e = sign_up()
+    code, where = location(token_e, turn)
+    check('a sign-in with no seat is sent to the view without news',
           (code, referee.view_object(public, turn) in where), (302, True))
     check('the referee reads the view back',
           referee.view_blob('DemoPlayer', turn), view)
