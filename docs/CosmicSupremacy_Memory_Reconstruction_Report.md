@@ -1972,8 +1972,10 @@ loyalty with `sim.economy.planet_loyalty`, without the bio-bomb penalty.
 read through `0x005343A0`, its u16 at `+0x24` of each node.
 
 [x] Read planet #384's loyalty on screen from `capture_live_invade_t0129.after`; the derivation
-gives 36.29%. The TestBed's Planets screen shows 36% for it (14 Nov 2026), in whole percent. The
-same screen shows 101% for GoodGuy's HQ, whose soldiers lift a fully loyal planet past 100.
+gives 36.29%. The TestBed's Planet View tooltip shows 36.29% (14 Nov 2026), with the list as
+derived: BadGuy turns 0 to 125 at 83.6%, GoodGuy from 126 at 16.4% (16.38% to more places), and a
+gain of 4.09 a turn, 1.00 regular and 3.09 from stationed military. The Planets screen shows 101%
+for GoodGuy's HQ, whose soldiers lift a fully loyal planet past 100.
 
 ### `Planet:368` is a turn counter; loyalty is derived (August 2026)
 
