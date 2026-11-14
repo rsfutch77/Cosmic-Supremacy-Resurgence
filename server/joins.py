@@ -38,6 +38,7 @@ blob unchanged; the player is told through `put_note`.
 import argparse
 import json
 import os
+import struct
 import sys
 import time
 
@@ -183,6 +184,85 @@ def forget_inherited_map(blob, name: str, log=print):
     return blob
 
 
+def forget_inherited_news(blob, name: str, log=print):
+    """Empty a newly added civ's news list, which it inherited from its donor's
+    cloned `OWNR` with the donor's messages and battle reports, and clear its
+    new-news flag. The strings stay in the table; no item names them."""
+    import merge_orders as mo
+    import news
+
+    oid = next((r['oid'] for r in icv.owner_records(blob)
+                if r['name'] == name), None)
+    items = news.items_of(blob, oid) if oid is not None else None
+    if not items:
+        return blob
+    out = news.clear_list(blob, oid)
+    at = mo._new_news_at(out, oid)
+    if at is not None:
+        out = out[:at] + b'\0' + out[at + 1:]
+    log(f'  joins: {name} forgot {len(items)} news item(s) inherited from the '
+        f'donor')
+    return out
+
+
+def untouched_homeworld(start):
+    """The PLPR payload of a homeworld whose prompt was never confirmed in
+    `start`, an earlier turn of the galaxy, or None. Every homeworld of a
+    galaxy starts with the same dialog fields."""
+    import merge_orders as mo
+    if start is None:
+        return None
+    planets = mo.planet_index(start)
+    for o in icv.owner_records(start):
+        flags = mo.setup_flags(start, o['oid'])
+        homes = sorted(mo.homeworlds(planets, o['oid']))
+        if flags is not None and flags[0] == 0 and homes:
+            return planets[homes[0]][2]
+    return None
+
+
+def fresh_start(blob, name: str, planet: int, start=None, log=print):
+    """Give a civ cloned from seat one a new civ's start: no score, no civ
+    name or coat of arms chosen, every trait untouched with its prompt offered
+    again, and, when `start` (the galaxy's turn 0) shows an untouched
+    homeworld, that homeworld on `planet` with its prompt offered again.
+    Each part that cannot be read is logged and left as cloned."""
+    import merge_orders as mo
+
+    oid = next((r['oid'] for r in icv.owner_records(blob)
+                if r['name'] == name), None)
+    if oid is None:
+        return blob
+    owner = next(r for r in icv.owner_records(blob) if r['oid'] == oid)
+    uid = struct.unpack_from('<I', blob, owner['end'] - 4)[0]
+    blob = icv.set_score(blob, uid, 0)
+    owpr = mo._owpr(blob, oid)
+    at = mo._identity_at(blob, owpr) if owpr is not None else None
+    if at is None:
+        log(f'  joins: {name}: OWPR unreadable, score, name and traits left '
+            f'as cloned')
+        return blob
+    out = bytearray(blob)
+    struct.pack_into('<I', out, at - icv.SCORE_BACK, 0)
+    blob = mo.set_civ_identity(bytes(out), oid, b'', 0, mo.NO_ARMS)
+    traits = mo.traits_of(blob, oid)
+    if traits is None:
+        log(f'  joins: {name}: traits unreadable, left as cloned')
+    else:
+        blob = mo.set_traits(blob, oid, (0,) * len(traits))
+        blob = mo.set_setup_flag(blob, oid, 'civ', 0)
+    home = untouched_homeworld(start)
+    if home is None:
+        log(f'  joins: {name}: no untouched homeworld to copy, homeworld '
+            f'left as cloned')
+    else:
+        blob = mo.set_homeworld(blob, planet, home)
+        blob = mo.set_setup_flag(blob, oid, 'homeworld', 0)
+    log(f'  joins: {name} starts with no score, no chosen name and untouched '
+        f'traits' + ('' if home is None else ' and homeworld'))
+    return blob
+
+
 def home_system(blob, planet_id: int):
     """(sun object id, label) for the planet a newcomer was given. An unnamed
     system is labelled 'an unnamed system'."""
@@ -311,6 +391,25 @@ def _grant(store, blob, req: dict, roster, turn: int, log=print,
     except Exception as exc:                                # noqa: BLE001
         # The join stands; the failure is logged.
         log(f'  joins: {name} kept the donor\'s explored map, '
+            f'{type(exc).__name__}: {exc}')
+
+    try:
+        joined = forget_inherited_news(joined, name, log=log)
+    except Exception as exc:                                # noqa: BLE001
+        # The join stands; the failure is logged.
+        log(f'  joins: {name} kept the donor\'s news, '
+            f'{type(exc).__name__}: {exc}')
+
+    try:
+        start = store.turn_blob(0) if store.has_turn(0) else None
+    except (OSError, ValueError) as exc:
+        log(f'  joins: turn 0 unreadable, {type(exc).__name__}: {exc}')
+        start = None
+    try:
+        joined = fresh_start(joined, name, planet, start, log=log)
+    except Exception as exc:                                # noqa: BLE001
+        # The join stands; the failure is logged.
+        log(f'  joins: {name} kept parts of the donor\'s start, '
             f'{type(exc).__name__}: {exc}')
 
     try:

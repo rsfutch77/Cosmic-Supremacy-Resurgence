@@ -336,15 +336,15 @@ So the score list holds one row per distinct `Owner:4`, and the collision, not t
 
 [ ] **The score list also feeds battle scoring.** `0x4430F0` reads it for the score ratio and skips a civ with no row, so a missing row changed battle scoring too, not only the display. Check whether any other caller reads the map at `0x857940`.
 
-[ ] **A clone inherits its donor's display name and score.** The `OWPR` display-name override (`civ+0x1A0`) and `Owner:28`/`Owner:32` are copied, so from the first boundary an injected clone of a renamed donor shows under the donor's display name, and a joiner starts with the donor's score. Same kind of inheritance as `EXSY` below.
+[x] **A clone inherits its donor's display name and score.** The `OWPR` display-name override (`civ+0x1A0`) and `Owner:28`/`Owner:32` are copied, so from the first boundary an injected clone of a renamed donor shows under the donor's display name, and a joiner starts with the donor's score. Same kind of inheritance as `EXSY` below. **Fixed for joins** (`joins.fresh_start`, `test_fair_start.py`, 13 November 2026): a joiner's score is set to zero in its score row and in `OWPR`, where `Owner:28` sits 78 bytes before the length field of the civ name dialog 225 chose (measured against every civ's score row on the sandbox at turn 163), and the civ name and arms are cleared, so the client offers dialog 225 and the merge takes the joiner's own choice.
 
-[ ] **`EXSY` is cloned, not reset, and that is a cheat rather than a cosmetic defect.** An injected civ inherits the donor's explored-systems map, so cloning a developed donor tells the newcomer where the home planets are. Two things keep it from mattering yet and neither is a fix: the AI player does not read `EXSY` (it keeps its own discovery set, persisted per civ name), and cloning from a turn-1 capture inherits an empty map, so only the developed-donor fixture leaks. The fix needs the record layout, which is not decoded, the leading `u32` reads 63 on a civ that had explored 105 systems, so it is not a plain count and the obvious guess is already falsified. **That `EXSY` is the explored-systems map is itself inferred** from the tag and from its size tracking exploration across two civs; confirm it while decoding it.
+[x] **`EXSY` is cloned, not reset, and that is a cheat rather than a cosmetic defect.** An injected civ inherits the donor's explored-systems map, so cloning a developed donor tells the newcomer where the home planets are. Two things keep it from mattering yet and neither is a fix: the AI player does not read `EXSY` (it keeps its own discovery set, persisted per civ name), and cloning from a turn-1 capture inherits an empty map, so only the developed-donor fixture leaks. The fix needs the record layout, which is not decoded, the leading `u32` reads 63 on a civ that had explored 105 systems, so it is not a plain count and the obvious guess is already falsified. **That `EXSY` is the explored-systems map is itself inferred** from the tag and from its size tracking exploration across two civs; confirm it while decoding it. **Fixed for joins:** `joins.forget_inherited_map` empties the joiner's `EXSY`.
 
-[ ] **A joiner inherits the donor's civ traits, bonuses included.** Seen on screen 28 September 2026: a civ that joined at turn 11 carried the donor's food-output trait bonus. `add_civ` clones the donor's `OWNR` whole and the traits are inside it, so this is the same mechanism as `EXSY` and the food stores rather than a separate defect. Accepted for the beta, where everybody starts with the same extra anyway, and wrong afterwards: a new civ should get the homeworld button back and choose its own traits. Everything the fix needs is now located: the trait values are `OWNR > CVTR`, (index, value) pairs after a 20-byte header (`merge_orders.TRAIT_RULES`), and the two prompts are offered while `Owner:359` (homeworld) and `Owner:360` (traits) are clear, both one-byte flags in `OWPR` (see "The three one-time setup prompts"). So `add_civ` should give the joiner the untouched trait values and clear both flags, and the referee then takes the joiner's confirm like anyone else's.
+[x] **A joiner inherits the donor's civ traits, bonuses included.** Seen on screen 28 September 2026: a civ that joined at turn 11 carried the donor's food-output trait bonus. `add_civ` clones the donor's `OWNR` whole and the traits are inside it, so this is the same mechanism as `EXSY` and the food stores rather than a separate defect. Accepted for the beta, where everybody starts with the same extra anyway, and wrong afterwards: a new civ should get the homeworld button back and choose its own traits. Everything the fix needs is now located: the trait values are `OWNR > CVTR`, (index, value) pairs after a 20-byte header (`merge_orders.TRAIT_RULES`), and the two prompts are offered while `Owner:359` (homeworld) and `Owner:360` (traits) are clear, both one-byte flags in `OWPR` (see "The three one-time setup prompts"). So `add_civ` should give the joiner the untouched trait values and clear both flags, and the referee then takes the joiner's confirm like anyone else's. **Fixed for joins** (`joins.fresh_start`, 13 November 2026): every trait is set to 0, the value a civ holds before its first confirm, and `Owner:360` is cleared. Given the galaxy's turn 0, the joiner's homeworld takes the dialog fields of a homeworld whose prompt was never confirmed there, and `Owner:359` is cleared; without turn 0 the homeworld stays as cloned and the join log says so.
 
 [ ] **Does a joiner inherit the donor's corruption?** Unknown, and it matters more than it looks. A civ joining a galaxy whose seat one is failing late would take on that civ's corruption along with its warehouses, which could cripple a newcomer at the moment they arrive. Corruption has **resisted location in memory entirely** (see the memory report) and is plausibly derived at display time from population, buildings and military rather than stored, in which case copying the planet copies the corruption and there is no field to clear. `GSET.corruption_multiplier = 100` is a galaxy-level knob and the cheapest way to make it vary. Settle whether it is stored or derived first: the two answers need completely different fixes, and only one of them has a field to blank. Observed at −0.5% on a turn-11 joiner, which is unremarkable on its own and says nothing about a late-game donor.
 
-[ ] **An injected civ gets no ships.** `SHIP`/`DYNO` records are galaxy-level rather than per-civ, so a starting colony ship is a separate job. Against civs that start with two, that is a real handicap at turn 1, the civ can build its own only if the donor's homeworld had a shipyard.
+[x] **An injected civ gets no ships.** `SHIP`/`DYNO` records are galaxy-level rather than per-civ, so a starting colony ship is a separate job. Against civs that start with two, that is a real handicap at turn 1, the civ can build its own only if the donor's homeworld had a shipyard. **Fixed:** `starting_kit` adds `STARTING_SHIPS` hulls, two, as a generated civ starts with.
 
 [ ] **Homeworld placement is one hardcoded policy.** New civs are placed as far from every claimed planet as possible, which is the right default for testing an AI (contact becomes something it has to earn) but not the only one worth having, random placement is what a real generator does and is the only way to test a hostile neighbour two systems away, and clustered or per-team placement follow from it. Wants a `--placement` option rather than a second function.
 
@@ -670,17 +670,101 @@ was destroyed there and its owner still received nothing. **Not discovery**, sin
 about where is a bad enough experience to be worth knowing whether it is the engine's rule or an
 artefact of how these galaxies are made.
 
-[ ] **Does a joined civ inherit its donor's `NEWS`?** `inject_civ.add_civ` clones a donor's `OWNR`
+[x] **Does a joined civ inherit its donor's `NEWS`?** `inject_civ.add_civ` clones a donor's `OWNR`
 whole, and `NEWS` lives inside that `OWNR`'s `DATA` block, so the same reasoning that made a joiner
 inherit the donor's `EXSY` applies here and nothing empties `NEWS` the way `joins` now empties
 `EXSY`. Observed on 28 September in a real client: a civ joined at turn 11 of `galaxy_demo` and its
 news tab was **empty**, which is consistent with the donor having no news to inherit rather than with
-the field being cleared. The donor in that galaxy is seat one at turn 11 and has fought nothing.
+the field being cleared. The donor in that galaxy is seat one at turn 11 and has fought nothing. **It does, and joins now empty it** (`joins.forget_inherited_news`, `test_messages_merge.py`, 13 November 2026): the clone holds the donor's list, messages included, and the join empties it and clears the new-news flag. The strings stay in `NWDB`; no item names them, and the served view drops them.
 
 The test is a donor that **does** have news: take a galaxy where a civ holds `NEWS` records, inject
 against that civ, and read the newcomer's tab. If the items come across, a player joins knowing where
 somebody else's battles happened, which is a smaller version of the `EXSY` map leak and the same
 class of bug. If they do not, something clears it and that something is worth naming.
+
+#### The `NEWS` record and player messages (November 2026)
+
+Read from the `NEWS` v3 writer (`0x5355B0`) and reader (`0x535E70`), and measured in one Single
+Player session on 9 November 2026 (`server/tests/fixtures/messages`).
+
+| Offset, with empty strings | Type | Field |
+|---|---|---|
+| `+0` | `u32` | type: 1 a received message, 6 the sender's copy, 8 a player's note |
+| `+4` | `u32` | flags, bit 0 "Mark As Important" |
+| `+8` | `u32` | turn |
+| `+12` | `u32` length, then bytes | title, empty when the title id names a string |
+| `+16` | `u32` length, then bytes | body, the same |
+| `+20` | `u32` | title id in `NWDB` |
+| `+24` | `u32` | body id in `NWDB` |
+| `+28` | `u32` count, then `u32` ids | the civs the item names |
+| `+32` | 3 × `f32` | position, zero for a message |
+
+Everything after the title moves by the title's length, and everything after the body by the
+body's. Every item measured names its title and body by id and writes both strings empty, so the
+unsettled `+20` and `+24` above are the two string ids. The reader turns a type 7 into a type 1
+marked important, and a type 5 into `0x43`. A civ's list is in its `OWNR > DATA`, a `u32` count and
+one `NEWS` per item, between the designs and `GOVS` (writer `0x539C90`, reader `0x5427B0`).
+
+**`NWDB` v1**, after `GLOB`, holds the strings: a `u32` next id, a `u32` count, then per string a
+`u32` id, a `u32` hash, a `u32` length and the text, Latin-1 with no terminator (writer
+`0x5371C0`, reader `0x536CF0`). The hash is Jenkins' one-at-a-time over the bytes as signed chars,
+with A to Z lowered and `\` read as `/` (`0x5E5230`); it matches all 39 strings in the captures.
+Interning a string (`0x5370A0`) returns the id of an equal string already held, so two items with
+one text share an id. A save holds the strings of every civ's news, not only its own.
+
+**Sending a message** (OK handler `0x4BAB40`) needs a subject, a body and at least one recipient.
+The body is refused above 18 rows, each line counting its length divided by 64, plus one. The
+subject has no limit and neither field is filtered. The client appends a type 1 item titled
+`Message from <sender> - Subject: <subject>` to each recipient's list, naming the sender, and a
+type 6 item titled `Message to <recipients> - Subject: <subject>` to the sender's, naming the
+recipients; both name one body string. `GoodGuy` sending `s1` added strings 9 to 11; `BadGuy`'s
+reply was titled `Re: s1`. The text is stored as typed: `ë` as one Latin-1 byte, line breaks as
+`\r\n`, and `<b>` and `|` raw. The news tab hides `<b>` (Robert, 9 November 2026), and copying
+the text shows it, so the text controls read `<` as markup; the delimiters at `0x750E10` are
+`|`, `>`, `<` and `%`. Marking an item important sets bit 0 of its flags. Online the client sends
+`SDNW` v0 holding one `NEWS` instead.
+
+**The new-news flag** is a byte in `OWPR`, 81 bytes before the civ name's length field. The reply
+set GoodGuy's to 1, and opening the news cleared BadGuy's, along with the byte two after it.
+
+**The reader trusts its input.** A count sizes a vector, and a string length sizes the string,
+before anything is read, so a huge value fails the load. A length past the section's end leaves
+the rest of the record misread. An id is not checked to name a civ.
+
+- [x] **Player messages are carried.** `merge_orders.py` takes a message when the submitter's new
+  type 6 item names civs it has met and each holds a matching type 1 item, renumbers the strings
+  into the merged `NWDB`, stores the text with the markup characters swapped for `(`, `)`, `/`
+  and `pct`, and sets each recipient's new-news flag; its own important marks and its read flag
+  are carried too, and anything else is refused with a note (`test_messages_merge.py`). On
+  9 November 2026 a round trip on `fixtures/messages/m0` went through the referee's path in the
+  client: GoodGuy's message from its served view, merged, read by BadGuy from its view as
+  `(b)hi(/b) from the merge/test 100pct` and `Zoë`, a reply restored and merged with no note, and
+  the reply read by GoodGuy from its view with the news tab marked new (Robert). Done when a
+  message sent each way on the sandbox arrives with the next turn. On the
+  sandbox galaxy, referee staged at `00d7548` (13 November 2026, turns 161 to 163, deadlines
+  brought forward): tmog66 sent `sandbox s1` to guest-test and `sandbox s2` to guest-test and
+  Elder Race, guest-test read both on screen and replied, and the reply reached tmog66; every
+  step was taken with no change dropped, and each civ's served view held only its own news. A
+  message to two recipients is as inferred: each recipient's item names the sender and the
+  other recipients, and the sender's title joins their names with `, ` (an unmet civ shows as
+  `Stranger`). The client titles a message with the sender's chosen civ name (`tmog66-`); the
+  referee at `00d7548` wrote the player name, and the merge keeps the client's title from
+  `ab2e6d3`.
+- [ ] **Messages arrive between ticks, close to instantly.** A message travels inside its
+  sender's submission, so it reaches the recipient with the next tick, up to a whole turn later.
+  Per tick is acceptable for now (Robert, 13 November 2026). The client's online path sends
+  `SDNW` v0 holding one `NEWS` the moment a message is sent; nothing answers it, because the
+  launcher runs the client offline. Done when a message sent in the client reaches a recipient
+  whose launcher is open within a minute, shows in the recipient's news without waiting for the
+  tick, and is still in the turn the referee publishes.
+- [x] **Each civ is served only its own news.** `fog.project` empties every other civ's news list
+  and keeps only the strings its own list names, with the next id unchanged (`news.own_view`),
+  and `fog.restore` puts them back ahead of anything the submission added, so a restored view is
+  the authoritative blob (`test_fog.py`, `test_messages_merge.py`). Before, each player's copy of
+  a turn held every civ's news and every string. Both served views in the round trip above
+  loaded in the client and sent a message to a civ whose list they held empty. The privacy page
+  says each message travels only in its sender's and recipients' copies; it is live once the
+  site is deployed.
 
 ### `SERV`, the Inactivity penalty and what keeps it at zero (October 2026)
 
@@ -857,10 +941,18 @@ rates at `+4`, food and production counters, and, when the owner is
 unchanged, the facility list. Whether the stock client shows any of them for
 another civ's planet is not known.
 
-[ ] **A caller without a seat is served the whole turn.** Under `first-use`
+[x] **A caller without a seat is served the whole turn.** Under `first-use`
 that is every player before their first submission, and any signed-in user who
 asks. An older turn is also served whole, since views are kept for the current
-turn only.
+turn only. **Fixed** (13 November 2026): the referee publishes, beside each
+civ's view, `turn_store.PUBLIC_VIEW`, the turn with every civ's news withheld,
+and the relay sends a caller with no view of its own there. The store keeps the
+previous turn's views, so a launcher that asks for a turn as the next is
+published still gets its own, and the relay serves a turn whole only while it
+is current and was published with no views. Any other turn is refused
+(`test_relay_function.py`). The referee has to be restaged before the relay is
+deployed: a relay that refuses earlier turns while the referee still deletes the
+previous turn's views would stop a launcher caught in that window.
 
 [ ] **The folder store and `turn_server` do not enforce views.** A folder
 store's player reads the files directly, and `turn_server` serves every caller
@@ -880,6 +972,10 @@ The **low three bytes are carried faithfully** through a save and load; the **to
 or `0x09` in a client that played and `0xFF` in one that loaded, whatever the blob held. The AI civ's
 low bytes also vary between otherwise identical runs, and that is the only nondeterminism found
 anywhere in the format.
+
+**The dword is the last record's custom colour** (`KNPL` record `+32`, below). The record's
+constructor (`0x532E60`) never sets it, so a civ that never picked a colour carries whatever was
+in memory, and the reader forces the top byte to `0xFF` (`0x533365`).
 
 Consequences. **Any blob comparison has to mask this dword**, or two honest computations of the same
 turn look different, which is exactly what a canonical hash must not do. The
@@ -1827,9 +1923,12 @@ What is left for after the beta is kept here.
   describes a ruler's influence over a planet's population growing each turn; whether the citizen
   owner field itself ever changes to the planet's owner is not measured.
 
-- [ ] **Nothing checks that a submitted order is legal**, only that it is the player's own. A
-  technology the civ cannot research, or a queue entry it cannot afford, is copied as given. Done
-  when the merge applies the rule the UI enforces for each order type it accepts.
+**The merge checks that an order is the player's own, not that the UI would allow it.** A
+technology the civ cannot research, or a queue entry it cannot afford, is copied as given. The
+client enforces those rules itself, so only an edited client or a memory edit gets past them,
+and the merge never takes a civ's credits or stocks from a submission: the referee charges
+hurries, trades and treaty sums itself. Checking every order type is not planned; it is taken up if cheating shows up in a galaxy
+(Robert, 13 November 2026).
 
 - [x] **Logging in is played through the live relay.** The relay knows a player by uid, and
   creating an account or linking Google keeps the guest's. On 4 November 2026 an email login
@@ -1846,11 +1945,21 @@ What is left for after the beta is kept here.
   relay refuse a token whose provider is `anonymous`, and the launcher shows "log in to play".
   It ships off; the sandbox still allows guests.
 
-- [ ] **The sandbox still lets guests in.** A guest is warned before it joins or plays, once a
+- [x] **The sandbox still lets guests in.** A guest is warned before it joins or plays, once a
   day, that galaxies will soon be played by account only (`GUEST_ONLY_TEXT` in the launcher).
   Done when `seat_tool.py firebase://cs-resurgence/sandbox guests refuse` is set, after the operator view shows
   no seated guests, and the launcher update that follows rewords the warning to say guests are
-  refused.
+  refused. Set on 12 November 2026 with `--anyway` (Robert): every seated civ on the roster
+  signs in with Google, and the one seat the check stopped on, Sygor, is not on the roster and
+  has not submitted since sign-ins were recorded. The bot civs submit with the operator's
+  credentials, not through the relay, and are not affected. The reworded warning is in v0.6.0.
+
+- [ ] **The merge parses the whole blob again for nearly every read.** Each accessor in
+  `merge_orders.py` and `news.py` calls `sp.parse_blob` itself, so one merge of a 38 KB test blob
+  parses it 83 times (13 November 2026, `test_admirals_diplomacy_merge.py` under `cProfile`).
+  v0.6's display, message and news reads added about a dozen, and the admirals and queues merge
+  tests now take over 30 minutes. A live tick is still dominated by the game client. Done when
+  a merge parses each blob it holds once per change, and both tests run in a few minutes.
 
 - [x] **A guest's seats follow its install to an existing account.** On login the launcher
   posts both the guest's and the account's tokens, and the relay moves each seat and each
@@ -1890,8 +1999,15 @@ What is left for after the beta is kept here.
   publish. Still refused: an admiral on a fleet. Built on the UI's word, not a save: a peace
   binding for 50 turns and an alliance for 100, a credit lump sum as one `u32`, and no war while
   a cease-fire or peace binds.
-  - [ ] An admiral made in the client UI and a treaty answered in it go through a live galaxy
-  - [ ] A per-turn credit payment is seen moving after an accepted trade
+  - [x] An admiral made in the client UI and a treaty answered in it go through a live galaxy
+    (13 November 2026, sandbox turns 166 to 168): tmog66 made admiral 337 "scout2a" and gave it a
+    ship, and proposed trade 338 to guest-test; guest-test accepted it on turn 167, and turn 168
+    holds it active with start 167 and length 5. No refusal on either turn.
+  - [x] A per-turn credit payment is seen moving after an accepted trade (13 November 2026):
+    guest-test, idle, gained 100 credits a turn from 163 to 167 and 101 on turn 168, the first tick
+    of trade 338's 1 credit a turn. The payer's side is not separable from tmog66's own spending,
+    and the trade running out after 5 turns is assumed, not seen: the game's tick ends it, and
+    no test covers a submission merged after a treaty ends.
 
 - [x] **Governors run through the live referee.** Measured in Single Player and merged in
   `test_governors_merge.py`. On the sandbox galaxy (2 November 2026, turns 97 to 98), Beta
@@ -2093,8 +2209,10 @@ layout read off the client above held.
   is greyed out while the admiral commands a ship.
 - **A turn** leaves the admiral record as it was. The `SHPR` of the colony ship under "man ships
   fully" grew by 9 bytes in the tick, likely crew the rule brought aboard.
-- **Not measured:** an admiral on a fleet, since GoodGuy had no two ships together; the other
-  choices in each rule; and the other rule types.
+- **An admiral on a fleet** (9 November 2026, `fixtures/admirals` `af0` and `af1`, DemoPlayer's
+  fleet 202 on `tier5/f1`): assigning admiral 203 wrote its id into the `FLET`'s own `DYNO`, the
+  `u32` after the has-orders byte as for a ship, and the `ADML` counts one command, the fleet.
+- **Not measured:** the other choices in each rule, and the other rule types.
 
 **Measured in one Single Player session on 27 and 28 October 2026
 (`server/tests/fixtures/diplomacy`):** diplomacy on `control_fork_played.dat` written with
@@ -2120,8 +2238,10 @@ either ignores the setting on load or the capture rewrites it.
   -1 and the turn twice, and sets both civs' stance to 1. The UI shows a civ at war in red,
   cease-fire in yellow and peace in green; grey before contact, likely stance 0.
 - **A turn** leaves the treaties as they were.
-- **Not measured:** peace and alliance acceptance, the per-turn payments over a turn, a treaty
-  running out, and the other item types.
+- **A per-turn payment** reaches the recipient on the first tick after acceptance (sandbox, 13
+  November 2026).
+- **Not measured:** peace and alliance acceptance, a treaty running out (assumed to work, since
+  the game's tick ends it), and the other item types.
 
 - [x] **Admirals and diplomacy are carried as measured** (`merge_orders.py`,
   `test_admirals_diplomacy_merge.py`). An admiral is judged like a governor: a new id, a printable
@@ -2133,13 +2253,23 @@ either ignores the setting on load or the capture rewrites it.
   `u32` count of 5 at the second research field `+55`, then a resource byte and a `u32` per
   resource) and credits, and refuses it when the payer is short. Refused: an admiral on a fleet,
   another civ's admirals, a treaty ended any other way, and a stance moved without a treaty.
-- [ ] **A rival's colour and its territory checkbox are lost at every turn.** The diplomacy
+- [x] **A rival's colour and its territory checkbox are lost at every turn.** The diplomacy
   screen's Change Color (right-click a civ) and the checkbox beside each civ, which shows or
   hides its sphere of control on the map, do not survive to the next served turn (Robert, 6
   November 2026). `merge_orders.py` carries only what it lists, so whatever the client saves for
-  them is dropped, and silently, since only a moved stance is named. Neither field is located:
-  the undecoded rest of the 36-byte `KNPL` record is the likely place, and the memory report's
-  open "change color" item is the same field. Both are the viewer's own display choices, so
+  them is dropped, and silently, since only a moved stance is named. Both are in the 36-byte
+  `KNPL` record, read off the client (writer `0x532F20`, reader `0x5332E0`): `+29` a `u8`, the
+  territory shown (the toggle `0x574930`), `+30` a `u8`, the rival's ships shown, `+31` a `u8`, 1
+  to colour the civ by stance and 0 to use `+32`, a `u32` colour as `B, G, R, A` (Change Color's
+  OK, `0x489B23`, through `0x5342D0`). Measured on 9 November 2026 (`fixtures/messages` `m3` to
+  `m6`): Change Color to green wrote `+31` 0 and `+32` `01 F8 0D FF`, ticking the territory box
+  wrote `+29` 1, and turning ship display off wrote `+30` 0, each in GoodGuy's record for BadGuy
+  only. The merge carries all four for the submitter's own records (`test_display_merge.py`). The constructor sets `+29` to 0, `+30` and `+31`
+  to 1. The player's own colour, territory and ships flag are `OWPR` fields at `Owner+0x210`,
+  `+0x214` and `+0x215`. Both are the viewer's own display choices, so
   carrying them needs no legality check beyond the record being the submitter's own. Done when
   a Single Player capture pair locates both fields, the merge carries them for the submitter's
   own `KNPL`, and a colour and a hidden territory set on one turn are still there on the next.
+  **Fixed** (13 November 2026): on the live sandbox tmog66 set guest-test to colour
+  0xF904E9 with territory and ships shown on turn 166, and turn 167 and tmog66's served view
+  both kept them, confirmed on screen by Robert.

@@ -69,7 +69,7 @@ STATE_FIELDS = ('turn', 'deadline', 'turn_seconds', 'civs', 'hash',
                 turn_store.STATUS_KEY, turn_store.CLOSED_REASON_KEY,
                 turn_store.RECLAIMED_KEY, turn_store.JOINED_KEY,
                 turn_store.MIN_BUILD_KEY, turn_store.WARN_KEY,
-                turn_store.RECLAIM_KEY)
+                turn_store.RECLAIM_KEY, turn_store.BOTS_KEY)
 
 # Who has submitted, as `{"<turn>": [civ, ...]}` on the galaxy document. Keyed
 # by turn so a commit racing a publish lands under its own turn; `publish`
@@ -178,6 +178,23 @@ def parse_spec(spec: str):
             urllib.parse.unquote(parts[0]) if parts else None,
             q.get('bucket', [None])[0],
             q.get('prefix', [PREFIX])[0])
+
+
+def galaxy_specs(spec: str) -> list:
+    """The spec of every galaxy in `spec`'s project and prefix, sorted.
+
+    `spec` names the tree, as `firebase://project/*`; its galaxy segment is
+    ignored and its query is kept on each spec returned. A document with no
+    fields, left behind by a removed galaxy's subcollections, is not listed.
+    """
+    project, _galaxy, _bucket, prefix = parse_spec(spec)
+    query = urllib.parse.urlparse(spec).query
+    tail = f'?{query}' if query else ''
+    fs = FirebaseTurnStore(project, '*', prefix=prefix).fs
+    ids = sorted(snap.id for snap in
+                 fs.collection(prefix.strip('/')).select(['turn']).stream()
+                 if snap.exists)
+    return [f'firebase://{project}/{urllib.parse.quote(g)}{tail}' for g in ids]
 
 
 def default_bucket(project: str, client) -> str:
@@ -443,13 +460,16 @@ class FirebaseTurnStore:
         submissions older than `SUBMISSION_TURNS_KEPT` turns.
 
         `views` is `{civ: blob}` for the civs served their own view. They are
-        written before the turn, and the previous turn's views are deleted
-        after it.
+        written before the turn. The previous turn's views are kept, for a
+        launcher that asks for that turn as this one is published, and older
+        ones are deleted after it.
         """
         import canonical
         snap = self.doc.get()
         doc = (snap.to_dict() or {}) if snap.exists else {}
         seconds = turn_seconds or doc['turn_seconds']
+        named = doc.get(turn_store.VIEWS_KEY) or {}
+        last = str(int(turn) - 1)
         views = views or {}
         for civ, view in views.items():
             self._put(self.view_object(civ, turn), sp.encode_save(view),
@@ -461,19 +481,21 @@ class FirebaseTurnStore:
             'turn_seconds': int(seconds),
             'hash': canonical.canonical_hash(blob),
             SUBMITTED_KEY: {str(int(turn)): []},
-            turn_store.VIEWS_KEY: {str(int(turn)): sorted(views)},
+            turn_store.VIEWS_KEY: {**({last: named[last]} if last in named
+                                       else {}),
+                                   str(int(turn)): sorted(views)},
         }
         if doc.get(SUBMISSIONS_FROM_KEY) is None:
             fields[SUBMISSIONS_FROM_KEY] = int(turn)
         self.doc.set(fields, merge=list(fields))
         self.prune_submissions(int(turn) - SUBMISSION_TURNS_KEPT + 1)
-        self._drop_views(doc.get(turn_store.VIEWS_KEY) or {}, int(turn))
+        self._drop_views(named, {int(turn), int(turn) - 1})
 
-    def _drop_views(self, named: dict, keep: int) -> None:
-        """Delete the view objects `named` lists for every turn but `keep`."""
+    def _drop_views(self, named: dict, keep) -> None:
+        """Delete the view objects `named` lists for every turn not in `keep`."""
         from google.api_core import exceptions
         for t, civs in named.items():
-            if not str(t).isdigit() or int(t) == keep:
+            if not str(t).isdigit() or int(t) in keep:
                 continue
             for civ in civs:
                 try:

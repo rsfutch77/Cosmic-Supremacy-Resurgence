@@ -89,7 +89,14 @@ MIN_BUILD_KEY = 'min_build'
 # `{"<turn>": [civ, ...]}`. `publish` replaces the whole map; a civ not named
 # is served the turn itself, which is its view.
 VIEWS_KEY = 'views'
+# The view a caller with none of its own is served: the turn with every civ's
+# news withheld. Longer than NAME_LIMIT, so no civ can hold the name.
+PUBLIC_VIEW = 'public-without-news'
 WARN_KEY, RECLAIM_KEY = 'warn_after_misses', 'reclaim_after_misses'
+
+# The civs the AI plays, as a list of names. Written by `bot_worker.py --add`;
+# a civ not named is never played by a bot.
+BOTS_KEY = 'bots'
 
 # Player name rules: the engine's civ name is a 15-character ASCII buffer, and a
 # folder store names files for the civ, so Windows-forbidden characters and a
@@ -194,6 +201,13 @@ def status_of(state) -> str:
     """`open` or `closed` for a galaxy's state. Absent means open."""
     value = (state or {}).get(STATUS_KEY)
     return CLOSED if value == CLOSED else OPEN
+
+
+def bots_of(state) -> list:
+    """The bot civs a galaxy's state names that are also in its roster."""
+    state = state or {}
+    roster = set(state.get('civs') or [])
+    return [c for c in (state.get(BOTS_KEY) or []) if c in roster]
 
 
 def reclaimed_of(state, civ: str = None):

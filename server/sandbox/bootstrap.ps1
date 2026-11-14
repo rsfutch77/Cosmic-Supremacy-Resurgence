@@ -7,6 +7,8 @@
     libraries at the key in C:\key when one is there, and runs the worker with
     its log, status file and operator page in C:\out, which the host can read.
     The worker is restarted after it exits, unless the stage was made with -Once.
+    Unless the stage was made with -NoBots, the bot worker runs beside it and is
+    restarted the same way.
 #>
 $ErrorActionPreference = 'Stop'
 
@@ -73,12 +75,45 @@ try {
         Out-File -Append -Encoding utf8 (Join-Path $Out 'preflight.log')
     Say "preflight exited with $LASTEXITCODE"
 
+    # The bot worker plays every bot civ in every galaxy of the store's project,
+    # or in the seed galaxy, and shares the client with the referee through its
+    # status file in C:\out. It runs as a job beside the referee loop.
+    if ($Config.bots) {
+        $BotStore = $Store
+        if ($Store -match '^(firebase://[^/?]+)/[^?]*(\?.*)?$') {
+            $BotStore = "$($Matches[1])/*$($Matches[2])"
+        }
+        $BotArgs = @('--store', $BotStore, '--work-dir', $Out,
+                     '--state-dir', (Join-Path $Out 'ai_state'), '--referee-dir', $Out)
+        if ($Config.once) { $BotArgs += '--once' }
+        Say "bots: $($BotArgs -join ' ')"
+        $null = Start-Job -Name bots -ArgumentList $Python, (Join-Path $Code 'server\bot_worker.py'), $BotArgs, $Out, [bool]$Config.once -ScriptBlock {
+            param($Python, $Entry, $BotArgs, $Out, $Once)
+            $Log = Join-Path $Out 'bootstrap.log'
+            # The referee worker starts the cs_server the bots use.
+            Start-Sleep -Seconds 60
+            while ($true) {
+                & $Python $Entry @BotArgs 2>&1 | Out-File -Append -Encoding utf8 (Join-Path $Out 'bot_console.log')
+                Add-Content -Encoding utf8 $Log ('{0}  bots exited with {1}' -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $LASTEXITCODE)
+                if ($Once) { break }
+                Start-Sleep -Seconds 60
+            }
+        }
+    } else {
+        Say 'bots: off'
+    }
+
     while ($true) {
         Say "worker: $Python $Entry $($WorkerArgs -join ' ')"
         & $Python $Entry @WorkerArgs 2>&1 | Out-File -Append -Encoding utf8 (Join-Path $Out 'worker_console.log')
         Say "worker exited with $LASTEXITCODE"
         if ($Config.once) { break }
         Start-Sleep -Seconds 30
+    }
+    # A job ends with this script, so a -Once stage waits for the bots' pass.
+    if ($Config.bots) {
+        Wait-Job -Name bots | Out-Null
+        Say 'bots: job finished'
     }
 } catch {
     Say "bootstrap failed: $_"

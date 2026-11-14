@@ -279,7 +279,7 @@ PRIV = [
       'For a Google login, the Google account\'s id and profile (Firebase Auth). Unverified: which profile fields Firebase keeps; check in the console.',
       'The account login on the player\'s PC (`fb_account.json`, sealed to the Windows user).',
       'Player and civ names (galaxy documents, the archive, every player\'s copy of the galaxy).',
-      'In-game messages (inside the turn blobs, held by every player in the galaxy).',
+      'In-game messages (inside the turn blobs of their sender and recipients, and the archive the referee keeps).',
       'Launcher logs (Firestore, redacted, kept for a fixed number of days).',
       'IP addresses (Google\'s request logs for the relay, Hosting and Storage).',
       'Join requests and penalties (Firestore, operator records).']),

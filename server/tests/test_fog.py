@@ -29,6 +29,7 @@ import inject_civ as icv
 import inject_design as idg
 import exsy
 import fog
+import news
 import player_turn
 import referee
 import turn_store
@@ -148,8 +149,13 @@ def main():
         turn = icv.turn_of(blob)
         store.start(blob, ['GoodGuy', 'BadGuy'], turn=turn - 1)
         held = referee.views(blob, ['GoodGuy', 'BadGuy', 'Nobody'], log=quiet)
-        check('the referee projects only civs the galaxy holds', sorted(held),
-              ['BadGuy', 'GoodGuy'])
+        check('the referee projects only civs the galaxy holds, and the view '
+              'without news', sorted(held),
+              sorted(['BadGuy', 'GoodGuy', turn_store.PUBLIC_VIEW]))
+        public = held[turn_store.PUBLIC_VIEW]
+        check('which holds no news',
+              [news.items_of(public, o['oid']) for o in icv.owner_records(public)],
+              [[] for _o in icv.owner_records(public)])
         store.publish(turn, blob, views=held)
         check('BadGuy is served its view',
               player_turn.served_blob(store, 'BadGuy', turn) == view, True)

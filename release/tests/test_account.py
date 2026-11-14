@@ -222,14 +222,76 @@ check("the player is told to look for it", cy.view.warnings(),
       lambda w: len(w) == 1 and "reset" in w[0])
 check("cancelling leaves the guest", (cy_id.account, cy.view.account), (None, None))
 
-print("\n5. not under a live galaxy")
+print("\n5. under a followed galaxy")
+
+
+class Loop:
+    """A turn loop that ends when asked, unless it is `stuck`."""
+    def __init__(self, stuck=False):
+        self.alive, self.stuck = True, stuck
+
+    def is_alive(self):
+        return self.alive
+
+
+def follow(app, stuck=False, client=False, sending=False):
+    """Have `app` follow a galaxy as the launcher does."""
+    loop = Loop(stuck)
+    app.mp_thread, app.mp_playing, app.mp_sending = loop, {"name": "h3check"}, sending
+    app.client_exes = ["client.exe"]
+    app.stopped = []
+    app._watch_mp_client = lambda up: None
+
+    def stop(why=""):
+        app.stopped.append(why)
+        loop.alive = loop.stuck
+        app.mp_thread = None
+    app.stop_multiplayer = stop
+    L.running_clients = lambda exes: ["client.exe"] if client else []
+
+
+def dialogs(app):
+    return [k for k, _a in app.view.prompts if k in ("fields", "choose")]
+
+
 dee, dee_id = make_app("Dee")
-dee.mp_thread = types.SimpleNamespace(is_alive=lambda: True)
+follow(dee, client=True)
 dee.on_account()
-check("the player is told why", dee.view.warnings(),
-      lambda w: len(w) == 1 and "playing a galaxy" in w[0])
-check("and no dialog opens",
-      [k for k, _a in dee.view.prompts if k in ("fields", "choose")], [])
+check("with the game open the player is told why", dee.view.warnings(),
+      lambda w: len(w) == 1 and "h3check" in w[0] and "Close the game" in w[0])
+check("and nothing stops or opens", (dee.stopped, dialogs(dee)), ([], []))
+
+follow(dee, sending=True)
+dee.view = FakeView()
+dee.on_account()
+check("a turn still sending is refused the same way",
+      (dee.view.warnings(), dee.stopped),
+      lambda r: len(r[0]) == 1 and "finish sending" in r[0][0] and r[1] == [])
+
+follow(dee)
+dee.view = FakeView(yes_no=False)
+dee.on_account()
+check("with the game closed the player is asked to stop following",
+      [args[0] for kind, args in dee.view.prompts if kind == "yes_no"],
+      lambda q: len(q) == 1 and "Stop following h3check" in q[0])
+check("saying no keeps following and opens nothing",
+      (dee.stopped, dialogs(dee), dee.view.warnings()), ([], [], []))
+
+follow(dee, stuck=True)
+dee.view = FakeView(yes_no=True)
+dee.on_account()
+check("a loop still finishing a turn is reported",
+      (dee.stopped, dee.view.warnings()),
+      lambda r: r[0] == ["logging in or out"] and len(r[1]) == 1
+      and "still finishing" in r[1][0])
+check("and the log in dialog does not open", dialogs(dee), [])
+
+follow(dee)
+dee.view = FakeView(yes_no=True, fields=[(None, {})])
+dee.on_account()
+check("saying yes stops following and goes on to log in",
+      (dee.stopped, dee.mp_thread, dialogs(dee), dee.view.warnings()),
+      (["logging in or out"], None, ["fields"], []))
 
 print("\n5b. Google, when the build carries the client secret")
 L.google_secret = lambda: "s3cret"
@@ -310,7 +372,7 @@ check("a galaxy played by account only tells a guest to log in",
 check("and other refusals have none",
       L.refusal_box("this galaxy is closed", "Hal", hal.data_dir), None)
 
-print("\n5d. a guest is warned that galaxies are going account only")
+print("\n5d. a guest is warned that galaxies are played by account only")
 gus, gus_id = make_app("Gus", choose="guest")
 check("a guest is warned before it joins or plays", gus._guest_ready(), True)
 check("in the warning's own words",
@@ -338,12 +400,13 @@ check("an account is not warned", (gus._guest_ready(), gus.view.prompts),
 
 print("\n6. an account whose login dies is reported once")
 dee.mp_thread = None
+dee.view = FakeView()
 dee_id.log_in("ann@example.com", PASSWORD)
 dee_id.dropped = True
 dee._show_player_code()
 dee._show_player_code()
 check("the player is told once", dee.view.warnings(),
-      lambda w: len(w) == 2 and "logged out" in w[1])
+      lambda w: len(w) == 1 and "logged out" in w[0])
 
 for d in dirs:
     shutil.rmtree(d, ignore_errors=True)

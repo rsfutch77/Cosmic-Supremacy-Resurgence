@@ -1199,11 +1199,21 @@ def _route(method: str, path: str, headers: dict, body: bytes):
                 if turn != doc.get('turn') and not store.has_turn(turn):
                     raise Refused(404, f'no turn {turn}')
             # A seat named in the turn's views is served its own; see `fog`.
+            # Any other caller is served the view with every civ's news
+            # withheld. Only a turn published with no views at all is served
+            # whole, and only while it is current.
+            named = (doc.get(turn_store.VIEWS_KEY) or {}).get(str(turn), ())
             civ = seat_of(doc, uid)
-            if civ is not None and civ in (
-                    doc.get(turn_store.VIEWS_KEY) or {}).get(str(turn), ()):
+            if civ is not None and civ in named:
                 return _redirect(signed_url(store, store.view_object(civ, turn),
                                             'GET'))
+            if turn_store.PUBLIC_VIEW in named:
+                return _redirect(signed_url(
+                    store, store.view_object(turn_store.PUBLIC_VIEW, turn),
+                    'GET'))
+            if named or turn != doc.get('turn'):
+                raise Refused(403, f'turn {turn} is not served to this sign-in; '
+                                   f'the current turn is {doc.get("turn")}')
             return _redirect(signed_url(store, store.turn_object(turn), 'GET'))
         if len(parts) == 2 and parts[0] == 'submissions':
             # The store answers the current turn from the document already

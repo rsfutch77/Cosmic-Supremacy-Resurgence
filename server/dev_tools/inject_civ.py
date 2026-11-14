@@ -807,6 +807,9 @@ def add_civ(blob, new_name, donor_name=None, home_id=None, taken=(),
 SCORE_GLOB_VERSION = 17
 SCORE_COUNT_AT = 9
 SCORE_TAIL = 9
+# Owner:28 is also in the civ's OWPR, this many bytes before the length field
+# of the civ name dialog 225 chose.
+SCORE_BACK = 78
 
 
 def score_rows(blob):
@@ -823,6 +826,25 @@ def score_rows(blob):
         rows[uid] = blob[at + 8 + ln:at + 8 + ln + SCORE_TAIL]
         at += 8 + ln + SCORE_TAIL
     return p, rows, at
+
+
+def set_score(blob, uid, score=0):
+    """`blob` with the score in Owner:4 `uid`'s highscore row, and the f32
+    beside it, set. A list without that row is left alone."""
+    glob = next(sp.parse_blob(blob)[0].find("GLOB"), None)
+    if glob is None or glob.version != SCORE_GLOB_VERSION:
+        return blob
+    p = glob.payload
+    n = struct.unpack_from("<I", blob, p + SCORE_COUNT_AT)[0]
+    at = p + SCORE_COUNT_AT + 4
+    for _ in range(n):
+        row, ln = struct.unpack_from("<II", blob, at)
+        if row == uid:
+            out = bytearray(blob)
+            struct.pack_into("<If", out, at + 8 + ln, score, 0.0)
+            return bytes(out)
+        at += 8 + ln + SCORE_TAIL
+    return blob
 
 
 def add_score_row(blob, uid, name, donor_tail, log=print):
