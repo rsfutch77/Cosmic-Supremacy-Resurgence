@@ -252,6 +252,18 @@ def stamp_for_a_holder(blob: bytes, log=print) -> bytes:
     return set_blob_player.set_player(blob, holder["name"], log=log)
 
 
+def simulate_every_civ(blob: bytes, log=print) -> bytes:
+    """The blob with every civ's `Owner:4` non-zero.
+
+    The engine skips a civ holding 0 in the empire tick and in
+    `Owner::AddNews` (0x543720), so that civ gains no research or score and is
+    told nothing, its battle reports included. A civ holding 0 takes the
+    lowest unused id from 20 up; any other blob is returned unchanged.
+    """
+    import make_multiplayer_galaxy as mmg
+    return mmg.fix_owner_ids(blob, log=lambda m: log(f"  referee:{m}"))
+
+
 def tick(blob: bytes, turns: int = 1, secs: int = 10, work_dir=None,
          save_dir=None, log=print, check_save_path=True) -> bytes:
     """Advance the galaxy by `turns` turns and return the resulting blob.
@@ -268,6 +280,7 @@ def tick(blob: bytes, turns: int = 1, secs: int = 10, work_dir=None,
         if not ok:
             raise SystemExit(f'refusing to tick: {why}')
 
+    blob = simulate_every_civ(blob, log=log)
     blob = stamp_for_a_holder(blob, log=log)
     work_dir = work_dir or os.path.join(HERE, "referee_work")
     os.makedirs(work_dir, exist_ok=True)
