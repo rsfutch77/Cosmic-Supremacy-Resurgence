@@ -21,9 +21,9 @@ What this document is still for:
   counters at `0x00842AE4`–`0x00842AF0` are the confirmed case, and finding the
   rest needs the techniques here.
 
-The open [ ] items below are field-annotation work and are kept deliberately:
-they remain useful for in-process AI work even though the multiplayer motivation
-for some of them has gone.
+Open [ ] items below are kept only where play needs them. The v0.7 triage closed
+the rest, each with its reason, since the save blob carries every field whether
+or not it has a name. Reopen one if in-process AI work needs it.
 
 ---
 
@@ -379,10 +379,10 @@ frees nothing and keeps the capacity. Confirmed end to end: two units moved off 
 onto a colony ship, and the ship then held and flew a colonize order it had previously been
 unable to keep for even one turn. Implemented as `actions.load_crew`.
 
-[ ] confirm the crew transfer against a UI-performed load. The move above is accepted by the
+[x] confirm the crew transfer against a UI-performed load. The move above is accepted by the
 engine and the ship flies, but nothing has checked whether the UI also updates something the
 move does not, a per-civ military total, or a morale or upkeep figure. Diff a planet and a
-ship across one context-menu load and compare with what `load_crew` writes.
+ship across one context-menu load and compare with what `load_crew` writes. **Closed, not needed for play (v0.7 triage):** in play the client performs the load and the blob carries whatever it changes; only the memory tool `load_crew` would miss a side effect.
 
 [x] identify the bio-bomb and create-wormhole order ids in `Ship:52`, needs a bio ship and a wormhole ship.
 **6 is bio-bomb and 8 is create wormhole**, with 7 move-near, from the engine's own order-name
@@ -458,8 +458,8 @@ the engine reads, and it delegates every structural change to the code that owns
 For unwanted ships that must merely be got out of the way, coordinates are writable and render live
 (see the layout section), so relocating is strictly safer than deleting.
 
-[ ] test whether writing condition 0.0 makes the engine reap a ship cleanly on the next turn
-[ ] test whether the engine frees a planet's citizen vector when a colony is captured or abandoned, if it does, a `VirtualAllocEx` buffer repointed into `Planet:144` would be freed by the game's allocator and crash; conquer one of our own colonies to find out
+[x] test whether writing condition 0.0 makes the engine reap a ship cleanly on the next turn **Closed, not needed for play (v0.7 triage):** ships are removed through the blob (`wipe_civ`), not by memory writes.
+[x] test whether the engine frees a planet's citizen vector when a colony is captured or abandoned, if it does, a `VirtualAllocEx` buffer repointed into `Planet:144` would be freed by the game's allocator and crash; conquer one of our own colonies to find out **Closed, not needed for play (v0.7 triage):** the hazard applies only to a `VirtualAllocEx` buffer written by a memory tool; the blob path never repoints the vector.
 
 ### Ship designs: five part-category vectors at a 24-byte stride (July 2026)
 
@@ -493,7 +493,7 @@ just never read. Extent raised to 320, which also brought `ShipModule` at `+224`
 **Corroboration:** `ShipScanner` at `+152` holds exactly one element on every design, matching the
 UI's rule that the scanner is mandatory but changeable.
 
-[ ] decode the individual part objects (`ShipEngine`, `ShipWeapon`, `ShipShield`, `ShipScanner`, `ShipModule`), not needed for sync, which copies values between clients rather than interpreting them; the category vectors above are enough to replicate a design
+[x] decode the individual part objects (`ShipEngine`, `ShipWeapon`, `ShipShield`, `ShipScanner`, `ShipModule`), not needed for sync, which copies values between clients rather than interpreting them; the category vectors above are enough to replicate a design **Closed, not needed for play (v0.7 triage):** designs travel in `DSGN`, and `components.py` reads every part's stats from the client's own tables.
 
 ### Writing population, the state-restore blocker is solved (July 2026)
 
@@ -593,9 +593,9 @@ static's presence carries no diplomatic meaning, which cost one wrong conclusion
 
 [ ] record the other `Treaty:16` type values by proposing each treaty kind, only `3` (war) is known, and the ids may not be contiguous. The declare-war button passes kind `1` to the proposal's setter `0x0055AD90`, so the proposal kind and the stored `Treaty:16` are not the same number
 [ ] decode the propose-treaty flow: whether a proposal creates a `Treaty` immediately or only on acceptance, and what `Treaty:12` and `Treaty:20` mean once a treaty has a duration (RTTI has a `TreatyLength` class). War is answered: the button builds an unregistered proposal (`0x5C` bytes, ctor `0x00559A60`), and apply `0x0055C3E0` copies it into a registered `Treaty`, makes first contact and writes War into both relation records; the proposal is then destroyed (`remote.declare_war`). The treaties that need acceptance are not
-[ ] find where "send message" state lives, RTTI has `SendMessageDlg` and `MessageListener`, so there is likely a message list per civ
-[ ] find the per-civ colour field behind "change color", likely a plain value on `Owner`, and a cheap write test would confirm it
-[ ] locate the `Fleet` registry so a fabricated fleet can be registered, make a fleet, scan memory for pointers to it, then find the `.data` vector holding the array, exactly as the `Treaty` registry was found
+[x] find where "send message" state lives, RTTI has `SendMessageDlg` and `MessageListener`, so there is likely a message list per civ **Answered (v0.7 triage):** messages are `NEWS` records on `Owner:344` ("News items located" below), carried since v0.6.
+[x] find the per-civ colour field behind "change color", likely a plain value on `Owner`, and a cheap write test would confirm it **Answered (v0.7 triage):** the colour a civ gives a rival is in that rival's 36-byte `KNPL` record, not on `Owner`, carried since v0.6 (Reconstruction Report §14).
+[x] locate the `Fleet` registry so a fabricated fleet can be registered, make a fleet, scan memory for pointers to it, then find the `.data` vector holding the array, exactly as the `Treaty` registry was found **Closed, not needed for play (v0.7 triage):** fleets are made in the client and travel in `FLET`, which the merge carries; nothing fabricates one in memory.
 
 ### `Owner` is a multiple-inheritance class, the civ name is in front of the tag (August 2026)
 
@@ -989,15 +989,15 @@ occupant of that allocation. **Read only the low byte.** The general lesson: a p
 a struct can be three bytes of stale allocator residue behind a one-byte field, and the check that
 catches it is comparing the same offset across two instances.
 
-[ ] re-check the ~27 dormant `Planet` offsets in a developed save before treating them as unused
+[x] re-check the ~27 dormant `Planet` offsets in a developed save before treating them as unused **Closed, not needed for play (v0.7 triage):** the blob round-trips byte for byte, so a planet field nobody has named is still carried.
 [x] identify `Owner:924` and `Owner:928` alongside the existing `Owner:920` item, one of the three
 is "anonymous scanning", which the UI renders as a checkbox rather than a number. **They are traits
 44 and 45**, `Owner:920` trait 43; the anonymous-scanning question stays with the trait-block item
-[ ] understand why the engine **zeroes** `Owner:932/936/940` on the next turn while accepting writes
+[x] understand why the engine **zeroes** `Owner:932/936/940` on the next turn while accepting writes
 to every trait from 748 to 928, a field the engine actively rejects is worth understanding before
 trying to load state into it. Not dark age turns: dark age is a negative `Owner:744`. Lead worth
 checking first: `research.py`'s grant table says trait grants land at `Owner:932 + 4 × trait`,
-which would make these a per-turn recomputed cache of research bonuses. Unverified
+which would make these a per-turn recomputed cache of research bonuses. Unverified **Closed, not needed for play (v0.7 triage):** the engine resets them each turn, so no served blob needs to set them.
 [x] identify `Ship:56` and `Fleet:56`, the same slot on both classes, holding the static null node
 on every instance ever observed including ships under orders and in fleets, so nothing has been seen
 to fill it. **`Ship:56` is the order's target-object reference node.** `Ship::SetCommand`
@@ -1005,16 +1005,16 @@ to fill it. **`Ship:56` is the order's target-object reference node.** `Ship::Se
 `Ship::HasActiveTargetedOrder` `0x004D9880` reads it for move, attack and move-near: a live node
 makes the ship escort that object. It was always null because every order observed was coordinates
 only.
-[ ] confirm `Fleet:56` is the same target node as `Ship:56`; assumed from the shared slot, untested
-[ ] identify `Owner:356`, a packed uint16 pair that moved `0x00000001 -> 0x00010001` when a
-technology completed
-[ ] identify `Owner:1208/1212/1216`, a float triple in X/Z/Y layout present only on the AI civ and
-zero on the human, plausibly an AI strategy target, in which case it is irrelevant to sync
-[ ] identify `Admiral:48` (1 on all admirals) and `Admiral:56` (1 on the admiral with a ship
-assigned, 0 on the others, tracking `Admiral:8`)
-[ ] decide whether `Sun` needs annotating at all, only 8 fields are known and `Sun:44/80/84/88`
+[x] confirm `Fleet:56` is the same target node as `Ship:56`; assumed from the shared slot, untested **Closed, not needed for play (v0.7 triage):** orders are built engine-natively from `ROUT`, which never writes the node.
+[x] identify `Owner:356`, a packed uint16 pair that moved `0x00000001 -> 0x00010001` when a
+technology completed **Closed, not needed for play (v0.7 triage):** the blob carries it, and the simulator's research matches the engine's without it.
+[x] identify `Owner:1208/1212/1216`, a float triple in X/Z/Y layout present only on the AI civ and
+zero on the human, plausibly an AI strategy target, in which case it is irrelevant to sync **Closed, not needed for play (v0.7 triage):** the blob carries it, and nothing the merge or referee writes depends on it.
+[x] identify `Admiral:48` (1 on all admirals) and `Admiral:56` (1 on the admiral with a ship
+assigned, 0 on the others, tracking `Admiral:8`) **Closed, not needed for play (v0.7 triage):** admirals travel in the blob and the merge carries them as measured; `Admiral:56` follows the assignment the client makes.
+[x] decide whether `Sun` needs annotating at all, only 8 fields are known and `Sun:44/80/84/88`
 vary across all 108 suns, but the galaxy is client-generated from a seed, so suns may need no
-syncing whatsoever. Settle the question before spending effort on the fields
+syncing whatsoever. Settle the question before spending effort on the fields **Closed, not needed for play (v0.7 triage):** suns round-trip in the blob and no order changes one.
 [x] settle `Planet:96`: 499 distinct values across 525 planets looks like real per-planet state, but
 both homeworlds share the identical pointer-shaped value `0x01278BE0`, which fits the appearance
 block already documented around `Planet:20-32`. Probably cosmetic; cheap to confirm. **Not cosmetic:
@@ -1118,12 +1118,12 @@ the `Owner:-12` "SolarSystem pointer". In that earlier game the target's first w
 not a vftable, so the field does not hold a `ShipDesign` in every game and the reading is not yet
 complete.
 
-[ ] settle `Owner:-48`: confirmed a `ShipDesign*` (the Colony Ship base template) in one game but
-pointing at text-like memory in another. Leading reading is the civ's default/starting design
-[ ] pin down `ShipDesign:76` and `ShipDesign:80` together: build a design mixing a **troop bay with
+[x] settle `Owner:-48`: confirmed a `ShipDesign*` (the Colony Ship base template) in one game but
+pointing at text-like memory in another. Leading reading is the civ's default/starting design **Closed, not needed for play (v0.7 triage):** designs travel in `DSGN`.
+[x] pin down `ShipDesign:76` and `ShipDesign:80` together: build a design mixing a **troop bay with
 weapons** to see whether `:76` stays 2, and a design with **two personnel modules** to see whether
 `:80` scales past 7 (which would confirm it as a capacity rather than a flag). `:76` is settled as
-the minimum crew (see the correction above); `:80` remains, with crew maximum the reading to test
+the minimum crew (see the correction above); `:80` remains, with crew maximum the reading to test **Closed, not needed for play (v0.7 triage):** the client enforces crew limits on its own screens. Reopen if the simulator needs a crew maximum.
 [x] extend the part-id tables by fitting each remaining part type once, the weapon ids are already
 known to be non-contiguous (`0` then `10`), so the ranges cannot be inferred and must be observed.
 **Done without fitting:** `client/dev_tools/ai_player/components.py` reads all six part-definition
@@ -1239,11 +1239,11 @@ register base as fields of something, and that something sits directly in front 
 `CustomizeCivilizationDlg` instance, whose vtable `0x00761584` is at `0x00842B00`, 28 bytes past the
 record. One static dialog, one record. Since the economy never reads it, per-civ was the wrong
 question to be asking
-[ ] confirm the `+50` space constant and the `[300, 32, 30, 40]` base table are galaxy-wide rather
+[x] confirm the `+50` space constant and the `[300, 32, 30, 40]` base table are galaxy-wide rather
 than per-galaxy-type, both were read in a single game, and galaxy type is known to vary other
 parameters. The user's working assumption is that these defaults are constant for every galaxy.
 Partly corroborated: a TestBed galaxy customised in September 2026 gave space `350 = 300 + 50 + 0`
-and a base food rate of 32, matching the same table
+and a base food rate of 32, matching the same table **Closed, not needed for play (v0.7 triage):** a joiner's homeworld copies the fields of an untouched homeworld from the galaxy's own turn 0 (`joins.untouched_homeworld`), so nothing assumes the table is galaxy-wide.
 [x] **`Planet:96` bytes 1 and 2 varied by a control.** On a pushed state reading `[62,30,40]`,
 spending 15 homeworld increments on production and 15 on science gave `[62,45,55]`. Byte 1 is
 production per worker, byte 2 is science per scientist, each `base + clicks`. All three bytes are
@@ -1341,7 +1341,7 @@ object may also need to appear in per-owner or per-system structures), and wheth
 it for rendering as well as logic. Fabricating a `Fleet` also needs a correct 44-byte member-record
 array and a valid vftable, so the object itself is more work than the registration.
 
-[ ] verify the `0x00854628` registry is sufficient to make a fabricated object live, register a copy of an existing Ship and see whether the game renders and ticks it
+[x] verify the `0x00854628` registry is sufficient to make a fabricated object live, register a copy of an existing Ship and see whether the game renders and ticks it **Closed, not needed for play (v0.7 triage):** objects are added through the blob (`inject_civ`, `starting_kit`), which the loader registers itself.
 
 ### The Scanning tab, reports located (August 2026)
 
@@ -1553,7 +1553,7 @@ can be normalised across clients. Object *counts* cannot, memory writes cannot c
 therefore shrink to the lowest common count and park the remainder out of the way, rather than
 making two galaxies genuinely identical.
 
-[ ] orbit rings do not follow a moved star or planet, cosmetic only, revisit if layout injection ships
+[x] orbit rings do not follow a moved star or planet, cosmetic only, revisit if layout injection ships **Closed, not needed for play (v0.7 triage):** cosmetic, and layout injection has not shipped.
 
 ### Confirmed: memory writes are functional
 
@@ -1701,9 +1701,9 @@ Then write the true stockpile to `Owner:12` once at the end, or the civ is left 
 surplus. This costs one turn per completed item and needs no foreign allocation, which is the same
 trade the known-players ship shuffle makes.
 
-[ ] check whether more than one item can complete per turn, the stockpile survived at 7640, well
+[x] check whether more than one item can complete per turn, the stockpile survived at 7640, well
 above the next cost, so a single turn might absorb several if the topic is rewritten between them,
-which would collapse the load to far fewer turns
+which would collapse the load to far fewer turns **Closed, not needed for play (v0.7 triage):** in play the engine completes research itself; this only sped up loading research state through memory.
 [x] establish whether doctrine ids occupy a distinct range from technology ids, three samples
 (`3`, `12` technologies; `43` a doctrine) hint at it but do not show it, and it only matters if the
 server ever has to validate an id rather than copy it. **They do not.** The live research table
@@ -2402,7 +2402,7 @@ snapshots only cover EJBO objects and the map lives in untagged heap nodes. What
 following pointers two levels deep and testing every offset against the known triple, the map
 node turned up as a hit at 1-, 2- **and** 4-byte widths simultaneously, which is the signature of
 a small integer in a dword rather than a coincidental byte match.
-[ ] annotate the building-queue setting, not critical, players can play without it
+[x] annotate the building-queue setting, not critical, players can play without it **Closed, not needed for play (v0.7 triage):** production queues and each planet's links to them are carried by the merge (`test_queues_merge.py`).
 
 ### Remaining `Planet` unknowns, and why a fresh save cannot settle them (July 2026)
 

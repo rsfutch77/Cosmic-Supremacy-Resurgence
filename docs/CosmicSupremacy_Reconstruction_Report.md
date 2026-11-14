@@ -1961,7 +1961,7 @@ the same idiom as the order object's `+28`/`+52` list heads.
 **Drafting is FREE below content version 150.** The gate is `[0x0080AA00] >= 150`;
 under it the engine skips the whole cost block.
 
-[ ] **HAZARD, `CommitPopulation` auto-conscripts any population above `space/10`.**
+**HAZARD, `CommitPopulation` auto-conscripts any population above `space/10`.**
 Anything calling it must expect the citizen vector to shift underneath a stale index,
 which is why `actions.conscript` re-reads the list live rather than trusting the
 snapshot.
