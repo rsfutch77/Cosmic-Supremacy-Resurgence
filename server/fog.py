@@ -15,19 +15,26 @@ keeps what each civ last saw, in that civ's `EXSY`: per system the turn it last
 looked, and per planet the owner and population then (`server/dev_tools/exsy.py`).
 
 A system is stale for a civ when its `EXSY` turn is before the blob's turn and
-the civ owns no planet in it. A planet in a stale system is rewritten when its
-live owner or population differs from memory:
+the civ owns no planet in it. Every planet there that is or was colonised is
+served as remembered: the owner, population and name from memory, and nothing
+only its owner would know.
 
-- remembered empty: owner 0, name cleared, no people, no facilities, and the
-  production of a never-colonised planet
-- remembered owned: owner set to the remembered civ and the citizen array cut
-  or padded to the remembered population; when the owner changed, the
-  stationed military and the facilities go and the name is the remembered one
+- remembered empty: owner 0, name cleared, no people, no facilities
+- remembered owned: owner and population from memory, every citizen a farmer
+  of that owner, no soldiers and no facilities; the name is the remembered one
+  when the owner changed
+- every one: the food store, production progress, recruitment rate and
+  military store read 0, and the production queue is a never-colonised
+  planet's
 
-Never rewritten: a planet the civ owns or has citizens on, one whose memory
-names the viewer or a civ the galaxy does not hold, and one whose `PLPR` does
-not walk. Systems a civ has never entered are left alone; the client already
-hides them.
+The base outputs, food store size and food per soldier stay live; they are
+the planet's, not the owner's running state, and the recon screen shows them.
+
+Served as it stands, with the same fields taken out: a planet whose memory
+names the viewer or a civ the galaxy does not hold, or reads as a misread
+population. Never rewritten: a planet the civ has citizens on, a planet empty
+both now and in memory, and one whose `PLPR` does not walk. Systems a civ has
+never entered are left alone; the client already hides them.
 
 Every other civ's news is withheld: its list is served empty, and the news
 string table holds only the strings the civ's own list names, with its next id
@@ -57,6 +64,13 @@ import news
 PLNT_OWNER = 16         # u32, the owning civ's object id
 PLNT_NAME = 24          # u32 length, then the name
 PLPR_HEAD = 36          # fixed fields before the population count
+# Header fields only the owner sees change, served as 0: (offset, size).
+OWNER_FIELDS = (
+    (15, 4),            # food store
+    (23, 4),            # production points toward the current item
+    (27, 1),            # recruitment rate
+    (32, 4),            # military store
+)
 CITIZEN = 9             # bytes per citizen or soldier record
 CITIZEN_OWNER = 3       # u32 inside a record
 UNNAMED = b'Unnamed'    # what EXSY calls a planet nobody has named
@@ -87,6 +101,24 @@ def _systems(blob, tree):
         if sun is not None:
             sid = struct.unpack_from('<I', blob, sun.payload)[0]
             out[sid] = list(sola.find('PLNT'))
+    return out
+
+
+def remembered_rows(blob: bytes, oid: int, rows, tree=None):
+    """The `EXSY` rows of civ `oid` that a view serves as remembered: looked
+    at before the blob's turn, in a system the civ holds no planet in."""
+    tree = tree or sp.parse_blob(blob)
+    turn = icv.turn_of(blob)
+    systems = _systems(blob, tree)
+    out = []
+    for row in rows:
+        planets = systems.get(row['system'])
+        if row['turn'] >= turn or planets is None:
+            continue
+        if any(struct.unpack_from('<I', blob, pl.payload + PLNT_OWNER)[0] == oid
+               for pl in planets):
+            continue
+        out.append(row)
     return out
 
 
@@ -131,43 +163,35 @@ def _farmer(oid: int) -> bytes:
     return b'\x00\x00\x00' + struct.pack('<I', oid) + b'\x00\x00'
 
 
-def _remembered_plpr(blob, plpr, owner: int, pop: int, same_owner: bool,
-                     blank_prod):
-    """The PLPR payload with its people (and, on a change of owner, its
-    military and facilities) as remembered. None when it does not walk."""
+def _remembered_plpr(blob, plpr, owner: int, pop: int, blank_prod):
+    """The PLPR payload as remembered: the owner's running state zeroed,
+    `pop` farmers of `owner`, no soldiers and no facilities, and an idle
+    queue. None when it does not walk."""
     walk = _walk(blob, plpr)
     if walk is None:
         return None
-    d, cit_end, mil_end = walk
+    d, _cit_end, mil_end = walk
     first = plpr.children[0].start - plpr.payload if plpr.children else len(d)
-    fac_end = first
-    cits = _citizens(d, cit_end)
-    if not same_owner:
-        cits = [_owned_by(c, owner) for c in cits]
-    if len(cits) >= pop:
-        cits = cits[:pop]
-    else:
-        cits += [cits[-1] if cits else _farmer(owner)] * (pop - len(cits))
-
-    out = bytearray(d[:PLPR_HEAD] + struct.pack('<I', pop) + b''.join(cits))
-    if same_owner:
-        out += d[cit_end:fac_end]
-    else:
-        # No soldiers, and an empty facility list with its trailing word.
-        out += struct.pack('<I', 0) + d[mil_end:mil_end + 1]
-        out += struct.pack('<I', 0) + d[fac_end - 4:fac_end]
+    head = bytearray(d[:PLPR_HEAD])
+    for off, size in OWNER_FIELDS:
+        head[off:off + size] = bytes(size)
+    out = bytes(head) + struct.pack('<I', pop) + _farmer(owner) * pop
+    # No soldiers, and an empty facility list with its trailing word.
+    out += struct.pack('<I', 0) + d[mil_end:mil_end + 1]
+    out += struct.pack('<I', 0) + d[first - 4:first]
     rest = d[first:]
-    if owner == 0 and blank_prod is not None:
+    if blank_prod is not None:
         prod = next(plpr.find('PROD'), None)
         if prod is not None:
             a, b = prod.start - plpr.payload, prod.end - plpr.payload
             rest = d[first:a] + blank_prod + d[b:]
-    return bytes(out) + rest
+    return out + rest
 
 
 def _plan(blob: bytes, civ: str, tree=None):
-    """[(PLNT section, remembered owner, remembered population, EXSY name)]
-    for each planet `project` rewrites for `civ`, and the turn."""
+    """[(PLNT section, owner, population, EXSY name or None)] for each
+    planet `project` rewrites for `civ`, and the turn. The name is None when
+    the planet is served with its live owner and population."""
     tree = tree or sp.parse_blob(blob)
     turn = icv.turn_of(blob)
     civs = _civs(blob, tree)
@@ -179,14 +203,10 @@ def _plan(blob: bytes, civ: str, tree=None):
     oids = {oid for oid, _t in civs.values()}
     systems = _systems(blob, tree)
     out = []
-    for row in exsy.parse(blob[table.payload:table.end]):
-        planets = systems.get(row['system'])
-        if row['turn'] >= turn or planets is None:
-            continue
+    rows = exsy.parse(blob[table.payload:table.end])
+    for row in remembered_rows(blob, me, rows, tree):
+        planets = systems[row['system']]
         if len(planets) != len(row['planets']):
-            continue
-        if any(struct.unpack_from('<I', blob, pl.payload + PLNT_OWNER)[0] == me
-               for pl in planets):
             continue
         for pl, mem in zip(planets, row['planets']):
             owner = struct.unpack_from('<I', blob, pl.payload + PLNT_OWNER)[0]
@@ -196,16 +216,21 @@ def _plan(blob: bytes, civ: str, tree=None):
                 continue
             d = walk[0]
             pop = struct.unpack_from('<I', d, PLPR_HEAD)[0]
-            if (owner, pop) == (mem['owner'], mem['population']):
-                continue
-            if mem['owner'] == me or (mem['owner'] and mem['owner'] not in oids):
-                continue
-            if mem['population'] > MAX_REMEMBERED or (mem['population'] and not mem['owner']):
-                continue
             if any(struct.unpack_from('<I', c, CITIZEN_OWNER)[0] == me
                    for c in _citizens(d, walk[1])):
                 continue
-            out.append((pl, mem['owner'], mem['population'], mem['name']))
+            usable = not (
+                mem['owner'] == me
+                or (mem['owner'] and mem['owner'] not in oids)
+                or mem['population'] > MAX_REMEMBERED
+                or (mem['population'] and not mem['owner']))
+            if usable:
+                target = (mem['owner'], mem['population'], mem['name'])
+            else:
+                target = (owner, pop, None)
+            if (owner, pop) == (0, 0) and target[:2] == (0, 0):
+                continue
+            out.append((pl, *target))
     return out, turn
 
 
@@ -220,7 +245,7 @@ def _rewritten(blob, pl, owner, pop, name, blank_prod):
     live_owner = struct.unpack_from('<I', blob, pl.payload + PLNT_OWNER)[0]
     same = owner == live_owner
     plpr = next(pl.find('PLPR'))
-    new_plpr = _remembered_plpr(blob, plpr, owner, pop, same, blank_prod)
+    new_plpr = _remembered_plpr(blob, plpr, owner, pop, blank_prod)
     if new_plpr is None:
         return None
     nlen = struct.unpack_from('<I', blob, pl.payload + PLNT_NAME)[0]
@@ -258,9 +283,7 @@ def _remembered(blob: bytes, civ: str, log=print) -> bytes:
     plan, turn = _plan(blob, civ, tree)
     if not plan:
         return blob
-    blank_prod = None
-    if any(owner == 0 for _pl, owner, _p, _n in plan):
-        blank_prod = icv.empty_prod(blob)
+    blank_prod = icv.empty_prod(blob)
     edits = []
     for pl, owner, pop, name in plan:
         new = _rewritten(blob, pl, owner, pop, name, blank_prod)
@@ -274,6 +297,9 @@ def _remembered(blob: bytes, civ: str, log=print) -> bytes:
         blob = icv.splice(blob, start, end, new)
     log(f"  fog: {civ}: {len(edits)} planet(s) shown as last seen at turn "
         f"{turn}")
+    if blank_prod is None:
+        log(f"  fog: {civ}: no never-colonised planet left; production queues "
+            f"served live")
     return blob
 
 
