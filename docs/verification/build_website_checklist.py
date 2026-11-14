@@ -265,7 +265,7 @@ R = [
     ('R3', 'MDN HTTP Observatory, "Tests & Scoring" (Mozilla), with the OWASP Secure Headers Project list',
      'The site\'s response headers pass the Observatory tests: Content-Security-Policy, Strict-Transport-Security, X-Content-Type-Options, frame-ancestors, Referrer-Policy, and the rest.',
      ['[x] `site/firebase.json` sends `X-Content-Type-Options: nosniff`, `Referrer-Policy: strict-origin-when-cross-origin` and `X-Frame-Options: SAMEORIGIN` on every path; Firebase Hosting already sends HSTS (live on 8 October 2026).',
-      'Content-Security-Policy, report-only first (Opquast 212).',
+      'Content-Security-Policy, report-only first (Opquast 212). `site/firebase.json` sends a report-only policy since v0.7, allowing inline script for the archive; after a deploy, read the console on a few pages, then enforce it.',
       'Scan `https://cosmicresurgence.com` and record the grade here.',
       'Add the headers in `site/firebase.json`. Do not take `Cache-Control: no-store` or `Clear-Site-Data` from the OWASP list: both are wrong for a cached public site.']),
     ('R4', 'Opquast 27, 28, 205; OWASP ASVS V14.2.1',
