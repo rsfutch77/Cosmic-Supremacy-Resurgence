@@ -1395,9 +1395,29 @@ The scan *inventory*, how many of each type are held, is the map at `Owner:64`, 
 2026 by its getter rather than by a diff.
 
 [x] locate the scan inventory: the count of each held scan type. `Owner:68` and the `Owner:200` descriptor vector are both excluded by write test; take a short-interval snapshot across producing or consuming a single scan. **A `std::map<type, count>` headed at `Owner:64`**, read by the getter `0x0053B8F0`. `Owner:68` is the map's size, the number of types ever held, which is why it rose on production and did not fall on use. Confirmed live October 2026: a route scan produced, held 1, used, back to 0 (actuator P in STRATEGY.md).
-[ ] run each remaining scan type and record its type id and report-object class, only route (2, `RouteScan`) and fleet (3, `FleetScan`) are known, and the ids are not contiguous so others may sit outside 2–3. Now also planetary (0) and military (4), from `intel.py`, with report classes unrecorded; Surveillance Scanning (tech 79) grants a type 7
-[ ] check whether each scan type's results vector at report`+44` has a different element layout, route and fleet both begin with a pointer to the scanned object, but the remainder differs in length (44 vs 52 bytes) and has not been decoded. They differ. Fleet (52 bytes): `+0x04` ship count, `+0x08` four uint16 counts by chassis, `+0x18` hull-class text. Military (124 bytes, one per ship): `+0x08` stats text, `+0x34` hull text, `+0x50/+0x58` base and effective hitpoints, `+0x60` condition, `+0x68/+0x6C/+0x70` firepower light, heavy, bomb. A planetary report holds a copy of the target's `PlanetProperties` at report `+0x28` instead. Route is still undecoded
-[ ] Recon tab, believed to have no backing state in memory; confirm by diffing across opening and using it, and record the negative result either way
+[x] run each remaining scan type and record its type id and report-object class, only route (2, `RouteScan`) and fleet (3, `FleetScan`) are known, and the ids are not contiguous so others may sit outside 2–3. Now also planetary (0) and military (4), from `intel.py`, with report classes unrecorded; Surveillance Scanning (tech 79) grants a type 7. **All eight, read off the factory** `0x54E030` (November 2026), which builds each id's class through the jump table at `0x54E218`; the costs are the descriptor table at `0x80AB60` (`server/tests/test_scan_table.py`):
+
+| id | class | vftable | name | cost |
+|---|---|---|---|---|
+| 0 | `PlanetaryScan` | `0x776504` | Planetary-Scan | 9000 |
+| 1 | `SystemScan` | `0x776AF4` | System-Scan | 20000 |
+| 2 | `RouteScan` | `0x7765B4` | Route-Scan | 3500 |
+| 3 | `FleetScan` | `0x77613C` | Fleet-Scan | 5000 |
+| 4 | `MilitaryScan` | `0x7763D4` | Military-Scan | 16000 |
+| 5 | `TechnologyScan` | `0x776C2C` | Technology-Scan | 12000 |
+| 6 | `EnergyGridScan` | `0x776094` | Energy-Grid-Scan | 10000 |
+| 7 | `LeaderNameScan` | `0x77623C` | Leader-Name-Scan | 20000 |
+
+Every class derives from `GenericScan`, whose constructor `0x54E240` sets the turn at `+0xC`, the position at `+0x10`, and the scanned civ's node at `+0x1C`. Type 7 is the leader-name scan that Surveillance Scanning grants. `sim/scans.py` had 5 and 6 swapped and the energy grid at 20000, now corrected. Two cheaper tables, a tenth of these, are chosen instead by `0x5545D0` on a galaxy version below `0x39` or when `0x52A790` is false
+[x] check whether each scan type's results vector at report`+44` has a different element layout, route and fleet both begin with a pointer to the scanned object, but the remainder differs in length (44 vs 52 bytes) and has not been decoded. They differ. Fleet (52 bytes): `+0x04` ship count, `+0x08` four uint16 counts by chassis, `+0x18` hull-class text. Military (124 bytes, one per ship): `+0x08` stats text, `+0x34` hull text, `+0x50/+0x58` base and effective hitpoints, `+0x60` condition, `+0x68/+0x6C/+0x70` firepower light, heavy, bomb. A planetary report holds a copy of the target's `PlanetProperties` at report `+0x28` instead. Route is still undecoded. **Every type decoded from its perform function** (November 2026):
+  - **Route** (`0x5541C0`), 44 bytes a ship: `+0x00` the ship's node, `+0x04` a float from the ship (speed, inferred), `+0x08` the ship's description with " (Cloaked)" or " (Partly Cloaked)", `+0x28` a heap copy of the ship's order at `Ship:48`, destination at `+0x10/14/18`. No ETA is stored; the reader derives it from the order copy.
+  - **System** keeps only the sun's node at `+0x20`, with no results; its text is built live from the current objects, and it lapses 8 turns after the scan (3 below galaxy version `0x39`).
+  - **Technology** (`0x555350`): `+0x20` a copy of the target's `Owner:96` (24-byte elements, its researched technologies), `+0x38/+0x3C` its topic from `Owner:144/148`, `+0x40` percent done, capped at 99, and `+0x44` turns left, -1 when nothing accrues.
+  - **Energy grid** (`0x54BF00`) rebuilds the target's grid at `Owner:1232` first, then keeps 32-byte elements at `+0x34`: the transmitter planet's node, its TW at `+0x04`, and a vector of receiver planets at `+0x14`.
+  - **Leader name** (`0x54EEE0`) stores nothing in the report; it sets a byte in the scanning civ's map at `Owner:248`, keyed by the target civ, and the report prints the name or "blocked by a mysterious technology"
+
+[ ] Three loose ends from the scan decode: route `+0x24`; how `Owner:96`, the technology scan's list, relates to the completed list at `Owner:108`; and what `0x52A790` tests when choosing the full-price scan table
+[x] Recon tab, believed to have no backing state in memory; confirm by diffing across opening and using it, and record the negative result either way. **No backing state of its own**, read from `ReconPage` (constructor `0x4382A0`, handler `0x439E80`, November 2026; not diffed live). Its planet list reads the global planet vector (`0x8553C4`), its ship list the global ship list filtered to other civs' ships with a non-zero byte at `Ship:16`, and its destination column the newest route scan covering the ship in `Owner:320`. The only state it holds is its filter controls. The manual's recon screen matches: explored planets as last scouted, and other civs' ships in sensor range
 
 ### The reference-node idiom
 
