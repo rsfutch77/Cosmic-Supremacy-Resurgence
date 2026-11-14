@@ -2237,7 +2237,7 @@ either ignores the setting on load or the capture rewrites it.
   `u32` count of 5 at the second research field `+55`, then a resource byte and a `u32` per
   resource) and credits, and refuses it when the payer is short. Refused: an admiral on a fleet,
   another civ's admirals, a treaty ended any other way, and a stance moved without a treaty.
-- [ ] **A rival's colour and its territory checkbox are lost at every turn.** The diplomacy
+- [x] **A rival's colour and its territory checkbox are lost at every turn.** The diplomacy
   screen's Change Color (right-click a civ) and the checkbox beside each civ, which shows or
   hides its sphere of control on the map, do not survive to the next served turn (Robert, 6
   November 2026). `merge_orders.py` carries only what it lists, so whatever the client saves for
@@ -2254,3 +2254,6 @@ either ignores the setting on load or the capture rewrites it.
   carrying them needs no legality check beyond the record being the submitter's own. Done when
   a Single Player capture pair locates both fields, the merge carries them for the submitter's
   own `KNPL`, and a colour and a hidden territory set on one turn are still there on the next.
+  **Fixed** (13 November 2026): on the live sandbox tmog66 set guest-test to colour
+  0xF904E9 with territory and ships shown on turn 166, and turn 167 and tmog66's served view
+  both kept them, confirmed on screen by Robert.
