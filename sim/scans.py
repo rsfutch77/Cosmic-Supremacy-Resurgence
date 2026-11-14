@@ -10,8 +10,10 @@ half of those the target learns who sent it, never with anonymous scanning
 (trait 45, Doctrine: Intelligence).
 
 Which research unlocks which scan id is the technology table's (kind 9
-grants). Which id is which scan is inferred: 2 route and 3 fleet are the
-production queue reader's; the rest follow the research that unlocks them.
+grants). Which id is which scan, and its cost, is the client's: its factory
+(0x54E030) builds each id's class, and its descriptor table (0x80AB60) holds
+each id's cost. The leader-name scan reveals a civ's player name and is not
+modelled.
 """
 import math
 
@@ -22,8 +24,8 @@ from . import traits
 CDA = 8                                 # Central Defense Agency, facility id
 SCANS = {                               # id: (name, production cost)
     2: ('route', 3500), 3: ('fleet', 5000), 0: ('planetary', 9000),
-    6: ('technology', 12000), 4: ('military', 16000), 1: ('system', 20000),
-    5: ('energy grid', 20000), 7: ('surveillance', 20000),
+    5: ('technology', 12000), 4: ('military', 16000), 1: ('system', 20000),
+    6: ('energy grid', 10000), 7: ('leader name', 20000),
 }
 SCAN_GRANT = 9                          # research grant kind
 SPOTTED, NAMED = 50, 50                 # percent
