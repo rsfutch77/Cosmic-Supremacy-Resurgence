@@ -8,8 +8,12 @@ Puts a directory `TurnStore` behind a URL, so `open_store("http://host:8899")`
 and `open_store("some/dir")` are interchangeable to every caller.
 
     GET  /state                     the turn number, deadline, roster
-    GET  /turn/<n>                  that turn's blob, decompressed
-    POST /turn/<n>?seconds=<s>      publish it and restart the clock
+    GET  /turn/<n>?civ=<civ>        that turn as the civ is served it
+    GET  /turn/<n>?whole=1          the turn itself, for the referee
+    POST /view/<n>/<civ>            one civ's view of a turn not yet published
+    POST /turn/<n>?seconds=<s>&view=<civ>...
+                                    publish it, naming the views sent, and
+                                    restart the clock
     POST /start?civ=A&civ=B&...     publish the first turn
     GET  /submissions/<n>           which civs have handed something back
     GET  /submission/<n>/<civ>      one submission, decompressed
@@ -28,12 +32,18 @@ and `open_store("some/dir")` are interchangeable to every caller.
 
 Blobs move as raw decompressed bytes.
 
+A turn is served as `turn_store.served_copy` says, as the relay serves it: a
+civ the views name gets its own, a roster civ they do not name gets the turn,
+and any other caller, a missing `civ` included, the view without news.
+
 Routes must match the relay in `functions/`. The upload ticket here asks for
 the raw blob and names a commit route that checks what was stored; the relay's
 asks for base64 and names no commit. `HttpTurnStore.submit` follows either.
 
-There is no authentication: anyone who can reach the port can publish a turn or
-submit as any civ. An `Authorization` header is accepted and not verified;
+There is no authentication: anyone who can reach the port can publish a turn,
+submit as any civ, or ask for any civ's view or the whole turn. The views keep
+an honest launcher to what its own client would see; they do not stop a player
+who names another civ. An `Authorization` header is accepted and not verified;
 `functions/relay.py` verifies tokens. `GET /joins` has no relay counterpart,
 since the relay answers a caller only about its own request.
 """
@@ -48,6 +58,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, HERE)
 sys.path.insert(0, os.path.join(HERE, 'dev_tools'))
 
+import save_parser as sp
 import turn_store
 from turn_store import TurnStore, check_save
 
@@ -108,7 +119,7 @@ class Handler(BaseHTTPRequestHandler):
         return parts, urllib.parse.parse_qs(url.query)
 
     def do_GET(self):
-        parts, _q = self._parts()
+        parts, q = self._parts()
         try:
             if parts == ['state']:
                 if not STORE.exists():
@@ -118,7 +129,13 @@ class Handler(BaseHTTPRequestHandler):
                 n = int(parts[1])
                 if not STORE.has_turn(n):
                     return self._fail(404, f'no turn {n}')
-                return self._blob(STORE.turn_blob(n))
+                if q.get('whole') == ['1']:
+                    return self._blob(STORE.turn_blob(n))
+                civ = (q.get('civ') or [None])[0]
+                try:
+                    return self._blob(STORE.served_turn(civ, n))
+                except turn_store.NotServed as exc:
+                    return self._fail(403, str(exc))
             if len(parts) == 2 and parts[0] == 'submissions':
                 # Names only, without reading any submission.
                 return self._json(STORE.submitted_civs(int(parts[1])))
@@ -172,12 +189,26 @@ class Handler(BaseHTTPRequestHandler):
                 turn = STORE.start(body, civs=civs, turn_seconds=seconds)
                 log(f'  started turn {turn}, {seconds}s, roster {civs}')
                 return self._json({'turn': turn})
+            if len(parts) == 3 and parts[0] == 'view':
+                n, civ = int(parts[1]), view_name(urllib.parse.unquote(parts[2]))
+                check_save(body, n)
+                STORE.put_view(civ, n, body)
+                return self._json({'turn': n, 'view': civ})
             if len(parts) == 2 and parts[0] == 'turn':
                 n = int(parts[1])
                 seconds = q.get('seconds')
+                views = {}
+                for civ in map(view_name, q.get('view', [])):
+                    try:
+                        views[civ] = sp.load_any(STORE.view_path(civ, n))
+                    except FileNotFoundError:
+                        raise ValueError(f'no view of turn {n} was sent for '
+                                         f'{civ}') from None
                 STORE.publish(n, body,
-                              turn_seconds=int(seconds[0]) if seconds else None)
-                log(f'  published turn {n}, {len(body):,} bytes')
+                              turn_seconds=int(seconds[0]) if seconds else None,
+                              views=views)
+                log(f'  published turn {n}, {len(body):,} bytes'
+                    + (f', {len(views)} view(s)' if views else ''))
                 return self._json({'turn': n})
             if len(parts) == 3 and parts[0] == 'submission':
                 n, civ = int(parts[1]), parts[2]
@@ -232,6 +263,13 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as exc:                            # noqa: BLE001
             return self._fail(500, f'{type(exc).__name__}: {exc}')
         self._fail(404, f'no route for {self.path}')
+
+
+def view_name(civ: str) -> str:
+    """`civ` when a view may be filed under it; it names a file."""
+    if civ != turn_store.PUBLIC_VIEW and turn_store.name_problem(civ):
+        raise ValueError(f'no view can be named {civ!r}')
+    return civ
 
 
 def upload_ticket(turn: int, civ: str) -> dict:

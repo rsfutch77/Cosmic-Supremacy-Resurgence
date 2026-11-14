@@ -126,6 +126,18 @@ def views(blob: bytes, civs, log=print) -> dict:
     return out
 
 
+def published_views(blob: bytes, held: dict) -> dict:
+    """The views `publish` is given: each civ's that differs from the turn,
+    and with any of them the view without news, so a caller with no seat is
+    never refused (`turn_store.served_copy`). A civ left out is served the
+    turn."""
+    import turn_store
+    out = {c: v for c, v in held.items() if v != blob}
+    if out and turn_store.PUBLIC_VIEW in held:
+        out[turn_store.PUBLIC_VIEW] = held[turn_store.PUBLIC_VIEW]
+    return out
+
+
 def galaxy_id(blob: bytes):
     """What says two blobs are the same galaxy: the civs in it by object id and
     name, the systems by object id, and the planets by object id.
@@ -391,10 +403,8 @@ def resolve_turn(store: TurnStore, save_dir=None, log=print) -> int:
     else:
         joined = early
 
-    # Only a civ whose view differs from the turn is given one.
     held = views(nxt, [o['name'] for o in icv.owner_records(nxt)], log=log)
-    store.publish(new_turn, nxt,
-                  views={c: v for c, v in held.items() if v != nxt})
+    store.publish(new_turn, nxt, views=published_views(nxt, held))
     joins.commit(store, turn, new_turn, joined, log=log)
     store.archive(turn, {
         "turn": turn,

@@ -27,7 +27,8 @@ boost.
 
 Not touched: the `OWNR` record, including its designs, research, treasury,
 `KNPL` and `NEWS`, so every other civ's `KNPL` naming the wiped civ still
-resolves. Only the `EXSY` entries remembering the wiped civ's planets change.
+resolves. Only the `EXSY` entries remembering the wiped civ's planets change,
+and only where the civ remembering them sees the planets now (`forget_civ`).
 
 `--delete-owner` also removes the `OWNR`. It has loaded and ticked only on a
 galaxy where no other civ's records named the wiped one, so `delete_owner`
@@ -39,6 +40,7 @@ import struct
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(1, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import save_parser as sp
 import inject_civ as icv
 import inject_design as idg
@@ -121,18 +123,25 @@ def uncolonise(blob, planet_id, template_plpr, log=print):
     return bytes(buf)
 
 
-def forget_civ(blob, oid, log=print):
-    """Clear the wiped civ out of every civ's remembered map.
+def forget_civ(blob, oid, everyone=False, log=print):
+    """Clear the wiped civ out of the remembered maps that see it go.
 
-    Per planet, `EXSY` holds a last-known owner and name, from which the client
-    draws the planet name and the capital marker. Every table is rewritten, the
-    victim's own included. `exsy.parse` refuses a table it cannot walk exactly,
-    so an unrecognised table stops the wipe.
+    Per planet, `EXSY` holds a last-known owner, population and name, from
+    which the client draws the planet name and the capital marker. The wiped
+    civ's own table forgets every planet. Another civ forgets only in a row
+    `fog.project` serves live: one looked at this turn, or in a system it holds
+    a planet in. A row from an earlier look keeps what it saw, and is served as
+    remembered until the engine refreshes it on the next look. `everyone`
+    clears every row, which `--delete-owner` needs, since it refuses a galaxy
+    where another civ still names the wiped one.
 
-    Deliberately not fog-correct: other civs forget the wiped civ's planets.
+    `exsy.parse` refuses a table it cannot walk exactly, so an unrecognised
+    table stops the wipe.
     """
     import exsy
+    import fog
     changed = 0
+    tree = sp.parse_blob(blob)
     for owner in icv.owner_records(blob):
         off = next((i for i in idg.find_all(blob, b"EXSY")
                     if owner["off"] <= i < owner["end"]), None)
@@ -140,11 +149,18 @@ def forget_civ(blob, oid, log=print):
             continue
         ver, ln = idg.sec_len(blob, off)
         table = exsy.parse(bytes(blob[off + 8:off + 8 + ln]))
+        kept = set()
+        if not everyone and owner["oid"] != oid:
+            kept = {id(r) for r in fog.remembered_rows(blob, owner["oid"],
+                                                        table, tree)}
         hits = 0
         for system in table:
+            if id(system) in kept:
+                continue
             for planet in system["planets"]:
                 if planet["owner"] == oid:
                     planet["owner"] = 0
+                    planet["population"] = 0
                     planet["name"] = b""
                     hits += 1
         if not hits:
@@ -287,7 +303,7 @@ def wipe(blob, name, remove_owner=False, force_owner=False, log=print,
     log(f"  {len(mine)} planet(s) {mine}, {len(ships)} ship(s) {ships}")
     blank = blank_plpr(blob, template_blob, log=log)
 
-    blob = forget_civ(blob, civ["oid"], log=log)
+    blob = forget_civ(blob, civ["oid"], everyone=remove_owner, log=log)
     for pid in mine:
         blob = uncolonise(blob, pid, blank, log=log)
     for sid in ships:
