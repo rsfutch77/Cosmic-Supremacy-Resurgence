@@ -35,6 +35,7 @@ sys.path.insert(0, WAYBACK)
 import wayback_grab as wg  # noqa: E402  (reuse the mirror's own path logic)
 import patches            # noqa: E402  site-wide edits, see patches.py
 import inventory          # noqa: E402  writes TODO-content.md
+import news               # noqa: E402  the home page's news items
 
 HOST = "cosmicsupremacy.com"
 SRC = os.path.join(WAYBACK, "cosmicsupremacy_mirror", HOST)
@@ -681,6 +682,12 @@ def main():
                 copied[rel] = os.path.getsize(full)
                 override_count += 1
 
+    # The home page's news items (site/news/), before the seed is copied to /.
+    news_count = None
+    news_page = os.path.join(DST, args.seed.replace("/", os.sep))
+    if os.path.isfile(news_page):
+        news_count = news.render_into(news_page)
+
     # The seed is also served at /. Copied after overrides so that editing the
     # seed page updates the front page too, rather than only its own URL.
     seed_staged = os.path.join(DST, args.seed.replace("/", os.sep))
@@ -746,6 +753,10 @@ def main():
     print("  links to unpublished targets unlinked: %d" % sum(dead_links.values()))
     if override_count:
         print("  hand-written overrides applied:  %d" % override_count)
+    if news_count is None:
+        print("  news items: NOT rendered, the home page has no %s" % news.MARKER)
+    else:
+        print("  news items on the home page:     %d" % news_count)
     for name, n in sorted(patch_hits.items()):
         print("  site-wide patch: %-32s %d pages" % (name, n))
     n_img, n_tgt, n_ref = inventory.write(
