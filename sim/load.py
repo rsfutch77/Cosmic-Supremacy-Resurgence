@@ -44,6 +44,8 @@ NO_GOLDEN_AGE = 9999                # the idle value the live object held
 RESEARCH_AFTER_CREDITS = 4          # u32 research store, right after credits
 RADIUS_AT = 20                      # f32 in both SUN and PLNT payloads
 ORE_BEFORE_ENLI = 5                 # u8 resource type then u32 rate, just before ENLI
+SCORE_AFTER_RESEARCH = 11           # u32 Owner:28 in OWPR, past the second research field
+REPUTATION_AFTER_RESEARCH = 27      # f32 Owner:32, four words later
 
 
 def _people(records):
@@ -251,6 +253,12 @@ def _civs(blob, galaxy):
         civ.topic = struct.unpack('<i', research[0])[0] if research else None
         civ.goal = struct.unpack('<i', research[1])[0] if research else None
         civ.traits = mo.traits_of(blob, oid)
+        owpr = mo._owpr(blob, oid)
+        offs = mo.research_offsets(blob, owpr) if owpr is not None else None
+        if offs and offs[1] + REPUTATION_AFTER_RESEARCH + 4 <= owpr.size:
+            at = owpr.payload + offs[1]
+            civ.score = struct.unpack_from('<I', blob, at + SCORE_AFTER_RESEARCH)[0]
+            civ.reputation = struct.unpack_from('<f', blob, at + REPUTATION_AFTER_RESEARCH)[0]
         cvtr = mo._cvtr(blob, oid)
         if cvtr is not None and cvtr.size >= GOLDEN_AGE_IN_CVTR + 4:
             left = struct.unpack_from('<I', blob, cvtr.payload + GOLDEN_AGE_IN_CVTR)[0]

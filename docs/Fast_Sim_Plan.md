@@ -488,13 +488,19 @@ unarmed colony ship's crew gained nothing. Score and reputation follow the manua
 simulator alike. The engine's corruption function (`0x0053A0D0`, content version 150 and
 up) reads an empire reputation float at `Owner:32`, then scales the result by
 `corruption_multiplier` / 100 and caps a bonus at 50%. The tick's score rebuild adds a
-pending float at `Owner:36` into `Owner:32` and clears it. Inside the client only bio-bombing
-adds to `Owner:36`; battle reputation, the manual's log2 score-ratio rule, appears nowhere
-in the client, so the original server must have supplied it. Resurgence never does, so
-`Owner:32` stays 0 in every save, which is why every corruption fit matches reputation 0.
-The earlier probe (`capture_rep*`) moved the per-relation records through AddReputation,
-which nothing in play reads, and so changed nothing. A loaded civ starts at 0 and only
-battles in the simulator move it. The score ratio divides
+pending float at `Owner:36` into `Owner:32` and clears it. The client computes battle
+reputation: a defender that destroyed an attacking ship gained exactly the manual's
+5 x log2 of the attacker's score over 80% of its own (12.759, 13.522), and the attacking
+GoodGuy lost 4.579 where the manual gives 9.540. Only battle captures move it, which is
+why every corruption fit so far matches reputation 0. The earlier probe (`capture_rep*`) moved the per-relation records through AddReputation,
+which nothing in play reads, and so changed nothing. A live probe wrote GoodGuy's
+`Owner:32` as +100 and -100 before two ticks (`capture_rep2*`): the save carries it in
+`OWPR`, 27 bytes past the second research field, a reload reads it back, and the simulator,
+which now loads it, matches the engine's research to 2 points and its food and production
+exactly. Credits move only about 0.62 times as far as the simulator's from the reputation 0
+result, so the engine's income takes the corruption by some other path; open below. The
+simulator loads score and reputation from the save, and its defenders now gain what the
+engine's did; its attackers still lose the manual's figure. The score ratio divides
 by 80% of one's own score, so attacking a civ of one's own size gains about 1.6 reputation
 (5 x log2 1.25), and only attacking a civ under 80% of one's own score loses it. The reward
 counts income and surge production after corruption, so a reputation gain shows up in `D`
@@ -576,17 +582,21 @@ corpus:
     the design's minimum crew, 2 for a Troop Bay. 6 soldiers at rank 0 against 3 at rank 1 left 5, which
     fits both sides firing at once, not defenders first (that leaves 4). The 5 gained 0.5
     experience, the defenders' count over their own. The Military Camp was lost with the
-    planet; the Academy is assumed to go too.
+    planet, and so was a staged Military Academy (`capture_live_academy_*`).
   - The turret passed over troopers holding a Conquer order to shoot an idle armed frigate:
     unarmed ships taking no part are shot last.
+  - A ship inside a planet's radius but not in orbit is shot by the planet's defence alone
+    and does not fire: an idle Destroyer 0.8 from a planet of radius 1.6 lost 0.435 a tick,
+    the turret's fire to the unit, while the armed corvettes in orbit took and gave nothing,
+    and Destroyers at 2.4 and 4.8 were left alone (`capture_live_radius_*`).
   - Shields: corvettes with a Magneto Shield in the sixth part list (`list6`) fought in
     every probe; their losses fit within the engine's random spread.
   Experience counts only the ships taking part, bombs included, which matched 5.73 and 0.70
   exactly in the first staging. Bombing kills about one citizen per 250 of defence damage;
   the live probes land within one citizen of that, 3 killed where the simulator kills 2 or
-  4. Scored on the live pairs, 47 of 56 match every ship, crew and planet field; the rest
-  differ by the engine's random spread of fire, by that one citizen, and in one tick where a
-  destroyer still flying, inside the planet's radius, was drawn into the battle.
+  4. Scored on the live pairs, 53 of 64 match every ship, crew and planet field; the rest
+  differ by the engine's random spread of fire, by that one citizen or one soldier, and in
+  which of two inert Destroyers the defence shot first.
 
 The scripted warlike opponent stalls in the Single Player galaxy, both before and after
 these changes: the baseline's job choice starves its homeworld from turn 195, and with no
@@ -648,12 +658,18 @@ soldiers to crew them its ships never fill. It is a probe, not a training oppone
       (§5b, "Pre-training checks")
 - [x] A ground battle on the client (§5b, "Pre-training checks", Battles)
 - [x] Shields in a captured battle, through `list6`
-- [ ] Resurgence's server computes battle reputation and writes it to `Owner:32` (or the
-      pending `Owner:36`), so the game matches the manual; confirm on the client that a set
-      `Owner:32` moves corruption and survives a save (§5b, reputation)
-- [ ] Confirm the min-crew rule on Cruiser and Battleship designs with the engine's getter
-- [ ] Find whether a ship inside a planet's radius but not yet in orbit joins its battle
-- [ ] Find whether conquest destroys the Military Academy, as it did the Camp
+- [ ] Find the attacker's reputation rule: 4.579 lost where the manual gives 9.540
+      (Memory Reconstruction Report, "Find the attacker's reputation rule")
+- [ ] A loaded galaxy does not say which pairs have had their first scoring battle, so the
+      simulator can award reputation a second time to a pair that fought before loading
+- [x] A set `Owner:32` moves corruption and survives a save (§5b, reputation)
+- [ ] Find how the engine's income takes corruption: at reputation +100 and -100 credits
+      moved about 0.62 times as far as the simulator's, while research, food and production
+      matched (`capture_rep2*`)
+- [x] The min-crew rule on Cruiser and Battleship designs: the engine's getter gave 4, 5, 7
+      and 5, 7, 10 for empty, half and full hulls, as the simulator does
+- [x] A ship inside a planet's radius but not in orbit is shot by the defence alone
+- [x] Conquest destroys the Military Academy, as it does the Camp
 - [ ] Fix the warlike opponent's starving homeworld, if it is kept as a probe
 - [x] Loyalty from stationed soldiers, their training and upkeep (§5b)
 - [x] Reputation, score and crew experience (§5b)

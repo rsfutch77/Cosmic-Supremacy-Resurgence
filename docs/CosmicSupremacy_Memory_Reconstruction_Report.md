@@ -2592,6 +2592,26 @@ Specifically still open: the forecast formula the declare-war dialog displays
 through the `[0x0085795C]` loop); which side's record the conquest writer updates; and how
 reputation enters the score calculation.
 
+**Reputation is `Owner:32`, and the client keeps it (November 2026).** The engine applies the
+manual's corruption formula (`0x0053A0D0`) to an empire reputation float at `Owner:32`, and the
+tick's score rebuild (`0x0053EDC4`) adds a pending float at `Owner:36` into it. The save carries
+`Owner:32` in `OWPR`, a float 27 bytes past the start of the second research field, four words
+after the score (`Owner:28`, 11 bytes past it). A live probe set it to +100 and -100 and the
+tick's corruption followed, and a reload read it back. The referee copies only the research
+fields from a submitted `OWPR`, so the engine's value carries from turn to turn. The client
+computes battle reputation itself: across the battle captures a defender that destroyed an
+attacker's ship gained 5 x log2 of the attacker's score over 80% of its own, 12.759 and 13.522,
+exactly the manual, once per pair. The per-relation word AddReputation changes is still unread
+in play.
+
+[ ] **Find the attacker's reputation rule.** The attacking GoodGuy lost 4.579 in every captured battle,
+where the manual's 5 x log2(2886 / (0.8 x 13538)) gives 9.540, 0.48 of it, and an attacker
+that destroyed nothing lost nothing. All of them share one pair of scores, so a probe with a
+different score ratio separates a factor from a ratio taken at some other moment (the
+declaration of war is the first guess). The writer was not found by scanning for adds into
+`Owner:36`, so look for the battle code that calls the score rebuild's inputs. One older
+capture also gave a defender 11.656 where the scores before the tick give 12.601.
+
 [ ] test whether loyalty and corruption are derived rather than stored, populate one planet's population, buildings and military fully, and check whether both values follow from those inputs without any field of their own changing.
 
 ### Governor, located and confirmed (July 2026)

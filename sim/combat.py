@@ -29,6 +29,8 @@ orbit never landed. A finished Attack or Conquer order at a planet is
 cleared after the battle. Fire goes to one target at a time, weakest first,
 where the engine spreads it at random.
 """
+import math
+
 from . import economy
 from . import traits
 from . import movement
@@ -132,18 +134,27 @@ def battles(g):
         if not p.owner:
             continue
         here = [s for s in g.ships.values() if s.orbit == p.oid]
-        foes = [s for s in here if s.owner != p.owner and at_war(g, s.owner, p.owner)]
+        near = [s for s in g.ships.values() if inside(g, s, p)]
+        foes = [s for s in here + near if s.owner != p.owner and at_war(g, s.owner, p.owner)]
         if not foes:
             # The manual: a defence the attackers leave is repaired at once.
             p.defence_damage = 0.0
             continue
         friends = [s for s in here if s.owner == p.owner]
-        fight(g, p, friends, foes)
+        fight(g, p, friends, foes, passive={s.oid for s in near})
         bio_bomb(g, p, [s for s in foes if s.oid in g.ships])
     space_battles(g)
     for s in g.ships.values():
         if holds_order(s) and s.orbit and s.order.progress >= sum(x[-1] for x in s.order.legs):
             s.order = None
+
+
+def inside(g, s, p):
+    """Not in orbit but within the planet's radius: such a ship is shot by
+    the planet's defence alone and does not fire, as an idle Destroyer 0.8
+    from a planet of radius 1.6 was, while one at 2.4 was left alone and the
+    armed corvettes in orbit fired at neither."""
+    return not s.orbit and math.dist(s.pos, p.pos) < g.radius.get(p.oid, 0)
 
 
 def holds_order(s):
@@ -168,6 +179,8 @@ def space_battles(g):
         p = g.planets.get(s.orbit)
         if p is not None and p.owner:
             continue
+        if any(q.owner and inside(g, s, q) for q in g.planets.values()):
+            continue
         key = s.orbit or tuple(round(c, 1) for c in s.pos)
         spots.setdefault(key, []).append(s)
     for here in spots.values():
@@ -180,30 +193,37 @@ def space_battles(g):
                 fight(g, None, foes, mine)
 
 
-def fight(g, p, friends, foes):
+def fight(g, p, friends, foes, passive=()):
     """`friends` defend (the planet's owner's ships, or the attacked side in
-    open space) and always fire; `foes` attack."""
+    open space) and always fire; `foes` attack, but those in `passive` only
+    take fire."""
     home = [Unit(g, s) for s in friends if s.design in g.designs]
     away = [Unit(g, s) for s in foes if s.design in g.designs]
+    taking = [u for u in away if u.ship.oid not in passive]
     planet = Planet(g, p) if p is not None else Planet.none()
     opposed = p is not None and any(u.armed for u in home)
-    shooters = [u for u in away if u.armed and (opposed or holds_order(u.ship)
-                                                 or u.ship.arrived == g.turn)]
+    shooters = [u for u in taking if u.armed and (opposed or holds_order(u.ship)
+                                                   or u.ship.arrived == g.turn)]
     every = opposed or any(holds_order(u.ship) for u in shooters)
     # Taking part: guns under an order, on arrival or against armed ships,
     # and bombs over a planet.
-    active = shooters + [u for u in away if u not in shooters and p is not None and u.fire[2] > 0]
+    active = shooters + [u for u in taking if u not in shooters and p is not None and u.fire[2] > 0]
     marks = home if every else [u for u in home if u.armed]
     for _round in range(SUB_ROUNDS):
         if not alive(away):
             break
         pfire = planet.fire if planet.hp > 0 else (0, 0)
-        hits_home = volley(home, pfire, away, first=active + [u for u in away if u.armed])
+        first = active + [u for u in away if u.armed]
+        if len(taking) < len(away):
+            # Only the planet's defence shoots at ships inside its radius.
+            hits_home = (volley(home, (0, 0), taking, first=first) if alive(taking) else [])                 + volley([], pfire, away, first=first)
+        else:
+            hits_home = volley(home, pfire, away, first=first)
         hits_away = volley(shooters, (0, 0), marks) if alive(marks) else []
         for u, dmg in hits_home + hits_away:
             u.hp -= dmg
         if planet.max:
-            bombs = sum(u.fire[2] for u in away if u.hp > 0) / SUB_ROUNDS
+            bombs = sum(u.fire[2] for u in taking if u.hp > 0) / SUB_ROUNDS
             planet.hp = max(0.0, planet.hp - bombs)
     if p is not None and planet.max:
         dealt = planet.max - p.defence_damage - planet.hp
@@ -219,7 +239,7 @@ def fight(g, p, friends, foes):
     if planet.max and planet.hp <= 1e-9:
         killed_home += defence_units(p)
     renown.battle(g, attacker, defender, killed_away, killed_home,
-                  power(g, defender), power(g, attacker))
+                  power(g, defender), power(g, attacker), at_planet=p is not None)
     renown.experience(home, active, sum(Planet(g, p).fire) if p is not None else 0.0)
     for u in home + away:
         if u.hp <= 1e-9:
@@ -372,7 +392,7 @@ def invade(g, p, ships):
         p.military, p.military_xp = [(economy.MILITARY, p.owner)] * len(held), held
         return
     owner = ships[0].owner
-    # The Military Camp went with the planet; the Academy is assumed to.
+    # The Military Camp and Academy go with the planet.
     for kind in (economy.MILITARY_CAMP, economy.MILITARY_ACADEMY):
         p.facilities.pop(kind, None)
     economy.conquered(g, p, owner)

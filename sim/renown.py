@@ -14,10 +14,13 @@ score-reputation-and-rank page, with no capture to check them against.
                   an armed ship; measured once: 2 x 545 / 590 = 1.85 on the turn-110
                   battle's two defending fighters, and nothing for its colony ship
 
-The engine's corruption reads an empire reputation at Owner:32, but battle
-reputation comes from the server, and Resurgence never sets it, so live saves
-carry 0. The simulator applies the manual's term (economy.empires). Scores start at
-0, since the save's score is not read.
+The engine keeps reputation at Owner:32 and its corruption reads it
+(economy.empires). Live battles fit the manual for a defender: BadGuy gained
+5 x log2 of GoodGuy's score over 80% of its own, 12.759 and 13.522 to the
+unit, at the first battle in which it destroyed a ship. The attacker lost
+4.579 where the manual gives 9.54, in three battles from one pair of scores;
+the simulator keeps the manual's figure until a second pair settles the rule.
+Scores load from the save (Owner:28).
 """
 import math
 
@@ -41,26 +44,25 @@ def gain(g, me, enemy, units):
 
 
 def battle(g, attacker, defender, lost_by_attacker, lost_by_defender,
-           defender_power, attacker_power):
-    if not (lost_by_attacker or lost_by_defender):
-        return
-    first = frozenset((attacker, defender)) not in g.fought
+           defender_power, attacker_power, at_planet=False):
     a_ratio, d_ratio = ratio(g, attacker, defender), ratio(g, defender, attacker)
+    # Each side's reputation comes from its own first battle against the other
+    # in which it scores: an attacker that destroyed nothing lost none.
     if lost_by_defender:
         g.civs[attacker].score += gain(g, attacker, defender, lost_by_defender)
+        # The manual: moving to a planet one is at war with makes one the aggressor.
+        if (attacker, defender) not in g.fought and (at_planet or (attacker, defender) in g.declared):
+            g.fought.add((attacker, defender))
+            rep = REPUTATION_PER_DOUBLING * math.log2(a_ratio)
+            if rep < 0 or lost_by_defender >= SIGNIFICANT * defender_power:
+                g.civs[attacker].reputation += rep
     if lost_by_attacker:
         g.civs[defender].score += gain(g, defender, attacker, lost_by_attacker)
-    if not first:
-        return
-    g.fought.add(frozenset((attacker, defender)))
-    if (attacker, defender) in g.declared:
-        rep = REPUTATION_PER_DOUBLING * math.log2(a_ratio)
-        if rep < 0 or lost_by_defender >= SIGNIFICANT * defender_power:
-            g.civs[attacker].reputation += rep
-    if lost_by_attacker:
-        rep = REPUTATION_PER_DOUBLING * math.log2(d_ratio)
-        if rep > 0 and lost_by_attacker >= SIGNIFICANT * attacker_power:
-            g.civs[defender].reputation += rep
+        if (defender, attacker) not in g.fought:
+            g.fought.add((defender, attacker))
+            rep = REPUTATION_PER_DOUBLING * math.log2(d_ratio)
+            if rep > 0 and lost_by_attacker >= SIGNIFICANT * attacker_power:
+                g.civs[defender].reputation += rep
 
 
 def experience(home, away, planet_fire=0.0):

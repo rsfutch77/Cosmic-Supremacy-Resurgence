@@ -200,6 +200,15 @@ def participation_checks():
                               'scanners': [0]},
                              {'chassis': [2], 'engines': [1], 'modules': [1], 'scanners': [0]})],
           [3, 4, 1, 2])
+    g = staged()
+    p = g.planets[HOME]
+    g.radius[HOME] = 1.6
+    g.ships[910].orbit, g.ships[910].pos = 0, (p.pos[0] + 0.8, p.pos[1], p.pos[2])
+    shot = combat.Planet(g, p).max > 0
+    combat.battles(g)
+    check('a ship inside the radius does not fire, and only the planet shoots it',
+          (p.owner == DEMO, g.ships[912].condition,
+           (910 not in g.ships or g.ships[910].condition < 1.0) == shot), (True, 1.0, True))
     g = staged(None, 0)
     combat.battles(g)
     check('in open space there is no battle without an order',

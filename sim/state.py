@@ -195,8 +195,8 @@ class Civ:
     intel: list = field(default_factory=list)  # scan reports, newest last
     news: list = field(default_factory=list)   # (turn, what) the civ was told
     golden_age: int = 0             # turns left, CVTR+12
-    score: float = 0.0              # battle score the simulator has counted; the save's is not read
-    reputation: float = 0.0         # the manual's, counted by the simulator
+    score: float = 0.0              # Owner:28 as loaded, plus battle score the simulator counts
+    reputation: float = 0.0         # Owner:32, which the corruption formula reads
     stances: dict = field(default_factory=dict)     # other civ -> STANCES code
 
 
@@ -227,7 +227,7 @@ class Galaxy:
     treaties: dict
     gaps: list = field(default_factory=list)    # what the loader could not read
     declared: set = field(default_factory=set)  # (declarer, target) wars declared in the simulator
-    fought: set = field(default_factory=set)    # pairs past their first significant battle
+    fought: set = field(default_factory=set)    # (civ, enemy) past civ's first scoring battle
     system_planets: dict = field(default_factory=dict)  # sun id -> planet ids in SOLA order
     player: int = 0                 # the civ the client plays as when it loads the save, GLOB
 

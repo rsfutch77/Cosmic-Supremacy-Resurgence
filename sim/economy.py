@@ -260,7 +260,7 @@ def empires(g):
         civ = g.civs.get(civ_oid)
         if civ is None:
             continue
-        # The engine reads reputation at Owner:32; Resurgence's saves carry 0.
+        # Reputation is Owner:32, loaded from the save and moved by battles.
         empire = empire_corruption(len(civ_planets), civ.reputation)
         yield (civ, civ_planets, space_bonus(civ), empire,
                inactivity(g.turn, civ.active_turn), idle_share(g.turn, civ.active_turn))
