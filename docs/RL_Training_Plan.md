@@ -75,6 +75,12 @@ What the roles found about the game:
   population, so the farmers' margin over what the planet eats is the main growth lever, and an
   army needs farms as much as a growing empire does.
 - **Soldiers board only at the planet they stand on**, so warships rally at the main shipyard.
+- **Troops land only on a turn the planet's defence falls and no defending ship survives**
+  (`combat.fight`). Only bomb weapons hurt the defence, and it repairs at once when the
+  attackers leave, so bombers and troopers have to arrive with the warships.
+- **A conquered planet starts at 100 loyalty less the turns its old owner held it**, so a
+  homeworld starts at 0. Below 30 for more than 3 turns it may rebel back each turn, and only
+  soldiers raise it quickly: 8 on 20 citizens lost BadGuy's homeworld again within 40 turns.
 - **Parts that need a resource the civ holds none of make ships it cannot build.** Quantum
   Fields brought crystal parts to a civ with no crystal and stopped every shipyard, so the
   shipwright uses only parts the civ holds twice the resources for.
@@ -102,12 +108,17 @@ once the simulator is checked on it.
       each posture and research line changes play the way it says (`sim/tests/test_strategy.py`,
       12 checks). Against the baseline over 150 turns: expand settles 8 to 10 planets where arm and
       defend hold 3, arm with weapons research fields the strongest fleet, defend with defence
-      research builds 13 turrets and 6 bunkers. Expanding to turn 90 and then arming at war built
-      59 warships and destroyed BadGuy's fleet, but took no planet
-  - [ ] Waves are sized on the ships last seen at the target, which goes stale: a wave of 12
-        left for 8 seen and met 19, and lost with its four troopers
-  - [ ] No conquest yet: troopers land at most 20 soldiers, and the defender's garrison grows
-        to 25 by turn 300 with no scan to count it
+      research builds 13 turrets and 6 bunkers. Expanding to turn 90 and then arming at war
+      destroys BadGuy's fleet and takes his homeworld at turn 293, and holds it
+  - [x] Waves were sized on the ships last seen at the target, which went stale: a wave of 12
+        left for 8 seen and met 19. Waves now wait for twice the most ships ever seen there
+  - [x] Conquest. A wave of warships, 4 bombers and 4 troopers arrives on one turn; troops land
+        the turn the defence falls; emptied troopers refill wherever soldiers stand and land
+        again in fours; a taken planet below 60 loyalty gets every full trooper's soldiers
+  - [ ] The second landing takes 43 turns to gather while the garrison regrows from 6 to 13:
+        a Shuttle trooper lands 5, and the warships' crews compete for the same soldiers
+  - [ ] No scan counts the garrison, so landings are sized by attrition, not by intel. A
+        planetary scan needs Advanced Scanning and a Central Defense Agency
   - [ ] Credits pile up once production runs out of things to build (40,000 by turn 150 on
         some goals): a market role could turn them into the ship resources the shipwright lacks
   - [ ] Ships built at a second shipyard wait for crew there, since soldiers board only where

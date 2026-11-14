@@ -22,6 +22,7 @@ from dataclasses import dataclass
 from . import combat
 from . import economy as ec
 from . import fog
+from . import movement as mv
 from . import orders as od
 from . import research as rs
 from . import state as st
@@ -57,10 +58,14 @@ LOW_CREDITS = 200               # below this a tenth of the free citizens bank
 RESERVE_CREDITS = 1000          # kept back from hurrying, for upkeep
 COLONY_SHIPS = {'expand': 3, 'grow': 1, 'arm': 0, 'defend': 0, 'balanced': 1}  # in hand at once
 WARSHIPS_PER_PLANET = {'expand': 0, 'grow': 0, 'arm': 99, 'defend': 1, 'balanced': 1}
-TROOPERS = 4                    # kept, and all aboard a wave, for a mission against a populated planet
+TROOPERS = 6                    # kept for a mission; four sail with the wave, the rest follow
+BOMBERS = 4                     # in the wave, to knock out the defence
+WAVE_TROOPERS = 4
+HELD_TROOPERS = 8               # kept once the orbit is held
+GARRISON_UNTIL = 60             # loyalty below which a planet keeps its soldiers and gets more
 TROOPS_ABOARD = 4               # soldiers past the flying crew before a trooper sails
 LAUNCH = 4                      # crewed warships at home before a wave leaves
-OUTNUMBER = 1.5                 # times the ships last seen at the target
+OUTNUMBER = 2.0                 # times the most ships seen at the target at once
 WARSHIP_SPEED = 10.0            # thrust over units the shipwright aims for
 SCOUT_SPEED = 35.0
 SCOUTS = 2                      # while half the systems are unexplored; 1 after
@@ -127,8 +132,9 @@ class Player:
         self.claims = {}            # colony ship -> planet it is bound for
         self.launch = {}            # warship or trooper -> turn it leaves
         self.made = {}              # design kind -> parts it was last asked for
-        self.sighted = {}           # planet -> other civs' ships last seen in its orbit
+        self.sighted = {}           # planet -> most other civs' ships seen in its orbit at once
         self.home = None            # the rally planet, kept while it has a shipyard
+        self.held = None            # the turn the mission's orbit was taken
 
     # -- what the civ can see --------------------------------------------
 
@@ -168,7 +174,7 @@ class Player:
         out += self.hurry(g, c, mine)
         out += self.crew(g, mine, ships)
         out += self.settler(g, c, mine, groups)
-        out += self.admiral(g, mine, groups)
+        out += self.admiral(g, mine, groups, designs)
         return out
 
     # -- scientist -------------------------------------------------------
@@ -350,7 +356,9 @@ class Player:
             'colony': min(COLONY_SHIPS[posture], targets),
             'scout': self.scouts_wanted(g),
             'warship': WARSHIPS_PER_PLANET[posture] * len(mine) if posture != 'arm' else 10 ** 6,
-            'trooper': TROOPERS if self.goals.mission is not None else 0,
+            'trooper': (HELD_TROOPERS if self.held is not None else TROOPERS)
+                       if self.goals.mission is not None else 0,
+            'bomber': BOMBERS if self.goals.mission is not None else 0,
         }
         if self.goals.mission is not None and posture not in ('arm',):
             want['warship'] = max(want['warship'], LAUNCH)
@@ -360,7 +368,7 @@ class Player:
                 continue
             choice = None
             if p.facilities.get(SHIPYARD):
-                for k in ('scout', 'colony', 'trooper', 'warship'):
+                for k in ('scout', 'colony', 'bomber', 'trooper', 'warship'):
                     if k not in designs:
                         continue
                     if len(groups[k]) + building.get(k, 0) >= want[k]:
@@ -404,11 +412,19 @@ class Player:
     def crew(self, g, mine, ships):
         out = []
         soldiers = {p.oid: len(p.military) for p in mine}
-        for s in ships:
+        # On a mission troopers board first; otherwise ships that cannot fly do.
+        first = 'trooper' if self.goals.mission is not None else None
+        order = sorted(ships, key=lambda s: (g.designs.get(s.design) is None
+                                             or kind_of(g.designs[s.design]) != first, s.oid))
+        for s in order:
             d = g.designs.get(s.design)
             if d is None or s.order is not None or s.orbit not in soldiers:
                 continue
+            if g.planets[s.orbit].loyalty < GARRISON_UNTIL:
+                continue        # its soldiers hold a planet that may rebel
             k = kind_of(d)
+            if self.held is not None and k in ('warship', 'bomber'):
+                continue        # the orbit is held: soldiers go to the troopers
             need = od.seats_of(d) if k == 'trooper' else combat.crew_needed(d, g.civs[self.civ])
             gap = need - len(s.crew)
             n = min(gap, soldiers[s.orbit])
@@ -468,7 +484,7 @@ class Player:
 
     # -- admiral ---------------------------------------------------------
 
-    def admiral(self, g, mine, groups):
+    def admiral(self, g, mine, groups, designs):
         out = []
         kept = g.planets.get(self.home)
         if kept is None or kept.owner != self.civ or not kept.facilities.get(SHIPYARD):
@@ -479,33 +495,74 @@ class Player:
         for s in fog.visible_ships(g, self.civ):
             if s.orbit in g.planets:
                 here[s.orbit] = here.get(s.orbit, 0) + 1
-        for oid in {s.orbit for s in g.ships.values() if s.owner == self.civ and s.orbit in g.planets}:
-            self.sighted[oid] = here.get(oid, 0)
-        self.sighted.update(here)
+        for oid, n in here.items():
+            self.sighted[oid] = max(n, self.sighted.get(oid, 0))
         fleet = groups['warship'] + groups['bomber']
         ready = [s for s in fleet if s.order is None
                  and len(s.crew) >= combat.crew_needed(g.designs[s.design], civ)]
+        resisting = {p.oid: p for p in mine if p.citizens and p.loyalty < GARRISON_UNTIL}
+        spare = {p.oid: len(p.military) for p in mine if p.oid not in resisting}
         for s in groups['trooper']:
-            if s.order is None and s.orbit != home.oid and s.oid not in self.launch                     and len(s.crew) >= combat.crew_needed(g.designs[s.design], civ) + TROOPS_ABOARD:
+            # A conquered planet that may rebel takes every full trooper's
+            # soldiers first. Full troopers gather at the rally; the rest fetch
+            # soldiers from the planet that has most, since soldiers board
+            # only where they stand.
+            d = g.designs[s.design]
+            if s.order is not None or s.oid in self.launch or len(s.crew) < combat.crew_needed(d, civ):
+                continue
+            aboard = len(s.crew) - combat.crew_needed(d, civ)
+            if s.orbit in resisting:
+                if aboard > 0:
+                    out.append(('crew', s.oid, -aboard))
+                continue
+            if resisting and aboard >= TROOPS_ABOARD:
+                out.append(('move', s.oid, min(resisting.values(), key=lambda p: p.loyalty).oid))
+                continue
+            full = len(s.crew) >= od.seats_of(d)
+            if full and s.orbit != home.oid:
                 out.append(('move', s.oid, home.oid))
+            elif not full and not spare.get(s.orbit):
+                best = max(spare, key=spare.get)
+                if spare[best]:
+                    spare[best] -= od.seats_of(d) - len(s.crew)
+                    out.append(('move', s.oid, best))
         target = self.mission_target(g)
         if target is None:
             for s in ready:
                 if s.orbit != home.oid:
                     out.append(('move', s.oid, home.oid))
             return out
-        at_home = [s for s in ready if s.orbit == home.oid]
+        at_home = [s for s in ready if s.orbit == home.oid and s.oid not in self.launch]
         for s in ready:
             if s.orbit not in (home.oid, target) and s.oid not in self.launch:
                 out.append(('move', s.oid, home.oid))
         troops = [s for s in groups['trooper'] if s.order is None and s.orbit == home.oid
                   and len(s.crew) >= combat.crew_needed(g.designs[s.design], civ) + TROOPS_ABOARD]
-        populated = self.seen_planets(g)[target][1] > 0
+        # The orbit is held once armed ships sit there with no other civ's
+        # ship seen beside them; their fight each turn keeps the defence down.
+        holding = any(s.orbit == target and s.order is None for s in fleet) and not here.get(target)
+        if not holding:
+            self.held = None
+        elif self.held is None:
+            self.held = g.turn
+        if holding:
+            # Reinforce the orbit with everything ready, troops included.
+            for s in at_home + (troops if len(troops) >= WAVE_TROOPERS else []):
+                out.append(('conquer', s.oid, target))
+            return out
+        # One wave: warships to clear the orbit, bombers to knock out the
+        # defence and troopers to land, timed to arrive on the same turn.
+        bombers = [s for s in at_home if s in groups['bomber']]
+        need_bombers = BOMBERS if 'bomber' in designs else 0
+        need_troops = WAVE_TROOPERS if 'trooper' in designs and self.seen_planets(g)[target][1] else 0
         enough = max(LAUNCH, math.ceil(OUTNUMBER * self.sighted.get(target, 0)))
-        if len(at_home) >= enough and (len(troops) >= TROOPERS or not populated):
+        sailing = any(s.order is not None and s.order.kind == mv.CONQUER
+                      for s in fleet + groups['trooper']) or any(
+            s.oid in self.launch for s in fleet + groups['trooper'])
+        if not sailing and len(at_home) - len(bombers) >= enough and len(bombers) >= need_bombers                 and len(troops) >= need_troops:
             wave = at_home + troops
             pos = g.planets[target].pos
-            eta = {s.oid: math.dist(s.pos, pos) / max(0.1, _speed(g, s)) for s in wave}
+            eta = {s.oid: math.dist(s.pos, pos) / max(0.1, mv.speed(g, s)) for s in wave}
             longest = max(eta.values())
             for s in wave:
                 self.launch[s.oid] = g.turn + int(longest - eta[s.oid])
@@ -531,11 +588,6 @@ def rally(mine):
     since soldiers board only at the planet they are on."""
     yards = [p for p in mine if p.facilities.get(SHIPYARD)] or mine
     return max(yards, key=lambda p: (len(p.citizens), -p.oid))
-
-
-def _speed(g, s):
-    from . import movement as mv
-    return mv.speed(g, s)
 
 
 def _same(a, b):

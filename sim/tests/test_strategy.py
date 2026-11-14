@@ -89,7 +89,7 @@ def main():
           2 in runs[('balanced', 'economy')]['done'])
     check('scouts reach most of the galaxy', runs[('balanced', 'economy')]['explored'] >= 20)
 
-    war = play(sg.Goals(posture='expand', line='hulls'), turns=300,
+    war = play(sg.Goals(posture='expand', line='hulls'), turns=330,
                switch=(90, sg.Goals(posture='arm', line='weapons', war=195, mission=186)))
     g = war['g']
     check('a war goal declares war', g.civs[war['me']].stances.get(war['them']), 1)
@@ -97,6 +97,7 @@ def main():
     check('the fleet destroys most of the rival\'s warships',
           sum(1 for s in g.ships.values() if s.owner == war['them']
               and sg.kind_of(g.designs[s.design]) == 'warship') <= 5)
+    check("and the troops take the rival's homeworld", g.planets[186].owner, war['me'])
 
     print(f'\n{len(PASS)} passed, {len(FAIL)} failed')
     return 1 if FAIL else 0
