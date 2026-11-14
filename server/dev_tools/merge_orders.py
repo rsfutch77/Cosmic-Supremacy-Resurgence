@@ -2693,7 +2693,7 @@ KNPL_FLAGS = (KNPL_SHOW_TERRITORY_AT, KNPL_SHOW_SHIPS_AT, KNPL_BY_STANCE_AT)
 STANCES = {0: 'Neutral', 1: 'War', 2: 'Cease-Fire', 3: 'Peace', 4: 'Alliance'}
 KINDS = {0: 'trade', 1: 'war', 2: 'cease-fire', 3: 'peace', 4: 'alliance'}
 WAR = 1
-PROPOSED, ACCEPTED, DECLINED, AT_WAR = 0, 1, 2, 3
+PROPOSED, ACCEPTED, DECLINED, NON_BINDING = 0, 1, 2, 3
 UNSET_LENGTH, UNSET_START = -2, -1
 STANCE_OF = {2: 2, 3: 3, 4: 4}          # the stance a kind sets when accepted
 # What a stance treaty binds for when it carries no TRLE, as the UI says.
@@ -3064,7 +3064,7 @@ def diplomacy_orders(served, sub, civ_oid, names):
             ends.add(frozenset((t['proposer'], t['recipient'])))
     for oid, ts, name in removed:
         pair = frozenset((ts['proposer'], ts['recipient']))
-        if pair not in ends or ts['status'] not in (ACCEPTED, AT_WAR):
+        if pair not in ends or ts['status'] not in (ACCEPTED, NON_BINDING):
             refusals.append(f'{name} DROPPED, ending a treaty this way is not '
                             f'something the client offers')
     named = set()
@@ -3099,7 +3099,7 @@ def new_treaty_refusal(t, oid, civ_oid, high, turn, met, who):
     if t['kind'] == WAR:
         if ((t['status'], t['length'], t['start'], t['proposed'], t['deleted'],
              t['demands'], t['offers'])
-                != (AT_WAR, -1, turn, turn, (0, 0), [], [])):
+                != (NON_BINDING, -1, turn, turn, (0, 0), [], [])):
             return 'it is not laid out as a declaration of war this turn'
         return ''
     if ((t['status'], t['length'], t['start'], t['proposed'], t['deleted'])
@@ -3117,7 +3117,7 @@ def _stance_in_force(record, pair):
     t = read_trdt(record)
     return (t is not None and _between(record, pair)
             and (t['kind'] == WAR or t['kind'] in STANCE_OF)
-            and t['status'] in (ACCEPTED, AT_WAR))
+            and t['status'] in (ACCEPTED, NON_BINDING))
 
 
 def take_treaty_step(blob, served_treaties, step, oid, record, civ_oid, turn,

@@ -2349,7 +2349,7 @@ either ignores the setting on load or the capture rewrites it.
 - **`TRDT`** is the proposer's and recipient's civ ids, the kind (0 trade, 1 war, 2 cease-fire,
   3 peace, 4 alliance, read from the client's tables), the status (0 pending, 1 binding, 2
   declined, 3 non-binding, 4 canceled; a war is created at 3 and a binding treaty reaches 3 when
-  its length runs out, so 1 and 3 are both in force; `merge_orders.AT_WAR` is that 3), an
+  its length runs out, so 1 and 3 are both in force; `merge_orders.NON_BINDING` is that 3), an
   `i32` length (-2 until accepted), an `i32` start turn (-1 until accepted), the turn proposed,
   one deleted byte per party, then the proposer's demands and its offers.
 - **Proposing** adds a `TRTY` and raises `SAVE+0` to its id. A military alliance stores no length
