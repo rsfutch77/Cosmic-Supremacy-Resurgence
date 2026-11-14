@@ -1022,9 +1022,13 @@ the merge then takes a fogged civ's orders exactly as an unfogged one's
 view of `d9` came up at turn 181, and client memory read GoodGuy's home planets
 as populations 8, 0, 8, 0, 10, 0, with the two later colonies unowned.
 
-[ ] **Confirm on screen that the map draws them**, and that the planet sphere's
-size follows population. BadGuy's view of `d9` with the counters zeroed loaded
-in the client on 14 November 2026, clock held, for Robert to look at.
+[x] **Confirm on screen that the map draws them**, and that the planet sphere's
+size follows population. **Confirmed** (14 November 2026) on BadGuy's view of
+`d9` with the counters zeroed: the map draws GoodGuy's home system as
+remembered, populations 8, 0, 8, 0, 10, 0, with the two later colonies unowned
+and unnamed, and the sphere sizes follow those populations rather than the live
+ones. The sun reads last scouted at turn 34, and a planet's tooltip shows
+none of the live counters.
 
 [x] **A view keeps the live header fields of a rewritten `PLPR`**: the output
 rates at `+4`, food and production counters, and, when the owner is
