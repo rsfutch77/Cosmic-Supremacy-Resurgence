@@ -716,12 +716,11 @@ often `+24` minus one, so they read more like a chain than like a category and a
 that `+20` was a category with fixed meanings did not survive a second galaxy: the value that carried
 no position in one carried one in the other. Do not read meaning into them.
 
-How many items an engagement raises is also unsettled. The `cycle.dat` battle raised two on one turn
-at one position, one in each civ's `OWNR`, which looked like each side's own view of it. The
-two-player battle raised one, for the defender only. One of those is a special case and it is not yet
-known which.
+An engagement raises one item for each civ at it, each written from that civ's side. The `cycle.dat`
+battle raised two on one turn at one position, one in each civ's `OWNR`. The two-player battle raised
+one, for the defender only, and that was the special case: see the next item.
 
-[ ] **A losing attacker can be told nothing at all, and why is unexplained.** In the two-player
+[x] **A losing attacker can be told nothing at all, and why is unexplained.** In the two-player
 battle the attacker lost two warships at the defender's homeworld and received **no `NEWS` record of
 any kind**, while the defender received one per engagement. Measured by counting raw `NEWS` sections
 against the `OWNR` byte ranges rather than by trusting an attribution helper: two sections in the
@@ -735,6 +734,31 @@ was destroyed there and its owner still received nothing. **Not discovery**, sin
 `make_multiplayer_galaxy`. Worth settling, because a player losing a fleet and being told nothing
 about where is a bad enough experience to be worth knowing whether it is the engine's rule or an
 artefact of how these galaxies are made.
+
+**It was the attacker's `Owner:4`, which was 0** (November 2026). `Owner::AddNews` (`0x543720`)
+returns at once when `Owner:4` is 0, the sentinel that also stops the empire tick. Until 19 October
+`make_multiplayer_galaxy` left seat one at 0 (`fix_owner_ids` now replaces it), and seat one,
+`GoodGuy`, was the attacker. Otherwise the engine tells every side: the battle pass (`0x523AC0`)
+groups objects by position and fights where two or more civs meet, and the report builder
+(`0x5218E0`) registers the owner of every group there, its losses included, and gives each a type 2
+item written from its side.
+
+- **Corpus:** in all 37 battles in `sim/corpus`, every civ at the battle got an item, and every civ
+  there holds a non-zero `Owner:4`.
+- **A/B in the client:** `capture_live_attack_ship_t0123`, ticked once as captured and once with
+  `GoodGuy`'s `Owner:4` set to 0. At 20 `GoodGuy` got its battle report; at 0 it got no item at
+  all, not even its failed-build notice. `BadGuy` got its report both times.
+
+**The original game told the attacker.** The manual's battle-report page explains a report as read
+from one participant's side, listed first, with allies next and enemies last. The shipped TestBed
+galaxies give the human seat `Owner:4` 0, a civ the client does not simulate, so for that seat the
+original server, not the client, must have written the report. That last step is inferred: no
+original server traffic carrying `NEWS` is captured.
+
+**The referee sends nothing extra.** The engine writes every civ's report, and the served view keeps
+each civ's own list (`news.own_view`). What the referee must guarantee is that no civ holds 0:
+`referee.simulate_every_civ` gives such a civ the lowest unused id from 20 up before every tick,
+which also restores its research and score (`server/tests/test_tick_owner_ids.py`).
 
 [x] **Does a joined civ inherit its donor's `NEWS`?** `inject_civ.add_civ` clones a donor's `OWNR`
 whole, and `NEWS` lives inside that `OWNR`'s `DATA` block, so the same reasoning that made a joiner
