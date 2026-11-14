@@ -306,6 +306,7 @@ DEFAULT_SUN_NAME = b'Unnamed'
 POP_COUNT_OFF = 36
 POP_ARRAY_OFF = 40
 POP_RECORD = 9
+POP_ARRIVED_OFF = 7             # u16, the turn the citizen was born or arrived
 JOB_IDS = {0: 'farmer', 1: 'worker', 2: 'scientist', 5: 'miner', 6: 'banker'}
 
 # A soldier is the same nine-byte record with this job id, kept in a second
@@ -384,25 +385,32 @@ FOOD_CAP_OFF = 19
 FACILITY_AFTER_MILITARY = 1
 FACILITY_RECORD = 8
 
-# The block between a colonised planet's `PROD` and its `ENLI`: 51 bytes, laid
-# out below as offsets from the end of `PROD`. A planet given an owner without
-# being colonised (only synthetic test galaxies) carries a 35-byte block
-# without these fields.
+# The block between a planet's `PROD` and its `ENLI`, as offsets from the end
+# of `PROD`: the population history, the turns-since-acquisition counter, the
+# conqueror list, the rebellion counter, then the resource deposit. Each list
+# entry is a ruler's influence on the people; a planet's loyalty is derived
+# from it and each citizen's origin and arrival turn (`sim.economy.planet_loyalty`).
+# One ruler gives 51 bytes, each further ruler 16 more; an empty list (an
+# owner set without colonising, only in synthetic galaxies) gives 35.
 #
-# The founding turn is a u32 here and again at `PLPR+0`; a homeworld reads 0
-# with an age equal to the turn. The population field equals the citizen
-# count, and the seven u16 after it are earlier turns' populations (newest
-# first, some carrying 0x1000, all zero at generation). A generated homeworld
-# reads 1 at +16 and 10 at +47.
+# The founding turn is a u32 here and again at `PLPR+0`; a homeworld reads 0.
+# The population field equals the citizen count, and the seven u16 after it
+# are earlier turns' populations (newest first, some carrying 0x1000, all zero
+# at generation). A generated homeworld reads 1 at +16 and mines 10 a turn.
 SETTLED_LEN = 51
 SETTLED_POP_OFF = 0             # u16
 SETTLED_HISTORY_OFF = 2         # SETTLED_HISTORY_LEN u16s
 SETTLED_HISTORY_LEN = 7
-SETTLED_COUNTER_OFF = 16        # u32, undecoded
-SETTLED_OWNER_OFF = 24          # u32, the owning civ's object id
-SETTLED_AGE_OFF = 28            # f32, turns since founded
-SETTLED_FOUNDED_OFF = 32        # u32, the turn it was founded
-SETTLED_LAST_OFF = 47           # u32, undecoded
+SETTLED_COUNTER_OFF = 16        # u32, turns since acquisition, capped at 8 (Planet:368)
+INFLUENCE_COUNT_OFF = 20        # u32, rulers in the conqueror list
+INFLUENCE_AT = 24               # the list (Planet:384)
+INFLUENCE_RECORD = 16           # owner id, f32 influence, first turn, last turn
+RULING = -1                     # the last turn of the current ruler's entry
+SETTLED_OWNER_OFF = 24          # u32, the first ruler: the owner, on a planet never taken
+SETTLED_AGE_OFF = 28            # f32, its influence: +1 a turn plus soldiers, up to 100
+SETTLED_FOUNDED_OFF = 32        # u32, the turn its rule began
+SETTLED_LAST_OFF = 47           # u32, the deposit's rate per miner, with one ruler
+UNREST_AFTER_LIST = 0           # u16, turns in a row below 30% loyalty (Planet:396)
 FOUNDED_OFF = 0                 # u32 at PLPR+0, the founding turn again
 PROD_HURRIED_OFF = 8            # PROD's own payload begins after its header
 CREDITS_AFTER_ID = 20           # past the object id, which is itself past
@@ -913,6 +921,12 @@ def citizens_of(raw):
         out.append((r[0], struct.unpack_from('<I', r, 3)[0], r[7],
                     bytes((r[1], r[2], r[8]))))
     return out
+
+
+def arrived(citizen):
+    """The turn a `citizens_of` record was born or arrived."""
+    _job, _owner, extra, rest = citizen
+    return extra | rest[2] << 8
 
 
 def citizen_bytes(raw):
@@ -1729,13 +1743,41 @@ def set_facilities(blob, planet_oid, pairs):
     return sp.replace_payload(blob, tree, plpr, body)
 
 
-def _settled_at(blob, plpr):
-    """Blob offset of a planet's settled block, or None when it has none."""
+def _block_at(blob, plpr):
+    """(blob offset, rulers) of a planet's settled block, or None when it has
+    none. A planet taken from another civ lists more than one ruler."""
     prod = next(plpr.find('PROD'), None)
     enli = next(plpr.find('ENLI'), None)
-    if prod is None or enli is None or enli.start - prod.end != SETTLED_LEN:
+    if prod is None or enli is None:
         return None
-    return prod.end
+    at = prod.end
+    if enli.start - at < SETTLED_LEN:
+        return None
+    n = struct.unpack_from('<I', blob, at + INFLUENCE_COUNT_OFF)[0]
+    if n < 1 or enli.start - at != SETTLED_LEN + INFLUENCE_RECORD * (n - 1):
+        return None
+    return at, n
+
+
+def _settled_at(blob, plpr):
+    """Blob offset of a settled block with one ruler, whose fields sit at the
+    fixed offsets above, or None."""
+    found = _block_at(blob, plpr)
+    return found[0] if found and found[1] == 1 else None
+
+
+def influence_of(blob, plpr):
+    """([(owner, influence, first turn, last turn)], unrest) from a planet's
+    settled block, or None. The current ruler's last turn reads RULING."""
+    found = _block_at(blob, plpr)
+    if found is None:
+        return None
+    at, n = found
+    rulers = [struct.unpack_from('<IfIi', blob, at + INFLUENCE_AT + INFLUENCE_RECORD * k)
+              for k in range(n)]
+    unrest = struct.unpack_from('<H', blob, at + INFLUENCE_AT + INFLUENCE_RECORD * n
+                                + UNREST_AFTER_LIST)[0]
+    return rulers, unrest
 
 
 def settled_of(blob, planet_oid):

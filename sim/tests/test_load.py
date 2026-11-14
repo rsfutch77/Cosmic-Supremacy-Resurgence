@@ -21,6 +21,7 @@ sys.path.insert(0, ROOT)
 from sim import load as sl                                      # noqa: E402
 
 GALAXY = os.path.join(ROOT, 'client', 'SinglePlayerGalaxy.dat')
+INVADE = os.path.join(ROOT, 'sim', 'corpus', 'capture_live_invade_t{:04d}.after.dat')
 FIXTURES = sorted(glob.glob(os.path.join(ROOT, 'server', 'tests', 'fixtures',
                                          '*', '*.dat')))
 PASS, FAIL = [], []
@@ -97,9 +98,31 @@ def fixtures():
               <= {0, 1, 2, 5, 6}, True)
 
 
+def conquest():
+    """Civ 656 takes planet 384 from 660 in the turn-125 tick, 5 soldiers on 16
+    citizens; the corpus is gitignored, so this is skipped without it."""
+    print('\nConquest (capture_live_invade)')
+    if not os.path.exists(INVADE.format(129)):
+        print('  skipped: sim/corpus is not here')
+        return
+    for tick, loyalty, unrest in ((125, 23.81, 0), (126, 26.93, 1), (127, 30.05, 0),
+                                  (129, 36.29, 0)):
+        g = sl.load_path(INVADE.format(tick))
+        p = g.planets[384]
+        check(f'tick {tick}: no gaps', g.gaps, [])
+        check(f'tick {tick}: loyalty', round(p.loyalty, 2), loyalty)
+        check(f'tick {tick}: rebellion counter', p.unrest, unrest)
+    check('two rulers, the taker gaining 4.094 a turn',
+          [(o, round(i, 3), f, t) for o, i, f, t in p.rulers],
+          [(660, 83.623, 0, 125), (656, 16.377, 126, -1)])
+    check('taken from 660', p.prior_owner, 660)
+    check('production and ore still read', (p.production is not None, p.ore), (True, 0))
+
+
 def main():
     single_player()
     fixtures()
+    conquest()
     print(f'\n{len(PASS)} passed, {len(FAIL)} failed')
     return 1 if FAIL else 0
 

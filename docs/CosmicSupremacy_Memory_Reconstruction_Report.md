@@ -335,7 +335,7 @@ bytes of the order object. `ceil`, `round` and `floor+1` all give 5 at this valu
 rule is not yet pinned, a case where the quotient falls below `.5` would separate them.
 
 That makes ETA the fourth displayed value confirmed to be computed rather than stored, after
-maximum population, military rank/experience, and loyalty/corruption's suspected derivation.
+maximum population, military rank/experience, and loyalty and corruption.
 
 **Two annotations falsified.** `Ship:88` was recorded as "only present when ship in motion" but reads
 exactly `100.0f` on **every** ship regardless of order state, a constant that looks like a percentage
@@ -1902,12 +1902,84 @@ picks the fix up with no change to the build. The v0.1.0 staging folder under
 `dist/` still reads `DemoPlayer=0`, which is the published zip: **every v0.1
 single-player game shipped with research disabled for the player.**
 
-### `Planet:368` is a turn counter, and loyalty is STILL unlocated (August 2026)
+### Loyalty is derived from the conqueror list, `Planet:384` (November 2026)
+
+A planet stores no loyalty. It stores the rulers that have held it, each with an influence on
+its people, and the client derives loyalty from that list and from each citizen's origin and
+arrival turn. The client's own help text says the same: a planet's loyalty is the average of its
+citizens', and a citizen's rests on the influence of past conquerors.
+
+**The list.** `Planet:384/388/392` is a `std::vector` of 16-byte entries, `[owner node, f32
+influence, first turn, last turn]`, the last turn -1 for the current ruler. It belongs to the
+`PlanetProperties` part of the planet (Planet `this+0x60`): the container at `+0x11C`
+(`Planet:372`, its head pointer), begin at `+0x128`. A colony starts with its founder's entry. A
+conquest (`0x004EDA60`) sets the last entry's last turn to the turn before and appends `[new
+owner, 0, turn, -1]`.
+
+**Each tick** (`0x004F4660`) computes a gain of 1, plus 10% of the planet's effective soldiers per
+citizen, plus its propaganda offices (trait 35 on top), and hands it to `0x004EDBC0`. The current
+ruler's entry gains it; every other entry loses it and is dropped at 0; each is clamped to 0..100,
+and the ruler's own is trimmed when the total passes 100. A planet with no citizens keeps only its
+owner's entry (`0x004EDAD0`).
+
+**A citizen's loyalty** (`0x004ED270`) is 100 less the pull of every other ruler in the list,
+clamped to 0..100. A ruler pulls with its whole influence on a citizen that arrived on or before
+its rule began, with `min(100, last - arrived) / min(100, last - first)` of it on one that arrived
+during the rule, and not at all on one that arrived after. A citizen of another origin feels half.
+A bio-bomb penalty, held per civ on the ruler (`Owner+0x12C`, keyed by the citizen's origin),
+comes off last. The origin is the citizen's owner field (`+8`, bytes 3-6 of the nine-byte save
+record), which keeps the civ it was born under through a conquest. The arrival turn is `+12`,
+the u16 at byte 7 of the save record.
+
+**A planet's loyalty** (`0x004F47A0`, `PlanetProperties` vtable slot `0x78`) is the mean over its
+citizens, 100 with none. Only at exactly 100 does it add the halved soldier term, the propaganda
+term, the float at `Owner+0x308` and trait 36, which is the loyalty bonus.
+
+**Rebellion** (`0x004F9970`) reads that loyalty after the tick's step. Below 30 it adds 1 to the
+u16 at `PlanetProperties+0x134` (`Planet:396`); at 30 or more it clears it; above 3 it rolls a
+rebellion weighted by the counter and the planet's soldiers.
+
+**The save.** `PLPR` (version 0x13) carries all of it between `PROD` and `ENLI`: the eight-slot
+population history, the `Planet:368` counter, the list's count and entries, the rebellion counter,
+then the resource deposit. One ruler makes the 51-byte block `merge_orders` calls the settled
+block, and each further ruler adds 16 bytes. Its "age" field is the first ruler's influence, so the
+developed save's `61.23 / 44.72` for ages 47 / 41 were soldiers raising it faster than 1 a turn.
+The save parser lost `PROD` and `ENLI` on a planet with two rulers, whose 67-byte gap passed its
+64-byte search window; the window is 256 bytes now.
+
+**The capture that moves it** is `capture_live_invade`: civ 656 takes planet #384 from 660 in the
+turn-125 tick, with 5 unranked soldiers on 16 citizens, every one of 660's origin:
+
+| tick | 660's influence | 656's influence | loyalty, derived | `Planet:396` |
+|---|---|---|---|---|
+| before | 100.0, turns 0 to -1 | | 100.00 | 0 |
+| 125 | 100.0, turns 0 to 125 | 0.0, from 126 | 23.81 | 0 |
+| 126 | 95.906 | 4.094 | 26.93 | 1 |
+| 127 | 91.812 | 8.188 | 30.05 | 0 |
+| 128 | 87.718 | 12.282 | 33.17 | 0 |
+| 129 | 83.623 | 16.377 | 36.29 | 0 |
+
+The step is 4.094, exactly 1 + 10 x 4.9506 / 16, the manual's figure for 5 soldiers. The
+rebellion counter checks the derivation at the line: it reads 1 after the tick that leaves 26.93
+and clears after the tick that leaves 30.05. `capture_live_academy` is the same conquest with an
+Academy's ranked soldiers: the step is 4.70, the turn-126 tick leaves 30.67, and the counter stays
+0. Those are the only planets with two rulers in `sim/corpus`, and all eight of their ticks agree.
+
+`sim/load.py` reads the list and the counter (`merge_orders.influence_of`) and sets each planet's
+loyalty with `sim.economy.planet_loyalty`, without the bio-bomb penalty.
+
+[ ] Find where the save carries the bio-bomb loyalty penalty: `Owner+0x12C` is a map keyed by civ,
+read through `0x005343A0`, its u16 at `+0x24` of each node.
+
+[ ] Read planet #384's loyalty on screen from `capture_live_invade_t0129.after`; the derivation
+gives 36.29%.
+
+### `Planet:368` is a turn counter; loyalty is derived (August 2026)
 
 **RESOLVED: `Planet:368` == `min(8, currentTurn - Planet:92 + 1)`.** It is turns since the
 planet last changed hands, capped at 8, and it carries no information that `Planet:92` and the
-turn counter do not already carry. **It is not loyalty**, and the "civil disorder" the client
-shows on a freshly conquered planet is not here either.
+turn counter do not already carry. **It is not loyalty**, which is derived from the conqueror
+list (above).
 
 **A garrison makes no difference to it**, the discriminating test, run per turn:
 
@@ -1922,12 +1994,11 @@ Identical, +1 per turn, on the same turns. This was written up a few hours earli
 the turn-counter hypothesis recorded as the open question. Per-turn sampling answers it against
 the more interesting reading, which is the way that usually goes.
 
-[ ] **Loyalty and corruption are still not located**, the conquest A/B that made this field
-findable did not turn up either of them. What it DID rule out: `Planet:100` bytes 0-2, the
-long-standing candidate, read `100/100/100` on freshly captured planets exactly as on planets
-held for 268 turns. Whatever the client is rendering as loyalty is derived, held off-object, or
-in a field that does not move on capture. Corruption is derived, the manual's formula over planet
-count and reputation (`docs/Fast_Sim_Plan.md` §5b); loyalty is still not located.
+[x] **Loyalty and corruption are still not located.** Both are derived. Loyalty comes from the
+conqueror list at `Planet:384` and each citizen's origin and arrival turn (the section above).
+Corruption is the manual's formula over planet count and reputation (`docs/Fast_Sim_Plan.md`
+§5b). `Planet:100` bytes 0-2, the old candidate, read `100/100/100` on freshly captured planets as
+on planets held for 268 turns.
 
 [ ] A single out-of-trend sample here is a TORN READ, not a signal: #476 read 8, 8, 7, 8 on
 consecutive turns with nothing happening to it.
@@ -1935,7 +2006,7 @@ consecutive turns with nothing happening to it.
 The historical observations below still hold and were the first clue.
 
 **Why it took until now: every planet reads the same value until one changes hands.** That is
-the same reason loyalty and corruption are still listed as unlocated below, a whole-galaxy
+the same reason loyalty went unlocated for so long, a whole-galaxy
 survey has nothing to correlate against when all 525 planets agree. A conquest breaks the tie,
 and this project could not conquer anything until August.
 
@@ -1954,18 +2025,20 @@ and time restores it, and **conquest knocks it down further than colonisation** 
 against a new colony's 5). It also explains the wild change frequency noted then (525/525
 planets on some turns, 1/525 on others): it only moves on planets that are still settling.
 
-This is the memory side of what the client shows as loyalty, and of the "civil disorder"
-readout that replaces corruption on a freshly conquered planet.
+It moves with a conquest, as loyalty does, but carries nothing loyalty needs.
 
-[ ] **NOT disambiguated from a plain "turns since acquisition, capped at 8" counter.** Both
+[x] **NOT disambiguated from a plain "turns since acquisition, capped at 8" counter.** It is
+that counter: the per-turn test at the top of this section climbed at the same rate with and
+without a garrison, and `0x004F7D80` reads it as the u32 after the population history. Both
 fit every reading taken. The discriminating test is whether anything but time moves it: sample
 it EVERY turn on two fresh captures, one garrisoned and one not, and compare the climb rates.
 The two above recovered within 11 turns while carrying garrisons of 6 and 0, which is weak
 evidence against the garrison mattering, but the samples were 11 turns apart and could not
 have seen a rate difference.
 
-[ ] `Planet:396` read 1 on the captured planet and 0 once it had settled, and 0 on the
-controls throughout. Its annotation calls it "likely appearance / render data" because every
+[x] `Planet:396` read 1 on the captured planet and 0 once it had settled, and 0 on the
+controls throughout. It is the rebellion counter, the u16 at `PlanetProperties+0x134`: turns in
+a row below 30% loyalty, cleared at 30% (the section above). Its annotation calls it "likely appearance / render data" because every
 non-zero value decodes as a plausible float; a 1/0 that tracks conquest does not. Worth a look
 as a "recently taken" flag.
 
@@ -2305,8 +2378,8 @@ flags or counts rather than objects.
 
 **Resolved, `Planet:100` byte 3 is the recruitment rate.** The field reads `0x3C646464` on the
 military-base planet and `0x00646464` on every other planet including uncolonised ones. Bytes 0–2
-are `100/100/100`, matching a UI showing loyalty at 100% everywhere, so one of them is still the
-leading loyalty candidate. **Byte 3 is the recruitment-rate percentage**, confirmed in a later game
+are `100/100/100`, matching a UI showing loyalty at 100% everywhere; they do not move on a
+conquest, and loyalty is derived ("Loyalty is derived from the conqueror list"). **Byte 3 is the recruitment-rate percentage**, confirmed in a later game
 against a UI showing 0% (minimum), 20% and 40% (maximum) on three planets:
 
 | Planet | UI recruitment rate | `Planet:100` byte 3 |
@@ -2434,7 +2507,8 @@ does not follow from it.
 
 **Unresolved, the float in the `Planet:384` element.** It read `61.23 / 44.72 / 13.0` in a
 developed save and exactly `1.0` on both homeworlds in a fresh one, so it starts at 1.0 and grows:
-a progress value or multiplier rather than a static property.
+a progress value or multiplier rather than a static property. It is the ruler's influence ("Loyalty
+is derived from the conqueror list").
 
 ### Colonising a second system settled two of the three (July 2026)
 
@@ -2477,9 +2551,11 @@ targets rather than a second live counter.
 
 **The `Planet:384` float is planet age in turns, confirmed by pre-registered prediction.** At turn 10
 it read `10.0 / 10.0 / 0.0` for ages `10 / 10 / 0`. The prediction that three further turns would give
-`13.0 / 13.0 / 3.0` was then verified exactly on all three planets. Since the developed save's
-`61.23 / 44.72 / 13.0` does not fit ages computed as `47 / 41 / 15`, the turn number *derived* in that
-save was probably wrong rather than this reading, the turn counter had not been located at that point.
+`13.0 / 13.0 / 3.0` was then verified exactly on all three planets. The developed save's
+`61.23 / 44.72 / 13.0` against ages `47 / 41 / 15` is explained: the float is the ruler's influence,
+which grows 1 a turn plus a soldier and propaganda term, up to 100, so it equals the age only on a
+planet without either. The three fit a turn two below the one derived there (ages 45 / 39 / 13),
+with soldiers raising the first two.
 
 **`Planet:352 … 364` is a population history ring.** Read as **eight `uint16` slots, newest first,
 one per turn, capped at 8 entries**. Bit `0x1000` marks any entry older than the current value:
@@ -2567,11 +2643,9 @@ fall in 270–279 before being read**, it is 271. Space is non-zero on all 525 p
 (range 156–450), so it is intrinsic to the planet rather than a consequence of colonisation.
 The low 16 bits are `0` on 509 of 525 planets and remain unidentified.
 
-**Still not located:** loyalty (100% on all three) and corruption
-(+0.68% / −0.61% / −0.47%). Searched as integers, scaled integers, 16-bit halves, bytes and
-floats across `Planet` and `PlanetProperties`, and as vector element counts. Loyalty at a
-uniform 100% carries no discriminating information and cannot be found until one planet
-differs; corruption is plausibly derived at display time.
+Loyalty (100% on all three) and corruption (+0.68% / −0.61% / −0.47%) have no field either.
+Both are derived: loyalty from the conqueror list at `Planet:384` ("Loyalty is derived from the
+conqueror list"), corruption from planet count and reputation (`docs/Fast_Sim_Plan.md` §5b).
 
 [x] **UNDERSTAND REPUTATION BEFORE MULTIPLAYER.** Reputation is a signed word at `+0x10`
 of each relation record inside `Owner:248`, added to by `AddReputation` `0x00534D50`
@@ -2620,7 +2694,7 @@ was not traced.
 [ ] Explain the defender gain of 11.656 in `capture_twosided_staged_fork_badguy_t0110`, where
 the scores before the tick give 12.601 by the same rule that matched every other battle.
 
-[ ] test whether loyalty and corruption are derived rather than stored, populate one planet's population, buildings and military fully, and check whether both values follow from those inputs without any field of their own changing. Corruption does (`docs/Fast_Sim_Plan.md` §5b); loyalty is untested.
+[x] test whether loyalty and corruption are derived rather than stored, populate one planet's population, buildings and military fully, and check whether both values follow from those inputs without any field of their own changing. Corruption does (`docs/Fast_Sim_Plan.md` §5b). Loyalty does too, from the conqueror list and the citizens (`0x004ED270`, `0x004F47A0`); the list's influences are its stored inputs, moved by soldiers and propaganda each tick.
 
 ### Governor, located and confirmed (July 2026)
 

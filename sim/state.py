@@ -161,7 +161,8 @@ class Planet:
     military_cost: int = None       # food per soldier
     military_food: int = None       # the military store
     governor: int = 0
-    loyalty: float = 100.0          # percent; not found in a save, so loaded planets read 100
+    loyalty: float = 100.0          # percent, derived from rulers and the citizens on load
+    rulers: list = field(default_factory=list)  # [(owner, influence, first turn, last turn)]
     prior_owner: int = 0            # who held it before a conquest
     unrest: int = 0                 # turns in a row below the rebellion line
     blight: int = 0                 # space bio-bombs have made uninhabitable

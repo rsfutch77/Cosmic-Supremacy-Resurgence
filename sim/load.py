@@ -26,6 +26,7 @@ import activity                                                 # noqa: E402
 import exsy                                                     # noqa: E402
 
 from . import state as st                                       # noqa: E402
+from . import economy as ec                                     # noqa: E402
 
 HIGH_WATER_AT = 8                   # SAVE payload +0
 SHPR_DESIGN_AT = 0
@@ -226,12 +227,19 @@ def _planets(blob, tree, galaxy):
                     gaps.append(f'planet {oid}: PROD does not read')
                 else:
                     planet.production.progress = mo.progress_of(plpr) or 0
-            at = mo._settled_at(blob, plpr_sec)
-            if at is not None:
+            block = mo._block_at(blob, plpr_sec)
+            if block is not None:
+                at = block[0]
                 planet.pop_history = list(struct.unpack_from(
                     f'<{HISTORY_SLOTS}H', blob, at + mo.SETTLED_POP_OFF))
                 planet.history_len = struct.unpack_from(
                     '<I', blob, at + mo.SETTLED_COUNTER_OFF)[0]
+                planet.rulers, planet.unrest = mo.influence_of(blob, plpr_sec)
+                planet.loyalty = ec.planet_loyalty(
+                    [(mo.arrived(c), c[1]) for c in cz or []], owner, planet.rulers)
+                taken_from = [r for r in planet.rulers if r[3] != mo.RULING]
+                if taken_from:
+                    planet.prior_owner = max(taken_from, key=lambda r: r[3])[0]
             planet.military_cost, planet.military_food = struct.unpack_from(
                 '<II', plpr, PLPR_MILITARY_COST)
 

@@ -115,7 +115,8 @@ def read_header(blob: bytes, off: int):
 # walker searches the whole payload for where a run of sections begins and
 # records skipped bytes on the parent as `prologue`/`epilogue`.
 
-GAP_WINDOW = 64       # bytes past one run's end to search for the next
+GAP_WINDOW = 256      # bytes past one run's end to search for the next; a taken planet's
+                      # `PLPR` holds 35 + 16 a ruler between `PROD` and `ENLI`
 MIN_COVERAGE = 0.5    # fraction of a payload a run must tile, so float data that spells a tag is rejected
 
 

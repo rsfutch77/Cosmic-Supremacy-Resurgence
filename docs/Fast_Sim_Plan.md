@@ -78,7 +78,7 @@ The market's per-tick decay sits beside the score rebuild at `0x56D24A`.
 | Production, income, food | Stat Tables, manual (`production-and-queuing`, `food-storage-size-calculation`) | Formulas in the manual; check against the oracle |
 | Population growth, max population | Memory report (`Planet:104`, `Planet:144`), measured series | Max population known; growth rate to fit from the oracle |
 | Corruption | Manual `corruption`: empire-wide from planet count and reputation, scaled per planet by population | Formula in the manual |
-| Loyalty | Manual `loyalty-corruption`: military and Propaganda Offices raise it, conquest lowers it, rebellion below 30% | Qualitative; the math needs fitting. Not located in memory |
+| Loyalty | Manual `loyalty-corruption`: military and Propaganda Offices raise it, conquest lowers it, rebellion below 30% | Derived from the conqueror list in `PLPR` and each citizen's origin and arrival (Memory report, `Planet:384`) |
 | Reputation | Manual `combat-preconditions`, `score-reputation-and-rank` | Not an objective, but it feeds corruption (below) |
 | Research | `ai_player/research.py`, manual `science-wastage` | Cost model open: re-dump the table on a released-version client |
 | Market | `v0.5-market-sales`: `RSMA`, quote formula, 1,000-unit decay per tick | Solved, in `main` |
@@ -475,9 +475,20 @@ These follow their tooltips.
 to their old ruler in proportion to how long it held them, up to 100 turns. Loyalty grows 1
 point a turn plus 10% of the planet's effective soldiers per citizen, and a citizen born
 there is wholly loyal. A resisting planet loses its shortfall below 100% from its output,
-and below 30% for more than three turns it may rebel back. The client's loyalty field was
-never found, so a loaded planet reads 100%. Propaganda offices raise a loyal planet's output
-10% for 10 citizens each.
+and below 30% for more than three turns it may rebel back. Propaganda offices raise a loyal
+planet's output 10% for 10 citizens each.
+
+**Loyalty is derived, and loaded.** The client keeps a list of each planet's rulers with an
+influence apiece, carried in `PLPR` between `PROD` and `ENLI` and read by
+`merge_orders.influence_of`; the ruler's own grows by the gain above each tick and every other
+loses it. A citizen's loyalty is 100 less every other ruler's influence, in full on a citizen
+there before that rule, by the share of the rule it lived through on one born during it, and
+halved on a citizen of another origin; a planet's is the mean
+(`economy.planet_loyalty`). `sim/load.py` sets each planet's loyalty, rulers and rebellion
+counter from the save; `capture_live_invade` moves all three (Memory Reconstruction Report,
+"Loyalty is derived from the conqueror list"). The simulator still steps one loyalty figure
+per planet, which matches the client when every citizen predates the old ruler, and starts a
+conquest from the turns the old ruler held it rather than its influence.
 
 **Score, reputation and crew experience**, from the manual. Crew experience is measured:
 the turn-110 battle's defending fighters gained 1.847 each, 2 x 545 / 590, which is every kind
@@ -675,7 +686,11 @@ soldiers to crew them its ships never fill. It is a probe, not a training oppone
 - [x] Loyalty from stationed soldiers, their training and upkeep (§5b)
 - [x] Reputation, score and crew experience (§5b)
 - [x] Conquered planets' loyalty and rebellion (§5b), with the rebellion chance invented
-- [ ] Find a planet's loyalty in the save, on a conquered planet
+- [x] Find a planet's loyalty in the save, on a conquered planet: derived from the conqueror
+      list in `PLPR`, loaded (§5b, "Loyalty is derived, and loaded")
+- [ ] Step the conqueror list in the simulator instead of one loyalty figure: a conquest
+      appends the new ruler at 0 and the old keeps its influence, and citizens born during a
+      rule feel only their share of it
 - [x] Fog to the client's rules (§5b)
 - [x] Bio-bombs (§5b), from the manual
 - [ ] Facilities lost to blighted space: the manual says bio-bombing destroys them
