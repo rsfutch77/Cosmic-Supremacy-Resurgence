@@ -340,27 +340,37 @@ def import_without_bytecode(name):
 
 
 def save_via_message() -> bool:
-    """Whether the save path posts a window message instead of injecting.
+    """Whether the save path sends a window message instead of injecting.
 
-    Set by CS_SAVE_VIA_MESSAGE. The message path saves only on a client carrying
-    a resident handler that calls SaveGame on the posted message.
+    CS_SAVE_VIA_MESSAGE set to 1/true/yes/on forces the message path, and to
+    0/false/no/off forces injection. Unset, the message path is taken when the
+    running client carries the handler `patch_save_message.py` adds, which
+    every client a release ships does.
     """
-    return os.environ.get("CS_SAVE_VIA_MESSAGE", "").strip().lower() in (
-        "1", "true", "yes", "on")
+    value = os.environ.get("CS_SAVE_VIA_MESSAGE", "").strip().lower()
+    if value in ("1", "true", "yes", "on"):
+        return True
+    if value in ("0", "false", "no", "off"):
+        return False
+    try:
+        import trigger_save_message as tsm
+        return tsm.client_has_handler()
+    except Exception:
+        return False
 
 
 def trigger_save(name, gameid=0, timeout=30):
     """Make the running client save. Returns (exit code, the tool's output).
 
-    The default calls SaveGame in a remote thread inside the client. With
-    CS_SAVE_VIA_MESSAGE set it posts a window message instead (see
-    trigger_save_message). trigger_save runs in process, because in the frozen
-    launcher sys.executable is the launcher itself; its arguments go in through
-    sys.argv.
+    A client carrying the save handler is sent a window message and saves on
+    its own main thread (see save_via_message and trigger_save_message). Any
+    other client has SaveGame called in a remote thread. trigger_save runs in
+    process, because in the frozen launcher sys.executable is the launcher
+    itself; its arguments go in through sys.argv.
     """
     if save_via_message():
         import trigger_save_message as tsm
-        ok, detail = tsm.post_save(gameid)
+        ok, detail = tsm.send_save(gameid, timeout=timeout)
         return (0 if ok else 1), detail + "\n"
 
     import contextlib
