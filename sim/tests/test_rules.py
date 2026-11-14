@@ -116,6 +116,16 @@ def loyalty_checks():
     p.facilities = {ec.MILITARY_CAMP: 1}
     ec.train(p)
     check('a camp doubles training to 0.2 a turn', [round(x, 3) for x in p.military_xp], [1.4] * 4)
+    # The client's derivation (0x004ED270): BAD ruled turns 0..125, DEMO since 126.
+    rulers = [(BAD, 80.0, 0, 125), (DEMO, 20.0, 126, -1)]
+    check('a citizen there before a rule feels all of it',
+          ec.citizen_loyalty(0, BAD, DEMO, rulers), 20.0)
+    check('one born halfway through feels half of it',
+          ec.citizen_loyalty(75, BAD, DEMO, rulers), 60.0)
+    check('one born after it feels none of it', ec.citizen_loyalty(126, DEMO, DEMO, rulers), 100.0)
+    check('one of another origin feels half', ec.citizen_loyalty(0, 7, DEMO, rulers), 60.0)
+    check('a planet is the mean of its citizens',
+          ec.planet_loyalty([(0, BAD), (126, DEMO)], DEMO, rulers), 60.0)
 
 
 def combat_checks():

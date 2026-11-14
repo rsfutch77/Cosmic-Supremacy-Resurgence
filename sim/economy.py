@@ -61,6 +61,8 @@ LOYALTY_PER_SOLDIER = 10        # percent, per effective soldier per citizen
 PROPAGANDA_OFFICE = 12
 PROPAGANDA_LOYALTY, PROPAGANDA_CITIZENS = 10, 10    # +10% for 10 citizens each
 LOYALTY_GROWTH = 1.0            # points a turn on a resisting planet
+INFLUENCE_SPAN = 100            # turns of a rule that count toward its influence
+FOREIGN_INFLUENCE = 0.5         # a ruler's pull on a citizen of another origin
 BLIGHT_RECOVERY = 1             # bio-blighted space that recovers a turn
 REBELLION_LINE, REBELLION_GRACE = 30, 3
 REBELLION_CHANCE = 20           # percent a turn once the grace is up; not given anywhere
@@ -205,6 +207,35 @@ def loyalty_bonus(p, civ=None):
         swayed = min(len(p.citizens), PROPAGANDA_CITIZENS * offices)
         bonus += traits.pct(civ, 35, PROPAGANDA_LOYALTY * swayed / len(p.citizens))
     return bonus + traits.value(civ, 36)
+
+
+def citizen_loyalty(arrived, origin, ruler, rulers):
+    """One citizen's loyalty to the ruler, the client's 0x004ED270.
+
+    Every other ruler in the planet's conqueror list pulls it down by that
+    ruler's influence: all of it on a citizen there before the rule began,
+    the share of the rule it lived through (each span capped at 100 turns) on
+    one that arrived during it, none on one that came after. A citizen of
+    another origin feels half. The bio-bomb penalty is not applied."""
+    pull = 0.0
+    for owner, influence, first, last in rulers:
+        if owner == ruler:
+            continue
+        if arrived <= first:
+            share = influence
+        elif arrived <= last:
+            share = influence * min(INFLUENCE_SPAN, last - arrived) / min(INFLUENCE_SPAN, last - first)
+        else:
+            share = 0.0
+        pull += share if origin == owner else share * FOREIGN_INFLUENCE
+    return min(100.0, max(0.0, 100.0 - pull))
+
+
+def planet_loyalty(citizens, ruler, rulers):
+    """A planet's loyalty, the mean over (arrived, origin) citizens; 100 with none."""
+    if not citizens:
+        return 100.0
+    return sum(citizen_loyalty(t, o, ruler, rulers) for t, o in citizens) / len(citizens)
 
 
 def conquered(g, p, owner):
