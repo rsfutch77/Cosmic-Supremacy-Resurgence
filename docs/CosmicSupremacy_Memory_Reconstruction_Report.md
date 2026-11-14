@@ -677,9 +677,18 @@ one record on exactly the discovery turn, containing exactly the discovered civ,
 and `Owner:200` both cleared a comparable bar and were later falsified, so it is recorded as
 unconfirmed.
 
-[ ] finish the write test: empty `0x0082AA28`, read the box (alt-tab to force a repaint), restore
-[ ] check whether the box is *derived* from this vector or from the owners of known planets, a
-galaxy-wide "known planets" list may be the real primary structure
+**A load rebuilds the vector from the blob.** BadGuy's view of `d9` came up (14 November 2026)
+with one record, `{GoodGuy (656), Planet 265 "GoodGuy's HQ"}`: the civ its `KNPL` names, and that
+civ's capital rather than where they met. So the vector is derived, not stored, and `KNPL` (Report,
+"The trailing dword of every `KNPL` payload is unreliable") is the stored list of known civs. No
+instruction names `0x0082AA28` as an immediate, so it is a member of a larger global.
+
+[ ] finish the write test: the vector was emptied in that client (end set to begin) and left for
+Robert to read the box after alt-tab. A box still listing GoodGuy reads `KNPL` or the owners of
+known planets; an empty one reads the vector. Restore with the triple `0xD156340, 0xD156348,
+0xD156348`
+[ ] check whether the box is *derived* from this vector or from `KNPL`, which the write test above
+answers
 
 #### Plan for loading known players: the ship shuffle
 
@@ -1576,7 +1585,7 @@ This proves that external memory manipulation is a viable approach for multiplay
 | `0x0086F1A1` | byte | Sync flag, 0=paused, 1=running |
 | `0x008578E8` | int32 | **Turn number**, read 48 with the UI showing turn 48, and 49 after one advance |
 | `0x00857904` | ptr | **Local player**, reference node whose `node[0]` is the human civ's `Owner` at `tag − 8`. Confirmed across two independent games (`Owner#641`, then `Owner#634` = `'GoodGuy'`). This answers "which `Owner` am I" without needing a war to read `Treaty:4` |
-| `0x0082AA28` | vector | **Known players**, `[begin, end, cap]`; one 8-byte `{Owner*, Planet*}` record per discovered rival, empty until first contact. Write test still pending |
+| `0x0082AA28` | vector | **Known players**, `[begin, end, cap]`; one 8-byte `{Owner*, Planet*}` record per discovered rival, empty until first contact, rebuilt on load. Write test left with Robert |
 | `0x00871430+` | mixed | Global serializer buffer (app context, file paths, UI config) |
 
 **`0x00844B68` is *not* the local player**, though it held the same reference node in the first

@@ -1023,7 +1023,8 @@ view of `d9` came up at turn 181, and client memory read GoodGuy's home planets
 as populations 8, 0, 8, 0, 10, 0, with the two later colonies unowned.
 
 [ ] **Confirm on screen that the map draws them**, and that the planet sphere's
-size follows population.
+size follows population. BadGuy's view of `d9` with the counters zeroed loaded
+in the client on 14 November 2026, clock held, for Robert to look at.
 
 [x] **A view keeps the live header fields of a rewritten `PLPR`**: the output
 rates at `+4`, food and production counters, and, when the owner is
