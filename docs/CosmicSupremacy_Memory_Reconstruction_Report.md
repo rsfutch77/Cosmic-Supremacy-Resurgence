@@ -1926,7 +1926,8 @@ the more interesting reading, which is the way that usually goes.
 findable did not turn up either of them. What it DID rule out: `Planet:100` bytes 0-2, the
 long-standing candidate, read `100/100/100` on freshly captured planets exactly as on planets
 held for 268 turns. Whatever the client is rendering as loyalty is derived, held off-object, or
-in a field that does not move on capture.
+in a field that does not move on capture. Corruption is derived, the manual's formula over planet
+count and reputation (`docs/Fast_Sim_Plan.md` §5b); loyalty is still not located.
 
 [ ] A single out-of-trend sample here is a TORN READ, not a signal: #476 read 8, 8, 7, 8 on
 consecutive turns with nothing happening to it.
@@ -2572,7 +2573,7 @@ floats across `Planet` and `PlanetProperties`, and as vector element counts. Loy
 uniform 100% carries no discriminating information and cannot be found until one planet
 differs; corruption is plausibly derived at display time.
 
-[ ] **UNDERSTAND REPUTATION BEFORE MULTIPLAYER.** Reputation is a signed word at `+0x10`
+[x] **UNDERSTAND REPUTATION BEFORE MULTIPLAYER.** Reputation is a signed word at `+0x10`
 of each relation record inside `Owner:248`, added to by `AddReputation` `0x00534D50`
 (`__thiscall(Owner* other, short delta)`, clamped to 100 on the high side only). Static
 analysis found **exactly one caller**, conquest resolution `0x004F6DE0`, reached from
@@ -2590,7 +2591,8 @@ That is NOT sufficient for multiplayer, for two reasons:
 Specifically still open: the forecast formula the declare-war dialog displays
 (`0x004430F0`, identity confirmed, arithmetic not closed, trace `[esp+0x2c]`/`[esp+0x30]`
 through the `[0x0085795C]` loop); which side's record the conquest writer updates; and how
-reputation enters the score calculation.
+reputation enters the score calculation. **Answered** by the two items below: reputation is
+`Owner:32`, the per-relation word is inert, and `0x00518480` is the forecast's arithmetic.
 
 **Reputation is `Owner:32`, and the client keeps it (November 2026).** The engine applies the
 manual's corruption formula (`0x0053A0D0`) to an empire reputation float at `Owner:32`, and the
@@ -2618,7 +2620,7 @@ was not traced.
 [ ] Explain the defender gain of 11.656 in `capture_twosided_staged_fork_badguy_t0110`, where
 the scores before the tick give 12.601 by the same rule that matched every other battle.
 
-[ ] test whether loyalty and corruption are derived rather than stored, populate one planet's population, buildings and military fully, and check whether both values follow from those inputs without any field of their own changing.
+[ ] test whether loyalty and corruption are derived rather than stored, populate one planet's population, buildings and military fully, and check whether both values follow from those inputs without any field of their own changing. Corruption does (`docs/Fast_Sim_Plan.md` §5b); loyalty is untested.
 
 ### Governor, located and confirmed (July 2026)
 
@@ -2692,7 +2694,7 @@ now use `Owner:*`:
 |---|---|---|
 | `[civ+0x38]` | `Owner:4` | Current science topic (tech id); `-1` = none (“No Research”) |
 | `[civ+0x40]` | `Owner:12` | Current research progress |
-| `[civ+0x54]` / `[civ+0x58]` | `Owner:32/36` | Science output / surplus (floats) |
+| `[civ+0x54]` / `[civ+0x58]` | `Owner:32/36` | Reputation / reputation pending this tick (floats) |
 
 Research-topic display and the `No Research` branch are at `0x00554DE1` (`cmp [civ+0x38], -1`).
 
