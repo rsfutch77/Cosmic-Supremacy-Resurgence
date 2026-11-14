@@ -366,7 +366,7 @@ PLNT payload:  u32 objectId ; f32 x, z, y ; u32 ownerObjectId ; f32 ;
 
 **An injected civ was present in the diplomacy list but absent from the overview score list, because a clone inherited its donor's `Owner:4`.** `Owner:4` is the `u32` that ends the `OWNR` payload (see the layout above). `add_civ`'s blanket `replace_u32` rewrites the donor's *object id*, which this is not, so the clone kept it. **`inject_civ.py` now assigns `max(existing) + 1`**, and `--userid` forces a value, pass one another civ already holds and the bug comes back, which is how the control below was built.
 
-*How it was found, before anything was run.* Ruled out the server (no score-related `action=` has ever reached the stub, the log carries only `savegame`, `testconnection`, `listcivnames`, `listcoa`, `getcoa`, so the list is client-side); ruled out a missing per-civ section (`OWPR`, `CVTR`, `SERV`, `GOVS`, `ADMS`, `SPQS`, `USSE` are byte-identical across all three civs in a turn-5 capture, and score itself lives on the object at `Owner:28`); ruled out `KNPL` (at turn 185 every civ knows every other, the injected one included, 36-byte records keyed by the other civ's object id, second word the turn contact was made). What was left was the one per-civ field a clone duplicates: across three separately generated galaxies it reads **20 for `GoodGuy` and 21 for `BadGuy`, always**, and every injected civ carried its donor's value.
+*How it was found, before anything was run.* Ruled out the server (no score-related `action=` has ever reached the stub, the log carries only `savegame`, `testconnection`, `listcivnames`, `listcoa`, `getcoa`, so the list is client-side); ruled out a missing per-civ section (`OWPR`, `CVTR`, `SERV`, `GOVS`, `ADMS`, `SPQS`, `USSE` are byte-identical across all three civs in a turn-5 capture, and score itself lives on the object at `Owner:28`); ruled out `KNPL` (at turn 185 every civ knows every other, the injected one included, 36-byte records keyed by the other civ's object id, third word the turn contact was made). What was left was the one per-civ field a clone duplicates: across three separately generated galaxies it reads **20 for `GoodGuy` and 21 for `BadGuy`, always**, and every injected civ carried its donor's value.
 
 *The A/B that confirmed it.* Two `.dat`s built from the same turn-185 capture, **differing in four bytes**, `Ceti`'s `Owner:4`, 20 (colliding with `GoodGuy`) versus 22. Same galaxy, same scores, same contact state, loaded one after the other:
 
@@ -941,7 +941,7 @@ the viewer's own remembered map, and only the viewer's explored systems show the
 remembered half. That is visible only from a seat that has explored the system,
 which is itself the confirmation.
 
-[ ] **Clearing another civ's remembered map is not fog-correct, and it is what
+[x] **Clearing another civ's remembered map is not fog-correct, and it is what
 `wipe_civ.forget_civ` currently does.** Strictly, a civ that has not looked again
 should keep remembering what it last saw: this section already records that
 `EXSY` is a cache which goes stale on purpose, and that one civ held a planet as
@@ -951,7 +951,14 @@ because a planet anybody may now colonise, carrying a dead empire's name and a
 capital marker, misleads a player about the board rather than about history. The
 fog-correct version clears only the wiped civ's own table and lets rivals keep
 theirs until they re-scout. Not attempted, and it needs a rule for what a rival
-sees when they do look again.
+sees when they do look again. **Fixed** (14 November 2026): `forget_civ` clears
+the wiped civ's own table, and in a rival's only the rows `fog.project` serves
+live, a system looked at this turn or one the rival holds a planet in. A row
+from an earlier look keeps the dead empire, and the rival's view shows it as
+remembered. The rule for looking again is the engine's: it refreshes the row on
+the next look, and the row then reads the planet empty. `--delete-owner` still
+clears every table, since it refuses a galaxy where another civ names the wiped
+one (`test_fog.py`).
 
 The "206 against the correct 202" above is not staleness. In `galaxy_demo`
 Neighbor (206) joined as a clone of BadGuy (202), before `joins` emptied a
@@ -984,17 +991,18 @@ and nothing served it.
 
 `server/fog.py` serves it. A system is stale for a civ when its `EXSY` turn is
 before the blob's turn and the civ holds no planet in it. Each planet there
-whose live owner or population differs from memory is rewritten:
+that is or was colonised is served as remembered:
 
-- remembered empty: owner 0, name cleared, no citizens, soldiers or
-  facilities, and the `PROD` of a never-colonised planet
-- remembered owned: owner set to the remembered civ, citizens cut or padded
-  to the remembered population; soldiers and facilities go when the owner
-  changed, and the name becomes the remembered one
+- remembered empty: owner 0, name cleared, no citizens
+- remembered owned: owner and population from memory, every citizen a farmer
+  of that owner; the name becomes the remembered one when the owner changed
+- either way: no soldiers or facilities, the `PROD` of a never-colonised
+  planet, and the owner's running counters in the `PLPR` header at 0
 
-A planet is left live when the viewer owns it or has citizens on it, when
-memory names the viewer (the joiner case above) or a civ the galaxy does not
-hold, or when its `PLPR` does not walk.
+A planet whose memory names the viewer (the joiner case above) or a civ the
+galaxy does not hold keeps its live owner and population, with the same
+fields taken out. A planet is left live when the viewer has citizens on it or
+its `PLPR` does not walk.
 
 Nothing is added or removed, so a view keeps every object id, system and
 planet. It passes `screen_submission`'s galaxy check, the high-water id is
@@ -1003,8 +1011,8 @@ system-dropping `project_blob.py` above could not do.
 
 The referee projects each civ after the tick and publishes a view only for a
 civ whose view differs (`publish(..., views=)`, recorded under `views` on the
-galaxy document or in `state.json`). The relay's turn route sends a seated
-caller to its own view; `player_turn.served_blob` reads it from a folder store.
+galaxy document or in `state.json`). Every store and the relay serve a caller
+by `turn_store.served_copy`; `player_turn.served_blob` asks the store.
 Before the merge, `fog.restore` puts the authoritative planets back into each
 submission. A civ cannot order another civ's planet, so nothing is lost, and
 the merge then takes a fogged civ's orders exactly as an unfogged one's
@@ -1017,10 +1025,27 @@ as populations 8, 0, 8, 0, 10, 0, with the two later colonies unowned.
 [ ] **Confirm on screen that the map draws them**, and that the planet sphere's
 size follows population.
 
-[ ] **A view keeps the live header fields of a rewritten `PLPR`**: the output
+[x] **A view keeps the live header fields of a rewritten `PLPR`**: the output
 rates at `+4`, food and production counters, and, when the owner is
 unchanged, the facility list. Whether the stock client shows any of them for
-another civ's planet is not known.
+another civ's planet is not known. **Fixed** (14 November 2026): every colonised
+planet in a stale system is served as remembered, changed or not. The food
+store (`+15`), production progress (`+23`), recruitment rate (`+27`) and
+military store (`+32`) read 0, every citizen is a farmer of the remembered
+owner, and there are no soldiers, no facilities and an idle queue. The output
+rates, food store size and food per soldier stay, since they belong to the
+planet and the recon screen shows its base outputs. The manual's Planet-View
+screen covers only planets the player owns (`test_fog.py`).
+
+[ ] **A rival's planet in a system the viewer is in is served live**, counters,
+queue, soldiers and facilities included, and so is every other civ's `OWNR`:
+treasury, research, designs and its own `KNPL`. Whether the original server
+sent another civ's running state at all is not known; the client's screens
+show it only after a scan.
+
+[ ] **A remembered planet keeps four live bytes**: the byte between its soldiers
+and its facility list, the word after the facility list, and the governor id in
+the `PLNT`'s last `u32`. None is decoded.
 
 [x] **A caller without a seat is served the whole turn.** Under `first-use`
 that is every player before their first submission, and any signed-in user who
@@ -1035,9 +1060,24 @@ is current and was published with no views. Any other turn is refused
 deployed: a relay that refuses earlier turns while the referee still deletes the
 previous turn's views would stop a launcher caught in that window.
 
-[ ] **The folder store and `turn_server` do not enforce views.** A folder
+[x] **The folder store and `turn_server` do not enforce views.** A folder
 store's player reads the files directly, and `turn_server` serves every caller
-the turn.
+the turn. **Fixed** (14 November 2026): one rule, `turn_store.served_copy`,
+picks the copy for every store and the relay. A civ the views name gets its
+own; a roster civ they do not name gets the turn, which is its view; any other
+caller gets the view without news. A launcher reads through
+`served_turn`. `turn_server` takes the views as `POST /view/<n>/<civ>` before
+the turn, serves `GET /turn/<n>?civ=` by the rule and the referee's
+`?whole=1` whole, and a folder store keeps the previous turn's views as the
+relay does. The relay used to send a roster civ the views do not name to the
+view without news, which withholds that civ's own news; it follows the rule
+now, and the referee publishes the view without news whenever it publishes any
+view (`test_views.py`, `test_fog.py`, `test_relay_function.py`). The relay has
+to be redeployed for its half.
+
+`turn_server` has no authentication, so a caller who names another civ gets
+that civ's view, as it can already submit as any civ. A folder is readable
+whole by anyone who can open it; the views keep an honest launcher to its own.
 
 #### The trailing dword of every `KNPL` payload is unreliable
 
@@ -1056,7 +1096,8 @@ anywhere in the format.
 
 **The dword is the last record's custom colour** (`KNPL` record `+32`, below). The record's
 constructor (`0x532E60`) never sets it, so a civ that never picked a colour carries whatever was
-in memory, and the reader forces the top byte to `0xFF` (`0x533365`).
+in memory, and the reader forces the top byte to `0xFF` (`0x533365`). The record boundary is
+where the reader puts it: the colour is one `u32`, and the top byte is its alpha.
 
 Consequences. **Any blob comparison has to mask this dword**, or two honest computations of the same
 turn look different, which is exactly what a canonical hash must not do. The
@@ -1065,10 +1106,27 @@ with the final byte a flag in its own right. And it is worth sweeping the other 
 signature, which is cheap now that it is known: a field that changes between two otherwise identical
 runs, or whose top byte becomes `0xFF` after a load.
 
-[ ] `KNPL` is worth decoding properly rather than piecemeal, for this field. The second reason
+[x] `KNPL` is worth decoding properly rather than piecemeal, for this field. The second reason
 recorded here, that a `KNPL` still naming removed planets is why a fog-filtered blob fails to load,
 is **falsified**: its records are keyed by **civ** id rather than planet id despite the name, and
-dropping systems removes no civs. See "Filtering a galaxy" below.
+dropping systems removes no civs. See "Filtering a galaxy" below. **Decoded** (14 November 2026):
+`server/dev_tools/knpl.py` reads and writes the table whole, and every tracked fixture's 78 tables
+build back byte for byte (`test_knpl.py`). A record is the map key, then the members the reader
+`0x5332E0` walks: the civ's handle (the same id), the turn of first contact, the stance as a
+`u32`, a `u8` set on the declarer's side when war is declared, a `u16` and a `u8` set on the
+declarer's side in the war's first tick, an `i32` that is -1 until war and then 100, a `u16` set
+with them (149 in `d8`), a `u16` and a `u8` that read 0 everywhere, then the three display flags
+and the colour. First contact (`0x534F90`) passes the current turn and the opening stance: war
+under `waronly`, by team in a team game, else neutral.
+
+[ ] **Name the four war fields** at `+17`, `+19`, `+20` and `+24`. The captures place them on the
+declarer's side and the war's first tick, which fits the manual's "declared the war and attacked
+first" reputation rule; the code that reads them is not found.
+
+[ ] **`canonical.py` masks only the last record's colour.** Every record's colour is unset until
+a player picks one, so a civ that meets its second rival in a tick carries unset bytes in a record
+that is not the last, and a recomputed turn can differ there. Masking every record's colour changes
+the stored hash of every galaxy with three or more civs, so it waits for a hash version.
 
 [x] **NOT A DATA-LOSS BUG. It is an unbounded re-grant exploit (measured September 2026).** This
 item previously read "BUG, DATA LOSS, confirming the customisation popup overwrites server-restored
@@ -2282,8 +2340,8 @@ treaty list), so each layout below is the writer's and reader's, checked only fo
 - **A civ's stance** toward each civ it has met is in its `KNPL` v12: a `u32` count, then a
   36-byte record keyed by the other civ's id. The stance (0 neutral, 1 war, 2 cease-fire, 3
   peace, 4 alliance) is the `u32` at record `+12`: it reads 3 in `control_fork_played.dat` and 1
-  in `war_fork_played.dat`, the same fork after a declaration of war. The rest of the record is
-  not decoded.
+  in `war_fork_played.dat`, the same fork after a declaration of war. The whole record is in
+  `server/dev_tools/knpl.py`.
 - **`waronly`** (GSET index 29) reads in the client as two things: first contact sets the stance
   to war (`0x534FF3`), and the diplomacy screen's context menu adds "Propose New Treaty" greyed
   out (`0x4425BF`). The second does not hold in the UI: on `control_fork_played.dat`, `waronly
