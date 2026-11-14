@@ -785,8 +785,13 @@ defender the score and reputation gained. The attacker's copy names the defender
 their strength, which is what a player learned by sacrificing a ship. Stationed troops are not
 in it. `client/dev_tools/ai_player/intel.py` parses it.
 
-[ ] The `0x42` kind on the other items is not identified, and whether research and doctrine
-completions are the items that doubled the vector earlier is not confirmed.
+[x] The `0x42` kind on the other items is not identified, and whether research and doctrine
+completions are the items that doubled the vector earlier is not confirmed. **`0x42` is "Research
+complete"**, the same number as the save's `NEWS +0`. Read from 60 captures in `sim/corpus`
+(November 2026), every item by kind and title: `0x42` all "Research complete" (202), `2` battle
+reports, `0x43` "Your empire is running low on money" and "Abandoned ships/facilities due to lack
+of financial support", `0x44` "Failed to build Ship(s) due to missing Ship-Resources", and `0`
+"Welcome to Cosmic Supremacy". So research completions are news items, one per completion.
 
 ### The Overview tab (August 2026)
 
@@ -832,7 +837,7 @@ reproduces and which matched the engine on all 46 traits with distinct probes (O
 engine's value is that base, plus every completed item's trait grant, plus +50 on traits 2-5 in a
 golden age or −20 in a dark age. **Golden and dark age share `Owner:744`**: trait 43 is a positive
 value there and trait 44 a negative one, so `GetTrait` never reads the slots at `Owner:920/924`.
-`Owner:932/936/940` would be traits 46-48, past the 46 that were matched.
+`Owner:932/936/940` are the first three entries of `GetTrait`'s grant cache, not traits.
 
 [x] resolve `Owner:788` (ship shield strength): probe `22` displayed as **−12**, but the doctrine's
 −10 shield penalty predicts **+12**. Either the sign was transcribed wrong or the penalty is not a
@@ -847,10 +852,13 @@ as base 10 + bonus, so its probe 13 also displayed 23
 "Food consumption per citizen" is the candidate: it read `10` before the pass and an unexplained
 `232` during it. **Food consumption and income per citizen**, both confirmed by write test and
 both rendered as base 10 + bonus
-[ ] confirm which of `Owner:920/924/928` is **anonymous scanning**, the UI renders it as a
+[x] confirm which of `Owner:920/924/928` is **anonymous scanning**, the UI renders it as a
 checkbox rather than a number and read "enabled" while all three were non-zero. `920` and `924`
 are traits 43 and 44, the age traits `GetTrait` takes from `Owner:744` instead, which leaves `928`
-(trait 45) as the likeliest if the checkbox goes through `GetTrait`. Unconfirmed
+(trait 45) as the likeliest if the checkbox goes through `GetTrait`. **`Owner:928`, trait 45**,
+read off the binary (November 2026): the trait table's initialiser gives the entry named
+"Anonymous Scanning" trait id 45 (`0x72465F`), beside 43 "Golden Age" and 44 "Subsequent Dark
+Age", and `GetTrait` reads trait t at `Owner:748 + 4t`. `sim/traits.py` names 45 the same way
 
 #### Cash and the resource market
 
@@ -993,11 +1001,15 @@ catches it is comparing the same offset across two instances.
 [x] identify `Owner:924` and `Owner:928` alongside the existing `Owner:920` item, one of the three
 is "anonymous scanning", which the UI renders as a checkbox rather than a number. **They are traits
 44 and 45**, `Owner:920` trait 43; the anonymous-scanning question stays with the trait-block item
-[ ] understand why the engine **zeroes** `Owner:932/936/940` on the next turn while accepting writes
+[x] understand why the engine **zeroes** `Owner:932/936/940` on the next turn while accepting writes
 to every trait from 748 to 928, a field the engine actively rejects is worth understanding before
 trying to load state into it. Not dark age turns: dark age is a negative `Owner:744`. Lead worth
 checking first: `research.py`'s grant table says trait grants land at `Owner:932 + 4 × trait`,
-which would make these a per-turn recomputed cache of research bonuses. Unverified
+which would make these a per-turn recomputed cache of research bonuses. Unverified. **They are
+`GetTrait`'s grant cache** (`0x516180`, November 2026): 46 dwords from `Owner:932`, one per
+trait. When the first holds -1, `GetTrait` zeroes all 46 and adds every completed item's trait
+grant (kind 11) into them, so a probe written there is replaced by the grants on the next rebuild;
+traits 0 to 2 have none, hence 0
 [x] identify `Ship:56` and `Fleet:56`, the same slot on both classes, holding the static null node
 on every instance ever observed including ships under orders and in fleets, so nothing has been seen
 to fill it. **`Ship:56` is the order's target-object reference node.** `Ship::SetCommand`
