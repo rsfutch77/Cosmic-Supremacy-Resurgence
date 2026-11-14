@@ -73,9 +73,14 @@ Two consequences worth keeping in mind:
 ### What a planet's `PLPR` holds (September 2026, partial)
 
     +4            the per-unit output rates, `Planet:96` on the object
+    +15           u32 food store
+    +19           u32 food store size, what fills it once
     +23           u32 production points accumulated toward the current item
     +27           u8  recruitment rate, a percentage of food diverted into
                       military growth each turn
+    +28           u32 food per soldier, 300 in every capture
+    +32           u32 the military store; a soldier is made when it reaches
+                      the cost above, and the excess carries
     +36           u32 population count
     +40 .. +40+9n nine-byte citizen records, one per unit of population:
                       +0  u8   job id, 0 farmer, 1 worker, 2 scientist,
@@ -105,14 +110,48 @@ Two consequences worth keeping in mind:
     +40+9n        u32 stationed-military count, then that many records of the
                   same nine-byte shape. A ship carries its crew in the same
                   form, SHPR+4 the count and SHPR+8 the records, and a record
-                  moves between the two byte for byte.
-    +167          PROD, the production queue, 29 bytes; its payload carries
-                  the queue's own fields, at +29 the object id of what is
-                  being built, and a nested section naming it, FCLT for a
-                  facility
+                  moves between the two byte for byte. In a soldier's or crew
+                  member's record, `+1..+2` is an f16, its experience: it
+                  rose 0.2 a turn on a planet with a Military Camp, the
+                  manual's 0.1 doubled, and a new soldier's reads 0
+                  (November 2026, the live Beta galaxy). It reads zero in a
+                  citizen's record because citizens do not train.
+    +167          PROD, the production queue, 29 bytes when the planet is in
+                  no queue; its payload carries the queue's own fields, the
+                  object id of what is being built, and a nested section
+                  naming it, FCLT for a facility. A queued planet's PROD is
+                  longer (41, 49 and 53 bytes seen) by fields not decoded, so
+                  no fixed offset finds the design: a ship build's design id
+                  is the payload of the SHIP section that ends PROD, its last
+                  4 bytes
     +255          ENLI, 4 bytes
 
 `WLTH` appears inside `PROD`'s payload rather than beside it, and is replaced by `FCLT` when a facility is queued. The rest of `PLPR` is undecoded and mixes the planet's population, stores and derived economy with the job decision, which is why a submitted job change is carried as the citizen array alone and never as the whole section.
+
+**The settled block**, the 51 bytes between `PROD` and `ENLI` on a colonised planet, opens with
+the population history the food store is sized from (November 2026, from chained engine ticks):
+
+    +0            8 × u16  past populations, newest first; bit 12 (0x1000)
+                           marks an entry older than the last birth
+    +16           u32      slots filled, 1 at founding, 8 from turn 7
+    +24           u32      the owning civ
+    +28           f32      turns since founded
+    +32           u32      the turn it was founded
+    ENLI −5       u8       the ship resource the planet mines, 0 metal to 4 exotics
+    ENLI −4       u32      ship resource per miner, before mines and traits
+
+The ore fields hold on every planet, owned or not: across a 547-planet galaxy the type takes
+all five values, metal most often (266 planets), and the rate runs 1 to 25. A miner on a
+rate-10 planet adds 10 metal a turn and one on a rate-6 planet adds 6, on every mining tick in
+the oracle corpus (November 2026).
+
+Each tick pushes the population after any birth, and a birth sets bit 12 on every older entry.
+The store size is the manual's `40 + 40 × floor((n − 1)^1.5)` for `n` the average of the
+unflagged filled entries, rounded up, so a birth resizes it at once and a loss walks it down
+over the following turns: 18 to 15 citizens gave 2840, 2600, 2600, 2600, 2600, 2360. On the
+Single Player galaxy the slot count rises 1 to 8 from founding. In the referee archive galaxy,
+whose homeworlds the join tools rewrote, it falls at a birth instead (5 to 4, 6 to 4), and what
+it counts there is not established.
 
 #### Section framing, read out of the archive class, not inferred from blobs
 
@@ -162,7 +201,7 @@ Fixed part 54 bytes; total `54 + 28 × (both leg counts)`. Each leg is `[originX
 
 This also **resolves two previously separate readings of the order object into one structure.** The writer hands both `+28` and `+52` to the *same* helper `0x004E5200`, which reads `_Myfirst`/`_Mylast` at `+0xC`/`+0x10` of whatever it is given and divides the span by 28. So `+28` and `+52` are two objects of the same type, each holding a 28-byte-element vector 12 bytes into itself, which is exactly why the known route-leg vector sits at `+40/+44/+48`.
 
-- **Falsifiable prediction, not yet tested:** there is a **second leg vector at `+64/+68/+72`**. On a live order, `(_Mylast − _Myfirst)` there should be a multiple of 28.
+- **Confirmed: the second leg vector is the path already flown** (November 2026, the live Beta galaxy). A colony ship with a 183.95 leg in the first list and a 76.27 leg in the second stood exactly 183.06 from the first leg's origin at progress 183.06, and the second leg ended where the first began. Progress runs along the first list alone, so a ship arrives when progress reaches the first list's length.
 - **The intrusive list nodes are not persisted.** The helper touches only the vector, and the reader constructs both `+28` and `+52` from scratch via `0x004A6D30`. An injected `ROUT` therefore supplies leg vectors only, and the engine rebuilds the node chains that make this object impossible to fabricate by hand.
 - **One asymmetry to watch:** the writer emits the reference id raw, but the reader **adds the global at `0x00857C58`** to any non-zero id before resolving it through the object registry (`0x004D9CA0`). Injected ids may need to be written relative to that base.
 
@@ -184,6 +223,18 @@ This also **resolves two previously separate readings of the order object into o
 The conditional tail is the tell: an unordered ship's DYNO is `4 + 17 + 4 + 1 + 4 = 30` bytes, an ordered one's is `30 + (8 + ROUT payload) + 4`. A capture with two ordered and two unordered ships gave exactly 30 / 152 / 124 / 30.
 
 So pushing an order takes **three coordinated edits**, not one: the SHCO order-type byte, the has-orders byte, and the appended `ROUT` + `u32`. Writing only the `ROUT` leaves the order type at 0. `server/dev_tools/inject_order.py` does all three.
+
+**A scout is the exception: its has-orders byte reads 0 and its `ROUT` is there anyway**
+(November 2026, the Single Player scout from turn 0 and two others). The SHCO byte reads 2,
+the route holds one leg to the next system, and the engine rewrites it on the tick the scout
+arrives. A reader that trusts the has-orders byte misses every scout's route.
+
+**A route's legs stand off each body by 1.02 radii.** The radius is the `f32` at `SUN` and
+`PLNT` own payload `+20`: a sun of radius 3.9276 starts a leg 4.0062 out, and a planet of 1.6
+starts one 1.632 out. The `ROUT` tail after progress holds the ship's position and, while it
+orbits, the id of the body it orbits, 0 once it is moving. Progress is the distance travelled
+along the legs, and the ship's position is exactly that point, so a ship placed off its route
+jumps onto it at the next tick.
 
 **Colonising is a ship order, not an immediate-effect action.** It is the same three edits with the SHCO byte reading **3** where a move writes **1**, so both come off one extraction path. A human given a turn-2 galaxy and asked for one move changed exactly one section of a 37,851-byte blob, that ship's `DYNO`, 38 bytes to 132.
 
@@ -539,11 +590,24 @@ A design is a self-contained subtree under the owning civ's `OWNR > DATA`.
       +0    u32     the design's own object id
       SDPR  section, v0
             u32     name length, then the name, unpadded
-            ...     six part lists
+            six part lists, each a u32 count then that many u32 part ids:
+                    chassis, scanners, engines, weapons, modules, shields
             u32     the owning civ's object id, at the end
       +1    u8      zero, counted by the DSGN length word
 
     the civ's design count, a u32 in DATA's own bytes before its first DSGN
+
+**The part lists are in the order of the `ShipDesign` vectors** (`:128` chassis, `:152` scanners,
+`:176` engines, `:200` weapons, `:224` modules), and a part id is the record's position in its
+component table (Stat Tables §3). An engine fitted three times is listed three times. Read across
+1,081 designs on disk in November 2026, and checked against the parts each design was built from:
+a Colony Ship is `[0] [0] [0,0,0] [] [0] []`, a Shuttle with a Neutron Scanner, three Nuclear Drives
+and a Colony Module, which fills the Shuttle's 120 space exactly; `b1` lists weapon 10, the Fusion
+Bomb; the hand-made `e1x2` and `e1x4` list engine 1 twice and four times. `inject_design.read_design`
+and `sim/load.py` read them.
+
+[ ] The sixth list is taken to be shields, the one category left, but it is empty in all 1,081
+designs on disk. Confirm by capturing a design with a shield fitted.
 
 **The trailing byte is uniform.** Surveyed across every blob on disk in September 2026, 327 blobs
 and 1015 `DSGN` records: every record is v4 with an `SDPR` v0 child, in all 1015 the byte after the
@@ -815,6 +879,21 @@ penalty.
 
 A three-civ galaxy gave tables of 111, 159 and 266 bytes, one per civ, holding
 `Unnamed` for things nobody has renamed and `BadGuy's HQ` for one that has been.
+
+**When the engine refreshes a row** (November 2026, the Single Player chain). Every turn
+the civ owns a planet in the system, and every turn any planet of the system is within the
+scanner range of one of the civ's ships. A scout with a 30-unit scanner refreshed system 135
+from a planet 19.3 away, then left it at turn 22 once the nearest planet was 32.6 away. A
+refresh stamps the new turn and each planet's owner and population. The row's planets are
+the system's in the order `SOLA` holds them. A civ whose `Owner:4` is 0 keeps its rows
+frozen unless it is the local player, the id in `GLOB` that `set_blob_player` reads. The
+DemoPlayer seat's rows froze at turn 2 in the referee's ticks, where another civ was local,
+and refreshed in a capture where DemoPlayer was. Its research store stayed at 0 in both.
+
+**The golden age's turns left are in `CVTR`**, the `u32` at payload `+12` in the header
+before the trait pairs. After Doctrine: Golden Age completed it read 99, 98, 97 on
+successive turns, and 0 before. `Owner:744` was the live object's counter, with 9999 as its
+idle value.
 
 **These are cached, not authored.** One civ's table gained `Neighbor's HQ`
 purely from loading a turn, with that player having taken no action, so `EXSY`
@@ -2055,6 +2134,23 @@ hurries, trades and treaty sums itself. Checking every order type is not planned
   one-ship fleet survives until disbanded. A `SHPR` ends with a `f32`, the id of the last fleet
   its ship was in (`SHPR+30` with two crew), kept after the ship leaves, and the ship's own id.
   Carried (`test_fleets_merge.py`).
+- **A `SHPR` begins with the ship's design id** (`+0`), then the crew count at `+4`. **The
+  tail's `f32` is the ship's condition**, `Ship:136`, 0.0 to 1.0. CONFIRMED November 2026 on
+  the war blobs ticked by `sim/oracle.py capture`: ship 678 reads 1.0 before the turn-110
+  battle, 0.9238 after it, and 1.0 again a turn later, repaired. Every other ship on disk
+  reads 1.0.
+- **A ship cloned before 27 September 2026 can name its donor in that tail.** 115 ships in 86
+  blobs end with another ship's id: the third civ's Colony Ship 208 in the `referee_work` galaxy
+  names 200, and the staged `bgf1` hulls 203 and 204 in `battle_a.dat` name 193. `inject_ship.py`
+  copied the donor's record whole until `f4fb9f7`; since then it rewrites the trailing id, and
+  `inject_civ.starting_kit` clones through it. The engine carries the stale id forward every tick
+  without complaint, so the galaxies made earlier still hold it. The object header's id is the
+  ship's. `merge_orders.read_ship` refuses such a ship as unreadable, which leaves it out of the
+  fleet merge; `sim/load.py` reads it by the header.
+
+[ ] Decide whether `merge_orders.read_ship` should accept a ship whose tail names its donor. As it
+stands a player in an older galaxy cannot put such a ship in a fleet. Check first whether any live
+galaxy holds one.
 - **Individual ships cannot be renamed**; only fleets can.
 
 **Measured in one Single Player session at turn 0 (23 October 2026,

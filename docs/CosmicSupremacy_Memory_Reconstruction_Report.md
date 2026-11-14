@@ -2592,6 +2592,32 @@ Specifically still open: the forecast formula the declare-war dialog displays
 through the `[0x0085795C]` loop); which side's record the conquest writer updates; and how
 reputation enters the score calculation.
 
+**Reputation is `Owner:32`, and the client keeps it (November 2026).** The engine applies the
+manual's corruption formula (`0x0053A0D0`) to an empire reputation float at `Owner:32`, and the
+tick's score rebuild (`0x0053EDC4`) adds a pending float at `Owner:36` into it. The save carries
+`Owner:32` in `OWPR`, a float 27 bytes past the start of the second research field, four words
+after the score (`Owner:28`, 11 bytes past it). A live probe set it to +100 and -100 and the
+tick's corruption followed, and a reload read it back. The referee copies only the research
+fields from a submitted `OWPR`, so the engine's value carries from turn to turn. The client
+computes battle reputation itself: across the battle captures a defender that destroyed an
+attacker's ship gained 5 x log2 of the attacker's score over 80% of its own, 12.759 and 13.522,
+exactly the manual, once per pair. The per-relation word AddReputation changes is still unread
+in play.
+
+[x] **Find the attacker's reputation rule.** `0x00518480` computes it, called from the battle
+code at `0x0051EEE5` and from the declare-war forecast at `0x004432A6`: the enemy's score over
+one's own times (100 - `score_breakeven`) / 100, clamped to 0.1..10, then 5 x log2, a
+negative result zeroed when a flag argument is set, capped at +/-20 in one galaxy mode, scaled
+by the turn over 120 (60 in another mode) before that turn, and multiplied by
+`reputation_multiplier` / 100. An attacker that loses reputation loses 0.48 of that figure:
+with GoodGuy's and BadGuy's scores written into memory before one battle tick, 13538 against
+6000 gave -2.045 (the formula -4.260), 50000 against 2886 gave -7.973 (-16.610, the ratio
+clamped), and equal scores gave the full +1.610 (`capture_rep3*`). Where the 0.48 is applied
+was not traced.
+
+[ ] Explain the defender gain of 11.656 in `capture_twosided_staged_fork_badguy_t0110`, where
+the scores before the tick give 12.601 by the same rule that matched every other battle.
+
 [ ] test whether loyalty and corruption are derived rather than stored, populate one planet's population, buildings and military fully, and check whether both values follow from those inputs without any field of their own changing.
 
 ### Governor, located and confirmed (July 2026)
