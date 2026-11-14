@@ -810,6 +810,7 @@ SCORE_TAIL = 9
 # Owner:28 is also in the civ's OWPR, this many bytes before the length field
 # of the civ name dialog 225 chose.
 SCORE_BACK = 78
+REPUTATION_BACK = SCORE_BACK - 16   # f32 Owner:32, four words after the score
 
 
 def score_rows(blob):

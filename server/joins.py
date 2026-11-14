@@ -222,8 +222,8 @@ def untouched_homeworld(start):
 
 
 def fresh_start(blob, name: str, planet: int, start=None, log=print):
-    """Give a civ cloned from seat one a new civ's start: no score, no civ
-    name or coat of arms chosen, every trait untouched with its prompt offered
+    """Give a civ cloned from seat one a new civ's start: no score or
+    reputation, no civ name or coat of arms chosen, every trait untouched with its prompt offered
     again, and, when `start` (the galaxy's turn 0) shows an untouched
     homeworld, that homeworld on `planet` with its prompt offered again.
     Each part that cannot be read is logged and left as cloned."""
@@ -239,11 +239,12 @@ def fresh_start(blob, name: str, planet: int, start=None, log=print):
     owpr = mo._owpr(blob, oid)
     at = mo._identity_at(blob, owpr) if owpr is not None else None
     if at is None:
-        log(f'  joins: {name}: OWPR unreadable, score, name and traits left '
-            f'as cloned')
+        log(f'  joins: {name}: OWPR unreadable, score, reputation, name and '
+            f'traits left as cloned')
         return blob
     out = bytearray(blob)
     struct.pack_into('<I', out, at - icv.SCORE_BACK, 0)
+    struct.pack_into('<f', out, at - icv.REPUTATION_BACK, 0.0)
     blob = mo.set_civ_identity(bytes(out), oid, b'', 0, mo.NO_ARMS)
     traits = mo.traits_of(blob, oid)
     if traits is None:
@@ -258,7 +259,8 @@ def fresh_start(blob, name: str, planet: int, start=None, log=print):
     else:
         blob = mo.set_homeworld(blob, planet, home)
         blob = mo.set_setup_flag(blob, oid, 'homeworld', 0)
-    log(f'  joins: {name} starts with no score, no chosen name and untouched '
+    log(f'  joins: {name} starts with no score or reputation, no chosen name '
+        f'and untouched '
         f'traits' + ('' if home is None else ' and homeworld'))
     return blob
 
