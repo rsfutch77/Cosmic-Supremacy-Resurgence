@@ -53,9 +53,9 @@ Images show a grey `image not archived` marker; links show as plain text.
 - `/wiki/_media/guides/unsguide/turn-433.png?w=400&amp;h=&amp;cache=cache`, 1 place(s), e.g. `wiki/guides/unsguide/fleetsplit.html`
 - `wiki/st_team.html`, 58 reference(s)
 - `wiki/guides/nongolfguide/auxgovernors.html`, 9 reference(s)
+- `download.php.html`, 8 reference(s)
 - `wiki/guides/nongolfguide/designing-governors.html`, 8 reference(s)
 - `wiki/guides/nongolfguide/planetspecialization.html`, 8 reference(s)
-- `download.php.html`, 7 reference(s)
 - `wiki/guides/unsguide/cloakedscouts.html`, 7 reference(s)
 - `wiki/guides/unsguide/scriptingtricks.html`, 7 reference(s)
 - `wiki/guides/nongolfguide/governorsectioning.html`, 6 reference(s)

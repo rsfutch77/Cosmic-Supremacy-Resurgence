@@ -148,12 +148,45 @@ def canonical_pages():
 
 
 def mirror_file(rel):
-    """The mirror's copy of `rel`, or None."""
+    """The mirror's copy of `rel`, or None.
+
+    A page captured only with a session id stands in for its clean name.
+    """
     for root in (SRC, SRC_80):
         path = os.path.join(root, rel.replace("/", os.sep))
         if os.path.isfile(path):
             return path
-    return None
+    return sid_captures().get(rel)
+
+
+_SID_INDEX = None
+
+
+def without_sid(name):
+    """`name` with the `sid` dropped from its query, or None if it has none."""
+    stem, at, rest = name.partition("@")
+    if not at or not rest.endswith(".php.html"):
+        return None
+    params = rest[:-len(".php.html")].split("&")
+    kept = [p for p in params if not p.lower().startswith("sid=")]
+    if len(kept) == len(params):
+        return None
+    return stem + ("@" + "&".join(kept) if kept else "") + ".php.html"
+
+
+def sid_captures():
+    """Clean top-level page name to a session-id capture of it, first by name."""
+    global _SID_INDEX
+    if _SID_INDEX is None:
+        _SID_INDEX = {}
+        for root in (SRC, SRC_80):
+            if not os.path.isdir(root):
+                continue
+            for fn in sorted(os.listdir(root)):
+                clean = without_sid(fn)
+                if clean and clean not in _SID_INDEX:
+                    _SID_INDEX[clean] = os.path.join(root, fn)
+    return _SID_INDEX
 
 
 _MEDIA_INDEX = None
