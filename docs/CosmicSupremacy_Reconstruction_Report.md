@@ -1999,7 +1999,8 @@ hurries, trades and treaty sums itself. Checking every order type is not planned
   - [x] A per-turn credit payment is seen moving after an accepted trade (13 November 2026):
     guest-test, idle, gained 100 credits a turn from 163 to 167 and 101 on turn 168, the first tick
     of trade 338's 1 credit a turn. The payer's side is not separable from tmog66's own spending,
-    and the trade running out after 5 turns is not yet seen.
+    and the trade running out after 5 turns is assumed, not seen: the game's tick ends it, and
+    no test covers a submission merged after a treaty ends.
 
 - [x] **Governors run through the live referee.** Measured in Single Player and merged in
   `test_governors_merge.py`. On the sandbox galaxy (2 November 2026, turns 97 to 98), Beta
@@ -2232,7 +2233,8 @@ either ignores the setting on load or the capture rewrites it.
 - **A turn** leaves the treaties as they were.
 - **A per-turn payment** reaches the recipient on the first tick after acceptance (sandbox, 13
   November 2026).
-- **Not measured:** peace and alliance acceptance, a treaty running out, and the other item types.
+- **Not measured:** peace and alliance acceptance, a treaty running out (assumed to work, since
+  the game's tick ends it), and the other item types.
 
 - [x] **Admirals and diplomacy are carried as measured** (`merge_orders.py`,
   `test_admirals_diplomacy_merge.py`). An admiral is judged like a governor: a new id, a printable
