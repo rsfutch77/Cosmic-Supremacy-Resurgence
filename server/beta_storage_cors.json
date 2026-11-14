@@ -1,0 +1,9 @@
+[
+  {
+    "origin": ["https://cosmicresurgence.com", "https://www.cosmicresurgence.com",
+               "https://cs-resurgence.web.app"],
+    "method": ["GET"],
+    "responseHeader": ["Content-Type"],
+    "maxAgeSeconds": 3600
+  }
+]

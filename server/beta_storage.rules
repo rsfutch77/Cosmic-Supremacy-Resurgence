@@ -1,7 +1,9 @@
 // beta_storage.rules: the Cloud Storage rules for the beta, as deployed to cs-resurgence.
 // Launchers reach the bucket only through signed URLs from the relay, which are
 // authorised by their signature. The relay and referee use service accounts,
-// which bypass rules, so every client read and write is denied.
+// which bypass rules, so every client read and write is denied, except a read of
+// the galaxy listing the website shows (server/public_listing.py).
+// A browser also needs the bucket's CORS setting, beta_storage_cors.json.
 // The Storage emulator is given a copy by functions/emulators.py.
 //
 // Deploy by hand: firebase deploy --only storage
@@ -12,6 +14,9 @@ service firebase.storage {
   match /b/{bucket}/o {
     match /{allPaths=**} {
       allow read, write: if false;
+    }
+    match /public/galaxies.json {
+      allow get: if true;
     }
   }
 }
