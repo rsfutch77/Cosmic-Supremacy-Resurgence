@@ -798,7 +798,7 @@ complete"**, the same number as the save's `NEWS +0`. Read from 60 captures in `
 (November 2026), every item by kind and title: `0x42` all "Research complete" (202), `2` battle
 reports, `0x43` "Your empire is running low on money" and "Abandoned ships/facilities due to lack
 of financial support", `0x44` "Failed to build Ship(s) due to missing Ship-Resources", and `0`
-"Welcome to Cosmic Supremacy". So research completions are news items, one per completion.
+"Welcome to Cosmic Supremacy". So research completions are news items, one per completion, raised by `0x545610` (`0x5457E0`), and a doctrine is one too: its body reads "Our scientists have just finished researching 'Doctrine: Trade'." Kinds from `0x40` up share the news screen's "Game Events" filter (`0x411D10`).
 
 ### The Overview tab (August 2026)
 
