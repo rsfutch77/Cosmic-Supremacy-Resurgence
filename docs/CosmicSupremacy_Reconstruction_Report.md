@@ -2322,11 +2322,15 @@ hurries, trades and treaty sums itself. Checking every order type is not planned
   shows a "Coming soon" note in place of the 2023 list (`replace_galaxy_list` in
   `site/patches.py`). The launcher reads the relay's listing (`GET /`, `galaxy_directory`), but
   that route needs a sign-in and sends no CORS header, so a page on cosmicresurgence.com cannot
-  read it. Done when the panel shows each open galaxy's name, turn and player count, never a
-  roster, and each row links somewhere a visitor can join from. Not yet chosen:
-  - where the page reads from: a public route on the relay with only those fields, a file the
-    referee publishes each tick, or `stage.py` at deploy, which goes stale between deploys;
-  - what a row links to, since the archived `galaxy@` pages are 2023 snapshots.
+  read it. Decided (Robert, 14 November 2026):
+  - the referee publishes a small public file each tick, and the page reads that; the relay
+    gets no route without a sign-in;
+  - the panel lists each open galaxy's title only, with no links; the file's rows leave room
+    for links, player counts and descriptions later;
+  - the sandbox is listed, and is the only galaxy for now.
+
+  Done when the panel on cosmicresurgence.com lists the sandbox by title from that file, and
+  keeps the "Coming soon" note when the file cannot be read or lists nothing.
 
 - [ ] **The home page carries news items.** The home page is `site/overrides/game_news.php.html`,
   served at `/`, and holds one post, "Welcome to Resurgence" (13 September 2026). Done when a
@@ -2334,13 +2338,16 @@ hurries, trades and treaty sums itself. Checking every order type is not planned
 
 - [ ] **The launcher shows a news banner below the Multiplayer button** on the Play page
   (`#modes` in `release/webui/index.html`). It is not linked to the home page's news: each is
-  written on its own. Done when the banner shows the current line, shows nothing when there is
-  none, and a launcher that cannot reach the source still opens. Not yet chosen: where the
-  launcher reads the line from, and whether a line can change without a release.
+  written on its own. The launcher reads the line from a small file on cosmicresurgence.com, so
+  a line changes with a site deploy, not a release (Robert, 14 November 2026). Done when the
+  banner shows the current line as plain text, shows nothing when there is none, and a
+  launcher that cannot reach the site still opens. The new request is recorded in the Privacy
+  Checklist.
 
 - [ ] **A release step asks whether to update the home page news or the launcher banner.** One
   step in `docs/DEVELOPMENT.md`'s release checklist, before the site deploy at step 9, asking
-  about each separately, since they are not linked. Added once both of the items above exist.
+  about each separately, since they are not linked. Both are site files, so step 9's deploy
+  carries either change. Added once both of the items above exist.
 
 **Measured in one Single Player session at turn 0 (October 2026,
 `server/tests/fixtures/tier4`):**
