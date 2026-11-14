@@ -154,7 +154,7 @@ def combat_checks():
 def participation_checks():
     """The live battle probes: an idle attacker fires back at an armed guard
     and spares an unarmed one, an Attack order opens fire, open space needs an
-    order, a Destroyer needs 4 crew, bombing kills citizens and a bombed
+    order, a probed Destroyer needs 4 crew, bombing kills citizens and a bombed
     defence stays bombed while the attackers stay."""
     def staged(order=None, orbit=HOME, armed=True):
         g = galaxy()
@@ -188,6 +188,18 @@ def participation_checks():
     combat.battles(g)
     check('a Destroyer with 3 crew does not fight', (g.ships[912].condition, od.move(g, BAD, 910, HOME)[0]),
           (1.0, False))
+
+    def need(parts):
+        d = st.Design(0, BAD, '', dict({c: [] for c in mv.tb.CATEGORIES}, **parts))
+        return mv.crew_needed(d, g.civs[BAD])
+    check('the crew a design needs grows with the space its parts fill',
+          [need(p) for p in ({'chassis': [3]},
+                             {'chassis': [3], 'engines': [1], 'weapons': [5, 5], 'shields': [0],
+                              'scanners': [0]},
+                             {'chassis': [2], 'engines': [1], 'weapons': [2], 'shields': [2],
+                              'scanners': [0]},
+                             {'chassis': [2], 'engines': [1], 'modules': [1], 'scanners': [0]})],
+          [3, 4, 1, 2])
     g = staged(None, 0)
     combat.battles(g)
     check('in open space there is no battle without an order',

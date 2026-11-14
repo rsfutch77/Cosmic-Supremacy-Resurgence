@@ -254,7 +254,7 @@ def _go(g, civ, ship, target, kind):
         return False, 'no such sun or planet'
     start_r = g.radius.get(s.orbit, 0) if s.orbit else 0
     d = g.designs.get(s.design)
-    need = combat.crew_needed(d)
+    need = combat.crew_needed(d, g.civs.get(s.owner))
     if len(s.crew) < need:
         return False, f'the ship needs {need} crew to fly'
     if s.fleet:
@@ -367,13 +367,7 @@ def unlocked_parts(g, civ):
     return out
 
 
-def hull_space(civ, d):
-    """The chassis's space raised by trait 16, and by trait 20 on a
-    battleship, added as percents like the speed traits."""
-    pct = traits.value(civ, traits.HULL_SPACE)
-    if d.chassis == ec.BATTLESHIP:
-        pct += traits.value(civ, traits.BATTLESHIP_HULL_SPACE)
-    return ec.R(d.space * (100 + pct) / 100)
+hull_space = mv.hull_space
 
 
 def design(g, civ, name, parts):

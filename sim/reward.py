@@ -84,7 +84,7 @@ def strength(g, civ):
             continue
         d = g.designs[s.design]
         need = tb.CHASSIS[d.chassis].crew[0] if d.chassis is not None else 0
-        if len(s.crew) >= combat.crew_needed(d) and _fire(d):
+        if len(s.crew) >= combat.crew_needed(d, c) and _fire(d):
             f, h = _armed(c, d)
             fire += f * (1 + combat.RANK_BONUS * combat.ship_rank(s, need))
             hp += h * s.condition

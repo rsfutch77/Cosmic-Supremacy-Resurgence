@@ -14,10 +14,9 @@ score-reputation-and-rank page, with no capture to check them against.
                   an armed ship; measured once: 2 x 545 / 590 = 1.85 on the turn-110
                   battle's two defending fighters, and nothing for its colony ship
 
-The engine ignores reputation: one save ticked with every relation of a civ
-at 0, +100 and -100, set by the engine's own AddReputation, came out the same
-to the credit. The simulator still applies the manual's reputation term to
-corruption (economy.empires), a rule the engine does not have. Scores start at
+The engine's corruption reads an empire reputation at Owner:32, but battle
+reputation comes from the server, and Resurgence never sets it, so live saves
+carry 0. The simulator applies the manual's term (economy.empires). Scores start at
 0, since the save's score is not read.
 """
 import math

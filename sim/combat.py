@@ -17,7 +17,8 @@ under turret fire and spared an unarmed colony ship once nothing armed was
 left, and a trooper's Conquer order did not make its escorts fire. Arriving
 alone shoots armed ships only. In open space
 there is no battle without an Attack order, as the manual says. A ship with
-less crew than `crew_needed` neither moves nor fights. Unarmed ships taking no
+less crew than `crew_needed`, the engine's design rule, neither moves nor
+fights, and a trooper lands everyone beyond that. Unarmed ships taking no
 part are shot last: the turret passed over troopers holding a Conquer order
 for an idle armed frigate. Experience counts only the ships taking part,
 bombs included.
@@ -50,7 +51,6 @@ PD_BONUS = (0, 30, 60, 120, 240, 450, 750, 1200)     # percent, per level
 PD_SHIELD = (40, 52, 64, 88, 136, 220, 340, 520)     # shield generator percent
 REPAIR = {False: 0.15, True: 0.08}                   # per turn, light and heavy
 COLLATERAL = 250                # defence damage a citizen killed; 1000 killed 4 in the probes
-LANDING_KEEP_EXTRA = 1          # a Frigate trooper kept 2 aboard, its minimum is 1
 crew_needed = movement.crew_needed
 
 
@@ -65,7 +65,7 @@ class Unit:
         self.hp = self.max * ship.condition
         light, heavy, bomb = d.firepower
         need = tb.CHASSIS[d.chassis].crew[0] if d.chassis is not None else 0
-        crewed = d.chassis is not None and len(ship.crew) >= crew_needed(d)
+        crewed = d.chassis is not None and len(ship.crew) >= crew_needed(d, civ)
         boost = (1 + RANK_BONUS * ship_rank(ship, need)) * fire_bonus(civ, d)
         self.fire = (light * boost, heavy * boost, bomb * boost) if crewed else (0, 0, 0)
         self.armed = crewed and (light or heavy)
@@ -308,11 +308,7 @@ def troops_aboard(g, ship):
     if economy.TROOP_BAY not in (d.parts.get('modules') or ()):
         return []
     xp = sorted(ship.crew_xp or [0.0] * len(ship.crew), reverse=True)
-    return xp[crew_kept(d):]
-
-
-def crew_kept(d):
-    return tb.CHASSIS[d.chassis].crew[0] + LANDING_KEEP_EXTRA if d.chassis is not None else 0
+    return xp[crew_needed(d, g.civs.get(ship.owner)):]
 
 
 def ground_side(xps, bunkers, fortresses, civ=None):
@@ -366,7 +362,8 @@ def invade(g, p, ships):
         strike(a_fire, defend)
     a_gain, d_gain = len(defend) / len(attack), len(attack) / max(1, len(defend))
     for s in {id(s): s for s, _x in landing}.values():
-        keep = sorted(s.crew_xp or [0.0] * len(s.crew), reverse=True)[:crew_kept(g.designs[s.design])]
+        need = crew_needed(g.designs[s.design], g.civs.get(s.owner))
+        keep = sorted(s.crew_xp or [0.0] * len(s.crew), reverse=True)[:need]
         s.crew, s.crew_xp = s.crew[:len(keep)], keep
     survivors = [x + a_gain for (_s, x), (h, _f) in zip(landing, attack) if h > 0]
     held = [x + d_gain for x, (h, _f) in zip(sorted(p.military_xp or [0.0] * len(p.military),

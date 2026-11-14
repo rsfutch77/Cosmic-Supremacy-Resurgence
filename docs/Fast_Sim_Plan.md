@@ -484,12 +484,17 @@ the turn-110 battle's defending fighters gained 1.847 each, 2 x 545 / 590, which
 of firepower the enemy had over every kind its own side had, its turret included, and the
 unarmed colony ship's crew gained nothing. Score and reputation follow the manual's page.
 
-**Reputation raises or lowers corruption** in the simulator, the manual's formula. The
-engine does not apply it: one q7 save ticked with every relation record of GoodGuy's at 0,
-+100 and -100, each set through the engine's own AddReputation, gave the same credits,
-research, food and production to the unit (`capture_rep*`). Every corruption fit so far
-matches the formula at reputation 0, so the engine behaves as if reputation were always 0.
-A loaded civ starts at 0 and only battles in the simulator move it. The score ratio divides
+**Reputation raises or lowers corruption**, the manual's formula, in the engine and the
+simulator alike. The engine's corruption function (`0x0053A0D0`, content version 150 and
+up) reads an empire reputation float at `Owner:32`, then scales the result by
+`corruption_multiplier` / 100 and caps a bonus at 50%. The tick's score rebuild adds a
+pending float at `Owner:36` into `Owner:32` and clears it. Inside the client only bio-bombing
+adds to `Owner:36`; battle reputation, the manual's log2 score-ratio rule, appears nowhere
+in the client, so the original server must have supplied it. Resurgence never does, so
+`Owner:32` stays 0 in every save, which is why every corruption fit matches reputation 0.
+The earlier probe (`capture_rep*`) moved the per-relation records through AddReputation,
+which nothing in play reads, and so changed nothing. A loaded civ starts at 0 and only
+battles in the simulator move it. The score ratio divides
 by 80% of one's own score, so attacking a civ of one's own size gains about 1.6 reputation
 (5 x log2 1.25), and only attacking a civ under 80% of one's own score loses it. The reward
 counts income and surge production after corruption, so a reputation gain shows up in `D`
@@ -547,10 +552,12 @@ corpus:
   fired nor moved, which first read as "idle attackers hold fire". The live probes load a
   staged save into the client and give orders through the engine's own ShipCommand and
   Ship::SetCommand, the AI player's `set_command`, the path the UI takes. What they showed:
-  - A Destroyer needs 4 crew. With 3 it did nothing under any order, shield or none, and the
-    defending corvettes did not engage it; with 4, 5, 6 and 7 it fought. Light hulls act at
-    the manual's minimum. Cruisers and Battleships are assumed to need one more, like the
-    Destroyer.
+  - The probed Destroyer needs 4 crew. With 3 it did nothing under any order, shield or
+    none, and the defending corvettes did not engage it; with 4, 5, 6 and 7 it fought. The
+    engine's design getter (`0x005490E0`) gives the rule: the chassis's least crew plus the
+    crew range times 0.8 times the share of hull space the parts fill, truncated, with a
+    Colony Module or Troop Bay needing 2 at least. The Destroyer's parts fill 43% of 650,
+    so 3 + trunc(4 x 0.8 x 0.43) = 4.
   - A planet's defence and its owner's ships always fire at hostile ships in orbit, and
     bombs always fall.
   - An attacking ship fires when it holds an Attack or Conquer order, arrived this tick, or
@@ -566,7 +573,7 @@ corpus:
   - Troops land only from a ship that arrives under a Conquer order, with the defence at
     nothing and no hostile ship in orbit. Troopers sitting in a cleared orbit with a Conquer
     order never landed. Two arriving troopers with 6 and 4 aboard landed 6 and kept 2 each,
-    one more than a frigate's minimum. 6 soldiers at rank 0 against 3 at rank 1 left 5, which
+    the design's minimum crew, 2 for a Troop Bay. 6 soldiers at rank 0 against 3 at rank 1 left 5, which
     fits both sides firing at once, not defenders first (that leaves 4). The 5 gained 0.5
     experience, the defenders' count over their own. The Military Camp was lost with the
     planet; the Academy is assumed to go too.
@@ -641,10 +648,10 @@ soldiers to crew them its ships never fill. It is a probe, not a training oppone
       (§5b, "Pre-training checks")
 - [x] A ground battle on the client (§5b, "Pre-training checks", Battles)
 - [x] Shields in a captured battle, through `list6`
-- [ ] Decide whether the simulator keeps the manual's reputation term, which the engine
-      does not apply, or Resurgence adds it to the game (§5b, reputation)
-- [ ] Probe a Cruiser and a Battleship for the crew they need; one more than the manual is
-      assumed
+- [ ] Resurgence's server computes battle reputation and writes it to `Owner:32` (or the
+      pending `Owner:36`), so the game matches the manual; confirm on the client that a set
+      `Owner:32` moves corruption and survives a save (§5b, reputation)
+- [ ] Confirm the min-crew rule on Cruiser and Battleship designs with the engine's getter
 - [ ] Find whether a ship inside a planet's radius but not yet in orbit joins its battle
 - [ ] Find whether conquest destroys the Military Academy, as it did the Camp
 - [ ] Fix the warlike opponent's starving homeworld, if it is kept as a probe

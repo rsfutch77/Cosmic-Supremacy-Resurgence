@@ -7,6 +7,7 @@ A route is straight legs whose ends stand off each body by a little more than
 its radius; a ship's position is its progress along them.
 """
 import math
+import struct
 
 from . import economy
 from . import state as st
@@ -16,15 +17,32 @@ from . import traits
 ORBIT_CLEARANCE = 1.02          # radii between a body's centre and a route's end
 MOVE, SCOUT, COLONISE = 1, 2, 3
 ATTACK, CONQUER = 4, 5          # inject_order.py's kinds; both stay given on arrival
-HEAVY_EXTRA_CREW = 1            # a Destroyer idled with 3 crew and fought with 4
+MIN_CREW_SHARE = 0.800000011920929   # of the crew range, at a full hull
+CREW_MODULES = (0, 1)           # a Colony Module or Troop Bay needs 2 crew at least
 
 
-def crew_needed(d):
-    """Crew a ship needs to fly and fight. Cruisers and Battleships are
-    assumed to want one more than the manual, as the Destroyer does."""
+def hull_space(civ, d):
+    """The chassis's space raised by trait 16, and by trait 20 on a
+    battleship, added as percents like the speed traits."""
+    pct = traits.value(civ, traits.HULL_SPACE)
+    if d.chassis == economy.BATTLESHIP:
+        pct += traits.value(civ, traits.BATTLESHIP_HULL_SPACE)
+    return economy.R(d.space * (100 + pct) / 100)
+
+
+def crew_needed(d, civ=None):
+    """Crew a ship needs to fly and fight, the engine's design getter
+    (0x005490E0): the chassis's least crew plus a share of its range that
+    grows with the space the parts fill, at most 80% of the range."""
     if d is None or d.chassis is None:
         return 0
-    return tb.CHASSIS[d.chassis].crew[0] + (HEAVY_EXTRA_CREW if d.heavy else 0)
+    lo, hi = tb.CHASSIS[d.chassis].crew
+    used = d.space - (hull_space(civ, d) - d.space_used)
+    share = struct.unpack('<f', struct.pack('<f', used / d.space * MIN_CREW_SHARE))[0]
+    need = lo + int((hi - lo) * min(1.0, share))
+    if any(m in CREW_MODULES for m in d.parts.get('modules') or ()):
+        need = max(need, 2)
+    return need
 BIO_BOMB = 6                    # inferred: inject_order lists 1 to 5 and 7
 
 
@@ -102,7 +120,8 @@ def ships(g):
         o = s.order
         if o is None or not o.legs:
             continue
-        if not s.fleet and len(s.crew) < crew_needed(g.designs.get(s.design)):
+        if not s.fleet and len(s.crew) < crew_needed(g.designs.get(s.design),
+                                                     g.civs.get(s.owner)):
             # Undermanned Destroyers sat still and lost their orders.
             s.order = None
             continue

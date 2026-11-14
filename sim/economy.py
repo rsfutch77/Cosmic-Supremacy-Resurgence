@@ -260,8 +260,7 @@ def empires(g):
         civ = g.civs.get(civ_oid)
         if civ is None:
             continue
-        # The manual's reputation term, which the engine does not apply: +100
-        # and -100 changed nothing. Loaded civs start at 0.
+        # The engine reads reputation at Owner:32; Resurgence's saves carry 0.
         empire = empire_corruption(len(civ_planets), civ.reputation)
         yield (civ, civ_planets, space_bonus(civ), empire,
                inactivity(g.turn, civ.active_turn), idle_share(g.turn, civ.active_turn))
