@@ -2226,6 +2226,20 @@ hurries, trades and treaty sums itself. Checking every order type is not planned
     referee publishes each tick, or `stage.py` at deploy, which goes stale between deploys;
   - what a row links to, since the archived `galaxy@` pages are 2023 snapshots.
 
+- [ ] **The home page carries news items.** The home page is `site/overrides/game_news.php.html`,
+  served at `/`, and holds one post, "Welcome to Resurgence" (13 September 2026). Done when a
+  new item can be added with a date, newest first, without editing the archived markup by hand.
+
+- [ ] **The launcher shows a news banner below the Multiplayer button** on the Play page
+  (`#modes` in `release/webui/index.html`). It is not linked to the home page's news: each is
+  written on its own. Done when the banner shows the current line, shows nothing when there is
+  none, and a launcher that cannot reach the source still opens. Not yet chosen: where the
+  launcher reads the line from, and whether a line can change without a release.
+
+- [ ] **A release step asks whether to update the home page news or the launcher banner.** One
+  step in `docs/DEVELOPMENT.md`'s release checklist, before the site deploy at step 9, asking
+  about each separately, since they are not linked. Added once both of the items above exist.
+
 **Measured in one Single Player session at turn 0 (October 2026,
 `server/tests/fixtures/tier4`):**
 
