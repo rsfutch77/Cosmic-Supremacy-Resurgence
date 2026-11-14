@@ -506,10 +506,18 @@ client session with actuator writes between them, which is precisely the played 
 experiment. Such a galaxy cannot be captured, reloaded and continued as the same galaxy, and
 per-turn measurements taken across such a run are not reproducible from the blob.
 
-[ ] **What those 30 bytes are is not established.** The `NWDB` pair reads `1` against `2` in ASCII,
-which would be a count rendered into news text, and a count rendered at generation time is carried by
-the blob while one recomputed at read time is not. That distinction is this section's own standard
-and is the thread to pull first.
+[ ] **Three of the 30 bytes are still unnamed.** The `NWDB` digits are the planetary-defense damage
+percent in the two battle reports (strings 9 and 11): the loaded branch reads `12% (1 Citizen
+Killed)` and the played branch `11%`. A rerun of the loaded arm on 14 November 2026 (war_fork.dat,
+turn 110 to 180, the current `referee.tick`) reproduces it. The client formats that percent at
+`0x00522EF0` from a double, truncated with `_ftol`, clamped to 0..100 and printed into the `planetary-defense damage:` line at `0x0076D63C` when
+it writes the report, so the blob carries the text and nothing recomputes it on read. The same one
+citizen killed is a smaller share in the played branch, which matches its `PLPR` growth series
+sitting one step ahead before the battle. So the digit is a symptom: the divergence is in the
+battle planet's population growth before the fight. The two dwords and the `OWPR+0` byte are not
+yet named. Next step: diff `war_fork_L` against `war_fork_played.dat` by section, give the two
+`NWDB` dwords and `OWPR+0` their field names, and find the earliest turn the planet's `PLPR` differs
+between the arms.
 
 #### The original client's online path (November 2026)
 
@@ -892,11 +900,20 @@ the rest of the record misread. An id is not checked to name a civ.
   `ab2e6d3`.
 - [ ] **Messages arrive between ticks, close to instantly.** A message travels inside its
   sender's submission, so it reaches the recipient with the next tick, up to a whole turn later.
-  Per tick is acceptable for now (Robert, 13 November 2026). The client's online path sends
-  `SDNW` v0 holding one `NEWS` the moment a message is sent; nothing answers it, because the
-  launcher runs the client offline. Done when a message sent in the client reaches a recipient
-  whose launcher is open within a minute, shows in the recipient's news without waiting for the
-  tick, and is still in the turn the referee publishes.
+  Per tick is acceptable for now (Robert, 13 November 2026). The original did it over its socket:
+  the send routine at `0x00575970` writes one `NEWS` (writer `0x005355B0`) into an `SDNW` v0
+  command and waits for `SUCC`, and the server pushes a `NEWS` section (the record and a `u8`) to
+  each connected recipient, whose handler at `0x00573940` adds it with `Owner::AddNews` and
+  refreshes the news view with no tick. A `.dat` client takes the standalone branch and never
+  connects, so the launcher's client sends nothing. A TestBed started on a galaxy pass
+  (`SAND 127.0.0.1 47110 ...`, 14 November 2026) shows the connection dialog with
+  `Changing connection settings...` and opens no socket in 45 seconds. That text is one state of
+  the connection state machine on `[0x0086F1AC]` (around `0x00579B3D`); the only `connect` call
+  is at `0x005F20EB`. Next step: decode which state reaches `0x005F20EB` and what the dialog
+  waits for before it, then record the opening exchange against a local listener. Done when a
+  message sent in the client reaches a recipient whose launcher is open within a minute, shows in
+  the recipient's news without waiting for the tick, and is still in the turn the referee
+  publishes.
 - [x] **Each civ is served only its own news.** `fog.project` empties every other civ's news list
   and keeps only the strings its own list names, with the next id unchanged (`news.own_view`),
   and `fog.restore` puts them back ahead of anything the submission added, so a restored view is
@@ -1606,7 +1623,7 @@ Each replacement is written into its original's slot and the remainder is NUL-fi
 
 **CONFIRMED:** a patched `CosmicSupremacy_TestBed.exe` started with no arguments from a non-administrator account shows the new text in the setup failed dialog.
 
-[ ] Patch 31 is verified by byte comparison and by formatting the patched string, not yet on screen. It needs a client whose `CreateDevice` fails.
+[x] Patch 31 is seen on screen (14 November 2026). A scratch copy of the patched TestBed with the success branch at `0x005728D0` (`74 4F`, `je 0x00572921`) NOPped takes the `CreateDevice` failure path on a working machine. Its dialog reads `Failed to initialize the Renderer.`, `DirextX CreateDevice returned an unknown error: 00000000`, then the patched paragraph: attach the saved file to an issue at the tracker URL with the latest log file, saved at the client's `log.txt` path. No host appears in it. The forced copy is a probe only and never ships.
 
 ### Patches 32–35, Main window opens 10% larger (16 bytes, October 2026)
 
@@ -1928,8 +1945,9 @@ Corrected:
 ### A save without a remote thread (follow-up, October 2026)
 
 The launcher makes the client save by injecting a call to `SaveGame` in a remote thread
-(`client/dev_tools/trigger_save.py`). That is the shipping path for the public beta. The route
-that removes the remote thread is a resident handler in the player client, and it is not built.
+(`client/dev_tools/trigger_save.py`). That was the shipping path for the public beta. The route
+that removes the remote thread is a resident handler in the client, and every shipped client now
+carries one.
 
 What bounds it:
 
@@ -1940,18 +1958,22 @@ What bounds it:
 - `SaveGame` is `ret 8`, ignores `this`, and is synchronous: the same three facts the injected
   stub relies on.
 - `.text` has a 3,948-byte run of padding at `0x006D2094` that can hold the stub.
-- The launcher half exists: `client/dev_tools/trigger_save_message.py` posts a registered window
-  message with `PostMessageW`, and `game_cycle.trigger_save` uses it when `CS_SAVE_VIA_MESSAGE`
-  is set. With a stock client the message reaches nothing.
+- The launcher half is `client/dev_tools/trigger_save_message.py`, which sends the registered
+  window message, and `game_cycle.trigger_save` uses it. A stock client ignores the message.
 
-- [ ] **A player build saves on a posted message.** The beta keeps the injected save. Done when a
-  player build saves on the posted message, a real capture lands through it, and
-  `CS_SAVE_VIA_MESSAGE` is made the default.
+- [x] **A player build saves on a sent message** (14 November 2026). `patch_save_message.py`
+  hooks `AfxWndProc` at `0x00654892` and puts the stub at `0x006D20A0`. The stub answers the
+  registered message `CosmicSupremacyResurgenceSave` by calling `SaveGame(wParam, "resident")` on
+  the client's own main thread and returns its result. `build.ps1` applies it to every client it
+  stages, and `release/tests/test_save_handler_patch.py` pins it. The launcher sends the message with
+  `SendMessageTimeoutW`, so it knows whether the save ran. `CS_SAVE_VIA_MESSAGE` now defaults to
+  the client's own answer: the message path when the running exe carries the handler, the
+  injected save otherwise. `1` or `0` forces either one. A patched TestBed on
+  `SinglePlayerGalaxy.dat` answered both a direct send and `game_cycle.trigger_save` with
+  `SaveGame` returning 1, and both captures reached `cs_server` (12,412 bytes, turn 0).
 
-The work left is the stub plus a window-procedure hook that routes the registered message to it,
-written as a `patch_*.py` in the existing client patch step and signed with the rest. A resident
-stub and a window-procedure hook are themselves a pattern antivirus heuristics watch for, so this
-moves the sensitive act into a signed static binary rather than removing it.
+A resident stub and a window-procedure hook are themselves a pattern antivirus heuristics watch
+for, so this moves the sensitive act into a signed static binary rather than removing it.
 
 ### One game process per machine, and what the lock does not know
 
