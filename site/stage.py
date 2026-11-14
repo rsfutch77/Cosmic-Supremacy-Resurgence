@@ -38,6 +38,8 @@ import inventory          # noqa: E402  writes TODO-content.md
 import news               # noqa: E402  the home page's news items
 
 HOST = "cosmicsupremacy.com"
+# Where the site is served now, for canonical links and the sitemap.
+SITE = "https://cosmicresurgence.com/"
 SRC = os.path.join(WAYBACK, "cosmicsupremacy_mirror", HOST)
 # Captures of `cosmicsupremacy.com:80` sit in their own folder, and some pages
 # exist only there.
@@ -520,6 +522,39 @@ def inject(html):
     return html
 
 
+_CANONICAL_RE = re.compile(r"<link\b[^>]*\brel=['\"]canonical['\"][^>]*>\s*", re.I)
+
+
+def canonical_url(rel, seed):
+    """The address a page is known by. The seed is also served at /, and / wins."""
+    if rel in ("index.html", seed):
+        return SITE
+    return SITE + urllib.parse.quote(rel, safe="/@=&;,+")
+
+
+def canonical(html, rel, seed):
+    """Name the page's own address, replacing any canonical link the archive
+    carried, which points at the old domain. Idempotent."""
+    html = _CANONICAL_RE.sub("", html)
+    url = canonical_url(rel, seed).replace("&", "&amp;")
+    m = re.search(r"</head>", html, re.I)
+    if not m:
+        return html
+    return html[:m.start()] + '<link rel="canonical" href="%s" />\n' % url + html[m.start():]
+
+
+def write_sitemap(path, pages, seed):
+    """Every staged page once, by its canonical address."""
+    urls = sorted({canonical_url(r, seed) for r in pages})
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write('<?xml version="1.0" encoding="UTF-8"?>\n'
+                 '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n')
+        for u in urls:
+            fh.write("  <url><loc>%s</loc></url>\n" % u.replace("&", "&amp;"))
+        fh.write("</urlset>\n")
+    return len(urls)
+
+
 # --------------------------------------------------------------------------
 # Copying
 # --------------------------------------------------------------------------
@@ -726,7 +761,7 @@ def main():
         for name in hit:
             patch_hits[name] = patch_hits.get(name, 0) + 1
         with open(full, "w", encoding="utf-8") as fh:
-            fh.write(inject(text))
+            fh.write(canonical(inject(text), rel, args.seed))
 
     # Release binaries are not staged here. The client zip is attached to the
     # GitHub release for its tag, which serves the download and counts it, and
@@ -736,8 +771,11 @@ def main():
     # Crawling and indexing are both allowed. The forum and everything else
     # withheld is absent from public/ entirely, so there is nothing here that a
     # Disallow would need to protect.
+    pages = [r for r in copied if os.path.splitext(r)[1].lower() in PAGE_EXT]
+    sitemap_count = write_sitemap(os.path.join(DST, "sitemap.xml"), pages, args.seed)
+    print("  sitemap.xml: %d pages" % sitemap_count)
     with open(os.path.join(DST, "robots.txt"), "w", encoding="utf-8") as fh:
-        fh.write("User-agent: *\nAllow: /\n")
+        fh.write("User-agent: *\nAllow: /\nSitemap: %ssitemap.xml\n" % SITE)
     shutil.copy2(os.path.join(HERE, "404.html"), os.path.join(DST, "404.html"))
 
     page_count = sum(1 for r in copied
