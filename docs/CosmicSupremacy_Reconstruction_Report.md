@@ -2332,22 +2332,45 @@ hurries, trades and treaty sums itself. Checking every order type is not planned
   Done when the panel on cosmicresurgence.com lists the sandbox by title from that file, and
   keeps the "Coming soon" note when the file cannot be read or lists nothing.
 
-- [ ] **The home page carries news items.** The home page is `site/overrides/game_news.php.html`,
+  Built in v0.7: `referee_worker` calls `public_listing.publish` after each tick, which writes
+  `public/galaxies.json` (`{"galaxies": [{"title": ...}]}`, open galaxies only, cached five
+  minutes) to the store's bucket; `beta_storage.rules` lets anyone read that one object; the
+  panel holds the note and `site/overrides/scripts/galaxies.js` replaces it with the titles.
+  `test_public_listing.py` checks the rule on the emulators, and the script was seen filling
+  the panel from a local stand-in. Left before it shows live:
+  - [ ] Deploy the storage rules: `firebase deploy --only storage`.
+  - [ ] Set the bucket's CORS: `gcloud storage buckets update
+    gs://cs-resurgence.firebasestorage.app --cors-file=server/beta_storage_cors.json`.
+  - [ ] Restage the referee (release step 10), so it publishes the file.
+  - [ ] Deploy the site, then confirm the panel lists the sandbox.
+
+- [x] **The home page carries news items.** The home page is `site/overrides/game_news.php.html`,
   served at `/`, and holds one post, "Welcome to Resurgence" (13 September 2026). Done when a
   new item can be added with a date, newest first, without editing the archived markup by hand.
+  Each item is a file in `site/news/`, `YYYY-MM-DD-anything.html` with the title on its first
+  line; `stage.py` renders them newest first at the home page's `<!-- news items -->` marker
+  (`site/news.py`, `site/tests/test_news.py`, `site/README.md`). The welcome post moved there
+  and renders as before.
 
-- [ ] **The launcher shows a news banner below the Multiplayer button** on the Play page
+- [x] **The launcher shows a news banner below the Multiplayer button** on the Play page
   (`#modes` in `release/webui/index.html`). It is not linked to the home page's news: each is
   written on its own. The launcher reads the line from a small file on cosmicresurgence.com, so
   a line changes with a site deploy, not a release (Robert, 14 November 2026). Done when the
   banner shows the current line as plain text, shows nothing when there is none, and a
   launcher that cannot reach the site still opens. The new request is recorded in the Privacy
-  Checklist.
+  Checklist. The launcher reads `site/overrides/launcher_news.json` (`{"text": ""}` for none)
+  two seconds after it opens and hourly after, off the UI thread; a failed read is logged and
+  keeps the last line. The page draws the line inside the Multiplayer row, as text
+  (`test_launcher_news.py`, in `run_all.ps1`). Seen on the Play page served locally, not yet
+  in a built launcher. The Privacy Checklist's PRIV-2 IP item names the request; its line was
+  edited by hand to match `build_ops_checklist.py`, since the checklist sources are not on
+  this machine to regenerate from.
 
-- [ ] **A release step asks whether to update the home page news or the launcher banner.** One
+- [x] **A release step asks whether to update the home page news or the launcher banner.** One
   step in `docs/DEVELOPMENT.md`'s release checklist, before the site deploy at step 9, asking
   about each separately, since they are not linked. Both are site files, so step 9's deploy
-  carries either change. Added once both of the items above exist.
+  carries either change. Added once both of the items above exist. It is part of step 9, so
+  step 10 keeps its number.
 
 **Measured in one Single Player session at turn 0 (October 2026,
 `server/tests/fixtures/tier4`):**
