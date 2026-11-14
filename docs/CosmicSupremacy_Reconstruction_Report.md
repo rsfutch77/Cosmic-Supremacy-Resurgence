@@ -2216,6 +2216,16 @@ hurries, trades and treaty sums itself. Checking every order type is not planned
   sent, and a stopped or unreachable galaxy keeps it, since the relay takes orders until the turn
   changes. `test_turn_busy.py`; not yet seen on screen.
 
+- [ ] **The website's Galaxies panel lists the open galaxies.** Every archived page's panel
+  shows a "Coming soon" note in place of the 2023 list (`replace_galaxy_list` in
+  `site/patches.py`). The launcher reads the relay's listing (`GET /`, `galaxy_directory`), but
+  that route needs a sign-in and sends no CORS header, so a page on cosmicresurgence.com cannot
+  read it. Done when the panel shows each open galaxy's name, turn and player count, never a
+  roster, and each row links somewhere a visitor can join from. Not yet chosen:
+  - where the page reads from: a public route on the relay with only those fields, a file the
+    referee publishes each tick, or `stage.py` at deploy, which goes stale between deploys;
+  - what a row links to, since the archived `galaxy@` pages are 2023 snapshots.
+
 **Measured in one Single Player session at turn 0 (October 2026,
 `server/tests/fixtures/tier4`):**
 
