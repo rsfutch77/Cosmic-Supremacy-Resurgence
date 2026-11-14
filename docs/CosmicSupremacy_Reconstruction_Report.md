@@ -1992,8 +1992,14 @@ hurries, trades and treaty sums itself. Checking every order type is not planned
   publish. Still refused: an admiral on a fleet. Built on the UI's word, not a save: a peace
   binding for 50 turns and an alliance for 100, a credit lump sum as one `u32`, and no war while
   a cease-fire or peace binds.
-  - [ ] An admiral made in the client UI and a treaty answered in it go through a live galaxy
-  - [ ] A per-turn credit payment is seen moving after an accepted trade
+  - [x] An admiral made in the client UI and a treaty answered in it go through a live galaxy
+    (13 November 2026, sandbox turns 166 to 168): tmog66 made admiral 337 "scout2a" and gave it a
+    ship, and proposed trade 338 to guest-test; guest-test accepted it on turn 167, and turn 168
+    holds it active with start 167 and length 5. No refusal on either turn.
+  - [x] A per-turn credit payment is seen moving after an accepted trade (13 November 2026):
+    guest-test, idle, gained 100 credits a turn from 163 to 167 and 101 on turn 168, the first tick
+    of trade 338's 1 credit a turn. The payer's side is not separable from tmog66's own spending,
+    and the trade running out after 5 turns is not yet seen.
 
 - [x] **Governors run through the live referee.** Measured in Single Player and merged in
   `test_governors_merge.py`. On the sandbox galaxy (2 November 2026, turns 97 to 98), Beta
@@ -2224,8 +2230,9 @@ either ignores the setting on load or the capture rewrites it.
   -1 and the turn twice, and sets both civs' stance to 1. The UI shows a civ at war in red,
   cease-fire in yellow and peace in green; grey before contact, likely stance 0.
 - **A turn** leaves the treaties as they were.
-- **Not measured:** peace and alliance acceptance, the per-turn payments over a turn, a treaty
-  running out, and the other item types.
+- **A per-turn payment** reaches the recipient on the first tick after acceptance (sandbox, 13
+  November 2026).
+- **Not measured:** peace and alliance acceptance, a treaty running out, and the other item types.
 
 - [x] **Admirals and diplomacy are carried as measured** (`merge_orders.py`,
   `test_admirals_diplomacy_merge.py`). An admiral is judged like a governor: a new id, a printable
