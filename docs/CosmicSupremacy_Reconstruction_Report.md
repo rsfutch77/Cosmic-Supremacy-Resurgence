@@ -440,16 +440,14 @@ The general shape still matters more than this instance: **game state living in 
 
 #### The caveat: the client never uploads state on its own
 
-`SaveGame` at `0x0048B350` has exactly one caller in the binary, the Save/Load dialog at `0x0048B950`, which is reached through a message map, and the normal game has no such dialog. So a server cannot ask a client to submit its state; `client/dev_tools/trigger_save.py` gets a blob out by calling `SaveGame` in a remote thread. That is not memory *editing*, it invokes the engine's own routine and writes no game state, but it is still process injection, so the read direction is not yet a clean protocol operation.
+`SaveGame` at `0x0048B350` has exactly one caller in the binary, the Save/Load dialog at `0x0048B950`, which is reached through a message map, and the normal game has no such dialog. So a server cannot ask a client to submit its state; `client/dev_tools/trigger_save.py` gets a blob out by calling `SaveGame` in a remote thread. That is not memory *editing*, it invokes the engine's own routine and writes no game state, but it is still process injection. `patch_save_message.py` gives every shipped client a handler that saves on a window message instead (see "A save without a remote thread").
 
-There is a much better candidate for what the original did. `0x0056EBC0` writes an **`STCO`** section that includes ship routes via the same `Route::Write` used by `ROUT`, gated on `[0x0086F4F8]` and `[0x0086F1A2]`, and reached from `0x00574E10` inside the testbed init path at `0x00577160`. That looks like per-turn order submission, far lighter than uploading a whole galaxy.
+`STCO` was the candidate for a per-turn order upload. **It is not one.** It is one of the original client's 56 server commands, sent the moment a player sets a ship's course, and the original had no per-turn upload at all: see "The original client's online path" below.
 
-[ ] decode the **`STCO` section and the path that uploads it** (`0x0056EBC0`, gated on `0x0086F4F8` /
-`0x0086F1A2`, reached via `0x00574E10` from `0x00577160`). It serialises ship routes with the same
-`Route::Write` as `ROUT`, which makes it the strongest candidate for the original per-turn
-order-submission format, the missing half of the multiplayer loop. If it is what it looks like, the
-server learns player intent from a small `STCO` upload instead of a full save, and the remote-thread
-`SaveGame` call in `trigger_save.py` becomes a dev convenience rather than the mechanism.
+- [x] decode the **`STCO` section and the path that uploads it** (`0x0056EBC0`). Decoded statically
+  on 14 November 2026: `STCO` v0 is the "set course" command, sent when a player orders a ship, and
+  the server's answer sets the order. It is not a per-turn submission, and the referee and the merge
+  keep the save capture. What it changes for them is below.
 
 [x] find the rest of the **state the blob cannot carry**. The played-vs-loaded comparison was run in
 September 2026, and paired with a **functional** test, because a structural diff on its own cannot
@@ -508,10 +506,94 @@ client session with actuator writes between them, which is precisely the played 
 experiment. Such a galaxy cannot be captured, reloaded and continued as the same galaxy, and
 per-turn measurements taken across such a run are not reproducible from the blob.
 
-[ ] **What those 30 bytes are is not established.** The `NWDB` pair reads `1` against `2` in ASCII,
-which would be a count rendered into news text, and a count rendered at generation time is carried by
-the blob while one recomputed at read time is not. That distinction is this section's own standard
-and is the thread to pull first.
+[ ] **Three of the 30 bytes are still unnamed.** The `NWDB` digits are the planetary-defense damage
+percent in the two battle reports (strings 9 and 11): the loaded branch reads `12% (1 Citizen
+Killed)` and the played branch `11%`. A rerun of the loaded arm on 14 November 2026 (war_fork.dat,
+turn 110 to 180, the current `referee.tick`) reproduces it. The client formats that percent at
+`0x00522EF0` from a double, truncated with `_ftol`, clamped to 0..100 and printed into the `planetary-defense damage:` line at `0x0076D63C` when
+it writes the report, so the blob carries the text and nothing recomputes it on read. The same one
+citizen killed is a smaller share in the played branch, which matches its `PLPR` growth series
+sitting one step ahead before the battle. So the digit is a symptom: the divergence is in the
+battle planet's population growth before the fight. The two dwords and the `OWPR+0` byte are not
+yet named. Next step: diff `war_fork_L` against `war_fork_played.dat` by section, give the two
+`NWDB` dwords and `OWPR+0` their field names, and find the earliest turn the planet's `PLPR` differs
+between the arms.
+
+#### The original client's online path (November 2026)
+
+Read from the disassembly on 14 November 2026; nothing here has run against a server. The four
+clients share every address. `client/dev_tools/online_commands.py` lists the commands from an
+exe, and `server/tests/test_online_commands.py` pins the table.
+
+**The original client is a socket client, and every player action is a command.** A galaxy pass
+is base64 of `<KIND> <host> <port> <passhash> <player>`, and the client opens a TCP connection to
+that host and port (`Socket.cpp`, `ws2_32`). Each action's routine follows one shape:
+
+1. Online when the channel at `[0x0086F198]` belongs to the connection at `[0x0086F194]`, the
+   connection is up (`0x00562CC0`) and `[0x0086F1A2]` is not 1: it opens a message (`0x00562030`),
+   writes one section named for the command, sends it (`0x00561950`), blocks for the answer
+   (`0x0056E930(1)`), and applies the answer only if it reads `SUCC` (`0x005612A0`). Nothing
+   changes locally before the server answers.
+2. Otherwise, when `[0x0086F1A0]` is set, it applies the action locally. This is the path every
+   client in this project takes: a `.dat` argument sets the flag (`0x0056E7F0`), and so do the
+   `standalone` option, a `TUTO`, `DEMO` or `TEBE` pass, and T4a in the Resurgence build.
+3. Neither: nothing happens.
+
+`[0x0086F1A2]` is set when a pass names port 4710 (`0x00577EF4`). `[0x0086F4F8]` is the Tutorial
+being on; `STCO` calls the Tutorial's order check (`0x0057E670`) before anything else, and raises
+Tutorial event 14 after a local Colonize order.
+
+**`STCO` v0, set course** (`0x0056EBC0`, called from `0x00475A8B`, `0x0047C347` and `0x00575232`): a
+`u32` ship id, the command record (`0x004E9CE0`), and the route when there is one (`Route::Write`,
+`0x004E5310`; the table in §2 calls this call site "the ship writer"). The answer carries a `ROUT`
+that the client reads (`0x004E6E90`) and sets on the ship (`0x004DA450`), then applies the command
+(`0x004D9DC0`). Offline it sets the route it was given and applies the command directly.
+
+**The wire is the save's own section format**: a tag, then a `u32` with the version in its top 6
+bits and the length in the low 26. The client wraps each outgoing command in `CMND` v0, a `u32` and
+the command's section compressed with zlib (`0x00561710`); whether that `u32` is the compressed or
+the original length is not settled. A frame is accepted with a version up to 100 and a length up to
+10,000,000 (`0x00561350`).
+
+**What the server sends** is read by the dispatcher at `0x00573EA0`, polled from the main loop,
+which sends `ALIV` when it has been idle:
+
+| tag | handler | what it does |
+|---|---|---|
+| `TICK` | `0x0056DD10` | clears `[0x0086F1A1]`, the galaxy-is-current flag |
+| `SAVE`, `UPDT` | `0x0056DDA0` | loads the galaxy with the loader a `.dat` uses (`0x0056D700`), sets `[0x0086F1A1]` and sends `RQTM` |
+| `NEWS` | `0x00573940` | while `[0x0086F1A1]` is set, one `NEWS` record and a byte, added to the local civ's list (`Owner::AddNews`, `0x00543720`) and shown at once |
+| `ALIV`, `RSMA`, `TIME`, `TRKP` | `0x0056E400`, `0x0056DCE0`, `0x0056E460`, `0x0056E620` | not read further |
+
+**The 56 commands**, in address order. Those named were read or are named elsewhere in this report;
+the rest are tags only.
+
+`RQTM` `RSMA` `RQTN` `RQSV` **`STCO`** set course · `SLFC` `TGSD` `MOSD` `NWTR` `MDTR` `SEEN` `DISS`
+`DLTR` `STCL` `HRPR` `NWGV` `DLGV` `MDGV` `STGV` `NWAD` `DLAD` `MDAD` `STAD` `NWSQ` `MDSQ` `DLSQ`
+`STSQ` `RNGV` **`CUHW`** and **`CUCV`** the two customisation prompts · `SVUS` `PLRR` `STEL` `CNWH`
+`RNFL` `SONA` `RNSD` `STPR` `STTP` `STRS` `ALIV` **`CHCZ`** `ChangeCitizenJobs` (§13) · `RTMI`
+`CHNW` `TGST` `TGSS` `CRAS` `DLSD` `DLSC` **`SDNW`** a message or note · `TRRS` `CRSD` `DOSC`
+`MCFL` `EDNW` **`CNCA`** the civ name, its checkbox and the arms id
+
+**What this changes for the referee and the merge.** The original server was authoritative per
+action: it saw each command as it was made, decided it, and the client showed only what came back.
+There was no per-turn upload to recover. The other direction is the one this project already
+uses: a server could push a whole galaxy as `SAVE`, which the client loads with the same routine a
+`.dat` reaches. The project's loop, a client applying actions locally, a
+capture at the end of the turn and a merge that reads the actions out of the difference, is the same
+authority moved to the turn boundary, and nothing in the referee or the merge depends on `STCO`.
+Two things follow:
+
+- The 56 commands are the whole list of what a player can do. Every change the merge accepts
+  should be the effect of one of them, and each command's offline branch, which is what produced
+  the submission, is the rule to encode. A change no command can make is refused.
+- A server that spoke this protocol would see each action as it happens, which is what "Messages
+  arrive between ticks" needs. A connected client sends every command online and waits for the
+  answer, so such a server has to answer all 56, not only `SDNW`.
+
+- [ ] **Each merge rule names the command it stands for.** Done when every rule in `merge_orders.py`
+  cites its command, and every command either has a rule or is noted as refused or cosmetic. Next
+  step: read each routine's offline branch, starting with the 50 not named above.
 
 #### The engine is deterministic (September 2026)
 
@@ -842,11 +924,20 @@ the rest of the record misread. An id is not checked to name a civ.
   `ab2e6d3`.
 - [ ] **Messages arrive between ticks, close to instantly.** A message travels inside its
   sender's submission, so it reaches the recipient with the next tick, up to a whole turn later.
-  Per tick is acceptable for now (Robert, 13 November 2026). The client's online path sends
-  `SDNW` v0 holding one `NEWS` the moment a message is sent; nothing answers it, because the
-  launcher runs the client offline. Done when a message sent in the client reaches a recipient
-  whose launcher is open within a minute, shows in the recipient's news without waiting for the
-  tick, and is still in the turn the referee publishes.
+  Per tick is acceptable for now (Robert, 13 November 2026). The original did it over its socket:
+  the send routine at `0x00575970` writes one `NEWS` (writer `0x005355B0`) into an `SDNW` v0
+  command and waits for `SUCC`, and the server pushes a `NEWS` section (the record and a `u8`) to
+  each connected recipient, whose handler at `0x00573940` adds it with `Owner::AddNews` and
+  refreshes the news view with no tick. A `.dat` client takes the standalone branch and never
+  connects, so the launcher's client sends nothing. A TestBed started on a galaxy pass
+  (`SAND 127.0.0.1 47110 ...`, 14 November 2026) shows the connection dialog with
+  `Changing connection settings...` and opens no socket in 45 seconds. That text is one state of
+  the connection state machine on `[0x0086F1AC]` (around `0x00579B3D`); the only `connect` call
+  is at `0x005F20EB`. Next step: decode which state reaches `0x005F20EB` and what the dialog
+  waits for before it, then record the opening exchange against a local listener. Done when a
+  message sent in the client reaches a recipient whose launcher is open within a minute, shows in
+  the recipient's news without waiting for the tick, and is still in the turn the referee
+  publishes.
 - [x] **Each civ is served only its own news.** `fog.project` empties every other civ's news list
   and keeps only the strings its own list names, with the next id unchanged (`news.own_view`),
   and `fog.restore` puts them back ahead of anything the submission added, so a restored view is
@@ -1534,7 +1625,7 @@ All three are called in turn from the main loop at `0x00579C3D`, and each also w
 
 **`Owner:384` is the length of the civ name, not a count of records.** The chosen name is a VC9 `std::string` at `session+0x1A0`, whose size field is `session+0x1B4`, so `OWPR` is `138 + Owner:384` bytes because the name's characters are written into it. `0x00538470`, the civ's display name, returns that string when the length is non-zero and the player name otherwise. Prompt 225 is therefore offered until a name has been chosen. Measured across saves: `testname4` stores 9. Writing the length without the characters does silence the prompt, and it is still the wrong fix, because it fabricates a name. Returning from `0x0056E700`, one byte, silences it without fabricating anything; a patch did that for the player client until the referee could carry the dialog's choice.
 
-**Prompt 225's OK stores three things through `0x00579230`:** the name, the "Reveal True Player Name" checkbox and the coat-of-arms id. Online it sends them as an `ACNC` message and changes nothing locally. Offline it trims spaces and tabs, then refuses a name outside 3 to 30 characters ("Civilization Name needs to be between 3 and 30 characters long") or one that matches another civ's player name or chosen name ("A similar Civilization Name already exists"). The match ignores case: `0x00404B30` upper-cases both names with `toupper` before comparing, and the civ's own player name is not checked. A name it accepts goes to `civ+0x1A0`, the checkbox to `+0x19D` and the id to `+0x1C0`. The dialog also has a "Decide Later" button.
+**Prompt 225's OK stores three things through `0x00579230`:** the name, the "Reveal True Player Name" checkbox and the coat-of-arms id. Online it sends them as a `CNCA` command and changes nothing locally. Offline it trims spaces and tabs, then refuses a name outside 3 to 30 characters ("Civilization Name needs to be between 3 and 30 characters long") or one that matches another civ's player name or chosen name ("A similar Civilization Name already exists"). The match ignores case: `0x00404B30` upper-cases both names with `toupper` before comparing, and the civ's own player name is not checked. A name it accepts goes to `civ+0x1A0`, the checkbox to `+0x19D` and the id to `+0x1C0`. The dialog also has a "Decide Later" button.
 
 **`OWPR` (version 19) ends with those three fields.** `0x0053B230` writes them last: the name as a `u32` length and its characters, the checkbox as one byte, the id as an `i32`, −1 for none. Every civ in the local saves and sandbox captures ends `00 00 00 00 | 00 | ff ff ff ff`: no name, player name hidden, no arms.
 
@@ -1632,7 +1723,7 @@ Each replacement is written into its original's slot and the remainder is NUL-fi
 
 **CONFIRMED:** a patched `CosmicSupremacy_TestBed.exe` started with no arguments from a non-administrator account shows the new text in the setup failed dialog.
 
-[ ] Patch 31 is verified by byte comparison and by formatting the patched string, not yet on screen. It needs a client whose `CreateDevice` fails.
+[x] Patch 31 is seen on screen (14 November 2026). A scratch copy of the patched TestBed with the success branch at `0x005728D0` (`74 4F`, `je 0x00572921`) NOPped takes the `CreateDevice` failure path on a working machine. Its dialog reads `Failed to initialize the Renderer.`, `DirextX CreateDevice returned an unknown error: 00000000`, then the patched paragraph: attach the saved file to an issue at the tracker URL with the latest log file, saved at the client's `log.txt` path. No host appears in it. The forced copy is a probe only and never ships.
 
 ### Patches 32–35, Main window opens 10% larger (16 bytes, October 2026)
 
@@ -1954,8 +2045,9 @@ Corrected:
 ### A save without a remote thread (follow-up, October 2026)
 
 The launcher makes the client save by injecting a call to `SaveGame` in a remote thread
-(`client/dev_tools/trigger_save.py`). That is the shipping path for the public beta. The route
-that removes the remote thread is a resident handler in the player client, and it is not built.
+(`client/dev_tools/trigger_save.py`). That was the shipping path for the public beta. The route
+that removes the remote thread is a resident handler in the client, and every shipped client now
+carries one.
 
 What bounds it:
 
@@ -1966,18 +2058,22 @@ What bounds it:
 - `SaveGame` is `ret 8`, ignores `this`, and is synchronous: the same three facts the injected
   stub relies on.
 - `.text` has a 3,948-byte run of padding at `0x006D2094` that can hold the stub.
-- The launcher half exists: `client/dev_tools/trigger_save_message.py` posts a registered window
-  message with `PostMessageW`, and `game_cycle.trigger_save` uses it when `CS_SAVE_VIA_MESSAGE`
-  is set. With a stock client the message reaches nothing.
+- The launcher half is `client/dev_tools/trigger_save_message.py`, which sends the registered
+  window message, and `game_cycle.trigger_save` uses it. A stock client ignores the message.
 
-- [ ] **A player build saves on a posted message.** The beta keeps the injected save. Done when a
-  player build saves on the posted message, a real capture lands through it, and
-  `CS_SAVE_VIA_MESSAGE` is made the default.
+- [x] **A player build saves on a sent message** (14 November 2026). `patch_save_message.py`
+  hooks `AfxWndProc` at `0x00654892` and puts the stub at `0x006D20A0`. The stub answers the
+  registered message `CosmicSupremacyResurgenceSave` by calling `SaveGame(wParam, "resident")` on
+  the client's own main thread and returns its result. `build.ps1` applies it to every client it
+  stages, and `release/tests/test_save_handler_patch.py` pins it. The launcher sends the message with
+  `SendMessageTimeoutW`, so it knows whether the save ran. `CS_SAVE_VIA_MESSAGE` now defaults to
+  the client's own answer: the message path when the running exe carries the handler, the
+  injected save otherwise. `1` or `0` forces either one. A patched TestBed on
+  `SinglePlayerGalaxy.dat` answered both a direct send and `game_cycle.trigger_save` with
+  `SaveGame` returning 1, and both captures reached `cs_server` (12,412 bytes, turn 0).
 
-The work left is the stub plus a window-procedure hook that routes the registered message to it,
-written as a `patch_*.py` in the existing client patch step and signed with the rest. A resident
-stub and a window-procedure hook are themselves a pattern antivirus heuristics watch for, so this
-moves the sensitive act into a signed static binary rather than removing it.
+A resident stub and a window-procedure hook are themselves a pattern antivirus heuristics watch
+for, so this moves the sensitive act into a signed static binary rather than removing it.
 
 ### One game process per machine, and what the lock does not know
 
@@ -1991,14 +2087,20 @@ player mid-turn cannot afford for it not to; a player's serve refuses at once. T
 nothing stops a tool calling `Popen` itself, and every path in this project goes through `launch`. On
 separate machines the problem does not exist, which is why it survived this long unnoticed.
 
-[ ] **The lock records who last claimed the client, not who is using it.** `take_client_lock` clears
-a stale lock by asking whether the holder's pid is alive, which was written for a holder that died
-mid-hold, since a legitimate hold lasts a whole turn and a timeout would break it. A holder that
-exits normally and deliberately leaves the client running produces the same stale lock, and the next
-tool through is waved past it. Seen live: a script that opened a galaxy for inspection finished, left
-the client up, and left a lock naming a dead pid while other work was still in flight on that
-machine. A free lock and a free machine are independent facts, and the tooling cannot tell them
-apart.
+- [x] **The lock records who last claimed the client, not who is using it.** `take_client_lock`
+  cleared a stale lock by asking whether the holder's pid is alive, which was written for a holder
+  that died mid-hold, since a legitimate hold lasts a whole turn and a timeout would break it. A
+  holder that exits normally and deliberately leaves the client running produced the same stale
+  lock, and the next tool through was waved past it. Seen live: a script that opened a galaxy for
+  inspection finished, left the client up, and left a lock naming a dead pid while other work was
+  still in flight on that machine. **Fixed** (14 November 2026): `launch` writes the pid of the
+  client it starts on a second line of the lock, `client <pid>`. A lock whose holder has exited is
+  stale only when that client has exited too. While it runs the client was left open: another
+  purpose is refused with the holder, its purpose and the client named, `close_client` refuses it,
+  and only the purpose that left it takes it over, which is how the referee recovers from its own
+  crash. `python game_cycle.py --close` closes a client left open once nobody is using it, and
+  still refuses a live holder. A lock written before this has no client line and is treated as
+  before (`server/tests/test_client_lock.py`).
 
 ### Conclusion (corrected)
 
