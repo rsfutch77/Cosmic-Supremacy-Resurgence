@@ -35,6 +35,7 @@ import struct
 import sys
 import zlib
 from collections import Counter
+from functools import lru_cache
 
 # Known tags, used to decide whether a payload contains sub-sections.
 KNOWN_TAGS = {
@@ -228,8 +229,23 @@ def parse_sections(blob: bytes, start: int, end: int, depth: int = 0) -> list:
     return run
 
 
+PARSE_CACHE = 16  # blobs whose trees are kept; a merge holds a handful at once
+
+
+@lru_cache(maxsize=PARSE_CACHE)
+def _parse_cached(blob: bytes) -> tuple:
+    return tuple(parse_sections(blob, 0, len(blob)))
+
+
 def parse_blob(blob: bytes) -> list:
-    """Parse a whole decompressed blob into a list of top-level sections."""
+    """Parse a whole decompressed blob into a list of top-level sections.
+
+    A `bytes` blob's tree is cached by its content, so repeated reads of the
+    same blob parse it once. The `Section` objects are shared between callers
+    and must not be changed; the list is the caller's own.
+    """
+    if type(blob) is bytes:
+        return list(_parse_cached(blob))
     return parse_sections(blob, 0, len(blob))
 
 
