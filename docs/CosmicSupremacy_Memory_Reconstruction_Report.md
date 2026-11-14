@@ -1971,8 +1971,9 @@ loyalty with `sim.economy.planet_loyalty`, without the bio-bomb penalty.
 [ ] Find where the save carries the bio-bomb loyalty penalty: `Owner+0x12C` is a map keyed by civ,
 read through `0x005343A0`, its u16 at `+0x24` of each node.
 
-[ ] Read planet #384's loyalty on screen from `capture_live_invade_t0129.after`; the derivation
-gives 36.29%.
+[x] Read planet #384's loyalty on screen from `capture_live_invade_t0129.after`; the derivation
+gives 36.29%. The TestBed's Planets screen shows 36% for it (14 Nov 2026), in whole percent. The
+same screen shows 101% for GoodGuy's HQ, whose soldiers lift a fully loyal planet past 100.
 
 ### `Planet:368` is a turn counter; loyalty is derived (August 2026)
 
