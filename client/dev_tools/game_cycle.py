@@ -7,6 +7,7 @@ game_cycle.py: save, close, edit the blob, relaunch, without a human
 
     python game_cycle.py --save-only          # just capture a blob
     python game_cycle.py --relaunch <file>    # bring a .dat back up
+    python game_cycle.py --close              # close a client left open
 
 Ship designs cannot be created in memory: nothing registers the object with the
 civ or computes its stat block. The engine's deserialiser does both on load, so
@@ -60,13 +61,19 @@ def close_client(timeout=20, force=False):
     `force` skips the check, for a caller that knows the holder is gone in a way
     `_pid_alive` cannot see.
     """
-    held = lock_holder()
-    if (held and not force and held[0] != os.getpid()
-            and _pid_alive(held[0]) and client_pids()):
-        raise SystemExit(
-            f"the client is held by pid {held[0]} ({held[1]}). Closing it now "
-            f"would destroy whatever that is doing, which if it is a player's "
-            f"turn leaves no trace. Wait for it, or stop that process.")
+    state = lock_state()
+    if (state and not force and state["pid"] != os.getpid()
+            and client_pids()):
+        if _pid_alive(state["pid"]):
+            raise SystemExit(
+                f"the client is held by pid {state['pid']} ({state['purpose']}). "
+                f"Closing it now would destroy whatever that is doing, which "
+                f"if it is a player's turn leaves no trace. Wait for it, or "
+                f"stop that process.")
+        if left_open(state):
+            raise SystemExit(_left_open_message(state))
+    if state and state["pid"] != os.getpid() and force:
+        _remove_lock()
     release_client_lock()
     pids = client_pids()
     if not pids:
@@ -89,8 +96,12 @@ def close_client(timeout=20, force=False):
 import tempfile
 
 # Advisory lock on the machine's one game process: a file holding
-# "<pid> <purpose>", taken by launch() and checked by close_client(). A lock
-# whose pid is no longer alive is stale; a legitimate hold can last a whole turn.
+# "<pid> <purpose>", and "client <pid>" on a second line once launch() has
+# started one. Taken by launch() and checked by close_client(). A legitimate
+# hold can last a whole turn, so there is no timeout. A lock whose holder has
+# exited is stale only when the client it started is gone too: a holder that
+# exits and leaves its client up has left it open, and somebody may still be
+# using it.
 CLIENT_LOCK = os.path.join(tempfile.gettempdir(), "cosmic_client.lock")
 
 TESTBED_EXE = os.path.join(CLIENT_DIR, "CosmicSupremacy_TestBed.exe")
@@ -109,25 +120,74 @@ def _pid_alive(pid):
         return True          # cannot tell, so assume the holder is alive
 
 
+def lock_state():
+    """{pid, purpose, client} from the lock file, or None. `client` is the pid
+    of the client the holder started, or None before one is started."""
+    try:
+        lines = open(CLIENT_LOCK, encoding="utf-8").read().splitlines()
+        pid, _, purpose = lines[0].strip().partition(" ")
+        state = {"pid": int(pid), "purpose": purpose, "client": None}
+        for line in lines[1:]:
+            key, _, value = line.strip().partition(" ")
+            if key == "client" and value.isdigit():
+                state["client"] = int(value)
+        return state
+    except (OSError, ValueError, IndexError):
+        return None
+
+
 def lock_holder():
     """(pid, purpose) currently holding the client, or None."""
+    state = lock_state()
+    return (state["pid"], state["purpose"]) if state else None
+
+
+def left_open(state):
+    """Whether a lock whose holder has exited still has its client running."""
+    return (state is not None and state["client"] is not None
+            and state["client"] in client_pids())
+
+
+def _left_open_message(state):
+    return (f"pid {state['pid']} ({state['purpose']}) exited and left its "
+            f"client running (pid {state['client']}). Somebody may still be "
+            f"using it. Once nobody is, close it with "
+            f"`python game_cycle.py --close`.")
+
+
+def _remove_lock():
     try:
-        raw = open(CLIENT_LOCK, encoding="utf-8").read().strip()
-        pid, _, purpose = raw.partition(" ")
-        return int(pid), purpose
-    except (OSError, ValueError):
-        return None
+        os.remove(CLIENT_LOCK)
+    except OSError:
+        pass
+
+
+def record_client(pid):
+    """Note on our lock the pid of the client we started."""
+    state = lock_state()
+    if state and state["pid"] == os.getpid():
+        with open(CLIENT_LOCK, "w", encoding="utf-8") as f:
+            f.write(f"{state['pid']} {state['purpose']}\nclient {pid}")
 
 
 def take_client_lock(purpose, wait=0.0, poll=2.0):
     """Claim the machine's one game process. Returns True when held.
 
     `wait` is how long to wait for a current holder to finish; zero refuses at
-    once.
+    once. A client left open is taken over only by the purpose that left it,
+    which is how the referee recovers from its own crash.
     """
     deadline = time.time() + wait
     while True:
-        held = lock_holder()
+        state = lock_state()
+        held = (state["pid"], state["purpose"]) if state else None
+        if (held is not None and held[0] != os.getpid()
+                and not _pid_alive(held[0]) and left_open(state)
+                and state["purpose"] != purpose):
+            if time.time() >= deadline:
+                raise SystemExit(_left_open_message(state))
+            time.sleep(poll)
+            continue
         if held is None or not _pid_alive(held[0]):
             if held is not None:
                 log(f"  clearing a stale client lock from pid {held[0]} "
@@ -156,10 +216,7 @@ def take_client_lock(purpose, wait=0.0, poll=2.0):
 def release_client_lock():
     held = lock_holder()
     if held and held[0] == os.getpid():
-        try:
-            os.remove(CLIENT_LOCK)
-        except OSError:
-            pass
+        _remove_lock()
 
 
 def resolve_exe(which=None):
@@ -228,8 +285,10 @@ def launch(dat, timeout=180, exe=None, purpose=None, wait_for_lock=0.0,
         release_client_lock()
         raise SystemExit(f"no such client: {exe_path}")
     log(f"  launching {os.path.basename(exe_path)} on {dat}")
-    subprocess.Popen([exe_path, dat], cwd=CLIENT_DIR,
-                     creationflags=getattr(subprocess, "DETACHED_PROCESS", 0))
+    proc = subprocess.Popen([exe_path, dat], cwd=CLIENT_DIR,
+                            creationflags=getattr(subprocess,
+                                                  "DETACHED_PROCESS", 0))
+    record_client(proc.pid)
     import gamestate as gs
     deadline = time.time() + timeout
     seen_alive = False
@@ -426,7 +485,18 @@ def main():
     ap.add_argument("--save-only", action="store_true")
     ap.add_argument("--relaunch", default=None,
                     help="skip everything and just bring this .dat up")
+    ap.add_argument("--close", action="store_true",
+                    help="close a client its holder left open; a live holder "
+                         "is still refused")
     a = ap.parse_args()
+
+    if a.close:
+        state = lock_state()
+        if state and state["pid"] != os.getpid() and _pid_alive(state["pid"]):
+            raise SystemExit(f"the client is held by pid {state['pid']} "
+                             f"({state['purpose']}); it is not left open")
+        close_client(force=True)
+        return
 
     if a.relaunch:
         close_client()
