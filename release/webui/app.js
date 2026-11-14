@@ -76,6 +76,7 @@ function gbtn(label, onClick, extra) {
 let columns = [];
 let sort = { key: null, desc: false };
 let modesDisabled = false;
+let newsLine = "";
 const controlBtns = {};
 
 function showPage(name) {
@@ -98,8 +99,23 @@ function drawModes(modes) {
       row.append(fresh);
     }
     if (m.done) row.append(el("div", "done", "Completed"));
+    row.dataset.mode = m.id;
     box.appendChild(row);
   }
+  drawNews();
+}
+
+// The news line sits below the Multiplayer button, inside its row so the rows
+// keep their stripes, as plain text.
+function drawNews() {
+  const old = $("news");
+  if (old) { old.parentElement.classList.remove("with-news"); old.remove(); }
+  const mp = $("modes").querySelector('[data-mode="multiplayer"]');
+  if (!newsLine || !mp) return;
+  const line = el("div", "news", newsLine);
+  line.id = "news";
+  mp.classList.add("with-news");
+  mp.append(line);
 }
 
 function drawHeadings() {
@@ -251,6 +267,7 @@ window.ui = {
     if (s.account !== undefined) $("account-btn").textContent = s.account || "log in";
     if (s.build !== undefined) $("st-build").textContent = s.build;
     if (s.update !== undefined) { $("st-update").textContent = s.update; show("st-update", !!s.update); }
+    if (s.news !== undefined) { newsLine = s.news; drawNews(); }
     if (s.status) {
       $("st-text").textContent = s.status.text;
       $("st-dot").style.background = s.status.colour;

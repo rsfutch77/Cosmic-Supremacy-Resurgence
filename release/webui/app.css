@@ -74,6 +74,8 @@ main { flex: 1; min-width: 0; padding: 10px 8px; display: flex; flex-direction: 
 .row:nth-child(even) { background: #222c36; }
 .row:hover { background: #34475a; }
 .blurb { color: #b9c6d2; line-height: 16px; }
+.row.with-news { flex-wrap: wrap; row-gap: 6px; }
+.news { flex: 0 0 100%; color: #e8eef2; font-size: 11px; line-height: 15px; }
 .hint { margin-top: auto; color: #8ea2b3; font-size: 11px; }
 
 /* Up to two lines: an outage note beside the turn number is long. */

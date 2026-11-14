@@ -982,6 +982,13 @@ UNSTAMPED_MARK = "unstamped"    # packaged, but the stamp did not reach the bund
 # Where a launcher that is too old is told to go.
 UPDATE_URL = "https://cosmicresurgence.com/download_client.php.html"
 
+# The line the Play page shows below Multiplayer, edited with the website.
+NEWS_URL = "https://cosmicresurgence.com/launcher_news.json"
+NEWS_URL_ENV = "CS_LAUNCHER_NEWS"   # a checkout may name a stand-in
+NEWS_CHECK_FIRST_MS = 2_000
+NEWS_CHECK_EVERY_MS = 3600 * 1000
+NEWS_LIMIT = 200                    # characters; a longer line is cut
+
 # How often a running launcher looks for a newer release, after the first look
 # shortly after it starts.
 UPDATE_CHECK_FIRST_MS = 15_000
@@ -1705,6 +1712,27 @@ def guest_relays(records, uid) -> list:
         if base not in out:
             out.append(base)
     return out
+
+
+def news_url() -> str:
+    return os.environ.get(NEWS_URL_ENV) or NEWS_URL
+
+
+def news_line(doc) -> str:
+    """The banner's text from the news file, as one plain line, or "" for none."""
+    text = doc.get("text") if isinstance(doc, dict) else None
+    if not isinstance(text, str):
+        return ""
+    line = " ".join(text.split())
+    return line if len(line) <= NEWS_LIMIT else line[:NEWS_LIMIT - 3] + "..."
+
+
+def fetch_news(url: str, timeout: float = 10.0) -> str:
+    """The banner's text, read from `url`. Raises on a network or format error."""
+    import urllib.request
+    req = urllib.request.Request(url, headers={"User-Agent": "CS-Launcher"})
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return news_line(json.loads(resp.read(64 * 1024) or b"{}"))
 
 
 def move_guest_seats(base: str, account_token: str, guest_token: str,
@@ -3219,6 +3247,7 @@ class Launcher:
         self._boot()
         self._update_boot()
         view.after(UPDATE_CHECK_FIRST_MS, self._update_tick)
+        view.after(NEWS_CHECK_FIRST_MS, self._news_tick)
         view.after(120, self._drain)
         view.after(1000, self._watch_game)
 
@@ -5545,6 +5574,25 @@ class Launcher:
             self.msgs.put(("__update__", found, err, feed if test else None))
         threading.Thread(target=work, daemon=True, name="update").start()
 
+    def _news_tick(self):
+        """Read the news line, off the UI thread."""
+        self.view.after(NEWS_CHECK_EVERY_MS, self._news_tick)
+        url = news_url()
+
+        def work():
+            try:
+                self.msgs.put(("__news__", fetch_news(url), None))
+            except Exception as exc:
+                self.msgs.put(("__news__", None, f"{type(exc).__name__}: {exc}"))
+        threading.Thread(target=work, daemon=True, name="news").start()
+
+    def _on_news(self, line, err):
+        """Show the line, or keep the last one when the site cannot be read."""
+        if err:
+            self.say(f"news: not read ({err})")
+            return
+        self.view.show_news(line)
+
     def _on_update_checked(self, found, err, test_feed):
         self.update_busy = False
         where = f" (test feed {test_feed})" if test_feed else ""
@@ -5802,6 +5850,8 @@ class Launcher:
                     self._on_mp_played(gid, turn)
                 elif isinstance(msg, tuple) and msg and msg[0] == "__update__":
                     self._on_update_checked(*msg[1:])
+                elif isinstance(msg, tuple) and msg and msg[0] == "__news__":
+                    self._on_news(*msg[1:])
                 elif isinstance(msg, tuple) and msg and msg[0] == "__mp_refused__":
                     self.warn(msg[1])
                 elif isinstance(msg, tuple) and msg and msg[0] == "__log_offer__":

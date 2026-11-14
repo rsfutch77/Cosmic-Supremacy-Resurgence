@@ -343,6 +343,11 @@ class WebView:
         if self._changed("update", text or ""):
             self._set(update=text or "")
 
+    def show_news(self, text: str) -> None:
+        """The line below Multiplayer, as plain text; "" shows none."""
+        if self._changed("news", text or ""):
+            self._set(news=text or "")
+
     def set_status(self, text: str, colour: str) -> None:
         self._set(status={"text": text,
                           "colour": ON_LIGHT.get(colour, ON_LIGHT_TEXT)})
