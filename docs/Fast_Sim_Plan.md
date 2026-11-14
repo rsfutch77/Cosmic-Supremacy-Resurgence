@@ -489,9 +489,10 @@ simulator alike. The engine's corruption function (`0x0053A0D0`, content version
 up) reads an empire reputation float at `Owner:32`, then scales the result by
 `corruption_multiplier` / 100 and caps a bonus at 50%. The tick's score rebuild adds a
 pending float at `Owner:36` into `Owner:32` and clears it. The client computes battle
-reputation: a defender that destroyed an attacking ship gained exactly the manual's
-5 x log2 of the attacker's score over 80% of its own (12.759, 13.522), and the attacking
-GoodGuy lost 4.579 where the manual gives 9.540. Only battle captures move it, which is
+reputation (`0x00518480`): a defender that destroyed an attacking ship gained exactly the
+manual's 5 x log2 of the attacker's score over 80% of its own (12.759, 13.522), the ratio
+clamped to 0.1..10; an attacker loses 0.48 of that figure and gains it in full, which three
+probes at other score ratios confirmed (`capture_rep3*`). Only battle captures move it, which is
 why every corruption fit so far matches reputation 0. The earlier probe (`capture_rep*`) moved the per-relation records through AddReputation,
 which nothing in play reads, and so changed nothing. A live probe wrote GoodGuy's
 `Owner:32` as +100 and -100 before two ticks (`capture_rep2*`): the save carries it in
@@ -499,10 +500,10 @@ which nothing in play reads, and so changed nothing. A live probe wrote GoodGuy'
 which now loads it, matches the engine's research to 2 points and its food and production
 exactly. Credits move only about 0.62 times as far as the simulator's from the reputation 0
 result, so the engine's income takes the corruption by some other path; open below. The
-simulator loads score and reputation from the save, and its defenders now gain what the
-engine's did; its attackers still lose the manual's figure. The score ratio divides
-by 80% of one's own score, so attacking a civ of one's own size gains about 1.6 reputation
-(5 x log2 1.25), and only attacking a civ under 80% of one's own score loses it. The reward
+simulator loads score and reputation from the save and matches every reputation the
+engine produced. The score ratio divides by 80% of one's own score, so attacking a civ of
+one's own size gains about 1.6 reputation (5 x log2 1.25), and only attacking a civ under
+80% of one's own score loses it, at 0.48 of the manual's rate. The reward
 counts income and surge production after corruption, so a reputation gain shows up in `D`
 through the economy rather than as a term of its own.
 
@@ -658,7 +659,7 @@ soldiers to crew them its ships never fill. It is a probe, not a training oppone
       (§5b, "Pre-training checks")
 - [x] A ground battle on the client (§5b, "Pre-training checks", Battles)
 - [x] Shields in a captured battle, through `list6`
-- [ ] Find the attacker's reputation rule: 4.579 lost where the manual gives 9.540
+- [x] The attacker's reputation rule: 0.48 of the manual's loss, a gain in full
       (Memory Reconstruction Report, "Find the attacker's reputation rule")
 - [ ] A loaded galaxy does not say which pairs have had their first scoring battle, so the
       simulator can award reputation a second time to a pair that fought before loading

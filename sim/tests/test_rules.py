@@ -23,6 +23,7 @@ from sim import load as sl                                      # noqa: E402
 from sim import movement as mv                                  # noqa: E402
 from sim import orders as od                                    # noqa: E402
 from sim import research as rs                                  # noqa: E402
+from sim import renown                                          # noqa: E402
 from sim import reward as rw                                    # noqa: E402
 from sim import scans as sc                                     # noqa: E402
 from sim import state as st                                     # noqa: E402
@@ -429,7 +430,21 @@ def order_checks():
 
 
 def reputation_checks():
-    """The manual's reputation term reaches the reward through corruption."""
+    """The manual's reputation term reaches the reward through corruption, and
+    battles move reputation as the live probes did."""
+    for (mine, theirs), want in (((13538, 6000), -2.045), ((13538, 13538), 1.610),
+                                 ((50000, 2886), -7.973), ((13538, 2886), -4.579)):
+        g = galaxy()
+        g.civs[DEMO].score, g.civs[BAD].score = mine, theirs
+        renown.battle(g, DEMO, BAD, 0, 100, 1000, 1000, at_planet=True)
+        check(f'an attacker at {mine} against {theirs} gets {want}',
+              round(g.civs[DEMO].reputation, 3), want)
+    g = galaxy()
+    g.civs[DEMO].score, g.civs[BAD].score = 17718, 3398
+    renown.battle(g, DEMO, BAD, 100, 0, 1000, 1000, at_planet=True)
+    check('a defender that destroys an attacker gains the full figure, and an attacker '
+          'that destroyed nothing loses none',
+          (round(g.civs[BAD].reputation, 3), g.civs[DEMO].reputation), (13.522, 0.0))
     g = galaxy()
     by = {}
     for rep in (-20, 0, 20):

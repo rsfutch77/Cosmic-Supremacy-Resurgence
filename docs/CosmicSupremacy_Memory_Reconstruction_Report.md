@@ -2604,13 +2604,19 @@ attacker's ship gained 5 x log2 of the attacker's score over 80% of its own, 12.
 exactly the manual, once per pair. The per-relation word AddReputation changes is still unread
 in play.
 
-[ ] **Find the attacker's reputation rule.** The attacking GoodGuy lost 4.579 in every captured battle,
-where the manual's 5 x log2(2886 / (0.8 x 13538)) gives 9.540, 0.48 of it, and an attacker
-that destroyed nothing lost nothing. All of them share one pair of scores, so a probe with a
-different score ratio separates a factor from a ratio taken at some other moment (the
-declaration of war is the first guess). The writer was not found by scanning for adds into
-`Owner:36`, so look for the battle code that calls the score rebuild's inputs. One older
-capture also gave a defender 11.656 where the scores before the tick give 12.601.
+[x] **Find the attacker's reputation rule.** `0x00518480` computes it, called from the battle
+code at `0x0051EEE5` and from the declare-war forecast at `0x004432A6`: the enemy's score over
+one's own times (100 - `score_breakeven`) / 100, clamped to 0.1..10, then 5 x log2, a
+negative result zeroed when a flag argument is set, capped at +/-20 in one galaxy mode, scaled
+by the turn over 120 (60 in another mode) before that turn, and multiplied by
+`reputation_multiplier` / 100. An attacker that loses reputation loses 0.48 of that figure:
+with GoodGuy's and BadGuy's scores written into memory before one battle tick, 13538 against
+6000 gave -2.045 (the formula -4.260), 50000 against 2886 gave -7.973 (-16.610, the ratio
+clamped), and equal scores gave the full +1.610 (`capture_rep3*`). Where the 0.48 is applied
+was not traced.
+
+[ ] Explain the defender gain of 11.656 in `capture_twosided_staged_fork_badguy_t0110`, where
+the scores before the tick give 12.601 by the same rule that matched every other battle.
 
 [ ] test whether loyalty and corruption are derived rather than stored, populate one planet's population, buildings and military fully, and check whether both values follow from those inputs without any field of their own changing.
 

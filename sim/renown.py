@@ -15,18 +15,19 @@ score-reputation-and-rank page, with no capture to check them against.
                   battle's two defending fighters, and nothing for its colony ship
 
 The engine keeps reputation at Owner:32 and its corruption reads it
-(economy.empires). Live battles fit the manual for a defender: BadGuy gained
-5 x log2 of GoodGuy's score over 80% of its own, 12.759 and 13.522 to the
-unit, at the first battle in which it destroyed a ship. The attacker lost
-4.579 where the manual gives 9.54, in three battles from one pair of scores;
-the simulator keeps the manual's figure until a second pair settles the rule.
-Scores load from the save (Owner:28).
+(economy.empires). Its rule (0x00518480) clamps the score ratio to 0.1..10
+before the log. Live battles fit it to the unit: a defender gained the full
+figure, 12.759 and 13.522, and an attacker lost 0.48 of it at three score
+ratios (-2.045, -4.579 and -7.973, the last clamped) and gained it in full
+(+1.610). Scores load from the save (Owner:28).
 """
 import math
 
 SCORE_PER_UNIT = 0.5
 BREAK_EVEN = 0.8
 REPUTATION_PER_DOUBLING = 5
+REPUTATION_RATIO = (0.1, 10.0)  # the score ratio's clamp before the log
+ATTACKER_LOSS_SHARE = 0.48      # of the manual's loss; a gain is paid in full
 SIGNIFICANT = 0.005             # share of the enemy's physical power
 EXPERIENCE_PER_RATIO = 2
 
@@ -34,6 +35,11 @@ EXPERIENCE_PER_RATIO = 2
 def ratio(g, me, enemy):
     mine, theirs = g.civs[me].score, g.civs[enemy].score
     return max(theirs, 1.0) / (BREAK_EVEN * max(mine, 1.0))
+
+
+def reputation(r):
+    lo, hi = REPUTATION_RATIO
+    return REPUTATION_PER_DOUBLING * math.log2(min(hi, max(lo, r)))
 
 
 def gain(g, me, enemy, units):
@@ -53,14 +59,16 @@ def battle(g, attacker, defender, lost_by_attacker, lost_by_defender,
         # The manual: moving to a planet one is at war with makes one the aggressor.
         if (attacker, defender) not in g.fought and (at_planet or (attacker, defender) in g.declared):
             g.fought.add((attacker, defender))
-            rep = REPUTATION_PER_DOUBLING * math.log2(a_ratio)
-            if rep < 0 or lost_by_defender >= SIGNIFICANT * defender_power:
+            rep = reputation(a_ratio)
+            if rep < 0:
+                g.civs[attacker].reputation += rep * ATTACKER_LOSS_SHARE
+            elif lost_by_defender >= SIGNIFICANT * defender_power:
                 g.civs[attacker].reputation += rep
     if lost_by_attacker:
         g.civs[defender].score += gain(g, defender, attacker, lost_by_attacker)
         if (defender, attacker) not in g.fought:
             g.fought.add((defender, attacker))
-            rep = REPUTATION_PER_DOUBLING * math.log2(d_ratio)
+            rep = reputation(d_ratio)
             if rep > 0 and lost_by_attacker >= SIGNIFICANT * attacker_power:
                 g.civs[defender].reputation += rep
 
