@@ -17,13 +17,17 @@ to a record the reader `0x5332E0` and writer `0x532F20` walk member by member.
                    4 alliance                            (key `stance`)
         +16   u8   1 on the side that declared the war   (key `declared`)
         +17   u16  set during the first tick of a war    (key `w17`)
-        +19   u8   set with +17                           (key `w19`)
-        +20   i32  -1 until a war is declared, then 100  (key `w20`)
-        +24   u16  set with +17                           (key `w24`)
-        +26   i16  the bio-bomb loyalty penalty: bio-bombing the record's
-                   civ adds the bombs dropped, capped at 100, and that
-                   civ's citizens under this one lose it   (key `bio_penalty`)
-        +28   u8   0 in every capture                     (key `w28`)
+        +19   u8   1 once the significant battle has been fought; no
+                   reputation is gained or lost for attacking again
+                                                         (key `battled`)
+        +20   i32  the other civ's Inactivity percent when the war was
+                   declared, -1 before                   (key `inactivity`)
+        +24   u16  reputation-gain cooldown: +150 per gain, -1 a tick
+                                                         (key `cooldown`)
+        +26   u16  bio-bomb sets dropped on the civ, capped at 100, -1 a
+                   tick; its loyalty penalty in percent  (key `biobombed`)
+        +28   u8   1 once the civ's leader's name is known
+                                                         (key `leader_known`)
         +29   u8   the civ's territory is drawn          (key `territory`)
         +30   u8   the civ's ships are drawn             (key `ships`)
         +31   u8   1 colours the civ by stance, 0 by +32 (key `by_stance`)
@@ -31,13 +35,28 @@ to a record the reader `0x5332E0` and writer `0x532F20` walk member by member.
 
 First contact (`0x534F90`) passes the current turn and the opening stance to
 the constructor (`0x532E60`): war under `waronly`, by team in a team game,
-else neutral. The constructor sets +20 to -1, +29 to 0, +30 and +31 to 1, and
-never sets the colour, so a civ that never picked one carries whatever was in
-memory. The reader forces the colour's top byte to 0xFF, and that is the
-nondeterministic dword `canonical.py` masks.
+else neutral. The constructor sets `inactivity` to -1, `territory` to 0,
+`ships` and `by_stance` to 1, and never sets the colour, so a civ that never
+picked one carries whatever was in memory. The reader forces the colour's top
+byte to 0xFF. The colour getter (`0x534E40`) reads it only when `by_stance` is
+0, and `canonical.py` masks every record's colour.
 
-`w17` to `w28`, apart from +26, are named by offset: the diplomacy
-captures place them, not the code that reads them.
+In the client a record is a map node whose value starts at node+0x10; the
+relation getter `0x534340` returns node+0x14, the `met` field. Accepting a
+war (`0x55BD40`) sets `declared` on the sender's side, clears it on the
+receiver's, zeroes `w17` on both and records each side's `inactivity`; any
+treaty but war and cease-fire clears `battled` on both. Attacking calls
+`0x534D10`, which sets `battled` and, for a gain, adds 150 to `cooldown`.
+The reputation tooltip (`0x4430F0`) reads `battled`, `0x517A40` takes the
+higher of the target's Inactivity now and `inactivity`, and `0x5177F0` turns
+`cooldown` into the gain reduction. Bio-bombing (`0x4F7147`) adds the sets
+dropped to `biobombed` through `0x534D50`, and the planet loyalty tooltip
+lists it per civ. `leader_known` is set at `0x54EF99` and refuses a second
+"name of the Empire Leader" message. The tick (`0x5344B0`) takes `cooldown`
+and `biobombed` down by 1, or 2 under the galaxy option it reads.
+
+`w17` has no writer reachable through the relation getters: the client sets
+it somewhere else in the war's first tick.
 """
 import struct
 
@@ -49,11 +68,11 @@ FIELDS = (                      # (key, offset, struct format)
     ('stance', 12, '<I'),
     ('declared', 16, '<B'),
     ('w17', 17, '<H'),
-    ('w19', 19, '<B'),
-    ('w20', 20, '<i'),
-    ('w24', 24, '<H'),
-    ('bio_penalty', 26, '<h'),
-    ('w28', 28, '<B'),
+    ('battled', 19, '<B'),
+    ('inactivity', 20, '<i'),
+    ('cooldown', 24, '<H'),
+    ('biobombed', 26, '<H'),
+    ('leader_known', 28, '<B'),
     ('territory', 29, '<B'),
     ('ships', 30, '<B'),
     ('by_stance', 31, '<B'),

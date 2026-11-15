@@ -690,9 +690,13 @@ instruction names `0x0082AA28` as an immediate, so it is a member of a larger gl
 
 [x] finish the write test: done 14 November 2026, the box still lists GoodGuy with the vector
 empty.
-[ ] check whether the box is *derived* from `KNPL` or from the owners of known planets. It is not
+[x] check whether the box is *derived* from `KNPL` or from the owners of known planets. It is not
 this vector. Emptying BadGuy's `KNPL` in a served view, with GoodGuy's planets still remembered,
-separates the two.
+separates the two. **Settled** (14 November 2026) from the client: the box is the viewer's `KNPL`.
+The page's fill (`0x444470`) takes its civs from `0x442DD0`, which walks the local civ's
+known-players map (`Owner+0x12C`, the table `KNPL` loads) node by node, keeps each civ whose stance
+passes the page's filter, and reads no planet. Each row then asks the same map for its stance and
+flags (`0x534410`). The in-client test was not run.
 
 #### Plan for loading known players: the ship shuffle
 
