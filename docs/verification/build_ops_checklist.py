@@ -207,7 +207,7 @@ OPS = [
      'PagerDuty Incident Response documentation (severity levels, roles, external communication, postmortem template)',
      ['Define three severities: a galaxy stalled or data at risk; a feature broken for everyone; a problem for one player.',
       'Where players are told: the operator page is the operator\'s; players need a status line in the launcher or a page on the site.',
-      'Postmortems: the 29 September turn-23 stall and the 5 October Smart App Control block each get a short written review.']),
+      '[x] Postmortems: the 29 September turn-23 stall and the 5 October Smart App Control block each get a short written review. Both are in `docs/Postmortems.md`; the turn-23 one holds only what the record has, since its cause and fix were never written down.']),
     ('OPS-2', 'Every live galaxy can be restored from what Firebase holds, and the restore has been tried.',
      'Google Cloud Well-Architected Framework, Reliability pillar, principle 8 (test data-loss recovery)',
      ['[x] The referee survives a reboot with its local files deleted, because the galaxy is in Firebase.',
