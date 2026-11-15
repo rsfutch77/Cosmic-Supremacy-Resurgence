@@ -343,10 +343,11 @@ class WebView:
         if self._changed("update", text or ""):
             self._set(update=text or "")
 
-    def show_news(self, text: str) -> None:
-        """The line below Multiplayer, as plain text; "" shows none."""
-        if self._changed("news", text or ""):
-            self._set(news=text or "")
+    def show_news(self, item) -> None:
+        """The news panel under the modes: a dict of title, date, text and an
+        image data URI, all drawn as plain text; None shows none."""
+        if self._changed("news", item or None):
+            self._set(news=item or None)
 
     def set_status(self, text: str, colour: str) -> None:
         self._set(status={"text": text,

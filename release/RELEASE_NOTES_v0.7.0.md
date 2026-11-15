@@ -18,8 +18,8 @@ research and planet details are no longer sent to you.
 **Vote to end a galaxy.** The **Vote to End the Galaxy** box on the Overview
 screen now counts. The galaxy's operator sees the votes and decides.
 
-**News in the launcher.** A line under Multiplayer carries the latest news,
-and the site's home page lists news and the galaxies that are running.
+**News in the launcher.** The Play page shows the latest news under the
+modes, and the site's home page lists news and the galaxies that are running.
 
 **A fair start, completed.** A player who joins a running galaxy now also
 starts with no reputation of their own.

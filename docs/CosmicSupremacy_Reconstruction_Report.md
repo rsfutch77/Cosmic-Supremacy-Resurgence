@@ -2595,11 +2595,14 @@ hurries, trades and treaty sums itself. Checking every order type is not planned
   a line changes with a site deploy, not a release (Robert, 14 November 2026). Done when the
   banner shows the current line as plain text, shows nothing when there is none, and a
   launcher that cannot reach the site still opens. The new request is recorded in the Privacy
-  Checklist. The launcher reads `site/overrides/launcher_news.json` (`{"text": ""}` for none)
-  two seconds after it opens and hourly after, off the UI thread; a failed read is logged and
-  keeps the last line. The page draws the line inside the Multiplayer row, as text
-  (`test_launcher_news.py`, in `run_all.ps1`). Seen on the Play page served locally, not yet
-  in a built launcher. The Privacy Checklist's PRIV-2 IP item names the request; its line was
+  Checklist. Robert asked for a panel rather than a line (14 November 2026): the Play page draws
+  it under the modes, a picture beside the title, date and text. The launcher reads
+  `site/overrides/launcher_news.json` (`title`, `date` as `YYYY-MM-DD`, `text`, and `image`, a
+  path on the same site) two seconds after it opens and hourly after, off the UI thread, and
+  inlines the picture only if it is on the same site, under 256 KB and a PNG, JPEG or GIF. A
+  file with no title and no text shows no panel, and a failed read is logged and keeps the
+  last item. Everything is drawn as text (`test_launcher_news.py`, in `run_all.ps1`). Robert
+  saw it in a checkout launcher reading a local copy of the site; not yet in a built one. The Privacy Checklist's PRIV-2 IP item names the request; its line was
   edited by hand to match `build_ops_checklist.py`, since the checklist sources are not on
   this machine to regenerate from.
 

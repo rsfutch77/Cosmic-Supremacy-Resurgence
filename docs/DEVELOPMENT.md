@@ -244,8 +244,9 @@ and merge `main` in first if it is not.
    on the default branch's head.
 9. Ask, as two questions since they are not linked, whether to post a news
    item on the home page (a file in `site/news/`, `site/README.md`) and
-   whether to change the launcher's news line
-   (`site/overrides/launcher_news.json`, `{"text": ""}` for none). Then update
+   whether to change the launcher's news panel
+   (`site/overrides/launcher_news.json`: `title`, `date`, `text`, `image`; no
+   title and no text shows none). Then update
    `site/overrides/download_client.php.html` with the file name, size, date
    and SHA-256, and stage and deploy the site (`site/README.md`), which
    publishes all three.
