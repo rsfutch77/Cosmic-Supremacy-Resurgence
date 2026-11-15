@@ -206,18 +206,15 @@ def main(galaxy):
            mo.add_design(served, ph_oid, remake(record, name='Colony Ship')),
            fragment='unique within a civ')
 
-    # Editing and deleting a design are not carried.
+    # Deleting an unused design and renaming one are carried
+    # (test_design_edits_merge.py has the rest).
     edited = mo.add_design(served, ph_oid, record)          # a legal new design
-    edited_idx = mo.design_index(edited)
     log, notes = [], {}
     out = mo.merge(edited, [('Powerhouse', served)], log=log.append,
                    notes=notes)
-    check('a design missing from a submission is refused, not deleted',
-          said(log, 'deleting a design is not carried yet')
-          and mo.design_index(out) == edited_idx)
-    check('    ... and the player is told',
-          any('deleting a design' in line
-              for line in notes.get('Powerhouse', [])))
+    check('a design no ship, planet or queue uses is deleted',
+          said(log, 'deleted')
+          and mo.design_index(out).keys() == mo.design_index(served).keys())
 
     # Renamed to something the same length, so no enclosing size changes.
     tweaked = bytearray(ph)
@@ -226,8 +223,7 @@ def main(galaxy):
     log, notes = [], {}
     out = mo.merge(ph, [('Powerhouse', bytes(tweaked))], log=log.append,
                    notes=notes)
-    check('an existing design that came back changed is refused',
-          said(log, 'editing a design is not carried yet'))
+    check('an existing design renamed is carried', said(log, "'scout test'"))
 
     # The dangling-reference guard: a queue naming a design that exists but
     # belongs to the other player.

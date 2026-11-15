@@ -27,6 +27,7 @@ import inject_civ as icv
 TABLE_HEAD = 8              # next id, count
 NEWS_VERSION = 3
 RECEIVED, SENT = 1, 6       # item types of a message, as the recipient and the sender hold it
+NOTE = 8                    # a note to oneself, its title and body inline
 IMPORTANT = 1               # flags bit, "Mark As Important"
 # The civ's new-news flag in OWPR, this many bytes before the civ name's length
 # field; the client sets it when an item arrives with notify and clears it when
@@ -199,6 +200,16 @@ def append_item(blob, civ_oid, section):
     out = bytearray(icv.splice(blob, at, at, section, log=lambda *_: None))
     U32.pack_into(out, count_at, len(secs) + 1)
     return bytes(out)
+
+
+def replace_item(blob, civ_oid, index, section):
+    """`blob` with the civ's item at `index` replaced by a `NEWS` section."""
+    tree = sp.parse_blob(blob)
+    data = _data_of(blob, civ_oid, tree)
+    sec = list_of(blob, civ_oid)[1][index]
+    payload = (blob[data.payload:sec.start] + section
+               + blob[sec.end:data.end])
+    return sp.replace_payload(blob, tree, data, payload)
 
 
 def set_flags(blob, civ_oid, index, flags):
