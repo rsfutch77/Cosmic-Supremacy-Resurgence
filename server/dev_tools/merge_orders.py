@@ -165,7 +165,9 @@ Carried as the client takes each step, applied to both civs at once:
   Renumbered like a design. A declaration of war is the same with kind 1 and
   status 3; it ends every treaty in force between the two and sets both
   stances to War, and is refused while they are at war or a cease-fire or
-  peace still binds them.
+  peace still binds them. In a galaxy whose `GSET` holds `waronly = 1` every
+  new treaty but war is refused, as the client greys "Propose New Treaty"
+  there (`0x442510`).
 - Withdrawing the submitter's own proposal; declining one made to it;
   deleting a declined one from its side.
 - Accepting one made to it: status, length (its `TRLE`, or what a stance
@@ -606,6 +608,34 @@ def read_ship(blob, sec):
     out.update(dyno=kids[0][2], shpr=kids[1][3], shpr_version=kids[1][1],
                last_fleet=ids[0])
     return out
+
+
+def repair_donor_tails(blob, log=print):
+    """`blob` with every GLXY SHIP whose SHPR ends by naming another ship
+    rewritten to name itself, in place.
+
+    A ship `inject_ship.py` cloned before `f4fb9f7` names its donor there,
+    and inside a fleet that id is the ship's only identity. The object
+    header's id is the ship's.
+    """
+    out = None
+    tree = sp.parse_blob(blob)
+    glxy = next(tree[0].find('GLXY'), None)
+    for sec in (glxy.children if glxy is not None else ()):
+        if sec.tag != b'SHIP':
+            continue
+        ship = read_ship(blob, sec)
+        if ship['why'] != 'its SHPR does not end by naming it':
+            continue
+        shpr = next(sec.find('SHPR'))
+        ids = shpr_ids(ship['shpr'])
+        if ids is None:
+            continue
+        out = out if out is not None else bytearray(blob)
+        struct.pack_into('<I', out, shpr.end - 4, ship['oid'])
+        log(f'  ship {ship["oid"]}: its SHPR named ship {ids[1]}, now '
+            f'itself')
+    return bytes(out) if out is not None else blob
 
 
 def read_fleet(blob, sec):
@@ -3191,6 +3221,7 @@ def diplomacy_orders(served, sub, civ_oid, names):
         return [], refusals
     turn = icv.turn_of(served)
     high = struct.unpack_from('<I', served, idg.HIGH_WATER_ID)[0]
+    war_only = gset_value(served, 'waronly') == 1
     s_stances, t_stances = stances(served), stances(sub)
     met = {other for civ, other in s_stances if civ == civ_oid}
     removed = []
@@ -3202,7 +3233,8 @@ def diplomacy_orders(served, sub, civ_oid, names):
         tt = read_trdt(b) if b is not None else None
         name = label(oid, tt or ts)
         if a is None:
-            why = new_treaty_refusal(tt, oid, civ_oid, high, turn, met, who)
+            why = new_treaty_refusal(tt, oid, civ_oid, high, turn, met, who,
+                                     war_only)
             if why:
                 refusals.append(f'{name} DROPPED, {why}')
             else:
@@ -3277,9 +3309,9 @@ def diplomacy_orders(served, sub, civ_oid, names):
     return orders, refusals
 
 
-def new_treaty_refusal(t, oid, civ_oid, high, turn, met, who):
+def new_treaty_refusal(t, oid, civ_oid, high, turn, met, who, war_only=False):
     """Why a treaty a submission adds is not a proposal or a declaration of
-    war the client makes, or ''."""
+    war the client makes, or ''. `war_only` is the galaxy's `waronly`."""
     if t is None:
         return 'its record cannot be read'
     if oid <= high:
@@ -3299,6 +3331,8 @@ def new_treaty_refusal(t, oid, civ_oid, high, turn, met, who):
     if ((t['status'], t['length'], t['start'], t['proposed'], t['deleted'])
             != (PROPOSED, UNSET_LENGTH, UNSET_START, turn, (0, 0))):
         return 'it is not laid out as a proposal made this turn'
+    if war_only:
+        return 'the galaxy is war-only, where the client proposes no treaty'
     return item_refusal(t)
 
 

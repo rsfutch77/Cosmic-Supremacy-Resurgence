@@ -1447,8 +1447,10 @@ planetspersystem (4, 6)   colonyships 2           startcredits 200
 tech_multiplier 800       corruption_multiplier 100   reputation_multiplier 100
 colonymodule_multiplier 100   hse_multiplier 100
 homeworld_changes 30      civilization_changes 5  score_breakeven 20
-premium 1   waronly 1     autoattack 1
+premium 1   waronly 0     autoattack 0
 ```
+
+**Every entry is its name, a `u32` type, a flag byte, then the value** (reader `0x4D4990`): type 0 an `i32`, 1 two `i32`s, 2 a bool byte, 3 a string, 4 a `u32` count and that many `u32`s. The flag is the third argument the client registers the setting with (`waronly` at `0x4D5FF3` registers as a bool, default 0, flag 1; `sandbox` default 0, flag 0). The loader `0x4D4C20` matches each entry by name and copies its value, not its flag, so a save always carries the client's own flags. `save_parser.parse_gset` reads this layout and `save_parser.set_gset` rewrites a whole-number or bool value in place; `set_turnlength.py --set` and the tests use it (`server/tests/test_gset.py`). A bool's two bytes were once read as one `int16`, which made `waronly` and `autoattack` (bytes `01 00`, flag 1, value 0) look like 1.
 
 **Turn length was a per-galaxy choice, not a constant.** Galaxies ran anywhere from minutes to hours per turn, which is what made the game playable across time zones, the design the README describes as "long turn based play (hours between ticks)". `turnlength` is that choice in seconds.
 
@@ -1467,13 +1469,17 @@ premium 1   waronly 1     autoattack 1
 
 Our galaxies carry `speed` 0, `density` 0, `rank` (0, 999), no `startticks`, `premium` 1, `score_breakeven` 20 and both multipliers at 100.
 
-[ ] **The `GLOB` loader also writes settings.** `0x52DA20` sets the content version and settings 0, 1, 2, 4, 5, 7 and 8 (`name`, `speed`, `team`, `sandbox`, `2d`, `maxusers`, `turnlength`) from values it reads, some only past a `GLOB` version. Which versions carry them, and whether `GSET` or `GLOB` wins at load, is not traced. `set_turnlength.py` writes `GSET` alone and is honoured, so for `turnlength` `GSET` wins or `GLOB` agrees. A tool that changes any of the others writes both until this is settled.
+[x] **The `GLOB` loader also writes settings.** `0x52DA20` sets the content version and settings 0, 1, 2, 4, 5, 7 and 8 (`name`, `speed`, `team`, `sandbox`, `2d`, `maxusers`, `turnlength`) from values it reads, some only past a `GLOB` version. Which versions carry them, and whether `GSET` or `GLOB` wins at load, is not traced. `set_turnlength.py` writes `GSET` alone and is honoured, so for `turnlength` `GSET` wins or `GLOB` agrees. A tool that changes any of the others writes both until this is settled. **Settled** (14 November 2026): only a `GLOB` below version 16 carries settings. From 16 the loader reads the turn, `0x80AA04`, `0x857900`, the score list and the content version (`0x80AA00`) and touches no setting; below 16 it converts the old fields into settings 8, 0, 7, 1, 4, 5 and, from version 10, 2. Every blob this project holds carries `GLOB` v17, so `GSET` alone decides the settings, and a tool writes `GSET` only. A tick on a local copy kept a `waronly` written into `GSET` either way.
 
 **`civilization_changes` is the civ-trait dialog's budget**, confirmed October 2026. Settings live in a vector in registration order, read by `get_setting(index)` at `0x004D4320`; `civilization_changes` is index 25. Its two readers are `0x00498F30`, which returns the budget less the clicks spent and feeds both the dialog's "You have N changes available" line and its OK handler, and `0x00537D00`, which marks a new civ's traits as already chosen (`Owner:360` = 1) when the value is negative. A turn-0 save with the value raised from 5 to 7 opened the dialog reading "You have 7 changes available".
 
 [x] **`corruption_multiplier = 100` is the first handle on corruption we have.** Corruption has resisted location in memory entirely, see the memory report, and here is a galaxy-level knob for it. Changing it and watching what moves is a far cheaper search than diffing planets, and it is the same trick that finally located `Planet:368`: make the thing vary. **Answered:** the corruption function `0x0053A0D0` scales its result by `corruption_multiplier` / 100 (`docs/Fast_Sim_Plan.md` §5b).
 
-- [ ] **`waronly` is understood and carried** (Robert, 14 November 2026: the sandbox stays war-only; this checks the setting is reconstructed). `waronly = 1` allows no alliances. Neither `galaxy_tool.py` nor `make_multiplayer_galaxy.py` writes `GSET`, so a new galaxy keeps whatever its generated blob carries. Document `sandbox` at the same time: it is the fifth `GSET` entry, and `GetGameOption(4)` gates the client's build-up protection in the declare-war validator at `0x004BDE50`, 300 turns from `0x0076F378`. The original Newbie Sandbox Galaxy ran 10-minute turns, so 300 turns was about two days; at 4-hour turns it is 50 days. The client enforces protection only in its UI, and `merge_orders.py` refuses diplomacy outright, with a note naming each treaty and stance it dropped. Done when what the client refuses under `waronly = 1` is located in the binary, `merge_orders.py` refuses the same, an alliance proposal is refused in a local test, nothing the referee or galaxy tools write changes the setting, and what `sandbox` does is written down.
+- [x] **`waronly` is understood and carried** (Robert, 14 November 2026: the sandbox stays war-only; this checks the setting is reconstructed). `waronly = 1` allows no alliances. Neither `galaxy_tool.py` nor `make_multiplayer_galaxy.py` writes `GSET`, so a new galaxy keeps whatever its generated blob carries. Document `sandbox` at the same time: it is the fifth `GSET` entry, and `GetGameOption(4)` gates the client's build-up protection in the declare-war validator at `0x004BDE50`, 300 turns from `0x0076F378`. The original Newbie Sandbox Galaxy ran 10-minute turns, so 300 turns was about two days; at 4-hour turns it is 50 days. The client enforces protection only in its UI, and `merge_orders.py` refuses diplomacy outright, with a note naming each treaty and stance it dropped. Done when what the client refuses under `waronly = 1` is located in the binary, `merge_orders.py` refuses the same, an alliance proposal is refused in a local test, nothing the referee or galaxy tools write changes the setting, and what `sandbox` does is written down.
+  **Done** (14 November 2026). **The live `sandbox` galaxy is not war-only today: it reads `waronly = 0`** at turns 0, 1 and 173 (read from Firebase, nothing written), as does every blob on disk. The `1` recorded here before was the bool's flag byte (see the entry layout above). Nothing in this work changes the live value; setting it to 1 is a `GSET` write on the live galaxy and is Robert's call.
+  What the client does under `waronly = 1`, from its four readers: first contact (`0x534F90`, read at `0x534FF5`) opens every stance at War, where it would be Neutral, or by team in a team game; the diplomacy menu (`0x442510`) adds "Propose New Treaty" (command `0xB798`) disabled, the only way the client proposes any treaty, so no trade, cease-fire, peace or alliance can be proposed; and the reputation forecast (`0x443160`) and battle (`0x51EE1A`) treat every war as one this civ declared, where otherwise only a war it declared (`0x535100`, the `KNPL` `declared` byte) counts. "Declare War" (`0xB79D`) and answering a treaty already made are not gated. The engine ends no treaty for it: an alliance accepted through the merge on `fixtures/diplomacy/d1.b64` survives a real tick with `waronly` 0 and 1 alike (`server/dev_tools/alliance_acceptance.py run --waronly 1`).
+  `merge_orders.py` carries diplomacy step by step (the note above that it refuses diplomacy is out of date) and, when the served galaxy holds `waronly = 1`, refuses every new treaty but a declaration of war, naming it; declaring war, accepting, declining, withdrawing and deleting are taken as before (`test_admirals_diplomacy_merge.py`, an alliance, a trade and a cease-fire proposal refused). Nothing the referee writes changes the setting: the merge builds on the served blob, so a submission's `GSET` is never taken (tested both ways); fog, joins, `inject_civ`, `make_multiplayer_galaxy`, `galaxy_tool.py` and the turn tools write no `GSET`; the `GLOB` loader writes settings only below `GLOB` v16 (item above); and the engine saves the `waronly` it loaded, which the acceptance run checks after its tick. `save_parser.set_gset` writes a setting for tests and `set_turnlength.py --set`; no galaxy tool calls it.
+  **What `sandbox` does** (index 4; it reads 0 on the live galaxy and stays so). Set to 1 it turns on: the 300-turn build-up protection in the declare-war validator, counted from the civ's join turn (`0x52AC40`); a cap of 30 colonised planets (`0x53A640`, `0x76F380`) and 50 conquered (`0x53A5F0`, `0x76F37C`), each sticky once reached; a warning at 900 turns played that the civ's term is ending (`0x52F230`); the Sandbox welcome text (`0x546430`); and at `0x52F640` it clears `0x857900` and sets `0x80AA04` to -1, two `GLOB` fields, in place of a check the function otherwise runs (not traced). The protection is enforced only in the client's UI, and the merge does not reproduce it.
 
 **`turnlength` drives the game's clock, and the engine re-applies it AT EVERY TURN BOUNDARY.** A galaxy set to 75 was observed writing 75 back over a driven 15 at each boundary, so a galaxy configured above the floor runs at its configured rate with nothing driving it, `ai.py --drive` is only needed to go faster than the game wants to.
 
@@ -2512,9 +2518,16 @@ hurries, trades and treaty sums itself. Checking every order type is not planned
   ship's. `merge_orders.read_ship` refuses such a ship as unreadable, which leaves it out of the
   fleet merge; `sim/load.py` reads it by the header.
 
-[ ] Decide whether `merge_orders.read_ship` should accept a ship whose tail names its donor. As it
+[x] Decide whether `merge_orders.read_ship` should accept a ship whose tail names its donor. As it
 stands a player in an older galaxy cannot put such a ship in a fleet. Check first whether any live
-galaxy holds one.
+galaxy holds one. **Decided** (14 November 2026): it keeps refusing, and the referee repairs the
+ship instead. Inside a fleet a member's `SHPR` tail is the ship's only id, so a ship accepted as it
+is would enter a fleet as its donor and come out as a second object with the donor's id.
+`merge_orders.repair_donor_tails` rewrites the tail to the header's id, which `inject_ship.py` has
+written since `f4fb9f7`, and `referee.tick` runs it before the engine loads the galaxy, so the
+ship reads from the next served turn on and the log names each one
+(`server/tests/test_donor_tail.py`). Whether the live `sandbox` holds one is not checked: the
+referee's log after the next restage says.
 - **Individual ships cannot be renamed**; only fleets can.
 
 **Measured in one Single Player session at turn 0 (23 October 2026,
@@ -2650,9 +2663,11 @@ treaty list), so each layout below is the writer's and reader's, checked only fo
   `server/dev_tools/knpl.py`.
 - **`waronly`** (GSET index 29) reads in the client as two things: first contact sets the stance
   to war (`0x534FF3`), and the diplomacy screen's context menu adds "Propose New Treaty" greyed
-  out (`0x4425BF`). The second does not hold in the UI: on `control_fork_played.dat`, `waronly
-  = 1`, "Propose New Treaty" and "Declare War" are both available and every treaty kind can be
-  chosen (28 October 2026). Sandbox players can propose treaties and declare war.
+  out (`0x4425BF`). `control_fork_played.dat` holds `waronly = 0`, so on it "Propose New
+  Treaty" and "Declare War" are both available and every treaty kind can be chosen (28 October
+  2026). Under `waronly = 1` the item is added disabled, which has not been seen on screen, and
+  the merge refuses a new treaty other than war (§2a). The live sandbox reads `waronly = 0`, so
+  its players can propose treaties today.
 
 **Measured in one Single Player session on 27 October 2026 (`server/tests/fixtures/admirals`):**
 admirals on `clean.dat` as GoodGuy, turns 110 to 112, with the turn length set to 30 days.
@@ -2683,8 +2698,8 @@ layout read off the client above held.
 **Measured in one Single Player session on 27 and 28 October 2026
 (`server/tests/fixtures/diplomacy`):** diplomacy on `control_fork_played.dat` written with
 `waronly = 0` and 30-day turns, at peace, turns 180 and 181, switching between GoodGuy and BadGuy
-with `set_blob_player.py` to answer. Every capture's GSET reads `waronly = 1`, so the client
-either ignores the setting on load or the capture rewrites it.
+with `set_blob_player.py` to answer. Every capture's `waronly` bytes read `01 00`, flag 1 and value
+0: the tool wrote `00 00`, the value was already 0, and the client saves its own flag.
 
 - **`TRDT`** is the proposer's and recipient's civ ids, the kind (0 trade, 1 war, 2 cease-fire,
   3 peace, 4 alliance, read from the client's tables), the status (0 pending, 1 binding, 2

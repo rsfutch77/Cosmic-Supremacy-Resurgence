@@ -292,6 +292,9 @@ def tick(blob: bytes, turns: int = 1, secs: int = 10, work_dir=None,
         if not ok:
             raise SystemExit(f'refusing to tick: {why}')
 
+    # The engine writes back what it loads, so a ship repaired here is
+    # readable by the merge from the next served turn on.
+    blob = merge_orders.repair_donor_tails(blob, log=log)
     blob = simulate_every_civ(blob, log=log)
     blob = stamp_for_a_holder(blob, log=log)
     work_dir = work_dir or os.path.join(HERE, "referee_work")
