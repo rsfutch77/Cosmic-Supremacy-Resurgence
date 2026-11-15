@@ -1,10 +1,12 @@
 """
-test_fog.py: a civ is served the systems it has left as it last saw them
-========================================================================
+test_fog.py: a civ is served only what its client shows it
+==========================================================
     server\\.venv\\Scripts\\python.exe server\\tests\\test_fog.py
 
-`fog.project` rewrites each stale planet to the civ's `EXSY` memory, and
-`fog.restore` puts the authoritative planets back into what the civ returns.
+`fog.project` serves every planet the civ does not own with only what the
+client's per-civ save shows of it, from the civ's `EXSY` memory where it has
+left the system, and other civs' private sections at their defaults. `fog.restore` puts the
+authoritative state back into what the civ returns.
 
 Fixture: `server/tests/fixtures/diplomacy/d9.b64` (turn 181, tracked). BadGuy
 last looked at GoodGuy's home system at turn 34, before two of its colonies
@@ -29,6 +31,7 @@ import inject_civ as icv
 import inject_design as idg
 import exsy
 import fog
+import merge_orders as mo
 import news
 import player_turn
 import referee
@@ -37,6 +40,7 @@ import wipe_civ
 
 GALAXY = os.path.join(ROOT, 'server', 'tests', 'fixtures', 'diplomacy', 'd9.b64')
 SPGALAXY = os.path.join(ROOT, 'client', 'SinglePlayerGalaxy.dat')
+GOOD, BAD = 656, 660
 PASS, FAIL = [], []
 
 
@@ -52,13 +56,42 @@ def quiet(_msg=''):
     pass
 
 
+def sections(blob):
+    """{planet id: PLNT section}."""
+    tree = sp.parse_blob(blob)
+    return {fog._pid(blob, pl): pl
+            for pls in fog._systems(blob, tree).values() for pl in pls}
+
+
+def owner_state(blob, pl):
+    """What only a planet's owner sees: (header fields, citizen owners,
+    citizen jobs, soldiers, facilities, PROD, governor)."""
+    plpr = next(pl.find('PLPR'))
+    d = blob[plpr.payload:plpr.end]
+    cits, mil, _fac = fog._people(d[:plpr.children[0].start - plpr.payload])
+    f = struct.unpack_from('<I', d, mil + 1)[0]
+    prod = next(plpr.find('PROD'))
+    return ([d[o:o + n] for o, n in fog.OWNER_FIELDS],
+            {struct.unpack_from('<I', d, i + fog.CITIZEN_OWNER)[0]
+             for i in range(fog.PLPR_HEAD + 4, cits, fog.CITIZEN)},
+            {d[i] for i in range(fog.PLPR_HEAD + 4, cits, fog.CITIZEN)},
+            struct.unpack_from('<I', d, cits)[0],
+            [struct.unpack_from('<II', d, mil + 5 + 8 * i) for i in range(f)],
+            bytes(blob[prod.start:prod.end]),
+            bytes(blob[pl.end - fog.GOVERNOR:pl.end]))
+
+
 def planets(blob):
     """{planet id: (owner, population, name)}."""
     out = {}
-    for p in icv.planet_records(blob):
-        d = blob[p['plpr_payload']:p['plpr_end']]
-        out[p['id']] = (p['owner'], struct.unpack_from('<I', d, fog.PLPR_HEAD)[0],
-                        p['name'])
+    for pid, pl in sections(blob).items():
+        nlen = struct.unpack_from('<I', blob, pl.payload + fog.PLNT_NAME)[0]
+        name = blob[pl.payload + fog.PLNT_NAME + 4:
+                    pl.payload + fog.PLNT_NAME + 4 + nlen].decode('latin-1')
+        plpr = next(pl.find('PLPR'))
+        out[pid] = (fog._owner(blob, pl),
+                    struct.unpack_from('<I', blob, plpr.payload + fog.PLPR_HEAD)[0],
+                    name)
     return out
 
 
@@ -70,33 +103,77 @@ def memory(blob, civ):
     out = {}
     for row in exsy.parse(blob[table.payload:table.end]):
         for pl, mem in zip(systems[row['system']], row['planets']):
-            pid = struct.unpack_from('<I', blob, pl.payload)[0]
-            out[pid] = (mem['owner'], mem['population'])
+            out[fog._pid(blob, pl)] = (mem['owner'], mem['population'])
     return out
+
+
+def set_row_turn(b, civ, pid, turn):
+    """`b` with the turn of `civ`'s row for planet `pid`'s system set."""
+    tree = sp.parse_blob(b)
+    _oid, table = fog._civs(b, tree)[civ]
+    rows = exsy.parse(b[table.payload:table.end])
+    systems = fog._systems(b, tree)
+    for row in rows:
+        ids = [fog._pid(b, pl) for pl in systems.get(row['system'], ())]
+        if pid in ids:
+            row['turn'] = turn
+    return icv.splice(b, table.payload, table.end, exsy.build(rows))
+
+
+def changed(blob, civ):
+    """Planets whose served owner or population differs from the live one."""
+    view = fog.project(blob, civ, log=quiet)
+    live, served = planets(blob), planets(view)
+    return sorted(p for p in live if live[p][:2] != served[p][:2])
+
+
+def owner_section(blob, oid, tag):
+    _tree, s = mo._civ_section(blob, oid, tag)
+    return bytes(blob[s.start:s.end])
 
 
 def main():
     blob = sp.load_any(GALAXY)
     before = planets(blob)
+    live = sections(blob)
 
-    print('which planets are stale')
+    print('which planets are served from memory')
     check('BadGuy: GoodGuy\'s home system, five planets that changed',
-          sorted(fog.stale_planets(blob, 'BadGuy')), [261, 262, 263, 265, 266])
+          changed(blob, 'BadGuy'), [261, 262, 263, 265, 266])
+    check('they are among those served from memory',
+          {261, 262, 263, 265, 266} <= set(fog.stale_planets(blob, 'BadGuy')))
     check('GoodGuy: BadGuy\'s capital, grown since turn 110',
-          fog.stale_planets(blob, 'GoodGuy'), [384])
+          changed(blob, 'GoodGuy'), [384])
 
     print('\nBadGuy\'s view')
     view = fog.project(blob, 'BadGuy', log=quiet)
     after = planets(view)
     mem = memory(blob, 'BadGuy')
+    served = sections(view)
     for pid in (261, 262, 263, 265, 266):
         check(f'planet {pid} reads as remembered', after[pid][:2], mem[pid])
     check('colonies founded since read as empty and unnamed',
           [after[p] for p in (262, 266)], [(0, 0, ''), (0, 0, '')])
     stale = {261, 262, 263, 265, 266}
-    check('every other planet is as served',
+    check('every other planet keeps its owner, population and name',
           {p: v for p, v in after.items() if p not in stale},
           {p: v for p, v in before.items() if p not in stale})
+    mine = {p for p, v in before.items() if v[0] == BAD}
+    check('BadGuy\'s own planets are untouched, byte for byte',
+          {p: view[served[p].start:served[p].end] for p in mine},
+          {p: blob[live[p].start:live[p].end] for p in mine})
+    blank = icv.empty_prod(blob)
+    no_state = ([bytes(n) for _o, n in fog.OWNER_FIELDS], 0, blank, bytes(4))
+    others = {p: owner_state(view, served[p]) for p in served if p not in mine}
+    check('every other planet holds no stores, soldiers, queue or governor',
+          sorted(p for p, o in others.items()
+                 if (o[0], o[3], o[5], o[6]) != no_state), [])
+    check('its citizens are all farmers of the owner it is served with',
+          sorted(p for p, o in others.items()
+                 if o[2] - {0} or o[1] - {after[p][0]}), [])
+    check('and its only facility is a shipyard, when it has one',
+          sorted(p for p, o in others.items() if o[4] not in ([], [(2, 1)])),
+          [])
     check('no planet, system or civ is added or removed',
           referee.galaxy_id(view), referee.galaxy_id(blob))
     check('the object-id high water is unchanged',
@@ -104,98 +181,64 @@ def main():
           struct.unpack_from('<I', blob, idg.HIGH_WATER_ID)[0])
     check('the view parses to the end', sp.parse_blob(view)[0].end, len(view))
     check('the turn is unchanged', icv.turn_of(view), icv.turn_of(blob))
-    check('BadGuy\'s own planets are untouched',
-          {p: v for p, v in after.items() if v[0] == 660},
-          {p: v for p, v in before.items() if v[0] == 660})
-    empty = next(p for p in icv.planet_records(view) if p['id'] == 262)
-    d = view[empty['plpr_payload']:empty['plpr_end']]
-    cits, mil, fac = fog._people(d)
-    check('an emptied colony keeps no soldiers and no facilities',
-          (struct.unpack_from('<I', d, cits)[0],
-           struct.unpack_from('<I', d, mil + 1)[0]), (0, 0))
-    check('its production is a never-colonised planet\'s',
-          icv.planet_prod(view, 262), icv.empty_prod(blob))
-    check('a remembered colony\'s citizens are all its owner\'s',
-          {struct.unpack_from('<I', d2, i + fog.CITIZEN_OWNER)[0]
-           for p in icv.planet_records(view) if p['id'] == 263
-           for d2 in [view[p['plpr_payload']:p['plpr_end']]]
-           for i in range(fog.PLPR_HEAD + 4,
-                          fog.PLPR_HEAD + 4 + fog.CITIZEN * after[263][1],
-                          fog.CITIZEN)}, {656})
 
-    print('\nonly what the recon screen shows survives on a remembered planet')
-    def plpr(b, pid):
-        p = next(p for p in icv.planet_records(b) if p['id'] == pid)
-        return b[p['plpr_payload']:p['plpr_end']]
+    print('\nwhat the per-civ save shows of a planet stays')
 
-    def owner_state(b, pid):
-        d = plpr(b, pid)
-        cits, mil, _fac = fog._people(d)
-        return {
-            'fields': [d[o:o + n] for o, n in fog.OWNER_FIELDS],
-            'jobs': {d[i] for i in range(fog.PLPR_HEAD + 4, cits, fog.CITIZEN)},
-            'soldiers': struct.unpack_from('<I', d, cits)[0],
-            'facilities': struct.unpack_from('<I', d, mil + 1)[0],
-            'prod': icv.planet_prod(b, pid),
-        }
-    check('planet 265 holds a live military store, recruitment and soldiers '
-          'in the turn',
-          owner_state(blob, 265)['fields'][2:], [bytes([20]), struct.pack('<I', 94)])
-    for pid in (261, 263, 265):
-        got = owner_state(view, pid)
-        check(f'planet {pid}: food, production, recruitment and military '
-              f'stores read 0', got['fields'],
-              [bytes(n) for _o, n in fog.OWNER_FIELDS])
-        check(f'planet {pid}: every citizen a farmer, no soldiers, no '
-              f'facilities, an idle queue',
-              (got['jobs'] <= {0}, got['soldiers'], got['facilities'],
-               got['prod']), (True, 0, 0, icv.empty_prod(blob)))
-    check('the base outputs and food store size stay as they are',
-          [plpr(view, p)[4:15] + plpr(view, p)[19:23] for p in (261, 263, 265)],
-          [plpr(blob, p)[4:15] + plpr(blob, p)[19:23] for p in (261, 263, 265)])
+    def natural(b, pid):
+        plpr = next(sections(b)[pid].find('PLPR'))
+        d = b[plpr.payload:plpr.end]
+        prod = next(plpr.find('PROD'))
+        return d[4:15] + d[19:23], b[prod.end:plpr.end]
+    for pid in (261, 265, 100):
+        check(f'planet {pid}: its natural bytes, food store size, deposits '
+              f'and energy link', natural(view, pid), natural(blob, pid))
+    check('GoodGuy\'s planet 265 holds soldiers and several facilities in the '
+          'turn', (owner_state(blob, live[265])[3] > 0,
+                   len(owner_state(blob, live[265])[4]) > 1), (True, True))
+    check('and GoodGuy\'s home planets are served only their shipyards',
+          [owner_state(view, served[p])[4] for p in (261, 265)],
+          [[(2, 1)], [(2, 1)]])
 
-    # The byte after the soldiers, the damage pool and the governor, set on
-    # planet 265 in the authoritative blob.
-    def marks(b, pid):
-        p = next(p for p in icv.planet_records(b) if p['id'] == pid)
-        _c, mil, fac = fog._people(b[p['plpr_payload']:p['plpr_end']])
-        return (p['plpr_payload'] + mil, p['plpr_payload'] + fac - 4,
-                p['end'] - fog.GOVERNOR)
-    at_byte, at_pool, at_gov = marks(blob, 265)
-    marked = bytearray(blob)
-    marked[at_byte] = 7
-    struct.pack_into('<I', marked, at_pool, 120)
-    struct.pack_into('<I', marked, at_gov, 642)
-    marked = bytes(marked)
-    mview = fog.project(marked, 'BadGuy', log=quiet)
-    vb, vp, vg = marks(mview, 265)
-    check('the byte after the soldiers, the damage pool and the governor '
-          'read 0', (mview[vb], mview[vp:vp + 4], mview[vg:vg + 4]),
-          (0, bytes(4), bytes(4)))
-    check('and come back on restore',
-          fog.restore(marked, 'BadGuy', mview) == marked, True)
+    print('\na rival\'s planet in a system the viewer is in this turn')
+    now = set_row_turn(blob, 'BadGuy', 265, icv.turn_of(blob))
+    nview = fog.project(now, 'BadGuy', log=quiet)
+    check('is served with its live owner, population and name',
+          planets(nview)[265], before[265])
+    o = owner_state(nview, sections(nview)[265])
+    check('without its soldiers, stores, queue or governor',
+          (o[0], o[3], o[5], o[6]), no_state)
+    check('and restored whole', fog.restore(now, 'BadGuy', nview) == now)
 
-    # A planet that has not changed since the last look is still served
-    # without its owner's running state.
-    tree = sp.parse_blob(blob)
-    _oid, table = fog._civs(blob, tree)['BadGuy']
-    rows = exsy.parse(blob[table.payload:table.end])
-    systems = fog._systems(blob, tree)
-    for row in rows:
-        for pl, mem in zip(systems.get(row['system'], ()), row['planets']):
-            if struct.unpack_from('<I', blob, pl.payload)[0] == 265:
-                mem['population'] = before[265][1]
-                mem['owner'] = before[265][0]
-    same = icv.splice(blob, table.payload, table.end, exsy.build(rows))
-    check('a planet unchanged since the last look is still served as '
-          'remembered', 265 in fog.stale_planets(same, 'BadGuy'), True)
-    sview = fog.project(same, 'BadGuy', log=quiet)
-    check('with its owner and population', planets(sview)[265][:2],
-          before[265][:2])
-    check('and without its military store or soldiers',
-          (owner_state(sview, 265)['fields'][3], owner_state(sview, 265)['soldiers']),
-          (bytes(4), 0))
-    check('and restored whole', fog.restore(same, 'BadGuy', sview) == same, True)
+    print('\nanother civ\'s private state')
+    check('GoodGuy holds credits, research and resources in the turn',
+          (mo.credits_of(blob, GOOD) > 0, len(mo.completed_research(blob, GOOD)) > 2,
+           sum(mo.resources_of(blob, GOOD)) > 0), (True, True, True))
+    check('BadGuy is served GoodGuy with no credits or resources, and only '
+          'the two starting technologies',
+          (mo.credits_of(view, GOOD), mo.completed_research(view, GOOD),
+           mo.resources_of(view, GOOD)), (0, [0, 1], [0, 0, 0, 0, 0]))
+    check('and no research topic',
+          mo.research_of(view, GOOD), (b'\xff' * 4, b'\xff' * 4))
+    check('and no known players, memory, governors or queues',
+          [mo._civ_section(view, GOOD, t)[1].size for t in
+           ('KNPL', 'EXSY', 'GOVS', 'SPQS')], [4, 4, 4, 4])
+    check('and every trait 0', set(mo.traits_of(view, GOOD) or (None,)), {0})
+    owpr_at = mo._civ_section(blob, GOOD, 'OWPR')[1]
+    v_at = mo._civ_section(view, GOOD, 'OWPR')[1]
+    r_auth = owpr_at.payload + mo.research_offsets(blob, owpr_at)[1]
+    r_view = v_at.payload + mo.research_offsets(view, v_at)[1]
+    check('its score and reputation stay, as the score rows show them',
+          (view[r_view + 11:r_view + 15], view[r_view + 27:r_view + 31]),
+          (blob[r_auth + 11:r_auth + 15], blob[r_auth + 27:r_auth + 31]))
+    check('its colour, setup flags and position stay',
+          view[r_view + 31:r_view + 55], blob[r_auth + 31:r_auth + 55])
+    check('its name, checkbox and arms stay',
+          mo.civ_identity(view, GOOD), mo.civ_identity(blob, GOOD))
+    check('its designs stay, since its ships name them',
+          mo.designs_of(view, GOOD), mo.designs_of(blob, GOOD))
+    check('BadGuy\'s own private sections are untouched',
+          [owner_section(view, BAD, t) for t in fog.WITHHELD],
+          [owner_section(blob, BAD, t) for t in fog.WITHHELD])
 
     print('\nprojecting twice and restoring')
     check('a view projected again is unchanged',
@@ -206,8 +249,13 @@ def main():
     check('and for GoodGuy', fog.restore(blob, 'GoodGuy', gview) == blob, True)
     check('GoodGuy sees BadGuy\'s capital at its turn-110 size',
           planets(gview)[384][:2], memory(blob, 'GoodGuy')[384])
-    check('restoring leaves a civ with nothing stale alone',
+    check('restoring the turn itself leaves it alone',
           fog.restore(blob, 'BadGuy', blob) == blob, True)
+    sub, want = bytearray(view), bytearray(blob)
+    struct.pack_into('<f', sub, served[min(mine)].payload + 20, 1.5)
+    struct.pack_into('<f', want, live[min(mine)].payload + 20, 1.5)
+    check('a change to the civ\'s own planet is kept by restore',
+          fog.restore(blob, 'BadGuy', bytes(sub)) == bytes(want), True)
 
     print('\nthe merge takes a fogged civ\'s orders as an unfogged one\'s')
     notes_fogged, notes_plain = {}, {}
@@ -217,6 +265,11 @@ def main():
                                  notes=notes_plain)
     check('the same merged blob', fogged == plain, True)
     check('and no refusal', notes_fogged, notes_plain)
+    gfogged = referee.apply_orders(blob, [('GoodGuy', gview)], log=quiet,
+                                   notes=notes_fogged)
+    check('and for GoodGuy',
+          gfogged == referee.apply_orders(blob, [('GoodGuy', blob)], log=quiet),
+          True)
 
     print('\na folder store keeps each civ\'s view beside the turn')
     with tempfile.TemporaryDirectory() as tmp:
@@ -247,52 +300,35 @@ def main():
               False)
 
     print('\nwiping a civ leaves rivals remembering what they last saw')
-    bad = next(o['oid'] for o in icv.owner_records(blob) if o['name'] == 'BadGuy')
-    good = next(o['oid'] for o in icv.owner_records(blob) if o['name'] == 'GoodGuy')
-
-    def remembered(b, civ, pid):
-        return memory(b, civ).get(pid)
-
-    def set_row_turn(b, civ, pid, turn):
-        """`b` with the turn of `civ`'s row for planet `pid`'s system set."""
-        tree = sp.parse_blob(b)
-        _oid, table = fog._civs(b, tree)[civ]
-        rows = exsy.parse(b[table.payload:table.end])
-        systems = fog._systems(b, tree)
-        for row in rows:
-            ids = [struct.unpack_from('<I', b, pl.payload)[0]
-                   for pl in systems.get(row['system'], ())]
-            if pid in ids:
-                row['turn'] = turn
-        return icv.splice(b, table.payload, table.end, exsy.build(rows))
-
     wiped, _planets, _ships = wipe_civ.wipe(blob, 'BadGuy', log=quiet)
     check('GoodGuy still remembers BadGuy\'s capital as of turn 110',
-          remembered(wiped, 'GoodGuy', 384), memory(blob, 'GoodGuy')[384])
+          memory(wiped, 'GoodGuy').get(384), memory(blob, 'GoodGuy')[384])
     check('and is served it as remembered, though it is empty now',
           (planets(wiped)[384][0], planets(fog.project(wiped, 'GoodGuy',
                                                        log=quiet))[384][:2]),
           (0, memory(blob, 'GoodGuy')[384]))
     check('BadGuy forgets its own planets',
-          [m for m in memory(wiped, 'BadGuy').values() if m[0] == bad], [])
+          [m for m in memory(wiped, 'BadGuy').values() if m[0] == BAD], [])
     looking = set_row_turn(blob, 'GoodGuy', 384, icv.turn_of(blob))
     wiped_now, _p, _s = wipe_civ.wipe(looking, 'BadGuy', log=quiet)
     check('a civ looking at the system this turn sees it empty',
-          remembered(wiped_now, 'GoodGuy', 384), (0, 0))
+          memory(wiped_now, 'GoodGuy').get(384), (0, 0))
     gone, _p, _s = wipe_civ.wipe(blob, 'BadGuy', remove_owner=True,
                                  force_owner=True, log=quiet)
     check('removing the civ\'s record clears every memory of it',
-          [m for m in memory(gone, 'GoodGuy').values() if m[0] == bad], [])
+          [m for m in memory(gone, 'GoodGuy').values() if m[0] == BAD], [])
     check('GoodGuy\'s own planets are remembered as before',
-          {p: m for p, m in memory(wiped, 'GoodGuy').items() if m[0] == good},
-          {p: m for p, m in memory(blob, 'GoodGuy').items() if m[0] == good})
+          {p: m for p, m in memory(wiped, 'GoodGuy').items() if m[0] == GOOD},
+          {p: m for p, m in memory(blob, 'GoodGuy').items() if m[0] == GOOD})
 
     print('\na turn-0 galaxy')
     sp0 = sp.load_any(SPGALAXY)
-    check('nothing is stale on the turn a galaxy is made',
-          [fog.stale_planets(sp0, c) for c in ('DemoPlayer', 'BadGuy')], [[], []])
-    check('and the view is the blob',
-          fog.project(sp0, 'BadGuy', log=quiet) == sp0, True)
+    check('nothing is served from memory on the turn a galaxy is made',
+          [changed(sp0, c) for c in ('DemoPlayer', 'BadGuy')], [[], []])
+    view0 = fog.project(sp0, 'BadGuy', log=quiet)
+    check('its view parses and restores to the blob',
+          (sp.parse_blob(view0)[0].end == len(view0),
+           fog.restore(sp0, 'BadGuy', view0) == sp0), (True, True))
 
     print(f'\n{len(PASS)} passed, {len(FAIL)} failed')
     return 1 if FAIL else 0
