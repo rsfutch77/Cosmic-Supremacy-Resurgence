@@ -241,7 +241,8 @@ def main():
     check('the next id is kept', news.read_table(view)[0],
           news.read_table(m1)[0])
     mine = fog.project(m0, 'GoodGuy', log=quiet)
-    sub = send(mine, GOOD, [BAD], b'from the view', b'hi')
+    sub = fog.restore(m0, 'GoodGuy',
+                      send(mine, GOOD, [BAD], b'from the view', b'hi'))
     out, notes = merged(m0, ('GoodGuy', sub))
     check("a message sent from the view reaches BadGuy's whole list",
           messages(out, BAD),

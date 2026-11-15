@@ -1161,18 +1161,14 @@ and nothing served it.
 
 `server/fog.py` serves it. A system is stale for a civ when its `EXSY` turn is
 before the blob's turn and the civ holds no planet in it. Each planet there
-that is or was colonised is served as remembered:
+is served with the owner, population and name the civ remembers, the name
+only when the owner changed. A planet whose memory names the viewer (the
+joiner case above) or a civ the galaxy does not hold keeps its live owner and
+population.
 
-- remembered empty: owner 0, name cleared, no citizens
-- remembered owned: owner and population from memory, every citizen a farmer
-  of that owner; the name becomes the remembered one when the owner changed
-- either way: no soldiers or facilities, the `PROD` of a never-colonised
-  planet, and the owner's running counters in the `PLPR` header at 0
-
-A planet whose memory names the viewer (the joiner case above) or a civ the
-galaxy does not hold keeps its live owner and population, with the same
-fields taken out. A planet is left live when the viewer has citizens on it or
-its `PLPR` does not walk.
+Every planet the viewer does not own, stale or not, is served without its
+owner's state (below, "Each civ is served only what the original server sent
+it").
 
 Nothing is added or removed, so a view keeps every object id, system and
 planet. It passes `screen_submission`'s galaxy check, the high-water id is
@@ -1183,8 +1179,9 @@ The referee projects each civ after the tick and publishes a view only for a
 civ whose view differs (`publish(..., views=)`, recorded under `views` on the
 galaxy document or in `state.json`). Every store and the relay serve a caller
 by `turn_store.served_copy`; `player_turn.served_blob` asks the store.
-Before the merge, `fog.restore` puts the authoritative planets back into each
-submission. A civ cannot order another civ's planet, so nothing is lost, and
+Before the merge, `fog.restore` puts the authoritative planets and sections
+back into each submission. A civ cannot order another civ's planet or change
+another civ's sections, so nothing is lost, and
 the merge then takes a fogged civ's orders exactly as an unfogged one's
 (`server/tests/test_fog.py`).
 
@@ -1212,19 +1209,113 @@ rates, food store size and food per soldier stay, since they belong to the
 planet and the recon screen shows its base outputs. The manual's Planet-View
 screen covers only planets the player owns (`test_fog.py`).
 
-[ ] **A rival's planet in a system the viewer is in is served live**, counters,
+[x] **A rival's planet in a system the viewer is in is served live**, counters,
 queue, soldiers and facilities included, and so is every other civ's `OWNR`:
-treasury, research, designs and its own `KNPL`. Whether the original server
-sent another civ's running state at all is not known; the client's screens
-show it only after a scan. What the stock client needs of it: a scan's result
-is kept in the scanning civ's own reports (`Owner:320`), the diplomacy box
-reads only the viewer's `KNPL` (`0x442DD0`, Memory report, "Known players"),
-and the map names a rival ship's class on hover. **Next step**, a decision for
-Robert: serve such a planet as a remembered one is served (owner and
-population kept, the rest taken out, `restore` before the merge), and another
-civ's treasury, research and `KNPL` zeroed, with its designs kept for the
-class. Then load the view and check the planet tooltip, the scanning screen
-and the diplomacy page show what they showed before.
+treasury, research, designs and its own `KNPL`. **Fixed** (14 November 2026)
+from what the original server sent, read off the client's own writer (below):
+every planet the viewer does not own is served with only what the per-civ
+save shows of it, and another civ's private sections at their constructor
+defaults (`server/fog.py`, `test_fog.py`). Checked in the client on both
+civs' views of `d9`: each loads, the referee's tick takes each to the next
+turn, and BadGuy's view holds GoodGuy's home planets at the remembered 8, 8
+and 10 farmers with only their shipyards. A capture of that view carries no
+orders (`player_turn.carries_orders`) and merges with no note after
+`restore`. Left open for Robert on BadGuy's view: the planet tooltips, the
+diplomacy page and the score list.
+
+#### Each civ is served only what the original server sent it (November 2026)
+
+**The client writes a per-civ save of its own.** `0x52C570(owner, flag)`
+answers whether an object of `owner` is written whole: always when no save
+target is set (`[0x8578FC]`, read by `0x52A780`), and otherwise only for the
+target civ, or with `flag` for a civ in the set at `0x857920`. Every save on
+record has no target, which is why the referee's and players' saves hold
+everyone's state. The writers it gates:
+
+- **`OWNR`** (`0x53C240`): another civ's `DATA` is not written at all. In its
+  place every civ gets a `CLIE` section, version 2: a `u32` (`Owner+0x2C8`,
+  computed by `0x5381D0` when `[0x86F1A0]` is set), the position at
+  `Owner:1208`, `Owner:400`, the name dialog 225 chose, the checkbox and the
+  arms. That is a civ's public face. The reader (`0x545CB0`) takes `DATA` and
+  `CLIE` each only when present. Inside the target's own `DATA`, `PRIV`
+  replaces `SERV`.
+- **`PLNT`** (`0x4EE500`): a planet another civ owns, or nobody owns, is
+  written with the owner, name and population from the target's `EXSY` row
+  (`0x526DC0` on `Owner+0x10C`), and a compact record instead of its `PLPR`
+  and governor: the population as a `u32`, `PlanetProperties+0x12` (a `u16`),
+  `+0x8` to `+0xE`, a byte that is 1 when it has a shipyard (`0x4F4FD0(2)`,
+  facility type 2), and the deposit list (`Planet+0x198`). The reader
+  (`0x4EF2E9`) takes this form when no `PLPR` follows, keeps the population
+  at `Planet+0x164`, and gives a shipyard back as one facility of type 2.
+  `0x4F0EC0`, the population getter, returns that figure when the citizen
+  list is empty.
+- **`SHIP`** (`0x4E8640`): another civ's ship has no `SHPR`, and its `DYNO`
+  (`0x4DA310`) keeps the design id but writes an `INFO` section, the ship's
+  description and a position, in place of its order, admiral and route.
+- **`GLXY`** (`0x4CB1F0`): an object whose byte `+0x18` is clear is not
+  written at all, so a per-civ save leaves out what the target cannot see.
+- A fleet (`0x4E1401`), a wormhole (`0x4FEF66`, with `flag`) and an `EXSY`
+  row (`0x526773`) are gated the same way.
+
+`fog.py` serves the planet and `OWNR` parts of it in the full form, since the
+engine cannot tick the per-civ save:
+
+- every planet the viewer does not own keeps its `PLPR` with what the compact
+  record carries: the population as farmers of the owner it is served with,
+  a shipyard when it has one and no other facility, and the planet's own
+  bytes (`0x4F3B10` writes `+0x8` to `+0xE` from byte 4 and `+0x12` at 11) and
+  deposits. Its stores, soldiers, queue, governor and damage pool read 0. The
+  compact record itself does not tick: `0x4F1440` takes a populated planet's
+  ruler from its citizens and reads `Owner+0x500` through a null pointer;
+- another civ keeps its `OWNR` sections, since its ships still name their
+  design in `DYNO` and their admiral, but its `OWPR`, `KNPL`, `EXSY`, `CVTR`,
+  `GOVS` and `SPQS` hold what the `Owner` constructor (`0x546430`) sets: no
+  credits, no research, no topic (`-1`), no resources, and 0 in the unknown
+  words of `OWPR`. The two starting technologies stay, since the tick's pass
+  over other civs (`0x542850`) takes the last grant `0x4A7EC0` finds in each
+  civ's completed list and stops the client on an empty one. The score and
+  reputation stay, since every civ's score row shows them, and so do the
+  `CLIE` fields.
+
+The `OWPR` layout, from its writer `0x53B230` (code offsets on `Owner`, report
+offset = code offset - `0x34`): credits `Owner:8`, `Owner:12`, a map at
+`Owner:40`, the completed list `Owner:96`, the topics `Owner:144` and
+`Owner:152`, three bytes `Owner:356` to `358`, the score `Owner:28`,
+`Owner:16`, `Owner:20`, `Owner:24`, the reputation `Owner:32`, the colour
+`Owner:476` and its two flags, the setup flags `Owner:359` and `360`,
+`Owner:724` (a float), the position `Owner:1208`, the resources
+`Owner:1116`, `Owner:400`, `Owner:721`, then the name, checkbox and arms.
+
+[ ] **Another civ's ships are served whole**: `SHPR` (crew, fleet) and the
+`DYNO` order, admiral and route. The per-civ save writes a rival's ship with
+no `SHPR` and an `INFO` section instead (above). Next step: write that form
+for ships the viewer does not own, check the map's hover and the recon tab
+read the `INFO` text, and have `restore` put the ships back.
+
+[ ] **Systems a civ has never entered and ships it cannot see are served**,
+with the live owner and population of each planet there. The per-civ save
+leaves out every object whose `+0x18` byte is clear. Dropping systems broke
+`project_blob.py` (the `min_suns` guard and the galaxy check), so a view keeps
+them; what `+0x18` means for a system and a ship, and whether the client
+needs an unseen system's planets at all, are open.
+
+[ ] **The view without news holds every civ's private state.** A caller with
+no seat is served `news.own_view(blob, None)`. Next step: decide what a
+caller with no seat should load, then serve it every planet in the compact
+form and every civ's private sections at their defaults.
+
+[ ] **Another civ's planet keeps the bytes after its `PROD`, and its admirals,
+designs and settings stay.** Past `PROD` a `PLPR` holds eight `u16`, a `u32`,
+a list of 16-byte records, a `u16`, the deposits and the energy link
+(`ENLI`); the per-civ save keeps only the deposits, and the energy-grid scan
+is what reveals a link. `ADMS`, every `DSGN` and `USSE` (the end-galaxy vote
+among them) stay whole while ships are served whole. Next step: decode the
+three unknown fields and the record list, then serve them and `ENLI` empty.
+
+A scan the client carries out (`DOSC`) runs on its own copy, so in a view a
+technology or planetary scan reads a rival's sections at their defaults and
+its planets without their owner's state. The `DOSC` todo, a report built by
+the referee from the authoritative galaxy, covers that.
 
 [x] **A remembered planet keeps four live bytes**: the byte between its soldiers
 and its facility list, the word after the facility list, and the governor id in
