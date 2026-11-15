@@ -96,7 +96,7 @@ def main():
     sub = with_byte(served, design_end(served, mine) - 1, 7)
     out, notes = merged(served, 'DemoPlayer', sub)
     check('a value other than 0 or 1 is an edit, refused',
-          any('editing a design' in n for n in notes))
+          any('beyond its name, parts and inactive byte' in n for n in notes))
 
     print('what a planet builds')
     planets = mo.planet_index(served)

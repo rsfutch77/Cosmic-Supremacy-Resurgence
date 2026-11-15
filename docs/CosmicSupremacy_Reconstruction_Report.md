@@ -606,18 +606,46 @@ Two things follow:
 
 - [x] **Each merge rule names the command it stands for.** Every rule in `merge_orders.py` cites
   its commands, and `merge_orders.COMMANDS` gives all 56 a rule or says why none carries it, read
-  from each routine's offline branch on 14 November 2026 (`test_online_commands.py`). 38 have a
-  rule. `RNGV` runs a governor at once, and the other rules judge what it changes. `SVUS` saves
-  the civ's interface settings (`USSE`, `Owner+0x2cc`), which are not carried. Six are online
+  from each routine's offline branch on 14 November 2026 (`test_online_commands.py`). 48 have a
+  rule. `RNGV` runs a governor at once, and the other rules judge what it changes. Six are online
   only: `RQTM`, `RSMA`, `RQTN` and `RQSV` (the replay), `STTP` (the team dialog) and `ALIV`.
-- [ ] **Ten commands a player can make have no rule, and the merge refuses their effect.**
-  `SLFC` sells a facility (`PlanetProperties::SellFacility`), `RTMI` retires stationed military,
-  which the people rule refuses as fewer soldiers, `STEL` sets a planet's hyperspace energy link
-  (`ENLI`), `CNWH` connects two wormholes, `DOSC` carries out scans (factory `0x0054E030`),
-  `DLSC` deletes an entry of the list at `Owner+0x168`, `MOSD`, `RNSD` and `DLSD` edit, rename
-  and delete a design, and `EDNW` edits a note. A note sent with `SDNW` is refused as well. Next
-  step: for each, write the rule from its offline branch or have the client say up front that
-  it is not carried. Done when none of the ten is lost silently.
+  `DOSC` is refused and named (below).
+- [x] **Ten commands a player can make have no rule, and the merge refuses their effect.**
+  Nine are carried and `DOSC` is refused and named, read off each command's sender, its offline
+  branch and the screen that gates it on 14 November 2026. Measured in one Single Player session
+  that day on `diplomacy/d0` with transmitters, a receiver and a Central Defense Agency added
+  (`server/tests/fixtures/unruled`), each command run through the client's own routine and the
+  galaxy saved after each; merging each save over the one before reproduces it. The rules are in
+  `merge_orders.py`'s docstring.
+  - `SLFC` (Facility sales): one facility a sale, 5% of its table cost paid (10 for a farm, 125
+    for a transmitter, 400 for a receiver, as measured); a sold transmitter leaves the civ's
+    energy links and a sold receiver's links empty. `test_facilities_merge.py`.
+  - `RTMI` (People): the chosen soldiers' records are erased and nothing else; the people rule
+    now takes everybody missing as retired. `STEL` (Energy links): any set of the civ's own
+    planets holding a transmitter, on a planet with a receiver. Same test.
+  - `MOSD`, `RNSD`, `DLSD` (Ship designs): a rename is carried for any design; a modify and a
+    delete only for a design not in use, which the screen opens read-only and will not delete.
+    Names are the client's: up to 32 characters, unique in any case, never `Unnamed`; the merge
+    held them to 15 until now. `test_design_edits_merge.py`.
+  - `DLSC` (Scan reports): a report deleted from the block after the civ's designs. `DOSC` is
+    refused: online the server answered with the reports, the scan posts a detection item to the
+    scanned civ by `rand()`, and a fogged client cannot make a true report. `save_parser` now
+    knows the report and `WORM` tags; before, a `DATA` holding a report hid the civ's news.
+  - `EDNW` and a note written with `SDNW` (Messages): a kind-8 item, inline, carried as the Note
+    dialog writes it. `CNWH` (Wormholes): two of the civ's own unlinked wormholes naming each
+    other. `test_scans_notes_wormholes_merge.py`.
+- [ ] **A scan is not carried.** The referee would make the report from the served state: one
+  `SC..` section per target group (layouts in Memory report, "The Scanning tab, reports
+  located"), the scan taken from the `OWPR` stock, the detection items for the scanned civ, a
+  leader-name scan's byte in the scanner's `KNPL` and a planetary scan's `EXSY` update. Until
+  then a player who scans keeps the scan and is told it was not carried.
+- [ ] **Notes and wormhole links are carried as read, not measured.** Calling the note dialog's
+  routine (`0x00538DD0`) from outside closed the client in a drawing routine, and no galaxy holds
+  a wormhole. Measure a note written and edited through the News screen, and a wormhole pair
+  connected once a galaxy has one.
+- [ ] **The design editor's space and cloaking checks are not encoded.** Its OK (`0x004A5D40`)
+  refuses a design over its hull's space and a cloaked heavy design; the merge takes a new or
+  modified design without either check.
 
 #### The engine is deterministic (September 2026)
 

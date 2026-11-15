@@ -44,7 +44,8 @@ KNOWN_TAGS = {
     b'SDPR', b'GOVS', b'ADMS', b'SPQS', b'USSE', b'SOLA', b'SUN ', b'PLNT',
     b'PLPR', b'PROD', b'WLTH', b'ENLI', b'SHIP', b'DYNO', b'SHCO', b'SHPR',
     b'ROUT', b'NEBU', b'CZYY', b'INFO', b'NEWS', b'FLET', b'FLDT', b'SPRQ',
-    b'PRQU',
+    b'PRQU', b'WORM', b'SCPL', b'SCSY', b'SCRO', b'SCFL', b'SCML', b'SCTE',
+    b'SCEG', b'SCLN', b'SCAN',
 }
 
 SIZE_MASK     = 0x03FFFFFF
