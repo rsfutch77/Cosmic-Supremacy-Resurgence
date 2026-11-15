@@ -504,8 +504,9 @@ reputation (`0x00518480`): a defender that destroyed an attacking ship gained ex
 manual's 5 x log2 of the attacker's score over 80% of its own (12.759, 13.522), the ratio
 clamped to 0.1..10; an attacker loses 0.48 of that figure and gains it in full, which three
 probes at other score ratios confirmed (`capture_rep3*`). Only battle captures move it, which is
-why every corruption fit so far matches reputation 0. The earlier probe (`capture_rep*`) moved the per-relation records through AddReputation,
-which nothing in play reads, and so changed nothing. A live probe wrote GoodGuy's
+why every corruption fit so far matches reputation 0. The earlier probe (`capture_rep*`) moved the per-relation records through `0x534D50`, which is
+the bio-bomb loyalty penalty (`KNPL` +26, 99 both ways in `capture_rep+100`), and so changed
+nothing on planets with no citizen of the other civ's origin. A live probe wrote GoodGuy's
 `Owner:32` as +100 and -100 before two ticks (`capture_rep2*`): the save carries it in
 `OWPR`, 27 bytes past the second research field, a reload reads it back, and the simulator,
 which now loads it, matches the engine's research to 2 points and its food and production
@@ -661,7 +662,8 @@ soldiers to crew them its ships never fill. It is a probe, not a training oppone
 - [x] Colony ship surcharge: the manual gives the fitted formula,
       `(planets + colony ships - 1) x 100`; one build of five came out 100 over
 - [ ] Find income's exact idle step: 1/144 a turn leaves idle civs 1 or 2 credits off
-- [ ] Read reputation from the relation records (`KNPL` +0x10) into the loader
+- [x] Read reputation from the relation records (`KNPL` +0x10) into the loader: that word is the
+      bio-bomb loyalty penalty, `KNPL` +26, and the loader applies it to loyalty
 - [x] Research module (§5b)
 - [x] Movement: speed, routes, arrival and the scout's next system (§5b)
 - [x] Finished move and colonise orders, and colonisation (§5b)

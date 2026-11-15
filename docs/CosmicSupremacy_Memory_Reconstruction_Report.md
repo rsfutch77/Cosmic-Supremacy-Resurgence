@@ -1430,7 +1430,10 @@ Every class derives from `GenericScan`, whose constructor `0x54E240` sets the tu
   - **Energy grid** (`0x54BF00`) rebuilds the target's grid at `Owner:1232` first, then keeps 32-byte elements at `+0x34`: the transmitter planet's node, its TW at `+0x04`, and a vector of receiver planets at `+0x14`.
   - **Leader name** (`0x54EEE0`) stores nothing in the report; it sets a byte in the scanning civ's map at `Owner:248`, keyed by the target civ, and the report prints the name or "blocked by a mysterious technology"
 
-[ ] Three loose ends from the scan decode: route `+0x24`; how `Owner:96`, the technology scan's list, relates to the completed list at `Owner:108`; and what `0x52A790` tests when choosing the full-price scan table
+[x] Three loose ends from the scan decode: route `+0x24`; how `Owner:96`, the technology scan's list, relates to the completed list at `Owner:108`; and what `0x52A790` tests when choosing the full-price scan table. **All three read off the binary** (November 2026):
+  - **Route `+0x24`** is the second half of the description. The engine's text type is 32 bytes, a `std::string` and then an owned stream pointer, both freed by its destructor `0x402A40`; the route element's description runs `+0x08` to `+0x27`, and `0x5541C0` frees `+0x24` before writing a new one.
+  - **`Owner:96` and `Owner:108` are one list.** `Owner:96` is the 24-byte container of the completed list and `Owner:108` its begin pointer, 12 bytes in. The technology scan copies the whole container with the vector assignment `0x453210`, 8-byte `[id, cost]` records, which is why its copy is 24 bytes and the topic follows at `+0x38`. `sim/scans.py` reports the target's completed list already.
+  - **`0x52A790` is content version >= 150** (`[0x80AA00]`), the drafting gate. `0x5545D0` takes `0x80B1E0` below version 57, `0x80AEA0` from 57 to 149, and the full-price `0x80AB60` from 150. Every mode on record runs at 171 or above.
 [x] Recon tab, believed to have no backing state in memory; confirm by diffing across opening and using it, and record the negative result either way. **No backing state of its own**, read from `ReconPage` (constructor `0x4382A0`, handler `0x439E80`, November 2026; not diffed live). Its planet list reads the global planet vector (`0x8553C4`), its ship list the global ship list filtered to other civs' ships with a non-zero byte at `Ship:16`, and its destination column the newest route scan covering the ship in `Owner:320`. The only state it holds is its filter controls. The manual's recon screen matches: explored planets as last scouted, and other civs' ships in sensor range
 
 ### The reference-node idiom
@@ -2012,10 +2015,24 @@ Academy's ranked soldiers: the step is 4.70, the turn-126 tick leaves 30.67, and
 0. Those are the only planets with two rulers in `sim/corpus`, and all eight of their ticks agree.
 
 `sim/load.py` reads the list and the counter (`merge_orders.influence_of`) and sets each planet's
-loyalty with `sim.economy.planet_loyalty`, without the bio-bomb penalty.
+loyalty with `sim.economy.planet_loyalty`, the ruler's bio-bomb penalty from `KNPL` included.
 
-[ ] Find where the save carries the bio-bomb loyalty penalty: `Owner+0x12C` is a map keyed by civ,
-read through `0x005343A0`, its u16 at `+0x24` of each node.
+[x] Find where the save carries the bio-bomb loyalty penalty: `Owner+0x12C` is a map keyed by civ,
+read through `0x005343A0`, its u16 at `+0x24` of each node. **It is `KNPL` record `+26`** (November
+2026). `Owner+0x12C` is `Owner:248`, the known-players map `KNPL` serialises; its writer
+(`0x534090`, `0x533260`, `0x532F20`) puts node `+0x24` at record `+26`, the field every capture
+read as 0. The bio-bomb resolution `0x4F6DE0` adds the bomb sets dropped on a planet that turn
+(`0x4D9AD0`, each bomber's sets capped by its order) through `0x534D50`, into the bomber's record
+for the planet's owner, capped at 100. The client's "Loyalty Penalties from Bio-Bombing" text
+(`0x42F960`) reads the same word. The earlier reputation probe drove it through `0x534D50` in
+memory, and `capture_rep+100_t0123` carries 99 at `+26` in both civs' records, the only non-zero
+value among the 44 galaxies in `sim/corpus`. `merge_orders.bio_penalties` reads it and `sim/load.py` applies
+it to each planet's loyalty.
+
+[ ] The fast sim's bio-bombing (`sim/combat.bio_bomb`) takes its sets off the loyalty of the
+bomber's planets taken from the victim once. The client keeps them as a standing penalty per civ
+pair, felt by every citizen of the victim's origin under the bomber, on planets taken later too.
+Carry it on the civ and subtract it where `sim/economy.settle` moves loyalty.
 
 [x] Read planet #384's loyalty on screen from `capture_live_invade_t0129.after`; the derivation
 gives 36.29%. The TestBed's Planet View tooltip shows 36.29% (14 Nov 2026), with the list as
@@ -2726,8 +2743,9 @@ tick's corruption followed, and a reload read it back. The referee copies only t
 fields from a submitted `OWPR`, so the engine's value carries from turn to turn. The client
 computes battle reputation itself: across the battle captures a defender that destroyed an
 attacker's ship gained 5 x log2 of the attacker's score over 80% of its own, 12.759 and 13.522,
-exactly the manual, once per pair. The per-relation word AddReputation changes is still unread
-in play.
+exactly the manual, once per pair. The per-relation word is not reputation: it is the bio-bomb
+loyalty penalty, `KNPL` `+26`, and `0x004F6DE0` is the bio-bomb resolution ("Loyalty is derived
+from the conqueror list").
 
 [x] **Find the attacker's reputation rule.** `0x00518480` computes it, called from the battle
 code at `0x0051EEE5` and from the declare-war forecast at `0x004432A6`: the enemy's score over
@@ -2740,8 +2758,12 @@ with GoodGuy's and BadGuy's scores written into memory before one battle tick, 1
 clamped), and equal scores gave the full +1.610 (`capture_rep3*`). Where the 0.48 is applied
 was not traced.
 
-[ ] Explain the defender gain of 11.656 in `capture_twosided_staged_fork_badguy_t0110`, where
-the scores before the tick give 12.601 by the same rule that matched every other battle.
+[x] Explain the defender gain of 11.656 in `capture_twosided_staged_fork_badguy_t0110`, where
+the scores before the tick give 12.601 by the same rule that matched every other battle. **The
+turn term:** `0x00518480` scales the figure by the turn over 120 while the engine's turn
+(`[0x8578E8]`) is 120 or less (60 when game option 1's byte `+0x30` is set). This battle
+resolves on turn 111, and 12.6009 x 111/120 = 11.6558, the save's 11.65582. Every other battle
+on record is at turn 123 or 125, where the factor is 1. `sim/renown.reputation` applies it.
 
 [x] test whether loyalty and corruption are derived rather than stored, populate one planet's population, buildings and military fully, and check whether both values follow from those inputs without any field of their own changing. Corruption does (`docs/Fast_Sim_Plan.md` §5b). Loyalty does too, from the conqueror list and the citizens (`0x004ED270`, `0x004F47A0`); the list's influences are its stored inputs, moved by soldiers and propaganda each tick.
 

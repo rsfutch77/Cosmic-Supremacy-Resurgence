@@ -126,6 +126,11 @@ def loyalty_checks():
     check('one of another origin feels half', ec.citizen_loyalty(0, 7, DEMO, rulers), 60.0)
     check('a planet is the mean of its citizens',
           ec.planet_loyalty([(0, BAD), (126, DEMO)], DEMO, rulers), 60.0)
+    check('the ruler\'s bio-bomb penalty comes off a citizen of that origin, clamped',
+          [ec.citizen_loyalty(126, BAD, DEMO, rulers, {BAD: 15}),
+           ec.citizen_loyalty(0, BAD, DEMO, rulers, {BAD: 30})], [85.0, 0.0])
+    check('and not off the ruler\'s own people',
+          ec.citizen_loyalty(126, DEMO, DEMO, rulers, {DEMO: 15}), 100.0)
 
 
 def combat_checks():
@@ -445,16 +450,25 @@ def reputation_checks():
     for (mine, theirs), want in (((13538, 6000), -2.045), ((13538, 13538), 1.610),
                                  ((50000, 2886), -7.973), ((13538, 2886), -4.579)):
         g = galaxy()
+        g.turn = 122                    # the live probes ran past turn 120
         g.civs[DEMO].score, g.civs[BAD].score = mine, theirs
         renown.battle(g, DEMO, BAD, 0, 100, 1000, 1000, at_planet=True)
         check(f'an attacker at {mine} against {theirs} gets {want}',
               round(g.civs[DEMO].reputation, 3), want)
     g = galaxy()
+    g.turn = 125
     g.civs[DEMO].score, g.civs[BAD].score = 17718, 3398
     renown.battle(g, DEMO, BAD, 100, 0, 1000, 1000, at_planet=True)
     check('a defender that destroys an attacker gains the full figure, and an attacker '
           'that destroyed nothing loses none',
           (round(g.civs[BAD].reputation, 3), g.civs[DEMO].reputation), (13.522, 0.0))
+    g = galaxy()
+    g.turn = 110
+    g.civs[DEMO].score, g.civs[BAD].score = 12602, 2746
+    renown.battle(g, DEMO, BAD, 100, 0, 1000, 1000, at_planet=True)
+    check('through turn 120 the figure scales by the turn over 120 '
+          '(capture_twosided_staged_fork_badguy_t0110)',
+          round(g.civs[BAD].reputation, 3), 11.656)
     g = galaxy()
     by = {}
     for rep in (-20, 0, 20):
