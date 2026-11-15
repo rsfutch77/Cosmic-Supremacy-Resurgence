@@ -422,6 +422,7 @@ def resolve_turn(store: TurnStore, save_dir=None, log=print) -> int:
         "closed_at": time.time(),
         "refused": notes,
         # For `verify_turn` to recompute this turn and check the answer.
+        "hash_version": canonical.HASH_VERSION,
         "hash_in": canonical.canonical_hash(blob),
         "hash_out": canonical.canonical_hash(nxt),
         "hash_submissions": {civ: canonical.canonical_hash(s)
@@ -450,10 +451,11 @@ def verify_turn(store: TurnStore, turn: int, recompute: bool = True,
         return False
 
     published = rec["published"]
+    version = rec.get("hash_version", 1)
     ok = True
 
     if store.has_turn(published):
-        stored = canonical.canonical_hash(store.turn_blob(published))
+        stored = canonical.canonical_hash(store.turn_blob(published), version)
         same = stored == rec["hash_out"]
         log(f"  verify: stored turn {published} "
             f"{'matches' if same else 'does NOT match'} its record "
@@ -467,7 +469,7 @@ def verify_turn(store: TurnStore, turn: int, recompute: bool = True,
         return ok
 
     blob = store.turn_blob(turn)
-    if canonical.canonical_hash(blob) != rec["hash_in"]:
+    if canonical.canonical_hash(blob, version) != rec["hash_in"]:
         log(f"  verify: turn {turn}'s own blob no longer matches what was "
             f"closed; a rerun would not be comparable")
         return False
@@ -477,7 +479,7 @@ def verify_turn(store: TurnStore, turn: int, recompute: bool = True,
         if civ not in subs:
             log(f"  verify: {civ}'s submission is missing")
             return False
-        if canonical.canonical_hash(subs[civ]) != want:
+        if canonical.canonical_hash(subs[civ], version) != want:
             log(f"  verify: {civ}'s submission is not the one that was used")
             return False
 
@@ -486,12 +488,13 @@ def verify_turn(store: TurnStore, turn: int, recompute: bool = True,
     arms = {civ: set(ids) for civ, ids in (rec.get("arms") or {}).items()}
     merged = apply_orders(blob, taken, log=log, arms=arms)
     again = tick(merged, turns=1, save_dir=save_dir, log=log)
-    got = canonical.canonical_hash(again)
+    got = canonical.canonical_hash(again, version)
     same = got == rec["hash_out"]
     log(f"  verify: recomputation {'agrees' if same else 'DISAGREES'} "
         f"({got[:16]} against {rec['hash_out'][:16]})")
     if not same:
-        for off, x, y in canonical.differences(store.turn_blob(published), again):
+        for off, x, y in canonical.differences(store.turn_blob(published),
+                                               again, version=version):
             log(f"    {off:#08x}  {x:#04x} -> {y:#04x}   "
                 f"{canonical.locate(again, off)}")
     return ok and same

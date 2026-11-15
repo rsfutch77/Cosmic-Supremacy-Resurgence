@@ -154,6 +154,27 @@ def main():
           [plpr(view, p)[4:15] + plpr(view, p)[19:23] for p in (261, 263, 265)],
           [plpr(blob, p)[4:15] + plpr(blob, p)[19:23] for p in (261, 263, 265)])
 
+    # The byte after the soldiers, the damage pool and the governor, set on
+    # planet 265 in the authoritative blob.
+    def marks(b, pid):
+        p = next(p for p in icv.planet_records(b) if p['id'] == pid)
+        _c, mil, fac = fog._people(b[p['plpr_payload']:p['plpr_end']])
+        return (p['plpr_payload'] + mil, p['plpr_payload'] + fac - 4,
+                p['end'] - fog.GOVERNOR)
+    at_byte, at_pool, at_gov = marks(blob, 265)
+    marked = bytearray(blob)
+    marked[at_byte] = 7
+    struct.pack_into('<I', marked, at_pool, 120)
+    struct.pack_into('<I', marked, at_gov, 642)
+    marked = bytes(marked)
+    mview = fog.project(marked, 'BadGuy', log=quiet)
+    vb, vp, vg = marks(mview, 265)
+    check('the byte after the soldiers, the damage pool and the governor '
+          'read 0', (mview[vb], mview[vp:vp + 4], mview[vg:vg + 4]),
+          (0, bytes(4), bytes(4)))
+    check('and come back on restore',
+          fog.restore(marked, 'BadGuy', mview) == marked, True)
+
     # A planet that has not changed since the last look is still served
     # without its owner's running state.
     tree = sp.parse_blob(blob)

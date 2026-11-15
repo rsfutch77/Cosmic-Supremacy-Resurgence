@@ -24,8 +24,9 @@ only its owner would know.
   of that owner, no soldiers and no facilities; the name is the remembered one
   when the owner changed
 - every one: the food store, production progress, recruitment rate and
-  military store read 0, and the production queue is a never-colonised
-  planet's
+  military store read 0, as do the byte after the soldiers, the damage pool
+  after the facility list and the governor, and the production queue is a
+  never-colonised planet's
 
 The base outputs, food store size and food per soldier stay live; they are
 the planet's, not the owner's running state, and the recon screen shows them.
@@ -72,6 +73,7 @@ OWNER_FIELDS = (
     (32, 4),            # military store
 )
 CITIZEN = 9             # bytes per citizen or soldier record
+GOVERNOR = 4            # the PLNT's last u32, Planet:496, 0 for none
 CITIZEN_OWNER = 3       # u32 inside a record
 UNNAMED = b'Unnamed'    # what EXSY calls a planet nobody has named
 MAX_REMEMBERED = 1000   # a remembered population above this is a misread
@@ -166,19 +168,24 @@ def _farmer(oid: int) -> bytes:
 def _remembered_plpr(blob, plpr, owner: int, pop: int, blank_prod):
     """The PLPR payload as remembered: the owner's running state zeroed,
     `pop` farmers of `owner`, no soldiers and no facilities, and an idle
-    queue. None when it does not walk."""
+    queue. None when it does not walk.
+
+    The byte after the soldiers is PlanetProperties+0x10, 0 on every tracked
+    planet. The `u32` after the facility list is PlanetProperties+0x7C, a
+    pool an attack fills (`0x4F86E0`) and the planet spends on destroying
+    facilities (`0x4F5710`)."""
     walk = _walk(blob, plpr)
     if walk is None:
         return None
-    d, _cit_end, mil_end = walk
+    d, _cit_end, _mil_end = walk
     first = plpr.children[0].start - plpr.payload if plpr.children else len(d)
     head = bytearray(d[:PLPR_HEAD])
     for off, size in OWNER_FIELDS:
         head[off:off + size] = bytes(size)
     out = bytes(head) + struct.pack('<I', pop) + _farmer(owner) * pop
-    # No soldiers, and an empty facility list with its trailing word.
-    out += struct.pack('<I', 0) + d[mil_end:mil_end + 1]
-    out += struct.pack('<I', 0) + d[first - 4:first]
+    # No soldiers, the byte after them, no facilities and an empty pool.
+    out += struct.pack('<I', 0) + bytes(1)
+    out += struct.pack('<I', 0) + struct.pack('<I', 0)
     rest = d[first:]
     if blank_prod is not None:
         prod = next(plpr.find('PROD'), None)
@@ -259,8 +266,10 @@ def _rewritten(blob, pl, owner, pop, name, blank_prod):
     out = bytes(head) + struct.pack('<I', len(label)) + label
     out += blob[name_end:plpr.start]
     out += sp.build_section(b'PLPR', plpr.version, new_plpr)
-    out += blob[plpr.end:pl.end]
-    return out
+    tail = blob[plpr.end:pl.end]
+    if len(tail) >= GOVERNOR:
+        tail = tail[:-GOVERNOR] + bytes(GOVERNOR)
+    return out + tail
 
 
 def project(blob: bytes, civ: str, log=print) -> bytes:

@@ -7,7 +7,8 @@ test_knpl.py: the known-players table read and written whole
 same bytes back. The diplomacy and messages sessions place the fields the
 captures move: `fixtures/diplomacy` d6 to d7 is BadGuy declaring war on
 GoodGuy, d7 to d8 a tick, and `fixtures/messages` m3 to m6 GoodGuy's colour,
-territory and ships choices for BadGuy.
+territory and ships choices for BadGuy. A two-record table spliced into d8
+shows `canonical.py` version 2 masking a colour that is not the last.
 """
 import glob
 import os
@@ -23,6 +24,7 @@ for d in (os.path.join(ROOT, 'server'),
 import save_parser as sp
 import inject_civ as icv
 import knpl
+import canonical
 
 FIX = os.path.join(HERE, 'fixtures')
 PASS, FAIL = [], []
@@ -82,12 +84,14 @@ def main():
           (after['stance'], other['stance']), (knpl.WAR, knpl.WAR))
     check('the declarer\'s record says it declared, the other\'s does not',
           (before['declared'], after['declared'], other['declared']), (0, 1, 0))
-    check('+20 goes from -1 to 100 on both sides',
-          (before['w20'], after['w20'], other['w20']), (-1, 100, 100))
+    check('each side records the other\'s Inactivity, 100 at turn 180',
+          (before['inactivity'], after['inactivity'], other['inactivity']),
+          (-1, 100, 100))
     tick = record('diplomacy/d8.b64', 'BadGuy', 'GoodGuy')
-    check('the next tick sets +17, +19 and +24 on the declarer\'s side only',
-          ((tick['w17'], tick['w19'], tick['w24']),
-           record('diplomacy/d8.b64', 'GoodGuy', 'BadGuy')['w24']),
+    check('the battle tick sets w17, battled and a cooldown of 150 less a '
+          'tick on the declarer\'s side only',
+          ((tick['w17'], tick['battled'], tick['cooldown']),
+           record('diplomacy/d8.b64', 'GoodGuy', 'BadGuy')['cooldown']),
           ((1, 1, 149), 0))
 
     print('\nthe viewer\'s display choices')
@@ -99,6 +103,29 @@ def main():
     check('green, territory shown and ships hidden, as chosen',
           (m6['colour'].to_bytes(4, 'little').hex(), m6['territory'],
            m6['ships'], m6['by_stance']), ('01f80dff', 1, 0, 0))
+
+    print('\nthe canonical form')
+    blob = sp.load_any(os.path.join(FIX, 'diplomacy', 'd8.b64'))
+    sec, recs = tables(blob)['GoodGuy']
+    second = dict(recs[0], civ=recs[0]['civ'] + 1, handle=recs[0]['civ'] + 1)
+    first = dict(recs[0], colour=0x12345678)
+
+    def two(colour):
+        return icv.splice(blob, sec.payload, sec.end,
+                          knpl.build([dict(first, colour=colour), second]),
+                          log=lambda *_: None)
+    a, b = two(0x12345678), two(0xFF4DC7F6)
+    check('a table of two records parses', len(knpl.parse(
+        a[sec.payload:sec.payload + 4 + 2 * knpl.RECORD])), 2)
+    check('version 2 ignores the first record\'s colour',
+          canonical.canonical_hash(a), canonical.canonical_hash(b))
+    check('version 1 does not', canonical.canonical_hash(a, 1)
+          != canonical.canonical_hash(b, 1), True)
+    check('both versions agree on one-record and empty tables',
+          sum(canonical.canonical_hash(sp.load_any(p)) ==
+              canonical.canonical_hash(sp.load_any(p), 1)
+              for p in sorted(glob.glob(os.path.join(FIX, '*', '*.b64')))),
+          len(glob.glob(os.path.join(FIX, '*', '*.b64'))))
 
     print(f'\n{len(PASS)} passed, {len(FAIL)} failed')
     return 1 if FAIL else 0

@@ -97,8 +97,11 @@ def level(store, turn: int, source: int, targets, log=print) -> bool:
         f'{round(deadline - time.time())}s still on the clock')
 
     rec = store.archive_record(turn - 1)
-    if rec and rec.get('published') == turn and rec.get('hash_out') == before:
-        rec['hash_out'] = after
+    version = (rec or {}).get('hash_version', 1)
+    named = rec and rec.get('published') == turn
+    if named and rec.get('hash_out') == canonical.canonical_hash(blob, version):
+        before = rec['hash_out']
+        rec['hash_out'] = canonical.canonical_hash(out, version)
         rec['levelled'] = {
             'at': time.time(),
             'source_planet': source,

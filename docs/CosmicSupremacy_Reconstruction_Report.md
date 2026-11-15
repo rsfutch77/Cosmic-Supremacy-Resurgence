@@ -1161,11 +1161,27 @@ screen covers only planets the player owns (`test_fog.py`).
 queue, soldiers and facilities included, and so is every other civ's `OWNR`:
 treasury, research, designs and its own `KNPL`. Whether the original server
 sent another civ's running state at all is not known; the client's screens
-show it only after a scan.
+show it only after a scan. What the stock client needs of it: a scan's result
+is kept in the scanning civ's own reports (`Owner:320`), the diplomacy box
+reads only the viewer's `KNPL` (`0x442DD0`, Memory report, "Known players"),
+and the map names a rival ship's class on hover. **Next step**, a decision for
+Robert: serve such a planet as a remembered one is served (owner and
+population kept, the rest taken out, `restore` before the merge), and another
+civ's treasury, research and `KNPL` zeroed, with its designs kept for the
+class. Then load the view and check the planet tooltip, the scanning screen
+and the diplomacy page show what they showed before.
 
-[ ] **A remembered planet keeps four live bytes**: the byte between its soldiers
+[x] **A remembered planet keeps four live bytes**: the byte between its soldiers
 and its facility list, the word after the facility list, and the governor id in
-the `PLNT`'s last `u32`. None is decoded.
+the `PLNT`'s last `u32`. None is decoded. **Fixed** (14 November 2026): all
+three read 0 in a view. Planet's loader (`0x4EF2B1`) reads `PLPR` into the
+`PlanetProperties` at `Planet+0x60` (`0x4F7D80`) and then, from `PLNT` v5, the
+governor reference into `Planet:496`. The byte is `PlanetProperties+0x10`, read
+from v19 and 0 on all 20,555 tracked planets. The `u32` is
+`PlanetProperties+0x7C`, from v17: a pool an attack fills (`0x4F86E0`) and
+the planet spends on destroying facilities (`0x4F5710`); planet 384 reads 0 in
+`d7` and 120 in `d8`, the tick it is attacked. The governor is 0 on every
+tracked planet, which is no governor (`test_fog.py`).
 
 [x] **A caller without a seat is served the whole turn.** Under `first-use`
 that is every player before their first submission, and any signed-in user who
@@ -1239,14 +1255,40 @@ with them (149 in `d8`), a `u16` and a `u8` that read 0 everywhere, then the thr
 and the colour. First contact (`0x534F90`) passes the current turn and the opening stance: war
 under `waronly`, by team in a team game, else neutral.
 
-[ ] **Name the four war fields** at `+17`, `+19`, `+20` and `+24`. The captures place them on the
+[x] **Name the four war fields** at `+17`, `+19`, `+20` and `+24`. The captures place them on the
 declarer's side and the war's first tick, which fits the manual's "declared the war and attacked
-first" reputation rule; the code that reads them is not found.
+first" reputation rule; the code that reads them is not found. **Named** (14 November 2026) from
+the client, with `+26` and `+28` beside them; `knpl.py` keys and documents each. The relation getter
+`0x534340` returns the record from `met` on, and every reader goes through it:
 
-[ ] **`canonical.py` masks only the last record's colour.** Every record's colour is unset until
+- `+19` `battled`: set by `0x534D10` when an attack is scored. The reputation tooltip
+  (`0x4430F0`) then says no reputation is gained or lost "since the significant battle has already
+  happened". Any treaty but war or cease-fire clears it on both sides.
+- `+20` `inactivity`: accepting a war (`0x55BD40`) records each side's Inactivity percent
+  (`0x538450`, from the `SERV` baseline). `0x517A40` reduces a reputation loss by the higher of that
+  and the target's Inactivity now. `d7` is turn 180 with both baselines 0, so both read 100.
+- `+24` `cooldown`: `0x534D10` adds 150 for a reputation gain, and the tick (`0x5344B0`) takes 1
+  off, 2 under the galaxy option it reads. `0x5177F0` reduces the next gain by `cooldown / 150`,
+  the tooltip's "gained reputation from this player only recently". `d8` reads 149.
+- `+26` `biobombed`: bio-bombing adds the sets dropped (`0x534D50`, capped at 100); the tick takes it
+  down as `cooldown`. The planet loyalty tooltip lists it per civ as a loyalty penalty in percent.
+- `+28` `leader_known`: set at `0x54EF99`; a second "name of the Empire Leader" message is refused.
+
+[ ] **Find what sets `+17`** (`w17`, record `+0x0A` behind the getter, map node `+0x1E`). Accepting
+a war zeroes it on both sides and the constructor zeroes it; nothing reached through `0x534340`,
+`0x5343A0` or the map's find (`0x533C70`) writes it, yet `d8` reads 1 on the declarer's side.
+**Next step**: a write watchpoint on that word in a live client across a war's first tick.
+
+[x] **`canonical.py` masks only the last record's colour.** Every record's colour is unset until
 a player picks one, so a civ that meets its second rival in a tick carries unset bytes in a record
 that is not the last, and a recomputed turn can differ there. Masking every record's colour changes
-the stored hash of every galaxy with three or more civs, so it waits for a hash version.
+the stored hash of every galaxy with three or more civs, so it waits for a hash version. **Fixed**
+(14 November 2026): hash version 2 masks every record's colour, and the referee records
+`hash_version` beside its hashes. `verify_turn` and `level_store_turn.py` hash with a record's own
+version, 1 when it has none, so archived turns still verify. The colour getter (`0x534E40`) reads
+the colour only for a civ coloured by choice. Versions 1 and 2 agree on every tracked fixture,
+which hold at most one record per table; a two-record table differs only under version 1
+(`test_knpl.py`).
 
 [x] **NOT A DATA-LOSS BUG. It is an unbounded re-grant exploit (measured September 2026).** This
 item previously read "BUG, DATA LOSS, confirming the customisation popup overwrites server-restored
