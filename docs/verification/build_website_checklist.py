@@ -284,7 +284,7 @@ R = [
      'Search engines can find, understand and correctly attribute the site.',
      ['[x] A canonical URL on every page, so `.php` and `.php.html` addresses do not compete. `stage.py` adds one to each page; the home page\'s is `/` (v0.7).',
       'Unique titles and descriptions (Opquast 3, 103).',
-      'Register the site in Google Search Console and submit `https://cosmicresurgence.com/sitemap.xml`, which `stage.py` writes and robots.txt names (Opquast 220).']),
+      '[x] Register the site in Google Search Console and submit `https://cosmicresurgence.com/sitemap.xml`, which `stage.py` writes and robots.txt names (Opquast 220). A Domain property, verified by Robert on 14 November 2026; the sitemap is submitted by its full address, which a Domain property needs.']),
     ('R8', 'Apache Software Foundation, "Release Download Pages for Projects"',
      'The download page links the file, its checksum, and how to verify it, all over HTTPS.',
      ['[x] The download page offered v0.1.0. It now offers v0.1.1, the latest published release, with its size, date and SHA-256 (matching GitHub\'s digest); live on 8 October 2026.',
