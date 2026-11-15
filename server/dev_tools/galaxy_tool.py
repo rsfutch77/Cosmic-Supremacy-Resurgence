@@ -59,6 +59,7 @@ for _d in (SERVER, HERE, os.path.join(os.path.dirname(SERVER), 'client',
 import abandonment                                              # noqa: E402
 import galaxy_directory as gd                                   # noqa: E402
 import inject_civ as icv                                        # noqa: E402
+import set_blob_player as sbp                                   # noqa: E402
 import turn_store                                               # noqa: E402
 
 TURN_SECONDS = 14400                # the beta's turn length
@@ -241,7 +242,8 @@ def first_blob(players, blob_path: str = None, generate: str = None,
     if missing:
         raise Refused(f'{path} holds no civ called {missing}; its civs are '
                       f'{civs}')
-    return blob
+    # A TestBed capture carries 99999, which selects the unreleased stat tables.
+    return sbp.released(blob, log=quiet)
 
 
 def check_start(directory, gid: str, name: str, players, seat_claim=None,

@@ -75,6 +75,14 @@ def get_content_version(blob) -> int:
     return struct.unpack_from('<I', blob, off)[0]
 
 
+def released(blob: bytes, log=print) -> bytes:
+    """`blob`, stamped with the released content version if it carries one at
+    or above the ceiling; a lower version is left as the galaxy chose it."""
+    if get_content_version(blob) < CONTENT_VERSION_CEILING:
+        return blob
+    return set_content_version(blob, log=log)
+
+
 def set_content_version(blob: bytes, version=RELEASED_CONTENT_VERSION,
                         log=print) -> bytes:
     """Stamp the content version that decides which stat tables the client uses.

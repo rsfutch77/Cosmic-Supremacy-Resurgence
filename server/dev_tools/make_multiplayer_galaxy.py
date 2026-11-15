@@ -45,6 +45,7 @@ import exsy
 import inject_civ as icv
 import inject_order as ino
 import merge_orders as mo
+import set_blob_player as sbp
 
 NAME_LIMIT = 15          # the engine's name buffer
 
@@ -346,7 +347,7 @@ def build(blob: bytes, players, log=print) -> bytes:
     if sorted(final) != sorted(players):
         raise SystemExit(f'ended with {final}, wanted {players}')
     log(f'\n{len(final)} civ(s), one per player: {final}')
-    return blob
+    return sbp.released(blob, log=log)
 
 
 def main():
