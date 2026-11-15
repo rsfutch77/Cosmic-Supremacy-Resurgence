@@ -20,7 +20,9 @@ to a record the reader `0x5332E0` and writer `0x532F20` walk member by member.
         +19   u8   set with +17                           (key `w19`)
         +20   i32  -1 until a war is declared, then 100  (key `w20`)
         +24   u16  set with +17                           (key `w24`)
-        +26   u16  0 in every capture                     (key `w26`)
+        +26   i16  the bio-bomb loyalty penalty: bio-bombing the record's
+                   civ adds the bombs dropped, capped at 100, and that
+                   civ's citizens under this one lose it   (key `bio_penalty`)
         +28   u8   0 in every capture                     (key `w28`)
         +29   u8   the civ's territory is drawn          (key `territory`)
         +30   u8   the civ's ships are drawn             (key `ships`)
@@ -34,8 +36,8 @@ never sets the colour, so a civ that never picked one carries whatever was in
 memory. The reader forces the colour's top byte to 0xFF, and that is the
 nondeterministic dword `canonical.py` masks.
 
-`w17` to `w28` are named by offset: the diplomacy captures place them, not the
-code that reads them.
+`w17` to `w28`, apart from +26, are named by offset: the diplomacy
+captures place them, not the code that reads them.
 """
 import struct
 
@@ -50,7 +52,7 @@ FIELDS = (                      # (key, offset, struct format)
     ('w19', 19, '<B'),
     ('w20', 20, '<i'),
     ('w24', 24, '<H'),
-    ('w26', 26, '<H'),
+    ('bio_penalty', 26, '<h'),
     ('w28', 28, '<B'),
     ('territory', 29, '<B'),
     ('ships', 30, '<B'),

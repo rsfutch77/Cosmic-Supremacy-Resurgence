@@ -172,6 +172,7 @@ def _queue_items(blob, galaxy):
 
 def _planets(blob, tree, galaxy):
     gaps = galaxy.gaps
+    bio = mo.bio_penalties(blob)
     glxy = next(tree[0].find('GLXY'))
     for sola in (c for c in glxy.children if c.tag == b'SOLA'):
         sun = next((c for c in sola.children if c.tag == b'SUN '), None)
@@ -236,7 +237,8 @@ def _planets(blob, tree, galaxy):
                     '<I', blob, at + mo.SETTLED_COUNTER_OFF)[0]
                 planet.rulers, planet.unrest = mo.influence_of(blob, plpr_sec)
                 planet.loyalty = ec.planet_loyalty(
-                    [(mo.arrived(c), c[1]) for c in cz or []], owner, planet.rulers)
+                    [(mo.arrived(c), c[1]) for c in cz or []], owner, planet.rulers,
+                    {o: n for (r, o), n in bio.items() if r == owner})
                 taken_from = [r for r in planet.rulers if r[3] != mo.RULING]
                 if taken_from:
                     planet.prior_owner = max(taken_from, key=lambda r: r[3])[0]

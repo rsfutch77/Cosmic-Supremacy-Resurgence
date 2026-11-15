@@ -209,14 +209,15 @@ def loyalty_bonus(p, civ=None):
     return bonus + traits.value(civ, 36)
 
 
-def citizen_loyalty(arrived, origin, ruler, rulers):
+def citizen_loyalty(arrived, origin, ruler, rulers, penalties=None):
     """One citizen's loyalty to the ruler, the client's 0x004ED270.
 
     Every other ruler in the planet's conqueror list pulls it down by that
     ruler's influence: all of it on a citizen there before the rule began,
     the share of the rule it lived through (each span capped at 100 turns) on
     one that arrived during it, none on one that came after. A citizen of
-    another origin feels half. The bio-bomb penalty is not applied."""
+    another origin feels half. A citizen not of the ruler's origin then loses
+    the ruler's bio-bomb penalty toward its origin, `penalties[origin]`."""
     pull = 0.0
     for owner, influence, first, last in rulers:
         if owner == ruler:
@@ -228,14 +229,18 @@ def citizen_loyalty(arrived, origin, ruler, rulers):
         else:
             share = 0.0
         pull += share if origin == owner else share * FOREIGN_INFLUENCE
+    if origin != ruler and penalties:
+        pull += penalties.get(origin, 0)
     return min(100.0, max(0.0, 100.0 - pull))
 
 
-def planet_loyalty(citizens, ruler, rulers):
-    """A planet's loyalty, the mean over (arrived, origin) citizens; 100 with none."""
+def planet_loyalty(citizens, ruler, rulers, penalties=None):
+    """A planet's loyalty, the mean over (arrived, origin) citizens; 100 with none.
+    `penalties` is the ruler's bio-bomb penalty by citizen origin."""
     if not citizens:
         return 100.0
-    return sum(citizen_loyalty(t, o, ruler, rulers) for t, o in citizens) / len(citizens)
+    return sum(citizen_loyalty(t, o, ruler, rulers, penalties)
+               for t, o in citizens) / len(citizens)
 
 
 def conquered(g, p, owner):

@@ -97,7 +97,8 @@ For a chassis the Space column is space PROVIDED, not consumed. Chassis 0-2 are 
 
 ### Shields
 
-No fitted-shield vector is read from a design yet, only the `ShipDesign:72` shield stat.
+A design's fitted shields are its sixth part list (`ShipDesign:248`); `ShipDesign:72` is their summed
+strength (`0x547A50`).
 
 | Id | Name | Units | Space | Cost | Upkeep | Strength | Metal | Deut | Radio | Cryst | Exot |
 |---|---|---|---|---|---|---|---|---|---|---|---|

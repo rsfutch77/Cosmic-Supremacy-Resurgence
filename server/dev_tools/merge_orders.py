@@ -2725,6 +2725,10 @@ TRDT_FIXED = 30             # parties, kind, status, length, start, proposed, by
 KNPL_COUNT = 4
 KNPL_RECORD = 36
 KNPL_STANCE_AT = 12
+# u16, loyalty this civ's citizens of the record's civ lose to it: bio-bombing
+# that civ adds the bombs dropped, capped at 100 (0x4F6DE0 through 0x534D50),
+# and the loyalty of a citizen of that origin under this civ drops by it (0x4ED270).
+KNPL_BIO_PENALTY_AT = 26
 # The viewer's display choices for the civ a KNPL record names, read off the
 # client's writer (0x532F20) and reader (0x5332E0).
 KNPL_SHOW_TERRITORY_AT = 29     # u8, 1 draws the civ's territory
@@ -2892,6 +2896,18 @@ def stances(blob):
             other, = struct.unpack_from('<I', blob, at)
             out[(o['oid'], other)] = struct.unpack_from(
                 '<I', blob, at + KNPL_STANCE_AT)[0]
+    return out
+
+
+def bio_penalties(blob):
+    """{(civ, other civ): loyalty penalty} for every non-zero bio-bomb penalty
+    in a KNPL that reads as a count of whole records."""
+    out = {}
+    for o in icv.owner_records(blob):
+        for other, (at, _rec) in (knpl_records(blob, o['oid']) or {}).items():
+            n = struct.unpack_from('<h', blob, at + KNPL_BIO_PENALTY_AT)[0]
+            if n:
+                out[(o['oid'], other)] = n
     return out
 
 

@@ -688,8 +688,17 @@ and a Colony Module, which fills the Shuttle's 120 space exactly; `b1` lists wea
 Bomb; the hand-made `e1x2` and `e1x4` list engine 1 twice and four times. `inject_design.read_design`
 and `sim/load.py` read them.
 
-[ ] The sixth list is taken to be shields, the one category left, but it is empty in all 1,081
-designs on disk. Confirm by capturing a design with a shield fitted.
+[x] The sixth list is taken to be shields, the one category left, but it is empty in all 1,081
+designs on disk. Confirm by capturing a design with a shield fitted. **Confirmed from the binary**
+(November 2026): the `SDPR` writer `0x547320` writes six vectors, the last the one whose begin is
+`ShipDesign:248`, and the shield-strength getter `0x547A50` sums each shield record's strength
+(`+0x14`, picked by `0x560240`) over that vector into `ShipDesign:72`, then adds that sum times the
+civ's researched trait-10 grants over 100, rounded.
+
+[ ] `sim/combat.hitpoints` adds trait 10 to the design's shield strength. The client multiplies
+the fitted strength by the researched trait-10 grants instead (`0x547A50`), so an unshielded ship
+gains nothing. Find where `ShipDesign:72` enters hitpoints and where the base trait 10 applies,
+then match it.
 
 **The trailing byte is uniform.** Surveyed across every blob on disk in September 2026, 327 blobs
 and 1015 `DSGN` records: every record is v4 with an `SDPR` v0 child, in all 1015 the byte after the
