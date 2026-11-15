@@ -2338,9 +2338,8 @@ hurries, trades and treaty sums itself. Checking every order type is not planned
   panel holds the note and `site/overrides/scripts/galaxies.js` replaces it with the titles.
   `test_public_listing.py` checks the rule on the emulators, and the script was seen filling
   the panel from a local stand-in. Left before it shows live:
-  - [ ] Deploy the storage rules: `firebase deploy --only storage`.
-  - [ ] Set the bucket's CORS: `gcloud storage buckets update
-    gs://cs-resurgence.firebasestorage.app --cors-file=server/beta_storage_cors.json`.
+  - [x] Publish the storage rules (Robert, from the console, 14 November 2026).
+  - [x] Set the bucket's CORS from `server/beta_storage_cors.json` (Robert, 14 November 2026).
   - [ ] Restage the referee (release step 10), so it publishes the file.
   - [ ] Deploy the site, then confirm the panel lists the sandbox.
 
