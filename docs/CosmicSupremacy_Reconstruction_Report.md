@@ -483,7 +483,7 @@ fixture, 70 turns each: arm P played through a two-sided battle, arm L loaded th
 and was ticked the same distance. Once the `Unnamed` star names are stripped the two blobs still
 differ by **30 bytes**, and the difference is real rather than cosmetic. It is two dwords and two
 ASCII digits in `NWDB`, one byte at `OWPR+0`, and a run in the `PLPR` of the planet the battle
-happened over, where the played branch's growth series sits one step ahead. Ticking both branches 20
+happened over, whose growth differs after the battle. Ticking both branches 20
 further turns leaves them nine bytes apart in LENGTH, exactly one nine-byte population record: the
 battle planet holds 19 citizens down the played line and 20 down the loaded one. The difference
 cashes out rather than washing out.
@@ -506,18 +506,27 @@ client session with actuator writes between them, which is precisely the played 
 experiment. Such a galaxy cannot be captured, reloaded and continued as the same galaxy, and
 per-turn measurements taken across such a run are not reproducible from the blob.
 
-[ ] **Three of the 30 bytes are still unnamed.** The `NWDB` digits are the planetary-defense damage
-percent in the two battle reports (strings 9 and 11): the loaded branch reads `12% (1 Citizen
-Killed)` and the played branch `11%`. A rerun of the loaded arm on 14 November 2026 (war_fork.dat,
-turn 110 to 180, the current `referee.tick`) reproduces it. The client formats that percent at
-`0x00522EF0` from a double, truncated with `_ftol`, clamped to 0..100 and printed into the `planetary-defense damage:` line at `0x0076D63C` when
-it writes the report, so the blob carries the text and nothing recomputes it on read. The same one
-citizen killed is a smaller share in the played branch, which matches its `PLPR` growth series
-sitting one step ahead before the battle. So the digit is a symptom: the divergence is in the
-battle planet's population growth before the fight. The two dwords and the `OWPR+0` byte are not
-yet named. Next step: diff `war_fork_L` against `war_fork_played.dat` by section, give the two
-`NWDB` dwords and `OWPR+0` their field names, and find the earliest turn the planet's `PLPR` differs
-between the arms.
+[x] **Every one of the 30 bytes is named, and the arms part at the battle.** The `NWDB` digits are
+the planetary-defense damage percent in the two battle reports (strings 9 and 11): the loaded
+branch reads `12% (1 Citizen Killed)` and the played branch `11%`. The client formats that percent
+at `0x00522EF0` from a double, truncated with `_ftol`, clamped to 0..100 and printed into the
+`planetary-defense damage:` line at `0x0076D63C` when it writes the report, so the blob carries
+the text and nothing recomputes it on read. The two `NWDB` dwords are those strings' hashes
+(`news.string_hash`, `NWDB +948` and `+3780`), which follow the digits. `OWPR+0` is the civ's
+credits (`merge_orders.credits_of`): BadGuy holds 5,519 loaded and 5,629 played. Settled on
+14 November 2026 from `war_fork.dat` (turn 110), the loaded arm rerun to turn 180 with the
+current `referee.tick`, and `war_fork_played.dat`, with the `Unnamed` star names stripped.
+
+The battle is at turn 111, the first tick after the fork, on BadGuy's HQ (planet 384, 16
+citizens), and the two arms resolve it differently. The loaded arm kills the planet's one worker,
+the played arm one of its four founding farmers. The rest follows: the next citizens arrive at
+turns 119, 130, 143 and 160 loaded and 120, 132, 148 and 170 played, the food store reads 2,554
+against 1,040, and the credits differ by 110. So the played client carries state into that
+battle that its fork blob does not hold.
+- [ ] **What the played client knows at the fork that the blob does not.** Next step: load
+  `war_fork.dat`, tick once with the double that `0x00522EF0` formats read live, and compare it
+  with the same read in a client that played up to turn 110. Done when the field
+  behind the 11% is named and either saved or shown to be rebuilt the same way on load.
 
 #### The original client's online path (November 2026)
 
@@ -526,8 +535,10 @@ clients share every address. `client/dev_tools/online_commands.py` lists the com
 exe, and `server/tests/test_online_commands.py` pins the table.
 
 **The original client is a socket client, and every player action is a command.** A galaxy pass
-is base64 of `<KIND> <host> <port> <passhash> <player>`, and the client opens a TCP connection to
-that host and port (`Socket.cpp`, `ws2_32`). Each action's routine follows one shape:
+is base64 of a first line `<host> <port> <passhash> <player>` and the lines after it, read at
+`0x00576230`. `TUTO`, `DEMO` and `TEBE` are the only kinds: their passes put the kind before the
+host, and any other first word is taken as the host. The client opens a TCP connection to that
+host and port (`Socket.cpp`, `ws2_32`). Each action's routine follows one shape:
 
 1. Online when the channel at `[0x0086F198]` belongs to the connection at `[0x0086F194]`, the
    connection is up (`0x00562CC0`) and `[0x0086F1A2]` is not 1: it opens a message (`0x00562030`),
@@ -551,8 +562,8 @@ that the client reads (`0x004E6E90`) and sets on the ship (`0x004DA450`), then a
 
 **The wire is the save's own section format**: a tag, then a `u32` with the version in its top 6
 bits and the length in the low 26. The client wraps each outgoing command in `CMND` v0, a `u32` and
-the command's section compressed with zlib (`0x00561710`); whether that `u32` is the compressed or
-the original length is not settled. A frame is accepted with a version up to 100 and a length up to
+the command's section compressed with zlib (`0x00561710`); the `u32` is the section's length before
+compression (12 for the 12-byte `RQLG` below). A frame is accepted with a version up to 100 and a length up to
 10,000,000 (`0x00561350`).
 
 **What the server sends** is read by the dispatcher at `0x00573EA0`, polled from the main loop,
@@ -565,8 +576,8 @@ which sends `ALIV` when it has been idle:
 | `NEWS` | `0x00573940` | while `[0x0086F1A1]` is set, one `NEWS` record and a byte, added to the local civ's list (`Owner::AddNews`, `0x00543720`) and shown at once |
 | `ALIV`, `RSMA`, `TIME`, `TRKP` | `0x0056E400`, `0x0056DCE0`, `0x0056E460`, `0x0056E620` | not read further |
 
-**The 56 commands**, in address order. Those named were read or are named elsewhere in this report;
-the rest are tags only.
+**The 56 commands**, in address order. What each one's offline branch does, and the merge rule
+that carries it, is `merge_orders.COMMANDS`.
 
 `RQTM` `RSMA` `RQTN` `RQSV` **`STCO`** set course · `SLFC` `TGSD` `MOSD` `NWTR` `MDTR` `SEEN` `DISS`
 `DLTR` `STCL` `HRPR` `NWGV` `DLGV` `MDGV` `STGV` `NWAD` `DLAD` `MDAD` `STAD` `NWSQ` `MDSQ` `DLSQ`
@@ -591,9 +602,20 @@ Two things follow:
   arrive between ticks" needs. A connected client sends every command online and waits for the
   answer, so such a server has to answer all 56, not only `SDNW`.
 
-- [ ] **Each merge rule names the command it stands for.** Done when every rule in `merge_orders.py`
-  cites its command, and every command either has a rule or is noted as refused or cosmetic. Next
-  step: read each routine's offline branch, starting with the 50 not named above.
+- [x] **Each merge rule names the command it stands for.** Every rule in `merge_orders.py` cites
+  its commands, and `merge_orders.COMMANDS` gives all 56 a rule or says why none carries it, read
+  from each routine's offline branch on 14 November 2026 (`test_online_commands.py`). 38 have a
+  rule. `RNGV` runs a governor at once, and the other rules judge what it changes. `SVUS` saves
+  the civ's interface settings (`USSE`, `Owner+0x2cc`), which are not carried. Six are online
+  only: `RQTM`, `RSMA`, `RQTN` and `RQSV` (the replay), `STTP` (the team dialog) and `ALIV`.
+- [ ] **Ten commands a player can make have no rule, and the merge refuses their effect.**
+  `SLFC` sells a facility (`PlanetProperties::SellFacility`), `RTMI` retires stationed military,
+  which the people rule refuses as fewer soldiers, `STEL` sets a planet's hyperspace energy link
+  (`ENLI`), `CNWH` connects two wormholes, `DOSC` carries out scans (factory `0x0054E030`),
+  `DLSC` deletes an entry of the list at `Owner+0x168`, `MOSD`, `RNSD` and `DLSD` edit, rename
+  and delete a design, and `EDNW` edits a note. A note sent with `SDNW` is refused as well. Next
+  step: for each, write the rule from its offline branch or have the client say up front that
+  it is not carried. Done when none of the ten is lost silently.
 
 #### The engine is deterministic (September 2026)
 
@@ -938,15 +960,37 @@ the rest of the record misread. An id is not checked to name a civ.
   command and waits for `SUCC`, and the server pushes a `NEWS` section (the record and a `u8`) to
   each connected recipient, whose handler at `0x00573940` adds it with `Owner::AddNews` and
   refreshes the news view with no tick. A `.dat` client takes the standalone branch and never
-  connects, so the launcher's client sends nothing. A TestBed started on a galaxy pass
-  (`SAND 127.0.0.1 47110 ...`, 14 November 2026) shows the connection dialog with
-  `Changing connection settings...` and opens no socket in 45 seconds. That text is one state of
-  the connection state machine on `[0x0086F1AC]` (around `0x00579B3D`); the only `connect` call
-  is at `0x005F20EB`. Next step: decode which state reaches `0x005F20EB` and what the dialog
-  waits for before it, then record the opening exchange against a local listener. Done when a
-  message sent in the client reaches a recipient whose launcher is open within a minute, shows in
-  the recipient's news without waiting for the tick, and is still in the turn the referee
-  publishes.
+  connects, so the launcher's client sends nothing.
+
+  **The connection state machine** is `0x00579870`, a switch on `[0x0086F1AC]` read on
+  14 November 2026 and watched live in TestBed the same day. The pass parser starts it at 5 for
+  a `.dat` and at 1 for a pass.
+
+  | state | does | next |
+  |---|---|---|
+  | 1 | skips the update check when the host parses as a private address (`0x00562E50`) | 5, or 4 with the Tutorial on |
+  | 2 | runs the updater and waits for it | 4 or 5 when it updated, else 3 |
+  | 3 | `Please change your connection settings.`, 2 seconds | 13, resuming at 1 |
+  | 4 | connects to the Tutorial Galaxy | 5, or 3 on failure |
+  | 5, 6 | analyses the system | 7 |
+  | 7, 8 | windows and renderer | 9, or 11 standalone |
+  | 9 | `Logging in...`: starts the `Login` thread (`0x0057A6B0`), which connects (`0x00563310`, `connect` at `0x005F20EB`) | 10 |
+  | 10 | waits for the thread, loads the `SAVE` it answered with | 11, or 13 resuming at 9 |
+  | 11, 12 | the game runs | 15 quits |
+  | 13 | `Changing connection settings...`, opens the dialog's socket settings | 14 |
+  | 14 | waits until the settings button clears `[0x0086F1A3]` | the resume state |
+
+  The stall was the pass. `SAND 127.0.0.1 47110 ...` makes `SAND` the host and 127 the port;
+  `SAND` is no private address, so the client ran the updater, which failed after 5 seconds, and
+  went 2, 3, 13, 14. A pass beginning `127.0.0.1 47110` went 6, 7, 8, 10 in 5 seconds and
+  connected. Its first command, before any login, is `RQLG` v1 holding the CRC-32 of the
+  client's own exe (`0x0056B880`), in a `CMND` of 32 bytes. The thread then waits for the
+  answer: `FAIL` ends the login, and anything else is followed by `LGIN`, which must be
+  answered `SUCC`, and then the galaxy as `SAVE`. Next step: a
+  listener that answers `RQLG` and `LGIN` and sends a served view as `SAVE`, then the client's
+  `SDNW` and a pushed `NEWS`. Done when a message sent in the client reaches a recipient whose
+  launcher is open within a minute, shows in the recipient's news without waiting for the tick,
+  and is still in the turn the referee publishes.
 - [x] **Each civ is served only its own news.** `fog.project` empties every other civ's news list
   and keeps only the strings its own list names, with the next id unchanged (`news.own_view`),
   and `fog.restore` puts them back ahead of anything the submission added, so a restored view is
