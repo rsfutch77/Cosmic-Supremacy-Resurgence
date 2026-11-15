@@ -1248,8 +1248,8 @@ civs' views of `d9`: each loads, the referee's tick takes each to the next
 turn, and BadGuy's view holds GoodGuy's home planets at the remembered 8, 8
 and 10 farmers with only their shipyards. A capture of that view carries no
 orders (`player_turn.carries_orders`) and merges with no note after
-`restore`. Left open for Robert on BadGuy's view: the planet tooltips, the
-diplomacy page and the score list.
+`restore`. Seen on screen by Robert on BadGuy's view of turn 181 (14 November 2026): the
+planet tooltips, the diplomacy page and the score list are as expected.
 
 #### Each civ is served only what the original server sent it (November 2026)
 
