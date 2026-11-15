@@ -123,7 +123,7 @@ M = [
          ['A page on the site, linked from the launcher and the join notice.']),
         ('M20', 'A player can report another player, a message, or a suspected cheat, and receives an acknowledgement.',
          'Xbox XR-018 test case 018-01 (reporting); PEGI provision 3 (reporting); Fair Play Alliance (acknowledge every report)',
-         ['A report route: from the launcher (with galaxy, turn and civ attached), or a form or address on the site.',
+         ['[x] A report route: a private message to an admin of the Cosmic Supremacy Facebook group, named on the guidelines and contact pages (Robert, 14 November 2026: the existing channels, nothing new).',
           'Every report is acknowledged, even when no action follows.']),
         ('M21', 'Reports are investigated against the archive, and penalties are proportionate, explained to the player, time-limited where possible, and repeat offences are tracked.',
          'Fair Play Alliance, "Building a Penalty and Reporting System" (investigation, penalty duration, path back to good standing, repeat offenders)',

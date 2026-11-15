@@ -2446,6 +2446,10 @@ hurries, trades and treaty sums itself. Checking every order type is not planned
   - [ ] Restage the referee (release step 10), so it publishes the file.
   - [ ] Deploy the site, then confirm the panel lists the sandbox.
 
+- [ ] **A message sent each way on the sandbox arrives with the next turn**, once the referee
+  is restaged from the release that carries it. Seen in the client on 9 November 2026 before
+  the v0.6 restage; checked again at each release that changes the merge.
+
 - [x] **The operator page shows when players have voted to end a galaxy** (Robert, 14 November
   2026). Players may vote to restart the sandbox; the operator decides, so the page only shows
   the count. Done when a vote cast with the client's "vote to end galaxy" button reaches the
