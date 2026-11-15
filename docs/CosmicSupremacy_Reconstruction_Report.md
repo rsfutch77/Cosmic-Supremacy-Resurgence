@@ -526,8 +526,10 @@ clients share every address. `client/dev_tools/online_commands.py` lists the com
 exe, and `server/tests/test_online_commands.py` pins the table.
 
 **The original client is a socket client, and every player action is a command.** A galaxy pass
-is base64 of `<KIND> <host> <port> <passhash> <player>`, and the client opens a TCP connection to
-that host and port (`Socket.cpp`, `ws2_32`). Each action's routine follows one shape:
+is base64 of a first line `<host> <port> <passhash> <player>` and the lines after it, read at
+`0x00576230`. `TUTO`, `DEMO` and `TEBE` are the only kinds: their passes put the kind before the
+host, and any other first word is taken as the host. The client opens a TCP connection to that
+host and port (`Socket.cpp`, `ws2_32`). Each action's routine follows one shape:
 
 1. Online when the channel at `[0x0086F198]` belongs to the connection at `[0x0086F194]`, the
    connection is up (`0x00562CC0`) and `[0x0086F1A2]` is not 1: it opens a message (`0x00562030`),
@@ -551,8 +553,8 @@ that the client reads (`0x004E6E90`) and sets on the ship (`0x004DA450`), then a
 
 **The wire is the save's own section format**: a tag, then a `u32` with the version in its top 6
 bits and the length in the low 26. The client wraps each outgoing command in `CMND` v0, a `u32` and
-the command's section compressed with zlib (`0x00561710`); whether that `u32` is the compressed or
-the original length is not settled. A frame is accepted with a version up to 100 and a length up to
+the command's section compressed with zlib (`0x00561710`); the `u32` is the section's length before
+compression (12 for the 12-byte `RQLG` below). A frame is accepted with a version up to 100 and a length up to
 10,000,000 (`0x00561350`).
 
 **What the server sends** is read by the dispatcher at `0x00573EA0`, polled from the main loop,
@@ -940,15 +942,37 @@ the rest of the record misread. An id is not checked to name a civ.
   command and waits for `SUCC`, and the server pushes a `NEWS` section (the record and a `u8`) to
   each connected recipient, whose handler at `0x00573940` adds it with `Owner::AddNews` and
   refreshes the news view with no tick. A `.dat` client takes the standalone branch and never
-  connects, so the launcher's client sends nothing. A TestBed started on a galaxy pass
-  (`SAND 127.0.0.1 47110 ...`, 14 November 2026) shows the connection dialog with
-  `Changing connection settings...` and opens no socket in 45 seconds. That text is one state of
-  the connection state machine on `[0x0086F1AC]` (around `0x00579B3D`); the only `connect` call
-  is at `0x005F20EB`. Next step: decode which state reaches `0x005F20EB` and what the dialog
-  waits for before it, then record the opening exchange against a local listener. Done when a
-  message sent in the client reaches a recipient whose launcher is open within a minute, shows in
-  the recipient's news without waiting for the tick, and is still in the turn the referee
-  publishes.
+  connects, so the launcher's client sends nothing.
+
+  **The connection state machine** is `0x00579870`, a switch on `[0x0086F1AC]` read on
+  14 November 2026 and watched live in TestBed the same day. The pass parser starts it at 5 for
+  a `.dat` and at 1 for a pass.
+
+  | state | does | next |
+  |---|---|---|
+  | 1 | skips the update check when the host parses as a private address (`0x00562E50`) | 5, or 4 with the Tutorial on |
+  | 2 | runs the updater and waits for it | 4 or 5 when it updated, else 3 |
+  | 3 | `Please change your connection settings.`, 2 seconds | 13, resuming at 1 |
+  | 4 | connects to the Tutorial Galaxy | 5, or 3 on failure |
+  | 5, 6 | analyses the system | 7 |
+  | 7, 8 | windows and renderer | 9, or 11 standalone |
+  | 9 | `Logging in...`: starts the `Login` thread (`0x0057A6B0`), which connects (`0x00563310`, `connect` at `0x005F20EB`) | 10 |
+  | 10 | waits for the thread, loads the `SAVE` it answered with | 11, or 13 resuming at 9 |
+  | 11, 12 | the game runs | 15 quits |
+  | 13 | `Changing connection settings...`, opens the dialog's socket settings | 14 |
+  | 14 | waits until the settings button clears `[0x0086F1A3]` | the resume state |
+
+  The stall was the pass. `SAND 127.0.0.1 47110 ...` makes `SAND` the host and 127 the port;
+  `SAND` is no private address, so the client ran the updater, which failed after 5 seconds, and
+  went 2, 3, 13, 14. A pass beginning `127.0.0.1 47110` went 6, 7, 8, 10 in 5 seconds and
+  connected. Its first command, before any login, is `RQLG` v1 holding the CRC-32 of the
+  client's own exe (`0x0056B880`), in a `CMND` of 32 bytes. The thread then waits for the
+  answer: `FAIL` ends the login, and anything else is followed by `LGIN`, which must be
+  answered `SUCC`, and then the galaxy as `SAVE`. Next step: a
+  listener that answers `RQLG` and `LGIN` and sends a served view as `SAVE`, then the client's
+  `SDNW` and a pushed `NEWS`. Done when a message sent in the client reaches a recipient whose
+  launcher is open within a minute, shows in the recipient's news without waiting for the tick,
+  and is still in the turn the referee publishes.
 - [x] **Each civ is served only its own news.** `fog.project` empties every other civ's news list
   and keeps only the strings its own list names, with the next id unchanged (`news.own_view`),
   and `fog.restore` puts them back ahead of anything the submission added, so a restored view is
