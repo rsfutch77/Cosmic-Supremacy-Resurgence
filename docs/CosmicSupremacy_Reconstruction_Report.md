@@ -483,7 +483,7 @@ fixture, 70 turns each: arm P played through a two-sided battle, arm L loaded th
 and was ticked the same distance. Once the `Unnamed` star names are stripped the two blobs still
 differ by **30 bytes**, and the difference is real rather than cosmetic. It is two dwords and two
 ASCII digits in `NWDB`, one byte at `OWPR+0`, and a run in the `PLPR` of the planet the battle
-happened over, where the played branch's growth series sits one step ahead. Ticking both branches 20
+happened over, whose growth differs after the battle. Ticking both branches 20
 further turns leaves them nine bytes apart in LENGTH, exactly one nine-byte population record: the
 battle planet holds 19 citizens down the played line and 20 down the loaded one. The difference
 cashes out rather than washing out.
@@ -506,18 +506,27 @@ client session with actuator writes between them, which is precisely the played 
 experiment. Such a galaxy cannot be captured, reloaded and continued as the same galaxy, and
 per-turn measurements taken across such a run are not reproducible from the blob.
 
-[ ] **Three of the 30 bytes are still unnamed.** The `NWDB` digits are the planetary-defense damage
-percent in the two battle reports (strings 9 and 11): the loaded branch reads `12% (1 Citizen
-Killed)` and the played branch `11%`. A rerun of the loaded arm on 14 November 2026 (war_fork.dat,
-turn 110 to 180, the current `referee.tick`) reproduces it. The client formats that percent at
-`0x00522EF0` from a double, truncated with `_ftol`, clamped to 0..100 and printed into the `planetary-defense damage:` line at `0x0076D63C` when
-it writes the report, so the blob carries the text and nothing recomputes it on read. The same one
-citizen killed is a smaller share in the played branch, which matches its `PLPR` growth series
-sitting one step ahead before the battle. So the digit is a symptom: the divergence is in the
-battle planet's population growth before the fight. The two dwords and the `OWPR+0` byte are not
-yet named. Next step: diff `war_fork_L` against `war_fork_played.dat` by section, give the two
-`NWDB` dwords and `OWPR+0` their field names, and find the earliest turn the planet's `PLPR` differs
-between the arms.
+[x] **Every one of the 30 bytes is named, and the arms part at the battle.** The `NWDB` digits are
+the planetary-defense damage percent in the two battle reports (strings 9 and 11): the loaded
+branch reads `12% (1 Citizen Killed)` and the played branch `11%`. The client formats that percent
+at `0x00522EF0` from a double, truncated with `_ftol`, clamped to 0..100 and printed into the
+`planetary-defense damage:` line at `0x0076D63C` when it writes the report, so the blob carries
+the text and nothing recomputes it on read. The two `NWDB` dwords are those strings' hashes
+(`news.string_hash`, `NWDB +948` and `+3780`), which follow the digits. `OWPR+0` is the civ's
+credits (`merge_orders.credits_of`): BadGuy holds 5,519 loaded and 5,629 played. Settled on
+14 November 2026 from `war_fork.dat` (turn 110), the loaded arm rerun to turn 180 with the
+current `referee.tick`, and `war_fork_played.dat`, with the `Unnamed` star names stripped.
+
+The battle is at turn 111, the first tick after the fork, on BadGuy's HQ (planet 384, 16
+citizens), and the two arms resolve it differently. The loaded arm kills the planet's one worker,
+the played arm one of its four founding farmers. The rest follows: the next citizens arrive at
+turns 119, 130, 143 and 160 loaded and 120, 132, 148 and 170 played, the food store reads 2,554
+against 1,040, and the credits differ by 110. So the played client carries state into that
+battle that its fork blob does not hold.
+- [ ] **What the played client knows at the fork that the blob does not.** Next step: load
+  `war_fork.dat`, tick once with the double that `0x00522EF0` formats read live, and compare it
+  with the same read in a client that played up to turn 110. Done when the field
+  behind the 11% is named and either saved or shown to be rebuilt the same way on load.
 
 #### The original client's online path (November 2026)
 
