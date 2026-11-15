@@ -959,8 +959,9 @@ it. Trading moves `RSMA`; each tick takes 1,000 off a positive count (above)
 > block of NaN bytes matches any float sequence. Float scans must reject NaN and infinities
 > explicitly.
 
-[ ] decode the **"vote to end galaxy"** button. Deferred: it is a galaxy-lifecycle action rather
-than per-turn state, so nothing in the playable loop needs it. Expect a per-civ vote flag plus a
+[ ] decode the **"vote to end galaxy"** button. Taken up in v0.7 (Robert, 14 November 2026):
+players may vote to restart the sandbox, and the operator page shows the votes (Reconstruction
+Report §14). Expect a per-civ vote flag plus a
 tally, and note that the original game resolved this server-side, so the client may hold only the
 local vote and rely on a server response, which would make it unsyncable without the real server
 protocol and would close the item.

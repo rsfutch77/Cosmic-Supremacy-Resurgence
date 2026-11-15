@@ -1376,7 +1376,7 @@ Our galaxies carry `speed` 0, `density` 0, `rank` (0, 999), no `startticks`, `pr
 
 [x] **`corruption_multiplier = 100` is the first handle on corruption we have.** Corruption has resisted location in memory entirely, see the memory report, and here is a galaxy-level knob for it. Changing it and watching what moves is a far cheaper search than diffing planets, and it is the same trick that finally located `Planet:368`: make the thing vary. **Answered:** the corruption function `0x0053A0D0` scales its result by `corruption_multiplier` / 100 (`docs/Fast_Sim_Plan.md` §5b).
 
-- [ ] **The first non-sandbox galaxy turns `waronly` off.** `waronly = 1` allows no alliances, which is what the sandbox galaxy is for. Neither `galaxy_tool.py` nor `make_multiplayer_galaxy.py` writes `GSET`, so a new galaxy keeps whatever its generated blob carries. Decide `sandbox` at the same time: it is the fifth `GSET` entry, and `GetGameOption(4)` gates the client's build-up protection in the declare-war validator at `0x004BDE50`, 300 turns from `0x0076F378`. The original Newbie Sandbox Galaxy ran 10-minute turns, so 300 turns was about two days; at 4-hour turns it is 50 days. The client enforces protection only in its UI, and `merge_orders.py` refuses diplomacy outright, with a note naming each treaty and stance it dropped. Done when a non-sandbox galaxy runs with `waronly = 0`, an alliance between two civs survives a tick, and its `sandbox` value is chosen on purpose.
+- [ ] **The sandbox turns `waronly` off** (Robert, 14 November 2026: the sandbox will not be war-only). `waronly = 1` allows no alliances. Neither `galaxy_tool.py` nor `make_multiplayer_galaxy.py` writes `GSET`, so a new galaxy keeps whatever its generated blob carries. Decide `sandbox` at the same time: it is the fifth `GSET` entry, and `GetGameOption(4)` gates the client's build-up protection in the declare-war validator at `0x004BDE50`, 300 turns from `0x0076F378`. The original Newbie Sandbox Galaxy ran 10-minute turns, so 300 turns was about two days; at 4-hour turns it is 50 days. The client enforces protection only in its UI, and `merge_orders.py` refuses diplomacy outright, with a note naming each treaty and stance it dropped. Done when the sandbox runs with `waronly = 0`, an alliance between two civs survives a tick, and its `sandbox` value is chosen on purpose.
 
 **`turnlength` drives the game's clock, and the engine re-applies it AT EVERY TURN BOUNDARY.** A galaxy set to 75 was observed writing 75 back over a driven 15 at each boundary, so a galaxy configured above the floor runs at its configured rate with nothing driving it, `ai.py --drive` is only needed to go faster than the game wants to.
 
@@ -2343,6 +2343,12 @@ hurries, trades and treaty sums itself. Checking every order type is not planned
     gs://cs-resurgence.firebasestorage.app --cors-file=server/beta_storage_cors.json`.
   - [ ] Restage the referee (release step 10), so it publishes the file.
   - [ ] Deploy the site, then confirm the panel lists the sandbox.
+
+- [ ] **The operator page shows when players have voted to end a galaxy** (Robert, 14 November
+  2026). Players may vote to restart the sandbox; the operator decides, so the page only shows
+  the count. Done when a vote cast with the client's "vote to end galaxy" button reaches the
+  referee through a submission, and `operator_view` shows each galaxy's votes against its
+  seated civs. Depends on decoding the button (Memory report, **"vote to end galaxy"**).
 
 - [x] **The home page carries news items.** The home page is `site/overrides/game_news.php.html`,
   served at `/`, and holds one post, "Welcome to Resurgence" (13 September 2026). Done when a
