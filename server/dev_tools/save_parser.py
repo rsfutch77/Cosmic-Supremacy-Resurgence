@@ -35,6 +35,7 @@ import struct
 import sys
 import zlib
 from collections import Counter
+from functools import lru_cache
 
 # Known tags, used to decide whether a payload contains sub-sections.
 KNOWN_TAGS = {
@@ -43,7 +44,8 @@ KNOWN_TAGS = {
     b'SDPR', b'GOVS', b'ADMS', b'SPQS', b'USSE', b'SOLA', b'SUN ', b'PLNT',
     b'PLPR', b'PROD', b'WLTH', b'ENLI', b'SHIP', b'DYNO', b'SHCO', b'SHPR',
     b'ROUT', b'NEBU', b'CZYY', b'INFO', b'NEWS', b'FLET', b'FLDT', b'SPRQ',
-    b'PRQU',
+    b'PRQU', b'WORM', b'SCPL', b'SCSY', b'SCRO', b'SCFL', b'SCML', b'SCTE',
+    b'SCEG', b'SCLN', b'SCAN',
 }
 
 SIZE_MASK     = 0x03FFFFFF
@@ -114,7 +116,8 @@ def read_header(blob: bytes, off: int):
 # walker searches the whole payload for where a run of sections begins and
 # records skipped bytes on the parent as `prologue`/`epilogue`.
 
-GAP_WINDOW = 64       # bytes past one run's end to search for the next
+GAP_WINDOW = 256      # bytes past one run's end to search for the next; a taken planet's
+                      # `PLPR` holds 35 + 16 a ruler between `PROD` and `ENLI`
 MIN_COVERAGE = 0.5    # fraction of a payload a run must tile, so float data that spells a tag is rejected
 
 
@@ -228,8 +231,23 @@ def parse_sections(blob: bytes, start: int, end: int, depth: int = 0) -> list:
     return run
 
 
+PARSE_CACHE = 16  # blobs whose trees are kept; a merge holds a handful at once
+
+
+@lru_cache(maxsize=PARSE_CACHE)
+def _parse_cached(blob: bytes) -> tuple:
+    return tuple(parse_sections(blob, 0, len(blob)))
+
+
 def parse_blob(blob: bytes) -> list:
-    """Parse a whole decompressed blob into a list of top-level sections."""
+    """Parse a whole decompressed blob into a list of top-level sections.
+
+    A `bytes` blob's tree is cached by its content, so repeated reads of the
+    same blob parse it once. The `Section` objects are shared between callers
+    and must not be changed; the list is the caller's own.
+    """
+    if type(blob) is bytes:
+        return list(_parse_cached(blob))
     return parse_sections(blob, 0, len(blob))
 
 
@@ -421,8 +439,17 @@ def make_leg(origin, dest):
     return dict(zip(LEG_FIELDS, (ox, oy, oz, dx, dy, dz, length)))
 
 
+GSET_TYPES = {0: 'int32', 1: 'int32_pair', 2: 'bool', 3: 'string', 4: 'array'}
+
+
 def parse_gset(blob: bytes, sec: 'Section') -> dict:
-    """Parse a GSET payload. Returns {name: {type, value, custom}}."""
+    """Parse a GSET payload. Returns {name: {type, value, flag, offset}}.
+
+    An entry is its name, a u32 type, a flag byte, then the value (reader
+    `0x4D4990`). `offset` is where the value starts. The flag is the third
+    argument the client registers a setting with; the loader `0x4D4C20`
+    copies the value and leaves the flag, so a save writes the client's own.
+    """
     pos         = sec.payload
     num_entries = struct.unpack_from('<I', blob, pos)[0]
     pos        += 4
@@ -433,32 +460,61 @@ def parse_gset(blob: bytes, sec: 'Section') -> dict:
         name     = blob[pos:pos + name_len].decode('ascii', errors='replace')
         pos     += name_len
         type_code = struct.unpack_from('<I', blob, pos)[0]; pos += 4
-
-        if type_code == 0:                                   # int32 + flag
-            custom = blob[pos]; pos += 1
-            value  = struct.unpack_from('<i', blob, pos)[0]; pos += 4
-            settings[name] = {'type': 'int32', 'value': value, 'custom': bool(custom)}
-        elif type_code == 1:                                 # int32 pair + flag
-            custom = blob[pos]; pos += 1
-            v1, v2 = struct.unpack_from('<ii', blob, pos); pos += 8
-            settings[name] = {'type': 'int32_pair', 'value': (v1, v2), 'custom': bool(custom)}
-        elif type_code == 2:                                 # int16
-            value = struct.unpack_from('<h', blob, pos)[0]; pos += 2
-            settings[name] = {'type': 'int16', 'value': value}
-        elif type_code == 3:                                 # string
-            n     = struct.unpack_from('<I', blob, pos)[0]; pos += 4
-            value = blob[pos:pos + n].decode('utf-8', errors='replace'); pos += n
-            settings[name] = {'type': 'string', 'value': value}
-        elif type_code == 4:                                 # uint32 array + flag
-            custom = blob[pos]; pos += 1
-            n      = struct.unpack_from('<I', blob, pos)[0]; pos += 4
-            vals   = list(struct.unpack_from(f'<{n}I', blob, pos)); pos += 4 * n
-            settings[name] = {'type': 'array', 'value': vals, 'custom': bool(custom)}
-        else:
+        kind = GSET_TYPES.get(type_code)
+        if kind is None:
             settings[name] = {'type': f'unknown({type_code})', 'value': None}
             break
+        flag = blob[pos]; pos += 1
+        offset = pos
+        if type_code == 0:
+            value = struct.unpack_from('<i', blob, pos)[0]; pos += 4
+        elif type_code == 1:
+            value = struct.unpack_from('<ii', blob, pos); pos += 8
+        elif type_code == 2:
+            value = blob[pos]; pos += 1
+        elif type_code == 3:
+            n     = struct.unpack_from('<I', blob, pos)[0]; pos += 4
+            value = blob[pos:pos + n].decode('utf-8', errors='replace'); pos += n
+        else:
+            n     = struct.unpack_from('<I', blob, pos)[0]; pos += 4
+            value = list(struct.unpack_from(f'<{n}I', blob, pos)); pos += 4 * n
+        settings[name] = {'type': kind, 'value': value, 'flag': flag,
+                          'offset': offset}
 
     return settings
+
+
+def gset_of(blob: bytes) -> dict:
+    """The blob's GSET settings, or {} when it has none."""
+    gset = next((s for s in flatten(parse_blob(blob)) if s.tag == b'GSET'),
+                None)
+    return parse_gset(blob, gset) if gset is not None else {}
+
+
+def set_gset(blob: bytes, changes: dict) -> bytes:
+    """`blob` with whole-number and bool settings rewritten in place.
+
+    `changes` maps a setting's name to an int; a bool takes 0 or 1. Raises
+    ValueError for a name the galaxy lacks, a string, pair or array setting,
+    or a value its type cannot hold.
+    """
+    settings = gset_of(blob)
+    out = bytearray(blob)
+    for name, value in changes.items():
+        entry = settings.get(name)
+        if entry is None:
+            raise ValueError(f'this galaxy has no {name!r} setting')
+        if entry['type'] == 'int32':
+            struct.pack_into('<i', out, entry['offset'], int(value))
+        elif entry['type'] == 'bool':
+            if value not in (0, 1):
+                raise ValueError(f'{name} is a bool and takes 0 or 1, '
+                                 f'not {value!r}')
+            out[entry['offset']] = int(value)
+        else:
+            raise ValueError(f'{name} is a {entry["type"]} setting, not a '
+                             f'whole number or bool')
+    return bytes(out)
 
 
 def summarize(blob: bytes):
@@ -522,8 +578,8 @@ def dump_gset(blob: bytes):
     settings = parse_gset(blob, gset)
     print(f"=== Galaxy Settings ({len(settings)} entries) ===")
     for name, info in settings.items():
-        custom = ' (custom)' if info.get('custom') else ''
-        print(f"  {name:30s} = {info['value']}{custom}")
+        print(f"  {name:30s} = {info['value']}  ({info['type']}, "
+              f"flag {info.get('flag')})")
 
 
 def load_any(path: str) -> bytes:

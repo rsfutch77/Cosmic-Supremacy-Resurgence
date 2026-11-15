@@ -783,6 +783,9 @@ $piArgs = @(
     '--hidden-import', 'ejbo_viewer',
     '--hidden-import', 'advance_turns',
     '--hidden-import', 'trigger_save',
+    # The save message path, chosen inside a function when the client has it.
+    '--hidden-import', 'trigger_save_message',
+    '--hidden-import', 'patch_save_message',
     # Single Player's New Game seeds a freshly built galaxy with it.
     '--hidden-import', 'make_single_player_galaxy',
     # This install's Firebase identity, imported by player_token(). Missing, it
@@ -878,8 +881,11 @@ if (Test-Path $License) {
 # opens each client's main window 10% larger by default, patch_tutorial.py
 # fixes the Tutorial's panel, step checks and texts in the client that runs it,
 # and patch_civ_name.py makes Single Player send a chosen civ name every time.
+# patch_save_message.py gives every client a handler that saves on a window
+# message, so the launcher captures a turn without a remote thread.
 $PatchMessages = Join-Path $ClientDir 'dev_tools\patch_launch_messages.py'
 $PatchWindow   = Join-Path $ClientDir 'dev_tools\patch_window_size.py'
+$PatchSave     = Join-Path $ClientDir 'dev_tools\patch_save_message.py'
 $PatchTutorial = Join-Path $ClientDir 'dev_tools\patch_tutorial.py'
 $PatchCivName  = Join-Path $ClientDir 'dev_tools\patch_civ_name.py'
 function Copy-Client {
@@ -888,6 +894,8 @@ function Copy-Client {
     if ($LASTEXITCODE -ne 0) { throw "patch_launch_messages failed for $(Split-Path -Leaf $src)" }
     & $VenvPy $PatchWindow --source $dst --out $dst | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "patch_window_size failed for $(Split-Path -Leaf $src)" }
+    & $VenvPy $PatchSave --source $dst --out $dst | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "patch_save_message failed for $(Split-Path -Leaf $src)" }
     if ((Split-Path -Leaf $src) -eq 'CosmicSupremacy.exe') {
         & $VenvPy $PatchTutorial --source $dst --out $dst | Out-Null
         if ($LASTEXITCODE -ne 0) { throw "patch_tutorial failed for $(Split-Path -Leaf $src)" }

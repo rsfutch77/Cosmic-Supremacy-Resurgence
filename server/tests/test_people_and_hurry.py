@@ -134,9 +134,15 @@ def main():
     refused('people may not be minted', served,
             mo.set_crew(served, ship, ships[ship] + ships[ship]), civ,
             'people served and')
-    refused('soldiers may not be retired', served,
-            mo.set_crew(served, ship, ships[ship][:-1]), civ,
-            'retiring from service is not carried yet')
+    accepted('a soldier leaves, retired (RTMI) after coming ashore',
+             served, mo.set_crew(served, ship, ships[ship][:-1]), civ)
+    refused('a soldier may not become a citizen again', served,
+            mo.set_people(mo.set_crew(served, ship, ships[ship][:-1]),
+                          planet,
+                          mo.citizen_bytes(mo.planet_index(served)[planet][2])
+                          + bytes((0,)) + ships[ship][-1][1:],
+                          mo.military_of(mo.planet_index(served)[planet][2])[1]),
+            civ, 'no command turns a soldier back into a citizen')
 
     jobs = mo.planet_index(served)[planet][2]
     arr = bytearray(mo.citizen_bytes(jobs))

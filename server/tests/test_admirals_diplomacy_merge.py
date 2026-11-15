@@ -466,6 +466,41 @@ def diplomacy():
     check('the lump sum moves once with both civs submitting',
           [mo.resources_of(out, c)[0] for c in (GOOD, BAD)], [625, 635])
 
+    print('a war-only galaxy (waronly = 1), as the client greys Propose New '
+          'Treaty (0x442510)')
+
+    def war_only(blob):
+        return sp.set_gset(blob, {'waronly': 1})
+
+    for prev, cur, who, what in (
+            ('d0', 'd1', GOOD, 'an alliance'),
+            ('d2', 'd3', GOOD, 'a trade'),
+            ('d8', 'd9', BAD, 'a cease-fire')):
+        out, notes = merged(war_only(d[prev]), (civ[who], war_only(d[cur])))
+        check(f'{what} proposed is refused and named',
+              (mo.treaties(out), notes.get(civ[who])),
+              (mo.treaties(d[prev]),
+               [f"treaty {next(iter(set(mo.treaties(d[cur])) - set(mo.treaties(d[prev]))))} "
+                f"({what.split()[-1]}, {civ[who]} to {civ[GOOD + BAD - who]}) "
+                f"DROPPED, the galaxy is war-only, where the client proposes "
+                f"no treaty"]))
+    for prev, cur, who, what in (
+            ('d6', 'd7', BAD, 'war declared'),
+            ('d5b', 'd5', BAD, 'a proposal already made, accepted'),
+            ('d1', 'd2', GOOD, 'a proposal already made, withdrawn')):
+        out, notes = merged(war_only(d[prev]), (civ[who], war_only(d[cur])))
+        check(f'{what}: taken as without waronly',
+              (mo.treaties(out), mo.stances(out), notes.get(civ[who])),
+              (mo.treaties(d[cur]), mo.stances(d[cur]), None))
+
+    print('a submission cannot change the galaxy settings')
+    for served, sub in ((d['d1'], war_only(d['d1'])),
+                        (war_only(d['d1']), d['d1'])):
+        out, notes = merged(served, ('GoodGuy', sub))
+        check(f"waronly {sp.gset_of(sub)['waronly']['value']} submitted over "
+              f"{sp.gset_of(served)['waronly']['value']}: the served GSET is "
+              f"kept", sp.gset_of(out), sp.gset_of(served))
+
     print('both parties in one turn')
     goodbye = without(d['d5b'], 681)
     out, notes = merged(d['d5b'], ('GoodGuy', goodbye), ('BadGuy', d['d5']))

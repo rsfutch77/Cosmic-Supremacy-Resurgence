@@ -31,6 +31,12 @@ SPACE_RELEASED = (7, 7, 25, 11, 9, 15, 14, 34, 26, 3, 6, 14, 9, 6, 12, 5, 12,
 SPACE_CURRENT = (7, 7, 25, 11, 9, 15, 14, 34, 26, 2, 4, 14, 9, 6, 12, 5, 12,
                  8, 9, 16, 10)                        # content 646 and up, 0x8066B0
 SPACE_LEGACY = (8, 8, 30, 12, 10, 16, 15, 40, 30, 5, 10, 25)   # below 150, 0x808930
+# Production cost of each facility type, read from the running client's tables.
+COST_RELEASED = (200, 400, 500, 1800, 700, 2200, 1500, 9000, 6000, 600, 3000,
+                 2000, 1200, 600, 1300, 700, 1800, 1200, 2500, 8000, 1500)
+COST_CURRENT = (200, 400, 500, 1800, 700, 2200, 1500, 9000, 6000, 400, 2000,
+                2000, 1200, 600, 1300, 700, 1800, 1200, 2500, 8000, 1500)
+COST_LEGACY = (20, 40, 50, 180, 70, 220, 150, 900, 600, 60, 300, 200)
 ONCE = {2, 7, 8, 19}                                  # one per planet
 ONCE_LEGACY = {2, 6, 7, 8}
 CURRENT_FROM = 646
@@ -51,6 +57,16 @@ def tables(version):
     if version >= RELEASED_FROM:
         return SPACE_RELEASED, ONCE
     return SPACE_LEGACY, ONCE_LEGACY
+
+
+def costs(version):
+    """Production cost per facility type for a content version, from the
+    same tables as the space (`+0x14` of each 0x8C-byte entry)."""
+    if version is None or version >= CURRENT_FROM:
+        return COST_CURRENT
+    if version >= RELEASED_FROM:
+        return COST_RELEASED
+    return COST_LEGACY
 
 
 def unlocked(completed):

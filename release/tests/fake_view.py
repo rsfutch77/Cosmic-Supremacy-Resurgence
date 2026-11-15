@@ -110,6 +110,9 @@ class FakeView:
     def show_update(self, text):
         self.update = text
 
+    def show_news(self, text):
+        self.news = text
+
     # status
     def set_status(self, text, colour):
         self.status = (text, colour)

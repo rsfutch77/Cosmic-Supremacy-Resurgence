@@ -21,9 +21,9 @@ What this document is still for:
   counters at `0x00842AE4`–`0x00842AF0` are the confirmed case, and finding the
   rest needs the techniques here.
 
-The open [ ] items below are field-annotation work and are kept deliberately:
-they remain useful for in-process AI work even though the multiplayer motivation
-for some of them has gone.
+Open [ ] items below are kept only where play needs them. The v0.7 triage closed
+the rest, each with its reason, since the save blob carries every field whether
+or not it has a name. Reopen one if in-process AI work needs it.
 
 ---
 
@@ -335,7 +335,7 @@ bytes of the order object. `ceil`, `round` and `floor+1` all give 5 at this valu
 rule is not yet pinned, a case where the quotient falls below `.5` would separate them.
 
 That makes ETA the fourth displayed value confirmed to be computed rather than stored, after
-maximum population, military rank/experience, and loyalty/corruption's suspected derivation.
+maximum population, military rank/experience, and loyalty and corruption.
 
 **Two annotations falsified.** `Ship:88` was recorded as "only present when ship in motion" but reads
 exactly `100.0f` on **every** ship regardless of order state, a constant that looks like a percentage
@@ -379,10 +379,10 @@ frees nothing and keeps the capacity. Confirmed end to end: two units moved off 
 onto a colony ship, and the ship then held and flew a colonize order it had previously been
 unable to keep for even one turn. Implemented as `actions.load_crew`.
 
-[ ] confirm the crew transfer against a UI-performed load. The move above is accepted by the
+[x] confirm the crew transfer against a UI-performed load. The move above is accepted by the
 engine and the ship flies, but nothing has checked whether the UI also updates something the
 move does not, a per-civ military total, or a morale or upkeep figure. Diff a planet and a
-ship across one context-menu load and compare with what `load_crew` writes.
+ship across one context-menu load and compare with what `load_crew` writes. **Closed, not needed for play (v0.7 triage):** in play the client performs the load and the blob carries whatever it changes; only the memory tool `load_crew` would miss a side effect.
 
 [x] identify the bio-bomb and create-wormhole order ids in `Ship:52`, needs a bio ship and a wormhole ship.
 **6 is bio-bomb and 8 is create wormhole**, with 7 move-near, from the engine's own order-name
@@ -458,8 +458,8 @@ the engine reads, and it delegates every structural change to the code that owns
 For unwanted ships that must merely be got out of the way, coordinates are writable and render live
 (see the layout section), so relocating is strictly safer than deleting.
 
-[ ] test whether writing condition 0.0 makes the engine reap a ship cleanly on the next turn
-[ ] test whether the engine frees a planet's citizen vector when a colony is captured or abandoned, if it does, a `VirtualAllocEx` buffer repointed into `Planet:144` would be freed by the game's allocator and crash; conquer one of our own colonies to find out
+[x] test whether writing condition 0.0 makes the engine reap a ship cleanly on the next turn **Closed, not needed for play (v0.7 triage):** ships are removed through the blob (`wipe_civ`), not by memory writes.
+[x] test whether the engine frees a planet's citizen vector when a colony is captured or abandoned, if it does, a `VirtualAllocEx` buffer repointed into `Planet:144` would be freed by the game's allocator and crash; conquer one of our own colonies to find out **Closed, not needed for play (v0.7 triage):** the hazard applies only to a `VirtualAllocEx` buffer written by a memory tool; the blob path never repoints the vector.
 
 ### Ship designs: five part-category vectors at a 24-byte stride (July 2026)
 
@@ -493,7 +493,7 @@ just never read. Extent raised to 320, which also brought `ShipModule` at `+224`
 **Corroboration:** `ShipScanner` at `+152` holds exactly one element on every design, matching the
 UI's rule that the scanner is mandatory but changeable.
 
-[ ] decode the individual part objects (`ShipEngine`, `ShipWeapon`, `ShipShield`, `ShipScanner`, `ShipModule`), not needed for sync, which copies values between clients rather than interpreting them; the category vectors above are enough to replicate a design
+[x] decode the individual part objects (`ShipEngine`, `ShipWeapon`, `ShipShield`, `ShipScanner`, `ShipModule`), not needed for sync, which copies values between clients rather than interpreting them; the category vectors above are enough to replicate a design **Closed, not needed for play (v0.7 triage):** designs travel in `DSGN`, and `components.py` reads every part's stats from the client's own tables.
 
 ### Writing population, the state-restore blocker is solved (July 2026)
 
@@ -591,11 +591,18 @@ static's presence carries no diplomatic meaning, which cost one wrong conclusion
 
 **Remaining diplomacy work**, all deferred, war was the piece that mattered for the prototype:
 
-[ ] record the other `Treaty:16` type values by proposing each treaty kind, only `3` (war) is known, and the ids may not be contiguous. The declare-war button passes kind `1` to the proposal's setter `0x0055AD90`, so the proposal kind and the stored `Treaty:16` are not the same number
-[ ] decode the propose-treaty flow: whether a proposal creates a `Treaty` immediately or only on acceptance, and what `Treaty:12` and `Treaty:20` mean once a treaty has a duration (RTTI has a `TreatyLength` class). War is answered: the button builds an unregistered proposal (`0x5C` bytes, ctor `0x00559A60`), and apply `0x0055C3E0` copies it into a registered `Treaty`, makes first contact and writes War into both relation records; the proposal is then destroyed (`remote.declare_war`). The treaties that need acceptance are not
-[ ] find where "send message" state lives, RTTI has `SendMessageDlg` and `MessageListener`, so there is likely a message list per civ
-[ ] find the per-civ colour field behind "change color", likely a plain value on `Owner`, and a cheap write test would confirm it
-[ ] locate the `Fleet` registry so a fabricated fleet can be registered, make a fleet, scan memory for pointers to it, then find the `.data` vector holding the array, exactly as the `Treaty` registry was found
+[x] record the other `Treaty:16` type values by proposing each treaty kind, only `3` (war) is known, and the ids may not be contiguous. The declare-war button passes kind `1` to the proposal's setter `0x0055AD90`, so the proposal kind and the stored `Treaty:16` are not the same number. **`Treaty:12` is the kind and `Treaty:16` the status**, read off the binary (November 2026), so the war's `3` was a status. Kinds, from the button, verb and stance tables at `0x776DB8`, `0x776DCC` and `0x776DA4`: 0 trade ("Propose Treaty", stance Neutral), 1 war, 2 cease-fire, 3 peace, 4 military alliance; an accepted treaty writes its kind into both civs' stance. Statuses, from `0x776EE0` and `0x776EF4`: 0 Pending, 1 Binding (a trade's Active), 2 Declined, 3 Non-Binding (a trade's Expired), 4 Canceled. A war is created at 3, in force with no binding period; statuses 1 and 3 are both in force
+[x] decode the propose-treaty flow: whether a proposal creates a `Treaty` immediately or only on acceptance, and what `Treaty:12` and `Treaty:20` mean once a treaty has a duration (RTTI has a `TreatyLength` class). War is answered: the button builds an unregistered proposal (`0x5C` bytes, ctor `0x00559A60`), and apply `0x0055C3E0` copies it into a registered `Treaty`, makes first contact and writes War into both relation records; the proposal is then destroyed (`remote.declare_war`). The treaties that need acceptance are not; now they are. **Decoded from the binary** (November 2026):
+  - **Proposing** registers a `Treaty` at once: apply `0x55C3E0` copies the proposal under a new id, dates it, makes first contact both ways and adds it to the registry `0x86ED6C`. Only a war is accepted on the spot; every other kind stays Pending (0).
+  - **Responses** go through `0x56F470`: withdraw removes and deletes it (`0x55AA90`), accept is `0x55BD40`, decline sets 2 (`0x558590`), and cancel (`0x55C2F0`) sets both stances to Neutral and the status to 4. Each party's deleted byte is written by the news-screen UI.
+  - **Accepting** checks the terms and each party's means, then sets status 1, the start turn (`Treaty:24`) and, while the length (`Treaty:20`) is still -2, the length; a war's length is -1. A non-trade kind sets both stances and ends the earlier non-trade treaties between the pair. A war ends every treaty between the pair, and breaking a cease-fire, peace or alliance that still binds costs the declarer reputation (inferred from the field it debits).
+  - **Length** is the `TreatyLength` item's value, else the kind's minimum: 20 for a cease-fire, 50 for peace, 100 for an alliance (`0x80B564`), or 10, 20 and 30 when a galaxy setting's flag is set (`0x80B578`, setting unidentified). A `TreatyLength` must be under 1000 and at least that minimum.
+  - **Each tick** (`0x55AC40`) runs the per-turn items of a Binding treaty and turns it Non-Binding once the turn reaches start plus length.
+  - **The items** are sections named by tag, with no number: `CRLS`, `CRPT`, `RSLS`, `RSPT` (credits and resources, lump sum or per turn), `SLOS` (share line of sight), `SHBR` (share battle reports), `SHGM` (share galaxy map, once on acceptance), `TRLE` (length) and `SHWH` (share wormhole). A per-turn resource payment the payer cannot meet raises news kind `0x45`, "We lost reputation".
+  - **Shared battle reports:** the battle builder also sends a shorter copy of each report through `Owner::AddNewsToAllies` (`0x543760`) to every civ allied with the recipient (stance 4) by an in-force treaty carrying `SHBR`. No treaty step itself raises news
+[x] find where "send message" state lives, RTTI has `SendMessageDlg` and `MessageListener`, so there is likely a message list per civ **Answered (v0.7 triage):** messages are `NEWS` records on `Owner:344` ("News items located" below), carried since v0.6.
+[x] find the per-civ colour field behind "change color", likely a plain value on `Owner`, and a cheap write test would confirm it **Answered (v0.7 triage):** the colour a civ gives a rival is in that rival's 36-byte `KNPL` record, not on `Owner`, carried since v0.6 (Reconstruction Report §14).
+[x] locate the `Fleet` registry so a fabricated fleet can be registered, make a fleet, scan memory for pointers to it, then find the `.data` vector holding the array, exactly as the `Treaty` registry was found **Closed, not needed for play (v0.7 triage):** fleets are made in the client and travel in `FLET`, which the merge carries; nothing fabricates one in memory.
 
 ### `Owner` is a multiple-inheritance class, the civ name is in front of the tag (August 2026)
 
@@ -670,16 +677,26 @@ Two candidates from the same diff were **discarded**: `0x0082DED4/D8` points at 
 holding `"Arial 12"`, a font cached because a new UI element rendered for the first time. It
 correlates perfectly with discovery and means nothing.
 
-The UI was confirmed to list the rival once the record existed. **The write test was started but
-not completed**: the vector was emptied and restored, but no reading of the box was taken while it
-was empty, so this remains a correlation. It is a strong one, a `.data` vector going from empty to
-one record on exactly the discovery turn, containing exactly the discovered civ, but `Owner:68`
-and `Owner:200` both cleared a comparable bar and were later falsified, so it is recorded as
-unconfirmed.
+The UI lists the rival once the record exists, but **the box does not read this vector**. With
+the vector emptied (end set to begin) in BadGuy's view of `d9`, the diplomacy page still listed
+GoodGuy after a repaint, and the vector stayed empty (14 November 2026). The vector going from
+empty to one record on the discovery turn is a side effect of contact, not what the box draws.
 
-[ ] finish the write test: empty `0x0082AA28`, read the box (alt-tab to force a repaint), restore
-[ ] check whether the box is *derived* from this vector or from the owners of known planets, a
-galaxy-wide "known planets" list may be the real primary structure
+**A load rebuilds the vector from the blob.** BadGuy's view of `d9` came up (14 November 2026)
+with one record, `{GoodGuy (656), Planet 265 "GoodGuy's HQ"}`: the civ its `KNPL` names, and that
+civ's capital rather than where they met. So the vector is derived, not stored, and `KNPL` (Report,
+"The trailing dword of every `KNPL` payload is unreliable") is the stored list of known civs. No
+instruction names `0x0082AA28` as an immediate, so it is a member of a larger global.
+
+[x] finish the write test: done 14 November 2026, the box still lists GoodGuy with the vector
+empty.
+[x] check whether the box is *derived* from `KNPL` or from the owners of known planets. It is not
+this vector. Emptying BadGuy's `KNPL` in a served view, with GoodGuy's planets still remembered,
+separates the two. **Settled** (14 November 2026) from the client: the box is the viewer's `KNPL`.
+The page's fill (`0x444470`) takes its civs from `0x442DD0`, which walks the local civ's
+known-players map (`Owner+0x12C`, the table `KNPL` loads) node by node, keeps each civ whose stance
+passes the page's filter, and reads no planet. Each row then asks the same map for its stance and
+flags (`0x534410`). The in-client test was not run.
 
 #### Plan for loading known players: the ship shuffle
 
@@ -785,8 +802,13 @@ defender the score and reputation gained. The attacker's copy names the defender
 their strength, which is what a player learned by sacrificing a ship. Stationed troops are not
 in it. `client/dev_tools/ai_player/intel.py` parses it.
 
-[ ] The `0x42` kind on the other items is not identified, and whether research and doctrine
-completions are the items that doubled the vector earlier is not confirmed.
+[x] The `0x42` kind on the other items is not identified, and whether research and doctrine
+completions are the items that doubled the vector earlier is not confirmed. **`0x42` is "Research
+complete"**, the same number as the save's `NEWS +0`. Read from 60 captures in `sim/corpus`
+(November 2026), every item by kind and title: `0x42` all "Research complete" (202), `2` battle
+reports, `0x43` "Your empire is running low on money" and "Abandoned ships/facilities due to lack
+of financial support", `0x44` "Failed to build Ship(s) due to missing Ship-Resources", and `0`
+"Welcome to Cosmic Supremacy". So research completions are news items, one per completion, raised by `0x545610` (`0x5457E0`), and a doctrine is one too: its body reads "Our scientists have just finished researching 'Doctrine: Trade'." Kinds from `0x40` up share the news screen's "Game Events" filter (`0x411D10`).
 
 ### The Overview tab (August 2026)
 
@@ -832,7 +854,7 @@ reproduces and which matched the engine on all 46 traits with distinct probes (O
 engine's value is that base, plus every completed item's trait grant, plus +50 on traits 2-5 in a
 golden age or −20 in a dark age. **Golden and dark age share `Owner:744`**: trait 43 is a positive
 value there and trait 44 a negative one, so `GetTrait` never reads the slots at `Owner:920/924`.
-`Owner:932/936/940` would be traits 46-48, past the 46 that were matched.
+`Owner:932/936/940` are the first three entries of `GetTrait`'s grant cache, not traits.
 
 [x] resolve `Owner:788` (ship shield strength): probe `22` displayed as **−12**, but the doctrine's
 −10 shield penalty predicts **+12**. Either the sign was transcribed wrong or the penalty is not a
@@ -847,10 +869,13 @@ as base 10 + bonus, so its probe 13 also displayed 23
 "Food consumption per citizen" is the candidate: it read `10` before the pass and an unexplained
 `232` during it. **Food consumption and income per citizen**, both confirmed by write test and
 both rendered as base 10 + bonus
-[ ] confirm which of `Owner:920/924/928` is **anonymous scanning**, the UI renders it as a
+[x] confirm which of `Owner:920/924/928` is **anonymous scanning**, the UI renders it as a
 checkbox rather than a number and read "enabled" while all three were non-zero. `920` and `924`
 are traits 43 and 44, the age traits `GetTrait` takes from `Owner:744` instead, which leaves `928`
-(trait 45) as the likeliest if the checkbox goes through `GetTrait`. Unconfirmed
+(trait 45) as the likeliest if the checkbox goes through `GetTrait`. **`Owner:928`, trait 45**,
+read off the binary (November 2026): the trait table's initialiser gives the entry named
+"Anonymous Scanning" trait id 45 (`0x72465F`), beside 43 "Golden Age" and 44 "Subsequent Dark
+Age", and `GetTrait` reads trait t at `Owner:748 + 4t`. `sim/traits.py` names 45 the same way
 
 #### Cash and the resource market
 
@@ -922,11 +947,22 @@ gives trait 42.
 > only worth acting on once re-run as a clean one-variable test. The same instinct with no follow-up
 > test is what produced `Owner:68` and `Owner:200`.
 
-[ ] explain the displayed price drift: the Ship-Resources screen shows `99/149/199/299/900`, one
+[x] explain the displayed price drift: the Ship-Resources screen shows `99/149/199/299/900`, one
 below base on each resource the civ holds and base on one it does not (turn 85 of the live galaxy,
 November 2026). Its served `RSMA` was all 0 at turn 83 and nothing carried could move it since. The
 sale quote at 0 is base, so the column is not the quote for 100 units; the screen's list builder is
-around `0x512AF0`
+around `0x512AF0`. **Explained** (14 November 2026): the column is the sale quote for 100 units
+with the viewer's trait 42, "Sell 100 for" in the market rows at `0x414CD0` (`0x512AF0` formats
+resource lists, not prices). The bases are exact floats, and the quote is base with the market at 0
+and base less 1 exactly when it holds 1 to 100 units of that resource. Nothing but the player's own
+trade raises the count: sale `0x512560` and purchase `0x5125D0` have one caller, the trade request
+`0x575E50`, which offline applies the trade in the viewer's client at once; the tick's decay,
+the load and a new galaxy's reset are the only other writers. So the screen showed the market after a sale of up to 100
+units of each resource held, in that client, before it was carried. The tick's decay (less 1,000,
+not below 0) takes such a sale out before the next served turn, which is why turn 83 read 0. The
+earlier reading above, sell 99 and buy 792 with crystal and exotics at base, is one 100-unit sale
+of each of a new civ's three stocks. Not yet seen on screen: a served turn reads `100/150/200/300/900`
+until one "Sell 100", which takes that row to base less 1.
 [x] confirm the **buy**-price formula: read from `0x512090`, the trait is taken off a purchase as it
 is added to a sale, so one data point was enough
 [x] determine whether trading, turn resolution, or both move the market: both, and every civ shares
@@ -938,11 +974,34 @@ it. Trading moves `RSMA`; each tick takes 1,000 off a positive count (above)
 > block of NaN bytes matches any float sequence. Float scans must reject NaN and infinities
 > explicitly.
 
-[ ] decode the **"vote to end galaxy"** button. Deferred: it is a galaxy-lifecycle action rather
-than per-turn state, so nothing in the playable loop needs it. Expect a per-civ vote flag plus a
-tally, and note that the original game resolved this server-side, so the client may hold only the
-local vote and rely on a server response, which would make it unsyncable without the real server
-protocol and would close the item.
+[x] decode the **"vote to end galaxy"** button. Taken up in v0.7 (Robert, 14 November 2026):
+players may vote to restart the sandbox, and the operator page shows the votes (Reconstruction
+Report §14). It is both a server command and a per-civ byte in the save, and the save carries
+it:
+
+- The tick-box is control `0x489` on the Overview Screen (`DoDataExchange` `0x412F00`,
+  `DDX_Check` into the dialog's `+0x7DA0`). Its click handler (`0x412DD0`) is the `SVUS`
+  routine, `0x5718C0`.
+- `SVUS` fills a 48-byte settings block (`0x57EA40`) from the interface options and, at `+0x2C`,
+  the tick-box. Online it sends the block as one `USSE` section; offline it copies the block to
+  the local civ at `Owner+0x2CC`, so the vote is `Owner+0x2F8`.
+- The civ's `OWNR > DATA > USSE` is that block, version 4, 45 bytes (writer `0x57ED00`, reader
+  `0x57EE30`): 11 option flags, 13 bytes, 4, 4, three `u32` (100, 0, 50 by default), and the
+  vote. The reader takes the vote from version 2 on.
+- The client tallies it itself (`0x52F6B1`, beside the "Game Progress Rate" log line): over
+  the civs it counts, half the share of civs voting plus half the share of their `Owner+0x50`
+  weight. With an end turn not yet set, the galaxy at turn 600 or later and the test against the
+  game progress rate passed, it sets the end turn (`[0x80AA04]`, -1 for none) to `turn + 109`
+  rounded down to a multiple of 10, about 100 turns on, as the tick-box's tooltip says.
+
+In the client (14 November 2026), ticking the box on a turn-37 galaxy and saving set Alpha's
+byte to 1 and nothing else in `USSE`; unticking set it back to 0. A save with Alpha's and
+another civ's vote cast kept both across the client's tick. The checks were made through the
+client's own handler, by setting the box and sending its `BN_CLICKED`, with the Overview Screen
+not on screen.
+
+[ ] find whether the engine's end turn `[0x80AA04]` is in the save. Until it is known, a galaxy
+past turn 600 with a majority voting may set an end turn of its own in the referee's tick.
 
 ### Audit sweep, closed items, and the Owner registry (August 2026)
 
@@ -989,15 +1048,19 @@ occupant of that allocation. **Read only the low byte.** The general lesson: a p
 a struct can be three bytes of stale allocator residue behind a one-byte field, and the check that
 catches it is comparing the same offset across two instances.
 
-[ ] re-check the ~27 dormant `Planet` offsets in a developed save before treating them as unused
+[x] re-check the ~27 dormant `Planet` offsets in a developed save before treating them as unused **Closed, not needed for play (v0.7 triage):** the blob round-trips byte for byte, so a planet field nobody has named is still carried.
 [x] identify `Owner:924` and `Owner:928` alongside the existing `Owner:920` item, one of the three
 is "anonymous scanning", which the UI renders as a checkbox rather than a number. **They are traits
 44 and 45**, `Owner:920` trait 43; the anonymous-scanning question stays with the trait-block item
-[ ] understand why the engine **zeroes** `Owner:932/936/940` on the next turn while accepting writes
+[x] understand why the engine **zeroes** `Owner:932/936/940` on the next turn while accepting writes
 to every trait from 748 to 928, a field the engine actively rejects is worth understanding before
 trying to load state into it. Not dark age turns: dark age is a negative `Owner:744`. Lead worth
 checking first: `research.py`'s grant table says trait grants land at `Owner:932 + 4 × trait`,
-which would make these a per-turn recomputed cache of research bonuses. Unverified
+which would make these a per-turn recomputed cache of research bonuses. Unverified. **They are
+`GetTrait`'s grant cache** (`0x516180`, November 2026): 46 dwords from `Owner:932`, one per
+trait. When the first holds -1, `GetTrait` zeroes all 46 and adds every completed item's trait
+grant (kind 11) into them, so a probe written there is replaced by the grants on the next rebuild;
+traits 0 to 2 have none, hence 0
 [x] identify `Ship:56` and `Fleet:56`, the same slot on both classes, holding the static null node
 on every instance ever observed including ships under orders and in fleets, so nothing has been seen
 to fill it. **`Ship:56` is the order's target-object reference node.** `Ship::SetCommand`
@@ -1005,16 +1068,16 @@ to fill it. **`Ship:56` is the order's target-object reference node.** `Ship::Se
 `Ship::HasActiveTargetedOrder` `0x004D9880` reads it for move, attack and move-near: a live node
 makes the ship escort that object. It was always null because every order observed was coordinates
 only.
-[ ] confirm `Fleet:56` is the same target node as `Ship:56`; assumed from the shared slot, untested
-[ ] identify `Owner:356`, a packed uint16 pair that moved `0x00000001 -> 0x00010001` when a
-technology completed
-[ ] identify `Owner:1208/1212/1216`, a float triple in X/Z/Y layout present only on the AI civ and
-zero on the human, plausibly an AI strategy target, in which case it is irrelevant to sync
-[ ] identify `Admiral:48` (1 on all admirals) and `Admiral:56` (1 on the admiral with a ship
-assigned, 0 on the others, tracking `Admiral:8`)
-[ ] decide whether `Sun` needs annotating at all, only 8 fields are known and `Sun:44/80/84/88`
+[x] confirm `Fleet:56` is the same target node as `Ship:56`; assumed from the shared slot, untested **Closed, not needed for play (v0.7 triage):** orders are built engine-natively from `ROUT`, which never writes the node.
+[x] identify `Owner:356`, a packed uint16 pair that moved `0x00000001 -> 0x00010001` when a
+technology completed **Closed, not needed for play (v0.7 triage):** the blob carries it, and the simulator's research matches the engine's without it.
+[x] identify `Owner:1208/1212/1216`, a float triple in X/Z/Y layout present only on the AI civ and
+zero on the human, plausibly an AI strategy target, in which case it is irrelevant to sync **Closed, not needed for play (v0.7 triage):** the blob carries it, and nothing the merge or referee writes depends on it.
+[x] identify `Admiral:48` (1 on all admirals) and `Admiral:56` (1 on the admiral with a ship
+assigned, 0 on the others, tracking `Admiral:8`) **Closed, not needed for play (v0.7 triage):** admirals travel in the blob and the merge carries them as measured; `Admiral:56` follows the assignment the client makes.
+[x] decide whether `Sun` needs annotating at all, only 8 fields are known and `Sun:44/80/84/88`
 vary across all 108 suns, but the galaxy is client-generated from a seed, so suns may need no
-syncing whatsoever. Settle the question before spending effort on the fields
+syncing whatsoever. Settle the question before spending effort on the fields **Closed, not needed for play (v0.7 triage):** suns round-trip in the blob and no order changes one.
 [x] settle `Planet:96`: 499 distinct values across 525 planets looks like real per-planet state, but
 both homeworlds share the identical pointer-shaped value `0x01278BE0`, which fits the appearance
 block already documented around `Planet:20-32`. Probably cosmetic; cheap to confirm. **Not cosmetic:
@@ -1118,12 +1181,12 @@ the `Owner:-12` "SolarSystem pointer". In that earlier game the target's first w
 not a vftable, so the field does not hold a `ShipDesign` in every game and the reading is not yet
 complete.
 
-[ ] settle `Owner:-48`: confirmed a `ShipDesign*` (the Colony Ship base template) in one game but
-pointing at text-like memory in another. Leading reading is the civ's default/starting design
-[ ] pin down `ShipDesign:76` and `ShipDesign:80` together: build a design mixing a **troop bay with
+[x] settle `Owner:-48`: confirmed a `ShipDesign*` (the Colony Ship base template) in one game but
+pointing at text-like memory in another. Leading reading is the civ's default/starting design **Closed, not needed for play (v0.7 triage):** designs travel in `DSGN`.
+[x] pin down `ShipDesign:76` and `ShipDesign:80` together: build a design mixing a **troop bay with
 weapons** to see whether `:76` stays 2, and a design with **two personnel modules** to see whether
 `:80` scales past 7 (which would confirm it as a capacity rather than a flag). `:76` is settled as
-the minimum crew (see the correction above); `:80` remains, with crew maximum the reading to test
+the minimum crew (see the correction above); `:80` remains, with crew maximum the reading to test **Closed, not needed for play (v0.7 triage):** the client enforces crew limits on its own screens. Reopen if the simulator needs a crew maximum.
 [x] extend the part-id tables by fitting each remaining part type once, the weapon ids are already
 known to be non-contiguous (`0` then `10`), so the ranges cannot be inferred and must be observed.
 **Done without fitting:** `client/dev_tools/ai_player/components.py` reads all six part-definition
@@ -1239,11 +1302,11 @@ register base as fields of something, and that something sits directly in front 
 `CustomizeCivilizationDlg` instance, whose vtable `0x00761584` is at `0x00842B00`, 28 bytes past the
 record. One static dialog, one record. Since the economy never reads it, per-civ was the wrong
 question to be asking
-[ ] confirm the `+50` space constant and the `[300, 32, 30, 40]` base table are galaxy-wide rather
+[x] confirm the `+50` space constant and the `[300, 32, 30, 40]` base table are galaxy-wide rather
 than per-galaxy-type, both were read in a single game, and galaxy type is known to vary other
 parameters. The user's working assumption is that these defaults are constant for every galaxy.
 Partly corroborated: a TestBed galaxy customised in September 2026 gave space `350 = 300 + 50 + 0`
-and a base food rate of 32, matching the same table
+and a base food rate of 32, matching the same table **Closed, not needed for play (v0.7 triage):** a joiner's homeworld copies the fields of an untouched homeworld from the galaxy's own turn 0 (`joins.untouched_homeworld`), so nothing assumes the table is galaxy-wide.
 [x] **`Planet:96` bytes 1 and 2 varied by a control.** On a pushed state reading `[62,30,40]`,
 spending 15 homeworld increments on production and 15 on science gave `[62,45,55]`. Byte 1 is
 production per worker, byte 2 is science per scientist, each `base + clicks`. All three bytes are
@@ -1341,7 +1404,7 @@ object may also need to appear in per-owner or per-system structures), and wheth
 it for rendering as well as logic. Fabricating a `Fleet` also needs a correct 44-byte member-record
 array and a valid vftable, so the object itself is more work than the registration.
 
-[ ] verify the `0x00854628` registry is sufficient to make a fabricated object live, register a copy of an existing Ship and see whether the game renders and ticks it
+[x] verify the `0x00854628` registry is sufficient to make a fabricated object live, register a copy of an existing Ship and see whether the game renders and ticks it **Closed, not needed for play (v0.7 triage):** objects are added through the blob (`inject_civ`, `starting_kit`), which the loader registers itself.
 
 ### The Scanning tab, reports located (August 2026)
 
@@ -1383,9 +1446,32 @@ The scan *inventory*, how many of each type are held, is the map at `Owner:64`, 
 2026 by its getter rather than by a diff.
 
 [x] locate the scan inventory: the count of each held scan type. `Owner:68` and the `Owner:200` descriptor vector are both excluded by write test; take a short-interval snapshot across producing or consuming a single scan. **A `std::map<type, count>` headed at `Owner:64`**, read by the getter `0x0053B8F0`. `Owner:68` is the map's size, the number of types ever held, which is why it rose on production and did not fall on use. Confirmed live October 2026: a route scan produced, held 1, used, back to 0 (actuator P in STRATEGY.md).
-[ ] run each remaining scan type and record its type id and report-object class, only route (2, `RouteScan`) and fleet (3, `FleetScan`) are known, and the ids are not contiguous so others may sit outside 2–3. Now also planetary (0) and military (4), from `intel.py`, with report classes unrecorded; Surveillance Scanning (tech 79) grants a type 7
-[ ] check whether each scan type's results vector at report`+44` has a different element layout, route and fleet both begin with a pointer to the scanned object, but the remainder differs in length (44 vs 52 bytes) and has not been decoded. They differ. Fleet (52 bytes): `+0x04` ship count, `+0x08` four uint16 counts by chassis, `+0x18` hull-class text. Military (124 bytes, one per ship): `+0x08` stats text, `+0x34` hull text, `+0x50/+0x58` base and effective hitpoints, `+0x60` condition, `+0x68/+0x6C/+0x70` firepower light, heavy, bomb. A planetary report holds a copy of the target's `PlanetProperties` at report `+0x28` instead. Route is still undecoded
-[ ] Recon tab, believed to have no backing state in memory; confirm by diffing across opening and using it, and record the negative result either way
+[x] run each remaining scan type and record its type id and report-object class, only route (2, `RouteScan`) and fleet (3, `FleetScan`) are known, and the ids are not contiguous so others may sit outside 2–3. Now also planetary (0) and military (4), from `intel.py`, with report classes unrecorded; Surveillance Scanning (tech 79) grants a type 7. **All eight, read off the factory** `0x54E030` (November 2026), which builds each id's class through the jump table at `0x54E218`; the costs are the descriptor table at `0x80AB60` (`server/tests/test_scan_table.py`):
+
+| id | class | vftable | name | cost |
+|---|---|---|---|---|
+| 0 | `PlanetaryScan` | `0x776504` | Planetary-Scan | 9000 |
+| 1 | `SystemScan` | `0x776AF4` | System-Scan | 20000 |
+| 2 | `RouteScan` | `0x7765B4` | Route-Scan | 3500 |
+| 3 | `FleetScan` | `0x77613C` | Fleet-Scan | 5000 |
+| 4 | `MilitaryScan` | `0x7763D4` | Military-Scan | 16000 |
+| 5 | `TechnologyScan` | `0x776C2C` | Technology-Scan | 12000 |
+| 6 | `EnergyGridScan` | `0x776094` | Energy-Grid-Scan | 10000 |
+| 7 | `LeaderNameScan` | `0x77623C` | Leader-Name-Scan | 20000 |
+
+Every class derives from `GenericScan`, whose constructor `0x54E240` sets the turn at `+0xC`, the position at `+0x10`, and the scanned civ's node at `+0x1C`. Type 7 is the leader-name scan that Surveillance Scanning grants. `sim/scans.py` had 5 and 6 swapped and the energy grid at 20000, now corrected. Two cheaper tables, a tenth of these, are chosen instead by `0x5545D0` on a galaxy version below `0x39` or when `0x52A790` is false
+[x] check whether each scan type's results vector at report`+44` has a different element layout, route and fleet both begin with a pointer to the scanned object, but the remainder differs in length (44 vs 52 bytes) and has not been decoded. They differ. Fleet (52 bytes): `+0x04` ship count, `+0x08` four uint16 counts by chassis, `+0x18` hull-class text. Military (124 bytes, one per ship): `+0x08` stats text, `+0x34` hull text, `+0x50/+0x58` base and effective hitpoints, `+0x60` condition, `+0x68/+0x6C/+0x70` firepower light, heavy, bomb. A planetary report holds a copy of the target's `PlanetProperties` at report `+0x28` instead. Route is still undecoded. **Every type decoded from its perform function** (November 2026):
+  - **Route** (`0x5541C0`), 44 bytes a ship: `+0x00` the ship's node, `+0x04` a float from the ship (speed, inferred), `+0x08` the ship's description with " (Cloaked)" or " (Partly Cloaked)", `+0x28` a heap copy of the ship's order at `Ship:48`, destination at `+0x10/14/18`. No ETA is stored; the reader derives it from the order copy.
+  - **System** keeps only the sun's node at `+0x20`, with no results; its text is built live from the current objects, and it lapses 8 turns after the scan (3 below galaxy version `0x39`).
+  - **Technology** (`0x555350`): `+0x20` a copy of the target's `Owner:96` (24-byte elements, its researched technologies), `+0x38/+0x3C` its topic from `Owner:144/148`, `+0x40` percent done, capped at 99, and `+0x44` turns left, -1 when nothing accrues.
+  - **Energy grid** (`0x54BF00`) rebuilds the target's grid at `Owner:1232` first, then keeps 32-byte elements at `+0x34`: the transmitter planet's node, its TW at `+0x04`, and a vector of receiver planets at `+0x14`.
+  - **Leader name** (`0x54EEE0`) stores nothing in the report; it sets a byte in the scanning civ's map at `Owner:248`, keyed by the target civ, and the report prints the name or "blocked by a mysterious technology"
+
+[x] Three loose ends from the scan decode: route `+0x24`; how `Owner:96`, the technology scan's list, relates to the completed list at `Owner:108`; and what `0x52A790` tests when choosing the full-price scan table. **All three read off the binary** (November 2026):
+  - **Route `+0x24`** is the second half of the description. The engine's text type is 32 bytes, a `std::string` and then an owned stream pointer, both freed by its destructor `0x402A40`; the route element's description runs `+0x08` to `+0x27`, and `0x5541C0` frees `+0x24` before writing a new one.
+  - **`Owner:96` and `Owner:108` are one list.** `Owner:96` is the 24-byte container of the completed list and `Owner:108` its begin pointer, 12 bytes in. The technology scan copies the whole container with the vector assignment `0x453210`, 8-byte `[id, cost]` records, which is why its copy is 24 bytes and the topic follows at `+0x38`. `sim/scans.py` reports the target's completed list already.
+  - **`0x52A790` is content version >= 150** (`[0x80AA00]`), the drafting gate. `0x5545D0` takes `0x80B1E0` below version 57, `0x80AEA0` from 57 to 149, and the full-price `0x80AB60` from 150. Every mode on record runs at 171 or above.
+[x] Recon tab, believed to have no backing state in memory; confirm by diffing across opening and using it, and record the negative result either way. **No backing state of its own**, read from `ReconPage` (constructor `0x4382A0`, handler `0x439E80`, November 2026; not diffed live). Its planet list reads the global planet vector (`0x8553C4`), its ship list the global ship list filtered to other civs' ships with a non-zero byte at `Ship:16`, and its destination column the newest route scan covering the ship in `Owner:320`. The only state it holds is its filter controls. The manual's recon screen matches: explored planets as last scouted, and other civs' ships in sensor range
 
 ### The reference-node idiom
 
@@ -1553,7 +1639,7 @@ can be normalised across clients. Object *counts* cannot, memory writes cannot c
 therefore shrink to the lowest common count and park the remainder out of the way, rather than
 making two galaxies genuinely identical.
 
-[ ] orbit rings do not follow a moved star or planet, cosmetic only, revisit if layout injection ships
+[x] orbit rings do not follow a moved star or planet, cosmetic only, revisit if layout injection ships **Closed, not needed for play (v0.7 triage):** cosmetic, and layout injection has not shipped.
 
 ### Confirmed: memory writes are functional
 
@@ -1576,7 +1662,7 @@ This proves that external memory manipulation is a viable approach for multiplay
 | `0x0086F1A1` | byte | Sync flag, 0=paused, 1=running |
 | `0x008578E8` | int32 | **Turn number**, read 48 with the UI showing turn 48, and 49 after one advance |
 | `0x00857904` | ptr | **Local player**, reference node whose `node[0]` is the human civ's `Owner` at `tag − 8`. Confirmed across two independent games (`Owner#641`, then `Owner#634` = `'GoodGuy'`). This answers "which `Owner` am I" without needing a war to read `Treaty:4` |
-| `0x0082AA28` | vector | **Known players**, `[begin, end, cap]`; one 8-byte `{Owner*, Planet*}` record per discovered rival, empty until first contact. Write test still pending |
+| `0x0082AA28` | vector | **Known players**, `[begin, end, cap]`; one 8-byte `{Owner*, Planet*}` record per discovered rival, empty until first contact, rebuilt on load. The diplomacy box does not read it |
 | `0x00871430+` | mixed | Global serializer buffer (app context, file paths, UI config) |
 
 **`0x00844B68` is *not* the local player**, though it held the same reference node in the first
@@ -1701,9 +1787,9 @@ Then write the true stockpile to `Owner:12` once at the end, or the civ is left 
 surplus. This costs one turn per completed item and needs no foreign allocation, which is the same
 trade the known-players ship shuffle makes.
 
-[ ] check whether more than one item can complete per turn, the stockpile survived at 7640, well
+[x] check whether more than one item can complete per turn, the stockpile survived at 7640, well
 above the next cost, so a single turn might absorb several if the topic is rewritten between them,
-which would collapse the load to far fewer turns
+which would collapse the load to far fewer turns **Closed, not needed for play (v0.7 triage):** in play the engine completes research itself; this only sped up loading research state through memory.
 [x] establish whether doctrine ids occupy a distinct range from technology ids, three samples
 (`3`, `12` technologies; `43` a doctrine) hint at it but do not show it, and it only matters if the
 server ever has to validate an id rather than copy it. **They do not.** The live research table
@@ -1902,12 +1988,101 @@ picks the fix up with no change to the build. The v0.1.0 staging folder under
 `dist/` still reads `DemoPlayer=0`, which is the published zip: **every v0.1
 single-player game shipped with research disabled for the player.**
 
-### `Planet:368` is a turn counter, and loyalty is STILL unlocated (August 2026)
+### Loyalty is derived from the conqueror list, `Planet:384` (November 2026)
+
+A planet stores no loyalty. It stores the rulers that have held it, each with an influence on
+its people, and the client derives loyalty from that list and from each citizen's origin and
+arrival turn. The client's own help text says the same: a planet's loyalty is the average of its
+citizens', and a citizen's rests on the influence of past conquerors.
+
+**The list.** `Planet:384/388/392` is a `std::vector` of 16-byte entries, `[owner node, f32
+influence, first turn, last turn]`, the last turn -1 for the current ruler. It belongs to the
+`PlanetProperties` part of the planet (Planet `this+0x60`): the container at `+0x11C`
+(`Planet:372`, its head pointer), begin at `+0x128`. A colony starts with its founder's entry. A
+conquest (`0x004EDA60`) sets the last entry's last turn to the turn before and appends `[new
+owner, 0, turn, -1]`.
+
+**Each tick** (`0x004F4660`) computes a gain of 1, plus 10% of the planet's effective soldiers per
+citizen, plus its propaganda offices (trait 35 on top), and hands it to `0x004EDBC0`. The current
+ruler's entry gains it; every other entry loses it and is dropped at 0; each is clamped to 0..100,
+and the ruler's own is trimmed when the total passes 100. A planet with no citizens keeps only its
+owner's entry (`0x004EDAD0`).
+
+**A citizen's loyalty** (`0x004ED270`) is 100 less the pull of every other ruler in the list,
+clamped to 0..100. A ruler pulls with its whole influence on a citizen that arrived on or before
+its rule began, with `min(100, last - arrived) / min(100, last - first)` of it on one that arrived
+during the rule, and not at all on one that arrived after. A citizen of another origin feels half.
+A bio-bomb penalty, held per civ on the ruler (`Owner+0x12C`, keyed by the citizen's origin),
+comes off last. The origin is the citizen's owner field (`+8`, bytes 3-6 of the nine-byte save
+record), which keeps the civ it was born under through a conquest. The arrival turn is `+12`,
+the u16 at byte 7 of the save record.
+
+**A planet's loyalty** (`0x004F47A0`, `PlanetProperties` vtable slot `0x78`) is the mean over its
+citizens, 100 with none. Only at exactly 100 does it add the halved soldier term, the propaganda
+term, the float at `Owner+0x308` and trait 36, which is the loyalty bonus.
+
+**Rebellion** (`0x004F9970`) reads that loyalty after the tick's step. Below 30 it adds 1 to the
+u16 at `PlanetProperties+0x134` (`Planet:396`); at 30 or more it clears it; above 3 it rolls a
+rebellion weighted by the counter and the planet's soldiers.
+
+**The save.** `PLPR` (version 0x13) carries all of it between `PROD` and `ENLI`: the eight-slot
+population history, the `Planet:368` counter, the list's count and entries, the rebellion counter,
+then the resource deposit. One ruler makes the 51-byte block `merge_orders` calls the settled
+block, and each further ruler adds 16 bytes. Its "age" field is the first ruler's influence, so the
+developed save's `61.23 / 44.72` for ages 47 / 41 were soldiers raising it faster than 1 a turn.
+The save parser lost `PROD` and `ENLI` on a planet with two rulers, whose 67-byte gap passed its
+64-byte search window; the window is 256 bytes now.
+
+**The capture that moves it** is `capture_live_invade`: civ 656 takes planet #384 from 660 in the
+turn-125 tick, with 5 unranked soldiers on 16 citizens, every one of 660's origin:
+
+| tick | 660's influence | 656's influence | loyalty, derived | `Planet:396` |
+|---|---|---|---|---|
+| before | 100.0, turns 0 to -1 | | 100.00 | 0 |
+| 125 | 100.0, turns 0 to 125 | 0.0, from 126 | 23.81 | 0 |
+| 126 | 95.906 | 4.094 | 26.93 | 1 |
+| 127 | 91.812 | 8.188 | 30.05 | 0 |
+| 128 | 87.718 | 12.282 | 33.17 | 0 |
+| 129 | 83.623 | 16.377 | 36.29 | 0 |
+
+The step is 4.094, exactly 1 + 10 x 4.9506 / 16, the manual's figure for 5 soldiers. The
+rebellion counter checks the derivation at the line: it reads 1 after the tick that leaves 26.93
+and clears after the tick that leaves 30.05. `capture_live_academy` is the same conquest with an
+Academy's ranked soldiers: the step is 4.70, the turn-126 tick leaves 30.67, and the counter stays
+0. Those are the only planets with two rulers in `sim/corpus`, and all eight of their ticks agree.
+
+`sim/load.py` reads the list and the counter (`merge_orders.influence_of`) and sets each planet's
+loyalty with `sim.economy.planet_loyalty`, the ruler's bio-bomb penalty from `KNPL` included.
+
+[x] Find where the save carries the bio-bomb loyalty penalty: `Owner+0x12C` is a map keyed by civ,
+read through `0x005343A0`, its u16 at `+0x24` of each node. **It is `KNPL` record `+26`** (November
+2026). `Owner+0x12C` is `Owner:248`, the known-players map `KNPL` serialises; its writer
+(`0x534090`, `0x533260`, `0x532F20`) puts node `+0x24` at record `+26`, the field every capture
+read as 0. The bio-bomb resolution `0x4F6DE0` adds the bomb sets dropped on a planet that turn
+(`0x4D9AD0`, each bomber's sets capped by its order) through `0x534D50`, into the bomber's record
+for the planet's owner, capped at 100. The client's "Loyalty Penalties from Bio-Bombing" text
+(`0x42F960`) reads the same word. The earlier reputation probe drove it through `0x534D50` in
+memory, and `capture_rep+100_t0123` carries 99 at `+26` in both civs' records, the only non-zero
+value among the 44 galaxies in `sim/corpus`. `merge_orders.bio_penalties` reads it and `sim/load.py` applies
+it to each planet's loyalty.
+
+[ ] The fast sim's bio-bombing (`sim/combat.bio_bomb`) takes its sets off the loyalty of the
+bomber's planets taken from the victim once. The client keeps them as a standing penalty per civ
+pair, felt by every citizen of the victim's origin under the bomber, on planets taken later too.
+Carry it on the civ and subtract it where `sim/economy.settle` moves loyalty.
+
+[x] Read planet #384's loyalty on screen from `capture_live_invade_t0129.after`; the derivation
+gives 36.29%. The TestBed's Planet View tooltip shows 36.29% (14 Nov 2026), with the list as
+derived: BadGuy turns 0 to 125 at 83.6%, GoodGuy from 126 at 16.4% (16.38% to more places), and a
+gain of 4.09 a turn, 1.00 regular and 3.09 from stationed military. The Planets screen shows 101%
+for GoodGuy's HQ, whose soldiers lift a fully loyal planet past 100.
+
+### `Planet:368` is a turn counter; loyalty is derived (August 2026)
 
 **RESOLVED: `Planet:368` == `min(8, currentTurn - Planet:92 + 1)`.** It is turns since the
 planet last changed hands, capped at 8, and it carries no information that `Planet:92` and the
-turn counter do not already carry. **It is not loyalty**, and the "civil disorder" the client
-shows on a freshly conquered planet is not here either.
+turn counter do not already carry. **It is not loyalty**, which is derived from the conqueror
+list (above).
 
 **A garrison makes no difference to it**, the discriminating test, run per turn:
 
@@ -1922,11 +2097,11 @@ Identical, +1 per turn, on the same turns. This was written up a few hours earli
 the turn-counter hypothesis recorded as the open question. Per-turn sampling answers it against
 the more interesting reading, which is the way that usually goes.
 
-[ ] **Loyalty and corruption are still not located**, the conquest A/B that made this field
-findable did not turn up either of them. What it DID rule out: `Planet:100` bytes 0-2, the
-long-standing candidate, read `100/100/100` on freshly captured planets exactly as on planets
-held for 268 turns. Whatever the client is rendering as loyalty is derived, held off-object, or
-in a field that does not move on capture.
+[x] **Loyalty and corruption are still not located.** Both are derived. Loyalty comes from the
+conqueror list at `Planet:384` and each citizen's origin and arrival turn (the section above).
+Corruption is the manual's formula over planet count and reputation (`docs/Fast_Sim_Plan.md`
+§5b). `Planet:100` bytes 0-2, the old candidate, read `100/100/100` on freshly captured planets as
+on planets held for 268 turns.
 
 [ ] A single out-of-trend sample here is a TORN READ, not a signal: #476 read 8, 8, 7, 8 on
 consecutive turns with nothing happening to it.
@@ -1934,7 +2109,7 @@ consecutive turns with nothing happening to it.
 The historical observations below still hold and were the first clue.
 
 **Why it took until now: every planet reads the same value until one changes hands.** That is
-the same reason loyalty and corruption are still listed as unlocated below, a whole-galaxy
+the same reason loyalty went unlocated for so long, a whole-galaxy
 survey has nothing to correlate against when all 525 planets agree. A conquest breaks the tie,
 and this project could not conquer anything until August.
 
@@ -1953,18 +2128,20 @@ and time restores it, and **conquest knocks it down further than colonisation** 
 against a new colony's 5). It also explains the wild change frequency noted then (525/525
 planets on some turns, 1/525 on others): it only moves on planets that are still settling.
 
-This is the memory side of what the client shows as loyalty, and of the "civil disorder"
-readout that replaces corruption on a freshly conquered planet.
+It moves with a conquest, as loyalty does, but carries nothing loyalty needs.
 
-[ ] **NOT disambiguated from a plain "turns since acquisition, capped at 8" counter.** Both
+[x] **NOT disambiguated from a plain "turns since acquisition, capped at 8" counter.** It is
+that counter: the per-turn test at the top of this section climbed at the same rate with and
+without a garrison, and `0x004F7D80` reads it as the u32 after the population history. Both
 fit every reading taken. The discriminating test is whether anything but time moves it: sample
 it EVERY turn on two fresh captures, one garrisoned and one not, and compare the climb rates.
 The two above recovered within 11 turns while carrying garrisons of 6 and 0, which is weak
 evidence against the garrison mattering, but the samples were 11 turns apart and could not
 have seen a rate difference.
 
-[ ] `Planet:396` read 1 on the captured planet and 0 once it had settled, and 0 on the
-controls throughout. Its annotation calls it "likely appearance / render data" because every
+[x] `Planet:396` read 1 on the captured planet and 0 once it had settled, and 0 on the
+controls throughout. It is the rebellion counter, the u16 at `PlanetProperties+0x134`: turns in
+a row below 30% loyalty, cleared at 30% (the section above). Its annotation calls it "likely appearance / render data" because every
 non-zero value decodes as a plausible float; a 1/0 that tracks conquest does not. Worth a look
 as a "recently taken" flag.
 
@@ -2304,8 +2481,8 @@ flags or counts rather than objects.
 
 **Resolved, `Planet:100` byte 3 is the recruitment rate.** The field reads `0x3C646464` on the
 military-base planet and `0x00646464` on every other planet including uncolonised ones. Bytes 0–2
-are `100/100/100`, matching a UI showing loyalty at 100% everywhere, so one of them is still the
-leading loyalty candidate. **Byte 3 is the recruitment-rate percentage**, confirmed in a later game
+are `100/100/100`, matching a UI showing loyalty at 100% everywhere; they do not move on a
+conquest, and loyalty is derived ("Loyalty is derived from the conqueror list"). **Byte 3 is the recruitment-rate percentage**, confirmed in a later game
 against a UI showing 0% (minimum), 20% and 40% (maximum) on three planets:
 
 | Planet | UI recruitment rate | `Planet:100` byte 3 |
@@ -2401,7 +2578,7 @@ snapshots only cover EJBO objects and the map lives in untagged heap nodes. What
 following pointers two levels deep and testing every offset against the known triple, the map
 node turned up as a hit at 1-, 2- **and** 4-byte widths simultaneously, which is the signature of
 a small integer in a dword rather than a coincidental byte match.
-[ ] annotate the building-queue setting, not critical, players can play without it
+[x] annotate the building-queue setting, not critical, players can play without it **Closed, not needed for play (v0.7 triage):** production queues and each planet's links to them are carried by the merge (`test_queues_merge.py`).
 
 ### Remaining `Planet` unknowns, and why a fresh save cannot settle them (July 2026)
 
@@ -2433,7 +2610,8 @@ does not follow from it.
 
 **Unresolved, the float in the `Planet:384` element.** It read `61.23 / 44.72 / 13.0` in a
 developed save and exactly `1.0` on both homeworlds in a fresh one, so it starts at 1.0 and grows:
-a progress value or multiplier rather than a static property.
+a progress value or multiplier rather than a static property. It is the ruler's influence ("Loyalty
+is derived from the conqueror list").
 
 ### Colonising a second system settled two of the three (July 2026)
 
@@ -2476,9 +2654,11 @@ targets rather than a second live counter.
 
 **The `Planet:384` float is planet age in turns, confirmed by pre-registered prediction.** At turn 10
 it read `10.0 / 10.0 / 0.0` for ages `10 / 10 / 0`. The prediction that three further turns would give
-`13.0 / 13.0 / 3.0` was then verified exactly on all three planets. Since the developed save's
-`61.23 / 44.72 / 13.0` does not fit ages computed as `47 / 41 / 15`, the turn number *derived* in that
-save was probably wrong rather than this reading, the turn counter had not been located at that point.
+`13.0 / 13.0 / 3.0` was then verified exactly on all three planets. The developed save's
+`61.23 / 44.72 / 13.0` against ages `47 / 41 / 15` is explained: the float is the ruler's influence,
+which grows 1 a turn plus a soldier and propaganda term, up to 100, so it equals the age only on a
+planet without either. The three fit a turn two below the one derived there (ages 45 / 39 / 13),
+with soldiers raising the first two.
 
 **`Planet:352 … 364` is a population history ring.** Read as **eight `uint16` slots, newest first,
 one per turn, capped at 8 entries**. Bit `0x1000` marks any entry older than the current value:
@@ -2566,13 +2746,11 @@ fall in 270–279 before being read**, it is 271. Space is non-zero on all 525 p
 (range 156–450), so it is intrinsic to the planet rather than a consequence of colonisation.
 The low 16 bits are `0` on 509 of 525 planets and remain unidentified.
 
-**Still not located:** loyalty (100% on all three) and corruption
-(+0.68% / −0.61% / −0.47%). Searched as integers, scaled integers, 16-bit halves, bytes and
-floats across `Planet` and `PlanetProperties`, and as vector element counts. Loyalty at a
-uniform 100% carries no discriminating information and cannot be found until one planet
-differs; corruption is plausibly derived at display time.
+Loyalty (100% on all three) and corruption (+0.68% / −0.61% / −0.47%) have no field either.
+Both are derived: loyalty from the conqueror list at `Planet:384` ("Loyalty is derived from the
+conqueror list"), corruption from planet count and reputation (`docs/Fast_Sim_Plan.md` §5b).
 
-[ ] **UNDERSTAND REPUTATION BEFORE MULTIPLAYER.** Reputation is a signed word at `+0x10`
+[x] **UNDERSTAND REPUTATION BEFORE MULTIPLAYER.** Reputation is a signed word at `+0x10`
 of each relation record inside `Owner:248`, added to by `AddReputation` `0x00534D50`
 (`__thiscall(Owner* other, short delta)`, clamped to 100 on the high side only). Static
 analysis found **exactly one caller**, conquest resolution `0x004F6DE0`, reached from
@@ -2590,9 +2768,41 @@ That is NOT sufficient for multiplayer, for two reasons:
 Specifically still open: the forecast formula the declare-war dialog displays
 (`0x004430F0`, identity confirmed, arithmetic not closed, trace `[esp+0x2c]`/`[esp+0x30]`
 through the `[0x0085795C]` loop); which side's record the conquest writer updates; and how
-reputation enters the score calculation.
+reputation enters the score calculation. **Answered** by the two items below: reputation is
+`Owner:32`, the per-relation word is inert, and `0x00518480` is the forecast's arithmetic.
 
-[ ] test whether loyalty and corruption are derived rather than stored, populate one planet's population, buildings and military fully, and check whether both values follow from those inputs without any field of their own changing.
+**Reputation is `Owner:32`, and the client keeps it (November 2026).** The engine applies the
+manual's corruption formula (`0x0053A0D0`) to an empire reputation float at `Owner:32`, and the
+tick's score rebuild (`0x0053EDC4`) adds a pending float at `Owner:36` into it. The save carries
+`Owner:32` in `OWPR`, a float 27 bytes past the start of the second research field, four words
+after the score (`Owner:28`, 11 bytes past it). A live probe set it to +100 and -100 and the
+tick's corruption followed, and a reload read it back. The referee copies only the research
+fields from a submitted `OWPR`, so the engine's value carries from turn to turn. The client
+computes battle reputation itself: across the battle captures a defender that destroyed an
+attacker's ship gained 5 x log2 of the attacker's score over 80% of its own, 12.759 and 13.522,
+exactly the manual, once per pair. The per-relation word is not reputation: it is the bio-bomb
+loyalty penalty, `KNPL` `+26`, and `0x004F6DE0` is the bio-bomb resolution ("Loyalty is derived
+from the conqueror list").
+
+[x] **Find the attacker's reputation rule.** `0x00518480` computes it, called from the battle
+code at `0x0051EEE5` and from the declare-war forecast at `0x004432A6`: the enemy's score over
+one's own times (100 - `score_breakeven`) / 100, clamped to 0.1..10, then 5 x log2, a
+negative result zeroed when a flag argument is set, capped at +/-20 in one galaxy mode, scaled
+by the turn over 120 (60 in another mode) before that turn, and multiplied by
+`reputation_multiplier` / 100. An attacker that loses reputation loses 0.48 of that figure:
+with GoodGuy's and BadGuy's scores written into memory before one battle tick, 13538 against
+6000 gave -2.045 (the formula -4.260), 50000 against 2886 gave -7.973 (-16.610, the ratio
+clamped), and equal scores gave the full +1.610 (`capture_rep3*`). Where the 0.48 is applied
+was not traced.
+
+[x] Explain the defender gain of 11.656 in `capture_twosided_staged_fork_badguy_t0110`, where
+the scores before the tick give 12.601 by the same rule that matched every other battle. **The
+turn term:** `0x00518480` scales the figure by the turn over 120 while the engine's turn
+(`[0x8578E8]`) is 120 or less (60 when game option 1's byte `+0x30` is set). This battle
+resolves on turn 111, and 12.6009 x 111/120 = 11.6558, the save's 11.65582. Every other battle
+on record is at turn 123 or 125, where the factor is 1. `sim/renown.reputation` applies it.
+
+[x] test whether loyalty and corruption are derived rather than stored, populate one planet's population, buildings and military fully, and check whether both values follow from those inputs without any field of their own changing. Corruption does (`docs/Fast_Sim_Plan.md` §5b). Loyalty does too, from the conqueror list and the citizens (`0x004ED270`, `0x004F47A0`); the list's influences are its stored inputs, moved by soldiers and propaganda each tick.
 
 ### Governor, located and confirmed (July 2026)
 
@@ -2666,7 +2876,7 @@ now use `Owner:*`:
 |---|---|---|
 | `[civ+0x38]` | `Owner:4` | Current science topic (tech id); `-1` = none (“No Research”) |
 | `[civ+0x40]` | `Owner:12` | Current research progress |
-| `[civ+0x54]` / `[civ+0x58]` | `Owner:32/36` | Science output / surplus (floats) |
+| `[civ+0x54]` / `[civ+0x58]` | `Owner:32/36` | Reputation / reputation pending this tick (floats) |
 
 Research-topic display and the `No Research` branch are at `0x00554DE1` (`cmp [civ+0x38], -1`).
 

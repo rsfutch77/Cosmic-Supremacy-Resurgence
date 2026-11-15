@@ -20,6 +20,8 @@
       test_updater         Self-update: the release listing, download and
                            unpack limits, the signing identity, the swap
                            and putting the old build back. No game.
+      test_launcher_news   The news line under Multiplayer, read from the
+                           website and drawn as plain text. No game.
       test_save_protocol   The wire protocol to cs_server: slot allocation,
                            savegamelist format, blob round-trip. No game.
       test_save_message_path
@@ -90,6 +92,7 @@ Invoke-Test 'test_packaging.py'
 Invoke-Test 'test_signing.py'
 Invoke-Test 'test_build_and_log.py'
 Invoke-Test 'test_updater.py'
+Invoke-Test 'test_launcher_news.py'
 Invoke-Test 'test_ai_state_reset.py'
 Invoke-Test 'test_save_protocol.py'
 Invoke-Test 'test_save_message_path.py'

@@ -14,68 +14,89 @@ dropped and named.
 
 What is accepted
 ----------------
-**Ship orders**, `SHIP > DYNO`. A move or a colonise is three edits inside the
-ship's `DYNO`: the `SHCO` order-type byte (1 move, 3 colonise), the has-orders
-byte, and an appended `ROUT` plus `u32`. Taking the order is copying the
-`DYNO`.
+Each rule names the original client's commands it stands for
+(`online_commands.py`); a command's offline branch is the change it makes in a
+submission. `COMMANDS` lists all 56, those with no rule among them.
 
-**Research topic**, `OWNR > DATA > OWPR`, the technology id written twice, 8
-bytes apart, after the completed technologies (`research_offsets`): at `+32`
-and `+40` only while a civ has its two starting technologies. Copied field by field: the rest of `OWPR` is the civ's
-property block (coat-of-arms count, flags).
+**Ship orders** (`STCO`), `SHIP > DYNO`. A move or a colonise is three edits
+inside the ship's `DYNO`: the `SHCO` order-type byte (1 move, 3 colonise), the
+has-orders byte, and an appended `ROUT` plus `u32`. Taking the order is copying
+the `DYNO`.
 
-**Current production**, `PLNT > PLPR > PROD`: what the planet is building, its
-own fields and a nested section naming it (`WLTH` for nothing, `FCLT` with the
-facility type at `+13`, `SCAN`, or `SHIP` with a design id). Copied whole,
-unless the served item was hurried, which the UI does not let be swapped, it
-names any other kind, or it starts a facility the client would not allow
-(`facility_rules.can_build`: researched, fits the free space, the hyperspace
-pair, the per-planet limit), judged on the served planet and research. The
-planet's link to a production queue, `+2..+8`, is part of the copy and is
-judged with the queues below.
+**Research topic** (`STRS`), `OWNR > DATA > OWPR`, the technology id written
+twice, 8 bytes apart, after the completed technologies (`research_offsets`): at
+`+32` and `+40` only while a civ has its two starting technologies. Copied
+field by field: the rest of `OWPR` is the civ's property block (coat-of-arms
+count, flags).
 
-**Production queues**, `OWNR > DATA > SPQS`: a `u32` count, then one `SPRQ` per
-queue holding its object id, a `u32` count of the planets using it, a byte, and
-a `PRQU` with the name and the entries in the order the UI shows them. An entry
-is an entry id, a count, an infinite flag, a count mode and an item: a facility
-type (item type 0), a design (item type 8) or a scan (item type 9; route is 2,
-fleet 3). The client's queue editor offers nothing else. A planet joins a
-queue through its `PROD`: a flag at `+2`, the queue's id at `+3`, and at `+7`
-the id of the entry it is building, 0 after a manual override; Wealth clears
-all three and is the only way out. Carried for the civ's own queues and
-planets: creating, editing, reordering and deleting queues and entries, and the
-links with the production that comes with them. A new queue takes a free object
-id as a governor does and its planets follow it; a ship entry follows a
-renumbered design. Refused: an entry naming a design the civ does not hold in
-the merged galaxy, a facility type the galaxy lacks, a scan the scanning screen
-does not list, any other item type, which the editor never writes, a planet
-naming a queue or entry the merged galaxy lacks, and deleting a queue a planet
-still uses. The planet counts are recounted from the merged links. The civ's `OWPR` `+132..+143` move with any production change,
+**Current production** (`STPR`, `HRPR`), `PLNT > PLPR > PROD`: what the planet
+is building, its own fields and a nested section naming it (`WLTH` for nothing,
+`FCLT` with the facility type at `+13`, `SCAN`, or `SHIP` with a design id).
+Copied whole, unless the served item was hurried, which the UI does not let be
+swapped, it names any other kind, or it starts a facility the client would not
+allow (`facility_rules.can_build`: researched, fits the free space, the
+hyperspace pair, the per-planet limit), judged on the served planet and
+research. The planet's link to a production queue, `+2..+8`, is part of the
+copy and is judged with the queues below.
+
+**Production queues** (`NWSQ`, `MDSQ`, `DLSQ`, `STSQ`), `OWNR > DATA > SPQS`: a
+`u32` count, then one `SPRQ` per queue holding its object id, a `u32` count of
+the planets using it, a byte, and a `PRQU` with the name and the entries in the
+order the UI shows them. An entry is an entry id, a count, an infinite flag, a
+count mode and an item: a facility type (item type 0), a design (item type 8)
+or a scan (item type 9; route is 2, fleet 3). The client's queue editor offers
+nothing else. A planet joins a queue through its `PROD`: a flag at `+2`, the
+queue's id at `+3`, and at `+7` the id of the entry it is building, 0 after a
+manual override; Wealth clears all three and is the only way out. Carried for
+the civ's own queues and planets: creating, editing, reordering and deleting
+queues and entries, and the links with the production that comes with them. A
+new queue takes a free object id as a governor does and its planets follow it;
+a ship entry follows a renumbered design. Refused: an entry naming a design the
+civ does not hold in the merged galaxy, a facility type the galaxy lacks, a
+scan the scanning screen does not list, any other item type, which the editor
+never writes, a planet naming a queue or entry the merged galaxy lacks, and
+deleting a queue a planet still uses. The planet counts are recounted from the
+merged links. The civ's `OWPR` `+132..+143` move with any production change,
 queued or not, and are not carried.
 
-**Ship designs**, `OWNR > DATA > DSGN`. A new design arrives as a second
-`DSGN`/`SDPR` pair, the civ's design count raised by one and `SAVE+0` raised to
-the new object id. The client allocates a new object id as one past the object
-count, so two players designing on the same turn claim the same id; whoever is
-merged second is renumbered, along with the id in the `DSGN` payload and in
-any production queue that names it. A queue naming a design the galaxy does
-not hold makes the engine refuse the whole galaxy, so such a queue is refused.
-Deactivating or reactivating one of the civ's own designs is carried: the
-design's last byte (`ShipDesign+0x114`), 1 inactive. Any other edit, and
-deleting a design, are refused and named.
+**Ship designs** (`CRSD`, `TGSD`, `MOSD`, `RNSD`, `DLSD`), `OWNR > DATA >
+DSGN`. A new design arrives
+as a second `DSGN`/`SDPR` pair, the civ's design count raised by one and
+`SAVE+0` raised to the new object id. The client allocates a new object id as
+one past the object count, so two players designing on the same turn claim the
+same id; whoever is merged second is renumbered, along with the id in the
+`DSGN` payload and in any production queue that names it. A queue naming a
+design the galaxy does not hold makes the engine refuse the whole galaxy, so
+such a queue is refused. Deactivating or reactivating one of the civ's own
+designs is carried: the design's last byte (`ShipDesign+0x114`), 1 inactive.
+A name is 1 to 32 printable characters with no leading or trailing space or
+tab, not `Unnamed` in any case, and unlike the civ's other designs' names in
+any case (`0x0053A380`). Renaming one of the civ's own designs rewrites the
+name in its `SDPR` and is carried for any design. Modifying one rewrites its
+`SDPR` parts and deleting one removes its `DSGN` and lowers the count; both
+are carried only for a design not in use as served, as the Ship Design screen
+opens a design in use read-only and greys Delete (`0x0050E490`): no ship of
+the civ's is built to it, no planet of its builds it, no queue of its lists
+it, and no admiral rule of its holds its id. The editor keeps a modified
+design's name and owner. A civ's last design is not deleted, as the referee
+finds the count from a design. The space and cloaking checks the editor's OK
+makes (`0x004A5D40`) are not encoded for a new or a modified design.
 
 `OWPR` `+49`, `+77`, `+78`, `+100` and `+110` also move in a design submission
 and are not carried: they move without a design too and differ between
 identical designs, and `+100` is a counter the engine advances by 7 every tick.
 
-**People**: the citizen array in `PLNT > PLPR`, the stationed military array
-that follows it, and a ship's crew in `SHPR`, judged as one thing because
-conscription and crewing move people between them. A submission never ticks,
-so a civ's total people cannot change within it. Also: no existing soldier
-record may be altered, nobody changes hands, and a civ may not come back with
-fewer soldiers than it was served. The per-citizen value and opaque bytes are
-judged against the state served, across all three arrays at once. Across a
-tick the total does change: the engine's recruitment makes soldiers from food.
+**People** (`CHCZ`, `CRAS`, `RTMI`): the citizen array in `PLNT > PLPR`, the
+stationed military array that follows it, and a ship's crew in `SHPR`, judged
+as one thing because conscription and crewing move people between them. A
+submission never ticks, so a civ's people grow in none of the arrays within
+it. Retiring stationed military erases the chosen soldiers' records
+(`0x004F5220`) and nothing else, so everybody missing from a submission is a
+soldier retired; a citizen is drafted first. Also: no soldier becomes a
+citizen again, no existing soldier record is altered, and nobody changes
+hands. The per-citizen value and opaque bytes are judged against the state
+served, across all three arrays at once. Across a tick the total does change:
+the engine's recruitment makes soldiers from food.
 
 `PLPR+36` is a `u32` population count and `PLPR+40` begins that many
 nine-byte records, kept sorted by job:
@@ -95,69 +116,91 @@ jobs. People are carried only on the submitter's own planets and ships; a
 change on a planet or ship another civ owns is refused and named, its own
 citizens included, as the client has not been measured managing them.
 
-**Military recruitment rate**, `PLPR+27`, a percentage in one byte.
+**Military recruitment rate** (`PLRR`), `PLPR+27`, a percentage in one byte.
 
-**The setup prompts' confirms**, once each. The civ-trait prompt writes the
-ten trait values in `OWNR > CVTR` and sets a flag in `OWPR`; the homeworld
-prompt adds to the homeworld's three rate bytes (`PLPR+4..+6`) and its space
-(`PLPR+11`) and sets another. A confirm is carried only when its flag was
-clear as served and is set in the submission, and only as the dialog could
-have made it: trait values the dialog gives and rates within 25..80, spending
-`GSET.civilization_changes` or `GSET.homeworld_changes` exactly, on the planet
-the client takes for the homeworld (the one founded earliest). Without the
-confirm the prompt would come back on every served turn.
+**Facility sales** (`SLFC`), the planet's facility list in `PLPR`: a `u32`
+count, then `(type, count)` pairs. The planet screen's Sell sells one at a
+time (`PlanetProperties::SellFacility`, `0x004F8580`): the type's count drops
+by one, or the type leaves the list, and the civ is paid 5% of the type's
+cost from the client's facility table, halved in a speed galaxy and rounded
+up. Selling a hyperspace transmitter takes it out of the civ's energy links
+and selling a receiver empties the planet's. Carried for the civ's own
+planets, as lower counts of the types served; the referee pays the credits. A
+hurried ship keeps the shipyard and a hurried scan the Central Defense Agency
+(`0x004F5160`). A facility that appears, and a sale on another civ's planet,
+are refused.
 
-**The civ name and coat of arms**, once. Dialog 225 writes the name, the
-"Reveal True Player Name" checkbox and the arms id at the end of `OWPR`, and is
-offered while the name is empty. Carried only while the name is empty as
+**Energy links** (`STEL`), a planet's `ENLI`: a `u32` count of the
+transmitter planets a hyperspace receiver draws on, then their ids. The
+receiver's menu lists the civ's own planets holding a transmitter
+(`0x005251E0`) and a pick adds or removes one (`0x0046B4E0`). Carried for the
+civ's own planets with a receiver, as any set of those planets, judged after
+the sales above; an empty list is carried too.
+
+**The setup prompts' confirms** (`CUCV`, `CUHW`), once each. The civ-trait
+prompt writes the ten trait values in `OWNR > CVTR` and sets a flag in `OWPR`;
+the homeworld prompt adds to the homeworld's three rate bytes (`PLPR+4..+6`)
+and its space (`PLPR+11`) and sets another. A confirm is carried only when its
+flag was clear as served and is set in the submission, and only as the dialog
+could have made it: trait values the dialog gives and rates within 25..80,
+spending `GSET.civilization_changes` or `GSET.homeworld_changes` exactly, on
+the planet the client takes for the homeworld (the one founded earliest).
+Without the confirm the prompt would come back on every served turn.
+
+**The civ name and coat of arms** (`CNCA`), once. Dialog 225 writes the name,
+the "Reveal True Player Name" checkbox and the arms id at the end of `OWPR`,
+and is offered while the name is empty. Carried only while the name is empty as
 served, and only as the dialog's OK allows: 3 to 30 printable characters after
 trimming spaces and tabs, none matching another civ's player name or chosen
 name in any case, and an arms id from the player's own uploads (`arms`), or
 none. A name another civ took earlier in the same merge counts.
 
-**System renaming**, the `SUN ` section's name at `+24` in its payload. Allowed
-for a civ owning more than half of the system's settled planets in the served
-state; unowned planets do not count.
+**System renaming** (`SONA`), the `SUN ` section's name at `+24` in its
+payload. Allowed for a civ owning more than half of the system's settled
+planets in the served state; unowned planets do not count.
 
-**Planet renaming**, `PLNT` own payload `+24`: a `u32` length then the
-characters. Carried for planets the submitter owns. `EXSY` also holds names
-but is each civ's cache of names seen, not where a rename is authored, so it is
+**Planet renaming** (`SONA`), `PLNT` own payload `+24`: a `u32` length then the
+characters. Carried for planets the submitter owns. `EXSY` also holds names but
+is each civ's cache of names seen, not where a rename is authored, so it is
 excluded.
 
-**Governors**, `OWNR > DATA > GOVS`, and the planet's link to one, the last
-`u32` of its `PLNT`. Creating a governor appends a `GVNR` and raises `SAVE+0`
-to its id, so a new one is renumbered like a design when another player's
-design, governor or production queue took the id. Editing rewrites the
-`GVNR` in place, and deleting removes it. Assigning sets the planet's link; the
-client offers no way to unassign. Carried for the civ's own governors and
-planets, as records whose sections fit, with a printable name and at least one
-rule, which the client requires; the rules themselves are the engine's to run.
-Deleting a governor that still governs a planet is refused. Each `GVNR` counts
-the planets it governs, and the referee recounts that from the merged links.
+**Governors** (`NWGV`, `MDGV`, `DLGV`, `STGV`), `OWNR > DATA > GOVS`, and the
+planet's link to one, the last `u32` of its `PLNT`. Creating a governor appends
+a `GVNR` and raises `SAVE+0` to its id, so a new one is renumbered like a
+design when another player's design, governor or production queue took the id.
+Editing rewrites the `GVNR` in place, and deleting removes it. Assigning sets
+the planet's link; the client offers no way to unassign. Carried for the civ's
+own governors and planets, as records whose sections fit, with a printable name
+and at least one rule, which the client requires; the rules themselves are the
+engine's to run. Deleting a governor that still governs a planet is refused.
+Each `GVNR` counts the planets it governs, and the referee recounts that from
+the merged links.
 
-**Admirals**, `OWNR > DATA > ADMS`, and a ship's link to one, the `u32` after
-the has-orders byte in its `DYNO`. Creating, editing and deleting are carried
-as for governors: a new one raises `SAVE+0` and is renumbered when another
-player's new object took its id, and its ships follow. Carried for the civ's
-own admirals, as records with a printable name, one of the four types, and
-rules the client's reader knows, each a `RULE` byte and its section; the rules
-are the engine's to run. A ship may name 0 or any admiral its civ holds as
-merged. Deleting one that still commands a ship is refused, as the client
-greys it out. Each `ADML` counts the ships and fleets naming it, and the
-referee recounts that. A fleet names its admiral in its own `DYNO` as a ship
-does, and may name 0 or any admiral its civ holds. A ship leaving a fleet keeps
-the fleet's admiral or has none.
+**Admirals** (`NWAD`, `MDAD`, `DLAD`, `STAD`), `OWNR > DATA > ADMS`, and a
+ship's link to one, the `u32` after the has-orders byte in its `DYNO`.
+Creating, editing and deleting are carried as for governors: a new one raises
+`SAVE+0` and is renumbered when another player's new object took its id, and
+its ships follow. Carried for the civ's own admirals, as records with a
+printable name, one of the four types, and rules the client's reader knows,
+each a `RULE` byte and its section; the rules are the engine's to run. A ship
+may name 0 or any admiral its civ holds as merged. Deleting one that still
+commands a ship is refused, as the client greys it out. Each `ADML` counts the
+ships and fleets naming it, and the referee recounts that. A fleet names its
+admiral in its own `DYNO` as a ship does, and may name 0 or any admiral its civ
+holds. A ship leaving a fleet keeps the fleet's admiral or has none.
 
-**Diplomacy**, the treaty list after SAVE's last section and each civ's stance
-toward the civs it has met, in its `KNPL`. Carried as the client takes each
-step, applied to both civs at once:
+**Diplomacy** (`NWTR`, `MDTR`, `DLTR`), the treaty list after SAVE's last
+section and each civ's stance toward the civs it has met, in its `KNPL`.
+Carried as the client takes each step, applied to both civs at once:
 
 - Proposing: a new `TRTY` from the submitter to a civ it has met, dated this
   turn, of a kind the client offers, holding items the client writes.
   Renumbered like a design. A declaration of war is the same with kind 1 and
   status 3; it ends every treaty in force between the two and sets both
   stances to War, and is refused while they are at war or a cease-fire or
-  peace still binds them.
+  peace still binds them. In a galaxy whose `GSET` holds `waronly = 1` every
+  new treaty but war is refused, as the client greys "Propose New Treaty"
+  there (`0x442510`).
 - Withdrawing the submitter's own proposal; declining one made to it;
   deleting a declined one from its side.
 - Accepting one made to it: status, length (its `TRLE`, or what a stance
@@ -169,50 +212,80 @@ step, applied to both civs at once:
 A step on a treaty that the other party already changed in this merge is
 refused. Per-turn payments and a treaty running out are the engine's.
 
-**Display choices**, in the civ's own `KNPL` record for each civ it has met:
-whether that civ's territory (`+29`) and ships (`+30`) are drawn, and its
-colour, by stance (`+31` set) or the `B, G, R, A` colour at `+32`. Carried for
-the records the civ was served, each flag 0 or 1. They change only what the
-submitter's own map shows.
+**Display choices** (`STCL`, `TGST`, `TGSS`), in the civ's own `KNPL` record
+for each civ it has met: whether that civ's territory (`+29`) and ships (`+30`)
+are drawn, and its colour, by stance (`+31` set) or the `B, G, R, A` colour at
+`+32`. Carried for the records the civ was served, each flag 0 or 1. They
+change only what the submitter's own map shows.
 
-**Messages**, news items naming their title and body in `NWDB`, the galaxy's
-string table (`news.py`). A message is taken when the submitter's new `SENT`
-item names civs it has met, each once, and each of them holds a new
-`RECEIVED` item with the same body, titled `Message from <submitter> -
-Subject: <subject>` and naming the submitter, all dated this turn with no
-position. Its strings are renumbered into the merged table, its text is kept
-to the send dialog's rows and a bounded subject, holds no control character
-but line breaks and tabs in the body, and has its markup characters replaced
-by plain stand-ins. Each recipient's new-news flag is set. The submitter's own
-items may change their important mark, and its new-news flag may be cleared;
-any other change to a news list is refused.
+**The end-galaxy vote** (`SVUS`), the last byte of the civ's `OWNR > DATA > USSE`, 1
+when the Overview Screen's "Vote to End the Galaxy" box is ticked. Carried as 0
+or 1. Nothing acts on it; the referee archives the votes and the operator page
+shows them. The rest of `USSE` is the civ's interface settings and is not read.
 
-**Market trades**, `GLOB > RSMA`: five `i32` counts of the units the market
-holds, which a sale raises and a purchase lowers. How far each count moved is
-the civ's net trade in that resource. The referee prices it from the market as
-served, the one the player traded against, with the civ's trait 42, then moves the
-credits, stock and count itself; the submitted credits and stocks are not read.
-Sales go first. A sale of more than the civ holds, or a purchase it cannot pay
-for, is refused. Several trades in one resource are priced as one, so the
-credits can differ from the client's by a few when a player splits them.
+**Messages** (`SDNW`, `CHNW`, `SEEN`, `EDNW`), news items naming their title
+and body in `NWDB`, the galaxy's string table (`news.py`). A message is taken when the
+submitter's new `SENT` item names civs it has met, each once, and each of them
+holds a new `RECEIVED` item with the same body, titled `Message from
+<submitter> - Subject: <subject>` and naming the submitter, all dated this turn
+with no position. Its strings are renumbered into the merged table, its text is
+kept to the send dialog's rows and a bounded subject, holds no control
+character but line breaks and tabs in the body, and has its markup characters
+replaced by plain stand-ins. Each recipient's new-news flag is set. The
+submitter's own items may change their important mark, and its new-news flag
+may be cleared. A note to oneself is a kind-8 item in the civ's own list with
+its title, `Note - Subject: <subject>`, and its text inline and no string
+ids, recipients or position, dated this turn; the Note dialog needs a subject
+and a text (`0x004B0D80`) and limits neither. Writing one appends it with no
+new-news flag, and editing one (`EDNW`) replaces it whole, keeping only its
+important mark. Any other change to a news list is refused.
 
-**Fleets**, `GLXY > FLET`: the object header (object id, x, z, y, owner), a
-`DYNO` with the fleet's orders, and `FLDT`, a `u32`-length name, a `u32` count
-and one `SHPR` per ship. Ships leave `GLXY` while in a fleet. A `SHPR` ends
-with the id of the last fleet its ship was in, then the ship's own id.
-Forming, renaming, a fleet's orders (copied whole, as a ship's are), ships
-leaving and joining, one fleet joining another, and disbanding are carried for
-the civ's own fleets, as where the submission leaves each of its ships. Every
-ship keeps its `SHPR` as served, its crew judged with the people below; a ship
-leaving takes the fleet's position and its own submitted `DYNO`, and a fleet
-keeps its header. A new fleet raises `SAVE+0` and is renumbered like a design
-when another player's new object took its id. It is refused unless its id is
-new, it names the submitter, its name fits the client's 32 characters, and it
-holds at least one ship, each the submitter's as served, placed once in the
-submission, and all at one position. A ship joins only the civ's own fleet,
-at that fleet's position. Moving or giving away a fleet, a fleet not laid out
-as measured, and any change to another civ's fleet are refused. A refused
-step leaves its ships where they were served.
+**Scan reports** (`DLSC`), after the civ's designs in `OWNR > DATA`: a `u32`
+count, then one section per report named for its class (`SCPL`, `SCSY`,
+`SCRO`, `SCFL`, `SCML`, `SCTE`, `SCEG`, `SCLN`). The Scanning page deletes any
+of the civ's own reports (`0x0043C610`), with no other effect. Carried as the
+reports served, in order, less those deleted. Carrying out a scan (`DOSC`)
+is refused and named and the scan stays in stock: online the server answered
+with the reports, `OWPR` and `KNPL`; a scan posts a detection item to the
+scanned civ by the C runtime's `rand()`, and a fogged client cannot make a
+true report, so the report is the referee's to make.
+
+**Wormholes** (`CNWH`), `GLXY > WORM`: the object header, a `u32`, a string
+and last the id of the wormhole it is linked to, 0 for none. The Connect To
+menu opens on the civ's own unlinked wormhole and offers its other unlinked
+ones at any distance (`0x005080B0`); `CNWH` links the two to each other. An
+ally's wormhole is connected by a treaty instead, and no player command
+clears a link. Carried as two of the civ's own wormholes, unlinked as served,
+each naming the other.
+
+**Market trades** (`TRRS`), `GLOB > RSMA`: five `i32` counts of the units the
+market holds, which a sale raises and a purchase lowers. How far each count
+moved is the civ's net trade in that resource. The referee prices it from the
+market as served, the one the player traded against, with the civ's trait 42,
+then moves the credits, stock and count itself; the submitted credits and
+stocks are not read. Sales go first. A sale of more than the civ holds, or a
+purchase it cannot pay for, is refused. Several trades in one resource are
+priced as one, so the credits can differ from the client's by a few when a
+player splits them.
+
+**Fleets** (`MCFL`, `RNFL`, `DISS`, and `STCO` for orders), `GLXY > FLET`: the
+object header (object id, x, z, y, owner), a `DYNO` with the fleet's orders,
+and `FLDT`, a `u32`-length name, a `u32` count and one `SHPR` per ship. Ships
+leave `GLXY` while in a fleet. A `SHPR` ends with the id of the last fleet its
+ship was in, then the ship's own id. Forming, renaming, a fleet's orders
+(copied whole, as a ship's are), ships leaving and joining, one fleet joining
+another, and disbanding are carried for the civ's own fleets, as where the
+submission leaves each of its ships. Every ship keeps its `SHPR` as served, its
+crew judged with the people below; a ship leaving takes the fleet's position
+and its own submitted `DYNO`, and a fleet keeps its header. A new fleet raises
+`SAVE+0` and is renumbered like a design when another player's new object took
+its id. It is refused unless its id is new, it names the submitter, its name
+fits the client's 32 characters, and it holds at least one ship, each the
+submitter's as served, placed once in the submission, and all at one position.
+A ship joins only the civ's own fleet, at that fleet's position. Moving or
+giving away a fleet, a fleet not laid out as measured, and any change to
+another civ's fleet are refused. A refused step leaves its ships where they
+were served.
 
 What is refused
 ---------------
@@ -236,6 +309,73 @@ import inject_civ as icv
 import inject_design as idg
 import facility_rules
 import news
+
+# The original client's 56 commands, each with the rule above that carries its
+# effect, or None and what the command does. A command with no rule is refused
+# when it changes the galaxy, or changes nothing a submission carries.
+COMMANDS = {
+    'STCO': ('Ship orders', 'a ship or fleet course and order'),
+    'STRS': ('Research topic', 'the topic being researched'),
+    'STPR': ('Current production', 'what a planet builds'),
+    'HRPR': ('Current production', 'hurries what a planet builds'),
+    'NWSQ': ('Production queues', 'a new queue'),
+    'MDSQ': ('Production queues', 'edits a queue'),
+    'DLSQ': ('Production queues', 'deletes a queue'),
+    'STSQ': ('Production queues', "sets a planet's queue"),
+    'CRSD': ('Ship designs', 'a new design'),
+    'TGSD': ('Ship designs', "toggles a design's inactive byte"),
+    'CHCZ': ('People', 'ChangeCitizenJobs'),
+    'CRAS': ('People', "moves people between a planet's military and a crew"),
+    'PLRR': ('Military recruitment rate', "a planet's recruitment rate"),
+    'CUCV': ("The setup prompts' confirms", 'Customize Your Civilization'),
+    'CUHW': ("The setup prompts' confirms", 'Customize Your Home World'),
+    'CNCA': ('The civ name and coat of arms', 'name, checkbox and arms id'),
+    'SONA': ('Planet renaming', 'names a planet or a system'),
+    'NWGV': ('Governors', 'a new governor'),
+    'MDGV': ('Governors', 'edits a governor'),
+    'DLGV': ('Governors', 'deletes a governor'),
+    'STGV': ('Governors', "sets a planet's governor"),
+    'NWAD': ('Admirals', 'a new admiral'),
+    'MDAD': ('Admirals', 'edits an admiral'),
+    'DLAD': ('Admirals', 'deletes an admiral'),
+    'STAD': ('Admirals', "sets a ship's admiral"),
+    'NWTR': ('Diplomacy', 'proposes a treaty or declares war'),
+    'MDTR': ('Diplomacy', 'accepts, declines or withdraws a treaty'),
+    'DLTR': ('Diplomacy', 'deletes a treaty from its side'),
+    'STCL': ('Display choices', "a civ's colour, or colour by stance"),
+    'TGST': ('Display choices', "draws a civ's territory or not"),
+    'TGSS': ('Display choices', "draws a civ's ships or not"),
+    'SDNW': ('Messages', 'sends a message or writes a note'),
+    'CHNW': ('Messages', 'clears flags on news items'),
+    'SEEN': ('Messages', 'clears one of three new-item flags'),
+    'TRRS': ('Market trades', 'buys or sells resources'),
+    'MCFL': ('Fleets', 'puts selected ships into a new or named fleet'),
+    'RNFL': ('Fleets', 'renames a fleet'),
+    'DISS': ('Fleets', 'disbands a fleet'),
+    # Runs a governor on one planet or all it governs; the other rules
+    # judge what its rules change.
+    'RNGV': (None, 'runs a governor now'),
+    'SLFC': ('Facility sales', 'sells a facility'),
+    'RTMI': ('People', 'retires stationed military'),
+    'STEL': ('Energy links', "sets a planet's hyperspace energy links, `ENLI`"),
+    'CNWH': ('Wormholes', "connects two of the civ's wormholes"),
+    'DLSC': ('Scan reports', 'deletes a scan report'),
+    'MOSD': ('Ship designs', 'modifies a design'),
+    'RNSD': ('Ship designs', 'renames a design'),
+    'DLSD': ('Ship designs', 'deletes a design'),
+    'EDNW': ('Messages', 'edits a note'),
+    # Refused and named: the report is the referee's to make (Scan reports).
+    'DOSC': (None, 'carries out scans'),
+    # Only the vote byte of the civ's `USSE` is carried.
+    'SVUS': ('The end-galaxy vote', 'saves user settings, the vote among them'),
+    # Online only: the offline branch changes nothing.
+    'RQTM': (None, 'asks for the time after a galaxy loads'),
+    'RSMA': (None, "asks for the market's prices"),
+    'RQTN': (None, 'asks for a replay turn'),
+    'RQSV': (None, 'asks for a replay save'),
+    'STTP': (None, 'a setting from the team dialog'),
+    'ALIV': (None, 'keep-alive'),
+}
 
 # The research topic is written twice in a civ's OWPR, 8 bytes apart, after a
 # map (u32 count at +8, 8-byte pairs) and the completed technologies (u32 count,
@@ -306,6 +446,7 @@ DEFAULT_SUN_NAME = b'Unnamed'
 POP_COUNT_OFF = 36
 POP_ARRAY_OFF = 40
 POP_RECORD = 9
+POP_ARRIVED_OFF = 7             # u16, the turn the citizen was born or arrived
 JOB_IDS = {0: 'farmer', 1: 'worker', 2: 'scientist', 5: 'miner', 6: 'banker'}
 
 # A soldier is the same nine-byte record with this job id, kept in a second
@@ -336,7 +477,8 @@ CREW_ARRAY_OFF = 8
 # Immediately before a civ's first `DSGN`, in `DATA`'s own bytes, sits a `u32`
 # count of that civ's designs. The readers are `inject_design.py`'s.
 DESIGN_COUNT_BEFORE = 4     # the count dword, this far before the first DSGN
-MAX_DESIGN_NAME = 15        # the client's name buffer, per inject_design
+MAX_DESIGN_NAME = 32        # the edit controls hold 32 (EM_LIMITTEXT at 0x004B087C)
+RESERVED_DESIGN_NAME = 'UNNAMED'   # what an empty name becomes, in any case
 
 # A civ's governors are in its `OWNR > DATA > GOVS`: a u32 count, then one
 # `GVNR` per governor, in creation order:
@@ -384,25 +526,39 @@ FOOD_CAP_OFF = 19
 FACILITY_AFTER_MILITARY = 1
 FACILITY_RECORD = 8
 
-# The block between a colonised planet's `PROD` and its `ENLI`: 51 bytes, laid
-# out below as offsets from the end of `PROD`. A planet given an owner without
-# being colonised (only synthetic test galaxies) carries a 35-byte block
-# without these fields.
+# Selling a facility (`SLFC`). The share is a double at 0x00753CF8 that the
+# engine stores as a float; above the epsilon (0x00753CF0) it rounds up.
+SELL_SHARE = 0.05000000074505806
+SELL_EPSILON = 1e-7
+SHIPYARD = 2                   # facility types the Sell button protects
+CDA = 8
+
+# The block between a planet's `PROD` and its `ENLI`, as offsets from the end
+# of `PROD`: the population history, the turns-since-acquisition counter, the
+# conqueror list, the rebellion counter, then the resource deposit. Each list
+# entry is a ruler's influence on the people; a planet's loyalty is derived
+# from it and each citizen's origin and arrival turn (`sim.economy.planet_loyalty`).
+# One ruler gives 51 bytes, each further ruler 16 more; an empty list (an
+# owner set without colonising, only in synthetic galaxies) gives 35.
 #
-# The founding turn is a u32 here and again at `PLPR+0`; a homeworld reads 0
-# with an age equal to the turn. The population field equals the citizen
-# count, and the seven u16 after it are earlier turns' populations (newest
-# first, some carrying 0x1000, all zero at generation). A generated homeworld
-# reads 1 at +16 and 10 at +47.
+# The founding turn is a u32 here and again at `PLPR+0`; a homeworld reads 0.
+# The population field equals the citizen count, and the seven u16 after it
+# are earlier turns' populations (newest first, some carrying 0x1000, all zero
+# at generation). A generated homeworld reads 1 at +16 and mines 10 a turn.
 SETTLED_LEN = 51
 SETTLED_POP_OFF = 0             # u16
 SETTLED_HISTORY_OFF = 2         # SETTLED_HISTORY_LEN u16s
 SETTLED_HISTORY_LEN = 7
-SETTLED_COUNTER_OFF = 16        # u32, undecoded
-SETTLED_OWNER_OFF = 24          # u32, the owning civ's object id
-SETTLED_AGE_OFF = 28            # f32, turns since founded
-SETTLED_FOUNDED_OFF = 32        # u32, the turn it was founded
-SETTLED_LAST_OFF = 47           # u32, undecoded
+SETTLED_COUNTER_OFF = 16        # u32, turns since acquisition, capped at 8 (Planet:368)
+INFLUENCE_COUNT_OFF = 20        # u32, rulers in the conqueror list
+INFLUENCE_AT = 24               # the list (Planet:384)
+INFLUENCE_RECORD = 16           # owner id, f32 influence, first turn, last turn
+RULING = -1                     # the last turn of the current ruler's entry
+SETTLED_OWNER_OFF = 24          # u32, the first ruler: the owner, on a planet never taken
+SETTLED_AGE_OFF = 28            # f32, its influence: +1 a turn plus soldiers, up to 100
+SETTLED_FOUNDED_OFF = 32        # u32, the turn its rule began
+SETTLED_LAST_OFF = 47           # u32, the deposit's rate per miner, with one ruler
+UNREST_AFTER_LIST = 0           # u16, turns in a row below 30% loyalty (Planet:396)
 FOUNDED_OFF = 0                 # u32 at PLPR+0, the founding turn again
 PROD_HURRIED_OFF = 8            # PROD's own payload begins after its header
 CREDITS_AFTER_ID = 20           # past the object id, which is itself past
@@ -516,6 +672,34 @@ def read_ship(blob, sec):
     out.update(dyno=kids[0][2], shpr=kids[1][3], shpr_version=kids[1][1],
                last_fleet=ids[0])
     return out
+
+
+def repair_donor_tails(blob, log=print):
+    """`blob` with every GLXY SHIP whose SHPR ends by naming another ship
+    rewritten to name itself, in place.
+
+    A ship `inject_ship.py` cloned before `f4fb9f7` names its donor there,
+    and inside a fleet that id is the ship's only identity. The object
+    header's id is the ship's.
+    """
+    out = None
+    tree = sp.parse_blob(blob)
+    glxy = next(tree[0].find('GLXY'), None)
+    for sec in (glxy.children if glxy is not None else ()):
+        if sec.tag != b'SHIP':
+            continue
+        ship = read_ship(blob, sec)
+        if ship['why'] != 'its SHPR does not end by naming it':
+            continue
+        shpr = next(sec.find('SHPR'))
+        ids = shpr_ids(ship['shpr'])
+        if ids is None:
+            continue
+        out = out if out is not None else bytearray(blob)
+        struct.pack_into('<I', out, shpr.end - 4, ship['oid'])
+        log(f'  ship {ship["oid"]}: its SHPR named ship {ids[1]}, now '
+            f'itself')
+    return bytes(out) if out is not None else blob
 
 
 def read_fleet(blob, sec):
@@ -915,6 +1099,12 @@ def citizens_of(raw):
     return out
 
 
+def arrived(citizen):
+    """The turn a `citizens_of` record was born or arrived."""
+    _job, _owner, extra, rest = citizen
+    return extra | rest[2] << 8
+
+
 def citizen_bytes(raw):
     """The array's own bytes, for copying, or None when it is unreadable."""
     if citizens_of(raw) is None:
@@ -975,17 +1165,19 @@ def people_acceptable(served, submitted, civ_oid):
         move soldiers between the civ's own planets and ships
         turn a citizen into a soldier
         reassign jobs among citizens
+        retire soldiers, who leave the galaxy
 
     What it may not do:
 
-        change the total number of people it holds
-        come back with fewer soldiers than it was served
+        add people
+        turn a soldier back into a citizen
         alter an existing soldier's record
         change who owns anybody
         invent per-citizen values
 
-    The total holds within a submission only; across a tick the engine's
-    recruitment makes soldiers from food without costing a citizen.
+    Every person missing from a submission is a soldier retired, as no other
+    command removes anybody; a citizen is drafted first. Across a tick the
+    engine's recruitment makes soldiers from food without costing a citizen.
     """
     import collections
     pa, sa = population(served, civ_oid)
@@ -997,20 +1189,22 @@ def people_acceptable(served, submitted, civ_oid):
 
     cit_a, sol_a = _everyone(pa, sa)
     cit_b, sol_b = _everyone(pb, sb)
-    if len(sol_b) < len(sol_a):
-        return (False, f'{len(sol_a)} soldier(s) served and {len(sol_b)} came '
-                f'back; retiring from service is not carried yet')
-    if len(cit_a) + len(sol_a) != len(cit_b) + len(sol_b):
+    retired = len(cit_a) + len(sol_a) - len(cit_b) - len(sol_b)
+    if retired < 0:
         return (False, f'{len(cit_a) + len(sol_a)} people served and '
                 f'{len(cit_b) + len(sol_b)} came back')
-    if collections.Counter(sol_a) - collections.Counter(sol_b):
+    if len(cit_b) > len(cit_a):
+        return (False, f'{len(cit_a)} citizen(s) served and {len(cit_b)} came '
+                f'back; no command turns a soldier back into a citizen')
+    gone = collections.Counter(sol_a) - collections.Counter(sol_b)
+    if sum(gone.values()) > retired:
         return (False, "an existing soldier's record was rewritten rather than "
-                "moved")
+                "moved or retired")
     owners_a = collections.Counter([c[1] for c in cit_a]
                                    + [_owner_of(r) for r in sol_a])
     owners_b = collections.Counter([c[1] for c in cit_b]
                                    + [_owner_of(r) for r in sol_b])
-    if owners_a != owners_b:
+    if owners_b - owners_a:
         return False, 'somebody changed hands'
     bad = {c[0] for c in cit_b} - set(JOB_IDS)
     if bad:
@@ -1071,6 +1265,83 @@ def foreign_people_refusals(planets, crews, submitted, civ_oid, names):
             out.append(f"ship {oid}: crew DROPPED, owned by "
                        f"{names.get(owner, owner)}")
     return out
+
+
+# A wormhole is a `WORM` v0 among `GLXY`'s children, after its objects (writer
+# 0x004FEF50): the object header (id, x, z, y, owner), a u32, a u32-length
+# string, and last the object id of the wormhole it is linked to, 0 for none.
+WORM_LINK_BACK = 4
+
+
+def wormholes(blob):
+    """{wormholeObjectId: (owner, linked id, payload bytes)}."""
+    tree = sp.parse_blob(blob)
+    glxy = next(tree[0].find('GLXY'))
+    out = {}
+    for sec in glxy.find('WORM'):
+        if sec.size < OBJECT_HEADER + WORM_LINK_BACK:
+            continue
+        oid, _x, _z, _y, owner = struct.unpack_from('<IfffI', blob,
+                                                    sec.payload)
+        link = struct.unpack_from('<I', blob, sec.end - WORM_LINK_BACK)[0]
+        out[oid] = (owner, link, bytes(blob[sec.payload:sec.end]))
+    return out
+
+
+def set_wormhole_link(blob, oid, link):
+    """`blob` with one wormhole's link set. Size does not change."""
+    tree = sp.parse_blob(blob)
+    glxy = next(tree[0].find('GLXY'))
+    for sec in glxy.find('WORM'):
+        if struct.unpack_from('<I', blob, sec.payload)[0] == oid:
+            out = bytearray(blob)
+            struct.pack_into('<I', out, sec.end - WORM_LINK_BACK, link)
+            return bytes(out)
+    raise KeyError(oid)
+
+
+def wormhole_orders(served, submitted, civ_oid):
+    """([(a, b)], refusals): the pairs of the civ's own wormholes it connected.
+
+    The Connect To menu (`0x005080B0`) opens on the civ's own unlinked
+    wormhole and lists every other unlinked one it owns, at any distance;
+    `CNWH` links the two to each other. An ally's wormhole is offered too, but
+    picking it proposes a treaty instead. A link is never cleared by a player.
+    """
+    was, now = wormholes(served), wormholes(submitted)
+    pairs, refused, seen = [], [], set()
+    for oid in sorted(set(was) | set(now)):
+        if oid not in was or oid not in now:
+            refused.append(f'wormhole {oid} DROPPED, it was '
+                           f'{"added" if oid in now else "removed"}')
+            continue
+        (owner, link_a, raw_a), (_o, link_b, raw_b) = was[oid], now[oid]
+        if raw_a == raw_b or oid in seen:
+            continue
+        other = now.get(link_b)
+        why = None
+        if raw_a[:-WORM_LINK_BACK] != raw_b[:-WORM_LINK_BACK]:
+            why = 'it came back changed beyond its link'
+        elif owner != civ_oid:
+            why = f"it is civ {owner}'s"
+        elif link_a:
+            why = 'it was already linked'
+        elif link_b not in was or link_b == oid:
+            why = f'it names {link_b}, which is not another wormhole'
+        elif was[link_b][0] != civ_oid:
+            why = (f'wormhole {link_b} is not the civ\'s; an ally\'s is '
+                   f'connected by treaty')
+        elif was[link_b][1] or other[1] != oid:
+            why = f'wormhole {link_b} was linked, or does not name it back'
+        elif other[2][:-WORM_LINK_BACK] != was[link_b][2][:-WORM_LINK_BACK]:
+            why = f'wormhole {link_b} came back changed beyond its link'
+        if why:
+            refused.append(f'wormhole {oid} connection DROPPED, {why}')
+            seen.add(oid)
+            continue
+        pairs.append((oid, link_b))
+        seen.update((oid, link_b))
+    return pairs, refused
 
 
 def systems(blob):
@@ -1342,8 +1613,10 @@ def with_prod_design(prod, oid):
     return bytes(out)
 
 
-def design_name_acceptable(name):
-    """(ok, reason) for a submitted design name."""
+def design_name_acceptable(name, others=()):
+    """(ok, reason) for a design name, as the client's check `0x0053A380` and
+    the edit controls it follows allow. `others` are the civ's other designs'
+    names."""
     if name is None:
         return False, 'the record does not parse'
     raw = name.encode('latin1')
@@ -1354,7 +1627,74 @@ def design_name_acceptable(name):
                 f'client offers holds {MAX_DESIGN_NAME}')
     if any(b < 0x20 or b > 0x7e for b in raw):
         return False, 'the name holds bytes outside printable ASCII'
+    if name != name.strip(' \t'):
+        return False, 'the name has spaces the client trims'
+    if name.upper() == RESERVED_DESIGN_NAME:
+        return False, f'{name!r} is reserved for a design left unnamed'
+    if name.upper() in {o.upper() for o in others if o is not None}:
+        return (False, f'this civ already owns one named {name!r} and the '
+                f'client requires a name to be unique within a civ, '
+                f'whatever its case')
     return True, ''
+
+
+def designs_in_use(blob, civ_oid):
+    """{designObjectId: reason} for a civ's designs the Ship Design screen
+    shows as in use (`0x0050E490`): built into one of its ships, being built
+    or queued on one of its planets or queues, or named by one of its
+    admirals' rules. In use, a design opens read-only and Delete is greyed.
+
+    An admiral's rules are not decoded, so any rule holding the design's id
+    as a u32 counts."""
+    out = {}
+    mine = designs_of(blob, civ_oid)
+    for ship, (owner, shpr) in sorted(_ship_crew_index(blob).items()):
+        if owner == civ_oid and shpr and len(shpr) >= 4:
+            d = struct.unpack_from('<I', shpr, 0)[0]
+            out.setdefault(d, f'ship {ship} is built to it')
+    for planet, (owner, prod, _plpr, _nm) in sorted(planet_index(blob).items()):
+        if owner == civ_oid and prod_builds(prod) is not None:
+            out.setdefault(prod_builds(prod), f'planet {planet} is building it')
+    for qid, record in queues_of(blob, civ_oid) or ():
+        for _e, item_type, item, _at in read_queue(record)[0] or ():
+            if item_type == ITEM_SHIP:
+                out.setdefault(item, f'production queue {qid} lists it')
+    for aid, record in admirals_of(blob, civ_oid) or ():
+        for d in mine:
+            if struct.pack('<I', d) in record[8 + ADML_FIXED:]:
+                out.setdefault(d, f'admiral {aid} names it in a rule')
+    return {d: why for d, why in out.items() if d in mine}
+
+
+def remove_design(blob, civ_oid, design_oid):
+    """`blob` without one of a civ's designs, its design count lowered."""
+    secs, tree = design_sections(blob)
+    for oid, data, designs in secs:
+        if oid != civ_oid:
+            continue
+        hit = next((d for d in designs if struct.unpack_from(
+            '<I', blob, d.payload)[0] == design_oid), None)
+        if hit is None:
+            raise KeyError(design_oid)
+        count_at = designs[0].start - DESIGN_COUNT_BEFORE - data.payload
+        body = bytearray(blob[data.payload:data.end])
+        struct.pack_into('<I', body, count_at, len(designs) - 1)
+        del body[hit.start - data.payload:hit.end - data.payload]
+        return sp.replace_payload(blob, tree, data, bytes(body))
+    raise SystemExit(f'civ {civ_oid} is not in this blob')
+
+
+def replace_design(blob, design_oid, record):
+    """`blob` with one design's whole `DSGN` section replaced."""
+    secs, tree = design_sections(blob)
+    for _oid, data, designs in secs:
+        for d in designs:
+            if struct.unpack_from('<I', blob, d.payload)[0] != design_oid:
+                continue
+            body = bytearray(blob[data.payload:data.end])
+            body[d.start - data.payload:d.end - data.payload] = record
+            return sp.replace_payload(blob, tree, data, bytes(body))
+    raise KeyError(design_oid)
 
 
 def add_design(blob, civ_oid, record):
@@ -1387,63 +1727,163 @@ def add_design(blob, civ_oid, record):
     raise SystemExit(f'civ {civ_oid} is not in this blob')
 
 
-def design_orders(served, submitted, civ_oid):
-    """([(objectId, design)], [(objectId, inactive)], [refusals]) for one civ's
-    ship designs.
+def design_orders(served, submitted, civ_oid, in_use=None):
+    """(new, toggled, edited, deleted, refusals) for one civ's ship designs.
 
-    `served` and `submitted` are `design_index` results. A design is new when
-    the submission holds one the served state does not. A design whose record
-    differs only in its last byte was deactivated or reactivated. Other edits,
-    deleting, and touching another civ's design are refused and named.
+    `served` and `submitted` are `design_index` results and `in_use` is
+    `designs_in_use` of the state served. `new` is [(objectId, design)] for
+    designs the served state lacks, `toggled` [(objectId, inactive)] for a
+    record that differs only in its last byte, `edited` [(objectId, record)]
+    for a rename or a modified design, and `deleted` the object ids deleted.
+    Touching another civ's design is refused and named.
     """
-    new, toggled, refused = [], [], []
+    in_use = in_use or {}
+    new, toggled, edited, deleted, refused = [], [], [], [], []
+    names = {k: v['name'] for k, v in submitted.items() if v['civ'] == civ_oid}
 
     for oid in sorted(set(served) - set(submitted)):
-        whose = 'its own' if served[oid]['civ'] == civ_oid else "another civ's"
-        refused.append(f'design {oid} ({served[oid]["name"]!r}) DROPPED, it is '
-                       f'missing from the submission and is {whose}; deleting '
-                       f'a design is not carried yet')
+        label = f'design {oid} ({served[oid]["name"]!r})'
+        if served[oid]['civ'] != civ_oid:
+            refused.append(f"{label} DROPPED, it is missing from the "
+                           f"submission and is another civ's")
+        elif oid in in_use:
+            refused.append(f'{label} deletion DROPPED, it is in use: '
+                           f'{in_use[oid]}, and the client greys Delete out')
+        elif not any(v['civ'] == civ_oid for v in submitted.values()):
+            refused.append(f'{label} deletion DROPPED, it is the civ\'s last '
+                           f'design and the referee finds the design count '
+                           f'from a design')
+        else:
+            deleted.append(oid)
 
     for oid in sorted(set(served) & set(submitted)):
-        was, now = served[oid]['record'], submitted[oid]['record']
-        if now == was:
+        was, now = served[oid], submitted[oid]
+        if now['record'] == was['record']:
             continue
-        if (len(now) == len(was) and now[:-1] == was[:-1]
-                and now[-1] in (0, 1)):
-            if served[oid]['civ'] != civ_oid:
-                refused.append(f'design {oid} ({served[oid]["name"]!r}) '
-                               f"(de)activation DROPPED, it is another civ's")
-            else:
-                toggled.append((oid, bool(now[-1])))
+        label = f'design {oid} ({was["name"]!r})'
+        if was['civ'] != civ_oid or now['civ'] != civ_oid:
+            refused.append(f"{label} DROPPED, it is another civ's")
             continue
-        refused.append(f'design {oid} ({served[oid]["name"]!r}) DROPPED, it '
-                       f'came back changed; editing a design is not carried '
-                       f'yet')
+        if (len(now['record']) == len(was['record'])
+                and now['record'][:-1] == was['record'][:-1]
+                and now['record'][-1] in (0, 1)):
+            toggled.append((oid, bool(now['record'][-1])))
+            continue
+        if now['name'] is None or was['name'] is None:
+            refused.append(f'{label} DROPPED, the record does not parse')
+            continue
+        if (now['record'][-1] not in (0, 1)
+                or now['claims'] != was['claims']
+                or _design_versions(now['record'])
+                != _design_versions(was['record'])):
+            refused.append(f'{label} DROPPED, it came back changed beyond its '
+                           f'name, parts and inactive byte')
+            continue
+        if now['name'] != was['name']:
+            ok, why = design_name_acceptable(
+                now['name'], [n for k, n in names.items() if k != oid])
+            if not ok:
+                refused.append(f'{label} rename DROPPED, {why}')
+                continue
+        if now['parts'] != was['parts'] and oid in in_use:
+            refused.append(f'{label} edit DROPPED, it is in use: '
+                           f'{in_use[oid]}, and the client opens it read-only')
+            continue
+        edited.append((oid, now['record']))
 
     for oid in sorted(set(submitted) - set(served)):
         d = submitted[oid]
-        ok, why = design_name_acceptable(d['name'])
-        if not ok:
-            refused.append(f'design {oid} DROPPED, {why}')
-            continue
         if d['civ'] != civ_oid:
             refused.append(f'design {oid} ({d["name"]!r}) DROPPED, it arrived '
                            f"under another civ's OWNR")
+            continue
+        ok, why = design_name_acceptable(
+            d['name'], [n for k, n in names.items() if k != oid])
+        if not ok:
+            refused.append(f'design {oid} DROPPED, {why}')
             continue
         if d['claims'] != civ_oid:
             refused.append(f'design {oid} ({d["name"]!r}) DROPPED, its payload '
                            f'names civ {d["claims"]} as the owner, not the '
                            f'submitter')
             continue
-        siblings = {v['name'] for k, v in submitted.items()
-                    if v['civ'] == civ_oid and k != oid}
-        if d['name'] in siblings:
-            refused.append(f'design {oid} DROPPED, this civ already owns one '
-                           f'named {d["name"]!r} and the client requires a '
-                           f'name to be unique within a civ')
-            continue
         new.append((oid, d))
-    return new, toggled, refused
+    return new, toggled, edited, deleted, refused
+
+
+def _design_versions(record):
+    """The `DSGN` and `SDPR` section versions of a whole `DSGN` record."""
+    return (struct.unpack_from('<I', record, 4)[0] >> sp.VERSION_SHIFT,
+            struct.unpack_from('<I', record, 16)[0] >> sp.VERSION_SHIFT)
+
+
+# A civ's scan reports follow its designs in `DATA` (writer 0x0053B5F0): a u32
+# count, then one section per report named for its class (`SCPL` planetary,
+# `SCSY`, `SCRO` route, `SCFL`, `SCML`, `SCTE`, `SCEG`, `SCLN`), each holding
+# the type id, a `SCAN` header and the class's own payload. The civ's news
+# count follows them.
+REPORT_TAGS = (b'SCPL', b'SCSY', b'SCRO', b'SCFL', b'SCML', b'SCTE', b'SCEG',
+               b'SCLN')
+
+
+def reports_of(blob, civ_oid):
+    """[whole report section] of a civ in order, or None when the block after
+    its designs does not read as one."""
+    found = _report_block(blob, civ_oid)
+    return None if found is None else found[3]
+
+
+def _report_block(blob, civ_oid):
+    """(tree, DATA section, (start, end) of the block, [reports]) or None."""
+    secs, tree = design_sections(blob)
+    for oid, data, designs in secs:
+        if oid != civ_oid:
+            continue
+        if not designs:
+            return None
+        at = designs[-1].end
+        if at + 4 > data.end:
+            return None
+        n = struct.unpack_from('<I', blob, at)[0]
+        p, out = at + 4, []
+        for _ in range(n):
+            if p + 8 > data.end or bytes(blob[p:p + 4]) not in REPORT_TAGS:
+                return None
+            end = p + 8 + (struct.unpack_from('<I', blob, p + 4)[0]
+                           & sp.SIZE_MASK)
+            if end > data.end:
+                return None
+            out.append(bytes(blob[p:end]))
+            p = end
+        return tree, data, (at, p), out
+    return None
+
+
+def set_reports(blob, civ_oid, reports):
+    """`blob` with a civ's scan reports replaced by `reports`."""
+    found = _report_block(blob, civ_oid)
+    if found is None:
+        raise SystemExit(f'civ {civ_oid} has no readable scan report block')
+    tree, data, (at, end), _old = found
+    body = bytearray(blob[data.payload:data.end])
+    body[at - data.payload:end - data.payload] = (
+        struct.pack('<I', len(reports)) + b''.join(reports))
+    return sp.replace_payload(blob, tree, data, bytes(body))
+
+
+def report_orders(served, submitted):
+    """(kept, deleted, made, why) for a civ's scan reports.
+
+    `kept` is what the civ keeps of the reports served, `deleted` how many it
+    deleted, `made` how many new reports the submission holds, and `why` a
+    reason when the served reports came back other than in order, less some.
+    """
+    kept = [r for r in submitted if r in served]
+    made = len(submitted) - len(kept)
+    it = iter(served)
+    if not all(any(r == s for s in it) for r in kept):
+        return list(served), 0, made, 'the reports served came back reordered'
+    return kept, len(served) - len(kept), made, ''
 
 
 def set_design_inactive(blob, design_oid, inactive):
@@ -1729,13 +2169,149 @@ def set_facilities(blob, planet_oid, pairs):
     return sp.replace_payload(blob, tree, plpr, body)
 
 
-def _settled_at(blob, plpr):
-    """Blob offset of a planet's settled block, or None when it has none."""
+def sale_refund(blob, facility_type, count):
+    """Credits the engine pays for selling `count` of a facility type.
+
+    `PlanetProperties::SellFacility` (`0x004F8580`) pays the type's cost from
+    the client's facility table (`0x00529D80`), halved in a speed galaxy, times
+    0.05 held as a float and rounded up, for each one sold.
+    """
+    costs = facility_rules.costs(facility_rules.content_version(blob))
+    if not 0 <= facility_type < len(costs):
+        return 0
+    cost = costs[facility_type] // (2 if gset_value(blob, 'speed') else 1)
+    each = struct.unpack('<f', struct.pack('<f', cost * SELL_SHARE))[0]
+    whole = int(each)
+    return (whole + 1 if each - whole > SELL_EPSILON else whole) * count
+
+
+def sale_refusal(prod, facility_type):
+    """Why the planet screen's Sell button refuses a facility type, or None.
+
+    `0x004F5160`: a hurried item keeps the facility building it, the shipyard
+    for a ship and the Central Defense Agency for a scan.
+    """
+    if not is_hurried(prod):
+        return None
+    kind = prod_kind(prod)
+    if facility_type == SHIPYARD and kind == b'SHIP':
+        return 'the shipyard is building a hurried ship'
+    if facility_type == CDA and kind == b'SCAN':
+        return 'the Central Defense Agency is building a hurried scan'
+    return None
+
+
+def facility_sales(served, submitted):
+    """({type: count sold}, reason) between two facility lists.
+
+    A sale lowers a type's count or removes the type; nothing else changes a
+    planet's list within a turn. The reason is empty when the change is sales.
+    """
+    have, now = dict(served), dict(submitted)
+    if len(have) != len(served) or len(now) != len(submitted):
+        return {}, 'a facility type is listed twice'
+    if [t for t, _k in submitted] != [t for t, _k in served if t in now]:
+        return {}, 'the list is not the one served, less what was sold'
+    sold = {}
+    for t, k in served:
+        left = now.get(t, 0)
+        if left > k:
+            return {}, f'facility {t} went {k} -> {left}; no command builds one'
+        if left < k:
+            sold[t] = k - left
+    if any(k < 1 for k in now.values()):
+        return {}, 'a type is listed with no facility'
+    return sold, ''
+
+
+def enli_of(blob):
+    """{planetObjectId: [transmitter planet ids]} from each planet's `ENLI`."""
+    out = {}
+    tree = sp.parse_blob(blob)
+    glxy = next(tree[0].find('GLXY'))
+    for sola in (c for c in glxy.children if c.tag == b'SOLA'):
+        for sec in sola.find('PLNT'):
+            plpr = next(sec.find('PLPR'), None)
+            enli = next(plpr.find('ENLI'), None) if plpr else None
+            if enli is None:
+                continue
+            n = struct.unpack_from('<I', blob, enli.payload)[0]
+            if enli.size != 4 + 4 * n:
+                continue
+            oid = struct.unpack_from('<I', blob, sec.payload)[0]
+            out[oid] = list(struct.unpack_from(f'<{n}I', blob,
+                                               enli.payload + 4))
+    return out
+
+
+def set_enli(blob, planet_oid, ids):
+    """Write a planet's energy links. Size changes with the count."""
+    tree, plpr = _planet_plpr(blob, planet_oid)
+    enli = next(plpr.find('ENLI'), None)
+    if enli is None:
+        raise SystemExit(f'planet {planet_oid} has no ENLI')
+    body = struct.pack(f'<I{len(ids)}I', len(ids), *ids)
+    return sp.replace_payload(blob, tree, enli, body)
+
+
+def energy_link_refusal(planet_oid, links, civ_oid, served_planets):
+    """Why the receiver's link menu could not have written `links`, or None.
+
+    The menu (`0x0046B7xx`) opens on a planet with a receiver and lists the
+    civ's own planets holding a transmitter (`0x005251E0`); a pick adds or
+    removes that planet (`0x0046B4E0`).
+    """
+    owner, _prod, plpr, _nm = served_planets[planet_oid]
+    if owner != civ_oid:
+        return 'the planet is not the civ\'s'
+    if dict(facilities_of(plpr) or ()).get(facility_rules.RECEIVER, 0) < 1:
+        return 'the planet has no hyperspace receiver'
+    if len(set(links)) != len(links):
+        return 'a transmitter is linked twice'
+    for t in links:
+        o, _p, tp, _n = served_planets.get(t, (None, None, None, None))
+        if o != civ_oid or dict(facilities_of(tp) or ()).get(
+                facility_rules.TRANSMITTER, 0) < 1:
+            return (f'planet {t} is not one of the civ\'s planets with a '
+                    f'hyperspace transmitter')
+    return None
+
+
+def _block_at(blob, plpr):
+    """(blob offset, rulers) of a planet's settled block, or None when it has
+    none. A planet taken from another civ lists more than one ruler."""
     prod = next(plpr.find('PROD'), None)
     enli = next(plpr.find('ENLI'), None)
-    if prod is None or enli is None or enli.start - prod.end != SETTLED_LEN:
+    if prod is None or enli is None:
         return None
-    return prod.end
+    at = prod.end
+    if enli.start - at < SETTLED_LEN:
+        return None
+    n = struct.unpack_from('<I', blob, at + INFLUENCE_COUNT_OFF)[0]
+    if n < 1 or enli.start - at != SETTLED_LEN + INFLUENCE_RECORD * (n - 1):
+        return None
+    return at, n
+
+
+def _settled_at(blob, plpr):
+    """Blob offset of a settled block with one ruler, whose fields sit at the
+    fixed offsets above, or None."""
+    found = _block_at(blob, plpr)
+    return found[0] if found and found[1] == 1 else None
+
+
+def influence_of(blob, plpr):
+    """([(owner, influence, first turn, last turn)], unrest) from a planet's
+    settled block, or None. The current ruler's last turn reads RULING."""
+    found = _block_at(blob, plpr)
+    if found is None:
+        return None
+    at, n = found
+    rulers = [struct.unpack_from('<IfIi', blob, at + INFLUENCE_AT + INFLUENCE_RECORD * k)
+              for k in range(n)]
+    unrest = struct.unpack_from('<H', blob, at + INFLUENCE_AT + INFLUENCE_RECORD * n
+                                + UNREST_AFTER_LIST)[0]
+    return rulers, unrest
 
 
 def settled_of(blob, planet_oid):
@@ -2683,6 +3259,10 @@ TRDT_FIXED = 30             # parties, kind, status, length, start, proposed, by
 KNPL_COUNT = 4
 KNPL_RECORD = 36
 KNPL_STANCE_AT = 12
+# u16, loyalty this civ's citizens of the record's civ lose to it: bio-bombing
+# that civ adds the bombs dropped, capped at 100 (0x4F6DE0 through 0x534D50),
+# and the loyalty of a citizen of that origin under this civ drops by it (0x4ED270).
+KNPL_BIO_PENALTY_AT = 26
 # The viewer's display choices for the civ a KNPL record names, read off the
 # client's writer (0x532F20) and reader (0x5332E0).
 KNPL_SHOW_TERRITORY_AT = 29     # u8, 1 draws the civ's territory
@@ -2693,7 +3273,7 @@ KNPL_FLAGS = (KNPL_SHOW_TERRITORY_AT, KNPL_SHOW_SHIPS_AT, KNPL_BY_STANCE_AT)
 STANCES = {0: 'Neutral', 1: 'War', 2: 'Cease-Fire', 3: 'Peace', 4: 'Alliance'}
 KINDS = {0: 'trade', 1: 'war', 2: 'cease-fire', 3: 'peace', 4: 'alliance'}
 WAR = 1
-PROPOSED, ACCEPTED, DECLINED, AT_WAR = 0, 1, 2, 3
+PROPOSED, ACCEPTED, DECLINED, NON_BINDING = 0, 1, 2, 3
 UNSET_LENGTH, UNSET_START = -2, -1
 STANCE_OF = {2: 2, 3: 3, 4: 4}          # the stance a kind sets when accepted
 # What a stance treaty binds for when it carries no TRLE, as the UI says.
@@ -2853,6 +3433,18 @@ def stances(blob):
     return out
 
 
+def bio_penalties(blob):
+    """{(civ, other civ): loyalty penalty} for every non-zero bio-bomb penalty
+    in a KNPL that reads as a count of whole records."""
+    out = {}
+    for o in icv.owner_records(blob):
+        for other, (at, _rec) in (knpl_records(blob, o['oid']) or {}).items():
+            n = struct.unpack_from('<h', blob, at + KNPL_BIO_PENALTY_AT)[0]
+            if n:
+                out[(o['oid'], other)] = n
+    return out
+
+
 def set_stance(blob, civ_oid, other, code):
     """Write a civ's stance toward another it has met. Sizes do not change."""
     _tree, knpl = _civ_section(blob, civ_oid, 'KNPL')
@@ -2933,6 +3525,60 @@ def set_display(blob, civ_oid, other, raw):
     return bytes(out)
 
 
+# A civ's `USSE` is the block the client's `SVUS` command sent (writer 0x57ED00,
+# reader 0x57EE30). The vote byte is read from version 2 on.
+USSE_SIZE = 45
+USSE_VOTE_VERSION = 2
+END_VOTE_AT = 44     # Owner+0x2F8, the "Vote to End the Galaxy" tick-box
+
+
+def _usse(blob, civ_oid):
+    """The civ's USSE section, or None unless it is one that holds the vote."""
+    _tree, usse = _civ_section(blob, civ_oid, 'USSE')
+    if (usse is None or usse.size != USSE_SIZE
+            or usse.version < USSE_VOTE_VERSION):
+        return None
+    return usse
+
+
+def end_vote_of(blob, civ_oid):
+    """The civ's end-galaxy vote byte, or None when its USSE cannot be read."""
+    usse = _usse(blob, civ_oid)
+    return None if usse is None else blob[usse.payload + END_VOTE_AT]
+
+
+def set_end_vote(blob, civ_oid, value):
+    """Write a civ's end-galaxy vote. Sizes do not change."""
+    usse = _usse(blob, civ_oid)
+    if usse is None:
+        raise SystemExit(f'civ {civ_oid} has no readable USSE')
+    out = bytearray(blob)
+    out[usse.payload + END_VOTE_AT] = int(value)
+    return bytes(out)
+
+
+def end_votes(blob):
+    """{civ name: True when it has voted to end the galaxy}, for every civ
+    whose USSE can be read."""
+    out = {}
+    for o in icv.owner_records(blob):
+        vote = end_vote_of(blob, o['oid'])
+        if vote is not None:
+            out[o['name']] = bool(vote)
+    return out
+
+
+def vote_orders(served, sub, civ_oid):
+    """(the submitter's new vote or None, refusals), judged against the state
+    served."""
+    was, now = end_vote_of(served, civ_oid), end_vote_of(sub, civ_oid)
+    if was is None or now is None or was == now:
+        return None, []
+    if now not in (0, 1):
+        return None, [f'end-galaxy vote DROPPED, it reads {now}']
+    return now, []
+
+
 def _resources_at(blob, civ_oid):
     """Where a civ's resource count sits, or None unless the count is
     RESOURCE_KINDS records naming 0, 1, 2 ... in order."""
@@ -2997,6 +3643,7 @@ def diplomacy_orders(served, sub, civ_oid, names):
         return [], refusals
     turn = icv.turn_of(served)
     high = struct.unpack_from('<I', served, idg.HIGH_WATER_ID)[0]
+    war_only = gset_value(served, 'waronly') == 1
     s_stances, t_stances = stances(served), stances(sub)
     met = {other for civ, other in s_stances if civ == civ_oid}
     removed = []
@@ -3008,7 +3655,8 @@ def diplomacy_orders(served, sub, civ_oid, names):
         tt = read_trdt(b) if b is not None else None
         name = label(oid, tt or ts)
         if a is None:
-            why = new_treaty_refusal(tt, oid, civ_oid, high, turn, met, who)
+            why = new_treaty_refusal(tt, oid, civ_oid, high, turn, met, who,
+                                     war_only)
             if why:
                 refusals.append(f'{name} DROPPED, {why}')
             else:
@@ -3064,7 +3712,7 @@ def diplomacy_orders(served, sub, civ_oid, names):
             ends.add(frozenset((t['proposer'], t['recipient'])))
     for oid, ts, name in removed:
         pair = frozenset((ts['proposer'], ts['recipient']))
-        if pair not in ends or ts['status'] not in (ACCEPTED, AT_WAR):
+        if pair not in ends or ts['status'] not in (ACCEPTED, NON_BINDING):
             refusals.append(f'{name} DROPPED, ending a treaty this way is not '
                             f'something the client offers')
     named = set()
@@ -3083,9 +3731,9 @@ def diplomacy_orders(served, sub, civ_oid, names):
     return orders, refusals
 
 
-def new_treaty_refusal(t, oid, civ_oid, high, turn, met, who):
+def new_treaty_refusal(t, oid, civ_oid, high, turn, met, who, war_only=False):
     """Why a treaty a submission adds is not a proposal or a declaration of
-    war the client makes, or ''."""
+    war the client makes, or ''. `war_only` is the galaxy's `waronly`."""
     if t is None:
         return 'its record cannot be read'
     if oid <= high:
@@ -3099,12 +3747,14 @@ def new_treaty_refusal(t, oid, civ_oid, high, turn, met, who):
     if t['kind'] == WAR:
         if ((t['status'], t['length'], t['start'], t['proposed'], t['deleted'],
              t['demands'], t['offers'])
-                != (AT_WAR, -1, turn, turn, (0, 0), [], [])):
+                != (NON_BINDING, -1, turn, turn, (0, 0), [], [])):
             return 'it is not laid out as a declaration of war this turn'
         return ''
     if ((t['status'], t['length'], t['start'], t['proposed'], t['deleted'])
             != (PROPOSED, UNSET_LENGTH, UNSET_START, turn, (0, 0))):
         return 'it is not laid out as a proposal made this turn'
+    if war_only:
+        return 'the galaxy is war-only, where the client proposes no treaty'
     return item_refusal(t)
 
 
@@ -3117,7 +3767,7 @@ def _stance_in_force(record, pair):
     t = read_trdt(record)
     return (t is not None and _between(record, pair)
             and (t['kind'] == WAR or t['kind'] in STANCE_OF)
-            and t['status'] in (ACCEPTED, AT_WAR))
+            and t['status'] in (ACCEPTED, NON_BINDING))
 
 
 def take_treaty_step(blob, served_treaties, step, oid, record, civ_oid, turn,
@@ -3328,6 +3978,11 @@ NO_POSITION = b'\0' * 12
 # The text controls read these as markup, so each is stored as a plain stand-in.
 MARKUP = {ord('<'): b'(', ord('>'): b')', ord('|'): b'/', ord('%'): b'pct'}
 BODY_CONTROLS = b'\r\n\t'
+# A note to oneself (`SDNW` with a kind-8 item, `EDNW`), from the Note dialog
+# (resource 0xBC): a subject and a text, neither empty, kept inline in the
+# item with no string ids. The edit controls hold the Windows default.
+NOTE_TITLE = b'Note - Subject: '
+NOTE_MAX = 32767
 
 
 def message_rows(body):
@@ -3365,6 +4020,33 @@ def _new_news_at(blob, civ_oid):
     return at - news.NEW_NEWS_BACK
 
 
+def note_refusal(item, turn):
+    """Why a kind-8 item is not a note as the Note dialog writes one, or None.
+
+    The dialog (`0x00538DD0`, and `0x0040EF10` to edit) titles it `Note -
+    Subject: <subject>`, dates it this turn and names nobody and nothing; an
+    edit keeps only the important mark of the flags.
+    """
+    if item['type'] != news.NOTE:
+        return 'it is not a note'
+    if (item['title_id'] or item['body_id'] or item['ids']
+            or item['position'] != NO_POSITION or item['turn'] != turn
+            or item['flags'] & ~news.IMPORTANT):
+        return 'it is not a note as the client writes one'
+    if not item['title'].startswith(NOTE_TITLE):
+        return "its title is not the client's"
+    subject = item['title'][len(NOTE_TITLE):]
+    if not subject or not item['body']:
+        return 'its subject or text is empty'
+    if len(subject) > NOTE_MAX or len(item['body']) > NOTE_MAX:
+        return f'its subject or text is over {NOTE_MAX} characters'
+    if (any(c < 0x20 or c == 0x7F for c in subject)
+            or any((c < 0x20 and c not in BODY_CONTROLS) or c == 0x7F
+                   for c in item['body'])):
+        return 'it holds a control character the dialog does not take'
+    return None
+
+
 def message_orders(served, sub, civ_oid, names):
     """(orders, refusals) for a civ's news, judged against the state served.
 
@@ -3374,7 +4056,8 @@ def message_orders(served, sub, civ_oid, names):
     a message as sent, its text not yet made plain. `from_title` is the
     recipients' title, naming the submitter as its client did.
     """
-    orders = {'flags': [], 'read': False, 'messages': []}
+    orders = {'flags': [], 'read': False, 'messages': [], 'notes': [],
+              'notes_edited': []}
     refusals = []
 
     def who(civ):
@@ -3392,14 +4075,19 @@ def message_orders(served, sub, civ_oid, names):
     first_new, served_strings = was_table
     strings = now_table[1]
 
+    turn = icv.turn_of(served)
     mine_was, mine_now = was[civ_oid], now[civ_oid]
     if (len(mine_now) < len(mine_was)
             or not all(_same_item(a, b, news.IMPORTANT)
+                       or (a['type'] == news.NOTE
+                           and note_refusal(b, turn) is None)
                        for a, b in zip(mine_was, mine_now))):
         return orders, ['news DROPPED, its list does not begin with the items '
                         'served']
     for i, (a, b) in enumerate(zip(mine_was, mine_now)):
-        if a['flags'] != b['flags']:
+        if not _same_item(a, b, news.IMPORTANT):
+            orders['notes_edited'].append((i, b))
+        elif a['flags'] != b['flags']:
             orders['flags'].append((i, b['flags']))
 
     identity = civ_identity(served, civ_oid)
@@ -3407,7 +4095,6 @@ def message_orders(served, sub, civ_oid, names):
     if identity and identity[0]:
         me.add(identity[0])
     met = {other for civ, other in stances(served) if civ == civ_oid}
-    turn = icv.turn_of(served)
 
     def text_of(sid):
         """The submitted text of a string id, or None when the id is neither
@@ -3441,6 +4128,13 @@ def message_orders(served, sub, civ_oid, names):
             received.append((civ, item, title, body))
 
     for item in mine_now[len(mine_was):]:
+        if item['type'] == news.NOTE:
+            why = note_refusal(item, turn)
+            if why:
+                refusals.append(f'note DROPPED, {why}')
+            else:
+                orders['notes'].append(item)
+            continue
         title, body = text_of(item['title_id']), text_of(item['body_id'])
         to = item['ids']
         why = None
@@ -3544,6 +4238,12 @@ def take_messages(blob, civ_oid, orders, turn, names):
             'ids': m['to'], 'position': NO_POSITION}))
         lines.append(f"{label} to "
                      f"{', '.join(str(names.get(c, c)) for c in m['to'])}")
+    for index, item in orders.get('notes_edited', ()):
+        blob = news.replace_item(blob, civ_oid, index, news.build_item(item))
+        lines.append(f"note {index} edited")
+    for item in orders.get('notes', ()):
+        blob = news.append_item(blob, civ_oid, news.build_item(item))
+        lines.append(f"note {item['title'][len(NOTE_TITLE):][:30]!r} written")
     return blob, refusals, lines
 
 
@@ -3903,17 +4603,43 @@ def merge(blob, submissions, log=print, notes=None, arms=None):
             mine = civ['oid']
             log(f"{civ_name} (object {mine}):")
 
+            # Scan reports first: a new one is taken out of the submission,
+            # which the rules below then read without it.
+            had, now = reports_of(served, mine), reports_of(sub, mine)
+            if had is not None and now is not None and had != now:
+                kept, deleted, made, why = report_orders(had, now)
+                if made:
+                    drop(f"{made} scan(s) DROPPED: carrying out a scan is not "
+                         f"carried, as its report is the referee's to make; "
+                         f"the scans stay in stock")
+                if why:
+                    drop(f"scan reports DROPPED, {why}")
+                elif deleted:
+                    blob = set_reports(blob, mine, kept)
+                    log(f"    {deleted} scan report(s) deleted")
+                    accepted += 1
+                sub = set_reports(sub, mine, kept)
+            elif had is not None and now is None:
+                drop("scan reports DROPPED, the submission's block after the "
+                     "designs does not read as reports")
+
             # Ship designs, before the production queues that may name them.
             # Judged against `served_designs`, the state as it was served.
             remap = {}
-            new_designs, toggled, refusals = design_orders(
-                served_designs, design_index(sub), mine)
+            new_designs, toggled, edited, deleted, refusals = design_orders(
+                served_designs, design_index(sub), mine,
+                designs_in_use(served, mine))
             for why in refusals:
                 drop(why)
             for oid, inactive in toggled:
                 blob = set_design_inactive(blob, oid, inactive)
                 log(f"    design {oid}: "
                     f"{'deactivated' if inactive else 'reactivated'}")
+                accepted += 1
+            for oid, record in edited:
+                blob = replace_design(blob, oid, record)
+                log(f"    design {oid}: edited, now "
+                    f"{design_index(blob)[oid]['name']!r}")
                 accepted += 1
             for was, d in new_designs:
                 oid = was
@@ -3929,6 +4655,10 @@ def merge(blob, submissions, log=print, notes=None, arms=None):
                 log(f"    design {oid}: {d['name']!r} taken"
                     + (f", submitted as {was} and renumbered"
                        if oid != was else ""))
+                accepted += 1
+            for oid in deleted:
+                blob = remove_design(blob, mine, oid)
+                log(f"    design {oid}: deleted")
                 accepted += 1
             mine_designs = designs_of(blob, mine)
 
@@ -4163,6 +4893,65 @@ def merge(blob, submissions, log=print, notes=None, arms=None):
                             f"{rate_served}% -> {rate}%")
                         accepted += 1
 
+            # Facilities sold, then the energy links, judged on what the
+            # sales leave standing.
+            sub_planets = planet_index(sub)
+            for planet_oid, (owner, prod_served, plpr_served, _nm) in sorted(
+                    served_planets.items()):
+                if planet_oid not in sub_planets:
+                    continue
+                had = facilities_of(plpr_served)
+                now = facilities_of(sub_planets[planet_oid][2])
+                if had is None or now is None or had == now:
+                    continue
+                if owner != mine:
+                    drop(f"planet {planet_oid}: facility sale DROPPED, owned "
+                         f"by {names.get(owner, owner)}")
+                    continue
+                sold, why = facility_sales(had, now)
+                why = why or next(filter(None, (
+                    sale_refusal(prod_served, t) for t in sold)), '')
+                if why:
+                    drop(f"planet {planet_oid}: facility sale DROPPED, {why}")
+                    continue
+                refund = sum(sale_refund(blob, t, k) for t, k in sold.items())
+                blob = set_facilities(blob, planet_oid, now)
+                blob = set_credits(blob, mine, credits_of(blob, mine) + refund)
+                log(f"    planet {planet_oid}: sold "
+                    + ', '.join(f'{k} of facility {t}'
+                                for t, k in sorted(sold.items()))
+                    + f" for {refund} credits")
+                accepted += 1
+            standing = planet_index(blob)
+            served_links, sub_links = enli_of(served), enli_of(sub)
+            for planet_oid, links in sorted(sub_links.items()):
+                if links == served_links.get(planet_oid, links):
+                    continue
+                if planet_oid not in standing:
+                    continue
+                why = energy_link_refusal(planet_oid, links, mine, standing)
+                if why and not links and standing[planet_oid][0] == mine:
+                    why = None          # the receiver was sold
+                if why:
+                    drop(f"planet {planet_oid}: energy link DROPPED, {why}")
+                    continue
+                blob = set_enli(blob, planet_oid, links)
+                log(f"    planet {planet_oid}: energy links "
+                    f"{served_links.get(planet_oid)} -> {links}")
+                accepted += 1
+            # A sale takes the sold transmitters out of the civ's links and
+            # empties a sold receiver's, as the engine does at once.
+            for planet_oid, links in sorted(enli_of(blob).items()):
+                if standing.get(planet_oid, (None,))[0] != mine or not links:
+                    continue
+                if energy_link_refusal(planet_oid, [], mine, standing):
+                    kept = []
+                else:
+                    kept = [t for t in links if not energy_link_refusal(
+                        planet_oid, [t], mine, standing)]
+                if kept != links:
+                    blob = set_enli(blob, planet_oid, kept)
+
             # A queue is deleted only once no planet uses it as merged, and
             # each counts the planets that do.
             merged_queues = queues_of(blob, mine)
@@ -4224,6 +5013,15 @@ def merge(blob, submissions, log=print, notes=None, arms=None):
             for why in foreign_people_refusals(served_planets, served_crews,
                                                sub, mine, names):
                 drop(why)
+
+            # Wormholes connected, judged against the state served.
+            pairs, refusals = wormhole_orders(served, sub, mine)
+            for why in refusals:
+                drop(why)
+            for a, b in pairs:
+                blob = set_wormhole_link(set_wormhole_link(blob, a, b), b, a)
+                log(f"    wormholes {a} and {b}: connected")
+                accepted += 1
 
             # system names, which belong to whoever holds most of the system
             served_systems = systems(blob)
@@ -4391,6 +5189,15 @@ def merge(blob, submissions, log=print, notes=None, arms=None):
                 blob = set_display(blob, mine, other, raw)
                 log(f"    display of {names.get(other, other)}: "
                     f"{describe_display(raw)}")
+                accepted += 1
+
+            # The submitter's end-galaxy vote, which nothing acts on.
+            vote, refusals = vote_orders(served, sub, mine)
+            for why in refusals:
+                drop(why)
+            if vote is not None:
+                blob = set_end_vote(blob, mine, vote)
+                log(f"    end-galaxy vote: {'cast' if vote else 'withdrawn'}")
                 accepted += 1
 
             # News: messages to other civs, and its own items marked

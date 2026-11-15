@@ -390,19 +390,29 @@ GALAXIES_NOTE = (
     "yet. This is where they will be listed once multiplayer is back."
     "</span></p>")
 
+# The listing the referee publishes after each tick (server/public_listing.py).
+GALAXIES_SRC = ("https://firebasestorage.googleapis.com/v0/b/"
+                "cs-resurgence.firebasestorage.app/o/public%2Fgalaxies.json?alt=media")
+
+# The note stays when the listing cannot be read or names no galaxy.
+GALAXIES_PANEL = (
+    "<div id='galaxy-list' data-src='" + GALAXIES_SRC + "'>" + GALAXIES_NOTE
+    + "</div><script type='text/javascript' src='/scripts/galaxies.js'></script>")
+
 _GALAXIES_RE = re.compile(r"<div\s+class=['\"]section galaxies['\"]\s*>", re.I)
 _SECTION_CONTENT_RE = re.compile(
     r"<div\s+class=['\"]section_content['\"]\s*>", re.I)
 
 
 def replace_galaxy_list(html):
-    """Replace the archived galaxy list with a coming-soon note.
+    """Replace the archived galaxy list with the live one.
 
     The Galaxies panel lists whatever galaxies were running on the day the page
     was captured, with a registered-player count and links into galaxy pages
     that either 404 or show a snapshot of a game from 2023. Each page was
     captured on a different day, so the counts disagree with each other as well
-    as with reality.
+    as with reality. `galaxies.js` fills the panel with the open galaxies'
+    titles, and the coming-soon note stays until it does.
 
     Only the panel's content is replaced. The header and footer divs carry the
     panel's background art, so the box keeps its place in the column.
@@ -417,7 +427,7 @@ def replace_galaxy_list(html):
     for tag in _DIV_TAG_RE.finditer(html, content.end()):
         depth += -1 if tag.group(0).startswith("</") else 1
         if depth == 0:
-            return (html[:content.end()] + "\n\t    " + GALAXIES_NOTE
+            return (html[:content.end()] + "\n\t    " + GALAXIES_PANEL
                     + "\n\t" + html[tag.start():])
     # Unbalanced markup: leave the page alone rather than truncate it.
     return html

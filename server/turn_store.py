@@ -86,13 +86,18 @@ JOINED_KEY = 'joined'
 MIN_BUILD_KEY = 'min_build'
 
 # The civs served their own view of a turn (`fog.project`), as
-# `{"<turn>": [civ, ...]}`. `publish` replaces the whole map; a civ not named
-# is served the turn itself, which is its view.
+# `{"<turn>": [civ, ...]}`, for the current turn and the one before it. A
+# roster civ not named is served the turn itself, which is its view; see
+# `served_copy`.
 VIEWS_KEY = 'views'
 # The view a caller with none of its own is served: the turn with every civ's
 # news withheld. Longer than NAME_LIMIT, so no civ can hold the name.
 PUBLIC_VIEW = 'public-without-news'
 WARN_KEY, RECLAIM_KEY = 'warn_after_misses', 'reclaim_after_misses'
+
+# How a joiner's homeworld is placed, one of `inject_civ.PLACEMENTS`; absent is
+# `farthest`. Read by `joins.apply`, written by `galaxy_tool.py placement`.
+PLACEMENT_KEY = 'placement'
 
 # The civs the AI plays, as a list of names. Written by `bot_worker.py --add`;
 # a civ not named is never played by a bot.
@@ -208,6 +213,49 @@ def bots_of(state) -> list:
     state = state or {}
     roster = set(state.get('civs') or [])
     return [c for c in (state.get(BOTS_KEY) or []) if c in roster]
+
+
+class NotServed(PermissionError):
+    """A turn this caller is not served: its views name neither the caller nor
+    a view without news, or it is no longer current."""
+
+
+def served_copy(state, turn: int, civ: str = None):
+    """Which copy of `turn` a caller playing `civ` is served (`fog.project`).
+
+    `civ` when the turn's views name it. None, the turn itself, for a roster
+    civ the views do not name, since its view is the turn. `PUBLIC_VIEW` for
+    any other caller when that view was published. None for anyone while the
+    turn is current and was published with no views. Otherwise raises
+    `NotServed`. `civ` None is a caller with no seat.
+    """
+    state = state or {}
+    turn = int(turn)
+    named = (state.get(VIEWS_KEY) or {}).get(str(turn))
+    if named:
+        if civ is not None and civ in named:
+            return civ
+        if civ is not None and civ in (state.get('civs') or ()):
+            return None
+        if PUBLIC_VIEW in named:
+            return PUBLIC_VIEW
+        raise NotServed(f'turn {turn} has views and none of them is served '
+                        f'to {civ or "a caller with no seat"}')
+    if turn == state.get('turn'):
+        return None
+    raise NotServed(f'turn {turn} is not served; the current turn is '
+                    f'{state.get("turn")}')
+
+
+def serve(store, state, civ: str, turn: int) -> bytes:
+    """The copy of `turn` that `served_copy` names, read from `store`."""
+    copy = served_copy(state, turn, civ)
+    if copy is None:
+        return store.turn_blob(turn)
+    blob = store.view_blob(copy, turn)
+    if blob is None:
+        raise NotServed(f'the view of turn {turn} for {copy} is missing')
+    return blob
 
 
 def reclaimed_of(state, civ: str = None):
@@ -454,7 +502,7 @@ class TurnStore:
         return os.path.exists(self.turn_path(turn))
 
     def view_blob(self, civ: str, turn: int):
-        """`civ`'s own view of a turn, or None when it is served the turn."""
+        """The view of a turn published under `civ`, or None."""
         if civ not in (self.state().get(VIEWS_KEY) or {}).get(str(int(turn)), ()):
             return None
         try:
@@ -462,15 +510,30 @@ class TurnStore:
         except FileNotFoundError:
             return None
 
+    def served_turn(self, civ: str, turn: int) -> bytes:
+        """The turn as a caller playing `civ` is served it (`served_copy`).
+
+        Anyone who can open the folder can read every file in it; this is what
+        a launcher reads, not a lock on the rest."""
+        return serve(self, self.state(), civ, turn)
+
+    def put_view(self, civ: str, turn: int, blob: bytes) -> None:
+        """Write one view ahead of the `publish` that names it."""
+        _atomic_write(self.view_path(civ, turn), sp.encode_save(blob))
+
     def publish(self, turn: int, blob: bytes, turn_seconds: int = None,
                 views: dict = None) -> None:
         """The referee's move: a new turn exists, and the clock restarts.
 
         `views` is `{civ: blob}` for the civs served their own view. They are
-        written before the turn, and earlier turns' views are removed.
+        written before the turn. The previous turn's views are kept, for a
+        launcher that asks for that turn as this one is published, and older
+        ones are removed.
         """
         import canonical
         state = self.state()
+        named = state.get(VIEWS_KEY) or {}
+        last = str(int(turn) - 1)
         seconds = turn_seconds or state['turn_seconds']
         views = views or {}
         for civ, view in views.items():
@@ -479,10 +542,11 @@ class TurnStore:
         state.update(turn=int(turn), deadline=time.time() + seconds,
                      turn_seconds=int(seconds),
                      hash=canonical.canonical_hash(blob))
-        state[VIEWS_KEY] = {str(int(turn)): sorted(views)}
+        state[VIEWS_KEY] = {**({last: named[last]} if last in named else {}),
+                            str(int(turn)): sorted(views)}
         self._put_state(state)
         os.makedirs(self.submission_dir(turn), exist_ok=True)
-        self._prune_views(int(turn))
+        self._prune_views(int(turn) - 1)
 
     def _prune_views(self, before: int) -> None:
         root = os.path.join(self.root, 'views')
@@ -958,19 +1022,42 @@ class HttpTurnStore:
         return self._post(f'/start?{q}', blob)['turn']
 
     def turn_blob(self, turn: int) -> bytes:
-        blob = self._blob(f'/turn/{turn}')
+        """The turn itself. `whole` asks `turn_server` for the referee's copy;
+        the relay drops the query and answers with the caller's view."""
+        blob = self._blob(f'/turn/{turn}?whole=1')
         if blob is None:
             raise FileNotFoundError(f'no turn {turn} at {self.base}')
         return blob
 
     def has_turn(self, turn: int) -> bool:
-        return self._get(f'/turn/{turn}', want_json=False) is not None
+        return self._get(f'/turn/{turn}?whole=1', want_json=False) is not None
+
+    def served_turn(self, civ: str, turn: int) -> bytes:
+        """The turn as a caller playing `civ` is served it. `turn_server` takes
+        the civ from the query; the relay from the caller's sign-in."""
+        import urllib.error
+        q = f'?civ={urllib.parse.quote(civ)}' if civ else ''
+        try:
+            blob = self._blob(f'/turn/{turn}{q}')
+        except urllib.error.HTTPError as exc:
+            if exc.code == 403:
+                raise NotServed(f'turn {turn} is not served to {civ} at '
+                                f'{self.base}') from exc
+            raise
+        if blob is None:
+            raise FileNotFoundError(f'no turn {turn} at {self.base}')
+        return blob
 
     def publish(self, turn: int, blob: bytes, turn_seconds: int = None,
                 views: dict = None) -> None:
-        # `turn_server` serves every caller the turn, so `views` is not sent.
-        q = f'?seconds={int(turn_seconds)}' if turn_seconds else ''
-        self._post(f'/turn/{turn}{q}', blob)
+        """Each view is sent first, then the turn naming them."""
+        views = views or {}
+        for civ, view in views.items():
+            self._post(f'/view/{turn}/{urllib.parse.quote(civ)}', view,
+                       want_json=False)
+        q = ([f'seconds={int(turn_seconds)}'] if turn_seconds else []) + \
+            [f'view={urllib.parse.quote(c)}' for c in sorted(views)]
+        self._post(f'/turn/{turn}' + (f'?{"&".join(q)}' if q else ''), blob)
 
     def submit(self, civ: str, turn: int, blob: bytes) -> str:
         """Hand a player's state back, by whichever route the far end offers.

@@ -178,12 +178,11 @@ def serve(blob: bytes, civ: str, work_dir=None, hold=HOLD_SECONDS,
 
 
 def served_blob(store, civ: str, turn: int) -> bytes:
-    """The turn as `civ` is served it: its own view where the store keeps one
-    (`fog.project`), otherwise the turn. The relay's turn route already answers
-    with the caller's view."""
-    view = getattr(store, 'view_blob', None)
-    blob = view(civ, turn) if view is not None else None
-    return blob if blob is not None else store.turn_blob(turn)
+    """The turn as `civ` is served it (`turn_store.served_copy`): its own view,
+    the view without news, or the turn. Raises `turn_store.NotServed` for a
+    turn not served to `civ`."""
+    served = getattr(store, 'served_turn', None)
+    return served(civ, turn) if served is not None else store.turn_blob(turn)
 
 
 def collect(name="player", save_dir=None, log=print, announce=True) -> str:

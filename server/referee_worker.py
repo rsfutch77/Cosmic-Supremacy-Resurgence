@@ -45,6 +45,7 @@ for _d in (HERE, os.path.join(HERE, 'dev_tools')):
     if _d not in sys.path:
         sys.path.insert(0, _d)
 
+import public_listing
 import referee
 import turn_store
 
@@ -737,6 +738,7 @@ def run(store, save_dir=None, grace: float = GRACE, poll: float = POLL,
                      f'after holding turn {turn}: no civ holds a planet and '
                      f'nobody is waiting to join')
             write_operator_page(store, page, event, gid=gid, log=log)
+            public_listing.publish(store, log=log)
             if once:
                 return EXIT_OK
         except (Exception, SystemExit) as exc:              # noqa: BLE001

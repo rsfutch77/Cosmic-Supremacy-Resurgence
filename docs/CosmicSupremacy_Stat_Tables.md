@@ -97,7 +97,8 @@ For a chassis the Space column is space PROVIDED, not consumed. Chassis 0-2 are 
 
 ### Shields
 
-No fitted-shield vector is read from a design yet, only the `ShipDesign:72` shield stat.
+A design's fitted shields are its sixth part list (`ShipDesign:248`); `ShipDesign:72` is their summed
+strength (`0x547A50`).
 
 | Id | Name | Units | Space | Cost | Upkeep | Strength | Metal | Deut | Radio | Cryst | Exot |
 |---|---|---|---|---|---|---|---|---|---|---|---|
@@ -225,15 +226,17 @@ months should not have its economy rewritten when the developer shipped a client
 so a galaxy carries the content version it started under and keeps the stat table that
 goes with it. New galaxies get the new one.
 
-**Two shipped modes currently select the WRONG table.** Measured by launching each mode
-and reading `[0x0080AA00]` and the picker's answer:
+Every shipped mode selects the released table. The Tutorial, Demo and Sandbox rows were
+measured by launching each mode and reading `[0x0080AA00]` and the picker's answer. The
+Single Player and Multiplayer rows were measured the same way at 99999, the unreleased
+table; their blobs now read 565, and the table follows from the picker:
 
 | Mode | Started as | Content version | Table | Correct |
 |---|---|---|---|---|
 | Tutorial, Demo | `CosmicSupremacy.exe` + `.csgalaxy` | 171 | `0x00807DB0` | yes |
 | Sandbox | `CosmicSupremacy_Resurgence.exe` + `.csgalaxy` | 565 | `0x00807DB0` | yes |
-| **Single Player** | `CosmicSupremacy_Resurgence.exe` + `SinglePlayerGalaxy.dat` | **99999** | `0x008066B0` | **no** |
-| **Multiplayer** | `CosmicSupremacy_Player.exe` + a served turn blob | **99999** | `0x008066B0` | **no** |
+| Single Player | `CosmicSupremacy_Resurgence.exe` + `SinglePlayerGalaxy.dat` | 565 | `0x00807DB0` | yes |
+| Multiplayer | `CosmicSupremacy_Player.exe` + a served turn blob | 565 | `0x00807DB0` | yes |
 
 ### Where the version actually comes from
 
@@ -350,11 +353,12 @@ wrong answers were written down first:
 
 What is left is not stat recovery:
 
-1. **Stamp a content version below 639 into every served blob.** See section 4a. This is
-   a live bug, not a theoretical one: Single Player and Multiplayer both run at 99999 today
-   and get the unreleased stat tables. The field is one dword in the blob's `GLOB` section,
-   the fix is verified, and it wants doing in two places, the shipped
-   `client/SinglePlayerGalaxy.dat` and the server-side blob authoring path.
+1. **Done: every served blob carries a content version below 639.** See section 4a. The
+   shipped `client/SinglePlayerGalaxy.dat` reads 565, and so does the live `sandbox` at
+   turns 0, 1 and 173 (read 14 November 2026). `galaxy_tool.py start` and
+   `make_multiplayer_galaxy.py` stamp 565 into a blob at 639 or above
+   (`set_blob_player.released`, `test_content_version.py`), so a galaxy started from a
+   TestBed capture runs on the released tables too.
 2. **Research cost model.** `research.cost` implements the manual's
    `round(800 * costFactor) * completed-count`, but `research.available` still calls the
    cost model unsolved, and `research.py`'s table was extracted at a different content

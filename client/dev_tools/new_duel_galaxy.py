@@ -50,7 +50,6 @@ def main():
     import save_parser as sp
     import inject_civ as icv
     import inject_ship as ish
-    import set_turnlength as stl
 
     print("1. capturing the running galaxy")
     capture = gc.capture_save("duelsetup")
@@ -76,12 +75,7 @@ def main():
 
     if a.secs is not None:
         print(f"\n5. galaxy turn length -> {a.secs}s")
-        entries = stl.gset_entries(blob, blob.find(b"GSET") + 8)
-        hit = next(e for e in entries if e[0] == "turnlength")
-        buf = bytearray(blob)
-        import struct
-        struct.pack_into("<i", buf, hit[2], a.secs)
-        blob = bytes(buf)
+        blob = sp.set_gset(blob, {"turnlength": a.secs})
         if a.secs < 60:
             print("   (below the engine's 60s floor, needs "
                   "patch_turn_floor.py --apply, or it will be clamped)")

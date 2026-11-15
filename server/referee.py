@@ -126,6 +126,18 @@ def views(blob: bytes, civs, log=print) -> dict:
     return out
 
 
+def published_views(blob: bytes, held: dict) -> dict:
+    """The views `publish` is given: each civ's that differs from the turn,
+    and with any of them the view without news, so a caller with no seat is
+    never refused (`turn_store.served_copy`). A civ left out is served the
+    turn."""
+    import turn_store
+    out = {c: v for c, v in held.items() if v != blob}
+    if out and turn_store.PUBLIC_VIEW in held:
+        out[turn_store.PUBLIC_VIEW] = held[turn_store.PUBLIC_VIEW]
+    return out
+
+
 def galaxy_id(blob: bytes):
     """What says two blobs are the same galaxy: the civs in it by object id and
     name, the systems by object id, and the planets by object id.
@@ -252,6 +264,18 @@ def stamp_for_a_holder(blob: bytes, log=print) -> bytes:
     return set_blob_player.set_player(blob, holder["name"], log=log)
 
 
+def simulate_every_civ(blob: bytes, log=print) -> bytes:
+    """The blob with every civ's `Owner:4` non-zero.
+
+    The engine skips a civ holding 0 in the empire tick and in
+    `Owner::AddNews` (0x543720), so that civ gains no research or score and is
+    told nothing, its battle reports included. A civ holding 0 takes the
+    lowest unused id from 20 up; any other blob is returned unchanged.
+    """
+    import make_multiplayer_galaxy as mmg
+    return mmg.fix_owner_ids(blob, log=lambda m: log(f"  referee:{m}"))
+
+
 def tick(blob: bytes, turns: int = 1, secs: int = 10, work_dir=None,
          save_dir=None, log=print, check_save_path=True) -> bytes:
     """Advance the galaxy by `turns` turns and return the resulting blob.
@@ -268,6 +292,10 @@ def tick(blob: bytes, turns: int = 1, secs: int = 10, work_dir=None,
         if not ok:
             raise SystemExit(f'refusing to tick: {why}')
 
+    # The engine writes back what it loads, so a ship repaired here is
+    # readable by the merge from the next served turn on.
+    blob = merge_orders.repair_donor_tails(blob, log=log)
+    blob = simulate_every_civ(blob, log=log)
     blob = stamp_for_a_holder(blob, log=log)
     work_dir = work_dir or os.path.join(HERE, "referee_work")
     os.makedirs(work_dir, exist_ok=True)
@@ -378,10 +406,8 @@ def resolve_turn(store: TurnStore, save_dir=None, log=print) -> int:
     else:
         joined = early
 
-    # Only a civ whose view differs from the turn is given one.
     held = views(nxt, [o['name'] for o in icv.owner_records(nxt)], log=log)
-    store.publish(new_turn, nxt,
-                  views={c: v for c, v in held.items() if v != nxt})
+    store.publish(new_turn, nxt, views=published_views(nxt, held))
     joins.commit(store, turn, new_turn, joined, log=log)
     store.archive(turn, {
         "turn": turn,
@@ -399,12 +425,17 @@ def resolve_turn(store: TurnStore, save_dir=None, log=print) -> int:
         "closed_at": time.time(),
         "refused": notes,
         # For `verify_turn` to recompute this turn and check the answer.
+        "hash_version": canonical.HASH_VERSION,
         "hash_in": canonical.canonical_hash(blob),
         "hash_out": canonical.canonical_hash(nxt),
         "hash_submissions": {civ: canonical.canonical_hash(s)
                              for civ, s in taken},
         # The coats of arms each civ could choose, for `verify_turn`.
         "arms": arms,
+        # The civs whose end-galaxy vote stands in the published turn, for
+        # the operator page.
+        "end_votes": sorted(c for c, v in merge_orders.end_votes(nxt).items()
+                            if v),
     })
     log(f"  referee: published turn {new_turn}, "
         f"canonical {canonical.canonical_hash(nxt)[:16]}")
@@ -427,10 +458,11 @@ def verify_turn(store: TurnStore, turn: int, recompute: bool = True,
         return False
 
     published = rec["published"]
+    version = rec.get("hash_version", 1)
     ok = True
 
     if store.has_turn(published):
-        stored = canonical.canonical_hash(store.turn_blob(published))
+        stored = canonical.canonical_hash(store.turn_blob(published), version)
         same = stored == rec["hash_out"]
         log(f"  verify: stored turn {published} "
             f"{'matches' if same else 'does NOT match'} its record "
@@ -444,7 +476,7 @@ def verify_turn(store: TurnStore, turn: int, recompute: bool = True,
         return ok
 
     blob = store.turn_blob(turn)
-    if canonical.canonical_hash(blob) != rec["hash_in"]:
+    if canonical.canonical_hash(blob, version) != rec["hash_in"]:
         log(f"  verify: turn {turn}'s own blob no longer matches what was "
             f"closed; a rerun would not be comparable")
         return False
@@ -454,7 +486,7 @@ def verify_turn(store: TurnStore, turn: int, recompute: bool = True,
         if civ not in subs:
             log(f"  verify: {civ}'s submission is missing")
             return False
-        if canonical.canonical_hash(subs[civ]) != want:
+        if canonical.canonical_hash(subs[civ], version) != want:
             log(f"  verify: {civ}'s submission is not the one that was used")
             return False
 
@@ -463,12 +495,13 @@ def verify_turn(store: TurnStore, turn: int, recompute: bool = True,
     arms = {civ: set(ids) for civ, ids in (rec.get("arms") or {}).items()}
     merged = apply_orders(blob, taken, log=log, arms=arms)
     again = tick(merged, turns=1, save_dir=save_dir, log=log)
-    got = canonical.canonical_hash(again)
+    got = canonical.canonical_hash(again, version)
     same = got == rec["hash_out"]
     log(f"  verify: recomputation {'agrees' if same else 'DISAGREES'} "
         f"({got[:16]} against {rec['hash_out'][:16]})")
     if not same:
-        for off, x, y in canonical.differences(store.turn_blob(published), again):
+        for off, x, y in canonical.differences(store.turn_blob(published),
+                                               again, version=version):
             log(f"    {off:#08x}  {x:#04x} -> {y:#04x}   "
                 f"{canonical.locate(again, off)}")
     return ok and same

@@ -14,6 +14,7 @@ Tracked, because it is source:
     stage.py          builds public/ out of the archive
     serve.py          local preview that mimics Firebase's 404 handling
     overrides/        hand-written pages that replace archived ones
+    news/             the home page's news items, rendered by news.py
     never_archived.txt  targets the Wayback Machine has no capture of
 
 Not tracked:
@@ -53,6 +54,13 @@ firebase emulators:start --only hosting    REM real Firebase behaviour
 
 Put edits in `overrides/`, never in `public/` — see `overrides/README.md`.
 `stage.py` wipes `public/` on every run.
+
+## Posting news
+
+Add a file to `news/` named `YYYY-MM-DD-anything.html`. Its first line is the
+title, as plain text; the rest is the body, as HTML. The home page lists every
+item, newest first, at the `<!-- news items -->` marker in
+`overrides/game_news.php.html`. Stage and deploy to publish it.
 
 ## Things that will break if changed carelessly
 

@@ -35,8 +35,11 @@ sys.path.insert(0, WAYBACK)
 import wayback_grab as wg  # noqa: E402  (reuse the mirror's own path logic)
 import patches            # noqa: E402  site-wide edits, see patches.py
 import inventory          # noqa: E402  writes TODO-content.md
+import news               # noqa: E402  the home page's news items
 
 HOST = "cosmicsupremacy.com"
+# Where the site is served now, for canonical links and the sitemap.
+SITE = "https://cosmicresurgence.com/"
 SRC = os.path.join(WAYBACK, "cosmicsupremacy_mirror", HOST)
 # Captures of `cosmicsupremacy.com:80` sit in their own folder, and some pages
 # exist only there.
@@ -148,12 +151,45 @@ def canonical_pages():
 
 
 def mirror_file(rel):
-    """The mirror's copy of `rel`, or None."""
+    """The mirror's copy of `rel`, or None.
+
+    A page captured only with a session id stands in for its clean name.
+    """
     for root in (SRC, SRC_80):
         path = os.path.join(root, rel.replace("/", os.sep))
         if os.path.isfile(path):
             return path
-    return None
+    return sid_captures().get(rel)
+
+
+_SID_INDEX = None
+
+
+def without_sid(name):
+    """`name` with the `sid` dropped from its query, or None if it has none."""
+    stem, at, rest = name.partition("@")
+    if not at or not rest.endswith(".php.html"):
+        return None
+    params = rest[:-len(".php.html")].split("&")
+    kept = [p for p in params if not p.lower().startswith("sid=")]
+    if len(kept) == len(params):
+        return None
+    return stem + ("@" + "&".join(kept) if kept else "") + ".php.html"
+
+
+def sid_captures():
+    """Clean top-level page name to a session-id capture of it, first by name."""
+    global _SID_INDEX
+    if _SID_INDEX is None:
+        _SID_INDEX = {}
+        for root in (SRC, SRC_80):
+            if not os.path.isdir(root):
+                continue
+            for fn in sorted(os.listdir(root)):
+                clean = without_sid(fn)
+                if clean and clean not in _SID_INDEX:
+                    _SID_INDEX[clean] = os.path.join(root, fn)
+    return _SID_INDEX
 
 
 _MEDIA_INDEX = None
@@ -486,6 +522,39 @@ def inject(html):
     return html
 
 
+_CANONICAL_RE = re.compile(r"<link\b[^>]*\brel=['\"]canonical['\"][^>]*>\s*", re.I)
+
+
+def canonical_url(rel, seed):
+    """The address a page is known by. The seed is also served at /, and / wins."""
+    if rel in ("index.html", seed):
+        return SITE
+    return SITE + urllib.parse.quote(rel, safe="/@=&;,+")
+
+
+def canonical(html, rel, seed):
+    """Name the page's own address, replacing any canonical link the archive
+    carried, which points at the old domain. Idempotent."""
+    html = _CANONICAL_RE.sub("", html)
+    url = canonical_url(rel, seed).replace("&", "&amp;")
+    m = re.search(r"</head>", html, re.I)
+    if not m:
+        return html
+    return html[:m.start()] + '<link rel="canonical" href="%s" />\n' % url + html[m.start():]
+
+
+def write_sitemap(path, pages, seed):
+    """Every staged page once, by its canonical address."""
+    urls = sorted({canonical_url(r, seed) for r in pages})
+    with open(path, "w", encoding="utf-8") as fh:
+        fh.write('<?xml version="1.0" encoding="UTF-8"?>\n'
+                 '<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">\n')
+        for u in urls:
+            fh.write("  <url><loc>%s</loc></url>\n" % u.replace("&", "&amp;"))
+        fh.write("</urlset>\n")
+    return len(urls)
+
+
 # --------------------------------------------------------------------------
 # Copying
 # --------------------------------------------------------------------------
@@ -648,6 +717,12 @@ def main():
                 copied[rel] = os.path.getsize(full)
                 override_count += 1
 
+    # The home page's news items (site/news/), before the seed is copied to /.
+    news_count = None
+    news_page = os.path.join(DST, args.seed.replace("/", os.sep))
+    if os.path.isfile(news_page):
+        news_count = news.render_into(news_page)
+
     # The seed is also served at /. Copied after overrides so that editing the
     # seed page updates the front page too, rather than only its own URL.
     seed_staged = os.path.join(DST, args.seed.replace("/", os.sep))
@@ -686,7 +761,7 @@ def main():
         for name in hit:
             patch_hits[name] = patch_hits.get(name, 0) + 1
         with open(full, "w", encoding="utf-8") as fh:
-            fh.write(inject(text))
+            fh.write(canonical(inject(text), rel, args.seed))
 
     # Release binaries are not staged here. The client zip is attached to the
     # GitHub release for its tag, which serves the download and counts it, and
@@ -696,8 +771,11 @@ def main():
     # Crawling and indexing are both allowed. The forum and everything else
     # withheld is absent from public/ entirely, so there is nothing here that a
     # Disallow would need to protect.
+    pages = [r for r in copied if os.path.splitext(r)[1].lower() in PAGE_EXT]
+    sitemap_count = write_sitemap(os.path.join(DST, "sitemap.xml"), pages, args.seed)
+    print("  sitemap.xml: %d pages" % sitemap_count)
     with open(os.path.join(DST, "robots.txt"), "w", encoding="utf-8") as fh:
-        fh.write("User-agent: *\nAllow: /\n")
+        fh.write("User-agent: *\nAllow: /\nSitemap: %ssitemap.xml\n" % SITE)
     shutil.copy2(os.path.join(HERE, "404.html"), os.path.join(DST, "404.html"))
 
     page_count = sum(1 for r in copied
@@ -713,6 +791,10 @@ def main():
     print("  links to unpublished targets unlinked: %d" % sum(dead_links.values()))
     if override_count:
         print("  hand-written overrides applied:  %d" % override_count)
+    if news_count is None:
+        print("  news items: NOT rendered, the home page has no %s" % news.MARKER)
+    else:
+        print("  news items on the home page:     %d" % news_count)
     for name, n in sorted(patch_hits.items()):
         print("  site-wide patch: %-32s %d pages" % (name, n))
     n_img, n_tgt, n_ref = inventory.write(

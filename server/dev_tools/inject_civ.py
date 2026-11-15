@@ -10,9 +10,11 @@ the same way `inject_design.py` gets a ship design built.
     python inject_civ.py ../saves/<capture>.b64 --name Ceti --name Draco \
         -o ../loadgame_blob.b64
 
-`--name` is repeatable. Each new civ gets an auto-picked homeworld as far as
-possible from every planet already spoken for; an unowned planet a ship is
-already ordered to counts as spoken for.
+`--name` is repeatable. Each new civ gets an auto-picked homeworld by
+`--placement`: `farthest`, the default, is as far as possible from every planet
+already spoken for; `random` is any free planet at least the margin from them,
+as a generator places one. An unowned planet a ship is already ordered to
+counts as spoken for. `--seed` makes a random placement repeatable.
 
 A new civ is levelled to what a generated civ starts with (`starting_kit`),
 not to what its donor holds now. Pass `kit=False` for a plain clone of the
@@ -21,6 +23,7 @@ donor.
 import argparse
 import math
 import os
+import random
 import struct
 import sys
 
@@ -56,6 +59,10 @@ STARTING_FOOD_CAP = 600
 STARTING_FACILITIES = ((2, 1), (6, 1), (9, 1))
 STARTING_SETTLED_COUNTER = 1
 STARTING_SETTLED_LAST = 10
+
+# How an auto-picked homeworld is chosen; see `pick_homeworld`.
+FARTHEST, RANDOM = "farthest", "random"
+PLACEMENTS = (FARTHEST, RANDOM)
 
 # A homeworld's founding turn. Every homeworld carries 0 (a colony carries its
 # real founding turn), so a joiner's capital matches the incumbents'.
@@ -295,30 +302,41 @@ def seat_one(owners):
     return min(owners, key=lambda o: o["oid"])
 
 
-def pick_homeworld(planets, taken, margin=0.0):
-    """The uncolonised planet furthest from everything already claimed.
+def pick_homeworld(planets, taken, margin=0.0, placement=FARTHEST, rng=None):
+    """An uncolonised planet for a new civ, chosen by `placement`.
 
-    Maximin over every claimed position. `margin` is a floor under the winning
+    `farthest` is the maximin over every claimed position. `random` is a
+    uniform pick, by `rng` (a `random.Random`), among the free planets at least
+    `margin` from every claimed position. `margin` is a floor under the
     distance: the pick is refused when even the furthest free planet sits
     closer than it.
     """
+    if placement not in PLACEMENTS:
+        raise SystemExit(f"no placement {placement!r}; want one of "
+                         f"{', '.join(PLACEMENTS)}")
     claimed = [p["pos"] for p in planets if p["owner"]] + \
               [p["pos"] for p in planets if p["id"] in taken]
     free = [p for p in planets
             if not p["owner"] and p["id"] not in taken and p["nlen"] == 0]
     if not free:
         raise SystemExit("no uncolonised planet left to use as a homeworld")
+    rng = rng or random.Random()
     if not claimed:
-        return free[0]
-    best = max(free, key=lambda p: min(dist(p["pos"], c) for c in claimed))
-    got = min(dist(best["pos"], c) for c in claimed)
+        return free[0] if placement == FARTHEST else rng.choice(free)
+
+    def room(p):
+        return min(dist(p["pos"], c) for c in claimed)
+    best = max(free, key=room)
+    got = room(best)
     if margin and got < margin:
         raise SystemExit(
             f"no room left: the furthest free planet is #{best['id']} at "
             f"{got:.0f} from the nearest claimed position, under the "
             f"{margin:.0f} margin. Lower it with --margin, or use a bigger "
             f"galaxy")
-    return best
+    if placement == FARTHEST:
+        return best
+    return rng.choice([p for p in free if not margin or room(p) >= margin])
 
 
 def starting_citizens(owner_id):
@@ -606,10 +624,11 @@ def pick_donor(blob, template=None):
 
 def add_civ(blob, new_name, donor_name=None, home_id=None, taken=(),
             user_id=None, margin=None, kit=True, ships=None, template=None,
-            log=print):
+            placement=FARTHEST, rng=None, log=print):
     """Clone a civ into the blob and level it to a generated civ's start.
 
-    `kit` is on by default; the referee's join path passes only a name.
+    `kit` is on by default. `placement` and `rng` choose the homeworld when
+    `home_id` is None (`pick_homeworld`).
     `ships` overrides the starting hull count. `template` is an earlier turn
     of this galaxy, used by `pick_donor` and by the starting kit when no ship
     is left to copy.
@@ -672,14 +691,17 @@ def add_civ(blob, new_name, donor_name=None, home_id=None, taken=(),
     else:
         if margin is None:
             margin = system_spacing(blob)
-        target = pick_homeworld(planets, set(taken) | reserved, margin=margin)
+        target = pick_homeworld(planets, set(taken) | reserved, margin=margin,
+                                placement=placement, rng=rng)
 
     new_id = idg.max_object_id(blob) + 1
     log(f"\n=== {new_name!r}: cloning {donor['name']!r} (id {donor['oid']}, "
         f"{how}) as object id {new_id}")
     nearest = min((dist(target['pos'], p['pos']) for p in planets
                    if p['owner']), default=None)
-    log(f"  homeworld: planet #{target['id']} at "
+    log(f"  homeworld: planet #{target['id']}"
+        + ("" if home_id is not None else f", placed {placement},")
+        + " at "
         f"({target['pos'][0]:.0f}, {target['pos'][1]:.0f}, {target['pos'][2]:.0f})"
         + (", no planet is owned" if nearest is None
            else f", {nearest:.0f} from the nearest owned planet")
@@ -810,6 +832,7 @@ SCORE_TAIL = 9
 # Owner:28 is also in the civ's OWPR, this many bytes before the length field
 # of the civ name dialog 225 chose.
 SCORE_BACK = 78
+REPUTATION_BACK = SCORE_BACK - 16   # f32 Owner:32, four words after the score
 
 
 def score_rows(blob):
@@ -918,6 +941,12 @@ def main():
                     help="refuse an auto-picked homeworld closer than this to "
                          "anything already claimed or under way. Default is the "
                          "galaxy's own median system spacing; 0 disables it")
+    ap.add_argument("--placement", choices=PLACEMENTS, default=FARTHEST,
+                    help="how an auto-picked homeworld is chosen: farthest "
+                         "from everything claimed (default), or random among "
+                         "the free planets that clear the margin")
+    ap.add_argument("--seed", default=None,
+                    help="seed for --placement random, so a run repeats")
     ap.add_argument("--donor", default=None,
                     help="civ to clone (default: the lowest object id, which "
                          "is the seat the generator filled first and the one "
@@ -945,13 +974,14 @@ def main():
         return
 
     taken = []
+    rng = random.Random(a.seed)
     for i, name in enumerate(a.name):
         home = a.home[i] if i < len(a.home) else None
         uid = a.userid[i] if i < len(a.userid) else -1
         blob, used = add_civ(blob, name, donor_name=a.donor, home_id=home,
                              taken=taken, user_id=None if uid < 0 else uid,
                              margin=a.margin, kit=not a.no_starting_kit,
-                             ships=a.ships)
+                             ships=a.ships, placement=a.placement, rng=rng)
         taken.append(used)
 
     print()

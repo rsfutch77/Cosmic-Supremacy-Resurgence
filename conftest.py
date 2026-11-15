@@ -1,6 +1,6 @@
 """
-Collects server/tests and release/tests as pytest items for the VS Code Test
-Explorer.
+Collects server/tests, release/tests and sim/tests as pytest items for the VS
+Code Test Explorer.
 
 Each test_*.py is one item that runs the script with the current interpreter
 and passes on exit code 0, so the scripts and run_all.ps1 work unchanged. A
@@ -23,7 +23,8 @@ import sys
 import pytest
 
 ROOT = pathlib.Path(__file__).resolve().parent
-SCRIPT_DIRS = {ROOT / 'server' / 'tests', ROOT / 'release' / 'tests'}
+SCRIPT_DIRS = {ROOT / 'server' / 'tests', ROOT / 'release' / 'tests',
+               ROOT / 'sim' / 'tests'}
 TIMEOUT = 900
 
 # Scripts that start and kill the game, and the arguments each run takes.

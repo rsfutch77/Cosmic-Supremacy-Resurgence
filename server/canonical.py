@@ -5,18 +5,25 @@ canonical.py: the form of a blob that two honest computations agree on
     python canonical.py runA.b64 runB.b64        # compare two runs
 
     from canonical import canonical_hash
-    canonical_hash(blob)
+    canonical_hash(blob)                    # HASH_VERSION
+    canonical_hash(blob, version=1)         # a record archived before it
 
-Recomputing a turn gives the same bytes except for the trailing `u32` of every
-`KNPL` payload, which is nondeterministic (its top byte reads 0xFF after a load,
-and an AI civ's low bytes vary between runs). The canonical form zeroes that
-dword and compares every other byte. An empty `KNPL` is exactly that dword, so
-it is masked entirely. Given two blobs, the tool prints where they still differ
-after masking.
+Recomputing a turn gives the same bytes except for the colour of every `KNPL`
+record (`dev_tools/knpl.py`): the client never sets it until a player picks
+one, so it carries whatever was in memory, and the reader forces its top byte
+to 0xFF. The canonical form zeroes every record's colour and compares every
+other byte. The colour is drawn only for a civ coloured by choice, which sets
+it.
+
+Version 1 zeroes only each `KNPL` payload's trailing `u32`, the last record's
+colour, or the whole payload when it is empty. `referee.py` records the
+version beside its hashes, and a record without one is version 1. Given two
+blobs, the tool prints where they still differ after masking.
 """
 import argparse
 import hashlib
 import os
+import struct
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -24,7 +31,9 @@ sys.path.insert(0, os.path.join(HERE, 'dev_tools'))
 
 import save_parser as sp
 
-VOLATILE_TAIL = {b'KNPL': 4}          # tag -> bytes at the end of the payload
+HASH_VERSION = 2
+KNPL_RECORD = 36        # bytes per KNPL record, after its u32 count
+KNPL_COLOUR = 32        # the record's colour, a u32
 
 
 def _walk(sections, path=()):
@@ -34,33 +43,53 @@ def _walk(sections, path=()):
         yield from _walk(s.children, here)
 
 
-def masked_ranges(blob: bytes):
-    """[(start, end, why)] of every byte range the canonical form zeroes."""
+def _knpl_colours(blob: bytes, sec):
+    """The blob offset of each record's colour, or None when the payload is
+    not a count and that many records."""
+    if sec.size < 4:
+        return None
+    n = struct.unpack_from('<I', blob, sec.payload)[0]
+    if sec.size != 4 + KNPL_RECORD * n:
+        return None
+    return [sec.payload + 4 + KNPL_RECORD * i + KNPL_COLOUR for i in range(n)]
+
+
+def masked_ranges(blob: bytes, version: int = HASH_VERSION):
+    """[(start, end, why)] of every byte range the canonical form zeroes. A
+    `KNPL` that does not walk has its trailing `u32` zeroed in either
+    version."""
+    if version not in (1, 2):
+        raise ValueError(f'no canonical hash version {version}')
     out = []
     for path, sec in _walk(sp.parse_blob(blob)):
-        n = VOLATILE_TAIL.get(sec.tag)
-        if not n or sec.size < n:
+        if sec.tag != b'KNPL':
             continue
-        out.append((sec.end - n, sec.end,
-                    f'{">".join(path)} trailing {n} byte(s)'))
+        where = ">".join(path)
+        colours = _knpl_colours(blob, sec) if version == 2 else None
+        if colours is not None:
+            out += [(at, at + 4, f'{where} record {i} colour')
+                    for i, at in enumerate(colours)]
+        elif sec.size >= 4:
+            out.append((sec.end - 4, sec.end, f'{where} trailing 4 byte(s)'))
     return out
 
 
-def canonical(blob: bytes) -> bytes:
+def canonical(blob: bytes, version: int = HASH_VERSION) -> bytes:
     """The blob with every volatile field zeroed."""
     out = bytearray(blob)
-    for start, end, _why in masked_ranges(blob):
+    for start, end, _why in masked_ranges(blob, version):
         out[start:end] = b'\0' * (end - start)
     return bytes(out)
 
 
-def canonical_hash(blob: bytes) -> str:
-    return hashlib.sha256(canonical(blob)).hexdigest()
+def canonical_hash(blob: bytes, version: int = HASH_VERSION) -> str:
+    return hashlib.sha256(canonical(blob, version)).hexdigest()
 
 
-def differences(a: bytes, b: bytes, limit: int = 20):
+def differences(a: bytes, b: bytes, limit: int = 20,
+                version: int = HASH_VERSION):
     """Where two blobs differ once both are canonical."""
-    ca, cb = canonical(a), canonical(b)
+    ca, cb = canonical(a, version), canonical(b, version)
     if len(ca) != len(cb):
         return [(None, len(ca), len(cb))]
     out = []

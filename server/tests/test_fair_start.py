@@ -4,7 +4,7 @@ test_fair_start.py: a joiner starts as a new civ, not as a copy of seat one
     python server\\tests\\test_fair_start.py
 
 A joiner is cloned from seat one. `joins.fresh_start` takes back what the
-clone inherited: the score, the civ name and coat of arms dialog 225 chose,
+clone inherited: the score and reputation, the civ name and coat of arms dialog 225 chose,
 the traits and the trait prompt, and, given the galaxy's turn 0, the homeworld
 and the homeworld prompt. `fixtures/messages` m0 and m2 are one galaxy at
 turns 180 and 181; neither civ has confirmed a setup prompt, so the test
@@ -64,6 +64,36 @@ def owpr_score(blob, oid):
         '<I', blob, mo._identity_at(blob, owpr) - icv.SCORE_BACK)[0]
 
 
+def row_reputation(blob, oid):
+    tail = icv.score_rows(blob)[1].get(uid_of(blob, oid))
+    return None if tail is None else struct.unpack_from('<f', tail, 4)[0]
+
+
+def owpr_reputation(blob, oid):
+    owpr = mo._owpr(blob, oid)
+    return struct.unpack_from(
+        '<f', blob, mo._identity_at(blob, owpr) - icv.REPUTATION_BACK)[0]
+
+
+def with_reputation(blob, oid, rep):
+    """`blob` with civ `oid`'s reputation set in OWPR and in its score row,
+    whose row is u32 Owner:4, u32 name length, name, u32 score, f32 Owner:32."""
+    out = bytearray(blob)
+    owpr = mo._owpr(blob, oid)
+    struct.pack_into('<f', out, mo._identity_at(blob, owpr) - icv.REPUTATION_BACK,
+                     rep)
+    uid = uid_of(blob, oid)
+    glob = next(sp.parse_blob(blob)[0].find('GLOB'))
+    n = struct.unpack_from('<I', blob, glob.payload + icv.SCORE_COUNT_AT)[0]
+    at = glob.payload + icv.SCORE_COUNT_AT + 4
+    for _ in range(n):
+        row, ln = struct.unpack_from('<II', blob, at)
+        if row == uid:
+            struct.pack_into('<f', out, at + 8 + ln + 4, rep)
+        at += 8 + ln + icv.SCORE_TAIL
+    return bytes(out)
+
+
 def home(blob, oid):
     planets = mo.planet_index(blob)
     return mo.homeworld_fields(planets[sorted(mo.homeworlds(planets, oid))[0]][2])
@@ -72,7 +102,7 @@ def home(blob, oid):
 def state(blob, oid):
     return {'flags': mo.setup_flags(blob, oid), 'traits': mo.traits_of(blob, oid),
             'home': home(blob, oid), 'name': mo.civ_identity(blob, oid),
-            'score': owpr_score(blob, oid)}
+            'score': owpr_score(blob, oid), 'reputation': owpr_reputation(blob, oid)}
 
 
 def confirmed(blob):
@@ -92,20 +122,28 @@ def confirmed(blob):
 def main():
     m0, m2 = (sp.load_any(os.path.join(FIX, n + '.b64')) for n in ('m0', 'm2'))
     print('\nseat one, confirmed')
-    base = confirmed(m2)
+    base = with_reputation(confirmed(m2), GOOD, -40.0)
     donor = state(base, GOOD)
     check('GoodGuy has both prompts confirmed', donor['flags'], (1, 1))
     check('and a score in OWPR that matches its score row',
           donor['score'], row_score(base, GOOD))
     check('the score is not zero', donor['score'] > 0, True)
+    check('a reputation of -40 in OWPR and its score row',
+          (donor['reputation'], row_reputation(base, GOOD)), (-40.0, -40.0))
+    owpr = mo._owpr(base, GOOD)
+    research = owpr.payload + mo.research_offsets(base, owpr)[1]
+    check('which is where the simulator reads Owner:32',
+          struct.unpack_from('<f', base, research + 27)[0], -40.0)
 
     print('\na clone of it')
     joined, planet = icv.add_civ(base, 'Newcomer', log=quiet)
     new = oid_of(joined, 'Newcomer')
     clone = state(joined, new)
-    check('inherits the traits, flags, name and score',
-          (clone['flags'], clone['traits'], clone['name'], clone['score']),
-          (donor['flags'], donor['traits'], donor['name'], donor['score']))
+    check('inherits the traits, flags, name, score and reputation',
+          (clone['flags'], clone['traits'], clone['name'], clone['score'],
+           clone['reputation']),
+          (donor['flags'], donor['traits'], donor['name'], donor['score'],
+           donor['reputation']))
     check("and the donor's homeworld fields", clone['home'], donor['home'])
     joined = icv.set_score(joined, uid_of(joined, new), donor['score'])
     check("and a score row carrying the donor's score",
@@ -122,6 +160,8 @@ def main():
     check('no civ name or arms is chosen', after['name'], (b'', 0, mo.NO_ARMS))
     check('the score is zero in OWPR', after['score'], 0)
     check('and in the score list', row_score(fresh, new), 0)
+    check('the reputation is zero in OWPR and the score list',
+          (after['reputation'], row_reputation(fresh, new)), (0.0, 0.0))
     check('the incumbents are untouched',
           (state(fresh, GOOD), state(fresh, BAD), row_score(fresh, GOOD)),
           (state(joined, GOOD), state(joined, BAD), row_score(joined, GOOD)))

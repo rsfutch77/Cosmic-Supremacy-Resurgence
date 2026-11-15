@@ -982,6 +982,17 @@ UNSTAMPED_MARK = "unstamped"    # packaged, but the stamp did not reach the bund
 # Where a launcher that is too old is told to go.
 UPDATE_URL = "https://cosmicresurgence.com/download_client.php.html"
 
+# The news panel under the Play page's modes, edited with the website.
+NEWS_URL = "https://cosmicresurgence.com/launcher_news.json"
+NEWS_URL_ENV = "CS_LAUNCHER_NEWS"   # a checkout may name a stand-in
+NEWS_CHECK_FIRST_MS = 2_000
+NEWS_CHECK_EVERY_MS = 3600 * 1000
+NEWS_TITLE_LIMIT = 60               # characters; a longer one is cut
+NEWS_TEXT_LIMIT = 400
+NEWS_IMAGE_LIMIT = 256 * 1024       # bytes; a larger picture is left out
+NEWS_IMAGE_TYPES = ((b"\x89PNG\r\n\x1a\n", "image/png"), (b"\xff\xd8\xff", "image/jpeg"),
+                    (b"GIF87a", "image/gif"), (b"GIF89a", "image/gif"))
+
 # How often a running launcher looks for a newer release, after the first look
 # shortly after it starts.
 UPDATE_CHECK_FIRST_MS = 15_000
@@ -1705,6 +1716,80 @@ def guest_relays(records, uid) -> list:
         if base not in out:
             out.append(base)
     return out
+
+
+def news_url() -> str:
+    return os.environ.get(NEWS_URL_ENV) or NEWS_URL
+
+
+def _plain(value, limit: int) -> str:
+    """`value` as one plain line, cut to `limit` characters, or "" if not text."""
+    if not isinstance(value, str):
+        return ""
+    line = " ".join(value.split())
+    return line if len(line) <= limit else line[:limit - 3] + "..."
+
+
+def news_date(value) -> str:
+    """A `YYYY-MM-DD` date as "14 November 2026", or "" if it is not one."""
+    import datetime
+    try:
+        day = datetime.date.fromisoformat(value) if isinstance(value, str) else None
+    except ValueError:
+        return ""
+    return f"{day.day} {day:%B %Y}" if day else ""
+
+
+def news_item(doc):
+    """The panel's title, date, text and picture path from the news file, or
+    None when it holds no title and no text."""
+    if not isinstance(doc, dict):
+        return None
+    item = {"title": _plain(doc.get("title"), NEWS_TITLE_LIMIT),
+            "date": news_date(doc.get("date")),
+            "text": _plain(doc.get("text"), NEWS_TEXT_LIMIT),
+            "image": doc.get("image") if isinstance(doc.get("image"), str) else ""}
+    return item if item["title"] or item["text"] else None
+
+
+def news_image(url: str, path: str, timeout: float = 10.0) -> str:
+    """The picture at `path` beside the news file, as a data URI, or "".
+
+    Only a picture on the news file's own site, under the size limit and of a
+    known type, is shown; anything else is left out rather than refused.
+    """
+    import base64
+    import urllib.parse
+    import urllib.request
+    if not path:
+        return ""
+    src = urllib.parse.urljoin(url, path)
+    here, there = urllib.parse.urlsplit(url), urllib.parse.urlsplit(src)
+    if (here.scheme, here.netloc) != (there.scheme, there.netloc):
+        return ""
+    req = urllib.request.Request(src, headers={"User-Agent": "CS-Launcher"})
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        data = resp.read(NEWS_IMAGE_LIMIT + 1)
+    if len(data) > NEWS_IMAGE_LIMIT:
+        return ""
+    kind = next((t for magic, t in NEWS_IMAGE_TYPES if data.startswith(magic)), None)
+    return f"data:{kind};base64,{base64.b64encode(data).decode()}" if kind else ""
+
+
+def fetch_news(url: str, timeout: float = 10.0):
+    """The news item read from `url`, its picture inlined, or None for none.
+    Raises on a network or format error in the news file; a picture that
+    cannot be read is left out."""
+    import urllib.request
+    req = urllib.request.Request(url, headers={"User-Agent": "CS-Launcher"})
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        item = news_item(json.loads(resp.read(64 * 1024) or b"{}"))
+    if item:
+        try:
+            item["image"] = news_image(url, item["image"], timeout=timeout)
+        except Exception:
+            item["image"] = ""
+    return item
 
 
 def move_guest_seats(base: str, account_token: str, guest_token: str,
@@ -3219,6 +3304,7 @@ class Launcher:
         self._boot()
         self._update_boot()
         view.after(UPDATE_CHECK_FIRST_MS, self._update_tick)
+        view.after(NEWS_CHECK_FIRST_MS, self._news_tick)
         view.after(120, self._drain)
         view.after(1000, self._watch_game)
 
@@ -5545,6 +5631,25 @@ class Launcher:
             self.msgs.put(("__update__", found, err, feed if test else None))
         threading.Thread(target=work, daemon=True, name="update").start()
 
+    def _news_tick(self):
+        """Read the news item, off the UI thread."""
+        self.view.after(NEWS_CHECK_EVERY_MS, self._news_tick)
+        url = news_url()
+
+        def work():
+            try:
+                self.msgs.put(("__news__", fetch_news(url), None))
+            except Exception as exc:
+                self.msgs.put(("__news__", None, f"{type(exc).__name__}: {exc}"))
+        threading.Thread(target=work, daemon=True, name="news").start()
+
+    def _on_news(self, item, err):
+        """Show the item, or keep the last one when the site cannot be read."""
+        if err:
+            self.say(f"news: not read ({err})")
+            return
+        self.view.show_news(item)
+
     def _on_update_checked(self, found, err, test_feed):
         self.update_busy = False
         where = f" (test feed {test_feed})" if test_feed else ""
@@ -5802,6 +5907,8 @@ class Launcher:
                     self._on_mp_played(gid, turn)
                 elif isinstance(msg, tuple) and msg and msg[0] == "__update__":
                     self._on_update_checked(*msg[1:])
+                elif isinstance(msg, tuple) and msg and msg[0] == "__news__":
+                    self._on_news(*msg[1:])
                 elif isinstance(msg, tuple) and msg and msg[0] == "__mp_refused__":
                     self.warn(msg[1])
                 elif isinstance(msg, tuple) and msg and msg[0] == "__log_offer__":

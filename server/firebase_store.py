@@ -69,7 +69,8 @@ STATE_FIELDS = ('turn', 'deadline', 'turn_seconds', 'civs', 'hash',
                 turn_store.STATUS_KEY, turn_store.CLOSED_REASON_KEY,
                 turn_store.RECLAIMED_KEY, turn_store.JOINED_KEY,
                 turn_store.MIN_BUILD_KEY, turn_store.WARN_KEY,
-                turn_store.RECLAIM_KEY, turn_store.BOTS_KEY)
+                turn_store.RECLAIM_KEY, turn_store.BOTS_KEY,
+                turn_store.PLACEMENT_KEY)
 
 # Who has submitted, as `{"<turn>": [civ, ...]}` on the galaxy document. Keyed
 # by turn so a commit racing a publish lands under its own turn; `publish`
@@ -449,6 +450,13 @@ class FirebaseTurnStore:
             return None
         data = self._get(self.view_object(civ, turn))
         return sp.decode_save(data) if data is not None else None
+
+    def served_turn(self, civ: str, turn: int) -> bytes:
+        """The turn as a caller playing `civ` is served it
+        (`turn_store.served_copy`)."""
+        snap = self.doc.get()
+        doc = (snap.to_dict() or {}) if snap.exists else {}
+        return turn_store.serve(self, doc, civ, turn)
 
     def publish(self, turn: int, blob: bytes, turn_seconds: int = None,
                 views: dict = None) -> None:

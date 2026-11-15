@@ -74,6 +74,14 @@ main { flex: 1; min-width: 0; padding: 10px 8px; display: flex; flex-direction: 
 .row:nth-child(even) { background: #222c36; }
 .row:hover { background: #34475a; }
 .blurb { color: #b9c6d2; line-height: 16px; }
+/* The news panel under the modes: a picture, then the title and date over the text. */
+.newsbox { display: flex; gap: 14px; padding: 12px; background: #222c36; border: 1px solid #34475a; }
+.npic { flex: 0 0 100px; width: 100px; height: 100px; border: 1px solid #34475a; }
+.nbody { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 8px; }
+.nhead { display: flex; align-items: baseline; gap: 12px; }
+.ntitle { flex: 1; min-width: 0; font-size: 14px; font-weight: bold; color: #e8eef2; }
+.ndate { flex: 0 0 auto; color: #8ea2b3; font-size: 11px; }
+.ntext { color: #b9c6d2; line-height: 16px; }
 .hint { margin-top: auto; color: #8ea2b3; font-size: 11px; }
 
 /* Up to two lines: an outage note beside the turn number is long. */

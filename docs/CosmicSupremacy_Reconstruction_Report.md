@@ -73,9 +73,14 @@ Two consequences worth keeping in mind:
 ### What a planet's `PLPR` holds (September 2026, partial)
 
     +4            the per-unit output rates, `Planet:96` on the object
+    +15           u32 food store
+    +19           u32 food store size, what fills it once
     +23           u32 production points accumulated toward the current item
     +27           u8  recruitment rate, a percentage of food diverted into
                       military growth each turn
+    +28           u32 food per soldier, 300 in every capture
+    +32           u32 the military store; a soldier is made when it reaches
+                      the cost above, and the excess carries
     +36           u32 population count
     +40 .. +40+9n nine-byte citizen records, one per unit of population:
                       +0  u8   job id, 0 farmer, 1 worker, 2 scientist,
@@ -105,14 +110,48 @@ Two consequences worth keeping in mind:
     +40+9n        u32 stationed-military count, then that many records of the
                   same nine-byte shape. A ship carries its crew in the same
                   form, SHPR+4 the count and SHPR+8 the records, and a record
-                  moves between the two byte for byte.
-    +167          PROD, the production queue, 29 bytes; its payload carries
-                  the queue's own fields, at +29 the object id of what is
-                  being built, and a nested section naming it, FCLT for a
-                  facility
+                  moves between the two byte for byte. In a soldier's or crew
+                  member's record, `+1..+2` is an f16, its experience: it
+                  rose 0.2 a turn on a planet with a Military Camp, the
+                  manual's 0.1 doubled, and a new soldier's reads 0
+                  (November 2026, the live Beta galaxy). It reads zero in a
+                  citizen's record because citizens do not train.
+    +167          PROD, the production queue, 29 bytes when the planet is in
+                  no queue; its payload carries the queue's own fields, the
+                  object id of what is being built, and a nested section
+                  naming it, FCLT for a facility. A queued planet's PROD is
+                  longer (41, 49 and 53 bytes seen) by fields not decoded, so
+                  no fixed offset finds the design: a ship build's design id
+                  is the payload of the SHIP section that ends PROD, its last
+                  4 bytes
     +255          ENLI, 4 bytes
 
 `WLTH` appears inside `PROD`'s payload rather than beside it, and is replaced by `FCLT` when a facility is queued. The rest of `PLPR` is undecoded and mixes the planet's population, stores and derived economy with the job decision, which is why a submitted job change is carried as the citizen array alone and never as the whole section.
+
+**The settled block**, the 51 bytes between `PROD` and `ENLI` on a colonised planet, opens with
+the population history the food store is sized from (November 2026, from chained engine ticks):
+
+    +0            8 × u16  past populations, newest first; bit 12 (0x1000)
+                           marks an entry older than the last birth
+    +16           u32      slots filled, 1 at founding, 8 from turn 7
+    +24           u32      the owning civ
+    +28           f32      turns since founded
+    +32           u32      the turn it was founded
+    ENLI −5       u8       the ship resource the planet mines, 0 metal to 4 exotics
+    ENLI −4       u32      ship resource per miner, before mines and traits
+
+The ore fields hold on every planet, owned or not: across a 547-planet galaxy the type takes
+all five values, metal most often (266 planets), and the rate runs 1 to 25. A miner on a
+rate-10 planet adds 10 metal a turn and one on a rate-6 planet adds 6, on every mining tick in
+the oracle corpus (November 2026).
+
+Each tick pushes the population after any birth, and a birth sets bit 12 on every older entry.
+The store size is the manual's `40 + 40 × floor((n − 1)^1.5)` for `n` the average of the
+unflagged filled entries, rounded up, so a birth resizes it at once and a loss walks it down
+over the following turns: 18 to 15 citizens gave 2840, 2600, 2600, 2600, 2600, 2360. On the
+Single Player galaxy the slot count rises 1 to 8 from founding. In the referee archive galaxy,
+whose homeworlds the join tools rewrote, it falls at a birth instead (5 to 4, 6 to 4), and what
+it counts there is not established.
 
 #### Section framing, read out of the archive class, not inferred from blobs
 
@@ -162,7 +201,7 @@ Fixed part 54 bytes; total `54 + 28 × (both leg counts)`. Each leg is `[originX
 
 This also **resolves two previously separate readings of the order object into one structure.** The writer hands both `+28` and `+52` to the *same* helper `0x004E5200`, which reads `_Myfirst`/`_Mylast` at `+0xC`/`+0x10` of whatever it is given and divides the span by 28. So `+28` and `+52` are two objects of the same type, each holding a 28-byte-element vector 12 bytes into itself, which is exactly why the known route-leg vector sits at `+40/+44/+48`.
 
-- **Falsifiable prediction, not yet tested:** there is a **second leg vector at `+64/+68/+72`**. On a live order, `(_Mylast − _Myfirst)` there should be a multiple of 28.
+- **Confirmed: the second leg vector is the path already flown** (November 2026, the live Beta galaxy). A colony ship with a 183.95 leg in the first list and a 76.27 leg in the second stood exactly 183.06 from the first leg's origin at progress 183.06, and the second leg ended where the first began. Progress runs along the first list alone, so a ship arrives when progress reaches the first list's length.
 - **The intrusive list nodes are not persisted.** The helper touches only the vector, and the reader constructs both `+28` and `+52` from scratch via `0x004A6D30`. An injected `ROUT` therefore supplies leg vectors only, and the engine rebuilds the node chains that make this object impossible to fabricate by hand.
 - **One asymmetry to watch:** the writer emits the reference id raw, but the reader **adds the global at `0x00857C58`** to any non-zero id before resolving it through the object registry (`0x004D9CA0`). Injected ids may need to be written relative to that base.
 
@@ -184,6 +223,18 @@ This also **resolves two previously separate readings of the order object into o
 The conditional tail is the tell: an unordered ship's DYNO is `4 + 17 + 4 + 1 + 4 = 30` bytes, an ordered one's is `30 + (8 + ROUT payload) + 4`. A capture with two ordered and two unordered ships gave exactly 30 / 152 / 124 / 30.
 
 So pushing an order takes **three coordinated edits**, not one: the SHCO order-type byte, the has-orders byte, and the appended `ROUT` + `u32`. Writing only the `ROUT` leaves the order type at 0. `server/dev_tools/inject_order.py` does all three.
+
+**A scout is the exception: its has-orders byte reads 0 and its `ROUT` is there anyway**
+(November 2026, the Single Player scout from turn 0 and two others). The SHCO byte reads 2,
+the route holds one leg to the next system, and the engine rewrites it on the tick the scout
+arrives. A reader that trusts the has-orders byte misses every scout's route.
+
+**A route's legs stand off each body by 1.02 radii.** The radius is the `f32` at `SUN` and
+`PLNT` own payload `+20`: a sun of radius 3.9276 starts a leg 4.0062 out, and a planet of 1.6
+starts one 1.632 out. The `ROUT` tail after progress holds the ship's position and, while it
+orbits, the id of the body it orbits, 0 once it is moving. Progress is the distance travelled
+along the legs, and the ship's position is exactly that point, so a ship placed off its route
+jumps onto it at the next tick.
 
 **Colonising is a ship order, not an immediate-effect action.** It is the same three edits with the SHCO byte reading **3** where a move writes **1**, so both come off one extraction path. A human given a turn-2 galaxy and asked for one move changed exactly one section of a 37,851-byte blob, that ship's `DYNO`, 38 bytes to 132.
 
@@ -315,7 +366,7 @@ PLNT payload:  u32 objectId ; f32 x, z, y ; u32 ownerObjectId ; f32 ;
 
 **An injected civ was present in the diplomacy list but absent from the overview score list, because a clone inherited its donor's `Owner:4`.** `Owner:4` is the `u32` that ends the `OWNR` payload (see the layout above). `add_civ`'s blanket `replace_u32` rewrites the donor's *object id*, which this is not, so the clone kept it. **`inject_civ.py` now assigns `max(existing) + 1`**, and `--userid` forces a value, pass one another civ already holds and the bug comes back, which is how the control below was built.
 
-*How it was found, before anything was run.* Ruled out the server (no score-related `action=` has ever reached the stub, the log carries only `savegame`, `testconnection`, `listcivnames`, `listcoa`, `getcoa`, so the list is client-side); ruled out a missing per-civ section (`OWPR`, `CVTR`, `SERV`, `GOVS`, `ADMS`, `SPQS`, `USSE` are byte-identical across all three civs in a turn-5 capture, and score itself lives on the object at `Owner:28`); ruled out `KNPL` (at turn 185 every civ knows every other, the injected one included, 36-byte records keyed by the other civ's object id, second word the turn contact was made). What was left was the one per-civ field a clone duplicates: across three separately generated galaxies it reads **20 for `GoodGuy` and 21 for `BadGuy`, always**, and every injected civ carried its donor's value.
+*How it was found, before anything was run.* Ruled out the server (no score-related `action=` has ever reached the stub, the log carries only `savegame`, `testconnection`, `listcivnames`, `listcoa`, `getcoa`, so the list is client-side); ruled out a missing per-civ section (`OWPR`, `CVTR`, `SERV`, `GOVS`, `ADMS`, `SPQS`, `USSE` are byte-identical across all three civs in a turn-5 capture, and score itself lives on the object at `Owner:28`); ruled out `KNPL` (at turn 185 every civ knows every other, the injected one included, 36-byte records keyed by the other civ's object id, third word the turn contact was made). What was left was the one per-civ field a clone duplicates: across three separately generated galaxies it reads **20 for `GoodGuy` and 21 for `BadGuy`, always**, and every injected civ carried its donor's value.
 
 *The A/B that confirmed it.* Two `.dat`s built from the same turn-185 capture, **differing in four bytes**, `Ceti`'s `Owner:4`, 20 (colliding with `GoodGuy`) versus 22. Same galaxy, same scores, same contact state, loaded one after the other:
 
@@ -332,9 +383,9 @@ So the score list holds one row per distinct `Owner:4`, and the collision, not t
 
 **The score list is saved in `GLOB` and only a turn boundary rebuilds it.** The GLOB v17 payload is `u32 turn, i32, u8, u32 rowCount`, then one row per `Owner:4`: `u32 Owner:4, u32 nameLen, name, u32 Owner:28, f32 Owner:32, u8 flag` (writers `0x52BFD0`/`0x52BE30`, reader `0x52DA20`). Load (`0x56D700`) reads the rows back as saved; the rebuild `0x52DFE0`, called from the tick at `0x56D240`, runs `Owner::ComputeScore`, which also adds to `Owner:24` and `Owner:32`, so it cannot simply be called at load. **`inject_civ.add_civ` now writes the newcomer's row**, carrying the donor's tail as the clone's `OWNR` does, and leaves a list with no rows (turn 0) for the first boundary; `server/tests/test_score_row.py` covers it.
 
-[ ] **Confirm the injected score row live.** Load a turn-9 or later galaxy with a civ injected by the new `add_civ`: the Overview list shows every civ before any boundary, and still does after one, with the newcomer's score recomputed. Then a turn-0 injection: the list is empty for everyone until the first boundary.
+[x] **Confirm the injected score row live.** Load a turn-9 or later galaxy with a civ injected by the new `add_civ`: the Overview list shows every civ before any boundary, and still does after one, with the newcomer's score recomputed. Then a turn-0 injection: the list is empty for everyone until the first boundary. **Confirmed** (14 November 2026, the client's map at `0x857940` read after each load): turn 9 of `galaxy_demo` with `Newcomer` injected loads with its three rows, the newcomer's among them, and after one boundary still has three, with scores recomputed (the newcomer 0 to 1526). `SinglePlayerGalaxy.dat` with `Newcomer` injected loads with no rows, and the first boundary lists all three civs. A civ whose user id is 0, `DemoPlayer` in `galaxy_demo`, has no row before or after a boundary, injected galaxy or not. At load, `0x56D6C0` rebuilds a list that is empty past turn 0, so a blob that drops `GLOB`'s rows comes back listed.
 
-[ ] **The score list also feeds battle scoring.** `0x4430F0` reads it for the score ratio and skips a civ with no row, so a missing row changed battle scoring too, not only the display. Check whether any other caller reads the map at `0x857940`.
+[x] **The score list also feeds battle scoring.** `0x4430F0` reads it for the score ratio and skips a civ with no row, so a missing row changed battle scoring too, not only the display. Check whether any other caller reads the map at `0x857940`. **It does not feed battle scoring.** `0x4430F0` is the reputation forecast that the diplomacy screen (`0x444470`) and the declare-war dialog (`0x4BDE50`) show, and nothing in the battle code reaches the map: battle reputation (`0x518480`, from `0x51EEE5`) takes the scores it is given. The map's other users are the Overview screen, which copies it (`0x419700`) and walks it from the reputation panel (`0x57BE20`, called from `0x413E20`), the save's writer (`0x52BFD0`), the load (`0x52DA20`, `0x56D6C0`), the tick's rebuild (`0x52DFE0`) and its clears. A missing row hid a civ from the Overview and the forecast, nothing more.
 
 [x] **A clone inherits its donor's display name and score.** The `OWPR` display-name override (`civ+0x1A0`) and `Owner:28`/`Owner:32` are copied, so from the first boundary an injected clone of a renamed donor shows under the donor's display name, and a joiner starts with the donor's score. Same kind of inheritance as `EXSY` below. **Fixed for joins** (`joins.fresh_start`, `test_fair_start.py`, 13 November 2026): a joiner's score is set to zero in its score row and in `OWPR`, where `Owner:28` sits 78 bytes before the length field of the civ name dialog 225 chose (measured against every civ's score row on the sandbox at turn 163), and the civ name and arms are cleared, so the client offers dialog 225 and the merge takes the joiner's own choice.
 
@@ -342,11 +393,15 @@ So the score list holds one row per distinct `Owner:4`, and the collision, not t
 
 [x] **A joiner inherits the donor's civ traits, bonuses included.** Seen on screen 28 September 2026: a civ that joined at turn 11 carried the donor's food-output trait bonus. `add_civ` clones the donor's `OWNR` whole and the traits are inside it, so this is the same mechanism as `EXSY` and the food stores rather than a separate defect. Accepted for the beta, where everybody starts with the same extra anyway, and wrong afterwards: a new civ should get the homeworld button back and choose its own traits. Everything the fix needs is now located: the trait values are `OWNR > CVTR`, (index, value) pairs after a 20-byte header (`merge_orders.TRAIT_RULES`), and the two prompts are offered while `Owner:359` (homeworld) and `Owner:360` (traits) are clear, both one-byte flags in `OWPR` (see "The three one-time setup prompts"). So `add_civ` should give the joiner the untouched trait values and clear both flags, and the referee then takes the joiner's confirm like anyone else's. **Fixed for joins** (`joins.fresh_start`, 13 November 2026): every trait is set to 0, the value a civ holds before its first confirm, and `Owner:360` is cleared. Given the galaxy's turn 0, the joiner's homeworld takes the dialog fields of a homeworld whose prompt was never confirmed there, and `Owner:359` is cleared; without turn 0 the homeworld stays as cloned and the join log says so.
 
-[ ] **Does a joiner inherit the donor's corruption?** Unknown, and it matters more than it looks. A civ joining a galaxy whose seat one is failing late would take on that civ's corruption along with its warehouses, which could cripple a newcomer at the moment they arrive. Corruption has **resisted location in memory entirely** (see the memory report) and is plausibly derived at display time from population, buildings and military rather than stored, in which case copying the planet copies the corruption and there is no field to clear. `GSET.corruption_multiplier = 100` is a galaxy-level knob and the cheapest way to make it vary. Settle whether it is stored or derived first: the two answers need completely different fixes, and only one of them has a field to blank. Observed at −0.5% on a turn-11 joiner, which is unremarkable on its own and says nothing about a late-game donor.
+[x] **Does a joiner inherit the donor's corruption?** Unknown, and it matters more than it looks. A civ joining a galaxy whose seat one is failing late would take on that civ's corruption along with its warehouses, which could cripple a newcomer at the moment they arrive. Corruption has **resisted location in memory entirely** (see the memory report) and is plausibly derived at display time from population, buildings and military rather than stored, in which case copying the planet copies the corruption and there is no field to clear. `GSET.corruption_multiplier = 100` is a galaxy-level knob and the cheapest way to make it vary. Settle whether it is stored or derived first: the two answers need completely different fixes, and only one of them has a field to blank. Observed at −0.5% on a turn-11 joiner, which is unremarkable on its own and says nothing about a late-game donor. Corruption is derived, from the civ's planet count and its reputation (`docs/Fast_Sim_Plan.md` §5b), so the field to blank is reputation: see the next item. **Answered:** a joiner holds its own planets, and `joins.fresh_start` zeroes its reputation, so it starts with a new civ's corruption. Not yet seen on screen.
+
+[x] **A joiner may keep the donor's reputation.** `Owner:32` is the empire reputation float that the corruption function reads (`fast-sim`, `docs/Fast_Sim_Plan.md` §5b), not a second score field, and `Owner:36` holds reputation gained this tick. `joins.fresh_start` zeroes the f32 in the joiner's `GLOB` score row through `set_score`, but in `OWPR` it zeroes only `Owner:28`, so the `OWPR` copy of `Owner:32` and `Owner:36` stay as cloned. Find which copy the client loads, then join a civ cloned from a donor with nonzero reputation and read its corruption against a fresh civ's. **Fixed for joins** (`joins.fresh_start`, `test_fair_start.py`, 14 November 2026): the joiner's `Owner:32` is zeroed in `OWPR`, `inject_civ.REPUTATION_BACK` bytes before the civ name's length field and four words after the score, which is where `sim/load.py` reads it. A reload reads `Owner:32` back from `OWPR` (`docs/Fast_Sim_Plan.md` §5b), and `set_score` zeroes the score row's own copy, which the next boundary rebuilds. `Owner:36` has no located place in the save.
 
 [x] **An injected civ gets no ships.** `SHIP`/`DYNO` records are galaxy-level rather than per-civ, so a starting colony ship is a separate job. Against civs that start with two, that is a real handicap at turn 1, the civ can build its own only if the donor's homeworld had a shipyard. **Fixed:** `starting_kit` adds `STARTING_SHIPS` hulls, two, as a generated civ starts with.
 
-[ ] **Homeworld placement is one hardcoded policy.** New civs are placed as far from every claimed planet as possible, which is the right default for testing an AI (contact becomes something it has to earn) but not the only one worth having, random placement is what a real generator does and is the only way to test a hostile neighbour two systems away, and clustered or per-team placement follow from it. Wants a `--placement` option rather than a second function.
+[x] **Homeworld placement is one hardcoded policy.** New civs are placed as far from every claimed planet as possible, which is the right default for testing an AI (contact becomes something it has to earn) but not the only one worth having, random placement is what a real generator does and is the only way to test a hostile neighbour two systems away, and clustered or per-team placement follow from it. Wants a `--placement` option rather than a second function. `inject_civ.pick_homeworld` takes `placement`: `farthest`, the default, or `random`, a uniform pick among the free planets that clear the margin, by a seedable `random.Random`. `inject_civ.py` has `--placement` and `--seed`. A galaxy's joins follow its `placement` state field, set with `galaxy_tool.py placement <galaxy> random` and read back; absent or unknown is `farthest`. The referee seeds a random join by the turn and the name, so the same join lands in the same place, and `joins.py --placement` previews either (`server/tests/test_placement.py`, `test_joins.py`, `test_galaxy_tool.py`). Not run against the Firebase emulator. Clustered and per-team placement are not built.
+
+  Both placements were checked end to end on a folder copy of the sandbox at turn 173, with its turn 0 (14 November 2026; `join_turn_acceptance.run` with a real client, the copy deleted afterwards). `farthest` seated FarJoiner on planet #138 and `random` seated Wanderer on #137, each a planet nobody owned, named or had a ship headed for, and each the planet `pick_homeworld` gives for that placement and seed. In both, the newcomer's civ and homeworld setup flags are clear on the join turn and the turn after, so both prompts are offered, and Wanderer's client shows "Customize Your Home World" on load. Each galaxy closed the join turn and one more, no incumbent's planets or `OWNR` bytes differed from a no-join control, and a cold client opened turn 175 as the newcomer holding one planet. Elder Race gains ship #358 in those ticks, in the control as well. At the default margin, the median system spacing (172), only two of the sandbox's 62 free planets qualify, so `random` there chooses between #137 and #138. In the first `random` run the referee's client exited during the load of the second tick and left no dump; the same blob loaded when relaunched, and the rerun passed.
 
 - [x] **A galaxy injected with a colonisation in flight plays on in the client.** The colony ships' `ROUT` sections come out byte-identical after injection, and across the tick archive the planet a colonise order names is the planet that changes hands two ticks later, 7 times out of 7. In the client (`join_acceptance.py k1`, 2 November 2026), DemoPlayer's two colony ships were sent from turn 11 of the demo galaxy and Joiner was added at the same turn; played 60 turns with and without the join, the near target #141 went to DemoPlayer on turn 13 and the far target #6 on turn 63 in both, with no divergence in any ship's orders, and Joiner's homeworld grew from 7 to 28. `k1load` opened the joined galaxy as Joiner, in the TestBed build, since this checkout has no `CosmicSupremacy_Player.exe`.
 
@@ -387,16 +442,14 @@ The general shape still matters more than this instance: **game state living in 
 
 #### The caveat: the client never uploads state on its own
 
-`SaveGame` at `0x0048B350` has exactly one caller in the binary, the Save/Load dialog at `0x0048B950`, which is reached through a message map, and the normal game has no such dialog. So a server cannot ask a client to submit its state; `client/dev_tools/trigger_save.py` gets a blob out by calling `SaveGame` in a remote thread. That is not memory *editing*, it invokes the engine's own routine and writes no game state, but it is still process injection, so the read direction is not yet a clean protocol operation.
+`SaveGame` at `0x0048B350` has exactly one caller in the binary, the Save/Load dialog at `0x0048B950`, which is reached through a message map, and the normal game has no such dialog. So a server cannot ask a client to submit its state; `client/dev_tools/trigger_save.py` gets a blob out by calling `SaveGame` in a remote thread. That is not memory *editing*, it invokes the engine's own routine and writes no game state, but it is still process injection. `patch_save_message.py` gives every shipped client a handler that saves on a window message instead (see "A save without a remote thread").
 
-There is a much better candidate for what the original did. `0x0056EBC0` writes an **`STCO`** section that includes ship routes via the same `Route::Write` used by `ROUT`, gated on `[0x0086F4F8]` and `[0x0086F1A2]`, and reached from `0x00574E10` inside the testbed init path at `0x00577160`. That looks like per-turn order submission, far lighter than uploading a whole galaxy.
+`STCO` was the candidate for a per-turn order upload. **It is not one.** It is one of the original client's 56 server commands, sent the moment a player sets a ship's course, and the original had no per-turn upload at all: see "The original client's online path" below.
 
-[ ] decode the **`STCO` section and the path that uploads it** (`0x0056EBC0`, gated on `0x0086F4F8` /
-`0x0086F1A2`, reached via `0x00574E10` from `0x00577160`). It serialises ship routes with the same
-`Route::Write` as `ROUT`, which makes it the strongest candidate for the original per-turn
-order-submission format, the missing half of the multiplayer loop. If it is what it looks like, the
-server learns player intent from a small `STCO` upload instead of a full save, and the remote-thread
-`SaveGame` call in `trigger_save.py` becomes a dev convenience rather than the mechanism.
+- [x] decode the **`STCO` section and the path that uploads it** (`0x0056EBC0`). Decoded statically
+  on 14 November 2026: `STCO` v0 is the "set course" command, sent when a player orders a ship, and
+  the server's answer sets the order. It is not a per-turn submission, and the referee and the merge
+  keep the save capture. What it changes for them is below.
 
 [x] find the rest of the **state the blob cannot carry**. The played-vs-loaded comparison was run in
 September 2026, and paired with a **functional** test, because a structural diff on its own cannot
@@ -432,7 +485,7 @@ fixture, 70 turns each: arm P played through a two-sided battle, arm L loaded th
 and was ticked the same distance. Once the `Unnamed` star names are stripped the two blobs still
 differ by **30 bytes**, and the difference is real rather than cosmetic. It is two dwords and two
 ASCII digits in `NWDB`, one byte at `OWPR+0`, and a run in the `PLPR` of the planet the battle
-happened over, where the played branch's growth series sits one step ahead. Ticking both branches 20
+happened over, whose growth differs after the battle. Ticking both branches 20
 further turns leaves them nine bytes apart in LENGTH, exactly one nine-byte population record: the
 battle planet holds 19 citizens down the played line and 20 down the loaded one. The difference
 cashes out rather than washing out.
@@ -455,10 +508,144 @@ client session with actuator writes between them, which is precisely the played 
 experiment. Such a galaxy cannot be captured, reloaded and continued as the same galaxy, and
 per-turn measurements taken across such a run are not reproducible from the blob.
 
-[ ] **What those 30 bytes are is not established.** The `NWDB` pair reads `1` against `2` in ASCII,
-which would be a count rendered into news text, and a count rendered at generation time is carried by
-the blob while one recomputed at read time is not. That distinction is this section's own standard
-and is the thread to pull first.
+[x] **Every one of the 30 bytes is named, and the arms part at the battle.** The `NWDB` digits are
+the planetary-defense damage percent in the two battle reports (strings 9 and 11): the loaded
+branch reads `12% (1 Citizen Killed)` and the played branch `11%`. The client formats that percent
+at `0x00522EF0` from a double, truncated with `_ftol`, clamped to 0..100 and printed into the
+`planetary-defense damage:` line at `0x0076D63C` when it writes the report, so the blob carries
+the text and nothing recomputes it on read. The two `NWDB` dwords are those strings' hashes
+(`news.string_hash`, `NWDB +948` and `+3780`), which follow the digits. `OWPR+0` is the civ's
+credits (`merge_orders.credits_of`): BadGuy holds 5,519 loaded and 5,629 played. Settled on
+14 November 2026 from `war_fork.dat` (turn 110), the loaded arm rerun to turn 180 with the
+current `referee.tick`, and `war_fork_played.dat`, with the `Unnamed` star names stripped.
+
+The battle is at turn 111, the first tick after the fork, on BadGuy's HQ (planet 384, 16
+citizens), and the two arms resolve it differently. The loaded arm kills the planet's one worker,
+the played arm one of its four founding farmers. The rest follows: the next citizens arrive at
+turns 119, 130, 143 and 160 loaded and 120, 132, 148 and 170 played, the food store reads 2,554
+against 1,040, and the credits differ by 110. So the played client carries state into that
+battle that its fork blob does not hold.
+- [ ] **What the played client knows at the fork that the blob does not.** Next step: load
+  `war_fork.dat`, tick once with the double that `0x00522EF0` formats read live, and compare it
+  with the same read in a client that played up to turn 110. Done when the field
+  behind the 11% is named and either saved or shown to be rebuilt the same way on load.
+
+#### The original client's online path (November 2026)
+
+Read from the disassembly on 14 November 2026; nothing here has run against a server. The four
+clients share every address. `client/dev_tools/online_commands.py` lists the commands from an
+exe, and `server/tests/test_online_commands.py` pins the table.
+
+**The original client is a socket client, and every player action is a command.** A galaxy pass
+is base64 of a first line `<host> <port> <passhash> <player>` and the lines after it, read at
+`0x00576230`. `TUTO`, `DEMO` and `TEBE` are the only kinds: their passes put the kind before the
+host, and any other first word is taken as the host. The client opens a TCP connection to that
+host and port (`Socket.cpp`, `ws2_32`). Each action's routine follows one shape:
+
+1. Online when the channel at `[0x0086F198]` belongs to the connection at `[0x0086F194]`, the
+   connection is up (`0x00562CC0`) and `[0x0086F1A2]` is not 1: it opens a message (`0x00562030`),
+   writes one section named for the command, sends it (`0x00561950`), blocks for the answer
+   (`0x0056E930(1)`), and applies the answer only if it reads `SUCC` (`0x005612A0`). Nothing
+   changes locally before the server answers.
+2. Otherwise, when `[0x0086F1A0]` is set, it applies the action locally. This is the path every
+   client in this project takes: a `.dat` argument sets the flag (`0x0056E7F0`), and so do the
+   `standalone` option, a `TUTO`, `DEMO` or `TEBE` pass, and T4a in the Resurgence build.
+3. Neither: nothing happens.
+
+`[0x0086F1A2]` is set when a pass names port 4710 (`0x00577EF4`). `[0x0086F4F8]` is the Tutorial
+being on; `STCO` calls the Tutorial's order check (`0x0057E670`) before anything else, and raises
+Tutorial event 14 after a local Colonize order.
+
+**`STCO` v0, set course** (`0x0056EBC0`, called from `0x00475A8B`, `0x0047C347` and `0x00575232`): a
+`u32` ship id, the command record (`0x004E9CE0`), and the route when there is one (`Route::Write`,
+`0x004E5310`; the table in §2 calls this call site "the ship writer"). The answer carries a `ROUT`
+that the client reads (`0x004E6E90`) and sets on the ship (`0x004DA450`), then applies the command
+(`0x004D9DC0`). Offline it sets the route it was given and applies the command directly.
+
+**The wire is the save's own section format**: a tag, then a `u32` with the version in its top 6
+bits and the length in the low 26. The client wraps each outgoing command in `CMND` v0, a `u32` and
+the command's section compressed with zlib (`0x00561710`); the `u32` is the section's length before
+compression (12 for the 12-byte `RQLG` below). A frame is accepted with a version up to 100 and a length up to
+10,000,000 (`0x00561350`).
+
+**What the server sends** is read by the dispatcher at `0x00573EA0`, polled from the main loop,
+which sends `ALIV` when it has been idle:
+
+| tag | handler | what it does |
+|---|---|---|
+| `TICK` | `0x0056DD10` | clears `[0x0086F1A1]`, the galaxy-is-current flag |
+| `SAVE`, `UPDT` | `0x0056DDA0` | loads the galaxy with the loader a `.dat` uses (`0x0056D700`), sets `[0x0086F1A1]` and sends `RQTM` |
+| `NEWS` | `0x00573940` | while `[0x0086F1A1]` is set, one `NEWS` record and a byte, added to the local civ's list (`Owner::AddNews`, `0x00543720`) and shown at once |
+| `ALIV`, `RSMA`, `TIME`, `TRKP` | `0x0056E400`, `0x0056DCE0`, `0x0056E460`, `0x0056E620` | not read further |
+
+**The 56 commands**, in address order. What each one's offline branch does, and the merge rule
+that carries it, is `merge_orders.COMMANDS`.
+
+`RQTM` `RSMA` `RQTN` `RQSV` **`STCO`** set course · `SLFC` `TGSD` `MOSD` `NWTR` `MDTR` `SEEN` `DISS`
+`DLTR` `STCL` `HRPR` `NWGV` `DLGV` `MDGV` `STGV` `NWAD` `DLAD` `MDAD` `STAD` `NWSQ` `MDSQ` `DLSQ`
+`STSQ` `RNGV` **`CUHW`** and **`CUCV`** the two customisation prompts · **`SVUS`** the civ's `USSE`, the end-galaxy vote among it · `PLRR` `STEL` `CNWH`
+`RNFL` `SONA` `RNSD` `STPR` `STTP` `STRS` `ALIV` **`CHCZ`** `ChangeCitizenJobs` (§13) · `RTMI`
+`CHNW` `TGST` `TGSS` `CRAS` `DLSD` `DLSC` **`SDNW`** a message or note · `TRRS` `CRSD` `DOSC`
+`MCFL` `EDNW` **`CNCA`** the civ name, its checkbox and the arms id
+
+**What this changes for the referee and the merge.** The original server was authoritative per
+action: it saw each command as it was made, decided it, and the client showed only what came back.
+There was no per-turn upload to recover. The other direction is the one this project already
+uses: a server could push a whole galaxy as `SAVE`, which the client loads with the same routine a
+`.dat` reaches. The project's loop, a client applying actions locally, a
+capture at the end of the turn and a merge that reads the actions out of the difference, is the same
+authority moved to the turn boundary, and nothing in the referee or the merge depends on `STCO`.
+Two things follow:
+
+- The 56 commands are the whole list of what a player can do. Every change the merge accepts
+  should be the effect of one of them, and each command's offline branch, which is what produced
+  the submission, is the rule to encode. A change no command can make is refused.
+- A server that spoke this protocol would see each action as it happens, which is what "Messages
+  arrive between ticks" needs. A connected client sends every command online and waits for the
+  answer, so such a server has to answer all 56, not only `SDNW`.
+
+- [x] **Each merge rule names the command it stands for.** Every rule in `merge_orders.py` cites
+  its commands, and `merge_orders.COMMANDS` gives all 56 a rule or says why none carries it, read
+  from each routine's offline branch on 14 November 2026 (`test_online_commands.py`). 48 have a
+  rule. `RNGV` runs a governor at once, and the other rules judge what it changes. Six are online
+  only: `RQTM`, `RSMA`, `RQTN` and `RQSV` (the replay), `STTP` (the team dialog) and `ALIV`.
+  `DOSC` is refused and named (below).
+- [x] **Ten commands a player can make have no rule, and the merge refuses their effect.**
+  Nine are carried and `DOSC` is refused and named, read off each command's sender, its offline
+  branch and the screen that gates it on 14 November 2026. Measured in one Single Player session
+  that day on `diplomacy/d0` with transmitters, a receiver and a Central Defense Agency added
+  (`server/tests/fixtures/unruled`), each command run through the client's own routine and the
+  galaxy saved after each; merging each save over the one before reproduces it. The rules are in
+  `merge_orders.py`'s docstring.
+  - `SLFC` (Facility sales): one facility a sale, 5% of its table cost paid (10 for a farm, 125
+    for a transmitter, 400 for a receiver, as measured); a sold transmitter leaves the civ's
+    energy links and a sold receiver's links empty. `test_facilities_merge.py`.
+  - `RTMI` (People): the chosen soldiers' records are erased and nothing else; the people rule
+    now takes everybody missing as retired. `STEL` (Energy links): any set of the civ's own
+    planets holding a transmitter, on a planet with a receiver. Same test.
+  - `MOSD`, `RNSD`, `DLSD` (Ship designs): a rename is carried for any design; a modify and a
+    delete only for a design not in use, which the screen opens read-only and will not delete.
+    Names are the client's: up to 32 characters, unique in any case, never `Unnamed`; the merge
+    held them to 15 until now. `test_design_edits_merge.py`.
+  - `DLSC` (Scan reports): a report deleted from the block after the civ's designs. `DOSC` is
+    refused: online the server answered with the reports, the scan posts a detection item to the
+    scanned civ by `rand()`, and a fogged client cannot make a true report. `save_parser` now
+    knows the report and `WORM` tags; before, a `DATA` holding a report hid the civ's news.
+  - `EDNW` and a note written with `SDNW` (Messages): a kind-8 item, inline, carried as the Note
+    dialog writes it. `CNWH` (Wormholes): two of the civ's own unlinked wormholes naming each
+    other. `test_scans_notes_wormholes_merge.py`.
+- [ ] **A scan is not carried.** The referee would make the report from the served state: one
+  `SC..` section per target group (layouts in Memory report, "The Scanning tab, reports
+  located"), the scan taken from the `OWPR` stock, the detection items for the scanned civ, a
+  leader-name scan's byte in the scanner's `KNPL` and a planetary scan's `EXSY` update. Until
+  then a player who scans keeps the scan and is told it was not carried.
+- [ ] **Notes and wormhole links are carried as read, not measured.** Calling the note dialog's
+  routine (`0x00538DD0`) from outside closed the client in a drawing routine, and no galaxy holds
+  a wormhole. Measure a note written and edited through the News screen, and a wormhole pair
+  connected once a galaxy has one.
+- [ ] **The design editor's space and cloaking checks are not encoded.** Its OK (`0x004A5D40`)
+  refuses a design over its hull's space and a cloaked heavy design; the merge takes a new or
+  modified design without either check.
 
 #### The engine is deterministic (September 2026)
 
@@ -537,11 +724,33 @@ A design is a self-contained subtree under the owning civ's `OWNR > DATA`.
       +0    u32     the design's own object id
       SDPR  section, v0
             u32     name length, then the name, unpadded
-            ...     six part lists
+            six part lists, each a u32 count then that many u32 part ids:
+                    chassis, scanners, engines, weapons, modules, shields
             u32     the owning civ's object id, at the end
       +1    u8      zero, counted by the DSGN length word
 
     the civ's design count, a u32 in DATA's own bytes before its first DSGN
+
+**The part lists are in the order of the `ShipDesign` vectors** (`:128` chassis, `:152` scanners,
+`:176` engines, `:200` weapons, `:224` modules), and a part id is the record's position in its
+component table (Stat Tables §3). An engine fitted three times is listed three times. Read across
+1,081 designs on disk in November 2026, and checked against the parts each design was built from:
+a Colony Ship is `[0] [0] [0,0,0] [] [0] []`, a Shuttle with a Neutron Scanner, three Nuclear Drives
+and a Colony Module, which fills the Shuttle's 120 space exactly; `b1` lists weapon 10, the Fusion
+Bomb; the hand-made `e1x2` and `e1x4` list engine 1 twice and four times. `inject_design.read_design`
+and `sim/load.py` read them.
+
+[x] The sixth list is taken to be shields, the one category left, but it is empty in all 1,081
+designs on disk. Confirm by capturing a design with a shield fitted. **Confirmed from the binary**
+(November 2026): the `SDPR` writer `0x547320` writes six vectors, the last the one whose begin is
+`ShipDesign:248`, and the shield-strength getter `0x547A50` sums each shield record's strength
+(`+0x14`, picked by `0x560240`) over that vector into `ShipDesign:72`, then adds that sum times the
+civ's researched trait-10 grants over 100, rounded.
+
+[ ] `sim/combat.hitpoints` adds trait 10 to the design's shield strength. The client multiplies
+the fitted strength by the researched trait-10 grants instead (`0x547A50`), so an unshielded ship
+gains nothing. Find where `ShipDesign:72` enters hitpoints and where the base trait 10 applies,
+then match it.
 
 **The trailing byte is uniform.** Surveyed across every blob on disk in September 2026, 327 blobs
 and 1015 `DSGN` records: every record is v4 with an `SDPR` v0 child, in all 1015 the byte after the
@@ -650,12 +859,11 @@ often `+24` minus one, so they read more like a chain than like a category and a
 that `+20` was a category with fixed meanings did not survive a second galaxy: the value that carried
 no position in one carried one in the other. Do not read meaning into them.
 
-How many items an engagement raises is also unsettled. The `cycle.dat` battle raised two on one turn
-at one position, one in each civ's `OWNR`, which looked like each side's own view of it. The
-two-player battle raised one, for the defender only. One of those is a special case and it is not yet
-known which.
+An engagement raises one item for each civ at it, each written from that civ's side. The `cycle.dat`
+battle raised two on one turn at one position, one in each civ's `OWNR`. The two-player battle raised
+one, for the defender only, and that was the special case: see the next item.
 
-[ ] **A losing attacker can be told nothing at all, and why is unexplained.** In the two-player
+[x] **A losing attacker can be told nothing at all, and why is unexplained.** In the two-player
 battle the attacker lost two warships at the defender's homeworld and received **no `NEWS` record of
 any kind**, while the defender received one per engagement. Measured by counting raw `NEWS` sections
 against the `OWNR` byte ranges rather than by trusting an attribution helper: two sections in the
@@ -669,6 +877,31 @@ was destroyed there and its owner still received nothing. **Not discovery**, sin
 `make_multiplayer_galaxy`. Worth settling, because a player losing a fleet and being told nothing
 about where is a bad enough experience to be worth knowing whether it is the engine's rule or an
 artefact of how these galaxies are made.
+
+**It was the attacker's `Owner:4`, which was 0** (November 2026). `Owner::AddNews` (`0x543720`)
+returns at once when `Owner:4` is 0, the sentinel that also stops the empire tick. Until 19 October
+`make_multiplayer_galaxy` left seat one at 0 (`fix_owner_ids` now replaces it), and seat one,
+`GoodGuy`, was the attacker. Otherwise the engine tells every side: the battle pass (`0x523AC0`)
+groups objects by position and fights where two or more civs meet, and the report builder
+(`0x5218E0`) registers the owner of every group there, its losses included, and gives each a type 2
+item written from its side.
+
+- **Corpus:** in all 37 battles in `sim/corpus`, every civ at the battle got an item, and every civ
+  there holds a non-zero `Owner:4`.
+- **A/B in the client:** `capture_live_attack_ship_t0123`, ticked once as captured and once with
+  `GoodGuy`'s `Owner:4` set to 0. At 20 `GoodGuy` got its battle report; at 0 it got no item at
+  all, not even its failed-build notice. `BadGuy` got its report both times.
+
+**The original game told the attacker.** The manual's battle-report page explains a report as read
+from one participant's side, listed first, with allies next and enemies last. The shipped TestBed
+galaxies give the human seat `Owner:4` 0, a civ the client does not simulate, so for that seat the
+original server, not the client, must have written the report. That last step is inferred: no
+original server traffic carrying `NEWS` is captured.
+
+**The referee sends nothing extra.** The engine writes every civ's report, and the served view keeps
+each civ's own list (`news.own_view`). What the referee must guarantee is that no civ holds 0:
+`referee.simulate_every_civ` gives such a civ the lowest unused id from 20 up before every tick,
+which also restores its research and score (`server/tests/test_tick_owner_ids.py`).
 
 [x] **Does a joined civ inherit its donor's `NEWS`?** `inject_civ.add_civ` clones a donor's `OWNR`
 whole, and `NEWS` lives inside that `OWNR`'s `DATA` block, so the same reasoning that made a joiner
@@ -752,11 +985,42 @@ the rest of the record misread. An id is not checked to name a civ.
   `ab2e6d3`.
 - [ ] **Messages arrive between ticks, close to instantly.** A message travels inside its
   sender's submission, so it reaches the recipient with the next tick, up to a whole turn later.
-  Per tick is acceptable for now (Robert, 13 November 2026). The client's online path sends
-  `SDNW` v0 holding one `NEWS` the moment a message is sent; nothing answers it, because the
-  launcher runs the client offline. Done when a message sent in the client reaches a recipient
-  whose launcher is open within a minute, shows in the recipient's news without waiting for the
-  tick, and is still in the turn the referee publishes.
+  Per tick is acceptable for now (Robert, 13 November 2026). The original did it over its socket:
+  the send routine at `0x00575970` writes one `NEWS` (writer `0x005355B0`) into an `SDNW` v0
+  command and waits for `SUCC`, and the server pushes a `NEWS` section (the record and a `u8`) to
+  each connected recipient, whose handler at `0x00573940` adds it with `Owner::AddNews` and
+  refreshes the news view with no tick. A `.dat` client takes the standalone branch and never
+  connects, so the launcher's client sends nothing.
+
+  **The connection state machine** is `0x00579870`, a switch on `[0x0086F1AC]` read on
+  14 November 2026 and watched live in TestBed the same day. The pass parser starts it at 5 for
+  a `.dat` and at 1 for a pass.
+
+  | state | does | next |
+  |---|---|---|
+  | 1 | skips the update check when the host parses as a private address (`0x00562E50`) | 5, or 4 with the Tutorial on |
+  | 2 | runs the updater and waits for it | 4 or 5 when it updated, else 3 |
+  | 3 | `Please change your connection settings.`, 2 seconds | 13, resuming at 1 |
+  | 4 | connects to the Tutorial Galaxy | 5, or 3 on failure |
+  | 5, 6 | analyses the system | 7 |
+  | 7, 8 | windows and renderer | 9, or 11 standalone |
+  | 9 | `Logging in...`: starts the `Login` thread (`0x0057A6B0`), which connects (`0x00563310`, `connect` at `0x005F20EB`) | 10 |
+  | 10 | waits for the thread, loads the `SAVE` it answered with | 11, or 13 resuming at 9 |
+  | 11, 12 | the game runs | 15 quits |
+  | 13 | `Changing connection settings...`, opens the dialog's socket settings | 14 |
+  | 14 | waits until the settings button clears `[0x0086F1A3]` | the resume state |
+
+  The stall was the pass. `SAND 127.0.0.1 47110 ...` makes `SAND` the host and 127 the port;
+  `SAND` is no private address, so the client ran the updater, which failed after 5 seconds, and
+  went 2, 3, 13, 14. A pass beginning `127.0.0.1 47110` went 6, 7, 8, 10 in 5 seconds and
+  connected. Its first command, before any login, is `RQLG` v1 holding the CRC-32 of the
+  client's own exe (`0x0056B880`), in a `CMND` of 32 bytes. The thread then waits for the
+  answer: `FAIL` ends the login, and anything else is followed by `LGIN`, which must be
+  answered `SUCC`, and then the galaxy as `SAVE`. Next step: a
+  listener that answers `RQLG` and `LGIN` and sends a served view as `SAVE`, then the client's
+  `SDNW` and a pushed `NEWS`. Done when a message sent in the client reaches a recipient whose
+  launcher is open within a minute, shows in the recipient's news without waiting for the tick,
+  and is still in the turn the referee publishes.
 - [x] **Each civ is served only its own news.** `fog.project` empties every other civ's news list
   and keeps only the strings its own list names, with the next id unchanged (`news.own_view`),
   and `fog.restore` puts them back ahead of anything the submission added, so a restored view is
@@ -814,6 +1078,21 @@ penalty.
 A three-civ galaxy gave tables of 111, 159 and 266 bytes, one per civ, holding
 `Unnamed` for things nobody has renamed and `BadGuy's HQ` for one that has been.
 
+**When the engine refreshes a row** (November 2026, the Single Player chain). Every turn
+the civ owns a planet in the system, and every turn any planet of the system is within the
+scanner range of one of the civ's ships. A scout with a 30-unit scanner refreshed system 135
+from a planet 19.3 away, then left it at turn 22 once the nearest planet was 32.6 away. A
+refresh stamps the new turn and each planet's owner and population. The row's planets are
+the system's in the order `SOLA` holds them. A civ whose `Owner:4` is 0 keeps its rows
+frozen unless it is the local player, the id in `GLOB` that `set_blob_player` reads. The
+DemoPlayer seat's rows froze at turn 2 in the referee's ticks, where another civ was local,
+and refreshed in a capture where DemoPlayer was. Its research store stayed at 0 in both.
+
+**The golden age's turns left are in `CVTR`**, the `u32` at payload `+12` in the header
+before the trait pairs. After Doctrine: Golden Age completed it read 99, 98, 97 on
+successive turns, and 0 before. `Owner:744` was the live object's counter, with 9999 as its
+idle value.
+
 **These are cached, not authored.** One civ's table gained `Neighbor's HQ`
 purely from loading a turn, with that player having taken no action, so `EXSY`
 records what a civ has seen rather than what it has decided. A rename is
@@ -860,7 +1139,7 @@ the viewer's own remembered map, and only the viewer's explored systems show the
 remembered half. That is visible only from a seat that has explored the system,
 which is itself the confirmation.
 
-[ ] **Clearing another civ's remembered map is not fog-correct, and it is what
+[x] **Clearing another civ's remembered map is not fog-correct, and it is what
 `wipe_civ.forget_civ` currently does.** Strictly, a civ that has not looked again
 should keep remembering what it last saw: this section already records that
 `EXSY` is a cache which goes stale on purpose, and that one civ held a planet as
@@ -870,7 +1149,14 @@ because a planet anybody may now colonise, carrying a dead empire's name and a
 capital marker, misleads a player about the board rather than about history. The
 fog-correct version clears only the wiped civ's own table and lets rivals keep
 theirs until they re-scout. Not attempted, and it needs a rule for what a rival
-sees when they do look again.
+sees when they do look again. **Fixed** (14 November 2026): `forget_civ` clears
+the wiped civ's own table, and in a rival's only the rows `fog.project` serves
+live, a system looked at this turn or one the rival holds a planet in. A row
+from an earlier look keeps the dead empire, and the rival's view shows it as
+remembered. The rule for looking again is the engine's: it refreshes the row on
+the next look, and the row then reads the planet empty. `--delete-owner` still
+clears every table, since it refuses a galaxy where another civ names the wiped
+one (`test_fog.py`).
 
 The "206 against the correct 202" above is not staleness. In `galaxy_demo`
 Neighbor (206) joined as a clone of BadGuy (202), before `joins` emptied a
@@ -903,17 +1189,14 @@ and nothing served it.
 
 `server/fog.py` serves it. A system is stale for a civ when its `EXSY` turn is
 before the blob's turn and the civ holds no planet in it. Each planet there
-whose live owner or population differs from memory is rewritten:
+is served with the owner, population and name the civ remembers, the name
+only when the owner changed. A planet whose memory names the viewer (the
+joiner case above) or a civ the galaxy does not hold keeps its live owner and
+population.
 
-- remembered empty: owner 0, name cleared, no citizens, soldiers or
-  facilities, and the `PROD` of a never-colonised planet
-- remembered owned: owner set to the remembered civ, citizens cut or padded
-  to the remembered population; soldiers and facilities go when the owner
-  changed, and the name becomes the remembered one
-
-A planet is left live when the viewer owns it or has citizens on it, when
-memory names the viewer (the joiner case above) or a civ the galaxy does not
-hold, or when its `PLPR` does not walk.
+Every planet the viewer does not own, stale or not, is served without its
+owner's state (below, "Each civ is served only what the original server sent
+it").
 
 Nothing is added or removed, so a view keeps every object id, system and
 planet. It passes `screen_submission`'s galaxy check, the high-water id is
@@ -922,10 +1205,11 @@ system-dropping `project_blob.py` above could not do.
 
 The referee projects each civ after the tick and publishes a view only for a
 civ whose view differs (`publish(..., views=)`, recorded under `views` on the
-galaxy document or in `state.json`). The relay's turn route sends a seated
-caller to its own view; `player_turn.served_blob` reads it from a folder store.
-Before the merge, `fog.restore` puts the authoritative planets back into each
-submission. A civ cannot order another civ's planet, so nothing is lost, and
+galaxy document or in `state.json`). Every store and the relay serve a caller
+by `turn_store.served_copy`; `player_turn.served_blob` asks the store.
+Before the merge, `fog.restore` puts the authoritative planets and sections
+back into each submission. A civ cannot order another civ's planet or change
+another civ's sections, so nothing is lost, and
 the merge then takes a fogged civ's orders exactly as an unfogged one's
 (`server/tests/test_fog.py`).
 
@@ -933,13 +1217,145 @@ the merge then takes a fogged civ's orders exactly as an unfogged one's
 view of `d9` came up at turn 181, and client memory read GoodGuy's home planets
 as populations 8, 0, 8, 0, 10, 0, with the two later colonies unowned.
 
-[ ] **Confirm on screen that the map draws them**, and that the planet sphere's
-size follows population.
+[x] **Confirm on screen that the map draws them**, and that the planet sphere's
+size follows population. **Confirmed** (14 November 2026) on BadGuy's view of
+`d9` with the counters zeroed: the map draws GoodGuy's home system as
+remembered, populations 8, 0, 8, 0, 10, 0, with the two later colonies unowned
+and unnamed, and the sphere sizes follow those populations rather than the live
+ones. The sun reads last scouted at turn 34, and a planet's tooltip shows
+none of the live counters.
 
-[ ] **A view keeps the live header fields of a rewritten `PLPR`**: the output
+[x] **A view keeps the live header fields of a rewritten `PLPR`**: the output
 rates at `+4`, food and production counters, and, when the owner is
 unchanged, the facility list. Whether the stock client shows any of them for
-another civ's planet is not known.
+another civ's planet is not known. **Fixed** (14 November 2026): every colonised
+planet in a stale system is served as remembered, changed or not. The food
+store (`+15`), production progress (`+23`), recruitment rate (`+27`) and
+military store (`+32`) read 0, every citizen is a farmer of the remembered
+owner, and there are no soldiers, no facilities and an idle queue. The output
+rates, food store size and food per soldier stay, since they belong to the
+planet and the recon screen shows its base outputs. The manual's Planet-View
+screen covers only planets the player owns (`test_fog.py`).
+
+[x] **A rival's planet in a system the viewer is in is served live**, counters,
+queue, soldiers and facilities included, and so is every other civ's `OWNR`:
+treasury, research, designs and its own `KNPL`. **Fixed** (14 November 2026)
+from what the original server sent, read off the client's own writer (below):
+every planet the viewer does not own is served with only what the per-civ
+save shows of it, and another civ's private sections at their constructor
+defaults (`server/fog.py`, `test_fog.py`). Checked in the client on both
+civs' views of `d9`: each loads, the referee's tick takes each to the next
+turn, and BadGuy's view holds GoodGuy's home planets at the remembered 8, 8
+and 10 farmers with only their shipyards. A capture of that view carries no
+orders (`player_turn.carries_orders`) and merges with no note after
+`restore`. Seen on screen by Robert on BadGuy's view of turn 181 (14 November 2026): the
+planet tooltips, the diplomacy page and the score list are as expected.
+
+#### Each civ is served only what the original server sent it (November 2026)
+
+**The client writes a per-civ save of its own.** `0x52C570(owner, flag)`
+answers whether an object of `owner` is written whole: always when no save
+target is set (`[0x8578FC]`, read by `0x52A780`), and otherwise only for the
+target civ, or with `flag` for a civ in the set at `0x857920`. Every save on
+record has no target, which is why the referee's and players' saves hold
+everyone's state. The writers it gates:
+
+- **`OWNR`** (`0x53C240`): another civ's `DATA` is not written at all. In its
+  place every civ gets a `CLIE` section, version 2: a `u32` (`Owner+0x2C8`,
+  computed by `0x5381D0` when `[0x86F1A0]` is set), the position at
+  `Owner:1208`, `Owner:400`, the name dialog 225 chose, the checkbox and the
+  arms. That is a civ's public face. The reader (`0x545CB0`) takes `DATA` and
+  `CLIE` each only when present. Inside the target's own `DATA`, `PRIV`
+  replaces `SERV`.
+- **`PLNT`** (`0x4EE500`): a planet another civ owns, or nobody owns, is
+  written with the owner, name and population from the target's `EXSY` row
+  (`0x526DC0` on `Owner+0x10C`), and a compact record instead of its `PLPR`
+  and governor: the population as a `u32`, `PlanetProperties+0x12` (a `u16`),
+  `+0x8` to `+0xE`, a byte that is 1 when it has a shipyard (`0x4F4FD0(2)`,
+  facility type 2), and the deposit list (`Planet+0x198`). The reader
+  (`0x4EF2E9`) takes this form when no `PLPR` follows, keeps the population
+  at `Planet+0x164`, and gives a shipyard back as one facility of type 2.
+  `0x4F0EC0`, the population getter, returns that figure when the citizen
+  list is empty.
+- **`SHIP`** (`0x4E8640`): another civ's ship has no `SHPR`, and its `DYNO`
+  (`0x4DA310`) keeps the design id but writes an `INFO` section, the ship's
+  description and a position, in place of its order, admiral and route.
+- **`GLXY`** (`0x4CB1F0`): an object whose byte `+0x18` is clear is not
+  written at all, so a per-civ save leaves out what the target cannot see.
+- A fleet (`0x4E1401`), a wormhole (`0x4FEF66`, with `flag`) and an `EXSY`
+  row (`0x526773`) are gated the same way.
+
+`fog.py` serves the planet and `OWNR` parts of it in the full form, since the
+engine cannot tick the per-civ save:
+
+- every planet the viewer does not own keeps its `PLPR` with what the compact
+  record carries: the population as farmers of the owner it is served with,
+  a shipyard when it has one and no other facility, and the planet's own
+  bytes (`0x4F3B10` writes `+0x8` to `+0xE` from byte 4 and `+0x12` at 11) and
+  deposits. Its stores, soldiers, queue, governor and damage pool read 0. The
+  compact record itself does not tick: `0x4F1440` takes a populated planet's
+  ruler from its citizens and reads `Owner+0x500` through a null pointer;
+- another civ keeps its `OWNR` sections, since its ships still name their
+  design in `DYNO` and their admiral, but its `OWPR`, `KNPL`, `EXSY`, `CVTR`,
+  `GOVS` and `SPQS` hold what the `Owner` constructor (`0x546430`) sets: no
+  credits, no research, no topic (`-1`), no resources, and 0 in the unknown
+  words of `OWPR`. The two starting technologies stay, since the tick's pass
+  over other civs (`0x542850`) takes the last grant `0x4A7EC0` finds in each
+  civ's completed list and stops the client on an empty one. The score and
+  reputation stay, since every civ's score row shows them, and so do the
+  `CLIE` fields.
+
+The `OWPR` layout, from its writer `0x53B230` (code offsets on `Owner`, report
+offset = code offset - `0x34`): credits `Owner:8`, `Owner:12`, a map at
+`Owner:40`, the completed list `Owner:96`, the topics `Owner:144` and
+`Owner:152`, three bytes `Owner:356` to `358`, the score `Owner:28`,
+`Owner:16`, `Owner:20`, `Owner:24`, the reputation `Owner:32`, the colour
+`Owner:476` and its two flags, the setup flags `Owner:359` and `360`,
+`Owner:724` (a float), the position `Owner:1208`, the resources
+`Owner:1116`, `Owner:400`, `Owner:721`, then the name, checkbox and arms.
+
+[ ] **Another civ's ships are served whole**: `SHPR` (crew, fleet) and the
+`DYNO` order, admiral and route. The per-civ save writes a rival's ship with
+no `SHPR` and an `INFO` section instead (above). Next step: write that form
+for ships the viewer does not own, check the map's hover and the recon tab
+read the `INFO` text, and have `restore` put the ships back.
+
+[ ] **Systems a civ has never entered and ships it cannot see are served**,
+with the live owner and population of each planet there. The per-civ save
+leaves out every object whose `+0x18` byte is clear. Dropping systems broke
+`project_blob.py` (the `min_suns` guard and the galaxy check), so a view keeps
+them; what `+0x18` means for a system and a ship, and whether the client
+needs an unseen system's planets at all, are open.
+
+[ ] **The view without news holds every civ's private state.** A caller with
+no seat is served `news.own_view(blob, None)`. Next step: decide what a
+caller with no seat should load, then serve it every planet in the compact
+form and every civ's private sections at their defaults.
+
+[ ] **Another civ's planet keeps the bytes after its `PROD`, and its admirals,
+designs and settings stay.** Past `PROD` a `PLPR` holds eight `u16`, a `u32`,
+a list of 16-byte records, a `u16`, the deposits and the energy link
+(`ENLI`); the per-civ save keeps only the deposits, and the energy-grid scan
+is what reveals a link. `ADMS`, every `DSGN` and `USSE` (the end-galaxy vote
+among them) stay whole while ships are served whole. Next step: decode the
+three unknown fields and the record list, then serve them and `ENLI` empty.
+
+A scan the client carries out (`DOSC`) runs on its own copy, so in a view a
+technology or planetary scan reads a rival's sections at their defaults and
+its planets without their owner's state. The `DOSC` todo, a report built by
+the referee from the authoritative galaxy, covers that.
+
+[x] **A remembered planet keeps four live bytes**: the byte between its soldiers
+and its facility list, the word after the facility list, and the governor id in
+the `PLNT`'s last `u32`. None is decoded. **Fixed** (14 November 2026): all
+three read 0 in a view. Planet's loader (`0x4EF2B1`) reads `PLPR` into the
+`PlanetProperties` at `Planet+0x60` (`0x4F7D80`) and then, from `PLNT` v5, the
+governor reference into `Planet:496`. The byte is `PlanetProperties+0x10`, read
+from v19 and 0 on all 20,555 tracked planets. The `u32` is
+`PlanetProperties+0x7C`, from v17: a pool an attack fills (`0x4F86E0`) and
+the planet spends on destroying facilities (`0x4F5710`); planet 384 reads 0 in
+`d7` and 120 in `d8`, the tick it is attacked. The governor is 0 on every
+tracked planet, which is no governor (`test_fog.py`).
 
 [x] **A caller without a seat is served the whole turn.** Under `first-use`
 that is every player before their first submission, and any signed-in user who
@@ -954,9 +1370,24 @@ is current and was published with no views. Any other turn is refused
 deployed: a relay that refuses earlier turns while the referee still deletes the
 previous turn's views would stop a launcher caught in that window.
 
-[ ] **The folder store and `turn_server` do not enforce views.** A folder
+[x] **The folder store and `turn_server` do not enforce views.** A folder
 store's player reads the files directly, and `turn_server` serves every caller
-the turn.
+the turn. **Fixed** (14 November 2026): one rule, `turn_store.served_copy`,
+picks the copy for every store and the relay. A civ the views name gets its
+own; a roster civ they do not name gets the turn, which is its view; any other
+caller gets the view without news. A launcher reads through
+`served_turn`. `turn_server` takes the views as `POST /view/<n>/<civ>` before
+the turn, serves `GET /turn/<n>?civ=` by the rule and the referee's
+`?whole=1` whole, and a folder store keeps the previous turn's views as the
+relay does. The relay used to send a roster civ the views do not name to the
+view without news, which withholds that civ's own news; it follows the rule
+now, and the referee publishes the view without news whenever it publishes any
+view (`test_views.py`, `test_fog.py`, `test_relay_function.py`). The relay has
+to be redeployed for its half.
+
+`turn_server` has no authentication, so a caller who names another civ gets
+that civ's view, as it can already submit as any civ. A folder is readable
+whole by anyone who can open it; the views keep an honest launcher to its own.
 
 #### The trailing dword of every `KNPL` payload is unreliable
 
@@ -975,7 +1406,8 @@ anywhere in the format.
 
 **The dword is the last record's custom colour** (`KNPL` record `+32`, below). The record's
 constructor (`0x532E60`) never sets it, so a civ that never picked a colour carries whatever was
-in memory, and the reader forces the top byte to `0xFF` (`0x533365`).
+in memory, and the reader forces the top byte to `0xFF` (`0x533365`). The record boundary is
+where the reader puts it: the colour is one `u32`, and the top byte is its alpha.
 
 Consequences. **Any blob comparison has to mask this dword**, or two honest computations of the same
 turn look different, which is exactly what a canonical hash must not do. The
@@ -984,10 +1416,53 @@ with the final byte a flag in its own right. And it is worth sweeping the other 
 signature, which is cheap now that it is known: a field that changes between two otherwise identical
 runs, or whose top byte becomes `0xFF` after a load.
 
-[ ] `KNPL` is worth decoding properly rather than piecemeal, for this field. The second reason
+[x] `KNPL` is worth decoding properly rather than piecemeal, for this field. The second reason
 recorded here, that a `KNPL` still naming removed planets is why a fog-filtered blob fails to load,
 is **falsified**: its records are keyed by **civ** id rather than planet id despite the name, and
-dropping systems removes no civs. See "Filtering a galaxy" below.
+dropping systems removes no civs. See "Filtering a galaxy" below. **Decoded** (14 November 2026):
+`server/dev_tools/knpl.py` reads and writes the table whole, and every tracked fixture's 78 tables
+build back byte for byte (`test_knpl.py`). A record is the map key, then the members the reader
+`0x5332E0` walks: the civ's handle (the same id), the turn of first contact, the stance as a
+`u32`, a `u8` set on the declarer's side when war is declared, a `u16` and a `u8` set on the
+declarer's side in the war's first tick, an `i32` that is -1 until war and then 100, a `u16` set
+with them (149 in `d8`), a `u16` and a `u8` that read 0 everywhere, then the three display flags
+and the colour. First contact (`0x534F90`) passes the current turn and the opening stance: war
+under `waronly`, by team in a team game, else neutral.
+
+[x] **Name the four war fields** at `+17`, `+19`, `+20` and `+24`. The captures place them on the
+declarer's side and the war's first tick, which fits the manual's "declared the war and attacked
+first" reputation rule; the code that reads them is not found. **Named** (14 November 2026) from
+the client, with `+26` and `+28` beside them; `knpl.py` keys and documents each. The relation getter
+`0x534340` returns the record from `met` on, and every reader goes through it:
+
+- `+19` `battled`: set by `0x534D10` when an attack is scored. The reputation tooltip
+  (`0x4430F0`) then says no reputation is gained or lost "since the significant battle has already
+  happened". Any treaty but war or cease-fire clears it on both sides.
+- `+20` `inactivity`: accepting a war (`0x55BD40`) records each side's Inactivity percent
+  (`0x538450`, from the `SERV` baseline). `0x517A40` reduces a reputation loss by the higher of that
+  and the target's Inactivity now. `d7` is turn 180 with both baselines 0, so both read 100.
+- `+24` `cooldown`: `0x534D10` adds 150 for a reputation gain, and the tick (`0x5344B0`) takes 1
+  off, 2 under the galaxy option it reads. `0x5177F0` reduces the next gain by `cooldown / 150`,
+  the tooltip's "gained reputation from this player only recently". `d8` reads 149.
+- `+26` `biobombed`: bio-bombing adds the sets dropped (`0x534D50`, capped at 100); the tick takes it
+  down as `cooldown`. The planet loyalty tooltip lists it per civ as a loyalty penalty in percent.
+- `+28` `leader_known`: set at `0x54EF99`; a second "name of the Empire Leader" message is refused.
+
+[ ] **Find what sets `+17`** (`w17`, record `+0x0A` behind the getter, map node `+0x1E`). Accepting
+a war zeroes it on both sides and the constructor zeroes it; nothing reached through `0x534340`,
+`0x5343A0` or the map's find (`0x533C70`) writes it, yet `d8` reads 1 on the declarer's side.
+**Next step**: a write watchpoint on that word in a live client across a war's first tick.
+
+[x] **`canonical.py` masks only the last record's colour.** Every record's colour is unset until
+a player picks one, so a civ that meets its second rival in a tick carries unset bytes in a record
+that is not the last, and a recomputed turn can differ there. Masking every record's colour changes
+the stored hash of every galaxy with three or more civs, so it waits for a hash version. **Fixed**
+(14 November 2026): hash version 2 masks every record's colour, and the referee records
+`hash_version` beside its hashes. `verify_turn` and `level_store_turn.py` hash with a record's own
+version, 1 when it has none, so archived turns still verify. The colour getter (`0x534E40`) reads
+the colour only for a civ coloured by choice. Versions 1 and 2 agree on every tracked fixture,
+which hold at most one record per table; a two-record table differs only under version 1
+(`test_knpl.py`).
 
 [x] **NOT A DATA-LOSS BUG. It is an unbounded re-grant exploit (measured September 2026).** This
 item previously read "BUG, DATA LOSS, confirming the customisation popup overwrites server-restored
@@ -1091,20 +1566,39 @@ planetspersystem (4, 6)   colonyships 2           startcredits 200
 tech_multiplier 800       corruption_multiplier 100   reputation_multiplier 100
 colonymodule_multiplier 100   hse_multiplier 100
 homeworld_changes 30      civilization_changes 5  score_breakeven 20
-premium 1   waronly 1     autoattack 1
+premium 1   waronly 0     autoattack 0
 ```
+
+**Every entry is its name, a `u32` type, a flag byte, then the value** (reader `0x4D4990`): type 0 an `i32`, 1 two `i32`s, 2 a bool byte, 3 a string, 4 a `u32` count and that many `u32`s. The flag is the third argument the client registers the setting with (`waronly` at `0x4D5FF3` registers as a bool, default 0, flag 1; `sandbox` default 0, flag 0). The loader `0x4D4C20` matches each entry by name and copies its value, not its flag, so a save always carries the client's own flags. `save_parser.parse_gset` reads this layout and `save_parser.set_gset` rewrites a whole-number or bool value in place; `set_turnlength.py --set` and the tests use it (`server/tests/test_gset.py`). A bool's two bytes were once read as one `int16`, which made `waronly` and `autoattack` (bytes `01 00`, flag 1, value 0) look like 1.
 
 **Turn length was a per-galaxy choice, not a constant.** Galaxies ran anywhere from minutes to hours per turn, which is what made the game playable across time zones, the design the README describes as "long turn based play (hours between ticks)". `turnlength` is that choice in seconds.
 
 **`primetime` and `primetime_turnlength` are a scheduled fast window.** A galaxy could run at its normal slow rate most of the day and switch to a much shorter turn during peak hours, early evening, when most players are home and want to see things happen. `primetime` is the `(start, end)` pair and `primetime_turnlength` the rate inside it; all three read `-1` here, meaning unused. Not needed for single-player or AI work, recorded because a faithful server has to implement it and nothing else documents it.
 
-[ ] **Not yet mapped to behaviour:** `speed`, `density`, `rank`, `startticks`, `premium`, `score_breakeven`, `hse_multiplier`, `colonymodule_multiplier`.
+[x] **Not yet mapped to behaviour:** `speed`, `density`, `rank`, `startticks`, `premium`, `score_breakeven`, `hse_multiplier`, `colonymodule_multiplier`. **Mapped** (14 November 2026) from the callers of `get_setting` and the original site's galaxy pages in the wayback mirror; the index follows each name:
+
+- `speed` (1): a speed-galaxy flag, read as a byte at 18 sites. In a speed galaxy the turn-length refresh `0x52D0E0` takes its length from `SpeedTicks.txt` beside the client or at `c:\`, 3600 by default, and timers shorten: 50 becomes 25 at `0x55C720`, and `0x54B166` halves a value. The early-game window in which battle earns no reputation (`0x518480`) applies only when it is 0.
+- `density` (9): selects a column of five tables at `0x767F08` for the galaxy generator (`0x4D25A0`, beside `GalaxyNebula`): 0 gives (8, 10, 1, 3, 11), 4 gives (2, 3, 2, 6, 5). What each of the five controls is not traced.
+- `rank` (6): the player ranks allowed in, (0, 999) for all; the site showed (0, 0) as "Unranked Players Only". A minimum above 0 makes the galaxy ranked, which the welcome text states (`0x546430`). Below content version 170, a ranked galaxy or one with more than one team offers a new civ the homeworld and trait prompts.
+- `startticks` (12): a fast opening, (tick, seconds): before that tick the refresh uses the shorter turn when it is above 60 (`0x52D497`).
+- `premium` (26): premium features for every seat. From content version 170 it alone decides whether a new civ is offered the homeworld and trait prompts (`0x537C80`, `0x537D00`), and it gates custom traits (`0x413AA0`), the hyperspace energy grid screen (`0x4254D0`) and doctrines in the research table (`0x54A970`).
+- `score_breakeven` (27): the bias on the score ratio, the enemy's score times (100 - breakeven) / 100, in battle (`0x51ED50`) and the reputation rule (`0x518480`). The site's galaxies show 20 and 35.
+- `hse_multiplier` (30): scales hyperspace energy by value / 100 (`0x5251E0`).
+- `colonymodule_multiplier` (28): multiplies the colony module's price, which grows with what the civ holds (`0x516580`; the design screen `0x4408A0` shows it).
+
+Our galaxies carry `speed` 0, `density` 0, `rank` (0, 999), no `startticks`, `premium` 1, `score_breakeven` 20 and both multipliers at 100.
+
+[x] **The `GLOB` loader also writes settings.** `0x52DA20` sets the content version and settings 0, 1, 2, 4, 5, 7 and 8 (`name`, `speed`, `team`, `sandbox`, `2d`, `maxusers`, `turnlength`) from values it reads, some only past a `GLOB` version. Which versions carry them, and whether `GSET` or `GLOB` wins at load, is not traced. `set_turnlength.py` writes `GSET` alone and is honoured, so for `turnlength` `GSET` wins or `GLOB` agrees. A tool that changes any of the others writes both until this is settled. **Settled** (14 November 2026): only a `GLOB` below version 16 carries settings. From 16 the loader reads the turn, `0x80AA04`, `0x857900`, the score list and the content version (`0x80AA00`) and touches no setting; below 16 it converts the old fields into settings 8, 0, 7, 1, 4, 5 and, from version 10, 2. Every blob this project holds carries `GLOB` v17, so `GSET` alone decides the settings, and a tool writes `GSET` only. A tick on a local copy kept a `waronly` written into `GSET` either way.
 
 **`civilization_changes` is the civ-trait dialog's budget**, confirmed October 2026. Settings live in a vector in registration order, read by `get_setting(index)` at `0x004D4320`; `civilization_changes` is index 25. Its two readers are `0x00498F30`, which returns the budget less the clicks spent and feeds both the dialog's "You have N changes available" line and its OK handler, and `0x00537D00`, which marks a new civ's traits as already chosen (`Owner:360` = 1) when the value is negative. A turn-0 save with the value raised from 5 to 7 opened the dialog reading "You have 7 changes available".
 
-[ ] **`corruption_multiplier = 100` is the first handle on corruption we have.** Corruption has resisted location in memory entirely, see the memory report, and here is a galaxy-level knob for it. Changing it and watching what moves is a far cheaper search than diffing planets, and it is the same trick that finally located `Planet:368`: make the thing vary.
+[x] **`corruption_multiplier = 100` is the first handle on corruption we have.** Corruption has resisted location in memory entirely, see the memory report, and here is a galaxy-level knob for it. Changing it and watching what moves is a far cheaper search than diffing planets, and it is the same trick that finally located `Planet:368`: make the thing vary. **Answered:** the corruption function `0x0053A0D0` scales its result by `corruption_multiplier` / 100 (`docs/Fast_Sim_Plan.md` §5b).
 
-- [ ] **The first non-sandbox galaxy turns `waronly` off.** `waronly = 1` allows no alliances, which is what the sandbox galaxy is for. Neither `galaxy_tool.py` nor `make_multiplayer_galaxy.py` writes `GSET`, so a new galaxy keeps whatever its generated blob carries. Decide `sandbox` at the same time: it is the fifth `GSET` entry, and `GetGameOption(4)` gates the client's build-up protection in the declare-war validator at `0x004BDE50`, 300 turns from `0x0076F378`. The original Newbie Sandbox Galaxy ran 10-minute turns, so 300 turns was about two days; at 4-hour turns it is 50 days. The client enforces protection only in its UI, and `merge_orders.py` refuses diplomacy outright, with a note naming each treaty and stance it dropped. Done when a non-sandbox galaxy runs with `waronly = 0`, an alliance between two civs survives a tick, and its `sandbox` value is chosen on purpose.
+- [x] **`waronly` is understood and carried** (this checks the setting is reconstructed). The sandbox stays at `waronly = 0` (Robert, 14 November 2026): turned on mid-game it would stop proposals at once but leave every stance and treaty already in force, so a war-only galaxy starts that way. `waronly = 1` opens first contact at War and allows no treaty proposal. Neither `galaxy_tool.py` nor `make_multiplayer_galaxy.py` writes `GSET`, so a new galaxy keeps whatever its generated blob carries. Document `sandbox` at the same time: it is the fifth `GSET` entry, and `GetGameOption(4)` gates the client's build-up protection in the declare-war validator at `0x004BDE50`, 300 turns from `0x0076F378`. The original Newbie Sandbox Galaxy ran 10-minute turns, so 300 turns was about two days; at 4-hour turns it is 50 days. The client enforces protection only in its UI, and `merge_orders.py` refuses diplomacy outright, with a note naming each treaty and stance it dropped. Done when what the client refuses under `waronly = 1` is located in the binary, `merge_orders.py` refuses the same, an alliance proposal is refused in a local test, nothing the referee or galaxy tools write changes the setting, and what `sandbox` does is written down.
+  **Done** (14 November 2026). **The live `sandbox` galaxy is not war-only today: it reads `waronly = 0`** at turns 0, 1 and 173 (read from Firebase, nothing written), as does every blob on disk. The `1` recorded here before was the bool's flag byte (see the entry layout above). Nothing in this work changes the live value; setting it to 1 is a `GSET` write on the live galaxy and is Robert's call.
+  What the client does under `waronly = 1`, from its four readers: first contact (`0x534F90`, read at `0x534FF5`) opens every stance at War, where it would be Neutral, or by team in a team game; the diplomacy menu (`0x442510`) adds "Propose New Treaty" (command `0xB798`) disabled, the only way the client proposes any treaty, so no trade, cease-fire, peace or alliance can be proposed; and the reputation forecast (`0x443160`) and battle (`0x51EE1A`) treat every war as one this civ declared, where otherwise only a war it declared (`0x535100`, the `KNPL` `declared` byte) counts. "Declare War" (`0xB79D`) and answering a treaty already made are not gated. The engine ends no treaty for it: an alliance accepted through the merge on `fixtures/diplomacy/d1.b64` survives a real tick with `waronly` 0 and 1 alike (`server/dev_tools/alliance_acceptance.py run --waronly 1`).
+  `merge_orders.py` carries diplomacy step by step (the note above that it refuses diplomacy is out of date) and, when the served galaxy holds `waronly = 1`, refuses every new treaty but a declaration of war, naming it; declaring war, accepting, declining, withdrawing and deleting are taken as before (`test_admirals_diplomacy_merge.py`, an alliance, a trade and a cease-fire proposal refused). Nothing the referee writes changes the setting: the merge builds on the served blob, so a submission's `GSET` is never taken (tested both ways); fog, joins, `inject_civ`, `make_multiplayer_galaxy`, `galaxy_tool.py` and the turn tools write no `GSET`; the `GLOB` loader writes settings only below `GLOB` v16 (item above); and the engine saves the `waronly` it loaded, which the acceptance run checks after its tick. `save_parser.set_gset` writes a setting for tests and `set_turnlength.py --set`; no galaxy tool calls it.
+  **What `sandbox` does** (index 4; it reads 0 on the live galaxy and stays so). Set to 1 it turns on: the 300-turn build-up protection in the declare-war validator, counted from the civ's join turn (`0x52AC40`); a cap of 30 colonised planets (`0x53A640`, `0x76F380`) and 50 conquered (`0x53A5F0`, `0x76F37C`), each sticky once reached; a warning at 900 turns played that the civ's term is ending (`0x52F230`); the Sandbox welcome text (`0x546430`); and at `0x52F640` it clears `0x857900` and sets `0x80AA04` to -1, two `GLOB` fields, in place of a check the function otherwise runs (not traced). The protection is enforced only in the client's UI, and the merge does not reproduce it.
 
 **`turnlength` drives the game's clock, and the engine re-applies it AT EVERY TURN BOUNDARY.** A galaxy set to 75 was observed writing 75 back over a driven 15 at each boundary, so a galaxy configured above the floor runs at its configured rate with nothing driving it, `ai.py --drive` is only needed to go faster than the game wants to.
 
@@ -1353,7 +1847,7 @@ All three are called in turn from the main loop at `0x00579C3D`, and each also w
 
 **`Owner:384` is the length of the civ name, not a count of records.** The chosen name is a VC9 `std::string` at `session+0x1A0`, whose size field is `session+0x1B4`, so `OWPR` is `138 + Owner:384` bytes because the name's characters are written into it. `0x00538470`, the civ's display name, returns that string when the length is non-zero and the player name otherwise. Prompt 225 is therefore offered until a name has been chosen. Measured across saves: `testname4` stores 9. Writing the length without the characters does silence the prompt, and it is still the wrong fix, because it fabricates a name. Returning from `0x0056E700`, one byte, silences it without fabricating anything; a patch did that for the player client until the referee could carry the dialog's choice.
 
-**Prompt 225's OK stores three things through `0x00579230`:** the name, the "Reveal True Player Name" checkbox and the coat-of-arms id. Online it sends them as an `ACNC` message and changes nothing locally. Offline it trims spaces and tabs, then refuses a name outside 3 to 30 characters ("Civilization Name needs to be between 3 and 30 characters long") or one that matches another civ's player name or chosen name ("A similar Civilization Name already exists"). The match ignores case: `0x00404B30` upper-cases both names with `toupper` before comparing, and the civ's own player name is not checked. A name it accepts goes to `civ+0x1A0`, the checkbox to `+0x19D` and the id to `+0x1C0`. The dialog also has a "Decide Later" button.
+**Prompt 225's OK stores three things through `0x00579230`:** the name, the "Reveal True Player Name" checkbox and the coat-of-arms id. Online it sends them as a `CNCA` command and changes nothing locally. Offline it trims spaces and tabs, then refuses a name outside 3 to 30 characters ("Civilization Name needs to be between 3 and 30 characters long") or one that matches another civ's player name or chosen name ("A similar Civilization Name already exists"). The match ignores case: `0x00404B30` upper-cases both names with `toupper` before comparing, and the civ's own player name is not checked. A name it accepts goes to `civ+0x1A0`, the checkbox to `+0x19D` and the id to `+0x1C0`. The dialog also has a "Decide Later" button.
 
 **`OWPR` (version 19) ends with those three fields.** `0x0053B230` writes them last: the name as a `u32` length and its characters, the checkbox as one byte, the id as an `i32`, −1 for none. Every civ in the local saves and sandbox captures ends `00 00 00 00 | 00 | ff ff ff ff`: no name, player name hidden, no arms.
 
@@ -1426,7 +1920,7 @@ Two things cost time here and are worth passing on:
 * **Patching the two obvious sites did nothing.** Only #20 and #27 write the immediate straight to memory; the rest load 60 into a REGISTER first (`mov ecx, 60 ; mov [0x0080AA08], ecx`), which does not match a search for `mov [addr], imm`. The live value kept coming up 60 on a client whose patched bytes verified correct on disk.
 * **Read the RUNNING process to tell the two failures apart.** "The patch does not work" and "the patch is not where I think it is" present identically. Reading the bytes back out of the live process settled it in one step.
 
-[ ] The same function also carries an **upper** bound, `cmp ebx, 0xA8C0` (43,200 = 12 hours) at `0x0052D34F`. Untouched, and presumably the longest turn the original game offered.
+[x] The same function also carries an **upper** bound, `cmp ebx, 0xA8C0` (43,200 = 12 hours) at `0x0052D34F`. Untouched, and presumably the longest turn the original game offered. **Not a limit on `turnlength`.** The compare sits in the speed-galaxy branch of `0x52D0E0` and tests the length read from `SpeedTicks.txt`: above 12 hours the file's second value becomes the turn length, and `[0x80AA04]`, which `GLOB` saves, marks the speed phase. A galaxy with `speed` 0 never reaches it, and the normal path from `0x52D497` shows no upper bound.
 
 ### Patches 28–31, Setup and renderer messages drop the old host (1,571 bytes, October 2026)
 
@@ -1451,7 +1945,7 @@ Each replacement is written into its original's slot and the remainder is NUL-fi
 
 **CONFIRMED:** a patched `CosmicSupremacy_TestBed.exe` started with no arguments from a non-administrator account shows the new text in the setup failed dialog.
 
-[ ] Patch 31 is verified by byte comparison and by formatting the patched string, not yet on screen. It needs a client whose `CreateDevice` fails.
+[x] Patch 31 is seen on screen (14 November 2026). A scratch copy of the patched TestBed with the success branch at `0x005728D0` (`74 4F`, `je 0x00572921`) NOPped takes the `CreateDevice` failure path on a working machine. Its dialog reads `Failed to initialize the Renderer.`, `DirextX CreateDevice returned an unknown error: 00000000`, then the patched paragraph: attach the saved file to an issue at the tracker URL with the latest log file, saved at the client's `log.txt` path. No host appears in it. The forced copy is a probe only and never ships.
 
 ### Patches 32–35, Main window opens 10% larger (16 bytes, October 2026)
 
@@ -1773,8 +2267,9 @@ Corrected:
 ### A save without a remote thread (follow-up, October 2026)
 
 The launcher makes the client save by injecting a call to `SaveGame` in a remote thread
-(`client/dev_tools/trigger_save.py`). That is the shipping path for the public beta. The route
-that removes the remote thread is a resident handler in the player client, and it is not built.
+(`client/dev_tools/trigger_save.py`). That was the shipping path for the public beta. The route
+that removes the remote thread is a resident handler in the client, and every shipped client now
+carries one.
 
 What bounds it:
 
@@ -1785,18 +2280,22 @@ What bounds it:
 - `SaveGame` is `ret 8`, ignores `this`, and is synchronous: the same three facts the injected
   stub relies on.
 - `.text` has a 3,948-byte run of padding at `0x006D2094` that can hold the stub.
-- The launcher half exists: `client/dev_tools/trigger_save_message.py` posts a registered window
-  message with `PostMessageW`, and `game_cycle.trigger_save` uses it when `CS_SAVE_VIA_MESSAGE`
-  is set. With a stock client the message reaches nothing.
+- The launcher half is `client/dev_tools/trigger_save_message.py`, which sends the registered
+  window message, and `game_cycle.trigger_save` uses it. A stock client ignores the message.
 
-- [ ] **A player build saves on a posted message.** The beta keeps the injected save. Done when a
-  player build saves on the posted message, a real capture lands through it, and
-  `CS_SAVE_VIA_MESSAGE` is made the default.
+- [x] **A player build saves on a sent message** (14 November 2026). `patch_save_message.py`
+  hooks `AfxWndProc` at `0x00654892` and puts the stub at `0x006D20A0`. The stub answers the
+  registered message `CosmicSupremacyResurgenceSave` by calling `SaveGame(wParam, "resident")` on
+  the client's own main thread and returns its result. `build.ps1` applies it to every client it
+  stages, and `release/tests/test_save_handler_patch.py` pins it. The launcher sends the message with
+  `SendMessageTimeoutW`, so it knows whether the save ran. `CS_SAVE_VIA_MESSAGE` now defaults to
+  the client's own answer: the message path when the running exe carries the handler, the
+  injected save otherwise. `1` or `0` forces either one. A patched TestBed on
+  `SinglePlayerGalaxy.dat` answered both a direct send and `game_cycle.trigger_save` with
+  `SaveGame` returning 1, and both captures reached `cs_server` (12,412 bytes, turn 0).
 
-The work left is the stub plus a window-procedure hook that routes the registered message to it,
-written as a `patch_*.py` in the existing client patch step and signed with the rest. A resident
-stub and a window-procedure hook are themselves a pattern antivirus heuristics watch for, so this
-moves the sensitive act into a signed static binary rather than removing it.
+A resident stub and a window-procedure hook are themselves a pattern antivirus heuristics watch
+for, so this moves the sensitive act into a signed static binary rather than removing it.
 
 ### One game process per machine, and what the lock does not know
 
@@ -1810,14 +2309,20 @@ player mid-turn cannot afford for it not to; a player's serve refuses at once. T
 nothing stops a tool calling `Popen` itself, and every path in this project goes through `launch`. On
 separate machines the problem does not exist, which is why it survived this long unnoticed.
 
-[ ] **The lock records who last claimed the client, not who is using it.** `take_client_lock` clears
-a stale lock by asking whether the holder's pid is alive, which was written for a holder that died
-mid-hold, since a legitimate hold lasts a whole turn and a timeout would break it. A holder that
-exits normally and deliberately leaves the client running produces the same stale lock, and the next
-tool through is waved past it. Seen live: a script that opened a galaxy for inspection finished, left
-the client up, and left a lock naming a dead pid while other work was still in flight on that
-machine. A free lock and a free machine are independent facts, and the tooling cannot tell them
-apart.
+- [x] **The lock records who last claimed the client, not who is using it.** `take_client_lock`
+  cleared a stale lock by asking whether the holder's pid is alive, which was written for a holder
+  that died mid-hold, since a legitimate hold lasts a whole turn and a timeout would break it. A
+  holder that exits normally and deliberately leaves the client running produced the same stale
+  lock, and the next tool through was waved past it. Seen live: a script that opened a galaxy for
+  inspection finished, left the client up, and left a lock naming a dead pid while other work was
+  still in flight on that machine. **Fixed** (14 November 2026): `launch` writes the pid of the
+  client it starts on a second line of the lock, `client <pid>`. A lock whose holder has exited is
+  stale only when that client has exited too. While it runs the client was left open: another
+  purpose is refused with the holder, its purpose and the client named, `close_client` refuses it,
+  and only the purpose that left it takes it over, which is how the referee recovers from its own
+  crash. `python game_cycle.py --close` closes a client left open once nobody is using it, and
+  still refuses a live holder. A lock written before this has no client line and is treated as
+  before (`server/tests/test_client_lock.py`).
 
 ### Conclusion (corrected)
 
@@ -1880,7 +2385,7 @@ the same idiom as the order object's `+28`/`+52` list heads.
 **Drafting is FREE below content version 150.** The gate is `[0x0080AA00] >= 150`;
 under it the engine skips the whole cost block.
 
-[ ] **HAZARD, `CommitPopulation` auto-conscripts any population above `space/10`.**
+**HAZARD, `CommitPopulation` auto-conscripts any population above `space/10`.**
 Anything calling it must expect the citizen vector to shift underneath a stale index,
 which is why `actions.conscript` re-reads the list live rather than trusting the
 snapshot.
@@ -1954,12 +2459,16 @@ hurries, trades and treaty sums itself. Checking every order type is not planned
   has not submitted since sign-ins were recorded. The bot civs submit with the operator's
   credentials, not through the relay, and are not affected. The reworded warning is in v0.6.0.
 
-- [ ] **The merge parses the whole blob again for nearly every read.** Each accessor in
+- [x] **The merge parses the whole blob again for nearly every read.** Each accessor in
   `merge_orders.py` and `news.py` calls `sp.parse_blob` itself, so one merge of a 38 KB test blob
   parses it 83 times (13 November 2026, `test_admirals_diplomacy_merge.py` under `cProfile`).
   v0.6's display, message and news reads added about a dozen, and the admirals and queues merge
   tests now take over 30 minutes. A live tick is still dominated by the game client. Done when
   a merge parses each blob it holds once per change, and both tests run in a few minutes.
+  **Fixed** (`save_parser.parse_blob`, 14 November 2026): a `bytes` blob's tree is cached by its
+  content, the last 16 kept, with the `Section` objects shared and never changed by a caller.
+  One merge of the test blob went from 83 parses to none beyond the first, the admirals test
+  from 72 minutes to 65 seconds and the queues test from 51 minutes to 49 seconds.
 
 - [x] **A guest's seats follow its install to an existing account.** On login the launcher
   posts both the guest's and the account's tokens, and the relay moves each seat and each
@@ -2031,6 +2540,78 @@ hurries, trades and treaty sums itself. Checking every order type is not planned
   sent, and a stopped or unreachable galaxy keeps it, since the relay takes orders until the turn
   changes. `test_turn_busy.py`; not yet seen on screen.
 
+- [ ] **The website's Galaxies panel lists the open galaxies.** Every archived page's panel
+  shows a "Coming soon" note in place of the 2023 list (`replace_galaxy_list` in
+  `site/patches.py`). The launcher reads the relay's listing (`GET /`, `galaxy_directory`), but
+  that route needs a sign-in and sends no CORS header, so a page on cosmicresurgence.com cannot
+  read it. Decided (Robert, 14 November 2026):
+  - the referee publishes a small public file each tick, and the page reads that; the relay
+    gets no route without a sign-in;
+  - the panel lists each open galaxy's title only, with no links; the file's rows leave room
+    for links, player counts and descriptions later;
+  - the sandbox is listed, and is the only galaxy for now.
+
+  Done when the panel on cosmicresurgence.com lists the sandbox by title from that file, and
+  keeps the "Coming soon" note when the file cannot be read or lists nothing.
+
+  Built in v0.7: `referee_worker` calls `public_listing.publish` after each tick, which writes
+  `public/galaxies.json` (`{"galaxies": [{"title": ...}]}`, open galaxies only, cached five
+  minutes) to the store's bucket; `beta_storage.rules` lets anyone read that one object; the
+  panel holds the note and `site/overrides/scripts/galaxies.js` replaces it with the titles.
+  `test_public_listing.py` checks the rule on the emulators, and the script was seen filling
+  the panel from a local stand-in. Left before it shows live:
+  - [x] Publish the storage rules (Robert, from the console, 14 November 2026).
+  - [x] Set the bucket's CORS from `server/beta_storage_cors.json` (Robert, 14 November 2026).
+  - [ ] Restage the referee (release step 10), so it publishes the file.
+  - [ ] Deploy the site, then confirm the panel lists the sandbox.
+
+- [ ] **A message sent each way on the sandbox arrives with the next turn**, once the referee
+  is restaged from the release that carries it. Seen in the client on 9 November 2026 before
+  the v0.6 restage; checked again at each release that changes the merge.
+
+- [x] **The operator page shows when players have voted to end a galaxy** (Robert, 14 November
+  2026). Players may vote to restart the sandbox; the operator decides, so the page only shows
+  the count. Done when a vote cast with the client's "vote to end galaxy" button reaches the
+  referee through a submission, and `operator_view` shows each galaxy's votes against its
+  seated civs. The vote is the last byte of the civ's `USSE` (Memory report, **"vote to end
+  galaxy"**). `merge_orders` carries the submitter's own vote, 0 or 1; the referee archives the
+  civs whose vote stands in the published turn as `end_votes`; the operator page shows "1 of 3
+  civs (Neighbor), as of turn 10" from the newest record that has them, counted against the
+  roster, and marks a majority. Nothing acts on the votes (`server/tests/test_end_vote.py`).
+  A vote cast with the client's own handler and saved merges and survives the client's tick,
+  the local civ's and another civ's alike (turn 37 of a five-civ galaxy, 14 November 2026).
+
+- [x] **The home page carries news items.** The home page is `site/overrides/game_news.php.html`,
+  served at `/`, and holds one post, "Welcome to Resurgence" (13 September 2026). Done when a
+  new item can be added with a date, newest first, without editing the archived markup by hand.
+  Each item is a file in `site/news/`, `YYYY-MM-DD-anything.html` with the title on its first
+  line; `stage.py` renders them newest first at the home page's `<!-- news items -->` marker
+  (`site/news.py`, `site/tests/test_news.py`, `site/README.md`). The welcome post moved there
+  and renders as before.
+
+- [x] **The launcher shows a news banner below the Multiplayer button** on the Play page
+  (`#modes` in `release/webui/index.html`). It is not linked to the home page's news: each is
+  written on its own. The launcher reads the line from a small file on cosmicresurgence.com, so
+  a line changes with a site deploy, not a release (Robert, 14 November 2026). Done when the
+  banner shows the current line as plain text, shows nothing when there is none, and a
+  launcher that cannot reach the site still opens. The new request is recorded in the Privacy
+  Checklist. Robert asked for a panel rather than a line (14 November 2026): the Play page draws
+  it under the modes, a picture beside the title, date and text. The launcher reads
+  `site/overrides/launcher_news.json` (`title`, `date` as `YYYY-MM-DD`, `text`, and `image`, a
+  path on the same site) two seconds after it opens and hourly after, off the UI thread, and
+  inlines the picture only if it is on the same site, under 256 KB and a PNG, JPEG or GIF. A
+  file with no title and no text shows no panel, and a failed read is logged and keeps the
+  last item. Everything is drawn as text (`test_launcher_news.py`, in `run_all.ps1`). Robert
+  saw it in a checkout launcher reading a local copy of the site; not yet in a built one. The Privacy Checklist's PRIV-2 IP item names the request; its line was
+  edited by hand to match `build_ops_checklist.py`, since the checklist sources are not on
+  this machine to regenerate from.
+
+- [x] **A release step asks whether to update the home page news or the launcher banner.** One
+  step in `docs/DEVELOPMENT.md`'s release checklist, before the site deploy at step 9, asking
+  about each separately, since they are not linked. Both are site files, so step 9's deploy
+  carries either change. Added once both of the items above exist. It is part of step 9, so
+  step 10 keeps its number.
+
 **Measured in one Single Player session at turn 0 (October 2026,
 `server/tests/fixtures/tier4`):**
 
@@ -2049,6 +2630,30 @@ hurries, trades and treaty sums itself. Checking every order type is not planned
   one-ship fleet survives until disbanded. A `SHPR` ends with a `f32`, the id of the last fleet
   its ship was in (`SHPR+30` with two crew), kept after the ship leaves, and the ship's own id.
   Carried (`test_fleets_merge.py`).
+- **A `SHPR` begins with the ship's design id** (`+0`), then the crew count at `+4`. **The
+  tail's `f32` is the ship's condition**, `Ship:136`, 0.0 to 1.0. CONFIRMED November 2026 on
+  the war blobs ticked by `sim/oracle.py capture`: ship 678 reads 1.0 before the turn-110
+  battle, 0.9238 after it, and 1.0 again a turn later, repaired. Every other ship on disk
+  reads 1.0.
+- **A ship cloned before 27 September 2026 can name its donor in that tail.** 115 ships in 86
+  blobs end with another ship's id: the third civ's Colony Ship 208 in the `referee_work` galaxy
+  names 200, and the staged `bgf1` hulls 203 and 204 in `battle_a.dat` name 193. `inject_ship.py`
+  copied the donor's record whole until `f4fb9f7`; since then it rewrites the trailing id, and
+  `inject_civ.starting_kit` clones through it. The engine carries the stale id forward every tick
+  without complaint, so the galaxies made earlier still hold it. The object header's id is the
+  ship's. `merge_orders.read_ship` refuses such a ship as unreadable, which leaves it out of the
+  fleet merge; `sim/load.py` reads it by the header.
+
+[x] Decide whether `merge_orders.read_ship` should accept a ship whose tail names its donor. As it
+stands a player in an older galaxy cannot put such a ship in a fleet. Check first whether any live
+galaxy holds one. **Decided** (14 November 2026): it keeps refusing, and the referee repairs the
+ship instead. Inside a fleet a member's `SHPR` tail is the ship's only id, so a ship accepted as it
+is would enter a fleet as its donor and come out as a second object with the donor's id.
+`merge_orders.repair_donor_tails` rewrites the tail to the header's id, which `inject_ship.py` has
+written since `f4fb9f7`, and `referee.tick` runs it before the engine loads the galaxy, so the
+ship reads from the next served turn on and the log names each one
+(`server/tests/test_donor_tail.py`). Whether the live `sandbox` holds one is not checked: the
+referee's log after the next restage says.
 - **Individual ships cannot be renamed**; only fleets can.
 
 **Measured in one Single Player session at turn 0 (23 October 2026,
@@ -2180,13 +2785,15 @@ treaty list), so each layout below is the writer's and reader's, checked only fo
 - **A civ's stance** toward each civ it has met is in its `KNPL` v12: a `u32` count, then a
   36-byte record keyed by the other civ's id. The stance (0 neutral, 1 war, 2 cease-fire, 3
   peace, 4 alliance) is the `u32` at record `+12`: it reads 3 in `control_fork_played.dat` and 1
-  in `war_fork_played.dat`, the same fork after a declaration of war. The rest of the record is
-  not decoded.
+  in `war_fork_played.dat`, the same fork after a declaration of war. The whole record is in
+  `server/dev_tools/knpl.py`.
 - **`waronly`** (GSET index 29) reads in the client as two things: first contact sets the stance
   to war (`0x534FF3`), and the diplomacy screen's context menu adds "Propose New Treaty" greyed
-  out (`0x4425BF`). The second does not hold in the UI: on `control_fork_played.dat`, `waronly
-  = 1`, "Propose New Treaty" and "Declare War" are both available and every treaty kind can be
-  chosen (28 October 2026). Sandbox players can propose treaties and declare war.
+  out (`0x4425BF`). `control_fork_played.dat` holds `waronly = 0`, so on it "Propose New
+  Treaty" and "Declare War" are both available and every treaty kind can be chosen (28 October
+  2026). Under `waronly = 1` the item is added disabled, which has not been seen on screen, and
+  the merge refuses a new treaty other than war (§2a). The live sandbox reads `waronly = 0`, so
+  its players can propose treaties today.
 
 **Measured in one Single Player session on 27 October 2026 (`server/tests/fixtures/admirals`):**
 admirals on `clean.dat` as GoodGuy, turns 110 to 112, with the turn length set to 30 days.
@@ -2217,11 +2824,13 @@ layout read off the client above held.
 **Measured in one Single Player session on 27 and 28 October 2026
 (`server/tests/fixtures/diplomacy`):** diplomacy on `control_fork_played.dat` written with
 `waronly = 0` and 30-day turns, at peace, turns 180 and 181, switching between GoodGuy and BadGuy
-with `set_blob_player.py` to answer. Every capture's GSET reads `waronly = 1`, so the client
-either ignores the setting on load or the capture rewrites it.
+with `set_blob_player.py` to answer. Every capture's `waronly` bytes read `01 00`, flag 1 and value
+0: the tool wrote `00 00`, the value was already 0, and the client saves its own flag.
 
 - **`TRDT`** is the proposer's and recipient's civ ids, the kind (0 trade, 1 war, 2 cease-fire,
-  4 alliance; peace is likely 3), the status (0 proposed, 1 accepted, 2 declined, 3 at war), an
+  3 peace, 4 alliance, read from the client's tables), the status (0 pending, 1 binding, 2
+  declined, 3 non-binding, 4 canceled; a war is created at 3 and a binding treaty reaches 3 when
+  its length runs out, so 1 and 3 are both in force; `merge_orders.NON_BINDING` is that 3), an
   `i32` length (-2 until accepted), an `i32` start turn (-1 until accepted), the turn proposed,
   one deleted byte per party, then the proposer's demands and its offers.
 - **Proposing** adds a `TRTY` and raises `SAVE+0` to its id. A military alliance stores no length

@@ -242,8 +242,14 @@ and merge `main` in first if it is not.
 8. Push `main` and the tag, then `gh release create` as `build.ps1` prints
    it. The tag has to exist first: given a tag that does not, `gh` creates it
    on the default branch's head.
-9. Update `site/overrides/download_client.php.html` with the file name,
-   size, date and SHA-256, then stage and deploy the site (`site/README.md`).
+9. Ask, as two questions since they are not linked, whether to post a news
+   item on the home page (a file in `site/news/`, `site/README.md`) and
+   whether to change the launcher's news panel
+   (`site/overrides/launcher_news.json`: `title`, `date`, `text`, `image`; no
+   title and no text shows none). Then update
+   `site/overrides/download_client.php.html` with the file name, size, date
+   and SHA-256, and stage and deploy the site (`site/README.md`), which
+   publishes all three.
 10. Restage the referee from the clean checkout of the tag, between turns.
     With the signing variables from step 3 set, run
     `server\sandbox\stage.ps1 -Store <store> -Bucket cs-resurgence.firebasestorage.app`,

@@ -24,6 +24,11 @@ one the planet and system. Answers are read back by key, never listed.
 `resolve_turn` runs abandonment before joins, so a join sees the planets a
 reclaim freed.
 
+A joiner's homeworld is placed by the galaxy's `placement` state field
+(`inject_civ.pick_homeworld`): `farthest` when absent, or `random`, seeded by
+the turn and the name so a rerun places the same way. `--placement` previews
+another.
+
 `apply` changes only bytes. `commit` runs after `publish` and does every
 durable write, so a referee killed between them leaves an empire with no roster
 entry, which the next boundary refuses and an operator can settle. The seat map
@@ -38,6 +43,7 @@ blob unchanged; the player is told through `put_note`.
 import argparse
 import json
 import os
+import random
 import struct
 import sys
 import time
@@ -222,8 +228,8 @@ def untouched_homeworld(start):
 
 
 def fresh_start(blob, name: str, planet: int, start=None, log=print):
-    """Give a civ cloned from seat one a new civ's start: no score, no civ
-    name or coat of arms chosen, every trait untouched with its prompt offered
+    """Give a civ cloned from seat one a new civ's start: no score or
+    reputation, no civ name or coat of arms chosen, every trait untouched with its prompt offered
     again, and, when `start` (the galaxy's turn 0) shows an untouched
     homeworld, that homeworld on `planet` with its prompt offered again.
     Each part that cannot be read is logged and left as cloned."""
@@ -239,11 +245,12 @@ def fresh_start(blob, name: str, planet: int, start=None, log=print):
     owpr = mo._owpr(blob, oid)
     at = mo._identity_at(blob, owpr) if owpr is not None else None
     if at is None:
-        log(f'  joins: {name}: OWPR unreadable, score, name and traits left '
-            f'as cloned')
+        log(f'  joins: {name}: OWPR unreadable, score, reputation, name and '
+            f'traits left as cloned')
         return blob
     out = bytearray(blob)
     struct.pack_into('<I', out, at - icv.SCORE_BACK, 0)
+    struct.pack_into('<f', out, at - icv.REPUTATION_BACK, 0.0)
     blob = mo.set_civ_identity(bytes(out), oid, b'', 0, mo.NO_ARMS)
     traits = mo.traits_of(blob, oid)
     if traits is None:
@@ -258,7 +265,8 @@ def fresh_start(blob, name: str, planet: int, start=None, log=print):
     else:
         blob = mo.set_homeworld(blob, planet, home)
         blob = mo.set_setup_flag(blob, oid, 'homeworld', 0)
-    log(f'  joins: {name} starts with no score, no chosen name and untouched '
+    log(f'  joins: {name} starts with no score or reputation, no chosen name '
+        f'and untouched '
         f'traits' + ('' if home is None else ' and homeworld'))
     return blob
 
@@ -331,8 +339,22 @@ def donor_template(store, blob, before: int, log=print):
     return None
 
 
+def placement_of(store, placement=None, log=print) -> str:
+    """The placement asked for, else the galaxy's, else `farthest`. A value
+    that names no placement is logged and read as `farthest`."""
+    if placement is None:
+        placement = store.state().get(turn_store.PLACEMENT_KEY)
+    if placement is None:
+        return icv.FARTHEST
+    if placement not in icv.PLACEMENTS:
+        log(f'  joins: placement {placement!r} is not one of '
+            f'{", ".join(icv.PLACEMENTS)}; placing {icv.FARTHEST}')
+        return icv.FARTHEST
+    return placement
+
+
 def _grant(store, blob, req: dict, roster, turn: int, log=print,
-           template=None):
+           template=None, placement=icv.FARTHEST):
     """One request against one blob. Returns (blob, outcome).
 
     Nothing raises out of here. The injection refuses with `SystemExit`, which
@@ -376,8 +398,9 @@ def _grant(store, blob, req: dict, roster, turn: int, log=print,
             return blob, out
 
     try:
-        joined, planet = icv.add_civ(blob, name, template=template,
-                                     log=lambda *a: None)
+        joined, planet = icv.add_civ(
+            blob, name, template=template, placement=placement,
+            rng=random.Random(f'{int(turn)}:{name}'), log=lambda *a: None)
     except (SystemExit, Exception) as exc:                  # noqa: BLE001
         out.update(outcome=REFUSED,
                    reason=(f'This galaxy had no room to put a new empire in: '
@@ -423,17 +446,20 @@ def _grant(store, blob, req: dict, roster, turn: int, log=print,
     sun, system = home_system(joined, planet)
     out.update(outcome=GRANTED, reason='', planet=planet, sun=sun,
                system=system)
-    log(f'  joins: seated {name} on planet #{planet} in {system}')
+    log(f'  joins: seated {name} on planet #{planet} in {system}, placed '
+        f'{placement}')
     return joined, out
 
 
-def apply(store, turn: int, new_turn: int, blob: bytes, log=print):
+def apply(store, turn: int, new_turn: int, blob: bytes, log=print,
+          placement=None):
     """Grant every join waiting on this galaxy.
 
     Called with the turn just closed, the turn about to be published, and the
     blob the tick produced for it, before `publish`. Returns `(blob, outcomes)`
     for `commit` once the blob is published. Nothing durable is written here.
     A closed galaxy grants nothing and leaves its requests waiting.
+    `placement` overrides the galaxy's (`placement_of`).
     """
     if store.is_closed():
         if pending(store, log=lambda *a: None):
@@ -448,10 +474,11 @@ def apply(store, turn: int, new_turn: int, blob: bytes, log=print):
     roster = list(store.civs())
     log(f'  joins: {len(waiting)} request(s) waiting on turn {turn}')
     template = donor_template(store, blob, turn, log=log)
+    placement = placement_of(store, placement, log=log)
     outcomes = []
     for req in waiting:
         blob, out = _grant(store, blob, req, roster, new_turn, log=log,
-                           template=template)
+                           template=template, placement=placement)
         if out['outcome'] == GRANTED:
             # So a second request for the same name this turn is refused.
             roster.append(out['name'])
@@ -616,11 +643,11 @@ def commit(store, turn: int, new_turn: int, outcomes, log=print) -> list:
     return list(outcomes)
 
 
-def review(store, log=print) -> list:
+def review(store, log=print, placement=None) -> list:
     """What the next boundary would do with what is waiting, changing nothing.
 
     Reasons about the current turn's blob, so a reported placement can differ
-    from the one the next tick makes.
+    from the one the next tick makes. `placement` overrides the galaxy's.
     """
     waiting = pending(store, log=log)
     if not waiting:
@@ -631,10 +658,11 @@ def review(store, log=print) -> list:
                 for r in waiting]
     blob = store.turn_blob(store.state()['turn'])
     roster = list(store.civs())
+    placement = placement_of(store, placement, log=log)
     out = []
     for req in waiting:
         blob, got = _grant(store, blob, req, roster, store.state()['turn'] + 1,
-                           log=log)
+                           log=log, placement=placement)
         if got['outcome'] == GRANTED:
             roster.append(got['name'])
         out.append(got)
@@ -645,6 +673,8 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__.split('\n')[1])
     ap.add_argument('store', help='a galaxy: a directory, a URL or a '
                                   'firebase:// spec')
+    ap.add_argument('--placement', choices=icv.PLACEMENTS, default=None,
+                    help='preview this placement instead of the galaxy\'s')
     a = ap.parse_args()
 
     store = turn_store.open_store(a.store)
@@ -653,7 +683,7 @@ def main():
     state = store.state()
     print(f'{a.store}: turn {state["turn"]}, status {store.status()}, '
           f'{len(store.civs())} seat(s)')
-    rows = review(store)
+    rows = review(store, placement=a.placement)
     if not rows:
         print('  no join requests waiting')
         return 0

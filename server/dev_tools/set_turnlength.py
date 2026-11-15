@@ -3,59 +3,15 @@ set_turnlength.py: change a galaxy's configured turn length in a save blob
     python set_turnlength.py <capture.b64|.dat> --secs 10 --dat out.dat
     python set_turnlength.py clean.dat --set waronly=0 --dat peace.dat
 
-`--set NAME=VALUE` rewrites any whole-number setting (int32 or int16) in
-place, and may be repeated.
+`--set NAME=VALUE` rewrites any whole-number or bool setting in place, and
+may be repeated. A bool takes 0 or 1.
 """
 import argparse
 import os
-import struct
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import save_parser as sp
-
-# The settings a value can be written into in place, by GSET type code.
-WHOLE = {0: "<i", 2: "<h"}
-
-
-def gset_entries(blob, payload):
-    """[(name, type_code, value_offset, value)] for an int32-shaped entry."""
-    pos = payload
-    n = struct.unpack_from("<I", blob, pos)[0]
-    pos += 4
-    out = []
-    for _ in range(n):
-        nlen = struct.unpack_from("<I", blob, pos)[0]; pos += 4
-        name = blob[pos:pos + nlen].decode("ascii", "replace"); pos += nlen
-        tc = struct.unpack_from("<I", blob, pos)[0]; pos += 4
-        if tc == 0:
-            pos += 1                                   # custom flag
-            out.append((name, tc, pos,
-                        struct.unpack_from("<i", blob, pos)[0]))
-            pos += 4
-        elif tc == 1:
-            pos += 1
-            out.append((name, tc, pos,
-                        struct.unpack_from("<ii", blob, pos)))
-            pos += 8
-        elif tc == 2:
-            out.append((name, tc, pos,
-                        struct.unpack_from("<h", blob, pos)[0]))
-            pos += 2
-        elif tc == 3:
-            ln = struct.unpack_from("<I", blob, pos)[0]; pos += 4
-            out.append((name, tc, pos,
-                        blob[pos:pos + ln].decode("utf-8", "replace")))
-            pos += ln
-        elif tc == 4:
-            pos += 1
-            cnt = struct.unpack_from("<I", blob, pos)[0]; pos += 4
-            out.append((name, tc, pos,
-                        list(struct.unpack_from(f"<{cnt}I", blob, pos))))
-            pos += 4 * cnt
-        else:
-            break
-    return out
 
 
 def main():
@@ -71,15 +27,15 @@ def main():
     raw = (open(a.capture, "rb").read() if a.capture.endswith(".dat")
            else sp.decode_save(open(a.capture).read()))
     blob = bytearray(raw)
-    g = blob.find(b"GSET")
-    if g < 0:
+    settings = sp.gset_of(bytes(blob))
+    if not settings:
         sys.exit("no GSET section")
-    entries = gset_entries(bytes(blob), g + 8)
     print(f"{os.path.basename(a.capture)}: {len(blob):,} bytes, "
-          f"{len(entries)} setting(s)")
-    for name, tc, off, val in entries:
+          f"{len(settings)} setting(s)")
+    for name, e in settings.items():
         mark = "  <--" if name == "turnlength" else ""
-        print(f"  {name:<20} type {tc}  @{off}  = {val}{mark}")
+        print(f"  {name:<24} {e['type']:<10} @{e.get('offset')}  = "
+              f"{e['value']}{mark}")
 
     changes = [("turnlength", a.secs)] if a.secs is not None else []
     for spec in a.set:
@@ -92,16 +48,13 @@ def main():
         print("\nno --secs or --set given; nothing changed")
         return
     print()
+    try:
+        blob = bytearray(sp.set_gset(bytes(blob), dict(changes)))
+    except ValueError as e:
+        sys.exit(str(e))
     for name, value in changes:
-        hit = next((e for e in entries if e[0] == name), None)
-        if hit is None:
-            sys.exit(f"this galaxy has no {name!r} setting")
-        _n, tc, off, old = hit
-        if tc not in WHOLE:
-            sys.exit(f"{name} is type {tc}, not an int32 or int16 this "
-                     f"rewrites")
-        struct.pack_into(WHOLE[tc], blob, off, value)
-        print(f"{name} {old} -> {value} (in place, no section resized)")
+        print(f"{name} {settings[name]['value']} -> {value} "
+              f"(in place, no section resized)")
 
     out = a.out or (a.capture if a.capture.endswith(".b64")
                     else None)

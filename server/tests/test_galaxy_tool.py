@@ -38,6 +38,7 @@ for d in (HERE, os.path.join(ROOT, 'server'),
 import save_parser as sp                                        # noqa: E402
 import inject_civ as icv                                        # noqa: E402
 import galaxy_tool                                              # noqa: E402
+import joins                                                    # noqa: E402
 import turn_store                                               # noqa: E402
 from galaxy_directory import CLOSED, OPEN, open_directory       # noqa: E402
 
@@ -162,6 +163,22 @@ def run_folder(tmp):
            launcher.version_problem('0.4.0', store.state())), (True, None))
     check('the same build again is accepted',
           tool(root, 'min-build', 'one', '0.4')[0], 0)
+
+    print('choosing how joiners are placed')
+    check('a new galaxy names no placement, which is farthest',
+          store.state().get(turn_store.PLACEMENT_KEY), None)
+    before = snapshot(root)
+    code, text = tool(root, 'placement', 'one', 'random', '--dry-run')
+    check('a dry run says what it would do, and writes nothing',
+          (code, 'from farthest' in text, snapshot(root)), (0, True, before))
+    code, text = tool(root, 'placement', 'one', 'random')
+    check('setting random succeeds and reads back',
+          (code, store.state().get(turn_store.PLACEMENT_KEY)), (0, 'random'))
+    check('and is what the referee\'s joins read',
+          joins.placement_of(store), 'random')
+    code, text = tool(root, 'placement', 'nowhere', 'farthest')
+    check('a galaxy that does not exist is refused',
+          (code, 'nowhere' in text), (2, True))
     before = snapshot(root)
 
     print('closing it')
