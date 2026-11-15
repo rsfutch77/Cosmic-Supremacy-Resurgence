@@ -4,6 +4,7 @@ galaxy_tool.py: the operator ends a galaxy and starts the next one
     python galaxy_tool.py firebase://cs-resurgence close sandbox --reason "Season one is over."
     python galaxy_tool.py firebase://cs-resurgence reopen sandbox
     python galaxy_tool.py firebase://cs-resurgence min-build sandbox 0.4.0
+    python galaxy_tool.py firebase://cs-resurgence placement sandbox random
     python galaxy_tool.py firebase://cs-resurgence start season2 --name "Season Two" \\
         --generate fresh.b64 --player Alice --player Bob --replaces sandbox \\
         --min-build 0.2.0
@@ -20,6 +21,9 @@ reason. The current turn and its archive are read back after the write.
 
 `min-build` raises the oldest launcher build a running galaxy accepts. It
 refuses to lower one, and reads the value back after the write.
+
+`placement` sets how the referee places a joiner's homeworld, `farthest` or
+`random` (`joins.placement_of`), and reads the value back after the write.
 
 `start` registers a galaxy and publishes its first turn with the roster, from
 one of:
@@ -54,6 +58,7 @@ for _d in (SERVER, HERE, os.path.join(os.path.dirname(SERVER), 'client',
 
 import abandonment                                              # noqa: E402
 import galaxy_directory as gd                                   # noqa: E402
+import inject_civ as icv                                        # noqa: E402
 import turn_store                                               # noqa: E402
 
 TURN_SECONDS = 14400                # the beta's turn length
@@ -178,6 +183,29 @@ def set_min_build(directory, gid: str, build: str, dry_run: bool = False,
                       f'back {got!r}')
     print(f'{gid} ({g.name}) now needs build {build}, from {was or "none"}',
           file=out)
+    return {'gid': gid, 'dry_run': False, 'was': was}
+
+
+def set_placement(directory, gid: str, placement: str, dry_run: bool = False,
+                  out=None) -> dict:
+    out = out or sys.stdout
+    if placement not in icv.PLACEMENTS:
+        raise Refused(f'{placement!r} is not a placement; want one of '
+                      f'{", ".join(icv.PLACEMENTS)}')
+    g = row(directory, gid)
+    store = directory.store(gid)
+    was = store.state().get(turn_store.PLACEMENT_KEY)
+    if dry_run:
+        print(f'would place joiners in {gid} ({g.name}) {placement}, from '
+              f'{was or icv.FARTHEST}', file=out)
+        return {'gid': gid, 'dry_run': True, 'was': was}
+    store.update_state({turn_store.PLACEMENT_KEY: placement})
+    got = store.state().get(turn_store.PLACEMENT_KEY)
+    if got != placement:
+        raise Refused(f'{gid} was written to place joiners {placement} and '
+                      f'reads back {got!r}')
+    print(f'{gid} ({g.name}) now places joiners {placement}, from '
+          f'{was or icv.FARTHEST}', file=out)
     return {'gid': gid, 'dry_run': False, 'was': was}
 
 
@@ -330,6 +358,11 @@ def main(argv=None, out=None) -> int:
     m.add_argument('galaxy')
     m.add_argument('build', help='a dotted number, such as 0.4.0')
     m.add_argument('--dry-run', action='store_true')
+    p = sub.add_parser('placement', help="how a joiner's homeworld is "
+                                         "placed")
+    p.add_argument('galaxy')
+    p.add_argument('placement', choices=icv.PLACEMENTS)
+    p.add_argument('--dry-run', action='store_true')
     s = sub.add_parser('start', help='register a galaxy and publish turn one')
     s.add_argument('galaxy')
     s.add_argument('--name', help='what the Galaxies page calls it')
@@ -366,6 +399,10 @@ def main(argv=None, out=None) -> int:
         if a.cmd == 'min-build':
             set_min_build(directory, a.galaxy, a.build, dry_run=a.dry_run,
                           out=out)
+            return 0
+        if a.cmd == 'placement':
+            set_placement(directory, a.galaxy, a.placement,
+                          dry_run=a.dry_run, out=out)
             return 0
         start(directory, a.galaxy, a.name, a.player, blob_path=a.blob,
               generate=a.generate, turn_seconds=a.turn_seconds, warn=a.warn,

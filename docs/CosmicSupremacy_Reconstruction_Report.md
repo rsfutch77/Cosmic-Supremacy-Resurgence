@@ -399,7 +399,9 @@ So the score list holds one row per distinct `Owner:4`, and the collision, not t
 
 [x] **An injected civ gets no ships.** `SHIP`/`DYNO` records are galaxy-level rather than per-civ, so a starting colony ship is a separate job. Against civs that start with two, that is a real handicap at turn 1, the civ can build its own only if the donor's homeworld had a shipyard. **Fixed:** `starting_kit` adds `STARTING_SHIPS` hulls, two, as a generated civ starts with.
 
-[ ] **Homeworld placement is one hardcoded policy.** New civs are placed as far from every claimed planet as possible, which is the right default for testing an AI (contact becomes something it has to earn) but not the only one worth having, random placement is what a real generator does and is the only way to test a hostile neighbour two systems away, and clustered or per-team placement follow from it. Wants a `--placement` option rather than a second function.
+[x] **Homeworld placement is one hardcoded policy.** New civs are placed as far from every claimed planet as possible, which is the right default for testing an AI (contact becomes something it has to earn) but not the only one worth having, random placement is what a real generator does and is the only way to test a hostile neighbour two systems away, and clustered or per-team placement follow from it. Wants a `--placement` option rather than a second function. `inject_civ.pick_homeworld` takes `placement`: `farthest`, the default, or `random`, a uniform pick among the free planets that clear the margin, by a seedable `random.Random`. `inject_civ.py` has `--placement` and `--seed`. A galaxy's joins follow its `placement` state field, set with `galaxy_tool.py placement <galaxy> random` and read back; absent or unknown is `farthest`. The referee seeds a random join by the turn and the name, so the same join lands in the same place, and `joins.py --placement` previews either (`server/tests/test_placement.py`, `test_joins.py`, `test_galaxy_tool.py`). Not run against the Firebase emulator. Clustered and per-team placement are not built.
+
+  Both placements were checked end to end on a folder copy of the sandbox at turn 173, with its turn 0 (14 November 2026; `join_turn_acceptance.run` with a real client, the copy deleted afterwards). `farthest` seated FarJoiner on planet #138 and `random` seated Wanderer on #137, each a planet nobody owned, named or had a ship headed for, and each the planet `pick_homeworld` gives for that placement and seed. In both, the newcomer's civ and homeworld setup flags are clear on the join turn and the turn after, so both prompts are offered, and Wanderer's client shows "Customize Your Home World" on load. Each galaxy closed the join turn and one more, no incumbent's planets or `OWNR` bytes differed from a no-join control, and a cold client opened turn 175 as the newcomer holding one planet. Elder Race gains ship #358 in those ticks, in the control as well. At the default margin, the median system spacing (172), only two of the sandbox's 62 free planets qualify, so `random` there chooses between #137 and #138. In the first `random` run the referee's client exited during the load of the second tick and left no dump; the same blob loaded when relaunched, and the rerun passed.
 
 - [x] **A galaxy injected with a colonisation in flight plays on in the client.** The colony ships' `ROUT` sections come out byte-identical after injection, and across the tick archive the planet a colonise order names is the planet that changes hands two ticks later, 7 times out of 7. In the client (`join_acceptance.py k1`, 2 November 2026), DemoPlayer's two colony ships were sent from turn 11 of the demo galaxy and Joiner was added at the same turn; played 60 turns with and without the join, the near target #141 went to DemoPlayer on turn 13 and the far target #6 on turn 63 in both, with no divergence in any ship's orders, and Joiner's homeworld grew from 7 to 28. `k1load` opened the joined galaxy as Joiner, in the TestBed build, since this checkout has no `CosmicSupremacy_Player.exe`.
 
@@ -581,7 +583,7 @@ that carries it, is `merge_orders.COMMANDS`.
 
 `RQTM` `RSMA` `RQTN` `RQSV` **`STCO`** set course · `SLFC` `TGSD` `MOSD` `NWTR` `MDTR` `SEEN` `DISS`
 `DLTR` `STCL` `HRPR` `NWGV` `DLGV` `MDGV` `STGV` `NWAD` `DLAD` `MDAD` `STAD` `NWSQ` `MDSQ` `DLSQ`
-`STSQ` `RNGV` **`CUHW`** and **`CUCV`** the two customisation prompts · `SVUS` `PLRR` `STEL` `CNWH`
+`STSQ` `RNGV` **`CUHW`** and **`CUCV`** the two customisation prompts · **`SVUS`** the civ's `USSE`, the end-galaxy vote among it · `PLRR` `STEL` `CNWH`
 `RNFL` `SONA` `RNSD` `STPR` `STTP` `STRS` `ALIV` **`CHCZ`** `ChangeCitizenJobs` (§13) · `RTMI`
 `CHNW` `TGST` `TGSS` `CRAS` `DLSD` `DLSC` **`SDNW`** a message or note · `TRRS` `CRSD` `DOSC`
 `MCFL` `EDNW` **`CNCA`** the civ name, its checkbox and the arms id
@@ -2438,11 +2440,17 @@ hurries, trades and treaty sums itself. Checking every order type is not planned
   - [ ] Restage the referee (release step 10), so it publishes the file.
   - [ ] Deploy the site, then confirm the panel lists the sandbox.
 
-- [ ] **The operator page shows when players have voted to end a galaxy** (Robert, 14 November
+- [x] **The operator page shows when players have voted to end a galaxy** (Robert, 14 November
   2026). Players may vote to restart the sandbox; the operator decides, so the page only shows
   the count. Done when a vote cast with the client's "vote to end galaxy" button reaches the
   referee through a submission, and `operator_view` shows each galaxy's votes against its
-  seated civs. Depends on decoding the button (Memory report, **"vote to end galaxy"**).
+  seated civs. The vote is the last byte of the civ's `USSE` (Memory report, **"vote to end
+  galaxy"**). `merge_orders` carries the submitter's own vote, 0 or 1; the referee archives the
+  civs whose vote stands in the published turn as `end_votes`; the operator page shows "1 of 3
+  civs (Neighbor), as of turn 10" from the newest record that has them, counted against the
+  roster, and marks a majority. Nothing acts on the votes (`server/tests/test_end_vote.py`).
+  A vote cast with the client's own handler and saved merges and survives the client's tick,
+  the local civ's and another civ's alike (turn 37 of a five-civ galaxy, 14 November 2026).
 
 - [x] **The home page carries news items.** The home page is `site/overrides/game_news.php.html`,
   served at `/`, and holds one post, "Welcome to Resurgence" (13 September 2026). Done when a

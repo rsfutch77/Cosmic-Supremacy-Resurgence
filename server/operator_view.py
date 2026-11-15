@@ -7,8 +7,11 @@ operator_view.py: is the beta healthy, without opening a log
     python operator_view.py --directory <spec> --serve 8765
 
 For every galaxy: the turn, when it is due, who has submitted, when the last
-tick ran and how late it was, the referee worker's heartbeat, the seat map, and
-anything that looks wrong.
+tick ran and how late it was, the referee worker's heartbeat, the seat map, the
+civs that have voted to end the galaxy, and anything that looks wrong.
+
+The votes are the referee's `end_votes` in the newest archive record that has
+them, counted against the civs on the roster. Nothing acts on them.
 
 The view never writes. Stores and directories are wrapped by `read_only`, which
 forwards only the names in an allowlist and raises `ReadOnlyError` for anything
@@ -234,6 +237,7 @@ def galaxy_report(store, gid: str = None, name: str = None, status: str = None,
         'last_tick': None, 'history': [],
         'worker': {'seen': None, 'failures': None},
         'seats': None, 'seat_claim': None, 'guests': None,
+        'end_votes': None,
         'read_at': time.time(),
     }
     try:
@@ -318,13 +322,37 @@ def galaxy_report(store, gid: str = None, name: str = None, status: str = None,
             'bytes_out': rec.get('bytes_out'),
             'measured_seconds': measured,
             'late_by': late_by,
+            'end_votes': rec.get('end_votes'),
         }
         out['history'].append(row)
     if out['history']:
         out['last_tick'] = out['history'][0]
+    out['end_votes'] = _end_votes(out)
 
     out['problems'].extend(_problems(out))
     return out
+
+
+def _end_votes(r: dict):
+    """{turn, voted, of} from the newest closed turn whose record holds the
+    votes, `voted` being the roster's civs in roster order, or None."""
+    for row in r['history']:
+        votes = row.get('end_votes')
+        if votes is not None:
+            civs = [c['name'] for c in r['civs']]
+            return {'turn': row.get('published'), 'of': len(civs),
+                    'voted': [c for c in civs if c in set(votes)]}
+    return None
+
+
+def end_vote_line(r: dict) -> str:
+    """'2 of 3 civs (Alpha, Beta), as of turn 40', or '' with no record."""
+    v = r.get('end_votes')
+    if v is None:
+        return ''
+    who = f' ({", ".join(v["voted"])})' if v['voted'] else ''
+    return (f'{len(v["voted"])} of {v["of"]} civs{who}, as of turn '
+            f'{v["turn"]}')
 
 
 def _problems(r: dict) -> list:
@@ -406,7 +434,7 @@ def _error_row(gid, name, store_spec, exc, note, **extra) -> dict:
            'waiting': [], 'last_tick': None, 'history': [],
            'worker': {'seen': None, 'failures': None},
            'seats': None, 'seat_claim': None, 'guests': None,
-           'read_at': time.time()}
+           'end_votes': None, 'read_at': time.time()}
     row.update(extra)
     return row
 
@@ -574,6 +602,8 @@ def render_text(rows: list) -> str:
             for row in r['history'][1:]:
                 out.append(f'           {_tick_line(row)}')
             out.append(f'  referee  {_worker_line(r)}')
+            if end_vote_line(r):
+                out.append(f'  end vote {end_vote_line(r)}')
             for i, line in enumerate(_seat_lines(r)):
                 out.append(f'  {"seats" if i == 0 else "":<7}  {line}')
         if r['problems']:
@@ -649,6 +679,10 @@ def _row_html(r: dict) -> str:
         failing = (r.get('worker') or {}).get('failures') or 0
         body.append(cell('referee', html.escape(_worker_line(r)),
                          'err' if failing else ''))
+        if end_vote_line(r):
+            v = r['end_votes']
+            body.append(cell('end votes', html.escape(end_vote_line(r)),
+                             'out' if 2 * len(v['voted']) > v['of'] else ''))
         seat_lines = _seat_lines(r)
         if seat_lines:
             body.append(cell('seats', '<br>'.join(

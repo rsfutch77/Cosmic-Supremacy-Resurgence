@@ -963,12 +963,34 @@ it. Trading moves `RSMA`; each tick takes 1,000 off a positive count (above)
 > block of NaN bytes matches any float sequence. Float scans must reject NaN and infinities
 > explicitly.
 
-[ ] decode the **"vote to end galaxy"** button. Taken up in v0.7 (Robert, 14 November 2026):
+[x] decode the **"vote to end galaxy"** button. Taken up in v0.7 (Robert, 14 November 2026):
 players may vote to restart the sandbox, and the operator page shows the votes (Reconstruction
-Report §14). Expect a per-civ vote flag plus a
-tally, and note that the original game resolved this server-side, so the client may hold only the
-local vote and rely on a server response, which would make it unsyncable without the real server
-protocol and would close the item.
+Report §14). It is both a server command and a per-civ byte in the save, and the save carries
+it:
+
+- The tick-box is control `0x489` on the Overview Screen (`DoDataExchange` `0x412F00`,
+  `DDX_Check` into the dialog's `+0x7DA0`). Its click handler (`0x412DD0`) is the `SVUS`
+  routine, `0x5718C0`.
+- `SVUS` fills a 48-byte settings block (`0x57EA40`) from the interface options and, at `+0x2C`,
+  the tick-box. Online it sends the block as one `USSE` section; offline it copies the block to
+  the local civ at `Owner+0x2CC`, so the vote is `Owner+0x2F8`.
+- The civ's `OWNR > DATA > USSE` is that block, version 4, 45 bytes (writer `0x57ED00`, reader
+  `0x57EE30`): 11 option flags, 13 bytes, 4, 4, three `u32` (100, 0, 50 by default), and the
+  vote. The reader takes the vote from version 2 on.
+- The client tallies it itself (`0x52F6B1`, beside the "Game Progress Rate" log line): over
+  the civs it counts, half the share of civs voting plus half the share of their `Owner+0x50`
+  weight. With an end turn not yet set, the galaxy at turn 600 or later and the test against the
+  game progress rate passed, it sets the end turn (`[0x80AA04]`, -1 for none) to `turn + 109`
+  rounded down to a multiple of 10, about 100 turns on, as the tick-box's tooltip says.
+
+In the client (14 November 2026), ticking the box on a turn-37 galaxy and saving set Alpha's
+byte to 1 and nothing else in `USSE`; unticking set it back to 0. A save with Alpha's and
+another civ's vote cast kept both across the client's tick. The checks were made through the
+client's own handler, by setting the box and sending its `BN_CLICKED`, with the Overview Screen
+not on screen.
+
+[ ] find whether the engine's end turn `[0x80AA04]` is in the save. Until it is known, a galaxy
+past turn 600 with a majority voting may set an end turn of its own in the referee's tick.
 
 ### Audit sweep, closed items, and the Owner registry (August 2026)
 

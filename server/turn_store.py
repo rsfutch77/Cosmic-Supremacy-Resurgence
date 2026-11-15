@@ -95,6 +95,10 @@ VIEWS_KEY = 'views'
 PUBLIC_VIEW = 'public-without-news'
 WARN_KEY, RECLAIM_KEY = 'warn_after_misses', 'reclaim_after_misses'
 
+# How a joiner's homeworld is placed, one of `inject_civ.PLACEMENTS`; absent is
+# `farthest`. Read by `joins.apply`, written by `galaxy_tool.py placement`.
+PLACEMENT_KEY = 'placement'
+
 # The civs the AI plays, as a list of names. Written by `bot_worker.py --add`;
 # a civ not named is never played by a bot.
 BOTS_KEY = 'bots'
