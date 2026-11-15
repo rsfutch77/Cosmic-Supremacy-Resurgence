@@ -301,6 +301,55 @@ def test_a_join_lands(blob):
           [j['name'] for j in (rec or {}).get('joined', [])], ['Ada'])
 
 
+def landed_on(blob, placement, name='Ada'):
+    """(the planet a join landed on, the store), with the galaxy's placement
+    set to `placement`, or left unset for None."""
+    store = fresh_store(blob)
+    if placement is not None:
+        store.update_state({turn_store.PLACEMENT_KEY: placement})
+    write_request(store, name, uid=f'uid-{name.lower()}')
+    close_turn(store)
+    return store.state()[joins.JOINED_KEY][name]['planet'], store
+
+
+def test_placement(blob):
+    print('\nthe galaxy\'s placement decides where a joiner lands')
+    planets = icv.planet_records(blob)
+    margin = icv.system_spacing(blob)
+    reserved = icv.reserved_planets(blob)
+    far = icv.pick_homeworld(planets, reserved, margin=margin)['id']
+
+    got, _store = landed_on(blob, None)
+    check('a galaxy naming no placement places farthest', got, far)
+    got, _store = landed_on(blob, 'farthest')
+    check('so does one naming farthest', got, far)
+
+    names = ['Ada', 'Bo', 'Cy', 'Di', 'Ed']
+    picks = {}
+    for name in names:
+        got, store = landed_on(blob, 'random', name)
+        picks[name] = got
+        want = icv.pick_homeworld(
+            planets, reserved, margin=margin, placement=icv.RANDOM,
+            rng=joins.random.Random(f'{TURN + 1}:{name}'))['id']
+        check(f'random: {name} lands where the turn and name seed say', got,
+              want)
+        joined_cleanly(f'random: {name}', store.turn_blob(TURN),
+                       store.turn_blob(TURN + 1), [name])
+    check('random: the joiners do not all land on the farthest planet',
+          set(picks.values()) != {far})
+    room = {p['id']: min(icv.dist(p['pos'], q['pos']) for q in planets
+                         if q['owner']) for p in planets}
+    check('random: every pick clears the margin',
+          all(room[p] >= margin for p in picks.values()))
+
+    got, store = landed_on(blob, 'clustered')
+    check('a placement that names nothing places farthest', got, far)
+    again, _store = landed_on(blob, 'random', 'Ada')
+    check('CONTROL: the same turn and name land in the same place',
+          again, picks['Ada'])
+
+
 def test_nothing_waiting_changes_nothing(blob):
     print('\na galaxy nobody asked to join is left alone')
     store = fresh_store(blob)
@@ -693,7 +742,8 @@ def main():
           f'{len(free_planets(blob))} free planet(s)')
 
     tests = [test_shape, test_the_launcher_asks_the_store,
-             test_a_join_lands, test_nothing_waiting_changes_nothing,
+             test_a_join_lands, test_placement,
+             test_nothing_waiting_changes_nothing,
              test_no_room, test_margin, test_name_already_seated,
              test_two_in_one_turn, test_a_worker_killed_before_commit,
              test_asked_twice_across_turns,
