@@ -428,6 +428,10 @@ def resolve_turn(store: TurnStore, save_dir=None, log=print) -> int:
                              for civ, s in taken},
         # The coats of arms each civ could choose, for `verify_turn`.
         "arms": arms,
+        # The civs whose end-galaxy vote stands in the published turn, for
+        # the operator page.
+        "end_votes": sorted(c for c, v in merge_orders.end_votes(nxt).items()
+                            if v),
     })
     log(f"  referee: published turn {new_turn}, "
         f"canonical {canonical.canonical_hash(nxt)[:16]}")

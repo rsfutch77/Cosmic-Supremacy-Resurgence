@@ -570,7 +570,7 @@ the rest are tags only.
 
 `RQTM` `RSMA` `RQTN` `RQSV` **`STCO`** set course · `SLFC` `TGSD` `MOSD` `NWTR` `MDTR` `SEEN` `DISS`
 `DLTR` `STCL` `HRPR` `NWGV` `DLGV` `MDGV` `STGV` `NWAD` `DLAD` `MDAD` `STAD` `NWSQ` `MDSQ` `DLSQ`
-`STSQ` `RNGV` **`CUHW`** and **`CUCV`** the two customisation prompts · `SVUS` `PLRR` `STEL` `CNWH`
+`STSQ` `RNGV` **`CUHW`** and **`CUCV`** the two customisation prompts · **`SVUS`** the civ's `USSE`, the end-galaxy vote among it · `PLRR` `STEL` `CNWH`
 `RNFL` `SONA` `RNSD` `STPR` `STTP` `STRS` `ALIV` **`CHCZ`** `ChangeCitizenJobs` (§13) · `RTMI`
 `CHNW` `TGST` `TGSS` `CRAS` `DLSD` `DLSC` **`SDNW`** a message or note · `TRRS` `CRSD` `DOSC`
 `MCFL` `EDNW` **`CNCA`** the civ name, its checkbox and the arms id
@@ -2343,11 +2343,17 @@ hurries, trades and treaty sums itself. Checking every order type is not planned
   - [ ] Restage the referee (release step 10), so it publishes the file.
   - [ ] Deploy the site, then confirm the panel lists the sandbox.
 
-- [ ] **The operator page shows when players have voted to end a galaxy** (Robert, 14 November
+- [x] **The operator page shows when players have voted to end a galaxy** (Robert, 14 November
   2026). Players may vote to restart the sandbox; the operator decides, so the page only shows
   the count. Done when a vote cast with the client's "vote to end galaxy" button reaches the
   referee through a submission, and `operator_view` shows each galaxy's votes against its
-  seated civs. Depends on decoding the button (Memory report, **"vote to end galaxy"**).
+  seated civs. The vote is the last byte of the civ's `USSE` (Memory report, **"vote to end
+  galaxy"**). `merge_orders` carries the submitter's own vote, 0 or 1; the referee archives the
+  civs whose vote stands in the published turn as `end_votes`; the operator page shows "1 of 3
+  civs (Neighbor), as of turn 10" from the newest record that has them, counted against the
+  roster, and marks a majority. Nothing acts on the votes (`server/tests/test_end_vote.py`).
+  A vote cast with the client's own handler and saved merges and survives the client's tick,
+  the local civ's and another civ's alike (turn 37 of a five-civ galaxy, 14 November 2026).
 
 - [x] **The home page carries news items.** The home page is `site/overrides/game_news.php.html`,
   served at `/`, and holds one post, "Welcome to Resurgence" (13 September 2026). Done when a

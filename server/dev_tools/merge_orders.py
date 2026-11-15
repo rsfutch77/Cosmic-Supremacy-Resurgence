@@ -175,6 +175,11 @@ colour, by stance (`+31` set) or the `B, G, R, A` colour at `+32`. Carried for
 the records the civ was served, each flag 0 or 1. They change only what the
 submitter's own map shows.
 
+**The end-galaxy vote**, the last byte of the civ's `OWNR > DATA > USSE`, 1
+when the Overview Screen's "Vote to End the Galaxy" box is ticked. Carried as 0
+or 1. Nothing acts on it; the referee archives the votes and the operator page
+shows them. The rest of `USSE` is the civ's interface settings and is not read.
+
 **Messages**, news items naming their title and body in `NWDB`, the galaxy's
 string table (`news.py`). A message is taken when the submitter's new `SENT`
 item names civs it has met, each once, and each of them holds a new
@@ -2975,6 +2980,60 @@ def set_display(blob, civ_oid, other, raw):
     return bytes(out)
 
 
+# A civ's `USSE` is the block the client's `SVUS` command sent (writer 0x57ED00,
+# reader 0x57EE30). The vote byte is read from version 2 on.
+USSE_SIZE = 45
+USSE_VOTE_VERSION = 2
+END_VOTE_AT = 44     # Owner+0x2F8, the "Vote to End the Galaxy" tick-box
+
+
+def _usse(blob, civ_oid):
+    """The civ's USSE section, or None unless it is one that holds the vote."""
+    _tree, usse = _civ_section(blob, civ_oid, 'USSE')
+    if (usse is None or usse.size != USSE_SIZE
+            or usse.version < USSE_VOTE_VERSION):
+        return None
+    return usse
+
+
+def end_vote_of(blob, civ_oid):
+    """The civ's end-galaxy vote byte, or None when its USSE cannot be read."""
+    usse = _usse(blob, civ_oid)
+    return None if usse is None else blob[usse.payload + END_VOTE_AT]
+
+
+def set_end_vote(blob, civ_oid, value):
+    """Write a civ's end-galaxy vote. Sizes do not change."""
+    usse = _usse(blob, civ_oid)
+    if usse is None:
+        raise SystemExit(f'civ {civ_oid} has no readable USSE')
+    out = bytearray(blob)
+    out[usse.payload + END_VOTE_AT] = int(value)
+    return bytes(out)
+
+
+def end_votes(blob):
+    """{civ name: True when it has voted to end the galaxy}, for every civ
+    whose USSE can be read."""
+    out = {}
+    for o in icv.owner_records(blob):
+        vote = end_vote_of(blob, o['oid'])
+        if vote is not None:
+            out[o['name']] = bool(vote)
+    return out
+
+
+def vote_orders(served, sub, civ_oid):
+    """(the submitter's new vote or None, refusals), judged against the state
+    served."""
+    was, now = end_vote_of(served, civ_oid), end_vote_of(sub, civ_oid)
+    if was is None or now is None or was == now:
+        return None, []
+    if now not in (0, 1):
+        return None, [f'end-galaxy vote DROPPED, it reads {now}']
+    return now, []
+
+
 def _resources_at(blob, civ_oid):
     """Where a civ's resource count sits, or None unless the count is
     RESOURCE_KINDS records naming 0, 1, 2 ... in order."""
@@ -4433,6 +4492,15 @@ def merge(blob, submissions, log=print, notes=None, arms=None):
                 blob = set_display(blob, mine, other, raw)
                 log(f"    display of {names.get(other, other)}: "
                     f"{describe_display(raw)}")
+                accepted += 1
+
+            # The submitter's end-galaxy vote, which nothing acts on.
+            vote, refusals = vote_orders(served, sub, mine)
+            for why in refusals:
+                drop(why)
+            if vote is not None:
+                blob = set_end_vote(blob, mine, vote)
+                log(f"    end-galaxy vote: {'cast' if vote else 'withdrawn'}")
                 accepted += 1
 
             # News: messages to other civs, and its own items marked
