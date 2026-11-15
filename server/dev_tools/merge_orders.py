@@ -14,68 +14,75 @@ dropped and named.
 
 What is accepted
 ----------------
-**Ship orders**, `SHIP > DYNO`. A move or a colonise is three edits inside the
-ship's `DYNO`: the `SHCO` order-type byte (1 move, 3 colonise), the has-orders
-byte, and an appended `ROUT` plus `u32`. Taking the order is copying the
-`DYNO`.
+Each rule names the original client's commands it stands for
+(`online_commands.py`); a command's offline branch is the change it makes in a
+submission. `COMMANDS` lists all 56, those with no rule among them.
 
-**Research topic**, `OWNR > DATA > OWPR`, the technology id written twice, 8
-bytes apart, after the completed technologies (`research_offsets`): at `+32`
-and `+40` only while a civ has its two starting technologies. Copied field by field: the rest of `OWPR` is the civ's
-property block (coat-of-arms count, flags).
+**Ship orders** (`STCO`), `SHIP > DYNO`. A move or a colonise is three edits
+inside the ship's `DYNO`: the `SHCO` order-type byte (1 move, 3 colonise), the
+has-orders byte, and an appended `ROUT` plus `u32`. Taking the order is copying
+the `DYNO`.
 
-**Current production**, `PLNT > PLPR > PROD`: what the planet is building, its
-own fields and a nested section naming it (`WLTH` for nothing, `FCLT` with the
-facility type at `+13`, `SCAN`, or `SHIP` with a design id). Copied whole,
-unless the served item was hurried, which the UI does not let be swapped, it
-names any other kind, or it starts a facility the client would not allow
-(`facility_rules.can_build`: researched, fits the free space, the hyperspace
-pair, the per-planet limit), judged on the served planet and research. The
-planet's link to a production queue, `+2..+8`, is part of the copy and is
-judged with the queues below.
+**Research topic** (`STRS`), `OWNR > DATA > OWPR`, the technology id written
+twice, 8 bytes apart, after the completed technologies (`research_offsets`): at
+`+32` and `+40` only while a civ has its two starting technologies. Copied
+field by field: the rest of `OWPR` is the civ's property block (coat-of-arms
+count, flags).
 
-**Production queues**, `OWNR > DATA > SPQS`: a `u32` count, then one `SPRQ` per
-queue holding its object id, a `u32` count of the planets using it, a byte, and
-a `PRQU` with the name and the entries in the order the UI shows them. An entry
-is an entry id, a count, an infinite flag, a count mode and an item: a facility
-type (item type 0), a design (item type 8) or a scan (item type 9; route is 2,
-fleet 3). The client's queue editor offers nothing else. A planet joins a
-queue through its `PROD`: a flag at `+2`, the queue's id at `+3`, and at `+7`
-the id of the entry it is building, 0 after a manual override; Wealth clears
-all three and is the only way out. Carried for the civ's own queues and
-planets: creating, editing, reordering and deleting queues and entries, and the
-links with the production that comes with them. A new queue takes a free object
-id as a governor does and its planets follow it; a ship entry follows a
-renumbered design. Refused: an entry naming a design the civ does not hold in
-the merged galaxy, a facility type the galaxy lacks, a scan the scanning screen
-does not list, any other item type, which the editor never writes, a planet
-naming a queue or entry the merged galaxy lacks, and deleting a queue a planet
-still uses. The planet counts are recounted from the merged links. The civ's `OWPR` `+132..+143` move with any production change,
+**Current production** (`STPR`, `HRPR`), `PLNT > PLPR > PROD`: what the planet
+is building, its own fields and a nested section naming it (`WLTH` for nothing,
+`FCLT` with the facility type at `+13`, `SCAN`, or `SHIP` with a design id).
+Copied whole, unless the served item was hurried, which the UI does not let be
+swapped, it names any other kind, or it starts a facility the client would not
+allow (`facility_rules.can_build`: researched, fits the free space, the
+hyperspace pair, the per-planet limit), judged on the served planet and
+research. The planet's link to a production queue, `+2..+8`, is part of the
+copy and is judged with the queues below.
+
+**Production queues** (`NWSQ`, `MDSQ`, `DLSQ`, `STSQ`), `OWNR > DATA > SPQS`: a
+`u32` count, then one `SPRQ` per queue holding its object id, a `u32` count of
+the planets using it, a byte, and a `PRQU` with the name and the entries in the
+order the UI shows them. An entry is an entry id, a count, an infinite flag, a
+count mode and an item: a facility type (item type 0), a design (item type 8)
+or a scan (item type 9; route is 2, fleet 3). The client's queue editor offers
+nothing else. A planet joins a queue through its `PROD`: a flag at `+2`, the
+queue's id at `+3`, and at `+7` the id of the entry it is building, 0 after a
+manual override; Wealth clears all three and is the only way out. Carried for
+the civ's own queues and planets: creating, editing, reordering and deleting
+queues and entries, and the links with the production that comes with them. A
+new queue takes a free object id as a governor does and its planets follow it;
+a ship entry follows a renumbered design. Refused: an entry naming a design the
+civ does not hold in the merged galaxy, a facility type the galaxy lacks, a
+scan the scanning screen does not list, any other item type, which the editor
+never writes, a planet naming a queue or entry the merged galaxy lacks, and
+deleting a queue a planet still uses. The planet counts are recounted from the
+merged links. The civ's `OWPR` `+132..+143` move with any production change,
 queued or not, and are not carried.
 
-**Ship designs**, `OWNR > DATA > DSGN`. A new design arrives as a second
-`DSGN`/`SDPR` pair, the civ's design count raised by one and `SAVE+0` raised to
-the new object id. The client allocates a new object id as one past the object
-count, so two players designing on the same turn claim the same id; whoever is
-merged second is renumbered, along with the id in the `DSGN` payload and in
-any production queue that names it. A queue naming a design the galaxy does
-not hold makes the engine refuse the whole galaxy, so such a queue is refused.
-Deactivating or reactivating one of the civ's own designs is carried: the
-design's last byte (`ShipDesign+0x114`), 1 inactive. Any other edit, and
-deleting a design, are refused and named.
+**Ship designs** (`CRSD`, `TGSD`), `OWNR > DATA > DSGN`. A new design arrives
+as a second `DSGN`/`SDPR` pair, the civ's design count raised by one and
+`SAVE+0` raised to the new object id. The client allocates a new object id as
+one past the object count, so two players designing on the same turn claim the
+same id; whoever is merged second is renumbered, along with the id in the
+`DSGN` payload and in any production queue that names it. A queue naming a
+design the galaxy does not hold makes the engine refuse the whole galaxy, so
+such a queue is refused. Deactivating or reactivating one of the civ's own
+designs is carried: the design's last byte (`ShipDesign+0x114`), 1 inactive.
+Any other edit, and deleting a design, are refused and named.
 
 `OWPR` `+49`, `+77`, `+78`, `+100` and `+110` also move in a design submission
 and are not carried: they move without a design too and differ between
 identical designs, and `+100` is a counter the engine advances by 7 every tick.
 
-**People**: the citizen array in `PLNT > PLPR`, the stationed military array
-that follows it, and a ship's crew in `SHPR`, judged as one thing because
-conscription and crewing move people between them. A submission never ticks,
-so a civ's total people cannot change within it. Also: no existing soldier
-record may be altered, nobody changes hands, and a civ may not come back with
-fewer soldiers than it was served. The per-citizen value and opaque bytes are
-judged against the state served, across all three arrays at once. Across a
-tick the total does change: the engine's recruitment makes soldiers from food.
+**People** (`CHCZ`, `CRAS`): the citizen array in `PLNT > PLPR`, the stationed
+military array that follows it, and a ship's crew in `SHPR`, judged as one
+thing because conscription and crewing move people between them. A submission
+never ticks, so a civ's total people cannot change within it. Also: no existing
+soldier record may be altered, nobody changes hands, and a civ may not come
+back with fewer soldiers than it was served. The per-citizen value and opaque
+bytes are judged against the state served, across all three arrays at once.
+Across a tick the total does change: the engine's recruitment makes soldiers
+from food.
 
 `PLPR+36` is a `u32` population count and `PLPR+40` begins that many
 nine-byte records, kept sorted by job:
@@ -95,62 +102,63 @@ jobs. People are carried only on the submitter's own planets and ships; a
 change on a planet or ship another civ owns is refused and named, its own
 citizens included, as the client has not been measured managing them.
 
-**Military recruitment rate**, `PLPR+27`, a percentage in one byte.
+**Military recruitment rate** (`PLRR`), `PLPR+27`, a percentage in one byte.
 
-**The setup prompts' confirms**, once each. The civ-trait prompt writes the
-ten trait values in `OWNR > CVTR` and sets a flag in `OWPR`; the homeworld
-prompt adds to the homeworld's three rate bytes (`PLPR+4..+6`) and its space
-(`PLPR+11`) and sets another. A confirm is carried only when its flag was
-clear as served and is set in the submission, and only as the dialog could
-have made it: trait values the dialog gives and rates within 25..80, spending
-`GSET.civilization_changes` or `GSET.homeworld_changes` exactly, on the planet
-the client takes for the homeworld (the one founded earliest). Without the
-confirm the prompt would come back on every served turn.
+**The setup prompts' confirms** (`CUCV`, `CUHW`), once each. The civ-trait
+prompt writes the ten trait values in `OWNR > CVTR` and sets a flag in `OWPR`;
+the homeworld prompt adds to the homeworld's three rate bytes (`PLPR+4..+6`)
+and its space (`PLPR+11`) and sets another. A confirm is carried only when its
+flag was clear as served and is set in the submission, and only as the dialog
+could have made it: trait values the dialog gives and rates within 25..80,
+spending `GSET.civilization_changes` or `GSET.homeworld_changes` exactly, on
+the planet the client takes for the homeworld (the one founded earliest).
+Without the confirm the prompt would come back on every served turn.
 
-**The civ name and coat of arms**, once. Dialog 225 writes the name, the
-"Reveal True Player Name" checkbox and the arms id at the end of `OWPR`, and is
-offered while the name is empty. Carried only while the name is empty as
+**The civ name and coat of arms** (`CNCA`), once. Dialog 225 writes the name,
+the "Reveal True Player Name" checkbox and the arms id at the end of `OWPR`,
+and is offered while the name is empty. Carried only while the name is empty as
 served, and only as the dialog's OK allows: 3 to 30 printable characters after
 trimming spaces and tabs, none matching another civ's player name or chosen
 name in any case, and an arms id from the player's own uploads (`arms`), or
 none. A name another civ took earlier in the same merge counts.
 
-**System renaming**, the `SUN ` section's name at `+24` in its payload. Allowed
-for a civ owning more than half of the system's settled planets in the served
-state; unowned planets do not count.
+**System renaming** (`SONA`), the `SUN ` section's name at `+24` in its
+payload. Allowed for a civ owning more than half of the system's settled
+planets in the served state; unowned planets do not count.
 
-**Planet renaming**, `PLNT` own payload `+24`: a `u32` length then the
-characters. Carried for planets the submitter owns. `EXSY` also holds names
-but is each civ's cache of names seen, not where a rename is authored, so it is
+**Planet renaming** (`SONA`), `PLNT` own payload `+24`: a `u32` length then the
+characters. Carried for planets the submitter owns. `EXSY` also holds names but
+is each civ's cache of names seen, not where a rename is authored, so it is
 excluded.
 
-**Governors**, `OWNR > DATA > GOVS`, and the planet's link to one, the last
-`u32` of its `PLNT`. Creating a governor appends a `GVNR` and raises `SAVE+0`
-to its id, so a new one is renumbered like a design when another player's
-design, governor or production queue took the id. Editing rewrites the
-`GVNR` in place, and deleting removes it. Assigning sets the planet's link; the
-client offers no way to unassign. Carried for the civ's own governors and
-planets, as records whose sections fit, with a printable name and at least one
-rule, which the client requires; the rules themselves are the engine's to run.
-Deleting a governor that still governs a planet is refused. Each `GVNR` counts
-the planets it governs, and the referee recounts that from the merged links.
+**Governors** (`NWGV`, `MDGV`, `DLGV`, `STGV`), `OWNR > DATA > GOVS`, and the
+planet's link to one, the last `u32` of its `PLNT`. Creating a governor appends
+a `GVNR` and raises `SAVE+0` to its id, so a new one is renumbered like a
+design when another player's design, governor or production queue took the id.
+Editing rewrites the `GVNR` in place, and deleting removes it. Assigning sets
+the planet's link; the client offers no way to unassign. Carried for the civ's
+own governors and planets, as records whose sections fit, with a printable name
+and at least one rule, which the client requires; the rules themselves are the
+engine's to run. Deleting a governor that still governs a planet is refused.
+Each `GVNR` counts the planets it governs, and the referee recounts that from
+the merged links.
 
-**Admirals**, `OWNR > DATA > ADMS`, and a ship's link to one, the `u32` after
-the has-orders byte in its `DYNO`. Creating, editing and deleting are carried
-as for governors: a new one raises `SAVE+0` and is renumbered when another
-player's new object took its id, and its ships follow. Carried for the civ's
-own admirals, as records with a printable name, one of the four types, and
-rules the client's reader knows, each a `RULE` byte and its section; the rules
-are the engine's to run. A ship may name 0 or any admiral its civ holds as
-merged. Deleting one that still commands a ship is refused, as the client
-greys it out. Each `ADML` counts the ships and fleets naming it, and the
-referee recounts that. A fleet names its admiral in its own `DYNO` as a ship
-does, and may name 0 or any admiral its civ holds. A ship leaving a fleet keeps
-the fleet's admiral or has none.
+**Admirals** (`NWAD`, `MDAD`, `DLAD`, `STAD`), `OWNR > DATA > ADMS`, and a
+ship's link to one, the `u32` after the has-orders byte in its `DYNO`.
+Creating, editing and deleting are carried as for governors: a new one raises
+`SAVE+0` and is renumbered when another player's new object took its id, and
+its ships follow. Carried for the civ's own admirals, as records with a
+printable name, one of the four types, and rules the client's reader knows,
+each a `RULE` byte and its section; the rules are the engine's to run. A ship
+may name 0 or any admiral its civ holds as merged. Deleting one that still
+commands a ship is refused, as the client greys it out. Each `ADML` counts the
+ships and fleets naming it, and the referee recounts that. A fleet names its
+admiral in its own `DYNO` as a ship does, and may name 0 or any admiral its civ
+holds. A ship leaving a fleet keeps the fleet's admiral or has none.
 
-**Diplomacy**, the treaty list after SAVE's last section and each civ's stance
-toward the civs it has met, in its `KNPL`. Carried as the client takes each
-step, applied to both civs at once:
+**Diplomacy** (`NWTR`, `MDTR`, `DLTR`), the treaty list after SAVE's last
+section and each civ's stance toward the civs it has met, in its `KNPL`.
+Carried as the client takes each step, applied to both civs at once:
 
 - Proposing: a new `TRTY` from the submitter to a civ it has met, dated this
   turn, of a kind the client offers, holding items the client writes.
@@ -169,50 +177,52 @@ step, applied to both civs at once:
 A step on a treaty that the other party already changed in this merge is
 refused. Per-turn payments and a treaty running out are the engine's.
 
-**Display choices**, in the civ's own `KNPL` record for each civ it has met:
-whether that civ's territory (`+29`) and ships (`+30`) are drawn, and its
-colour, by stance (`+31` set) or the `B, G, R, A` colour at `+32`. Carried for
-the records the civ was served, each flag 0 or 1. They change only what the
-submitter's own map shows.
+**Display choices** (`STCL`, `TGST`, `TGSS`), in the civ's own `KNPL` record
+for each civ it has met: whether that civ's territory (`+29`) and ships (`+30`)
+are drawn, and its colour, by stance (`+31` set) or the `B, G, R, A` colour at
+`+32`. Carried for the records the civ was served, each flag 0 or 1. They
+change only what the submitter's own map shows.
 
-**Messages**, news items naming their title and body in `NWDB`, the galaxy's
-string table (`news.py`). A message is taken when the submitter's new `SENT`
-item names civs it has met, each once, and each of them holds a new
-`RECEIVED` item with the same body, titled `Message from <submitter> -
-Subject: <subject>` and naming the submitter, all dated this turn with no
-position. Its strings are renumbered into the merged table, its text is kept
-to the send dialog's rows and a bounded subject, holds no control character
-but line breaks and tabs in the body, and has its markup characters replaced
-by plain stand-ins. Each recipient's new-news flag is set. The submitter's own
-items may change their important mark, and its new-news flag may be cleared;
-any other change to a news list is refused.
+**Messages** (`SDNW`, `CHNW`, `SEEN`), news items naming their title and body
+in `NWDB`, the galaxy's string table (`news.py`). A message is taken when the
+submitter's new `SENT` item names civs it has met, each once, and each of them
+holds a new `RECEIVED` item with the same body, titled `Message from
+<submitter> - Subject: <subject>` and naming the submitter, all dated this turn
+with no position. Its strings are renumbered into the merged table, its text is
+kept to the send dialog's rows and a bounded subject, holds no control
+character but line breaks and tabs in the body, and has its markup characters
+replaced by plain stand-ins. Each recipient's new-news flag is set. The
+submitter's own items may change their important mark, and its new-news flag
+may be cleared; any other change to a news list is refused.
 
-**Market trades**, `GLOB > RSMA`: five `i32` counts of the units the market
-holds, which a sale raises and a purchase lowers. How far each count moved is
-the civ's net trade in that resource. The referee prices it from the market as
-served, the one the player traded against, with the civ's trait 42, then moves the
-credits, stock and count itself; the submitted credits and stocks are not read.
-Sales go first. A sale of more than the civ holds, or a purchase it cannot pay
-for, is refused. Several trades in one resource are priced as one, so the
-credits can differ from the client's by a few when a player splits them.
+**Market trades** (`TRRS`), `GLOB > RSMA`: five `i32` counts of the units the
+market holds, which a sale raises and a purchase lowers. How far each count
+moved is the civ's net trade in that resource. The referee prices it from the
+market as served, the one the player traded against, with the civ's trait 42,
+then moves the credits, stock and count itself; the submitted credits and
+stocks are not read. Sales go first. A sale of more than the civ holds, or a
+purchase it cannot pay for, is refused. Several trades in one resource are
+priced as one, so the credits can differ from the client's by a few when a
+player splits them.
 
-**Fleets**, `GLXY > FLET`: the object header (object id, x, z, y, owner), a
-`DYNO` with the fleet's orders, and `FLDT`, a `u32`-length name, a `u32` count
-and one `SHPR` per ship. Ships leave `GLXY` while in a fleet. A `SHPR` ends
-with the id of the last fleet its ship was in, then the ship's own id.
-Forming, renaming, a fleet's orders (copied whole, as a ship's are), ships
-leaving and joining, one fleet joining another, and disbanding are carried for
-the civ's own fleets, as where the submission leaves each of its ships. Every
-ship keeps its `SHPR` as served, its crew judged with the people below; a ship
-leaving takes the fleet's position and its own submitted `DYNO`, and a fleet
-keeps its header. A new fleet raises `SAVE+0` and is renumbered like a design
-when another player's new object took its id. It is refused unless its id is
-new, it names the submitter, its name fits the client's 32 characters, and it
-holds at least one ship, each the submitter's as served, placed once in the
-submission, and all at one position. A ship joins only the civ's own fleet,
-at that fleet's position. Moving or giving away a fleet, a fleet not laid out
-as measured, and any change to another civ's fleet are refused. A refused
-step leaves its ships where they were served.
+**Fleets** (`MCFL`, `RNFL`, `DISS`, and `STCO` for orders), `GLXY > FLET`: the
+object header (object id, x, z, y, owner), a `DYNO` with the fleet's orders,
+and `FLDT`, a `u32`-length name, a `u32` count and one `SHPR` per ship. Ships
+leave `GLXY` while in a fleet. A `SHPR` ends with the id of the last fleet its
+ship was in, then the ship's own id. Forming, renaming, a fleet's orders
+(copied whole, as a ship's are), ships leaving and joining, one fleet joining
+another, and disbanding are carried for the civ's own fleets, as where the
+submission leaves each of its ships. Every ship keeps its `SHPR` as served, its
+crew judged with the people below; a ship leaving takes the fleet's position
+and its own submitted `DYNO`, and a fleet keeps its header. A new fleet raises
+`SAVE+0` and is renumbered like a design when another player's new object took
+its id. It is refused unless its id is new, it names the submitter, its name
+fits the client's 32 characters, and it holds at least one ship, each the
+submitter's as served, placed once in the submission, and all at one position.
+A ship joins only the civ's own fleet, at that fleet's position. Moving or
+giving away a fleet, a fleet not laid out as measured, and any change to
+another civ's fleet are refused. A refused step leaves its ships where they
+were served.
 
 What is refused
 ---------------
@@ -236,6 +246,73 @@ import inject_civ as icv
 import inject_design as idg
 import facility_rules
 import news
+
+# The original client's 56 commands, each with the rule above that carries its
+# effect, or None and what the command does. A command with no rule is refused
+# when it changes the galaxy, or changes nothing a submission carries.
+COMMANDS = {
+    'STCO': ('Ship orders', 'a ship or fleet course and order'),
+    'STRS': ('Research topic', 'the topic being researched'),
+    'STPR': ('Current production', 'what a planet builds'),
+    'HRPR': ('Current production', 'hurries what a planet builds'),
+    'NWSQ': ('Production queues', 'a new queue'),
+    'MDSQ': ('Production queues', 'edits a queue'),
+    'DLSQ': ('Production queues', 'deletes a queue'),
+    'STSQ': ('Production queues', "sets a planet's queue"),
+    'CRSD': ('Ship designs', 'a new design'),
+    'TGSD': ('Ship designs', "toggles a design's inactive byte"),
+    'CHCZ': ('People', 'ChangeCitizenJobs'),
+    'CRAS': ('People', "moves people between a planet's military and a crew"),
+    'PLRR': ('Military recruitment rate', "a planet's recruitment rate"),
+    'CUCV': ("The setup prompts' confirms", 'Customize Your Civilization'),
+    'CUHW': ("The setup prompts' confirms", 'Customize Your Home World'),
+    'CNCA': ('The civ name and coat of arms', 'name, checkbox and arms id'),
+    'SONA': ('Planet renaming', 'names a planet or a system'),
+    'NWGV': ('Governors', 'a new governor'),
+    'MDGV': ('Governors', 'edits a governor'),
+    'DLGV': ('Governors', 'deletes a governor'),
+    'STGV': ('Governors', "sets a planet's governor"),
+    'NWAD': ('Admirals', 'a new admiral'),
+    'MDAD': ('Admirals', 'edits an admiral'),
+    'DLAD': ('Admirals', 'deletes an admiral'),
+    'STAD': ('Admirals', "sets a ship's admiral"),
+    'NWTR': ('Diplomacy', 'proposes a treaty or declares war'),
+    'MDTR': ('Diplomacy', 'accepts, declines or withdraws a treaty'),
+    'DLTR': ('Diplomacy', 'deletes a treaty from its side'),
+    'STCL': ('Display choices', "a civ's colour, or colour by stance"),
+    'TGST': ('Display choices', "draws a civ's territory or not"),
+    'TGSS': ('Display choices', "draws a civ's ships or not"),
+    'SDNW': ('Messages', 'sends a message; a note to oneself is refused'),
+    'CHNW': ('Messages', 'clears flags on news items'),
+    'SEEN': ('Messages', 'clears one of three new-item flags'),
+    'TRRS': ('Market trades', 'buys or sells resources'),
+    'MCFL': ('Fleets', 'puts selected ships into a new or named fleet'),
+    'RNFL': ('Fleets', 'renames a fleet'),
+    'DISS': ('Fleets', 'disbands a fleet'),
+    # Runs a governor on one planet or all it governs; the other rules
+    # judge what its rules change.
+    'RNGV': (None, 'runs a governor now'),
+    # Refused: a player can make these, and no rule carries them.
+    'SLFC': (None, 'sells a facility'),
+    'RTMI': (None, 'retires stationed military'),
+    'STEL': (None, "sets a planet's hyperspace energy link, `ENLI`"),
+    'CNWH': (None, 'connects two wormholes'),
+    'DOSC': (None, 'carries out scans'),
+    'DLSC': (None, 'deletes an entry of the list at Owner+0x168'),
+    'MOSD': (None, 'edits a design'),
+    'RNSD': (None, 'renames a design'),
+    'DLSD': (None, 'deletes a design'),
+    'EDNW': (None, 'edits a note'),
+    # Not carried: the civ's own interface settings, `USSE`.
+    'SVUS': (None, 'saves user settings'),
+    # Online only: the offline branch changes nothing.
+    'RQTM': (None, 'asks for the time after a galaxy loads'),
+    'RSMA': (None, "asks for the market's prices"),
+    'RQTN': (None, 'asks for a replay turn'),
+    'RQSV': (None, 'asks for a replay save'),
+    'STTP': (None, 'a setting from the team dialog'),
+    'ALIV': (None, 'keep-alive'),
+}
 
 # The research topic is written twice in a civ's OWPR, 8 bytes apart, after a
 # map (u32 count at +8, 8-byte pairs) and the completed technologies (u32 count,

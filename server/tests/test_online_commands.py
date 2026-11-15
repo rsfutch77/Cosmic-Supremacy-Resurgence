@@ -15,8 +15,10 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
 CLIENT = os.path.join(ROOT, 'client')
 sys.path.insert(0, os.path.join(CLIENT, 'dev_tools'))
+sys.path.insert(0, os.path.join(ROOT, 'server', 'dev_tools'))
 
 import online_commands as oc                                    # noqa: E402
+import merge_orders                                             # noqa: E402
 
 PASS, FAIL = [], []
 
@@ -29,6 +31,10 @@ KNOWN = {
     'SDNW': 0x00575970,    # a message or note
     'CNCA': 0x00579230,    # civ name, checkbox and arms
     'ALIV': 0x00573EA0,    # the dispatcher's keep-alive when idle
+    'SLFC': 0x0056EDB0,    # PlanetProperties::SellFacility offline
+    'TGSD': 0x0056F000,    # toggles ShipDesign+0x114 offline
+    'STEL': 0x00571B70,    # a planet's ENLI, online only
+    'SVUS': 0x005718C0,    # USSE, Owner+0x2cc
 }
 SERVER = ['TICK', 'RSMA', 'ALIV', 'NEWS', 'SAVE', 'TIME', 'TRKP', 'UPDT']
 
@@ -60,6 +66,16 @@ def main():
     check('every section is version 0 but NWTR',
           sorted(c['tag'] for c in cmds if c['version'] != 0), ['NWTR'])
     check('STCO is sent at 0x0056EC67', by_tag['STCO']['site'], 0x0056EC67)
+
+    print('\nthe merge names every command')
+    check('merge_orders.COMMANDS holds the 56 tags',
+          sorted(merge_orders.COMMANDS), sorted(by_tag))
+    doc = merge_orders.__doc__
+    for tag, (rule, _what) in sorted(merge_orders.COMMANDS.items()):
+        if rule:
+            head = doc.find(f'**{rule}** (')
+            check(f'{tag} is cited by the rule {rule!r}',
+                  head >= 0 and f'`{tag}`' in doc[head:doc.find('\n\n', head)])
 
     print('\nthe messages the server sends')
     check('eight, in the order the dispatcher tests them', pushed, SERVER)

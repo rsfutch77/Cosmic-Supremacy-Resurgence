@@ -565,8 +565,8 @@ which sends `ALIV` when it has been idle:
 | `NEWS` | `0x00573940` | while `[0x0086F1A1]` is set, one `NEWS` record and a byte, added to the local civ's list (`Owner::AddNews`, `0x00543720`) and shown at once |
 | `ALIV`, `RSMA`, `TIME`, `TRKP` | `0x0056E400`, `0x0056DCE0`, `0x0056E460`, `0x0056E620` | not read further |
 
-**The 56 commands**, in address order. Those named were read or are named elsewhere in this report;
-the rest are tags only.
+**The 56 commands**, in address order. What each one's offline branch does, and the merge rule
+that carries it, is `merge_orders.COMMANDS`.
 
 `RQTM` `RSMA` `RQTN` `RQSV` **`STCO`** set course · `SLFC` `TGSD` `MOSD` `NWTR` `MDTR` `SEEN` `DISS`
 `DLTR` `STCL` `HRPR` `NWGV` `DLGV` `MDGV` `STGV` `NWAD` `DLAD` `MDAD` `STAD` `NWSQ` `MDSQ` `DLSQ`
@@ -591,9 +591,20 @@ Two things follow:
   arrive between ticks" needs. A connected client sends every command online and waits for the
   answer, so such a server has to answer all 56, not only `SDNW`.
 
-- [ ] **Each merge rule names the command it stands for.** Done when every rule in `merge_orders.py`
-  cites its command, and every command either has a rule or is noted as refused or cosmetic. Next
-  step: read each routine's offline branch, starting with the 50 not named above.
+- [x] **Each merge rule names the command it stands for.** Every rule in `merge_orders.py` cites
+  its commands, and `merge_orders.COMMANDS` gives all 56 a rule or says why none carries it, read
+  from each routine's offline branch on 14 November 2026 (`test_online_commands.py`). 38 have a
+  rule. `RNGV` runs a governor at once, and the other rules judge what it changes. `SVUS` saves
+  the civ's interface settings (`USSE`, `Owner+0x2cc`), which are not carried. Six are online
+  only: `RQTM`, `RSMA`, `RQTN` and `RQSV` (the replay), `STTP` (the team dialog) and `ALIV`.
+- [ ] **Ten commands a player can make have no rule, and the merge refuses their effect.**
+  `SLFC` sells a facility (`PlanetProperties::SellFacility`), `RTMI` retires stationed military,
+  which the people rule refuses as fewer soldiers, `STEL` sets a planet's hyperspace energy link
+  (`ENLI`), `CNWH` connects two wormholes, `DOSC` carries out scans (factory `0x0054E030`),
+  `DLSC` deletes an entry of the list at `Owner+0x168`, `MOSD`, `RNSD` and `DLSD` edit, rename
+  and delete a design, and `EDNW` edits a note. A note sent with `SDNW` is refused as well. Next
+  step: for each, write the rule from its offline branch or have the client say up front that
+  it is not carried. Done when none of the ten is lost silently.
 
 #### The engine is deterministic (September 2026)
 
