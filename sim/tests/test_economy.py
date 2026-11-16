@@ -57,7 +57,7 @@ def main():
     ec.food(p, civ, 0, empire)
     check('the store fills and a farmer is born', (p.food, len(p.citizens)),
           ((986 + 587 - 1280, ec.food_capacity(12)), 12))
-    check('the new citizen farms for the planet\'s owner', p.citizens[0], (0, 9))
+    check('the new citizen farms for the planet\'s owner', p.citizens[0][:2], (0, 9))
 
     one = ec.empire_corruption(1)
     small = planet(8, 5, 32, 0, (100, 760), space=300)

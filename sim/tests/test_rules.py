@@ -3,8 +3,7 @@ test_rules.py: research, colonisation, ship builds, loyalty, combat, orders
 ==========================================================================
     server\\.venv\\Scripts\\python.exe sim\\tests\\test_rules.py
 
-Each check restates something an engine tick showed (docs/Fast_Sim_Plan.md,
-section 5b), on `client/SinglePlayerGalaxy.dat` with the state the capture had
+Each check restates something an engine tick showed, on `client/SinglePlayerGalaxy.dat` with the state the capture had
 put in place, since the oracle corpus itself is not in the repository.
 """
 import copy
@@ -164,6 +163,18 @@ def combat_checks():
           (g.civs[DEMO].score > 0, g.civs[DEMO].reputation > 0, g.civs[BAD].reputation), (True, True, 0.0))
     combat.battles(g)
     check('a light ship at its shipyard mends 15% a turn', g.ships[913].condition, 1.0)
+    for kind in (combat.LIGHT_TURRET, combat.HEAVY_TURRET, combat.SHIELD_GENERATOR):
+        home.facilities.pop(kind, None)
+    g.ships[911] = st.Ship(911, BAD, home.pos, 901, [(3, BAD)], 1.0, orbit=HOME, crew_xp=[0.0])
+    g.ships[911].arrived = g.turn
+    xp = list(g.ships[913].crew_xp)
+    combat.battles(g)
+    check('a bomber with no defence to bomb dies without giving experience',
+          (911 in g.ships, g.ships[913].crew_xp), (False, xp))
+    units = [combat.Unit(g, g.ships[s]) for s in (912, 913)]
+    renown.experience(units[:1], units[1:], home_scored=False, away_scored=True)
+    check('a side that destroyed nothing gains no experience',
+          (g.ships[912].crew_xp == xp, g.ships[913].crew_xp > xp), (True, True))
     participation_checks()
 
 
@@ -268,6 +279,33 @@ def bio_checks():
           (len(home.military), pop - len(home.citizens), home.blight,
            round(g.civs[BAD].reputation, 2), g.ships[930].order.runs),
           (0, min(pop, 15), 5, -0.1, 1))
+    check('the set joins the bomber\'s standing penalty toward the planet\'s owner',
+          g.biobombed, {(BAD, DEMO): 1})
+    g.biobombed[(BAD, DEMO)] = 150
+    combat.bio_bomb(g, home, [g.ships[930]])
+    check('the penalty stops at 100', g.biobombed[(BAD, DEMO)], 100)
+    g.biobombed[(BAD, DEMO)] = 100
+    ec.bio_penalties(g)
+    check('and falls 1 a tick', g.biobombed[(BAD, DEMO)], 99)
+    home.citizens = [(0, DEMO, 0)] * 5
+    ec.hand_over(g, home, BAD)
+    home.owner, home.prior_owner = BAD, DEMO
+    ec.refresh_loyalty(g, home)
+    felt = home.loyal()
+    g.biobombed.clear()
+    ec.refresh_loyalty(g, home)
+    check('the victim\'s people on a planet the bomber takes later feel it in full',
+          round(felt, 3), round(max(0.0, home.loyal() - 99), 3))
+    g = galaxy()
+    home = g.planets[HOME]
+    room = ec.usable_space(home, g.civs[DEMO]) - ec.facility_space(home)
+    home.blight = room + 1
+    check('blighted space takes no new building', od.free_space(g, home) < 0, True)
+    before = sum(home.facilities.values())
+    lost = ec.lose_facilities(g, home)
+    check('blight that leaves facilities without room destroys them until they fit',
+          (sum(lost.values()) >= 1, sum(home.facilities.values()) == before - sum(lost.values()),
+           ec.facility_space(home) <= ec.usable_space(home, g.civs[DEMO])), (True, True, True))
 
 
 def trait_checks():
@@ -333,8 +371,13 @@ def doctrine_checks():
         sc.chance = draw
     check('Intelligence scans are spotted but never named', g.civs[DEMO].news[-1][1][-1], None)
     armed = next(d for d in galaxy().designs.values() if rw._fire(d))
-    check('the reward counts Bio-Armor\'s +5% hitpoints',
-          round(rw._armed(st.Civ(BAD, '', completed=[66]), armed)[1] / rw._armed(plain, armed)[1], 3), 1.05)
+    base = rw._armed(plain, armed)[1]
+    check('the reward counts Bio-Armor\'s +5% hitpoints, rounded as the client caches them',
+          rw._armed(st.Civ(BAD, '', completed=[66]), armed)[1], base + ec.R(base * 5 / 100))
+    shielded = st.Design(9999, BAD, 'shielded', dict(armed.parts, shields=[0]))
+    check('a fitted shield raises hitpoints and no shield adds none, trait 10 or not',
+          (combat.hitpoints(plain, armed) == base, combat.hitpoints(plain, shielded) > base),
+          (True, True))
 
 
 def debt_checks():
@@ -358,13 +401,23 @@ def debt_checks():
 def unrest_checks():
     g = galaxy()
     home = g.planets[HOME]
-    home.founded, g.turn = 0, 40
+    # Held 40 turns at a point a turn: the old ruler's influence is 40.
+    home.rulers, g.turn = [(DEMO, 40.0, 0, ec.RULING)], 40
+    home.citizens = [(c[0], DEMO, 0) for c in home.citizens]
     ec.conquered(g, home, BAD)
-    check('a planet held 40 turns is 60% loyal to its taker', (home.loyalty, home.prior_owner), (60.0, DEMO))
-    check('a resisting planet loses its shortfall', ec.loyalty_bonus(home), -40.0)
     home.owner, home.military, home.military_xp = BAD, [], []
+    ec.refresh_loyalty(g, home)
+    check('a planet held 40 turns is 60% loyal to its taker', (home.loyalty, home.prior_owner), (60.0, DEMO))
+    check('the conqueror list closes the old rule and opens the new one at nothing',
+          home.rulers, [(DEMO, 40.0, 0, 40), (BAD, 0.0, 41, ec.RULING)])
+    check('a resisting planet loses its shortfall', ec.loyalty_bonus(home), -40.0)
     ec.settle(g, home, g.civs[BAD])
-    check('it comes round a point a turn with no soldiers', home.loyalty, 61.0)
+    check('with no soldiers the taker gains a point a turn and the old ruler loses it',
+          (home.loyalty, home.rulers[0][1], home.rulers[1][1]), (61.0, 39.0, 1.0))
+    home.citizens.insert(0, (0, BAD, 42))
+    ec.refresh_loyalty(g, home)
+    check('a citizen born under the taker feels nothing of the old rule',
+          ec.citizen_loyalty(42, BAD, BAD, home.rulers), 100.0)
 
 
 def fog_checks():
@@ -442,6 +495,34 @@ def order_checks():
     check('selling 100 metal pays the engine\'s quote and fills the market',
           (ok, g.civs[DEMO].credits - credits, g.civs[DEMO].resources[0], g.market[0]),
           (True, sl.mo.market_total(0, 100, held, 0), metal - 100, held + 100))
+    check('retiring keeps the most experienced soldier',
+          (od.retire(g, DEMO, HOME, 1), g.planets[HOME].military_xp), ((True, ''), []))
+    held = sum(len(p.military) for p in g.planets.values() if p.owner == DEMO) + \
+        sum(len(s.crew) for s in g.ships.values() if s.owner == DEMO)
+    check('drafting costs 105 a soldier and 5 more for each the civ holds',
+          od.draft_cost(g, DEMO, 2), (105 + 5 * held) + (105 + 5 * (held + 1)))
+    g.civs[DEMO].credits, pop = 10 ** 6, len(g.planets[HOME].citizens)
+    cost = od.draft_cost(g, DEMO, 2)
+    check('a draft turns citizens into soldiers and pays for them',
+          (od.draft(g, DEMO, HOME, 2, {0: 2}), len(g.planets[HOME].citizens),
+           len(g.planets[HOME].military), g.civs[DEMO].credits),
+          ((True, ''), pop - 2, 2, 10 ** 6 - cost))
+    g.civs[DEMO].credits = 0
+    check('a civ short of the cost cannot draft', od.draft(g, DEMO, HOME, 1)[0], False)
+
+    g = galaxy()
+    check('a cease-fire needs a war', od.propose(g, DEMO, BAD, od.CEASE_FIRE)[0], False)
+    od.declare_war(g, DEMO, BAD)
+    check('war is declared once', od.declare_war(g, DEMO, BAD)[0], False)
+    od.propose(g, DEMO, BAD, od.CEASE_FIRE)
+    offer = max(g.treaties)
+    check('only the civ it is made to accepts', od.accept(g, DEMO, offer)[0], False)
+    check('an accepted cease-fire sets both stances',
+          (od.accept(g, BAD, offer), g.civs[DEMO].stances[BAD], g.civs[BAD].stances[DEMO]),
+          ((True, ''), od.CEASE_FIRE, od.CEASE_FIRE))
+    check('war is refused while it binds', od.declare_war(g, BAD, DEMO)[0], False)
+    g.turn += od.BINDS_FOR[od.CEASE_FIRE]
+    check('and allowed once its 20 turns are up', od.declare_war(g, BAD, DEMO), (True, ''))
 
 
 def reputation_checks():
@@ -492,12 +573,33 @@ def env_checks():
           (total, all(0 <= v <= 1 for v in r.values())), (5, True))
 
 
+def score_checks():
+    print('the score rebuild')
+    from sim import tick as tk
+    g = copy.deepcopy(BASE)
+    before = {c: civ.score for c, civ in g.civs.items()}
+    for _t in range(5):
+        g = tk.tick(g)
+    check('a civ holding one planet and building nothing gains 10 a turn',
+          {c: civ.score - before[c] for c, civ in g.civs.items()}, {DEMO: 50, BAD: 50})
+    p = g.planets[HOME]
+    terms = renown.score_terms(g, DEMO)
+    p.facilities[0] = p.facilities.get(0, 0) + 1
+    p.military.append((ec.MILITARY, DEMO))
+    check('a farm adds a tenth of its cost and a soldier 10',
+          renown.score_terms(g, DEMO) - terms, 20 + 10)
+    g.civs[DEMO].uid = 0
+    score = g.civs[DEMO].score
+    g = tk.tick(g)
+    check('a civ whose Owner:4 is 0 is not rebuilt', g.civs[DEMO].score, score)
+
+
 def main():
     global BASE
     BASE = sl.load_path(GALAXY)
     for part in (research_checks, colonise_checks, build_checks, loyalty_checks,
                  combat_checks, conquest_checks, bio_checks, trait_checks, doctrine_checks, debt_checks, unrest_checks, fog_checks,
-                 order_checks, reputation_checks, env_checks):
+                 order_checks, reputation_checks, env_checks, score_checks):
         part()
     print(f'\n{len(PASS)} passed, {len(FAIL)} failed')
     return 1 if FAIL else 0

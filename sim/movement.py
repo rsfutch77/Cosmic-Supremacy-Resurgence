@@ -2,7 +2,7 @@
 The movement step of a tick: ships follow their routes, and scouts pick the
 next system when they arrive.
 
-Measured against engine ticks (docs/Fast_Sim_Plan.md, the movement section).
+Measured against engine ticks.
 A route is straight legs whose ends stand off each body by a little more than
 its radius; a ship's position is its progress along them.
 """
@@ -169,7 +169,9 @@ def arrive(g, s):
 def colonise(g, s, p):
     """The ship lands its crew as farmers and is gone, in the tick it arrives."""
     p.owner = s.owner
-    p.citizens = [(economy.FARMER, s.owner)] * len(s.crew)
+    p.citizens = [(economy.FARMER, s.owner, g.turn + 1)] * len(s.crew)
+    p.rulers = [(s.owner, 0.0, g.turn + 1, economy.RULING)]
+    p.loyalty = 100.0
     p.military = []
     p.military_xp = []
     p.food = (0, economy.food_capacity(len(p.citizens)))

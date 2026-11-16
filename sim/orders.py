@@ -27,7 +27,9 @@ ONCE = {2, 7, 8, 19}            # facility_rules.ONCE, one per planet
 TRANSMITTER, RECEIVER = 18, 19
 FACILITY_CAP = 99
 RECRUIT_BASE, RECRUIT_CAMP = 20, 20     # percent; the highest captured rates fit, unconfirmed
-WAR = 1
+WAR, CEASE_FIRE, PEACE = 1, 2, 3        # treaty kinds and the stances they set
+PROPOSED, ACCEPTED, DECLINED = 0, 1, 2  # treaty status
+BINDS_FOR = {CEASE_FIRE: 20, PEACE: 50}  # turns, the manual's; only the cease-fire's is measured
 
 
 def _own_planet(g, civ, planet):
@@ -53,16 +55,16 @@ def set_jobs(g, civ, planet, jobs):
         return False, f'jobs are {JOBS}'
     if sum(jobs.values()) != len(p.citizens):
         return False, f'{len(p.citizens)} citizens to place'
-    p.citizens = sorted((j, civ) for j, n in jobs.items() for _ in range(n))
+    people = sorted((ec.origin(c), ec.arrival(c)) for c in p.citizens)
+    wanted = sorted(j for j, n in jobs.items() for _ in range(n))
+    p.citizens = sorted((j, o, t) for j, (o, t) in zip(wanted, people))
     return True, ''
 
 
 def free_space(g, p):
-    civ = g.civs[p.owner]
-    space = p.base_space + ec.R(p.base_space * ec.space_bonus(civ) / 100)
-    used = sum(tb.FACILITIES[t].space * n for t, n in p.facilities.items()
-               if t < len(tb.FACILITIES))
-    return space - (p.lost_space or 0) - used
+    """Space a new facility may take: the usable space, blight included, less
+    what the planet's facilities fill."""
+    return ec.usable_space(p, g.civs[p.owner]) - ec.facility_space(p)
 
 
 def build_facility(g, civ, planet, kind):
@@ -389,13 +391,127 @@ def design(g, civ, name, parts):
     return True, ''
 
 
+def binding(g, a, b):
+    """The cease-fire or peace between two civs that still binds them, or None."""
+    for t in g.treaties.values():
+        if {t.proposer, t.recipient} == {a, b} and t.kind in BINDS_FOR and t.status == ACCEPTED \
+                and g.turn < t.start + t.length:
+            return t
+    return None
+
+
 def declare_war(g, civ, other):
-    """War is the one stance a civ takes alone; peace needs a treaty."""
+    """War is the one stance a civ takes alone; peace needs a treaty. Refused
+    while a cease-fire or peace still binds the two, as the referee does
+    (merge_orders); the client warns of a reputation penalty instead."""
     if other not in g.civs or other == civ:
         return False, 'no such civ'
+    if g.civs[civ].stances.get(other) == WAR:
+        return False, 'already at war'
+    if binding(g, civ, other) is not None:
+        return False, 'a cease-fire or peace still binds the two'
     g.civs[civ].stances[other] = WAR
     g.civs[other].stances[civ] = WAR
     g.declared.add((civ, other))
+    return True, ''
+
+
+def propose(g, civ, other, kind):
+    """Propose a cease-fire, only while at war, or a peace."""
+    if other not in g.civs or other == civ:
+        return False, 'no such civ'
+    if kind not in BINDS_FOR:
+        return False, 'only a cease-fire or a peace is modelled'
+    stance = g.civs[civ].stances.get(other, 0)
+    if kind == CEASE_FIRE and stance != WAR:
+        return False, 'a cease-fire needs a war'
+    if stance == kind:
+        return False, 'the two already hold that stance'
+    g.high_water += 1
+    g.treaties[g.high_water] = st.Treaty(g.high_water, civ, other, kind, PROPOSED,
+                                         BINDS_FOR[kind], g.turn)
+    return True, ''
+
+
+def accept(g, civ, treaty):
+    """Accept a treaty proposed to the civ: both take its stance, and it binds
+    from this turn."""
+    t = g.treaties.get(treaty)
+    if t is None or t.recipient != civ or t.status != PROPOSED:
+        return False, 'no proposal to this civ'
+    t.status, t.start = ACCEPTED, g.turn
+    g.civs[t.proposer].stances[t.recipient] = t.kind
+    g.civs[t.recipient].stances[t.proposer] = t.kind
+    if t.kind not in (WAR, CEASE_FIRE):
+        # Any treaty but war or cease-fire clears the significant battle on both sides.
+        g.fought.discard((t.proposer, t.recipient))
+        g.fought.discard((t.recipient, t.proposer))
+    return True, ''
+
+
+def decline(g, civ, treaty):
+    t = g.treaties.get(treaty)
+    if t is None or t.recipient != civ or t.status != PROPOSED:
+        return False, 'no proposal to this civ'
+    t.status = DECLINED
+    return True, ''
+
+
+DRAFT_BASE, DRAFT_STEP = 105, 5        # credits a soldier, and 5 more for each held (0x00516060)
+
+
+def draft_cost(g, civ, n):
+    """Credits to draft n citizens, the client's 0x00516060: each costs 105
+    plus 5 for every soldier the civ then holds, on its planets and aboard
+    its ships, counting the ones drafted before it."""
+    held = (sum(len(p.military) for p in g.planets.values() if p.owner == civ)
+            + sum(len(s.crew) for s in g.ships.values() if s.owner == civ))
+    return sum(DRAFT_BASE + DRAFT_STEP * (held + i) for i in range(n))
+
+
+def draft(g, civ, planet, n, jobs=None):
+    """Make n of a planet's citizens soldiers for credits; refused when the
+    civ is short, as the client's dialog (0x00425120) is. `jobs` picks them
+    ({job: count}), as selecting citizens does; without it they come from the
+    planet's largest job."""
+    p, why = _own_planet(g, civ, planet)
+    if p is None:
+        return False, why
+    if not 1 <= n <= len(p.citizens):
+        return False, f'1 to {len(p.citizens)} citizens'
+    have = p.jobs()
+    if jobs is None:
+        big = max(have, key=lambda j: (have[j], -j))
+        jobs = {big: n}
+    if sum(jobs.values()) != n or any(have.get(j, 0) < k for j, k in jobs.items()):
+        return False, 'the citizens picked are not on the planet'
+    cost = draft_cost(g, civ, n)
+    if cost > (g.civs[civ].credits or 0):
+        return False, f'drafting {n} costs {cost} credits'
+    g.civs[civ].credits -= cost
+    left = dict(jobs)
+    kept = []
+    for c in p.citizens:
+        if left.get(c[0], 0) > 0:
+            left[c[0]] -= 1
+        else:
+            kept.append(c)
+    p.citizens = kept
+    p.military = p.military + [(ec.MILITARY, civ)] * n
+    p.military_xp = (p.military_xp or [0.0] * (len(p.military) - n)) + [0.0] * n
+    return True, ''
+
+
+def retire(g, civ, planet, n):
+    """Send home some of a planet's soldiers, to save their upkeep. Which go
+    is not documented: the least experienced here."""
+    p, why = _own_planet(g, civ, planet)
+    if p is None:
+        return False, why
+    if not 1 <= n <= len(p.military):
+        return False, f'1 to {len(p.military)} soldiers'
+    xp = sorted(p.military_xp or [0.0] * len(p.military), reverse=True)[:len(p.military) - n]
+    p.military, p.military_xp = p.military[:len(xp)], xp
     return True, ''
 
 
@@ -403,7 +519,8 @@ ACTIONS = {
     'jobs': set_jobs, 'facility': build_facility, 'ship': build_ship,
     'wealth': wealth, 'hurry': hurry, 'research': research, 'recruit': recruit,
     'crew': crew, 'move': move, 'colonise': colonise, 'scout': scout,
-    'trade': trade, 'war': declare_war, 'design': design,
+    'trade': trade, 'war': declare_war, 'design': design, 'propose': propose,
+    'accept': accept, 'decline': decline, 'retire': retire, 'draft': draft,
     'build_scan': build_scan, 'scan': scan, 'bio_bomb': bio_bomb, 'attack': attack, 'conquer': conquer,
 }
 

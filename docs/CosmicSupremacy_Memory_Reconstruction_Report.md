@@ -435,8 +435,12 @@ looking for a death flag.
 through at exactly 1.0000 while every `invader2` was hit or destroyed. Whether that is because
 combat engages only armed ships or because it targets them first is not established from one battle.
 
-[ ] close this from the fast sim's battle probes once they are on the release line: `sim/combat.py`
-on `fast-sim` records that unarmed ships taking no part are shot last.
+[x] close this from the fast sim's battle probes once they are on the release line: `sim/combat.py`
+on `fast-sim` records that unarmed ships taking no part are shot last. **Closed** (15 November
+2026, v0.8): combat targets them first rather than engaging them only. The probes on the live
+client (turn 123 of the q7 galaxy) saw a turret pass over troopers holding a Conquer order for
+an idle armed frigate: unarmed ships taking no part are shot last, so the Scouts here were last
+in line when the battle ended. `sim/combat.py` does the same.
 
 ### Deleting a ship safely, what is and is not possible (July 2026)
 
@@ -2083,10 +2087,15 @@ memory, and `capture_rep+100_t0123` carries 99 at `+26` in both civs' records, t
 value among the 44 galaxies in `sim/corpus`. `merge_orders.bio_penalties` reads it and `sim/load.py` applies
 it to each planet's loyalty.
 
-[ ] The fast sim's bio-bombing (`sim/combat.bio_bomb`) takes its sets off the loyalty of the
+[x] The fast sim's bio-bombing (`sim/combat.bio_bomb`) takes its sets off the loyalty of the
 bomber's planets taken from the victim once. The client keeps them as a standing penalty per civ
 pair, felt by every citizen of the victim's origin under the bomber, on planets taken later too.
-Carry it on the civ and subtract it where `sim/economy.settle` moves loyalty.
+Carry it on the civ and subtract it where `sim/economy.settle` moves loyalty. **Done** (14
+November 2026): `Galaxy.biobombed` holds each pair's sets, capped at 100, loaded from `KNPL`
+`+26` and stepped down 1 a tick (`economy.bio_penalties`; the faster galaxy option is not read).
+Since the simulator now steps the conqueror list with each citizen's origin and arrival,
+`economy.refresh_loyalty` takes the ruler's penalty off each citizen of the victim's origin,
+as the client does, and the output bonus, rebellion and the scripted roles read that loyalty.
 
 [x] Read planet #384's loyalty on screen from `capture_live_invade_t0129.after`; the derivation
 gives 36.29%. The TestBed's Planet View tooltip shows 36.29% (14 Nov 2026), with the list as
@@ -2116,12 +2125,13 @@ the more interesting reading, which is the way that usually goes.
 
 [x] **Loyalty and corruption are still not located.** Both are derived. Loyalty comes from the
 conqueror list at `Planet:384` and each citizen's origin and arrival turn (the section above).
-Corruption is the manual's formula over planet count and reputation (`docs/Fast_Sim_Plan.md`
-§5b). `Planet:100` bytes 0-2, the old candidate, read `100/100/100` on freshly captured planets as
+Corruption is the manual's formula over planet count and reputation (`sim/economy.py`).
+`Planet:100` bytes 0-2, the old candidate, read `100/100/100` on freshly captured planets as
 on planets held for 268 turns.
 
-[ ] A single out-of-trend sample here is a TORN READ, not a signal: #476 read 8, 8, 7, 8 on
-consecutive turns with nothing happening to it.
+**Caution, standing:** a single out-of-trend sample here is a torn read, not a signal: #476 read
+8, 8, 7, 8 on consecutive turns with nothing happening to it. Confirm any one-sample change with a
+second read before acting on it.
 
 The historical observations below still hold and were the first clue.
 
@@ -2765,7 +2775,7 @@ The low 16 bits are `0` on 509 of 525 planets and remain unidentified.
 
 Loyalty (100% on all three) and corruption (+0.68% / −0.61% / −0.47%) have no field either.
 Both are derived: loyalty from the conqueror list at `Planet:384` ("Loyalty is derived from the
-conqueror list"), corruption from planet count and reputation (`docs/Fast_Sim_Plan.md` §5b).
+conqueror list"), corruption from planet count and reputation (`sim/economy.py`).
 
 [x] **UNDERSTAND REPUTATION BEFORE MULTIPLAYER.** Reputation is a signed word at `+0x10`
 of each relation record inside `Owner:248`, added to by `AddReputation` `0x00534D50`
@@ -2819,7 +2829,7 @@ turn term:** `0x00518480` scales the figure by the turn over 120 while the engin
 resolves on turn 111, and 12.6009 x 111/120 = 11.6558, the save's 11.65582. Every other battle
 on record is at turn 123 or 125, where the factor is 1. `sim/renown.reputation` applies it.
 
-[x] test whether loyalty and corruption are derived rather than stored, populate one planet's population, buildings and military fully, and check whether both values follow from those inputs without any field of their own changing. Corruption does (`docs/Fast_Sim_Plan.md` §5b). Loyalty does too, from the conqueror list and the citizens (`0x004ED270`, `0x004F47A0`); the list's influences are its stored inputs, moved by soldiers and propaganda each tick.
+[x] test whether loyalty and corruption are derived rather than stored, populate one planet's population, buildings and military fully, and check whether both values follow from those inputs without any field of their own changing. Corruption does (`sim/economy.py`). Loyalty does too, from the conqueror list and the citizens (`0x004ED270`, `0x004F47A0`); the list's influences are its stored inputs, moved by soldiers and propaganda each tick.
 
 ### Governor, located and confirmed (July 2026)
 

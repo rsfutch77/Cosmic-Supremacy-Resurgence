@@ -35,7 +35,7 @@ import time
 from . import load as sl
 from . import tick as st_tick
 
-MODULES = ('economy', 'growth', 'research', 'market', 'movement',
+MODULES = ('economy', 'score', 'growth', 'research', 'market', 'movement',
            'colonisation', 'combat', 'fog', 'orders')
 FLOAT_TOLERANCE = 1e-3              # relative, for positions, progress, condition
 MISSING = '<missing>'
@@ -53,6 +53,8 @@ def snapshot(g):
     for civ in g.civs.values():
         e = f'civ {civ.oid}'
         put('economy', e, 'credits', civ.credits)
+        put('score', e, 'score', civ.score)
+        put('score', e, 'reputation', round(civ.reputation, 3))
         for i, r in enumerate(civ.resources or []):
             put('economy', e, f'resource {i}', r)
         put('research', e, 'completed', tuple(civ.completed or ()))
@@ -70,6 +72,7 @@ def snapshot(g):
             continue
         put('growth', e, 'citizens', len(p.citizens))
         put('growth', e, 'military', len(p.military))
+        put('growth', e, 'loyalty', round(p.loyalty, 2))
         put('growth', e, 'military food', p.military_food)
         put('growth', e, 'military xp', tuple(round(x, 1) for x in p.military_xp or ()))
         put('growth', e, 'history', tuple(p.pop_history or ()))

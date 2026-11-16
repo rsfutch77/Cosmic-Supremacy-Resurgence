@@ -322,7 +322,17 @@ each player's share of the combined score. Player-Rank 1 needs at least 15 fame,
 needs more than 200. The manual gives no thresholds above Rank 2. Ranked galaxies are said
 to award more fame, but the multiplier is not stated beyond the `Galaxy-Rank` term.
 
-Score during play comes from combat. Destroying ship or planetary-defense units awards one
+The manual says score during play comes from combat, but the engine also rebuilds every
+civ's score at the end of each tick (`0x0052DFE0`, `Owner::ComputeScore` at `0x0053E890`,
+skipping a civ whose `Owner:4` is 0). Score is three stored accumulators, one of which gains
+10 for each planet held at every rebuild, plus terms read from the civ's state: at content
+version 565, 1000 a planet, 10 a citizen, 10 a soldier on a planet or aboard a ship, a tenth
+of each facility's and each ship part's cost, and half a tenth of each completed technology's
+cost. Several terms change below content version 170 and with the table helper at
+`0x0052A790`. Checked against 1,471 captured civ-turns, 1,326 exactly (`sim/renown.py`
+`score_terms`).
+
+Battles add to it as the manual says. Destroying ship or planetary-defense units awards one
 score point per two units destroyed, gated on destroying at least one ship or one defence
 facility in the battle, then scaled by
 

@@ -42,6 +42,19 @@ def best_range(g, civ):
     return traits.pct(g.civs.get(civ), 13, best)
 
 
+def eyes_of(g, civ_id):
+    """[(position, scanner range)] of the civ's ships, one per position with
+    the longest range there: ships stacked in one orbit see no further than
+    the best of them."""
+    best = {}
+    for s in g.ships.values():
+        if s.owner == civ_id:
+            r = scanner_range(g, s)
+            if r > best.get(s.pos, -1.0):
+                best[s.pos] = r
+    return list(best.items())
+
+
 def cloaked(g, ship):
     d = g.designs.get(ship.design)
     return d is not None and CLOAKING_DEVICE in (d.parts.get('modules') or ())
@@ -75,7 +88,7 @@ def update(g):
             # client still draws for. Its research freezes either way.
             continue
         systems = {p.system for p in g.planets.values() if p.owner == civ_id}
-        eyes = [(s.pos, scanner_range(g, s)) for s in g.ships.values() if s.owner == civ_id]
+        eyes = eyes_of(g, civ_id)
         for sid, planets in by_system.items():
             if sid in systems:
                 continue
@@ -93,7 +106,7 @@ def update(g):
 
 def visible_ships(g, civ_id):
     """Other civs' ships this civ sees now."""
-    eyes = [(s.pos, scanner_range(g, s)) for s in g.ships.values() if s.owner == civ_id]
+    eyes = eyes_of(g, civ_id)
     civ = g.civs[civ_id]
     reach = SYSTEM_SCAN_REACH * best_range(g, civ_id)
     watched = [g.suns[sid] for sid in civ.watching if sid in g.suns]
@@ -105,8 +118,11 @@ def visible_ships(g, civ_id):
         orbit = g.planets.get(s.orbit)
         if orbit is not None and orbit.system in held or s.orbit in held:
             out.append(s)
-        elif any(math.dist(s.pos, pos) <= seen_at(g, s, r) for pos, r in eyes):
+            continue
+        # A ship's reach to be seen at scales every scanner's range alike.
+        share = seen_at(g, s, 1.0)
+        if any(math.dist(s.pos, pos) <= r * share for pos, r in eyes):
             out.append(s)
-        elif any(math.dist(s.pos, sun) <= seen_at(g, s, reach) for sun in watched):
+        elif any(math.dist(s.pos, sun) <= reach * share for sun in watched):
             out.append(s)
     return out

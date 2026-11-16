@@ -2,11 +2,12 @@
 The planet step of a tick: food, corruption, growth, production, mining and
 income.
 
-Measured against engine ticks (docs/Fast_Sim_Plan.md, the economy section):
+Measured against engine ticks:
 every rule here reproduces the archive pairs exactly unless its comment says
 otherwise.
 """
 import math
+import struct
 
 from . import load as sl
 from . import state as st
@@ -72,7 +73,21 @@ HISTORY_OLD = 0x1000            # set on every entry older than a birth
 INACTIVITY_GRACE = 72           # turns after the civ was last active
 INACTIVITY_TURNS_PER_POINT = 2  # food loses half a point a turn, the tooltip a whole one
 IDLE_OUTPUT_PER_TURN = 0.009    # share of production and mining lost per idle turn
-IDLE_INCOME_PER_TURN = 1 / 144  # fitted; idle civs land 1 or 2 credits off on some turns
+IDLE_PERCENT_PER_TURN = 1.0     # the owner's idle percent (Owner+0x2C8) a turn
+IDLE_PRODUCTION_SHARE = 0.8999999761581421  # of it production and mining lose, a float (0x004F0960)
+IDLE_INCOME_SHARE = 0.699999988079071       # of it income loses, a float (0x004F0CE0)
+
+
+def f32(x):
+    """x as the 32-bit float the engine stores between steps."""
+    return struct.unpack('<f', struct.pack('<f', x))[0]
+
+
+def percent_cut(amount, percent):
+    """What a percent takes off an amount, as the engine works it: the
+    percent and its share of the amount each kept as a 32-bit float, then
+    rounded half away from zero."""
+    return R(f32(f32(percent) * amount / 100))
 
 
 def R(x):
@@ -96,6 +111,41 @@ def space_bonus(civ):
 def max_pop(planet, bonus):
     space = planet.base_space + (R(planet.base_space * bonus / 100) if bonus else 0)
     return (space - (planet.lost_space or 0) - planet.blight) // SPACE_PER_CITIZEN
+
+
+def usable_space(p, civ):
+    """The space facilities may fill: the planet's, raised by the space bonus,
+    less what battle and bio-bombing have made unusable (0x004F1140). The
+    engine keeps both losses in one word at PlanetProperties+0x14; the
+    simulator keeps them as lost space and blight."""
+    bonus = space_bonus(civ) if civ is not None else 0
+    space = p.base_space + (R(p.base_space * bonus / 100) if bonus else 0)
+    return space - (p.lost_space or 0) - p.blight
+
+
+def facility_space(p):
+    return sum(tb.FACILITIES[t].space * n for t, n in p.facilities.items()
+               if t < len(tb.FACILITIES))
+
+
+def lose_facilities(g, p):
+    """While a planet's facilities need more space than it can use, one
+    facility of a type drawn at random from those it holds is destroyed
+    (0x004F5DF0, 0x004F5C40, bunkers and fortresses included). The client
+    draws with rand(); the simulator's draw is repeatable but not the
+    client's. Returns {facility type: destroyed}."""
+    civ = g.civs.get(p.owner)
+    lost = {}
+    while p.facilities and facility_space(p) > usable_space(p, civ):
+        kinds = sorted(k for k, n in p.facilities.items() if n > 0)
+        if not kinds:
+            break
+        k = kinds[hash((g.turn, p.oid, facility_space(p))) % len(kinds)]
+        p.facilities[k] -= 1
+        if not p.facilities[k]:
+            del p.facilities[k]
+        lost[k] = lost.get(k, 0) + 1
+    return lost
 
 
 def empire_corruption(planets, reputation=0):
@@ -169,8 +219,9 @@ def facility_cost(kind, built, civ=None):
 
 
 def corrupted(gross, corruption):
-    """Output after corruption, or with a loyalty bonus when that is positive."""
-    return gross - R(gross * -corruption / 100) if corruption else gross
+    """Output after corruption, or with a loyalty bonus when that is positive;
+    the engine keeps the percent and its share as 32-bit floats."""
+    return gross - percent_cut(gross, -corruption) if corruption else gross
 
 
 def rank(xp):
@@ -197,8 +248,8 @@ def loyalty_bonus(p, civ=None):
     below 100%, the manual's 'a lot less productive' read as one for one."""
     if not p.citizens:
         return 0.0
-    if p.loyalty < 100:
-        return p.loyalty - 100
+    if p.loyal() < 100:
+        return p.loyal() - 100
     bonus = 0.0
     if p.military:
         bonus += LOYALTY_PER_SOLDIER * effective_soldiers(p, civ) / 2 / len(p.citizens)
@@ -243,32 +294,106 @@ def planet_loyalty(citizens, ruler, rulers, penalties=None):
                for t, o in citizens) / len(citizens)
 
 
+RULING = -1                     # the last turn of the current ruler's entry
+
+
+def origin(c):
+    return c[1]
+
+
+def arrival(c):
+    return c[2] if len(c) > 2 else 0
+
+
+def bio_by_origin(g, ruler):
+    """The ruler's standing bio-bomb penalty toward each civ, by origin."""
+    return {victim: n for (bomber, victim), n in g.biobombed.items() if bomber == ruler}
+
+
+def refresh_loyalty(g, p):
+    """The planet's loyalty from its conqueror list and its citizens, the
+    client's 0x004F47A0, the ruler's bio-bomb penalties included."""
+    if not p.owner or not p.citizens:
+        p.loyalty = 100.0
+        return
+    p.loyalty = planet_loyalty([(arrival(c), origin(c)) for c in p.citizens], p.owner,
+                               p.rulers, bio_by_origin(g, p.owner))
+
+
+def step_rulers(p, gain):
+    """The tick's step on the conqueror list: the ruler's influence grows by
+    the gain, up to 100, and every other ruler's falls by it, to 0."""
+    if not p.rulers:
+        p.rulers = [(p.owner, 0.0, p.founded or 0, RULING)]
+    out = []
+    for owner, influence, first, last in p.rulers:
+        if owner == p.owner and last == RULING:
+            influence = min(100.0, influence + gain)
+        else:
+            influence = max(0.0, influence - gain)
+        out.append((owner, influence, first, last))
+    p.rulers = out
+
+
+def hand_over(g, p, owner):
+    """A change of ruler on the conqueror list: the old ruler's entry closes
+    this turn and the new ruler's starts the next, at no influence, or takes up
+    its old entry again if it ruled the planet before."""
+    rulers = list(p.rulers) or [(p.owner, 0.0, p.founded or 0, RULING)]
+    rulers = [(o, inf, first, g.turn if last == RULING else last)
+              for o, inf, first, last in rulers]
+    mine = [i for i, r in enumerate(rulers) if r[0] == owner]
+    if mine:
+        o, inf, first, _last = rulers[mine[-1]]
+        rulers[mine[-1]] = (o, inf, first, RULING)
+    else:
+        rulers.append((owner, 0.0, g.turn + 1, RULING))
+    p.rulers = rulers
+
+
 def conquered(g, p, owner):
-    """The people stay loyal to the ruler they lived under for as long as it
-    held them, up to all of them after 100 turns (the manual's example)."""
-    held = g.turn - (p.founded or 0)
+    """The people keep their origin and the old ruler its influence; loyalty
+    follows from the conqueror list (the Memory Reconstruction Report,
+    "Loyalty is derived from the conqueror list")."""
     p.prior_owner, p.unrest = p.owner, 0
-    p.loyalty = max(0.0, 100.0 - min(100, held))
+    hand_over(g, p, owner)
     p.founded = g.turn
 
 
 def settle(g, p, civ):
-    """A resisting planet comes round 1 point a turn plus 10% of its
-    effective soldiers per citizen, unhalved; below 30% for more than 3 turns
-    it may rebel back to the ruler it was taken from."""
-    if p.loyalty >= 100 or not p.citizens:
+    """The ruler gains 1 point of influence a turn plus 10% of its effective
+    soldiers per citizen, unhalved, and every other ruler loses as much (the
+    step 4.094 for 5 soldiers on 16 citizens in capture_live_invade); loyalty
+    follows. Below 30% for more than 3 turns it may rebel back to the ruler it
+    was taken from."""
+    if not p.citizens:
         return
-    p.loyalty = min(100.0, p.loyalty + LOYALTY_GROWTH
-                    + LOYALTY_PER_SOLDIER * effective_soldiers(p, civ) / len(p.citizens))
+    step_rulers(p, LOYALTY_GROWTH + LOYALTY_PER_SOLDIER * effective_soldiers(p, civ) / len(p.citizens))
+    refresh_loyalty(g, p)
     p.unrest = p.unrest + 1 if p.loyalty < REBELLION_LINE else 0
     if p.unrest > REBELLION_GRACE and p.prior_owner in g.civs:
         if (hash((g.turn, p.oid)) % 100) < REBELLION_CHANCE:
             # Untested: the chance is not given anywhere; the defection is.
+            hand_over(g, p, p.prior_owner)
             p.owner, p.prior_owner = p.prior_owner, p.owner
-            p.citizens = [(job, p.owner) for job, _w in p.citizens]
             p.military, p.military_xp = [], []
-            p.loyalty, p.unrest = 100.0, 0
+            p.unrest = 0
+            refresh_loyalty(g, p)
             p.production = st.Production('WLTH')
+            lose_facilities(g, p)
+
+
+def bio_penalties(g):
+    """The tick's step on the standing bio-bomb penalties (0x005344B0): each
+    pair's falls by the decay. A citizen of the victim's origin under the
+    bomber feels the bomber's penalty in its loyalty (refresh_loyalty)."""
+    from . import combat
+    for pair in list(g.biobombed):
+        left = g.biobombed[pair] - combat.BIO_PENALTY_DECAY
+        if left > 0:
+            g.biobombed[pair] = left
+        else:
+            del g.biobombed[pair]
 
 
 def train(p, civ=None):
@@ -332,7 +457,7 @@ def planets(g):
             built, p.facilities = p.facilities, start
             # Soldiers train before recruitment: a new one starts next tick.
             train(p, civ)
-            food(p, civ, bonus, empire, idle, corruption)
+            food(p, civ, bonus, empire, idle, corruption, g.turn)
             p.facilities = built
             settle(g, p, civ)
             if p.blight:
@@ -437,15 +562,25 @@ def idle_share(turn, active_turn):
                         * IDLE_OUTPUT_PER_TURN))
 
 
+def idle_percent(share):
+    """The owner's idle percent behind an output idle share."""
+    return round(share / IDLE_OUTPUT_PER_TURN) * IDLE_PERCENT_PER_TURN
+
+
 def after_idle(made, share):
-    return made - R(made * share) if share else made
+    """Production or mining after the idle cut, 0.9 of the idle percent."""
+    if not share:
+        return made
+    return made - percent_cut(made, f32(idle_percent(share) * IDLE_PRODUCTION_SHARE))
 
 
 def income_after(gross, corruption, share):
-    """Income loses corruption and inactivity in one rounding."""
-    lost = -corruption / 100
-    lost += share * IDLE_INCOME_PER_TURN / IDLE_OUTPUT_PER_TURN
-    return gross - R(gross * lost)
+    """Income loses corruption, then 0.7 of the idle cut on what is left,
+    each rounded, as the engine's planet income (0x004F0CE0) does."""
+    net = corrupted(gross, corruption)
+    if not share:
+        return net
+    return net - percent_cut(net, f32(idle_percent(share) * IDLE_INCOME_SHARE))
 
 
 def work(p, civ, corruption, share, g=None):
@@ -473,19 +608,21 @@ def ship_cost(g, owner, design):
     civ = g.civs.get(owner)
     cost = design.cost
     modules = design.parts.get('modules') or ()
-    for m, t in ((COLONY_MODULE, 23), (CLOAKING_DEVICE, 24)):
-        if m in modules and civ is not None:
-            part = tb.MODULES[m].cost * modules.count(m)
-            cost += R(traits.pct(civ, t, part)) - part
+    if CLOAKING_DEVICE in modules and civ is not None:
+        part = tb.MODULES[CLOAKING_DEVICE].cost * modules.count(CLOAKING_DEVICE)
+        cost += R(traits.pct(civ, 24, part)) - part
     if civ is not None:
         cost = R(traits.pct(civ, 14, cost))
         if design.chassis == BATTLESHIP:
             cost = R(traits.pct(civ, 21, cost))
     if COLONY_MODULE in modules:
+        # The surcharge alone takes trait 23 (0x00516470); the module's own
+        # cost is among the parts. Measured on two trait probes.
         planets = sum(1 for q in g.planets.values() if q.owner == owner)
         colony = sum(1 for s in g.ships.values() if s.owner == owner and s.design in g.designs
                      and COLONY_MODULE in (g.designs[s.design].parts.get('modules') or ()))
-        cost += COLONY_SURCHARGE * max(0, planets + colony - 1)
+        surcharge = COLONY_SURCHARGE * max(0, planets + colony - 1)
+        cost += surcharge + (R(traits.value(civ, 23) * surcharge / 100) if civ is not None else 0)
     return cost
 
 
@@ -560,7 +697,9 @@ def inactivity(turn, active_turn):
 
 
 def after_inactivity(made, idle):
-    return made - R(made * idle / 100) if idle else made
+    """Food, science or recruitment after an idle percent: half the owner's
+    for food and science, the whole of it for recruitment."""
+    return made - percent_cut(made, idle) if idle else made
 
 
 def activity(g):
@@ -573,9 +712,9 @@ def activity(g):
         civ.active = False
 
 
-def food(p, civ, bonus, empire, idle=0.0, corruption=None):
+def food(p, civ, bonus, empire, idle=0.0, corruption=None, turn=0):
     pop = len(p.citizens)
-    farmers = sum(1 for job, _w in p.citizens if job == FARMER)
+    farmers = sum(1 for c in p.citizens if c[0] == FARMER)
     if corruption is None:
         corruption = planet_corruption(empire, pop, max_pop(p, bonus))
     made = after_inactivity(
@@ -597,7 +736,7 @@ def food(p, civ, bonus, empire, idle=0.0, corruption=None):
     grew = store >= cap and not full
     if grew:
         store -= cap
-        p.citizens.insert(0, (FARMER, p.owner))
+        p.citizens.insert(0, (FARMER, p.owner, turn + 1))
         if p.loyalty < 100:
             # A citizen born under the ruler is wholly loyal to it.
             p.loyalty += (100 - p.loyalty) / len(p.citizens)
@@ -628,10 +767,19 @@ def push_history(p, grew):
     pop = len(p.citizens)
     if p.pop_history is None:
         return food_capacity(pop)
-    older = p.pop_history[:HISTORY_SLOTS - 1]
+    # The counter spans the entries since the birth before last: the current
+    # window, unmarked, and the one before. The push drops the entry just past
+    # it, or in a birth's tick the previous window's last if there is one, and
+    # leaves the slots beyond as they were; a birth starts the counter again
+    # from the closing window.
+    old = list(p.pop_history)
+    window = sum(1 for w in old if w and not w & HISTORY_OLD)
+    earlier = any(w & HISTORY_OLD for w in old[:p.history_len])
+    drop = min(HISTORY_SLOTS - 1, max(0, p.history_len - 1 if grew and earlier else p.history_len))
+    older = old[:drop] + old[drop + 1:]
     if grew:
         older = [w | HISTORY_OLD if w else w for w in older]
     p.pop_history = [pop] + older
-    p.history_len = min(HISTORY_SLOTS, p.history_len + 1)
+    p.history_len = window + 1 if grew else min(HISTORY_SLOTS, p.history_len + 1)
     kept = [w for w in p.pop_history[:p.history_len] if not w & HISTORY_OLD]
     return food_capacity(math.ceil(sum(kept) / len(kept)) if kept else pop)

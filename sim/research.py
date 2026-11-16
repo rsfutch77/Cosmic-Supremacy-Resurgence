@@ -4,7 +4,7 @@ The research step of a tick: a civ's banked points finish its topic.
 Costs are the manual's: round(800 x the technology's factor) x the number of
 technologies already completed. The factors are client/dev_tools/ai_player/
 research.py's table; capture probes at the released content version confirmed
-every one they reached, 31 technologies (docs/Fast_Sim_Plan.md).
+every one they reached, 31 technologies.
 
 A civ finishes at most one technology a tick. With a goal deeper in the tree
 the topic walks the goal's missing prerequisites, cheapest available first and

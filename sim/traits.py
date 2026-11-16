@@ -5,8 +5,7 @@ technology's trait grant, plus 50 on the four output traits in a golden age.
 
 Engine trait t is Owner:(748 + 4t). The names are the client's own trait list,
 which its string table holds in trait order with a tooltip for each. Where a
-trait applies is checked against a capture only where docs/Fast_Sim_Plan.md
-section 5b says so.
+trait applies is checked against a capture only where its code says so.
 
 GRANTS is client/dev_tools/ai_player/research.py's table, read from a client
 at a content version other than the released one.
@@ -127,6 +126,25 @@ GRANTS = {
 }
 
 
+_GRANTED = {}                   # completed techs -> {trait: points granted}
+
+
+def granted(completed):
+    """{trait: points} the completed technologies grant, cached by the list."""
+    key = tuple(completed or ())
+    out = _GRANTED.get(key)
+    if out is None:
+        out = {}
+        for tech in key:
+            for kind, oid, v in GRANTS.get(tech, ()):
+                if kind == TRAIT:
+                    out[oid] = out.get(oid, 0) + v
+        if len(_GRANTED) > 100000:
+            _GRANTED.clear()
+        _GRANTED[key] = out
+    return out
+
+
 def value(civ, t):
     """Engine trait `t` for a civ, in its own units."""
     if civ is None:
@@ -136,8 +154,7 @@ def value(civ, t):
         base += GOLDEN_AGE_BONUS
     if t in (43, 44):
         return base
-    return base + sum(v for tech in (civ.completed or ())
-                      for kind, oid, v in GRANTS.get(tech, ()) if kind == TRAIT and oid == t)
+    return base + granted(civ.completed).get(t, 0)
 
 
 def pct(civ, t, amount):

@@ -98,6 +98,54 @@ def main():
           sum(1 for s in g.ships.values() if s.owner == war['them']
               and sg.kind_of(g.designs[s.design]) == 'warship') <= 5)
     check("and the troops take the rival's homeworld", g.planets[186].owner, war['me'])
+    reports = [what[1] for _t, what in g.civs[war['me']].news
+               if what[0] == 'battle' and what[1]['planet'] == 186]
+    check('battle reports at the homeworld tell both sides and what the defence has left',
+          bool(reports) and all(len(r['sides']) >= 2 and 'defence_left' in r for r in reports))
+    check('a report showed the defence down before the landing',
+          any(r['defence_left'] <= 1e-9 for r in reports))
+    check('the first report from the target is an unarmed probe\'s',
+          bool(reports) and not any(reports[0]['sides'][war['me']]['firepower']))
+
+    print('the defence a wave is sent against')
+    pl = sg.Player(war['me'], sg.Goals('arm', 'weapons', war=war['them'], mission=186))
+    mine = [s for s in g.ships.values() if s.owner == war['me']]
+    guns = [s for s in mine if sg.kind_of(g.designs[s.design]) == 'warship'][:10]
+    bombs = [s for s in mine if sg.kind_of(g.designs[s.design]) == 'bomber']
+    pl.intel[186] = {'turn': g.turn, 'fire_most': 500.0, 'hp_most': 0.0, 'planet_most': 1000.0}
+    check('warships alone cannot clear a turret', pl.odds_against(g, guns, 186), 0.0)
+    check('with bombers they can', pl.odds_against(g, guns + bombs, 186) > 0)
+    del pl.intel[186]
+    check('an unknown defence is none until assumed', pl.defence(g, 186), (0.0, 0.0, 0.0))
+    sg.UNKNOWN_DEFENCE = 'assume'
+    check('and two light turrets when assumed', pl.defence(g, 186), (1000.0, 0.0, 2000.0))
+    sg.UNKNOWN_DEFENCE = 'probe'
+    g.civs[war['me']].intel.append({'turn': g.turn, 'kind': 'planetary', 'target': 186, 'soldiers': 0,
+                                    'jobs': {}, 'facilities': {sg.HEAVY_TURRET: 1}})
+    check('a scan\'s turrets are the known defence', (pl.known(g, 186), pl.defence(g, 186)),
+          (True, (1200.0, 0.0, 2000.0)))
+    g.civs[war['me']].intel.pop()
+
+    print('the garrison estimate')
+    check('the troops it asks for take the planet',
+          all(sg.ground_won(sg.troops_beating(d), d) for d in (1, 5, 20, 40)))
+    check('bunkers raise the troops needed', sg.troops_beating(20, 2) > sg.troops_beating(20))
+    check('a failed landing of 20 troops shows at least as many soldiers',
+          sg.defenders_beating(20) >= 1 and not sg.ground_won(20, sg.defenders_beating(20)))
+    pl = sg.Player(war['me'], sg.Goals('arm', 'weapons', war=war['them'], mission=186))
+    g = war['g']
+    g.civs[war['me']].intel += [
+        {'turn': 100, 'kind': 'planetary', 'target': 186, 'soldiers': 10, 'jobs': {0: 6, 1: 6},
+         'facilities': {}},
+        {'turn': 120, 'kind': 'planetary', 'target': 186, 'soldiers': 14, 'jobs': {0: 6, 1: 6},
+         'facilities': {15: 1}}]
+    est, rate, bunkers, _forts = pl.garrison(g, 186, 140)
+    check('two scans give the growth between them', (round(rate, 2), round(est, 1), bunkers), (0.2, 18.0, 1))
+    floor = sg.defenders_beating(20)
+    check('a failed landing leaves fewer soldiers than beat it', 0 <= sg.ground_left(20, floor) < floor)
+    pl.failed[186] = (130, 5)
+    check('a failed landing after the scans restarts the estimate from what it left',
+          round(pl.garrison(g, 186, 140)[0], 1), 7.0)
 
     print(f'\n{len(PASS)} passed, {len(FAIL)} failed')
     return 1 if FAIL else 0
