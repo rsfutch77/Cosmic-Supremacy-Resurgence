@@ -166,3 +166,5 @@ Diplomacy Scans (http://cosmicsupremacy.com/forum/thread.php?threadid=5799),Scan
 "AI players: local play, a bot-filled galaxy running entirely on the player machine, no server dependency and no waiting",AI Players
 "AI players: lobby seat filling, offer a waiting multiplayer galaxy the option to start early with bots in the remaining seats",AI Players
 "AI players: keep at least one AI civ seated in a galaxy while any human is, so a galaxy is never a human alone and abandonment never empties it under a player who returns",AI Players
+"Mobile companion app (player suggestion): not a full port, a lighter app for checking turn status, news and messages and queuing simple orders on the go; overlaps RRS News / Phone Interface",General/Misc
+"Check joining when no seat is open: a limited-seat galaxy that is full, and a sandbox galaxy with no planets left to assign; confirm the player gets a clear message and no broken half-joined state","Webpage, Game Startup, and Tutorial Galaxy"

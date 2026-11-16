@@ -1,6 +1,18 @@
 # Cosmic Supremacy, Reconstruction Reference
 *Binary analysis of `CosmicSupremacy.exe`*
 
+- [ ] **Close what is left by name, and fix the text the closes left stale** (v0.8). Fields
+  named "not established", "unnamed" or "not traced" without a box each get a closing line with
+  the reason, or a box if play needs them: what `Owner:4` is, the unknown `OWPR` words and
+  `+49/+77/+78/+100/+110`, `ASKY`, the `GLOB` `i32, u8`, `u32 99999` and `0x857900`, the `SUN`
+  `+16` and trailing `u32`s, `DYNO`'s `Ship:72` and `Ship:100`, `ROUT`'s flag byte, the `PLNT`
+  six bytes and trailing `u32`, the compact record's `PlanetProperties` fields, a queued
+  `PROD`'s fields, what `density`'s five values control, the sandbox branch at `0x52F640`,
+  what gates dialog 222, and why some system-drop projections fail to load (`SAVE+12`). Stale:
+  the admirals item in §14 still lists an admiral on a fleet as refused, which the merge
+  carries; `TRDT`'s "four `u32`s not yet decoded", which the diplomacy session decoded; and §8's
+  "Mechanism TBD" and "Save blob format remains unknown", which §12 answers.
+
 ---
 
 ## 1. Binary Overview
@@ -643,6 +655,15 @@ Two things follow:
   routine (`0x00538DD0`) from outside closed the client in a drawing routine, and no galaxy holds
   a wormhole. Measure a note written and edited through the News screen, and a wormhole pair
   connected once a galaxy has one.
+- [ ] **The replay is not served.** `RQTN` and `RQSV` are online only, and their offline branch
+  does nothing, so a served galaxy answers neither. Done when the replay screen has been opened
+  on a served galaxy, what it asks for is known, and it either shows the turns it asks for or
+  says plainly that the replay is not available.
+- [ ] **People on another civ's planet or ship are refused.** A colony keeps the owner of the
+  colonists that founded it, so a civ can hold citizens on a rival's planet, but the people rule
+  carries changes only on the submitter's own planets and ships. Done when a Single Player
+  capture shows what the client lets a civ do with its people there, and the merge carries that
+  and refuses the rest.
 - [ ] **The design editor's space and cloaking checks are not encoded.** Its OK (`0x004A5D40`)
   refuses a design over its hull's space and a cloaked heavy design; the merge takes a new or
   modified design without either check.
@@ -2581,6 +2602,31 @@ hurries, trades and treaty sums itself. Checking every order type is not planned
   A vote cast with the client's own handler and saved merges and survives the client's tick,
   the local civ's and another civ's alike (turn 37 of a five-civ galaxy, 14 November 2026).
 
+- [ ] **v0.8 carries the fast sim's rule fixes** (Robert, 15 November 2026). `fast-sim` holds 44
+  commits that are not on `main`. Its rule changes in `sim/` and their report edits close
+  `sim/combat.hitpoints` and trait 10 (§`DSGN`), the fast sim's bio-bombing and the torn-read
+  note (Memory report), and they settle which ships combat engages. The training tools
+  (`sim/learn.py`, `film.py`, `viewer.py`, `sweep.py` and the rest),
+  `docs/RL_Training_Plan.md` and `docs/M2_Sweep.md` stay on `fast-sim`. Done when `v0.8` holds
+  the rule fixes and their tests, the sim suite passes, and the training files are not on
+  `v0.8`.
+
+- [ ] **The original developers' list moves to GitHub issues** (Robert, 15 November 2026).
+  `cosmic_supremacy_original_todo.csv` is the list the original developers kept, with player
+  suggestions added since. Done when every row is an issue and the CSV is deleted.
+  - [ ] Make it a real CSV: the `task,category` header on the first line, and the "merge
+    original todo list into github" note, which this item replaces, removed.
+  - [ ] Merge the duplicates, keeping every forum link: waypoints, ship upgrading and
+    recycling, Earendel's bombing mechanics, blockades, colonizing admirals, ship-class bonuses
+    and rock-paper-scissors combat, and RRS news with the mobile companion app.
+  - [ ] Check each bug against the current client and referee, and record whether it is fixed,
+    still reproduces, or now depends on the referee (ally ship names in a battle report,
+    reputation for a neutral bystander, a message or a bio-bombing news item sent twice, a tick
+    while synchronising).
+  - [ ] Point each forum link at its copy in the local wayback mirror where one exists.
+  - [ ] Post the rows as GitHub issues, labelled by category and by the bug check's result.
+  - [ ] Delete the CSV.
+
 - [x] **The home page carries news items.** The home page is `site/overrides/game_news.php.html`,
   served at `/`, and holds one post, "Welcome to Resurgence" (13 September 2026). Done when a
   new item can be added with a date, newest first, without editing the archived markup by hand.
@@ -2819,7 +2865,12 @@ layout read off the client above held.
 - **An admiral on a fleet** (9 November 2026, `fixtures/admirals` `af0` and `af1`, DemoPlayer's
   fleet 202 on `tier5/f1`): assigning admiral 203 wrote its id into the `FLET`'s own `DYNO`, the
   `u32` after the has-orders byte as for a ship, and the `ADML` counts one command, the fleet.
-- **Not measured:** the other choices in each rule, and the other rule types.
+- [ ] **The other admiral rule types and choices are not measured.** Only `TSCQ`, `MASH` and
+  `SCRG` were captured, and `MASH`'s values beside the planet id, `SCRG`'s 260, the six `u32`s
+  of `RLYP` and `RZPT`, and the `ADDT` type field are inferred. Since an unknown tag crashes the
+  load, a rule the merge accepts must be one the client wrote. Done when each of the 24 tags
+  has a Single Player capture with its choices changed one at a time, and the merge's checks
+  follow those layouts.
 
 **Measured in one Single Player session on 27 and 28 October 2026
 (`server/tests/fixtures/diplomacy`):** diplomacy on `control_fork_played.dat` written with
@@ -2849,8 +2900,13 @@ with `set_blob_player.py` to answer. Every capture's `waronly` bytes read `01 00
 - **A turn** leaves the treaties as they were.
 - **A per-turn payment** reaches the recipient on the first tick after acceptance (sandbox, 13
   November 2026).
-- **Not measured:** peace and alliance acceptance, a treaty running out (assumed to work, since
-  the game's tick ends it), and the other item types.
+- [ ] **Peace, alliances, expiry and the sharing items are not measured.** Peace and alliance
+  acceptance were built on the UI's word and tried only with a synthesized submission
+  (`server/dev_tools/alliance_acceptance.py`); a treaty running out is assumed to work, since
+  the game's tick ends it; `CRLS` is read like `CRPT`; and nothing checks that `SHGM`, `SLOS`,
+  `SHBR` and `SHWH` reach the partner's fogged view, which withholds other civs' `EXSY` and
+  `KNPL` (`server/fog.py`). Done when each is answered in the client on the sandbox or in a
+  Single Player capture, and a shared map or line of sight shows in the partner's served view.
 
 - [x] **Admirals and diplomacy are carried as measured** (`merge_orders.py`,
   `test_admirals_diplomacy_merge.py`). An admiral is judged like a governor: a new id, a printable

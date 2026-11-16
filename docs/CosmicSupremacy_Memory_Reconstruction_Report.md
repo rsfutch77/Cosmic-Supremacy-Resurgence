@@ -25,6 +25,15 @@ Open [ ] items below are kept only where play needs them. The v0.7 triage closed
 the rest, each with its reason, since the save blob carries every field whether
 or not it has a name. Reopen one if in-process AI work needs it.
 
+[ ] Close what is left by name, and fix the text the closes left stale (v0.8). Fields named
+"unidentified", "not established" or "unexplained" without a box (`Planet:512`, the low half of
+`Planet:104`, the citizen and military `+4` words, the `Owner` members and arrays, `Owner:1180`
+to `1216`, the 9999 golden-age sentinel, the `Ship:88` to `96` constants, the ETA rounding, the
+`ShipDesign` extent above `+190`, the known-players growth step) each get a closing line with
+the reason, or a box if play needs them. Stale: "Object extents" still calls `Owner:144/152`
+against `Owner:4` unresolved, and the table under "`Planet:284` farm id confirmed" still names
+`Owner:4` the science topic.
+
 ---
 
 ## 1. Live Memory Object System (EJBO)
@@ -395,6 +404,10 @@ turn submission in multiplayer. Two observations only. It also read a non-boolea
 freshly built ship, so it may be uninitialised until an order is first set. Use `Ship:52` to ask
 whether an order exists.
 
+[ ] confirm or falsify `Ship:76` as the local civ's pending-orders flag: read it on several of
+the local civ's ships before and after an order and a submitted turn, and on a rival's ships in
+the same session.
+
 ### Combat damage: condition is the only per-ship state (July 2026)
 
 A fleet attack on a defended planet produced a useful spread of outcomes, captured by snapshotting
@@ -421,6 +434,9 @@ looking for a death flag.
 **Only the armed ships took damage.** All five zero-firepower `Scout` ships in the same fleet came
 through at exactly 1.0000 while every `invader2` was hit or destroyed. Whether that is because
 combat engages only armed ships or because it targets them first is not established from one battle.
+
+[ ] close this from the fast sim's battle probes once they are on the release line: `sim/combat.py`
+on `fast-sim` records that unarmed ships taking no part are shot last.
 
 ### Deleting a ship safely, what is and is not possible (July 2026)
 
@@ -603,6 +619,7 @@ static's presence carries no diplomatic meaning, which cost one wrong conclusion
 [x] find where "send message" state lives, RTTI has `SendMessageDlg` and `MessageListener`, so there is likely a message list per civ **Answered (v0.7 triage):** messages are `NEWS` records on `Owner:344` ("News items located" below), carried since v0.6.
 [x] find the per-civ colour field behind "change color", likely a plain value on `Owner`, and a cheap write test would confirm it **Answered (v0.7 triage):** the colour a civ gives a rival is in that rival's 36-byte `KNPL` record, not on `Owner`, carried since v0.6 (Reconstruction Report §14).
 [x] locate the `Fleet` registry so a fabricated fleet can be registered, make a fleet, scan memory for pointers to it, then find the `.data` vector holding the array, exactly as the `Treaty` registry was found **Closed, not needed for play (v0.7 triage):** fleets are made in the client and travel in `FLET`, which the merge carries; nothing fabricates one in memory.
+[ ] find the galaxy setting behind the shorter treaty minimums: 10, 20 and 30 turns in place of 20, 50 and 100 when the flag at `0x80B578` is set. The merge and the served length depend on it.
 
 ### `Owner` is a multiple-inheritance class, the civ name is in front of the tag (August 2026)
 
