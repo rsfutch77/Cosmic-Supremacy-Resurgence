@@ -38,8 +38,9 @@ roster to first-use claims, and `--min-build` (a dotted number) is the oldest
 launcher build that may play. `--replaces OLD` closes OLD only after the new
 galaxy is published.
 
-The referee worker ticks one galaxy, named by its `--store`; the tool prints
-that command and does not run it. `--dry-run` checks everything, including
+A referee worker started on `firebase://<project>/*` picks the new galaxy up
+at its next listing; one started on a single galaxy does not, and the tool
+prints the command for one that does. It runs neither. `--dry-run` checks everything, including
 building a generated galaxy in memory, and writes nothing.
 """
 from __future__ import annotations
@@ -323,8 +324,9 @@ def start(directory, gid: str, name: str, players, blob_path: str = None,
     done = {'gid': gid, 'dry_run': False, 'turn': turn, 'store': spec}
     if replaces:
         done['closed'] = close(directory, replaces, reason, out=out)
-    print(f'\nthe referee worker ticks one galaxy; to tick this one, point it '
-          f'here:\n  python server/referee_worker.py --store "{spec}"',
+    print(f'\na referee worker on every galaxy of the project picks this one up '
+          f'at its next listing; one on a single galaxy needs this one added:'
+          f'\n  python server/referee_worker.py --store "{spec}"',
           file=out)
     return done
 

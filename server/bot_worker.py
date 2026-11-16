@@ -76,26 +76,8 @@ class BotGuard(rw.GalaxyGuard):
         self.path = os.path.join(work_dir, STATUS_NAME)
 
 
-def expand(specs) -> list:
-    """Each spec, with a `*` galaxy replaced by the galaxies it matches."""
-    out = []
-    for spec in specs:
-        if spec.startswith('firebase://') and _galaxy_part(spec) == '*':
-            import firebase_store
-            out.extend(firebase_store.galaxy_specs(spec))
-        elif '*' in spec and '://' not in spec:
-            out.extend(sorted(d for d in glob.glob(spec) if os.path.isfile(
-                os.path.join(d, 'state.json'))))
-        else:
-            out.append(spec)
-    seen = set()
-    return [s for s in out if not (s in seen or seen.add(s))]
-
-
-def _galaxy_part(spec: str) -> str:
-    path = spec.split('://', 1)[1].split('?', 1)[0]
-    parts = [p for p in path.split('/') if p]
-    return parts[1] if len(parts) > 1 else ''
+expand = rw.expand
+_galaxy_part = rw._galaxy_part
 
 
 def galaxy_label(store, spec: str) -> str:
