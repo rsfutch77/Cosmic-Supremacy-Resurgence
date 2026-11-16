@@ -8,9 +8,9 @@ The referee writes `public/galaxies.json` to the galaxy store's bucket after
 every tick. It is the one object `beta_storage.rules` lets anyone read, and the
 website's Galaxies panel fetches it (`site/overrides/scripts/galaxies.js`).
 
-A row carries the galaxy's title and nothing else. The rows are objects so
+A row carries the galaxy's title and its current turn. The rows are objects so
 links, player counts and descriptions can be added later without breaking a
-page that reads only `title`.
+page that reads only some of them.
 
 Only a Firebase store has a bucket to publish to; any other store is skipped.
 """
@@ -25,7 +25,7 @@ CACHE_CONTROL = 'public, max-age=300'
 
 def rows(directory) -> list:
     """One row per open galaxy, in the directory's order."""
-    return [{'title': g.name} for g in directory.galaxies()
+    return [{'title': g.name, 'turn': g.turn} for g in directory.galaxies()
             if g.status == galaxy_directory.OPEN]
 
 
