@@ -1,7 +1,8 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-    Runs the referee over one galaxy, unattended, using the project virtualenv.
+    Runs the referee over one galaxy, or every galaxy a * spec names, unattended,
+    using the project virtualenv.
 
 .DESCRIPTION
     The command the scheduled task runs, and the command to run by hand to see

@@ -1654,6 +1654,27 @@ Galaxy file format extension: `.csgalaxy` / `galaxy%d_%s.cs`
 
 ### What the client's own generator produces (September 2026)
 
+**Galaxy size is the sector grid, set by `-size XYZ` on the command line, not by `GSET`.** One sun
+per sector, so X\*Y\*Z suns. `0x52B270` reads `size` after `local` and `galid`, default `"636"`
+(108 suns) or `"1010"` in 2D, and `0x5012C0` parses one digit per axis in 3D, two 2-digit numbers
+in 2D. It runs only while the sun vector `0x853D4C` is empty, so a loaded galaxy is never resized.
+The grid lives in `GLXY`, three `i32`s at the `NEBU` tag - 16, and the loader reads them back at
+`0x4D066D`. Two pass types ignore `-size`: TEBE, the TestBed path the launcher's New Game uses,
+sets 4,2,4 (32 suns) at `0x57DB00`, and type -1 sets 5,3,5 (75 suns) at `0x57E7B0`. So a sized
+galaxy is generated with `CosmicSupremacy_Resurgence.exe` and a SAND pass.
+
+| `-size` | suns | planets |
+|---|---|---|
+| `333` | 27 | 132 |
+| `433` | 36 | 177 |
+| none | 108 | 531 |
+
+`maxusers` (100), `density` (0) and `sectorsize` (200) read the same at every size. `maxusers` is
+read only by home placement `0x4CE1D0`, which also builds the `0x4D25A0` object holding the density
+tables, so density most likely shapes where homeworlds go rather than how many suns there are; not
+traced. A 27-sun galaxy ticked, saved and reloaded at its size, and join placement at the system
+spacing margin finds room for 24 more civs in it.
+
 **A generation does not hand its two civs equal worlds.** The second civ's homeworld reads the same
 two `PLPR` bytes in every generation captured here, `+4` = 32 and `+11` = 44, while the first civ's
 read 62/94 or 42/194: the first carries the homeworld customisation the setup screens apply and the
