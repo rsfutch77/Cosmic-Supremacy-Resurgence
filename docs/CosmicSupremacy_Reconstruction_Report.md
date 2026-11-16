@@ -1354,9 +1354,25 @@ them; what `+0x18` means for a system and a ship, and whether the client
 needs an unseen system's planets at all, are open.
 
 [ ] **The view without news holds every civ's private state.** A caller with
-no seat is served `news.own_view(blob, None)`. Next step: decide what a
-caller with no seat should load, then serve it every planet in the compact
-form and every civ's private sections at their defaults.
+no seat is served `news.own_view(blob, None)`. Since the item below, that is
+a caller naming no unheld civ: a sign-in reading a galaxy it has not joined,
+or any galaxy with first-use off. Next step: decide what that caller should
+load, then serve it every planet in the compact form and every civ's private
+sections at their defaults.
+
+[x] **A first-use player was served the view without news before its first
+submission.** The relay chose a copy by seat alone, and under `first-use` a
+player has none until its first submission takes the civ it names, so its
+first turn showed every civ's private state. **Fixed** (15 November 2026): a
+seatless caller on a `first-use` galaxy that names a roster civ nobody holds,
+with a view for that turn, is served that civ's view (`relay.unheld_civ`).
+The launcher already names its civ in `served_turn`'s `?civ=`; `main.py` and
+the test server now pass the query to the relay, which dropped it. The seat is
+checked on a fresh read of the galaxy document, so a seat taken inside the
+relay's hold is not served, and the read claims nothing. A held civ, a civ off
+the roster, a civ with no view and a galaxy with first-use off all still get
+the view without news (`test_relay_function.py`). The relay has to be
+redeployed for players to see it.
 
 [ ] **Another civ's planet keeps the bytes after its `PROD`, and its admirals,
 designs and settings stay.** Past `PROD` a `PLPR` holds eight `u16`, a `u32`,

@@ -385,6 +385,24 @@ def seat_of(doc: dict, uid: str):
     return (doc.get('seats') or {}).get(uid)
 
 
+def unheld_civ(doc: dict, civ: str, turn: int):
+    """`civ` when a seatless caller may read its view of `turn`, else None.
+
+    Only under `seat_claim: 'first-use'`, where a player is seatless until its
+    first submission takes the civ it names, and only for a roster civ nobody
+    holds whose view the turn names. A roster civ without a view is served the
+    whole turn, so it is never served this way. Reading it claims nothing.
+    """
+    if not civ or (doc.get('seat_claim') or '') != 'first-use':
+        return None
+    if civ not in (doc.get('civs') or ()):
+        return None
+    if civ in (doc.get('seats') or {}).values():
+        return None
+    named = (doc.get(turn_store.VIEWS_KEY) or {}).get(str(int(turn))) or ()
+    return civ if civ in named else None
+
+
 def reclaimed_refusal(store, doc: dict, civ: str) -> Refused:
     """The refusal for writing as a civ that is no longer on the roster.
 
@@ -1155,8 +1173,10 @@ REFEREE_ONLY = ('only the referee publishes a turn, and it does not come '
 
 
 def _route(method: str, path: str, headers: dict, body: bytes):
-    # A query is dropped: only referee routes carry one, and those are refused.
-    path = (path or '').split('?', 1)[0]
+    # A query is dropped, save the civ a seatless caller names on `/turn`.
+    # Every other route that carries one is a referee route, and refused.
+    path, _, query = (path or '').partition('?')
+    asked = (urllib.parse.parse_qs(query).get('civ') or [None])[0]
     parts = [p for p in path.split('/') if p]
     if not parts:
         # The galaxy listing. Signed in like every other route.
@@ -1200,9 +1220,15 @@ def _route(method: str, path: str, headers: dict, body: bytes):
                     raise Refused(404, f'no turn {turn}')
             # Which copy is `turn_store.served_copy`'s answer for this seat:
             # its own view, the turn when the views do not name a roster civ,
-            # or the view with every civ's news withheld.
+            # or the view with every civ's news withheld. A seatless caller
+            # under first-use is served the unheld civ it names, checked on a
+            # fresh read so a seat taken inside the hold is not served.
+            civ = seat_of(doc, uid)
+            if civ is None and unheld_civ(doc, asked, turn):
+                doc = galaxy_doc(store)
+                civ = seat_of(doc, uid) or unheld_civ(doc, asked, turn)
             try:
-                copy = turn_store.served_copy(doc, turn, seat_of(doc, uid))
+                copy = turn_store.served_copy(doc, turn, civ)
             except turn_store.NotServed:
                 raise Refused(403, f'turn {turn} is not served to this sign-in; '
                                    f'the current turn is {doc.get("turn")}')

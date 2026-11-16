@@ -161,7 +161,9 @@ class RelayHandler(BaseHTTPRequestHandler):
     def _run(self):
         length = int(self.headers.get('Content-Length') or 0)
         body = self.rfile.read(length) if length else b''
-        path = urllib.parse.urlparse(self.path).path
+        # The query goes too, as `main.py` passes it.
+        url = urllib.parse.urlparse(self.path)
+        path = url.path + (f'?{url.query}' if url.query else '')
         status, headers, out = relay.handle(
             self.command, path, dict(self.headers), body)
         self.send_response(status)
@@ -233,6 +235,7 @@ def main():
         run_catalog(referee, galaxy, root, token_a, token_c)
         run_guests()
         run_views(referee, galaxy, token_a, token_b)
+        run_first_use_views(referee, galaxy, base, token_a)
     finally:
         httpd.shutdown()
         httpd.server_close()
@@ -652,6 +655,73 @@ def run_views(referee, galaxy, token_a, token_b):
            referee._has(referee.view_object(public, turn))), (False, False))
     code, _where = location(token_a, turn + 1)
     check('and an earlier turn with no views is not served whole', code, 403)
+
+
+def run_first_use_views(referee, galaxy, base, token_a):
+    """A first-use player reads the unheld civ it names before it claims it."""
+    def location(token, turn, civ=None):
+        q = f'?civ={urllib.parse.quote(civ)}' if civ else ''
+        code, headers, _body = relay.handle(
+            'GET', f'/{galaxy}/turn/{turn}{q}',
+            {'Authorization': f'Bearer {token}'}, b'')
+        return code, urllib.parse.unquote(headers.get('Location', ''))
+
+    print('a first-use player is served the civ it names before claiming it')
+    public = turn_store.PUBLIC_VIEW
+    doc = referee.doc.get().to_dict()
+    # Fourth has a view and nobody holds it; Fifth is on the roster with none.
+    referee.doc.set({'seat_claim': 'first-use',
+                     'civs': list(doc.get('civs') or []) + ['Fourth', 'Fifth']},
+                    merge=True)
+    turn = referee.state()['turn'] + 1
+    fourth = make_blob(turn, filler=b'f')
+    referee.publish(turn, make_blob(turn),
+                    views={'DemoPlayer': make_blob(turn, filler=b'v'),
+                           'Fourth': fourth,
+                           public: make_blob(turn, filler=b'p')})
+    uid_e, token_e = sign_up()
+    code, where = location(token_e, turn, 'Fourth')
+    check('a seatless sign-in naming an unheld civ is sent to its view',
+          (code, referee.view_object('Fourth', turn) in where), (302, True))
+    player_e = HttpTurnStore(base, token=lambda: token_e)
+    check('the launcher\'s served_turn gets that view\'s bytes',
+          player_e.served_turn('Fourth', turn), fourth)
+    check('and the read claims nothing',
+          uid_e in (referee.doc.get().to_dict().get('seats') or {}), False)
+    code, where = location(token_e, turn)
+    check('naming no civ is still the view without news',
+          (code, referee.view_object(public, turn) in where), (302, True))
+    code, where = location(token_e, turn, 'DemoPlayer')
+    check('naming a held civ is the view without news',
+          (code, referee.view_object(public, turn) in where), (302, True))
+    code, where = location(token_e, turn, 'Nobody')
+    check('naming a civ off the roster is the view without news',
+          (code, referee.view_object(public, turn) in where), (302, True))
+    code, where = location(token_e, turn, 'Fifth')
+    check('naming a roster civ with no view is the view without news, not the '
+          'whole turn', (code, referee.view_object(public, turn) in where),
+          (302, True))
+    code, where = location(token_a, turn, 'Fourth')
+    check('a seated caller naming another civ is sent to its own',
+          (code, referee.view_object('DemoPlayer', turn) in where), (302, True))
+
+    # A seat taken while this instance holds the document is not served.
+    location(token_e, turn, 'Fourth')
+    uid_f, token_f = sign_up()
+    referee.doc.set({'seats': {uid_f: 'Fourth'}}, merge=True)
+    _uid, token_g = sign_up()
+    code, where = location(token_g, turn, 'Fourth')
+    check('once Fourth is claimed, another sign-in naming it is not sent to it',
+          (code, referee.view_object(public, turn) in where), (302, True))
+    code, where = location(token_f, turn, 'Fourth')
+    check('while the sign-in that claimed it is',
+          (code, referee.view_object('Fourth', turn) in where), (302, True))
+
+    referee.doc.set({'seat_claim': '', 'seats': {uid_f: None}}, merge=True)
+    relay.forget_doc(referee)
+    code, where = location(token_e, turn, 'Fourth')
+    check('with first-use off, naming an unheld civ is the view without news',
+          (code, referee.view_object(public, turn) in where), (302, True))
 
 
 def run_catalog(referee, galaxy, root, token_a, token_c):
