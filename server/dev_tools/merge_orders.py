@@ -304,11 +304,14 @@ import struct
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import save_parser as sp
 import inject_civ as icv
 import inject_design as idg
 import facility_rules
+import knpl
 import news
+import activity
 
 # The original client's 56 commands, each with the rule above that carries its
 # effect, or None and what the command does. A command with no rule is refused
@@ -3268,7 +3271,7 @@ KNPL_COLOUR_AT = 32             # u32, B, G, R, A; the reader forces A to 0xFF
 KNPL_FLAGS = (KNPL_SHOW_TERRITORY_AT, KNPL_SHOW_SHIPS_AT, KNPL_BY_STANCE_AT)
 STANCES = {0: 'Neutral', 1: 'War', 2: 'Cease-Fire', 3: 'Peace', 4: 'Alliance'}
 KINDS = {0: 'trade', 1: 'war', 2: 'cease-fire', 3: 'peace', 4: 'alliance'}
-WAR = 1
+WAR, CEASE_FIRE = 1, 2
 PROPOSED, ACCEPTED, DECLINED, NON_BINDING = 0, 1, 2, 3
 UNSET_LENGTH, UNSET_START = -2, -1
 STANCE_OF = {2: 2, 3: 3, 4: 4}          # the stance a kind sets when accepted
@@ -3443,15 +3446,56 @@ def bio_penalties(blob):
 
 def set_stance(blob, civ_oid, other, code):
     """Write a civ's stance toward another it has met. Sizes do not change."""
-    _tree, knpl = _civ_section(blob, civ_oid, 'KNPL')
-    count = struct.unpack_from('<I', blob, knpl.payload)[0]
+    return set_known(blob, civ_oid, other, stance=code)
+
+
+def set_known(blob, civ_oid, other, **fields):
+    """Write `knpl.FIELDS` of a civ's record for another it has met. Sizes do
+    not change."""
+    _tree, sec = _civ_section(blob, civ_oid, 'KNPL')
+    count = struct.unpack_from('<I', blob, sec.payload)[0]
+    layout = {k: (off, f) for k, off, f in knpl.FIELDS}
     for i in range(count):
-        at = knpl.payload + KNPL_COUNT + i * KNPL_RECORD
+        at = sec.payload + KNPL_COUNT + i * KNPL_RECORD
         if struct.unpack_from('<I', blob, at)[0] == other:
             out = bytearray(blob)
-            struct.pack_into('<I', out, at + KNPL_STANCE_AT, int(code))
+            for key, value in fields.items():
+                off, f = layout[key]
+                struct.pack_into(f, out, at + off, int(value))
             return bytes(out)
     raise SystemExit(f'civ {civ_oid} has not met {other}')
+
+
+def known(blob, civ_oid, other):
+    """A civ's `knpl` record for another it has met, or None."""
+    _tree, sec = _civ_section(blob, civ_oid, 'KNPL')
+    if sec is None:
+        return None
+    try:
+        records = knpl.parse(blob[sec.payload:sec.end])
+    except ValueError:
+        return None
+    return next((r for r in records if r['civ'] == other), None)
+
+
+def inactivity_of(blob, civ_oid, turn):
+    """The civ's Inactivity percent at `turn`, from its SERV baseline; 0 for
+    a civ whose SERV does not hold one."""
+    name = next((o['name'] for o in icv.owner_records(blob)
+                 if o['oid'] == civ_oid), None)
+    seen = activity.state(blob).get(name)
+    return activity.penalty(turn, seen[0]) if seen else 0
+
+
+def declare_war(blob, declarer, target, turn):
+    """Both civs' records of a war `declarer` declared at `turn`, as accepting
+    a war (0x55BD40) writes them: war both ways, `declared` on the declarer's
+    side only, `w17` cleared, and each side's record of the other's
+    Inactivity."""
+    for civ, other, declared in ((declarer, target, 1), (target, declarer, 0)):
+        blob = set_known(blob, civ, other, stance=WAR, declared=declared,
+                         w17=0, inactivity=inactivity_of(blob, other, turn))
+    return blob
 
 
 def knpl_records(blob, civ_oid):
@@ -3805,8 +3849,7 @@ def take_treaty_step(blob, served_treaties, step, oid, record, civ_oid, turn,
         merged[new] = with_treaty_id(record, new)
         blob = set_treaties(blob, list(merged.values()))
         if step == 'war':
-            blob = set_stance(blob, civ_oid, other, WAR)
-            blob = set_stance(blob, other, civ_oid, WAR)
+            blob = declare_war(blob, civ_oid, other, turn)
             line = f'treaty {new}: war declared on {who(other)}'
         else:
             line = f'treaty {new}: {kind} proposed to {who(other)}'
@@ -3863,6 +3906,10 @@ def take_treaty_step(blob, served_treaties, step, oid, record, civ_oid, turn,
     if step == 'accept' and t['kind'] in STANCE_OF:
         blob = set_stance(blob, civ_oid, other, STANCE_OF[t['kind']])
         blob = set_stance(blob, other, civ_oid, STANCE_OF[t['kind']])
+    if step == 'accept' and t['kind'] not in (WAR, CEASE_FIRE):
+        # The next war's first battle moves reputation again.
+        blob = set_known(blob, civ_oid, other, battled=0)
+        blob = set_known(blob, other, civ_oid, battled=0)
     return blob, line, '', oid
 
 
