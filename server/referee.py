@@ -235,8 +235,10 @@ def hold_empty(store: TurnStore, turn: int, outcomes, log=print) -> int:
     Refused joins in `outcomes` are answered now.
     """
     joins.commit(store, turn, turn, outcomes or [], log=log)
-    seconds = int(store.state().get("turn_seconds") or 3600)
-    store.update_state({"deadline": time.time() + seconds})
+    state = store.state()
+    seconds = int(state.get("turn_seconds") or 3600)
+    store.update_state({"deadline": turn_store.next_deadline(
+        state.get("deadline"), seconds)})
     log(f"  referee: no civ in this galaxy holds a planet and nobody is "
         f"waiting to join; turn {turn} is held for {seconds}s")
     return turn

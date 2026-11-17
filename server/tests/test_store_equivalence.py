@@ -216,6 +216,8 @@ def run_sequence(store, label, turn=TURN, writer=None):
           store.current()[0], turn + 1)
     check(f'{label}: publishing restarts the clock',
           store.state()['deadline'] > before, True)
+    check(f'{label}: the next deadline is one turn length after the last',
+          round(store.state()['deadline'] - before, 3), 1800)
     check(f'{label}: publishing keeps the roster',
           store.civs(), ['DemoPlayer', 'Neighbor'])
     check(f'{label}: publishing keeps the turn length',

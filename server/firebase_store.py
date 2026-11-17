@@ -485,7 +485,9 @@ class FirebaseTurnStore:
         self._put(self.turn_object(turn), sp.encode_save(blob), 'text/plain')
         fields = {
             'turn': int(turn),
-            'deadline': time.time() + seconds,
+            'deadline': turn_store.next_deadline(
+                doc.get('deadline') if doc.get('turn') == int(turn) - 1
+                else None, seconds),
             'turn_seconds': int(seconds),
             'hash': canonical.canonical_hash(blob),
             SUBMITTED_KEY: {str(int(turn)): []},
