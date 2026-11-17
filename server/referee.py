@@ -75,14 +75,14 @@ def apply_orders(blob: bytes, submissions, log=print, notes=None,
     Each civ was served its `fog.project` view, so the planets that view
     rewrote are put back first and the merge judges the rest.
     """
-    if not submissions:
-        return blob
-    submissions = [(civ, _unfogged(blob, civ, sub, log))
-                   for civ, sub in submissions]
-    merged = merge_orders.merge(blob, submissions, log=log, notes=notes,
-                                arms=arms)
-    return activity.mark_present(merged, [civ for civ, _sub in submissions],
-                                 log=log)
+    if submissions:
+        submissions = [(civ, _unfogged(blob, civ, sub, log))
+                       for civ, sub in submissions]
+        blob = merge_orders.merge(blob, submissions, log=log, notes=notes,
+                                  arms=arms)
+        blob = activity.mark_present(blob, [civ for civ, _sub in submissions],
+                                     log=log)
+    return merge_orders.repair_wars(blob, log=log)
 
 
 def arms_of(store: TurnStore, civs, log=print) -> dict:

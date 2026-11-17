@@ -3487,6 +3487,25 @@ def inactivity_of(blob, civ_oid, turn):
     return activity.penalty(turn, seen[0]) if seen else 0
 
 
+def repair_wars(blob, log=print):
+    """The blob with `declared` set on the proposer's side of each war in
+    force that neither side's record says was declared."""
+    names = {o['oid']: o['name'] for o in icv.owner_records(blob)}
+    for oid, record in sorted((treaties(blob) or {}).items()):
+        t = read_trdt(record)
+        if t is None or t['kind'] != WAR or t['status'] != NON_BINDING:
+            continue
+        a, b = t['proposer'], t['recipient']
+        ka, kb = known(blob, a, b), known(blob, b, a)
+        if (ka is None or kb is None or ka['stance'] != WAR
+                or kb['stance'] != WAR or ka['declared'] or kb['declared']):
+            continue
+        blob = set_known(blob, a, b, declared=1)
+        log(f'  referee: war {oid} recorded as declared by '
+            f'{names.get(a, a)} on {names.get(b, b)}')
+    return blob
+
+
 def declare_war(blob, declarer, target, turn):
     """Both civs' records of a war `declarer` declared at `turn`, as accepting
     a war (0x55BD40) writes them: war both ways, `declared` on the declarer's

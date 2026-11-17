@@ -479,6 +479,14 @@ def diplomacy():
     check('  which is declared on BadGuy\'s side and not GoodGuy\'s',
           [r['declared'] for r in war_fields(out)], [1, 0])
 
+    undeclared = mo.set_known(d['d8'], BAD, GOOD, declared=0)
+    check('a war in force that neither side declared is given back to its '
+          'proposer', mo.repair_wars(undeclared, log=lambda *_: None), d['d8'])
+    check('  and a war already declared is left alone',
+          mo.repair_wars(d['d8'], log=lambda *_: None), d['d8'])
+    check('  as is a galaxy whose war a cease-fire ended',
+          mo.repair_wars(d['d9a'], log=lambda *_: None), d['d9a'])
+
     def battled(blob):
         for a, b in ((BAD, GOOD), (GOOD, BAD)):
             blob = mo.set_known(blob, a, b, battled=1)
