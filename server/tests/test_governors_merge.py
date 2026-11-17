@@ -116,7 +116,10 @@ def main():
              ('creating and assigning from nothing', made, assigned),
              ('editing in place', assigned, switched),
              ('a new governor taking the planet over', switched, reassigned),
-             ('deleting one that governs nothing', reassigned, deleted))
+             ('deleting one that governs nothing', reassigned, deleted),
+             ('unassigning, leaving the planet blank', assigned, made),
+             ('unassigning and deleting in one turn', assigned,
+              mo.set_governors(mo.set_governor_link(assigned, HOME, 0), ME, [])))
     for label, served, sub in steps:
         out, notes = merged(served, ('DemoPlayer', sub))
         check(f'{label}: nothing refused', notes.get('DemoPlayer', []), [])
@@ -178,9 +181,6 @@ def main():
         "naming a governor on another civ's planet": (
             assigned, mo.set_governor_link(assigned, their_home, 218),
             f'planet {their_home}: governor DROPPED, owned by BadGuy'),
-        'unassigning, which the client offers no way to do': (
-            assigned, mo.set_governor_link(assigned, HOME, 0),
-            'unassigning one is not something the client offers'),
         'deleting a governor that still governs': (
             assigned, mo.set_governors(assigned, ME, []),
             'governor 218 deletion DROPPED, it still governs planet(s) [141]'),

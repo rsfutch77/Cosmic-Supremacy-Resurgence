@@ -2957,11 +2957,10 @@ def governor_orders(served, sub, civ_oid, served_planets, names):
     against the state served.
 
     new and edited are [(objectId, GVNR)], new ones under the id submitted;
-    deleted is a list of ids; links is [(planet, governor)]. The number of
-    planets each governor governs is the referee's to count, so it is ignored
-    here. Deleting a governor that would still govern a planet, and
-    unassigning one, are not something the client was seen to do, and are
-    refused.
+    deleted is a list of ids; links is [(planet, governor)], governor 0 for
+    a planet left blank. The number of planets each governor governs is the
+    referee's to count, so it is ignored here. Deleting a governor that would
+    still govern a planet is refused.
     """
     refusals = []
     for o in icv.owner_records(served):
@@ -3002,10 +3001,7 @@ def governor_orders(served, sub, civ_oid, served_planets, names):
         if owner != civ_oid:
             refusals.append(f'planet {planet}: governor DROPPED, owned by '
                             f'{names.get(owner, owner)}')
-        elif gov == 0:
-            refusals.append(f'planet {planet}: governor DROPPED, unassigning '
-                            f'one is not something the client offers')
-        elif gov not in usable:
+        elif gov != 0 and gov not in usable:
             refusals.append(f'planet {planet}: governor DROPPED, {gov} is not '
                             f'a governor this civ holds')
         else:
@@ -5136,7 +5132,9 @@ def merge(blob, submissions, log=print, notes=None, arms=None):
                 for planet_oid, gov in links:
                     gov = renumbered.get(gov, gov)
                     blob = set_governor_link(blob, planet_oid, gov)
-                    log(f"    planet {planet_oid}: governor {gov} assigned")
+                    log(f"    planet {planet_oid}: "
+                        + (f"governor {gov} assigned" if gov else
+                           "governor unassigned"))
                     accepted += 1
                 for oid in deleted:
                     del records[oid]
