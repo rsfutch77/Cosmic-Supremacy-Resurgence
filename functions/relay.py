@@ -1132,10 +1132,12 @@ def _take_arms(store, doc: dict, claims: dict, body: bytes):
 
 
 def _list_arms(store, uid: str):
-    """This sign-in's uploads that were not refused, oldest first."""
+    """This sign-in's uploads in this galaxy that were not refused, oldest
+    first."""
     snap = firebase_store.arms_owner_doc(store.fs, store.prefix, uid).get()
-    return _json({'ids': firebase_store.usable_arms(
-        snap.to_dict() if snap.exists else None)})
+    ids = firebase_store.usable_arms(snap.to_dict() if snap.exists else None)
+    return _json({'ids': firebase_store.arms_in_galaxy(
+        store.fs, store.prefix, ids, store.galaxy)})
 
 
 def _serve_arms(store, uid: str, arms_id: int):

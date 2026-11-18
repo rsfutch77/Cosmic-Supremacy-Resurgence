@@ -133,6 +133,18 @@ def usable_arms(owner: dict) -> list:
     return [int(i) for i in owner.get('ids') or [] if i not in refused]
 
 
+def arms_in_galaxy(fs, prefix: str, ids, galaxy: str) -> list:
+    """The ids, in order, of uploads made in `galaxy`. Dialog 225 shows the
+    first id it is listed, so a galaxy lists only its own uploads."""
+    ids = list(ids)
+    if not ids:
+        return []
+    refs = [arms_collection(fs, prefix).document(str(i)) for i in ids]
+    here = {int(s.id) for s in fs.get_all(refs, field_paths=['galaxy'])
+            if s.exists and (s.to_dict() or {}).get('galaxy') == galaxy}
+    return [i for i in ids if i in here]
+
+
 def join_doc_id(key: str) -> str:
     """A document id for a request key, still readable when the key is a uid.
 
@@ -722,7 +734,8 @@ class FirebaseTurnStore:
 
     def arms(self) -> dict:
         """{civ: {id}} for the coats of arms each seated civ may choose: its
-        sign-in's uploads, pending or approved."""
+        sign-in's uploads in this galaxy, pending or approved, the ones
+        dialog 225 is listed."""
         seats = (self.doc.get().to_dict() or {}).get('seats') or {}
         if not seats:
             return {}
@@ -731,6 +744,7 @@ class FirebaseTurnStore:
         for snap in self.fs.get_all(refs):
             civ = seats.get(snap.id)
             ids = usable_arms(snap.to_dict()) if snap.exists else []
+            ids = arms_in_galaxy(self.fs, self.prefix, ids, self.galaxy)
             if civ and ids:
                 out.setdefault(civ, set()).update(ids)
         return out
