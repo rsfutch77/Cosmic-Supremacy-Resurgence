@@ -261,6 +261,19 @@ and merge `main` in first if it is not.
     when `C:\CSReferee\out\bootstrap.log` says `stage commit <the tag's
     commit>` with no `+`. The sandbox runs a copy of the code, so skipping
     this leaves the live referee on the last release's merge rules.
+11. Deploy the relay from the clean checkout of the tag when `functions/`, or
+    a file `functions/bundle.py` copies from `server/`, changed since the last
+    deploy: `server\.venv\Scripts\python.exe functions\deploy.py --check`,
+    then without `--check`. Firebase needs `functions\venv`; when it is
+    missing or empty the deploy fails with "An unexpected error", and
+    `py -3.12 -m venv functions\venv` with
+    `functions\venv\Scripts\python.exe -m pip install -r functions\requirements.txt`
+    builds it. Done when
+    `gcloud run revisions list --service relay --region us-west1 --project cs-resurgence`
+    shows a revision created after the tag serving all traffic, and the
+    relay's log shows signed-in requests answered 200 after it. The relay is
+    deployed by hand, so skipping this leaves players on the last deploy's
+    rules: v0.7.0 shipped without one.
 
 The launcher and the patched clients are signed; the original
 `CosmicSupremacy.exe` is not. SmartScreen can still warn while a new
