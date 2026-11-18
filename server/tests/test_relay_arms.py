@@ -230,6 +230,27 @@ def run(store, galaxy, player_a, player_b, account, made, uids):
     arms_tool.decide(fs, prefix, second, 'approved')
     check('a refusal can be reversed', store.arms(),
           {'DemoPlayer': {first, second}})
+
+    print('a galaxy lists only the uploads made in it, as dialog 225 shows '
+          'the first id it is listed')
+    elsewhere = second + 100000
+    made.append(elsewhere)
+    firebase_store.arms_collection(fs, prefix).document(str(elsewhere)).set({
+        'id': elsewhere, 'uid': a, 'galaxy': f'{galaxy}_other',
+        'civ': 'DemoPlayer', 'status': firebase_store.ARMS_APPROVED,
+        'png': red, 'bytes': len(red), 'width': 56, 'height': 66})
+    owner = firebase_store.arms_owner_doc(fs, prefix, a)
+    ids = list(owner.get().to_dict()['ids'])
+    owner.set({'ids': ids + [elsewhere]}, merge=True)
+    cs_server.MP_STORE = lambda: player_a
+    check('an upload from another galaxy is not listed here',
+          player_a.list_arms(), [first, second])
+    check('so the dialog is answered only this galaxy\'s',
+          asked('listcoa'), (200, f'{first} {second}'))
+    check('nor may the referee here take it',
+          store.arms(), {'DemoPlayer': {first, second}})
+    owner.set({'ids': ids}, merge=True)
+
     check('a store that keeps no arms gives none',
           referee.arms_of(object(), ['DemoPlayer']), {})
 
