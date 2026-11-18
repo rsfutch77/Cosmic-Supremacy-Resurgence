@@ -662,7 +662,26 @@ Two things follow:
   planetary or system scan recomputes sight (`0x00542850`). Run on a whole galaxy, the offline
   branch is the referee builder's oracle. Every client here runs offline (`[0x0086F1A0]`), and
   the online test is all or nothing (`[0x0086F198]` up), so the client needs a patch that sends
-  only `DOSC` online. The referee would make the report from the authoritative galaxy: one
+  only `DOSC` online. Such a patch looks feasible (read 18 November 2026, not yet run):
+  - Startup always builds the connection (`0x00562CE0`, `[0x0086F194]`) and its channel
+    (`0x00562230`, `[0x0086F198]`), offline as well. The host string `0x00814F48` is set by
+    `0x00563000`.
+  - `0x00563310(port)` stores the port at `+0x434` and connects (`0x00562EA0`). Connecting
+    closes any old socket, opens a plain TCP connection unless the proxy flag `[0x0086EEF0]`
+    is set, and puts the result in the up byte `+0x4CD`, which `0x00562CC0` reads. Nothing
+    is sent on connect. The login and the other online steps belong to the galaxy-pass
+    path (`0x0057A73A`), which a `.dat` start never takes.
+  - The wait `0x0056E930` reads the answer from the channel. On a lost connection it builds
+    a `FAIL` answer and shows a warning.
+  - Plan: a stub in the `int3` padding the save-message and tutorial patches use (their stubs
+    sit at `0x006D20A0` and `0x006D30A0`). It
+    sets the host and connects to the launcher's port. If that fails, it takes the offline
+    branch as today. Otherwise it runs the online branch and then drops the connection, so no
+    other command ever sees it up. `[0x0086F1A2]` reads 0 on a `.dat` start.
+  - Open: how an answer is framed (zlib like `CMND` or not), whether the wait matches a
+    request id, and the request's own layout.
+
+  The referee would make the report from the authoritative galaxy: one
   `SC..` section per target group (layouts in Memory report, "The Scanning tab, reports
   located"), the scan taken from the `OWPR` stock, the detection items for the scanned civ, a
   leader-name scan's byte in the scanner's `KNPL` and a planetary scan's `EXSY` update. Until
