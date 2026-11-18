@@ -1303,9 +1303,15 @@ everyone's state. The writers it gates:
   at `Planet+0x164`, and gives a shipyard back as one facility of type 2.
   `0x4F0EC0`, the population getter, returns that figure when the citizen
   list is empty.
-- **`SHIP`** (`0x4E8640`): another civ's ship has no `SHPR`, and its `DYNO`
-  (`0x4DA310`) keeps the design id but writes an `INFO` section, the ship's
-  description and a position, in place of its order, admiral and route.
+- **`SHIP`** (`0x4E8640`): another civ's ship has no `SHPR`, so no design id,
+  crew or condition. Its `DYNO` (`0x4DA310`) keeps the orbit `u32` and writes
+  an `INFO` v1 section in place of its order, admiral and route: a `u32` hull
+  mask and three `f32` of heading. The reader (`0x4DBBB2`) puts the mask in
+  `Ship:84` and the heading in `Ship:88` to `96`. The mask is `1 << chassis`
+  of the design (`0x4D96B0`), six chassis, bits 0 to 5; for a fleet it is the
+  OR over its members. The heading is the unit vector from the ship to its
+  current leg's destination, plus a random 0.1, and 0 with no route. A fleet
+  (`0x4E13D0`) leaves out its `FLDT` the same way.
 - **`GLXY`** (`0x4CB1F0`): an object whose byte `+0x18` is clear is not
   written at all, so a per-civ save leaves out what the target cannot see.
 - A fleet (`0x4E1401`), a wormhole (`0x4FEF66`, with `flag`) and an `EXSY`
@@ -1340,11 +1346,17 @@ offset = code offset - `0x34`): credits `Owner:8`, `Owner:12`, a map at
 `Owner:724` (a float), the position `Owner:1208`, the resources
 `Owner:1116`, `Owner:400`, `Owner:721`, then the name, checkbox and arms.
 
-[ ] **Another civ's ships are served whole**: `SHPR` (crew, fleet) and the
-`DYNO` order, admiral and route. The per-civ save writes a rival's ship with
-no `SHPR` and an `INFO` section instead (above). Next step: write that form
-for ships the viewer does not own, check the map's hover and the recon tab
-read the `INFO` text, and have `restore` put the ships back.
+**Another civ's ships and fleets are served whole, by choice** (17 November
+2026): `SHPR` (design, crew, condition), `FLDT` and the `DYNO` order, admiral
+and route. A modified client can read them. The original's server answered a
+scan online; here the client runs a fleet or route scan (`DOSC`) on its own
+copy, and the whole form keeps those scans instant and true. The `INFO` form
+(above) is written and tested on branch `ship-fog` (`8ca09aa`): `fog.py`
+serves it to rivals and `restore` puts the authoritative sections back. A
+fleet in that form loads. A lone ship crashes the client: `0x4D9A70` walks its
+members and `0x5495B0` reads a null design at `0x5495B3`, from `0x4DC94D` and
+`0x54E54E`. A ship that keeps its `SHPR` with the design and no crew loads.
+The branch fits if the relay ever answers scans live.
 
 [ ] **Systems a civ has never entered and ships it cannot see are served**,
 with the live owner and population of each planet there. The per-civ save
