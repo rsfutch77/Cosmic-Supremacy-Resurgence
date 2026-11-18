@@ -682,7 +682,13 @@ Two things follow:
     client). Robert ran a planetary scan of BadGuy's HQ as GoodGuy on `unruled/d4`, with three
     planetary scans added to the stock map at the head of `OWPR`. A test server on 8890
     received `CMND` v0 holding `DOSC` v0 with 12 bytes: `1`, `384` (the HQ's object id) and
-    `0`. One scan does not show where the scan type goes. The server answered with a plain
+    `0`. The request is the target list and the scan type. `DOSC(targets, type)` is called
+    from `0x00508D51`. `0x00576160` writes a `u32` count, then each target's object id
+    (`0x00573DB0`, `0x00442D40`), and the routine adds the type as a `u32`. Offline,
+    `0x0054E840(out, targets, owner, type)` takes the same pair. It skips a type the civ holds
+    none of (`0x0053B8F0`), unless `[0x008578F5]` is set, and builds one scan per target with
+    the factory `0x0054E030(type)`. A report on the wire is the save's own section, read by
+    tag in `0x0054E2D0`. The server answered with a plain
     `SUCC` v0 section, not wrapped in `CMND`, holding a count of 1, the `SCPL` report the
     client had made offline in `sc1`, GoodGuy's `OWPR` with credits raised by 12,345 and the
     planetary stock lowered by one, and its `KNPL`. The client showed the report, and memory
