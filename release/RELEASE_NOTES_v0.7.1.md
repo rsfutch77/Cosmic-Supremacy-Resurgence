@@ -18,6 +18,10 @@ this way has been given back.
 planet's governor was undone at the next turn, and the old governor came
 back.
 
+**The diplomacy screen counts only the planets you know about.** The Planets
+column counted every planet a player owns, including ones in systems you have
+never explored. It now matches what your Recon screen shows.
+
 **Turns end on a fixed schedule.** A galaxy's next turn now ends one turn
 length after the last one ended, so a four-hour galaxy ends its turns at the
 same times every day. Before, each turn also waited for the previous one to

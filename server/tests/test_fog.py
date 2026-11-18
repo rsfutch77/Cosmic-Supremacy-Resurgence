@@ -324,7 +324,24 @@ def main():
     print('\na turn-0 galaxy')
     sp0 = sp.load_any(SPGALAXY)
     check('nothing is served from memory on the turn a galaxy is made',
-          [changed(sp0, c) for c in ('DemoPlayer', 'BadGuy')], [[], []])
+          [fog.stale_planets(sp0, c) for c in ('DemoPlayer', 'BadGuy')],
+          [[], []])
+    check('and the only planet whose owner is hidden is the other\'s '
+          'homeworld, in a system never entered',
+          [changed(sp0, c) for c in ('DemoPlayer', 'BadGuy')], [[186], [138]])
+    check('  which is among the planets served unseen',
+          [186 in fog.unseen_planets(sp0, 'DemoPlayer'),
+           138 in fog.unseen_planets(sp0, 'BadGuy')], [True, True])
+
+    print('\na rival\'s planets in systems never entered')
+    for civ in ('GoodGuy', 'BadGuy'):
+        view = fog.project(blob, civ, log=quiet)
+        served = planets(view)
+        unseen = fog.unseen_planets(blob, civ)
+        check(f'{civ}: each is served unowned and empty',
+              {served[p][:2] for p in unseen} <= {(0, 0)}, True)
+        check(f'  and the restored submission is the turn again',
+              fog.restore(blob, civ, view), blob)
     view0 = fog.project(sp0, 'BadGuy', log=quiet)
     check('its view parses and restores to the blob',
           (sp.parse_blob(view0)[0].end == len(view0),
