@@ -1,12 +1,12 @@
 """
 restore_reputation.py: give a civ back reputation a referee fault took
 =======================================================================
-    python restore_reputation.py <store> --civ "Elder Race" --add 8.074 --dry-run
-    python restore_reputation.py <store> --civ "Elder Race" --add 8.074 --at-next-turn
-    python restore_reputation.py <store> --civ "Elder Race" --add 8.074 --turn 187
+    python restore_reputation.py <store> --civ "Elder Race" --to 0 --dry-run
+    python restore_reputation.py <store> --civ "Elder Race" --to 0 --at-next-turn
+    python restore_reputation.py <store> --civ "Elder Race" --to 0 --turn 187
 
-Adds to a civ's reputation (`Owner:32`, an f32 in its `OWPR`) in one published
-turn and in every view of it. The turn and its views are rewritten in place:
+Sets a civ's reputation (`Owner:32`, an f32 in its `OWPR`) in one published
+turn and in every view of it. Running it twice changes nothing more. The turn and its views are rewritten in place:
 the clock, the submissions and the list of who submitted are left as they are.
 The galaxy's `hash` and the archive record that names the turn are updated,
 with the old hash kept in a `reputation_restored` note.
@@ -47,15 +47,15 @@ def reputation_at(blob, name):
     return at, struct.unpack_from('<f', blob, at)[0]
 
 
-def with_reputation(blob, name, add):
-    """(blob, before, after) with `add` added to the civ's reputation, or
+def with_reputation(blob, name, value):
+    """(blob, before, after) with the civ's reputation set to `value`, or
     (blob, None, None) when the blob does not hold it."""
     got = reputation_at(blob, name)
     if got is None:
         return blob, None, None
     at, before = got
     out = bytearray(blob)
-    struct.pack_into('<f', out, at, before + add)
+    struct.pack_into('<f', out, at, value)
     out = bytes(out)
     sp.parse_blob(out)
     return out, before, struct.unpack_from('<f', out, at)[0]
@@ -72,20 +72,19 @@ def _write(store, turn, blob, civ=None):
                                  store.turn_path(turn), data)
 
 
-def restore(store, turn, name, add, dry_run=False, save=None, log=print):
-    """Add to `name`'s reputation in `turn` and its views. True if written."""
+def restore(store, turn, name, value, dry_run=False, save=None, log=print):
+    """Set `name`'s reputation in `turn` and its views. True if written."""
     blob = store.turn_blob(turn)
-    out, before, after = with_reputation(blob, name, add)
+    out, before, after = with_reputation(blob, name, value)
     if before is None:
         raise SystemExit(f'turn {turn}: {name} has no reputation to change')
     log(f'turn {turn}: {name} reputation {before:.3f} -> {after:.3f}')
-    viewers = (store.state().get(turn_store.VIEWS_KEY) or {}).get(str(turn), [])
     views = {}
-    for civ in viewers:
+    for civ in list(store.civs()) + [turn_store.PUBLIC_VIEW]:
         view = store.view_blob(civ, turn)
         if view is None:
             continue
-        changed, v_before, v_after = with_reputation(view, name, add)
+        changed, v_before, v_after = with_reputation(view, name, value)
         if v_before is None:
             log(f'  view {civ}: holds no reputation for {name}; left alone')
             continue
@@ -105,6 +104,9 @@ def restore(store, turn, name, add, dry_run=False, save=None, log=print):
 
     for civ, (_view, changed) in views.items():
         _write(store, turn, changed, civ)
+    if out == blob:
+        log(f'  turn {turn} already holds it')
+        return bool(views)
     _write(store, turn, out)
     old, new = canonical.canonical_hash(blob), canonical.canonical_hash(out)
     store.update_state({'hash': new})
@@ -117,7 +119,7 @@ def restore(store, turn, name, add, dry_run=False, save=None, log=print):
             and rec.get('hash_out') == canonical.canonical_hash(blob, version)):
         rec['hash_out'] = canonical.canonical_hash(out, version)
         rec['reputation_restored'] = {'at': time.time(), 'civ': name,
-                                      'add': add, 'hash_out_before': old}
+                                      'to': value, 'hash_out_before': old}
         store.archive(turn - 1, rec)
         log(f'  archive record {turn - 1} updated, with the old hash kept in it')
     elif rec:
@@ -129,8 +131,8 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__.split('\n')[1])
     ap.add_argument('store')
     ap.add_argument('--civ', required=True)
-    ap.add_argument('--add', type=float, required=True,
-                    help='reputation to add; negative takes it away')
+    ap.add_argument('--to', type=float, required=True,
+                    help='the reputation the civ is given')
     ap.add_argument('--turn', type=int, help='edit this turn now')
     ap.add_argument('--at-next-turn', action='store_true',
                     help='wait for the referee to publish, then edit that turn')
@@ -146,10 +148,10 @@ def main():
         raise SystemExit(f'no galaxy at {a.store}')
     if a.dry_run:
         turn, _ = store.current()
-        restore(store, a.turn or turn, a.civ, a.add, dry_run=True, save=a.save)
+        restore(store, a.turn or turn, a.civ, a.to, dry_run=True, save=a.save)
         return 0
     if a.turn is not None:
-        return 0 if restore(store, a.turn, a.civ, a.add, save=a.save) else 1
+        return 0 if restore(store, a.turn, a.civ, a.to, save=a.save) else 1
     if not a.at_next_turn:
         raise SystemExit('say --turn N, --at-next-turn or --dry-run')
 
@@ -161,7 +163,7 @@ def main():
         turn, _ = store.current()
         if turn != start:
             print(f'turn {turn} published')
-            return 0 if restore(store, turn, a.civ, a.add, save=a.save) else 1
+            return 0 if restore(store, turn, a.civ, a.to, save=a.save) else 1
         time.sleep(a.poll)
     raise SystemExit(f'no new turn within {a.timeout}s; the referee may be down')
 
