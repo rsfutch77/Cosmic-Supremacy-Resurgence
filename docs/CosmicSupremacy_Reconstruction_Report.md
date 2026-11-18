@@ -1358,12 +1358,28 @@ members and `0x5495B0` reads a null design at `0x5495B3`, from `0x4DC94D` and
 `0x54E54E`. A ship that keeps its `SHPR` with the design and no crew loads.
 The branch fits if the relay ever answers scans live.
 
-[ ] **Systems a civ has never entered and ships it cannot see are served**,
-with the live owner and population of each planet there. The per-civ save
-leaves out every object whose `+0x18` byte is clear. Dropping systems broke
-`project_blob.py` (the `min_suns` guard and the galaxy check), so a view keeps
-them; what `+0x18` means for a system and a ship, and whether the client
-needs an unseen system's planets at all, are open.
+**Systems a civ has never entered and ships it cannot see are served, by
+choice** (17 November 2026), with the live owner and population of each planet
+there. The per-civ save leaves out every object whose `+0x18` byte is clear. A
+system scan in the client lists that sun's planets and the ships near it from
+its own copy, and keeping them is what makes it instant. A modified client can
+read every rival ship's position.
+
+`+0x18` is the local civ's sight, and the client works it out itself on every
+load: `0x542850`, called for the local `Owner` (`0x52A8D0`) from `0x4D10A5` and
+`0x488F1B`, builds a list of eyes, then `0x4DC6D0` sets the byte on ships and
+`0x4CD580` and `0x4FFFF0` set it on other objects. The eyes are each of the
+civ's planets at one range, each of its ships at its scanner range
+(`0x4D9A20`), and each live system scan in `Owner:320` (a scan of the class at
+`0x80AAAC` whose `+0x50` call says it has not lapsed) at the scanned sun with
+twice that range, and it sees cloaks. `0x4DC6D0` sets a
+ship's byte when the civ owns it or an eye reaches it. A cloaked ship
+(`0x4D9A70` returns 1) is reached only within the range times
+`(100 - 0x516350(owner)) / 100`, unless the eye sees cloaks. A ship seen in
+orbit also marks its planet's system, and a seen civ goes into the viewer's
+`KNPL` (`0x534F90`). A view's `+0x18` bytes are therefore ignored. Dropping
+systems also broke `project_blob.py` (the `min_suns` guard and the galaxy
+check).
 
 [ ] **The view without news holds every civ's private state.** A caller with
 no seat is served `news.own_view(blob, None)`. Since the item below, that is
