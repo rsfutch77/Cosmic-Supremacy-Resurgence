@@ -678,14 +678,31 @@ Two things follow:
     sets the host and connects to the launcher's port. If that fails, it takes the offline
     branch as today. Otherwise it runs the online branch and then drops the connection, so no
     other command ever sees it up. `[0x0086F1A2]` reads 0 on a `.dat` start.
-  - Open: how an answer is framed (zlib like `CMND` or not), whether the wait matches a
-    request id, and the request's own layout.
+  - **It works** (18 November 2026, `client/dev_tools/patch_scan_online.py` on the TestBed
+    client). Robert ran a planetary scan of BadGuy's HQ as GoodGuy on `unruled/d4`, with three
+    planetary scans added to the stock map at the head of `OWPR`. A test server on 8890
+    received `CMND` v0 holding `DOSC` v0 with 12 bytes: `1`, `384` (the HQ's object id) and
+    `0`. One scan does not show where the scan type goes. The server answered with a plain
+    `SUCC` v0 section, not wrapped in `CMND`, holding a count of 1, the `SCPL` report the
+    client had made offline in `sc1`, GoodGuy's `OWPR` with credits raised by 12,345 and the
+    planetary stock lowered by one, and its `KNPL`. The client showed the report, and memory
+    read credits 23,673 with both completed lists intact. A `SUCC` holding a whole `SAVE` also
+    loaded. The wait matches no request id.
+  - Both runs closed the client when the Ship Design tab opened. That crash is the
+    fixture's, not the scan's. GoodGuy's design 674 (`e1x4`) has no scanner, and the tab's
+    scanner-range getter `0x005479C0` stops the client on an empty scanner list
+    (`ShipDesign:152`). The client writes a dump with no exception stream. That is the
+    Singleplayer checklist's F9, and it is open below.
 
   The referee would make the report from the authoritative galaxy: one
   `SC..` section per target group (layouts in Memory report, "The Scanning tab, reports
   located"), the scan taken from the `OWPR` stock, the detection items for the scanned civ, a
   leader-name scan's byte in the scanner's `KNPL` and a planetary scan's `EXSY` update. Until
   then a player who scans keeps the scan and is told it was not carried.
+- [ ] **A design with no scanner closes the client on the Ship Design tab.** The tab asks each
+  design for its scanner range, and `0x005479C0` stops the client when `ShipDesign:152` is
+  empty. The designer saved one in `unruled` (674, `e1x4`). Next step: find whether the
+  designer or the merge should refuse such a design (Singleplayer checklist F9).
 - [ ] **Notes and wormhole links are carried as read, not measured.** Calling the note dialog's
   routine (`0x00538DD0`) from outside closed the client in a drawing routine, and no galaxy holds
   a wormhole. Measure a note written and edited through the News screen, and a wormhole pair
