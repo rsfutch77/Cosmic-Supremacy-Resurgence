@@ -646,7 +646,23 @@ Two things follow:
   - `EDNW` and a note written with `SDNW` (Messages): a kind-8 item, inline, carried as the Note
     dialog writes it. `CNWH` (Wormholes): two of the civ's own unlinked wormholes naming each
     other. `test_scans_notes_wormholes_merge.py`.
-- [ ] **A scan is not carried.** The referee would make the report from the served state: one
+- [ ] **A scan is not carried.** Decided 17 November 2026: scans go online as in the original.
+  The client sends `DOSC` to a launcher endpoint that forwards it to the relay. The referee
+  builds the report from the authoritative galaxy and records the scan, and the answer comes
+  back in the same call. A planetary, technology or energy-grid scan reads a rival planet's
+  `PLPR` or a rival civ's `OWPR` and `CVTR`. The client shows a rival planet's live owner and
+  population on screen (d9 served as BadGuy with rival planets live), so these stay fogged
+  and these three scans cannot run on the view. The online branch of `0x00576D40` sends `DOSC`
+  v0 holding the request (`0x00576160`) and a `u32` (the routine's second argument). It
+  blocks for the answer and applies it only on `SUCC`. A `SAVE` or `UPDT` answer is loaded as
+  a galaxy (`0x0056D700`). Any other answer is a `u32` count of reports, each read by
+  `0x0054E2D0` and added to the scanner (`0x0053EE80`), then the scanner's `OWPR` v19
+  (`0x00540100`) and its `KNPL` (`0x00535160`). Offline, `0x0054E840` builds the reports on the
+  client's copy. Each report posts a detection item to the scanned civ (`0x005405F0`), and a
+  planetary or system scan recomputes sight (`0x00542850`). Run on a whole galaxy, the offline
+  branch is the referee builder's oracle. Every client here runs offline (`[0x0086F1A0]`), and
+  the online test is all or nothing (`[0x0086F198]` up), so the client needs a patch that sends
+  only `DOSC` online. The referee would make the report from the authoritative galaxy: one
   `SC..` section per target group (layouts in Memory report, "The Scanning tab, reports
   located"), the scan taken from the `OWPR` stock, the detection items for the scanned civ, a
   leader-name scan's byte in the scanner's `KNPL` and a planetary scan's `EXSY` update. Until
