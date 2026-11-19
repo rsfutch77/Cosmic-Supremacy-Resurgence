@@ -3228,6 +3228,9 @@ class Launcher:
         # the UI says until the client is back up.
         self.mp_reopen = threading.Event()
         self.mp_reopening = False
+        # The socket a patched client sends its scans to, started with the
+        # first multiplayer galaxy and kept until the launcher closes.
+        self.scan_endpoint = None
         # Set when this machine's internet connection comes or goes, so the
         # loop reads the galaxy at once (see `_watch_network`).
         self.mp_check_now = threading.Event()
@@ -4755,6 +4758,116 @@ class Launcher:
         self.mp_thread = threading.Thread(target=work, daemon=True,
                                           name="multiplayer")
         self.mp_thread.start()
+        self._start_scans()
+
+    # Scans. The patched multiplayer client sends a scan to the launcher,
+    # which files it with the galaxy and hands back the referee's answer
+    # (scan_endpoint.py). The client draws nothing while it waits, so a
+    # window of the launcher's own shows the wait above the game.
+    def _start_scans(self):
+        """Listen for scans, once per launcher. A port that is held leaves
+        scans to the client's own copy, which the referee does not carry."""
+        if self.scan_endpoint is not None:
+            return
+        import scan_endpoint
+        ep = scan_endpoint.ScanEndpoint(
+            self._scan_session, log=self.say_threadsafe,
+            on_event=lambda kind, **facts: self.msgs.put(
+                ("__scan__", kind, facts)))
+        if ep.start():
+            self.scan_endpoint = ep
+            self.say(f"scans: listening on {ep.host}:{ep.port}")
+
+    def _scan_session(self):
+        """(store, civ, turn) of the galaxy being played, or None. Asked from
+        the endpoint's thread."""
+        thread = self.mp_thread
+        if thread is None or not thread.is_alive():
+            return None
+        store, civ = self.mp_store, self.mp_civ
+        turn = getattr(self, "mp_turn", None)
+        if store is None or not civ or turn is None:
+            return None
+        return store, civ, turn
+
+    def _on_scan(self, kind, facts):
+        import scan_endpoint
+        if kind == "asked":
+            name = scan_endpoint.SCAN_NAMES.get(facts.get("type"), "")
+            self.scan_shown = {
+                "title": f"Scanning: {name} scan" if name else "Scanning",
+                "text": "The referee is running your scan. The game waits "
+                        "for its answer and does not respond until it "
+                        "comes.",
+                "seconds": 0, "buttons": ["give_up"]}
+            self.say(f"scans: the referee is running your {name} scan")
+            self.view.show_scan(self.scan_shown)
+        elif kind == "waiting":
+            shown = getattr(self, "scan_shown", None)
+            if shown is not None and "give_up" in shown["buttons"]:
+                shown = dict(shown, seconds=facts.get("seconds", 0))
+                self.scan_shown = shown
+                self.view.show_scan(shown)
+        elif kind == "answered":
+            self.say("scans: answered, and shown in the game")
+            self._close_scan()
+        elif kind in ("refused", "failed"):
+            # The client shows the reason in its own box.
+            self.say(f"scans: {facts.get('reason', '')}")
+            self._close_scan()
+        elif kind == "gave_up":
+            self.say(f"scans: {facts.get('reason', '')}")
+            self.scan_shown = {
+                "title": "Scan given up",
+                "text": f"{facts.get('reason', '')} The game should respond "
+                        "again in a moment. If it does not, restart it: "
+                        "orders the launcher has not sent yet are lost.",
+                "seconds": None,
+                "buttons": (["restart", "close"]
+                            if self._scan_session() is not None
+                            else ["close"])}
+            self.view.show_scan(self.scan_shown)
+        elif kind == "restarted":
+            self._close_scan()
+
+    def _close_scan(self):
+        self.scan_shown = None
+        self.view.show_scan(None)
+
+    def on_scan_press(self, name):
+        """A button in the scan window."""
+        if name == "give_up" and self.scan_endpoint is not None:
+            self.say("scans: giving up on the scan, you asked")
+            self.scan_endpoint.abandon()
+            if getattr(self, "scan_shown", None):
+                self.scan_shown = dict(self.scan_shown, buttons=[],
+                                       text="Giving up on the scan…")
+                self.view.show_scan(self.scan_shown)
+        elif name == "restart":
+            self._restart_for_scan()
+        elif name == "close":
+            self._close_scan()
+
+    def _restart_for_scan(self):
+        """Close a game that stays stuck after a scan, and have the turn loop
+        open it again on this turn with the orders already sent."""
+        self.scan_shown = {"title": "Restarting the game",
+                           "text": "Closing the game. It opens again on this "
+                                   "turn with the orders already sent.",
+                           "seconds": None, "buttons": []}
+        self.view.show_scan(self.scan_shown)
+        self.say("scans: closing the game to restart it, you asked")
+
+        def work():
+            import game_cycle as gc
+            try:
+                gc.close_client()
+            except (Exception, SystemExit) as exc:          # noqa: BLE001
+                self.say_threadsafe(f"scans: the game was not closed ({exc})")
+            self.mp_reopen.set()
+            self.mp_reopening = True
+            self.msgs.put(("__scan__", "restarted", {}))
+        threading.Thread(target=work, daemon=True, name="scan-restart").start()
 
     def _mp_state(self, kind, **facts):
         """Called from the worker thread. Records a line for the turn readout."""
@@ -5571,6 +5684,10 @@ class Launcher:
         self._shut_down("the launcher is closing")
 
     def _shut_down(self, why: str):
+        endpoint = getattr(self, "scan_endpoint", None)
+        if endpoint is not None:
+            endpoint.stop()
+            self.scan_endpoint = None
         self.stop_multiplayer(why)
         self.stop_ai(why)
         for srv in self.servers:
@@ -5905,6 +6022,9 @@ class Launcher:
                 elif isinstance(msg, tuple) and msg and msg[0] == "__mp_played__":
                     _tag, gid, turn = msg
                     self._on_mp_played(gid, turn)
+                elif isinstance(msg, tuple) and msg and msg[0] == "__scan__":
+                    _tag, kind, facts = msg
+                    self._on_scan(kind, facts)
                 elif isinstance(msg, tuple) and msg and msg[0] == "__update__":
                     self._on_update_checked(*msg[1:])
                 elif isinstance(msg, tuple) and msg and msg[0] == "__news__":

@@ -66,6 +66,7 @@ class FakeView:
         self.turn_label = ""
         self.log = []
         self.log_refs_link = False
+        self.scan = None
         self.modes_disabled = False
         self.closed = False
         self.icon = None
@@ -171,6 +172,10 @@ class FakeView:
 
     def show_log_refs_link(self):
         self.log_refs_link = True
+
+    # the scan-pending window: what it shows, None when closed
+    def show_scan(self, state):
+        self.scan = state
 
     # prompts
     def warn(self, msg):

@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Scan</title>
+<link rel="stylesheet" href="app.css">
+<style>
+  .scan { box-sizing: border-box; height: 100%; display: flex; flex-direction: column; gap: 10px;
+          padding: 0 14px 12px; border: 1px solid #3a5266; }
+  .scan .hdr { margin: 0 -14px; color: #0a1a33; font-weight: bold; }
+  .scan .text { flex: 1; line-height: 16px; }
+  .scan .secs { color: #93a6b5; font-size: 11px; }
+  .scan .buttons { display: flex; gap: 8px; justify-content: flex-end; }
+</style>
+</head>
+<body>
+<div class="scan pywebview-drag-region">
+  <div class="hdr" id="title">Scan</div>
+  <div class="text" id="text"></div>
+  <div class="secs" id="secs"></div>
+  <div class="buttons" id="buttons"></div>
+</div>
+<script src="skin.js"></script>
+<script>
+"use strict";
+// The scan-pending window. Python sends what it shows through window.scan.set
+// and hears each press through window.pywebview.api.press.
+const LABELS = { give_up: "Give up", restart: "Restart the game", close: "Close" };
+const $ = (id) => document.getElementById(id);
+
+function press(name) {
+  const api = window.pywebview && window.pywebview.api;
+  if (api) api.press(name);
+}
+
+window.scan = {
+  set(state) {
+    $("title").textContent = state.title || "Scan";
+    $("text").textContent = state.text || "";
+    $("secs").textContent = state.seconds == null ? "" : `${Math.floor(state.seconds)} s`;
+    const row = $("buttons");
+    row.replaceChildren(...(state.buttons || []).map((name) => {
+      const b = document.createElement("button");
+      b.className = "gbtn";
+      b.textContent = LABELS[name] || name;
+      b.addEventListener("click", () => press(name));
+      return b;
+    }));
+  },
+};
+
+const skinReady = buildSkin().catch((e) => console.error(e));
+window.addEventListener("pywebviewready", () => skinReady.then(() => {
+  const api = window.pywebview && window.pywebview.api;
+  if (api) api.ready();
+}));
+</script>
+</body>
+</html>

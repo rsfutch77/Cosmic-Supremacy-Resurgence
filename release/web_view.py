@@ -25,6 +25,7 @@ import traceback
 import launcher as L
 
 PAGE_W, PAGE_H = 720, 540
+SCAN_W, SCAN_H = 420, 190       # the scan-pending window
 
 # The launcher's meaning colours (launcher.OK and the rest), mapped to ones
 # that read on the table's slate and on the status line's light blue.
@@ -132,6 +133,22 @@ class Bridge:
         self._post(lambda app: app.on_close())
 
 
+class ScanBridge:
+    """What the scan-pending window can ask for: its buttons."""
+
+    def __init__(self, view: "WebView"):
+        self._view = view
+
+    def ready(self):
+        view = self._view
+        view.post(view._scan_page_ready)
+
+    def press(self, name):
+        view = self._view
+        view.post(lambda: view.app is not None
+                  and view.app.on_scan_press(str(name)))
+
+
 class _Either:
     """Set when either of two Events is, for `_pump(until=...)`."""
 
@@ -164,6 +181,10 @@ class WebView:
         # What the page shows now, so a repaint that changes nothing sends
         # nothing.
         self._sent: dict = {}
+        # The scan-pending window, its page loaded, and what it shows.
+        self._scan_win = None
+        self._scan_ready = False
+        self._scan_state = None
 
     def run(self, make_app) -> None:
         """Open the window and run `make_app()` on the controller thread once
@@ -231,6 +252,41 @@ class WebView:
     def _js(self, fn: str, arg) -> None:
         if self.window is not None and not self._closed:
             self.window.run_js(f"window.ui.{fn}({json.dumps(arg)})")
+
+    def show_scan(self, state) -> None:
+        """The scan-pending window, kept above the game, or None to close it.
+
+        `state` is `{"title", "text", "seconds", "buttons"}`, the buttons
+        named `give_up`, `restart` and `close`. The client draws nothing while
+        it waits on an answer, so this is its own window, not a prompt here.
+        """
+        if state is None:
+            win, self._scan_win = self._scan_win, None
+            self._scan_state = None
+            if win is not None:
+                try:
+                    win.destroy()
+                except Exception:                           # noqa: BLE001
+                    pass
+            return
+        self._scan_state = state
+        if self._scan_win is None:
+            import webview
+            self._scan_ready = False
+            self._scan_win = webview.create_window(
+                "Scan", os.path.join(webui_dir(), "scan.html"),
+                js_api=ScanBridge(self), width=SCAN_W, height=SCAN_H,
+                resizable=False, frameless=True, easy_drag=True, on_top=True,
+                background_color="#001428")
+            return
+        if self._scan_ready:
+            self._scan_win.run_js(f"window.scan.set({json.dumps(state)})")
+
+    def _scan_page_ready(self) -> None:
+        self._scan_ready = True
+        if self._scan_win is not None and self._scan_state is not None:
+            self._scan_win.run_js(
+                f"window.scan.set({json.dumps(self._scan_state)})")
 
     def _set(self, **state) -> None:
         self._js("set", state)
