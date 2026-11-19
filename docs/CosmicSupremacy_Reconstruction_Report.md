@@ -728,10 +728,17 @@ Two things follow:
   byte. The planetary report differs in two places:
   - 8 bytes at its `PLPR` payload `+15` are memory the planet copy (`0x005527F0`) never
     writes. They are zero in `sc1` and in one of three runs here.
-  - The two `u32`s at `SCPL` payload `+420`, written after the `PLPR` section, read 400 and
-    100 here and 5,200 and 1,300 in `sc1`. Neither pair is in any save, so the running client
-    computes them. A 10-second wait after the load did not change them. Which is right for a
-    referee's scan is not settled.
+  - The two `u32`s at `SCPL` payload `+420` are the planet's light and heavy firepower, as
+    the report shows them (Robert, 18 November 2026). They read 400 and 100 here and 5,200
+    and 1,300 in `sc1`. The copy fills them at scan time from the live planet's method
+    `0x004F29E0` (vtable `+0x80`), which sums the planet's facilities with its owner's
+    research and branches on the content version `[0x0080AA00]` (565 here). Called on a
+    client loaded from `d4`, both HQs give 400 and 100, even after 15 minutes running. `sc1`
+    saves as `d4` plus its two reports, so the client that made it held something its save
+    does not. That is most likely a tool's memory write in that session (inferred, not
+    traced). Every client loaded from a served blob, the referee's ticks included, computes
+    what the referee's scan reports, and GoodGuy's own HQ shows 400 and 100 on its planet
+    view (Robert, 19 November 2026).
 
   `sc1`'s `EXSY` also grew from 520 to 13,322 bytes. That is the sight pass the scan button
   runs after the scan, and the online answer does not carry it.
