@@ -708,8 +708,15 @@ Two things follow:
   21 seconds and captures in about 1 second (referee log, 18 November 2026). The client waits
   at most 20 seconds for an answer: `0x0056E930` loops on `Sleep(1)` against the double at
   `0x00750290`, so its window stops drawing while it waits. A scan answered from a client
-  started for it misses that wait. Until then a player who scans keeps the scan and is told it
-  was not carried.
+  started for it misses that wait. The scan patch raises the wait past the launcher's own
+  limit, and the launcher shows a scan-pending window above the client until it sends the
+  answer (Robert, 18 November 2026). A scan that never comes has to fail gracefully: the
+  window's give-up button and the launcher's limit both close the socket, and the client is
+  read to warn of a lost connection and carry on (`0x0056E930` builds a `FAIL` answer). That
+  is read, not tried. A client still stuck after that is restarted on the current turn from
+  the same window. A scan the referee already ran is still recorded at the tick, so its report
+  arrives with the next turn. Until then a player who scans keeps the scan and is told
+  it was not carried.
 - [ ] **A design with no scanner closes the client on the Ship Design tab.** The tab asks each
   design for its scanner range, and `0x005479C0` stops the client when `ShipDesign:152` is
   empty. The designer saved one in `unruled` (674, `e1x4`). Next step: find whether the
