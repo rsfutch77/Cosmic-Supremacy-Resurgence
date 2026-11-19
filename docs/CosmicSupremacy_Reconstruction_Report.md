@@ -700,11 +700,16 @@ Two things follow:
     (`ShipDesign:152`). The client writes a dump with no exception stream. That is the
     Singleplayer checklist's F9, and it is open below.
 
-  The referee would make the report from the authoritative galaxy: one
-  `SC..` section per target group (layouts in Memory report, "The Scanning tab, reports
-  located"), the scan taken from the `OWPR` stock, the detection items for the scanned civ, a
-  leader-name scan's byte in the scanner's `KNPL` and a planetary scan's `EXSY` update. Until
-  then a player who scans keeps the scan and is told it was not carried.
+  The referee runs the client's own scan (decided 18 November 2026: Robert counts seconds as
+  instant, and the engine's code needs no copy in Python). It loads the authoritative galaxy
+  and calls `0x0054E840` in a remote thread (`use_scans` in
+  `client/dev_tools/ai_player/remote.py`). The engine takes the scan from the stock, makes
+  the reports and posts the detection items itself. A referee tick puts a client up in 16 to
+  21 seconds and captures in about 1 second (referee log, 18 November 2026). The client waits
+  at most 20 seconds for an answer: `0x0056E930` loops on `Sleep(1)` against the double at
+  `0x00750290`, so its window stops drawing while it waits. A scan answered from a client
+  started for it misses that wait. Until then a player who scans keeps the scan and is told it
+  was not carried.
 - [ ] **A design with no scanner closes the client on the Ship Design tab.** The tab asks each
   design for its scanner range, and `0x005479C0` stops the client when `ShipDesign:152` is
   empty. The designer saved one in `unruled` (674, `e1x4`). Next step: find whether the
