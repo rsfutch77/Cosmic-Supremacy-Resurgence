@@ -717,8 +717,24 @@ Two things follow:
   the same window. A player who gives up keeps the scan (Robert, 18 November 2026): the
   referee builds an answer without recording it, the launcher says when it has handed the
   answer to the client, and the tick replays only those scans. A scan given up on is
-  cancelled, so an answer that comes later is dropped and never charged. Until then a player who scans keeps the scan and is told
-  it was not carried.
+  cancelled, so an answer that comes later is dropped and never charged. Until then a player
+  who scans keeps the scan and is told it was not carried.
+
+  The referee's scan call works (18 November 2026, `server/scan.py` on `unruled/d4` with 3
+  planetary and 2 route scans put in GoodGuy's stock). It launched the client, replayed a
+  planetary scan of 384, ran a route scan of 677, saved and closed in 15 to 19 seconds. The
+  stock went from 3 and 2 to 2 and 1. The capture differs from `d4` only in GoodGuy's `OWPR`
+  and the two new reports. The route report matches `sc1`, the client's own scan, byte for
+  byte. The planetary report differs in two places:
+  - 8 bytes at its `PLPR` payload `+15` are memory the planet copy (`0x005527F0`) never
+    writes. They are zero in `sc1` and in one of three runs here.
+  - The two `u32`s at `SCPL` payload `+420`, written after the `PLPR` section, read 400 and
+    100 here and 5,200 and 1,300 in `sc1`. Neither pair is in any save, so the running client
+    computes them. A 10-second wait after the load did not change them. Which is right for a
+    referee's scan is not settled.
+
+  `sc1`'s `EXSY` also grew from 520 to 13,322 bytes. That is the sight pass the scan button
+  runs after the scan, and the online answer does not carry it.
 - [ ] **A design with no scanner closes the client on the Ship Design tab.** The tab asks each
   design for its scanner range, and `0x005479C0` stops the client when `ShipDesign:152` is
   empty. The designer saved one in `unruled` (674, `e1x4`). Next step: find whether the
