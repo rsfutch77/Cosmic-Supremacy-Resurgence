@@ -714,8 +714,10 @@ Two things follow:
   window's give-up button and the launcher's limit both close the socket, and the client is
   read to warn of a lost connection and carry on (`0x0056E930` builds a `FAIL` answer). That
   is read, not tried. A client still stuck after that is restarted on the current turn from
-  the same window. A scan the referee already ran is still recorded at the tick, so its report
-  arrives with the next turn. Until then a player who scans keeps the scan and is told
+  the same window. A player who gives up keeps the scan (Robert, 18 November 2026): the
+  referee builds an answer without recording it, the launcher says when it has handed the
+  answer to the client, and the tick replays only those scans. A scan given up on is
+  cancelled, so an answer that comes later is dropped and never charged. Until then a player who scans keeps the scan and is told
   it was not carried.
 - [ ] **A design with no scanner closes the client on the Ship Design tab.** The tab asks each
   design for its scanner range, and `0x005479C0` stops the client when `ShipDesign:152` is
