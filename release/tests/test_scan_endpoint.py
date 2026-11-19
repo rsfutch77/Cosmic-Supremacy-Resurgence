@@ -130,17 +130,22 @@ def window():
     app.scan_endpoint = type('E', (), {'abandon': lambda s: abandoned.append(1)})()
 
     app._on_scan('asked', {'type': 0})
-    check('a scan asked opens the window with Give up',
-          (app.view.scan['title'], app.view.scan['buttons']),
-          ('Scanning: planetary scan', ['give_up']))
+    check('a scan asked opens the window with Retry counting down from 30',
+          (app.view.scan['title'], app.view.scan['buttons'],
+           app.view.scan['countdown']),
+          ('Scanning: planetary scan', ['retry'], 30))
     app._on_scan('waiting', {'seconds': 7.4})
-    check('    and counts the seconds', app.view.scan['seconds'], 7.4)
-    app.on_scan_press('give_up')
-    check('Give up asks the endpoint to give up', abandoned, [1])
+    check('    which counts down as the scan waits',
+          app.view.scan['countdown'], 23)
+    app._on_scan('waiting', {'seconds': 31.0})
+    check('    and stops at 0, when it can be pressed',
+          app.view.scan['countdown'], 0)
+    app.on_scan_press('retry')
+    check('Retry asks the endpoint to cancel the scan', abandoned, [1])
     check('    and takes the button away while it does',
           app.view.scan['buttons'], [])
-    app._on_scan('gave_up', {'reason': 'You gave up on the scan; it stays '
-                                       'in stock.'})
+    app._on_scan('gave_up', {'reason': 'The scan was cancelled; it stays '
+                                       'in stock, so you can scan again.'})
     check('a scan given up offers a restart while a galaxy is played',
           app.view.scan['buttons'], ['restart', 'close'])
     check('    and says the scan stays in stock',

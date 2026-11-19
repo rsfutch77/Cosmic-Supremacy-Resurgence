@@ -9,7 +9,6 @@
           padding: 0 14px 12px; border: 1px solid #3a5266; }
   .scan .hdr { margin: 0 -14px; color: #0a1a33; font-weight: bold; }
   .scan .text { flex: 1; line-height: 16px; }
-  .scan .secs { color: #93a6b5; font-size: 11px; }
   .scan .buttons { display: flex; gap: 8px; justify-content: flex-end; }
 </style>
 </head>
@@ -17,7 +16,6 @@
 <div class="scan pywebview-drag-region">
   <div class="hdr" id="title">Scan</div>
   <div class="text" id="text"></div>
-  <div class="secs" id="secs"></div>
   <div class="buttons" id="buttons"></div>
 </div>
 <script src="skin.js"></script>
@@ -25,7 +23,7 @@
 "use strict";
 // The scan-pending window. Python sends what it shows through window.scan.set
 // and hears each press through window.pywebview.api.press.
-const LABELS = { give_up: "Give up", restart: "Restart the game", close: "Close" };
+const LABELS = { retry: "Retry", restart: "Restart the game", close: "Close" };
 const $ = (id) => document.getElementById(id);
 
 function press(name) {
@@ -37,12 +35,14 @@ window.scan = {
   set(state) {
     $("title").textContent = state.title || "Scan";
     $("text").textContent = state.text || "";
-    $("secs").textContent = state.seconds == null ? "" : `${Math.floor(state.seconds)} s`;
+    // Retry counts down and can be pressed once the count reaches 0.
     const row = $("buttons");
     row.replaceChildren(...(state.buttons || []).map((name) => {
       const b = document.createElement("button");
+      const wait = name === "retry" && state.countdown > 0;
       b.className = "gbtn";
-      b.textContent = LABELS[name] || name;
+      b.textContent = wait ? `${LABELS[name]} (${state.countdown})` : (LABELS[name] || name);
+      b.disabled = wait;
       b.addEventListener("click", () => press(name));
       return b;
     }));

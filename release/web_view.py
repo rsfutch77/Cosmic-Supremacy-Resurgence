@@ -256,9 +256,10 @@ class WebView:
     def show_scan(self, state) -> None:
         """The scan-pending window, kept above the game, or None to close it.
 
-        `state` is `{"title", "text", "seconds", "buttons"}`, the buttons
-        named `give_up`, `restart` and `close`. The client draws nothing while
-        it waits on an answer, so this is its own window, not a prompt here.
+        `state` is `{"title", "text", "countdown", "buttons"}`, the buttons
+        named `retry`, `restart` and `close`; `retry` waits out `countdown`
+        seconds. The client draws nothing while it waits on an answer, so
+        this is its own window, not a prompt here.
         """
         if state is None:
             win, self._scan_win = self._scan_win, None

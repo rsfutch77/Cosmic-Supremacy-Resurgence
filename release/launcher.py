@@ -1126,6 +1126,9 @@ def closed_problem(state) -> "str | None":
             "from the Galaxies list to keep playing.")
 
 
+# Seconds the scan window's Retry counts down before it can be pressed.
+SCAN_RETRY_AFTER = 30
+
 # What the turn readout says once the galaxy being followed has closed.
 GALAXY_ENDED_NOTE = "this galaxy has ended"
 
@@ -4796,18 +4799,19 @@ class Launcher:
             name = scan_endpoint.SCAN_NAMES.get(facts.get("type"), "")
             self.scan_shown = {
                 "title": f"Scanning: {name} scan" if name else "Scanning",
-                "text": "The referee is running your scan. The game waits "
-                        "for its answer and does not respond until it "
-                        "comes.",
-                "seconds": 0, "buttons": ["give_up"]}
+                "text": "The referee is running your scan.",
+                "countdown": SCAN_RETRY_AFTER, "buttons": ["retry"]}
             self.say(f"scans: the referee is running your {name} scan")
             self.view.show_scan(self.scan_shown)
         elif kind == "waiting":
             shown = getattr(self, "scan_shown", None)
-            if shown is not None and "give_up" in shown["buttons"]:
-                shown = dict(shown, seconds=facts.get("seconds", 0))
-                self.scan_shown = shown
-                self.view.show_scan(shown)
+            if shown is not None and "retry" in shown["buttons"]:
+                left = max(0, int(SCAN_RETRY_AFTER
+                                  - facts.get("seconds", 0) + 0.999))
+                if left != shown.get("countdown"):
+                    shown = dict(shown, countdown=left)
+                    self.scan_shown = shown
+                    self.view.show_scan(shown)
         elif kind == "answered":
             self.say("scans: answered, and shown in the game")
             self._close_scan()
@@ -4818,11 +4822,11 @@ class Launcher:
         elif kind == "gave_up":
             self.say(f"scans: {facts.get('reason', '')}")
             self.scan_shown = {
-                "title": "Scan given up",
+                "title": "Scan cancelled",
                 "text": f"{facts.get('reason', '')} The game should respond "
                         "again in a moment. If it does not, restart it: "
                         "orders the launcher has not sent yet are lost.",
-                "seconds": None,
+                "countdown": None,
                 "buttons": (["restart", "close"]
                             if self._scan_session() is not None
                             else ["close"])}
@@ -4836,12 +4840,14 @@ class Launcher:
 
     def on_scan_press(self, name):
         """A button in the scan window."""
-        if name == "give_up" and self.scan_endpoint is not None:
-            self.say("scans: giving up on the scan, you asked")
+        if name == "retry" and self.scan_endpoint is not None:
+            # The scan is cancelled and the game freed, so the player can
+            # scan again from it.
+            self.say("scans: cancelling the scan to retry, you asked")
             self.scan_endpoint.abandon()
             if getattr(self, "scan_shown", None):
                 self.scan_shown = dict(self.scan_shown, buttons=[],
-                                       text="Giving up on the scan…")
+                                       text="Cancelling the scan…")
                 self.view.show_scan(self.scan_shown)
         elif name == "restart":
             self._restart_for_scan()
@@ -4854,7 +4860,7 @@ class Launcher:
         self.scan_shown = {"title": "Restarting the game",
                            "text": "Closing the game. It opens again on this "
                                    "turn with the orders already sent.",
-                           "seconds": None, "buttons": []}
+                           "countdown": None, "buttons": []}
         self.view.show_scan(self.scan_shown)
         self.say("scans: closing the game to restart it, you asked")
 

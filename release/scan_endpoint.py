@@ -138,7 +138,8 @@ def run_scan(store, civ, turn, payload, give_up, on_event=None, limit=LIMIT,
 
     while True:
         if give_up.is_set():
-            out = cancel('You gave up on the scan; it stays in stock.')
+            out = cancel('The scan was cancelled; it stays in stock, so you '
+                         'can scan again.')
             if out:
                 return out
         waited = clock() - started
