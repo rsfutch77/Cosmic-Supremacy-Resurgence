@@ -98,6 +98,8 @@ MAX_DOC_ID = 1500   # longest Firestore document id, in bytes
 JOIN_COLLECTION = 'joins'
 JOIN_DONE_COLLECTION = 'joins_done'
 
+SCAN_COLLECTION = 'scans'               # one document per scan, keyed by its id
+
 # Characters a document id carries unescaped. Escaping `.` and `_` rules out
 # `.`, `..` and `__reserved__` ids.
 ID_SAFE = frozenset(string.ascii_letters + string.digits + '-~')
@@ -821,6 +823,77 @@ class FirebaseTurnStore:
         snap = self.join_done_doc(key).get()
         return snap.to_dict() if snap.exists else None
 
+    # Scans: one document each, its answer a bytes field.
+    @property
+    def scan_collection(self):
+        return self.doc.collection(SCAN_COLLECTION)
+
+    def scan_doc(self, scan_id: str):
+        if not turn_store.scan_id_ok(scan_id):
+            raise ValueError(f'{scan_id!r} is not a scan id')
+        return self.scan_collection.document(scan_id)
+
+    def ask_scan(self, civ: str, turn: int, kind: int, targets) -> str:
+        """File an asked scan. Returns its id."""
+        rec = turn_store.new_scan(civ, turn, kind, targets)
+        self.scan_doc(rec['id']).set(rec)
+        return rec['id']
+
+    def scan(self, scan_id: str):
+        """One scan's record, or None while there is none."""
+        snap = self.scan_doc(scan_id).get()
+        return snap.to_dict() if snap.exists else None
+
+    def _scans_where(self, field: str, value) -> list:
+        from google.cloud.firestore_v1.base_query import FieldFilter
+        q = self.scan_collection.where(filter=FieldFilter(field, '==', value))
+        return sorted((s.to_dict() for s in q.stream()),
+                      key=turn_store.scan_order)
+
+    def scans_waiting(self) -> list:
+        """Every asked scan, oldest first."""
+        return self._scans_where('state', turn_store.SCAN_ASKED)
+
+    def delivered_scans(self, turn: int, civ: str = None) -> list:
+        """The scans delivered on this turn, oldest first. Filtered here
+        rather than in the query, so no composite index is needed."""
+        return [r for r in self._scans_where('turn', int(turn))
+                if r.get('state') == turn_store.SCAN_DELIVERED
+                and (civ is None or r.get('civ') == civ)]
+
+    def move_scan(self, scan_id: str, to: str, answer: bytes = None,
+                  reason: str = None):
+        """Move a scan to state `to` in a transaction. Returns the record as
+        it now stands, moved or not, or None when there is no such scan."""
+        from google.cloud import firestore
+        ref = self.scan_doc(scan_id)
+
+        @firestore.transactional
+        def move(tx):
+            snap = ref.get(transaction=tx)
+            rec = snap.to_dict() if snap.exists else None
+            moved = turn_store.scan_moved(rec, to, answer=answer,
+                                          reason=reason)
+            if moved is None:
+                return rec
+            tx.set(ref, moved)
+            return moved
+
+        return move(self.fs.transaction())
+
+    def prune_scans(self, before: int) -> int:
+        """Delete the scans of turns before `before`. Returns how many."""
+        from google.cloud.firestore_v1.base_query import FieldFilter
+        snaps = list(self.scan_collection.where(
+            filter=FieldFilter('turn', '<', int(before))).select(
+                ['turn']).stream())
+        for i in range(0, len(snaps), 400):
+            batch = self.fs.batch()
+            for snap in snaps[i:i + 400]:
+                batch.delete(snap.reference)
+            batch.commit()
+        return len(snaps)
+
     def delete_everything(self) -> int:
         """Remove this galaxy from both services, and say how many things went.
 
@@ -833,7 +906,7 @@ class FirebaseTurnStore:
             n += 1
         for name in ('archive', SUBMISSION_COLLECTION, NOTE_COLLECTION,
                      JOIN_COLLECTION,
-                     JOIN_DONE_COLLECTION):
+                     JOIN_DONE_COLLECTION, SCAN_COLLECTION):
             for snap in self.doc.collection(name).stream():
                 snap.reference.delete()
                 n += 1

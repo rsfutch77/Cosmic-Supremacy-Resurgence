@@ -39,14 +39,13 @@ for _d in (os.path.join(HERE, "dev_tools"), HERE, DEV,
         sys.path.insert(0, _d)
 
 import save_parser as sp
-import inject_civ as icv
 import merge_orders as mo
 import fog
+import turn_store
 
 SCAN_TYPES = {0: "planetary", 1: "system", 2: "route", 3: "fleet",
               4: "military", 5: "technology", 6: "energy grid",
               7: "leader name"}
-MAX_TARGETS = 256                      # far more than the scan screen selects
 
 
 class ScanError(Exception):
@@ -55,23 +54,15 @@ class ScanError(Exception):
 
 def parse_request(payload: bytes):
     """(scan type, [target object id]) from a `DOSC` v0 payload."""
-    if len(payload) < 8:
-        raise ScanError(f"DOSC of {len(payload)} bytes is too short")
-    n = struct.unpack_from("<I", payload)[0]
-    if n > MAX_TARGETS or len(payload) != 8 + 4 * n:
-        raise ScanError(f"DOSC of {len(payload)} bytes does not hold {n} target(s)")
-    targets = list(struct.unpack_from(f"<{n}I", payload, 4))
-    kind = struct.unpack_from("<I", payload, 4 + 4 * n)[0]
-    if kind not in SCAN_TYPES:
-        raise ScanError(f"DOSC asks for scan type {kind}")
-    return kind, targets
+    try:
+        return turn_store.parse_scan_request(payload)
+    except ValueError as exc:
+        raise ScanError(str(exc)) from None
 
 
 def build_request(kind: int, targets) -> bytes:
     """The `DOSC` v0 payload the client sends for this scan."""
-    return (struct.pack("<I", len(targets))
-            + struct.pack(f"<{len(targets)}I", *targets)
-            + struct.pack("<I", kind))
+    return turn_store.scan_request(kind, targets)
 
 
 def answer_body(capture: bytes, civ: str, made: int) -> bytes:

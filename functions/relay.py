@@ -32,6 +32,9 @@ What it enforces:
   * a guest is refused every galaxy route where the document says
     `guests: refuse`
   * a guest's seats move only to an account, on both tokens
+  * a scan is asked only for the caller's own civ on the turn being played,
+    and read, delivered or cancelled only by that civ; only the referee
+    answers one
   * a coat of arms is uploaded only by an account seated on the galaxy, as a
     small PNG, and up to `ARMS_PER_UID` of them; it is shown to its owner at
     once and to anyone else only once the operator approves it
@@ -92,6 +95,9 @@ MAX_BYTES = int(os.environ.get('CS_RELAY_MAX_BYTES', str(1024 * 1024)))
 
 # Ceiling on a join request body (a name, a build string and two numbers).
 MAX_JOIN_BYTES = int(os.environ.get('CS_RELAY_MAX_JOIN_BYTES', '4096'))
+
+# The longest `DOSC` payload: a count, every target and the type.
+MAX_SCAN_BYTES = 8 + 4 * turn_store.MAX_SCAN_TARGETS
 
 # Longest build string a join request may carry; read by the minimum-build gate.
 MAX_BUILD_CHARS = 64
@@ -588,6 +594,28 @@ def _may_submit(store, doc, uid, turn, civ):
     if turn != current:
         raise Refused(409, f'{store.galaxy} is playing turn {current}, '
                            f'not turn {turn}')
+
+
+def _ask_scan(store, doc, uid, turn, civ, body):
+    """File a scan the client sent. Checked as a submission is, since a scan
+    is played on the same turn by the same seat."""
+    if len(body) > MAX_SCAN_BYTES:
+        raise Refused(413, f'a scan request is at most {MAX_SCAN_BYTES} bytes')
+    _may_submit(store, doc, uid, turn, civ)
+    try:
+        kind, targets = turn_store.parse_scan_request(body)
+    except ValueError as exc:
+        raise Refused(400, str(exc))
+    return _json({'id': store.ask_scan(civ, turn, kind, targets)})
+
+
+def _own_scan(store, doc, uid, scan_id):
+    """The caller's own scan. Another civ's reads as missing."""
+    rec = store.scan(scan_id) if turn_store.scan_id_ok(scan_id) else None
+    civ = seat_of(doc, uid)
+    if rec is None or civ is None or rec.get('civ') != civ:
+        raise Refused(404, 'no scan of yours is filed under that id')
+    return rec
 
 
 def _upload_ticket(turn, civ):
@@ -1295,6 +1323,9 @@ def _route(method: str, path: str, headers: dict, body: bytes):
                 raise Refused(404, 'nothing has been decided about a join '
                                    'request of yours here')
             return _json(answer)
+        if len(parts) == 2 and parts[0] == 'scan':
+            return _json(turn_store.scan_to_json(
+                _own_scan(store, doc, uid, parts[1])))
         if parts and parts[0] == 'joins':
             # What is waiting on a galaxy is the worker's question
             # (`turn_server.py` answers it on a LAN). Here it would tell a
@@ -1304,13 +1335,25 @@ def _route(method: str, path: str, headers: dict, body: bytes):
                                'caller only about its own request')
 
     if method == 'POST':
-        if parts == ['join'] or parts[:1] == ['submission'] \
+        if parts == ['join'] or parts[:1] in (['submission'], ['scan']) \
                 or parts[:2] == ['commit', 'submission']:
             verified_or_refuse(claims)
         if parts == ['join']:
             return _lodge_join(store, doc, uid, body)
         if parts == ['arms']:
             return _take_arms(store, doc, claims, body)
+        if len(parts) == 3 and parts[0] == 'scan' \
+                and turn_store.scan_id_ok(parts[1]):
+            if parts[2] not in (turn_store.SCAN_DELIVERED,
+                                turn_store.SCAN_CANCELLED):
+                raise Refused(403, 'a scan is answered by the worker, and the '
+                                   'answer does not come through here')
+            _own_scan(store, doc, uid, parts[1])
+            return _json(turn_store.scan_to_json(
+                store.move_scan(parts[1], parts[2])))
+        if len(parts) == 3 and parts[0] == 'scan':
+            return _ask_scan(store, doc, uid, _turn_number(parts[1]), parts[2],
+                             body)
         if parts and parts[0] in ('join', 'joins'):
             raise Refused(403, 'a join request is answered by the worker at a '
                                'turn boundary, and it does not come through '

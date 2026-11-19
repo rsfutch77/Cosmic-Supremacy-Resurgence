@@ -31,6 +31,9 @@ own backoff, and its own operator page, `operator_<galaxy>.html`, with
 6.  `operator_view`'s page is written to `<work-dir>\\operator.html` at startup,
     after every tick and after a failure. `run_worker.ps1 -WriteShortcut` makes
     a shortcut to it.
+7.  Between deadlines, every `SCAN_POLL` seconds, a scan a player's client
+    sent online is run in the client and answered (`scan.py`). `--once` answers
+    none.
 
 The game client needs a desktop session, so the scheduled task
 (`referee_worker_task.xml`) triggers at logon, not at boot; an unattended reboot
@@ -89,6 +92,10 @@ GRACE = 20.0
 POLL = 5.0
 POLL_CEILING = 120.0
 POLL_SHARE = 20.0
+
+# Seconds between looks for scans waiting on an answer, while the worker waits
+# for a deadline. A player's client waits on the answer.
+SCAN_POLL = 2.0
 
 # Retry wait after a failed resolution, in seconds: doubles from the first
 # value up to the ceiling.
@@ -776,9 +783,74 @@ def tend(g, save_dir=None, grace: float = GRACE, poll: float = POLL,
         return wait, FAILED
 
 
+def answer_scan(store, rec, save_dir=None, log=print):
+    """Run one asked scan in the client and answer it, or refuse it.
+
+    The scan is run on the turn's authoritative blob after the civ's scans
+    delivered earlier this turn, so its stock is what the player's client
+    holds. Nothing is charged here: a scan cancelled while it ran keeps its
+    cancel, and only the tick replays delivered scans.
+    """
+    import scan
+    sid, civ = rec['id'], rec['civ']
+    what = f'{civ}\'s {scan.SCAN_TYPES.get(rec["type"], rec["type"])} scan'
+    try:
+        state = store.state()
+        if turn_store.status_of(state) == turn_store.CLOSED:
+            raise scan.ScanError('the galaxy is closed')
+        if rec['turn'] != state['turn']:
+            raise scan.ScanError(f'turn {rec["turn"]} has closed')
+        earlier = [(r['type'], r['targets'])
+                   for r in store.delivered_scans(rec['turn'], civ)]
+        body = scan.answer(store.turn_blob(rec['turn']), civ, rec['type'],
+                           rec['targets'], earlier, save_dir=save_dir, log=log)
+    except scan.ScanError as exc:
+        store.move_scan(sid, turn_store.SCAN_REFUSED, reason=str(exc))
+        log(f'  worker: refused {what} ({exc})')
+        return
+    except (Exception, SystemExit) as exc:                  # noqa: BLE001
+        log(f'  worker: {what} failed ({type(exc).__name__}: {exc})')
+        log(traceback.format_exc())
+        store.move_scan(sid, turn_store.SCAN_REFUSED)
+        return
+    now = store.move_scan(sid, turn_store.SCAN_ANSWERED, answer=body)
+    state = (now or {}).get('state')
+    log(f'  worker: answered {what}, {len(body):,} bytes'
+        if state == turn_store.SCAN_ANSWERED else
+        f'  worker: {what} was {state} before its answer was ready')
+
+
+def answer_scans(galaxies, save_dir=None, log=print) -> int:
+    """Answer every scan waiting on these galaxies. Returns how many."""
+    done = 0
+    for g in galaxies:
+        try:
+            waiting = g.store.scans_waiting()
+        except Exception as exc:                            # noqa: BLE001
+            log(f'  worker: {g.tag}scans not read ({type(exc).__name__}: '
+                f'{exc})')
+            continue
+        for rec in waiting:
+            answer_scan(g.store, rec, save_dir=save_dir, log=log)
+            done += 1
+    return done
+
+
+def wait_answering(galaxies, gap, save_dir=None, log=print,
+                   sleeper=time.sleep, clock=time.time) -> None:
+    """Wait `gap` seconds, answering scans every `SCAN_POLL` seconds."""
+    end = clock() + gap
+    while True:
+        answer_scans(galaxies, save_dir=save_dir, log=log)
+        left = end - clock()
+        if left <= 0:
+            return
+        sleeper(min(SCAN_POLL, left))
+
+
 def run_many(watch, save_dir=None, grace: float = GRACE, poll: float = POLL,
              once: bool = False, stop=None, log=print, server=None,
-             sleeper=time.sleep, clock=time.time) -> int:
+             sleeper=time.sleep, clock=time.time, scans=False) -> int:
     """Close each galaxy's turn as its deadline passes, one at a time.
 
     `watch()` returns the `Watched` galaxies for this pass. The client and the
@@ -818,7 +890,10 @@ def run_many(watch, save_dir=None, grace: float = GRACE, poll: float = POLL,
         if once and all(g.spec in settled for g in galaxies):
             return 1 if failed else EXIT_OK
         gap = min(gaps) if gaps else max(poll, POLL_CEILING)
-        if gap > 0:
+        if gap > 0 and scans:
+            wait_answering(galaxies, gap, save_dir=save_dir, log=log,
+                           sleeper=sleeper, clock=clock)
+        elif gap > 0:
             sleeper(gap)
         spent = max(gap, time.time() - started)
         for g in galaxies:
@@ -828,7 +903,7 @@ def run_many(watch, save_dir=None, grace: float = GRACE, poll: float = POLL,
 def run(store, save_dir=None, grace: float = GRACE, poll: float = POLL,
         once: bool = False, stop=None, guard=None, log=print,
         server=None, sleeper=time.sleep, page=None, gid=None,
-        clock=time.time) -> int:
+        clock=time.time, scans=False) -> int:
     """Close each turn of one galaxy as its deadline passes, for as long as
     the machine is up.
 
@@ -844,7 +919,7 @@ def run(store, save_dir=None, grace: float = GRACE, poll: float = POLL,
                    page=page, gid=gid)]
     return run_many(lambda: one, save_dir=save_dir, grace=grace, poll=poll,
                     once=once, stop=stop, log=log, server=server,
-                    sleeper=sleeper, clock=clock)
+                    sleeper=sleeper, clock=clock, scans=scans)
 
 
 def expand(specs) -> list:
@@ -1121,7 +1196,7 @@ def main(argv=None) -> int:
 
         return run(store, save_dir=save_dir, grace=a.grace, poll=a.poll,
                    once=a.once, guard=guard, log=log, server=server,
-                   page=page, gid=gid)
+                   page=page, gid=gid, scans=not a.once)
     except KeyboardInterrupt:
         log('  worker: stopped from the console')
         return EXIT_OK
@@ -1187,7 +1262,8 @@ def main_many(a) -> int:
         log(f'  worker: captures are collected from {save_dir}')
 
         return run_many(roster, save_dir=save_dir, grace=a.grace,
-                        poll=a.poll, once=a.once, log=log, server=server)
+                        poll=a.poll, once=a.once, log=log, server=server,
+                        scans=not a.once)
     except KeyboardInterrupt:
         log('  worker: stopped from the console')
         return EXIT_OK

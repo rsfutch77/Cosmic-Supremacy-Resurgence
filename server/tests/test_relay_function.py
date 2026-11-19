@@ -610,6 +610,75 @@ def run(referee, galaxy, base, player_a, player_b, player_c, anonymous, ids):
               os.environ['STORAGE_EMULATOR_HOST'].rstrip('/')), True)
 
     run_joins(referee, galaxy, call, ids)
+    run_scans(referee, call, ids, player_a)
+
+
+def run_scans(referee, call, ids, player_a):
+    """Scans through the relay: asked by a seat for its own civ, answered by
+    the referee alone, delivered or cancelled by the civ that asked.
+
+    Each check reads back through the referee's store.
+    """
+    _uid_a, token_a = ids['a']
+    _uid_b, token_b = ids['b']
+    turn = referee.current()[0]
+
+    def waiting():
+        return [r['id'] for r in referee.scans_waiting()]
+
+    print('a scan is asked by a seat for its own civ')
+    sid = player_a.ask_scan('DemoPlayer', turn, 0, [384])
+    rec = referee.scan(sid)
+    check('the launcher files a scan', waiting(), [sid])
+    check('as the request the client sent',
+          (rec['civ'], rec['turn'], rec['type'], rec['targets'], rec['state']),
+          ('DemoPlayer', turn, 0, [384], 'asked'))
+    request = turn_store.scan_request(0, [384])
+    check('a scan for another civ is refused',
+          call('POST', f'/scan/{turn}/Neighbor', token_a, request)[0], 403)
+    check('a scan for a turn not being played is refused',
+          call('POST', f'/scan/{turn - 1}/DemoPlayer', token_a, request)[0],
+          409)
+    check('a request that does not read as one is refused',
+          call('POST', f'/scan/{turn}/DemoPlayer', token_a, b'\x01\0\0\0')[0],
+          400)
+    check('a request past the size cap is refused',
+          call('POST', f'/scan/{turn}/DemoPlayer', token_a,
+               b'\0' * (relay.MAX_SCAN_BYTES + 1))[0], 413)
+    check('and none of them filed anything', waiting(), [sid])
+
+    print('a scan is read and moved only by the civ that asked')
+    check('the asker reads it back', player_a.scan(sid)['state'], 'asked')
+    check('another seat reads it as missing',
+          call('GET', f'/scan/{sid}', token_b)[0], 404)
+    check('a player may not answer it',
+          call('POST', f'/scan/{sid}/answered', token_a)[0], 403)
+    check('another seat may not cancel it',
+          call('POST', f'/scan/{sid}/cancelled', token_b)[0], 404)
+    check('and it is still waiting', waiting(), [sid])
+    referee.move_scan(sid, turn_store.SCAN_ANSWERED, answer=b'\x01\x02')
+    check('the referee\'s answer reaches the asker as bytes',
+          (player_a.scan(sid)['state'], player_a.scan(sid)['answer']),
+          ('answered', b'\x01\x02'))
+    check('the asker marks it delivered',
+          player_a.move_scan(sid, 'delivered')['state'], 'delivered')
+    check('and the referee counts it delivered on this turn',
+          [r['id'] for r in referee.delivered_scans(turn, 'DemoPlayer')],
+          [sid])
+    check('a delivered scan is not cancelled after',
+          player_a.move_scan(sid, 'cancelled')['state'], 'delivered')
+
+    print('a scan given up on is never charged')
+    other = player_a.ask_scan('DemoPlayer', turn, 2, [677, 678])
+    check('the asker cancels it while it waits',
+          player_a.move_scan(other, 'cancelled')['state'], 'cancelled')
+    late = referee.move_scan(other, turn_store.SCAN_ANSWERED, answer=b'late')
+    check('an answer that comes after leaves it cancelled', late['state'],
+          'cancelled')
+    check('and only the delivered scan counts',
+          [r['id'] for r in referee.delivered_scans(turn)], [sid])
+    check('a path that is not a scan id is missing',
+          call('GET', '/scan/not-a-scan', token_a)[0], 404)
 
 
 def run_views(referee, galaxy, token_a, token_b):

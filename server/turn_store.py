@@ -343,6 +343,120 @@ def skipped(log, what, why: str) -> None:
         log(f'  joins: ignoring {what}, {why}')
 
 
+# A scan the client sends online (`DOSC`), answered by the referee. One record
+# per scan under a random id. The referee answers or refuses an asked scan.
+# The launcher marks an answered scan delivered once the client holds the
+# answer, or cancels a scan it gives up on. Only a delivered scan is charged.
+SCAN_DIR = 'scans'
+SCAN_ASKED = 'asked'
+SCAN_ANSWERED = 'answered'
+SCAN_REFUSED = 'refused'
+SCAN_DELIVERED = 'delivered'
+SCAN_CANCELLED = 'cancelled'
+SCAN_TYPES = 8                  # ids 0 to 7, the factory 0x0054E030's
+MAX_SCAN_TARGETS = 256          # far more than the scan screen selects
+MAX_SCAN_ANSWER = 1024 * 1024   # a few reports, an OWPR and a KNPL
+SCAN_LOCK_SECONDS = 10.0        # a lock file older than this is abandoned
+
+# Which states each move is made from.
+SCAN_MOVES = {
+    SCAN_ANSWERED: (SCAN_ASKED,),
+    SCAN_REFUSED: (SCAN_ASKED,),
+    SCAN_DELIVERED: (SCAN_ANSWERED,),
+    SCAN_CANCELLED: (SCAN_ASKED, SCAN_ANSWERED),
+}
+SCAN_STAMPS = {SCAN_ANSWERED: 'answered_at', SCAN_REFUSED: 'answered_at',
+               SCAN_DELIVERED: 'delivered_at',
+               SCAN_CANCELLED: 'cancelled_at'}
+
+
+def parse_scan_request(payload: bytes):
+    """(scan type, [target object id]) from a `DOSC` v0 payload: a `u32`
+    count, each target's object id, then the type. Raises ValueError."""
+    if not isinstance(payload, (bytes, bytearray)) or len(payload) < 8:
+        raise ValueError('a scan request is at least 8 bytes')
+    n = struct.unpack_from('<I', payload)[0]
+    if n > MAX_SCAN_TARGETS or len(payload) != 8 + 4 * n:
+        raise ValueError(f'a scan request of {len(payload)} bytes does not '
+                         f'hold {n} target(s)')
+    targets = list(struct.unpack_from(f'<{n}I', payload, 4))
+    kind = struct.unpack_from('<I', payload, 4 + 4 * n)[0]
+    if kind >= SCAN_TYPES:
+        raise ValueError(f'there is no scan type {kind}')
+    return kind, targets
+
+
+def scan_request(kind: int, targets) -> bytes:
+    """The `DOSC` v0 payload the client sends for this scan."""
+    targets = list(targets)
+    return (struct.pack('<I', len(targets))
+            + struct.pack(f'<{len(targets)}I', *targets)
+            + struct.pack('<I', kind))
+
+
+def new_scan(civ: str, turn: int, kind: int, targets, now=None) -> dict:
+    """An asked scan's record. Raises ValueError on a bad request."""
+    problem = name_problem(civ)
+    if problem:
+        raise ValueError(problem)
+    targets = [int(t) for t in targets]
+    if not 0 <= int(kind) < SCAN_TYPES or len(targets) > MAX_SCAN_TARGETS \
+            or any(not 0 <= t < 2 ** 32 for t in targets):
+        raise ValueError(f'scan type {kind} on {len(targets)} target(s) '
+                         f'is not a scan the client sends')
+    return {'id': os.urandom(16).hex(), 'civ': civ, 'turn': int(turn),
+            'type': int(kind), 'targets': targets, 'state': SCAN_ASKED,
+            'asked_at': time.time() if now is None else now}
+
+
+def scan_moved(rec: dict, to: str, answer: bytes = None, reason: str = None,
+               now=None):
+    """`rec` moved to state `to`, or None when that move is not allowed.
+
+    Every store moves a scan through this, so a cancel and an answer that
+    race end the same way in each: whichever lands first wins.
+    """
+    if rec is None or rec.get('state') not in SCAN_MOVES.get(to, ()):
+        return None
+    out = dict(rec, state=to)
+    out[SCAN_STAMPS[to]] = time.time() if now is None else now
+    if to == SCAN_ANSWERED:
+        if not isinstance(answer, (bytes, bytearray)) or \
+                len(answer) > MAX_SCAN_ANSWER:
+            raise ValueError(f'an answer is bytes, at most {MAX_SCAN_ANSWER}')
+        out['answer'] = bytes(answer)
+    if to == SCAN_REFUSED:
+        out['reason'] = str(reason or 'the referee could not run the scan')
+    return out
+
+
+def scan_order(rec):
+    """Oldest first, ties broken by id, so every store gives the same order."""
+    return (rec.get('asked_at') or 0.0, str(rec.get('id') or ''))
+
+
+def scan_to_json(rec: dict) -> dict:
+    """A record with its answer as base64, for a file or an HTTP body."""
+    out = dict(rec)
+    if isinstance(out.get('answer'), (bytes, bytearray)):
+        out['answer'] = base64.b64encode(out['answer']).decode('ascii')
+    return out
+
+
+def scan_from_json(rec: dict) -> dict:
+    """A record read from a file or an HTTP body, its answer as bytes."""
+    out = dict(rec)
+    if isinstance(out.get('answer'), str):
+        out['answer'] = base64.b64decode(out['answer'])
+    return out
+
+
+def scan_id_ok(scan_id) -> bool:
+    """Whether this can be a scan id: 32 lowercase hex characters."""
+    return (isinstance(scan_id, str) and len(scan_id) == 32
+            and all(c in '0123456789abcdef' for c in scan_id))
+
+
 def _atomic_write(path: str, data: bytes) -> None:
     """Write, then replace, retrying while a reader holds the target.
 
@@ -715,6 +829,108 @@ class TurnStore:
                 return json.load(f)
         except (FileNotFoundError, PermissionError, ValueError):
             return None
+
+    # Scans. The worker and `turn_server.py` both move them, so each move is
+    # made under a lock file.
+    def scan_dir(self) -> str:
+        return os.path.join(self.root, SCAN_DIR)
+
+    def scan_path(self, scan_id: str) -> str:
+        if not scan_id_ok(scan_id):
+            raise ValueError(f'{scan_id!r} is not a scan id')
+        return os.path.join(self.scan_dir(), f'{scan_id}.json')
+
+    def _scan_lock(self):
+        path = os.path.join(self.scan_dir(), '.lock')
+        os.makedirs(self.scan_dir(), exist_ok=True)
+        deadline = time.time() + WRITE_RETRY_SECONDS
+        while True:
+            try:
+                os.close(os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY))
+                return path
+            except FileExistsError:
+                try:
+                    if time.time() - os.path.getmtime(path) > SCAN_LOCK_SECONDS:
+                        os.remove(path)
+                        continue
+                except OSError:
+                    continue
+                if time.time() >= deadline:
+                    raise TimeoutError('the scan lock is held')
+                time.sleep(0.05)
+
+    def _read_scan(self, path: str):
+        try:
+            with open(path, encoding='utf-8') as f:
+                return scan_from_json(json.load(f))
+        except (FileNotFoundError, PermissionError, ValueError):
+            return None
+
+    def _write_scan(self, rec: dict) -> None:
+        _atomic_write(self.scan_path(rec['id']),
+                      json.dumps(scan_to_json(rec)).encode('utf-8'))
+
+    def ask_scan(self, civ: str, turn: int, kind: int, targets) -> str:
+        """File an asked scan. Returns its id."""
+        rec = new_scan(civ, turn, kind, targets)
+        self._write_scan(rec)
+        return rec['id']
+
+    def scan(self, scan_id: str):
+        """One scan's record, or None while there is none."""
+        return self._read_scan(self.scan_path(scan_id))
+
+    def _scans(self) -> list:
+        where = self.scan_dir()
+        if not os.path.isdir(where):
+            return []
+        out = []
+        for entry in os.listdir(where):
+            if entry.endswith('.json') and scan_id_ok(entry[:-5]):
+                rec = self._read_scan(os.path.join(where, entry))
+                if rec is not None:
+                    out.append(rec)
+        return sorted(out, key=scan_order)
+
+    def scans_waiting(self) -> list:
+        """Every asked scan, oldest first."""
+        return [r for r in self._scans() if r.get('state') == SCAN_ASKED]
+
+    def delivered_scans(self, turn: int, civ: str = None) -> list:
+        """The scans delivered on this turn, oldest first."""
+        return [r for r in self._scans()
+                if r.get('state') == SCAN_DELIVERED and r.get('turn') == turn
+                and (civ is None or r.get('civ') == civ)]
+
+    def move_scan(self, scan_id: str, to: str, answer: bytes = None,
+                  reason: str = None):
+        """Move a scan to state `to`. Returns the record as it now stands,
+        moved or not, or None when there is no such scan."""
+        lock = self._scan_lock()
+        try:
+            rec = self.scan(scan_id)
+            moved = scan_moved(rec, to, answer=answer, reason=reason)
+            if moved is None:
+                return rec
+            self._write_scan(moved)
+            return moved
+        finally:
+            try:
+                os.remove(lock)
+            except OSError:
+                pass
+
+    def prune_scans(self, before: int) -> int:
+        """Drop the scans of turns before `before`. Returns how many."""
+        gone = 0
+        for rec in self._scans():
+            if rec.get('turn', before) < before:
+                try:
+                    os.remove(self.scan_path(rec['id']))
+                    gone += 1
+                except OSError:
+                    pass
+        return gone
 
 
 def _same_host(a: str, b: str) -> bool:
@@ -1179,6 +1395,36 @@ class HttpTurnStore:
         """What was decided about one request, or None while it is waiting."""
         return self._get(
             f'/join/{urllib.parse.quote(key, safe="")}/answer')
+
+    # Scans, as a player asks them. Only the worker answers one, on its own
+    # store, so these are the player's moves alone.
+    def ask_scan(self, civ: str, turn: int, kind: int, targets) -> str:
+        """File an asked scan as the request the client sent. Returns its id."""
+        new_scan(civ, turn, kind, targets)
+        out = self._post(f'/scan/{int(turn)}/{urllib.parse.quote(civ)}',
+                         scan_request(kind, targets))
+        scan_id = (out or {}).get('id')
+        if not scan_id_ok(scan_id):
+            raise ValueError(f'the service filed the scan as {scan_id!r}')
+        return scan_id
+
+    def scan(self, scan_id: str):
+        """One scan's record, or None while there is none."""
+        if not scan_id_ok(scan_id):
+            raise ValueError(f'{scan_id!r} is not a scan id')
+        rec = self._get(f'/scan/{scan_id}')
+        return None if rec is None else scan_from_json(rec)
+
+    def move_scan(self, scan_id: str, to: str, answer: bytes = None,
+                  reason: str = None):
+        """Mark a scan delivered or cancelled. Returns the record as it now
+        stands, moved or not."""
+        if to not in (SCAN_DELIVERED, SCAN_CANCELLED):
+            raise ValueError(f'a player does not move a scan to {to!r}')
+        if not scan_id_ok(scan_id):
+            raise ValueError(f'{scan_id!r} is not a scan id')
+        rec = self._post(f'/scan/{scan_id}/{to}')
+        return None if not rec else scan_from_json(rec)
 
     # Coats of arms, which only the relay keeps. A `turn_server.py` answers
     # 404, which reads as none uploaded.
