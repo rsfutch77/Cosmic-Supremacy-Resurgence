@@ -244,11 +244,12 @@ important mark. Any other change to a news list is refused.
 count, then one section per report named for its class (`SCPL`, `SCSY`,
 `SCRO`, `SCFL`, `SCML`, `SCTE`, `SCEG`, `SCLN`). The Scanning page deletes any
 of the civ's own reports (`0x0043C610`), with no other effect. Carried as the
-reports served, in order, less those deleted. Carrying out a scan (`DOSC`)
-is refused and named and the scan stays in stock: online the server answered
-with the reports, `OWPR` and `KNPL`; a scan posts a detection item to the
-scanned civ by the C runtime's `rand()`, and a fogged client cannot make a
-true report, so the report is the referee's to make.
+reports served, in order, less those deleted. A scan (`DOSC`) goes online and
+the referee answers it in its own client (`scan.py`). The new reports a
+submission holds are never taken from it: up to the count the referee
+answered the civ, they are expected, and the referee adds its own copies
+before the tick. Any more are refused and named, and those scans stay in
+stock.
 
 **Wormholes** (`CNWH`), `GLXY > WORM`: the object header, a `u32`, a string
 and last the id of the wormhole it is linked to, 0 for none. The Connect To
@@ -4556,14 +4557,15 @@ def _ship_crew_index(blob):
     return out
 
 
-def merge(blob, submissions, log=print, notes=None, arms=None):
+def merge(blob, submissions, log=print, notes=None, arms=None, scans=None):
     """submissions: [(civ_name, submitted_blob)]. Returns the merged blob.
 
     `notes` is an optional `{civ: [reason]}` that every refusal is recorded in
     as well as logged. `referee.py` writes it beside the turn so
     `player_turn.follow` can print it into the launcher's log. `arms` is an
     optional `{civ: {coat-of-arms id}}` of the uploads each player may choose;
-    without it only no arms is carried.
+    without it only no arms is carried. `scans` is an optional `{civ: count}`
+    of the reports the referee answered each civ this turn.
     """
     served_ships = ship_index(blob)
     served_members = {m: f['owner'] for f in fleet_index(blob).values()
@@ -4608,10 +4610,14 @@ def merge(blob, submissions, log=print, notes=None, arms=None):
             had, now = reports_of(served, mine), reports_of(sub, mine)
             if had is not None and now is not None and had != now:
                 kept, deleted, made, why = report_orders(had, now)
-                if made:
-                    drop(f"{made} scan(s) DROPPED: carrying out a scan is not "
-                         f"carried, as its report is the referee's to make; "
-                         f"the scans stay in stock")
+                answered = min(made, (scans or {}).get(civ_name, 0))
+                if answered:
+                    log(f"    {answered} scan report(s) the referee answered, "
+                        f"added from its own record")
+                if made > answered:
+                    drop(f"{made - answered} scan report(s) DROPPED: a scan "
+                         f"is carried only when the referee answered it "
+                         f"online; the scans stay in stock")
                 if why:
                     drop(f"scan reports DROPPED, {why}")
                 elif deleted:

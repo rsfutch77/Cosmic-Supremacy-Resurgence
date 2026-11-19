@@ -46,9 +46,10 @@ def load(name):
     return sp.load_any(os.path.join(FIX, name + '.b64'))
 
 
-def merged(served, sub, civ='GoodGuy'):
+def merged(served, sub, civ='GoodGuy', scans=None):
     notes = {}
-    out = mo.merge(served, [(civ, sub)], log=lambda *_: None, notes=notes)
+    out = mo.merge(served, [(civ, sub)], log=lambda *_: None, notes=notes,
+                   scans=scans)
     return out, notes.get(civ, [])
 
 
@@ -83,11 +84,24 @@ def main():
     check('and deleting one left the route scan',
           mo.reports_of(sc2, GOOD), mo.reports_of(sc1, GOOD)[1:])
     out, notes = merged(d4, sc1)
-    check('carrying out scans is refused and named',
-          any("the referee's to make" in n for n in notes))
+    check('scans the referee did not answer are refused and named',
+          any("answered it online" in n for n in notes))
     check('    no report is taken', mo.reports_of(out, GOOD), [])
     check('    and the news after them still reads',
           len(news.items_of(out, GOOD)), len(news.items_of(d4, GOOD)))
+    out, notes = merged(d4, sc1, scans={'GoodGuy': 2})
+    check('two reports the referee answered are expected, with no note',
+          notes, [])
+    check('    and still not taken from the submission',
+          mo.reports_of(out, GOOD), [])
+    out, notes = merged(d4, sc1, scans={'GoodGuy': 1})
+    check('a report past what the referee answered is refused',
+          [n for n in notes if 'answered it online' in n][:1],
+          ['1 scan report(s) DROPPED: a scan is carried only when the referee '
+           'answered it online; the scans stay in stock'])
+    check('    another civ\'s answers do not count for this one',
+          any('2 scan report(s) DROPPED' in n
+              for n in merged(d4, sc1, scans={'BadGuy': 2})[1]))
     out, notes = merged(sc1, sc2)
     check('deleting a report is carried', (mo.reports_of(out, GOOD), notes),
           (mo.reports_of(sc2, GOOD), []))

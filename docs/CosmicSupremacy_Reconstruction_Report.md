@@ -752,8 +752,22 @@ Two things follow:
   asked scans every 2 seconds (`SCAN_POLL`), replays the civ's scans delivered earlier this
   turn, and answers. One answered through the client on a folder galaxy in 12.5 seconds.
   `server/tests/test_scan.py` covers the folder store, the worker and the LAN, and
-  `test_relay_function.py` the relay on the emulator. Not yet done: the tick replaying
-  delivered scans, the launcher's endpoint and window, and the production client patch.
+  `test_relay_function.py` the relay on the emulator.
+
+  The tick charges a delivered scan (19 November 2026). The merge never takes a report from
+  a submission. Up to the count the referee answered the civ, new reports are expected and
+  pass without a note; any more are refused and named. `referee.with_scan_reports` then adds
+  each delivered answer's reports after the civ's own, the bytes the player was shown. In the
+  tick's client, `replay_scans` runs each delivered scan through `UseScans` before the turn
+  advances, so the engine takes the stock, and drops the reports it makes from the civ's list
+  (`Owner:324`, the vector's end). The archive names the scans, and `verify_turn` replays
+  the same ones. On `d4` with 3 planetary and 2 route scans in stock, a real tick with both
+  scans replayed reached turn 181 with the two delivered reports and a stock of 2 and 1. A
+  control tick without them kept 3 and 2. Nothing else differed: no detection item reached
+  BadGuy in either, nor in `sc1`, so whether a scan is detected by chance is not measured. A
+  scan delivered after the referee has read the turn's scans is never charged. A player who
+  deletes a delivered report in the same turn gets it back, and can delete it next turn. Not
+  yet done: the launcher's endpoint and window, and the production client patch.
 - [ ] **A design with no scanner closes the client on the Ship Design tab.** The tab asks each
   design for its scanner range, and `0x005479C0` stops the client when `ShipDesign:152` is
   empty. The designer saved one in `unruled` (674, `e1x4`). Next step: find whether the

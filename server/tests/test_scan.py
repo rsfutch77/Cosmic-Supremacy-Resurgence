@@ -95,9 +95,80 @@ def main():
         check('more reports than the civ holds is refused', True)
 
     store_and_worker()
+    turn_close()
 
     print(f'\n{len(PASS)} passed, {len(FAIL)} failed')
     return 1 if FAIL else 0
+
+
+def set_turn(blob, turn):
+    """The same blob carrying a different turn number."""
+    tree = sp.parse_blob(blob)
+    glob = next(tree[0].find('GLOB'))
+    out = bytearray(blob)
+    struct.pack_into('<I', out, glob.payload, turn)
+    return bytes(out)
+
+
+def turn_close():
+    """`resolve_turn` with the engine stubbed: the delivered scans' reports go
+    into the blob it ticks, and the scans go to the tick to replay."""
+    import tempfile
+    import turn_store
+    import referee
+    import player_turn
+
+    d4 = sp.load_any(os.path.join(FIX, 'd4.b64'))
+    pl, ro = mo.reports_of(sp.load_any(os.path.join(FIX, 'sc1.b64')), GOOD)
+    print('the turn close')
+    with tempfile.TemporaryDirectory() as root:
+        store = turn_store.TurnStore(root)
+        store.start(d4, ['GoodGuy', 'BadGuy'], turn_seconds=3600)
+        turn = store.current()[0]
+        ids = []
+        for kind, targets, rep in ((0, [384], pl), (2, [677], ro)):
+            sid = store.ask_scan('GoodGuy', turn, kind, targets)
+            store.move_scan(sid, 'answered', answer=struct.pack('<I', 1) + rep)
+            store.move_scan(sid, 'delivered')
+            ids.append(sid)
+        gone = store.ask_scan('GoodGuy', turn, 0, [384])
+        store.move_scan(gone, 'answered', answer=struct.pack('<I', 1) + pl)
+        store.move_scan(gone, 'cancelled')
+        view = store.served_turn('GoodGuy', turn)
+        # The client holds every answer it was handed, and one more report
+        # nobody answered.
+        sub = mo.set_reports(view, GOOD, mo.reports_of(view, GOOD)
+                             + [pl, ro, ro])
+        store.submit('GoodGuy', turn, sub)
+
+        seen = {}
+
+        def fake_tick(blob, turns=1, secs=10, save_dir=None, log=print, **kw):
+            seen['blob'], seen['scans'] = blob, kw.get('scans')
+            return set_turn(blob, turn + 1)
+
+        real_tick, real_ready = referee.tick, player_turn.save_path_ready
+        referee.tick = fake_tick
+        player_turn.save_path_ready = lambda: (True, '')
+        try:
+            referee.resolve_turn(store, log=lambda *_: None)
+            check('the tick gets the delivered reports, in order',
+                  mo.reports_of(seen['blob'], GOOD), [pl, ro])
+            check('    and the delivered scans to replay, not the cancelled',
+                  seen['scans'], [('GoodGuy', 0, [384]), ('GoodGuy', 2, [677])])
+            notes = store.note('GoodGuy', turn)
+            check('the report nobody answered is refused by name',
+                  [n for n in notes if 'answered it online' in n],
+                  ['1 scan report(s) DROPPED: a scan is carried only when the '
+                   'referee answered it online; the scans stay in stock'])
+            check('the archive names the scans replayed',
+                  store.archive_record(turn)['scans'], ids)
+            check('a rerun replays the same scans and agrees',
+                  referee.verify_turn(store, turn, log=lambda *_: None), True)
+            check('    and gave the tick the same scans', seen['scans'],
+                  [('GoodGuy', 0, [384]), ('GoodGuy', 2, [677])])
+        finally:
+            referee.tick, player_turn.save_path_ready = real_tick, real_ready
 
 
 def store_and_worker():

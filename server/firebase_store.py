@@ -467,7 +467,7 @@ class FirebaseTurnStore:
         Merges only the fields it names, so status and name survive and
         `SUBMITTED_KEY` and `VIEWS_KEY` are replaced whole. Sets
         `SUBMISSIONS_FROM_KEY` on a galaxy that lacks it, then prunes
-        submissions older than `SUBMISSION_TURNS_KEPT` turns.
+        submissions and scans older than `SUBMISSION_TURNS_KEPT` turns.
 
         `views` is `{civ: blob}` for the civs served their own view. They are
         written before the turn. The previous turn's views are kept, for a
@@ -499,6 +499,8 @@ class FirebaseTurnStore:
             fields[SUBMISSIONS_FROM_KEY] = int(turn)
         self.doc.set(fields, merge=list(fields))
         self.prune_submissions(int(turn) - SUBMISSION_TURNS_KEPT + 1)
+        # Kept as long as submissions, so `referee --verify` replays them.
+        self.prune_scans(int(turn) - SUBMISSION_TURNS_KEPT + 1)
         self._drop_views(named, {int(turn), int(turn) - 1})
 
     def _drop_views(self, named: dict, keep) -> None:
