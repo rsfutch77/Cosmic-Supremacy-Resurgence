@@ -742,6 +742,18 @@ Two things follow:
 
   `sc1`'s `EXSY` also grew from 520 to 13,322 bytes. That is the sight pass the scan button
   runs after the scan, and the online answer does not carry it.
+
+  A scan is filed, answered and delivered through every store (19 November 2026). A record
+  moves from asked to answered or refused, then to delivered, and asked or answered moves to
+  cancelled. Every store makes each move through `turn_store.scan_moved`, so a cancel and an
+  answer that race end the same way: the first to land wins. The relay files a scan with the
+  same checks as a submission, and only the scan's own civ reads, delivers or cancels it.
+  `turn_server.py` carries the same routes on a LAN. Between deadlines the worker looks for
+  asked scans every 2 seconds (`SCAN_POLL`), replays the civ's scans delivered earlier this
+  turn, and answers. One answered through the client on a folder galaxy in 12.5 seconds.
+  `server/tests/test_scan.py` covers the folder store, the worker and the LAN, and
+  `test_relay_function.py` the relay on the emulator. Not yet done: the tick replaying
+  delivered scans, the launcher's endpoint and window, and the production client patch.
 - [ ] **A design with no scanner closes the client on the Ship Design tab.** The tab asks each
   design for its scanner range, and `0x005479C0` stops the client when `ShipDesign:152` is
   empty. The designer saved one in `unruled` (674, `e1x4`). Next step: find whether the
