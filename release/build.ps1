@@ -937,8 +937,10 @@ foreach ($m in $playable) {
 # client\CosmicSupremacy_Player.exe is neither read nor written.
 # patch_status_bar.py cuts its status bar down to the turn number: the in-game
 # countdown runs off the clock the launcher holds, and the launcher shows the
-# deadline and the connection instead.
+# deadline and the connection instead. patch_scan_online.py sends each scan to
+# the launcher's endpoint, where the referee runs it.
 $PatchStatusBar = Join-Path $ClientDir 'dev_tools\patch_status_bar.py'
+$PatchScan      = Join-Path $ClientDir 'dev_tools\patch_scan_online.py'
 $mpModes = @($modes | Where-Object { $_.session -eq 'multiplayer' })
 if ($mpModes.Count -gt 0) {
     Write-Step "Adding the multiplayer client"
@@ -946,6 +948,8 @@ if ($mpModes.Count -gt 0) {
     Copy-Client (Join-Path $ClientDir 'CosmicSupremacy_TestBed.exe') $player
     & $VenvPy $PatchStatusBar --source $player --out $player | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "patch_status_bar failed for CosmicSupremacy_Player.exe" }
+    & $VenvPy $PatchScan --source $player --out $player | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "patch_scan_online failed for CosmicSupremacy_Player.exe" }
     Write-Ok 'game\CosmicSupremacy_Player.exe, from CosmicSupremacy_TestBed.exe'
 }
 

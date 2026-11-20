@@ -22,6 +22,12 @@ client does. Otherwise the online branch runs, and both of its exits to
 `0x00577090` jump to a second stub that closes the socket (the connection's
 slot 2, which `0x00562EA0` also calls before connecting) and clears the up
 byte `+0x4CD`. No other command sees the connection up.
+
+The client waits for an answer in `0x0056E930`, which gives up after the
+20.0 at `0x00750290`. Seven other routines read that double, so the wait's
+`fcomp` at `0x0056E9C7` reads `WAIT_SECONDS` from the stub instead. The
+wait outlasts the launcher's own limit, so the launcher decides when a scan
+has taken too long. The wait runs only while the scan's connection is up.
 """
 import argparse
 import os
@@ -38,6 +44,7 @@ CREATE_NO_WINDOW = 0x08000000
 
 SCAN_HOST = b"127.0.0.1"
 SCAN_PORT = 8890                        # the launcher's scan endpoint
+WAIT_SECONDS = 120.0                    # past the launcher's 90-second limit
 
 TEXT_VA = 0x00401000                    # .text, file offset 0x400
 TEXT_RAW = 0x400
@@ -51,6 +58,9 @@ EXIT_ORIGINAL = (bytes.fromhex("e95e010000"), bytes.fromhex("e947010000"))
 TAIL = 0x00577090
 STUB = 0x006D2200                       # inside 3947 bytes of int3 padding
 STUB_ROOM = 0x100
+
+WAIT_SITE = 0x0056E9C9                  # fcomp qword [0x00750290]: the address
+WAIT_ORIGINAL = struct.pack("<I", 0x00750290)
 
 SET_HOST = 0x00563000                   # void (std::string*), cdecl
 CONNECT = 0x00563310                    # bool Connection::Connect(int port), ret 4
@@ -127,8 +137,19 @@ def stubs():
     emit(b"\0" * 4 + SCAN_HOST.ljust(16, b"\0")
          + struct.pack("<II", len(SCAN_HOST), 15))
     struct.pack_into("<I", code, host_at, host)
+    emit(struct.pack("<d", WAIT_SECONDS))
     assert len(code) <= STUB_ROOM
     return connect_at, close_at, bytes(code)
+
+
+def wait_at():
+    """The address of `WAIT_SECONDS` in the stub: its last 8 bytes."""
+    _c, _k, code = stubs()
+    return STUB + len(code) - 8
+
+
+def wait_bytes():
+    return struct.pack("<I", wait_at())
 
 
 def hook_bytes():
@@ -146,11 +167,12 @@ def state(data):
     hook = bytes(data[offset(HOOK):offset(HOOK) + len(HOOK_ORIGINAL)])
     exits = [bytes(data[offset(a):offset(a) + 5]) for a in EXITS]
     room = bytes(data[offset(STUB):offset(STUB) + len(code)])
+    wait = bytes(data[offset(WAIT_SITE):offset(WAIT_SITE) + 4])
     if (hook == HOOK_ORIGINAL and tuple(exits) == EXIT_ORIGINAL
-            and room == b"\xCC" * len(code)):
+            and room == b"\xCC" * len(code) and wait == WAIT_ORIGINAL):
         return "original"
     if (hook == hook_bytes() and exits == [exit_bytes(a) for a in EXITS]
-            and room == code):
+            and room == code and wait == wait_bytes()):
         return "patched"
     return "unknown"
 
@@ -167,6 +189,7 @@ def patch(data):
     data[offset(HOOK):offset(HOOK) + len(HOOK_ORIGINAL)] = hook_bytes()
     for a in EXITS:
         data[offset(a):offset(a) + 5] = exit_bytes(a)
+    data[offset(WAIT_SITE):offset(WAIT_SITE) + 4] = wait_bytes()
     return 1
 
 
