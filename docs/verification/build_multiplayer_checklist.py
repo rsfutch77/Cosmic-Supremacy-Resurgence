@@ -143,6 +143,21 @@ M = [
          'PEGI Online Safety Code provision 6 (advertising policy)',
          ['None today; record that.']),
     ]),
+    ('Scans', [
+        ('M25', 'A scan is answered by the referee within seconds, shows what the original showed, and costs one scan only when its report reaches the player.',
+         'Cosmic Supremacy manual, The Scanning Screen (scans give instant information); Pinelle heuristic 9 (reduce game-based delays); Epic Games Store testing guide, Player Experience (inform the player how to resolve an issue)',
+         ['Planetary scan of an enemy planet: the report opens the Planet View with its facilities, production and planetary defence.',
+          'System scan of an enemy sun: the system\'s planets show their population and owner.',
+          'Route scan of a moving enemy ship: the report shows where it started, where it is going and when it arrives.',
+          'Fleet scan: check whether the client offers it on an enemy ship. No galaxy here holds a fleet, so the tests cannot make one.',
+          'Military scan of an enemy ship: its speed, firepower, units, hitpoints, rank and condition.',
+          'Technology scan of an enemy planet: the research done, in order, and the current research.',
+          'Energy grid scan of an enemy planet: its hyperspace energy network, or none.',
+          'Leader name scan of a planet whose owner has chosen a civ name: a report appears. On a civ with no name chosen it makes no report and keeps the scan.',
+          'Each scan used is one fewer in the Scanning screen\'s stock after the next turn.',
+          '[x] A scan the referee refuses shows the reason in the launcher\'s scan window, and the scan stays in stock (20 November 2026).',
+          '[x] Retry, once its 30-second countdown ends, cancels a scan with no answer; the game carries on and the scan stays in stock (20 November 2026).']),
+    ]),
 ]
 
 # GAG decisions, by guideline text

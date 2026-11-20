@@ -788,6 +788,25 @@ Two things follow:
   referee on a folder galaxy, a planetary scan was answered and shown in the game, a refused
   one showed its reason in the window, and after Retry the game carried on with the scan
   still in stock (Robert, 20 November 2026).
+
+  Every scan type makes the same report from the scan button as from the referee (20
+  November 2026, `server/tests/test_scan_types.py`). On `d4` with two of every scan in
+  GoodGuy's stock, one client pressed each scan through the button's own routine
+  (`0x00576D40`, offline), and the referee ran the same scans in another. Planetary,
+  system, route, military, technology, energy grid and leader name reports match byte for
+  byte, except the planetary report's 8 unwritten bytes. Each side took one of each of those
+  scans. The button's offline branch calls the same `UseScans`, then posts the news and,
+  for some targets, runs the sight pass.
+  - A leader name scan takes a planet whose owner has chosen a civ name (`Owner:384` not
+    zero). The target must not be the scanner's own. On `d4` neither civ has a name, so
+    the test names BadGuy; without one the scan makes no report and keeps the scan.
+  - A fleet scan casts each target to `Fleet`, and no galaxy here holds one, so it makes
+    no report on either side. Whether the client offers it on a ship is a checklist item
+    (Multiplayer Checklist M25).
+  - Route, fleet and military scans group their target ships first (`0x00462BC0`); the
+    others scan each target alone.
+
+  Not yet done: a scan carried by the live relay and referee, and M25's rows seen on screen.
 - [ ] **A design with no scanner closes the client on the Ship Design tab.** The tab asks each
   design for its scanner range, and `0x005479C0` stops the client when `ShipDesign:152` is
   empty. The designer saved one in `unruled` (674, `e1x4`). Next step: find whether the
