@@ -711,7 +711,7 @@ Two things follow:
   started for it misses that wait. The scan patch raises the wait past the launcher's own
   limit, and the launcher shows a scan-pending window above the client until it sends the
   answer (Robert, 18 November 2026). A scan that never comes has to fail gracefully: the
-  window's give-up button and the launcher's limit both close the socket, and the client is
+  window's Retry button and the launcher's limit both close the socket, and the client is
   read to warn of a lost connection and carry on (`0x0056E930` builds a `FAIL` answer). That
   is read, not tried. A client still stuck after that is restarted on the current turn from
   the same window. A player who gives up keeps the scan (Robert, 18 November 2026): the
@@ -766,8 +766,18 @@ Two things follow:
   control tick without them kept 3 and 2. Nothing else differed: no detection item reached
   BadGuy in either, nor in `sc1`, so whether a scan is detected by chance is not measured. A
   scan delivered after the referee has read the turn's scans is never charged. A player who
-  deletes a delivered report in the same turn gets it back, and can delete it next turn. Not
-  yet done: the launcher's endpoint and window, and the production client patch.
+  deletes a delivered report in the same turn gets it back, and can delete it next turn.
+
+  The launcher answers scans on `127.0.0.1:8890` (`release/scan_endpoint.py`, 19 November
+  2026), one at a time. It files the `DOSC` request, polls the record once a second, and
+  sends `SUCC` with the answer or `FAIL` with the referee's reason, then marks the scan
+  delivered. Its own limit is 90 seconds. While it waits, a window above the client says
+  "The referee is running your scan." and offers Retry, greyed out and counting down from
+  30 seconds. Retry cancels the scan, which stays in stock, and closes the socket so the
+  client can scan again. The window then offers to restart the game on the current turn, or
+  to close. Robert approved the window on screen (19 November 2026).
+  `release/tests/test_scan_endpoint.py` runs it against a stand-in client. Not yet done: the
+  production client patch, and the real client's `FAIL` and lost connection seen on screen.
 - [ ] **A design with no scanner closes the client on the Ship Design tab.** The tab asks each
   design for its scanner range, and `0x005479C0` stops the client when `ShipDesign:152` is
   empty. The designer saved one in `unruled` (674, `e1x4`). Next step: find whether the
