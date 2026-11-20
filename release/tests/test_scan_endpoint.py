@@ -156,11 +156,23 @@ def window():
     app._on_scan('answered', {})
     check('an answer closes the window', app.view.scan, None)
     app._on_scan('asked', {'type': 6})
-    app._on_scan('refused', {'reason': 'turn 179 has closed'})
-    check('a refusal closes it too, the game showing the reason',
-          app.view.scan, None)
+    app._on_scan('refused', {'reason': 'The referee refused the scan: '
+                                       'turn 179 has closed.'})
+    check('a refusal shows the reason, since the game only logs it',
+          (app.view.scan['title'], app.view.scan['text'],
+           app.view.scan['buttons']),
+          ('Scan refused', 'The referee refused the scan: turn 179 has '
+           'closed. The scan stays in stock, so you can scan again.',
+           ['close']))
     check('    and the log keeps the reason', app.said[-1],
-          'scans: turn 179 has closed')
+          'scans: The referee refused the scan: turn 179 has closed.')
+    app.on_scan_press('close')
+    app._on_scan('asked', {'type': 0})
+    app._on_scan('failed', {'reason': 'The scan could not be sent'})
+    check('a scan not sent says so, its reason ending in a full stop',
+          (app.view.scan['title'], app.view.scan['text'].split('.')[0]),
+          ('Scan not sent', 'The scan could not be sent'))
+    app.on_scan_press('close')
     check('the session is the galaxy being played',
           app._scan_session()[1:], ('GoodGuy', 180))
     app.mp_turn = None

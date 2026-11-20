@@ -4816,9 +4816,18 @@ class Launcher:
             self.say("scans: answered, and shown in the game")
             self._close_scan()
         elif kind in ("refused", "failed"):
-            # The client shows the reason in its own box.
-            self.say(f"scans: {facts.get('reason', '')}")
-            self._close_scan()
+            # The client only logs a FAIL, so the reason is shown here.
+            reason = facts.get("reason", "").strip()
+            if reason and not reason.endswith("."):
+                reason += "."
+            self.say(f"scans: {reason}")
+            self.scan_shown = {
+                "title": ("Scan refused" if kind == "refused"
+                          else "Scan not sent"),
+                "text": f"{reason} The scan stays in stock, so you can scan "
+                        "again.".strip(),
+                "countdown": None, "buttons": ["close"]}
+            self.view.show_scan(self.scan_shown)
         elif kind == "gave_up":
             self.say(f"scans: {facts.get('reason', '')}")
             self.scan_shown = {

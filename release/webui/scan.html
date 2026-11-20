@@ -49,11 +49,15 @@ window.scan = {
   },
 };
 
-const skinReady = buildSkin().catch((e) => console.error(e));
-window.addEventListener("pywebviewready", () => skinReady.then(() => {
+// The text needs no skin, so it is asked for at once and the skin fills in
+// as its images load.
+buildSkin().catch((e) => console.error(e));
+function ready() {
   const api = window.pywebview && window.pywebview.api;
-  if (api) api.ready();
-}));
+  if (api && api.ready) api.ready();
+}
+if (window.pywebview && window.pywebview.api && window.pywebview.api.ready) ready();
+else window.addEventListener("pywebviewready", ready);
 </script>
 </body>
 </html>
