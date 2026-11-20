@@ -2882,3 +2882,12 @@ with `set_blob_player.py` to answer. Every capture's `waronly` bytes read `01 00
   **Fixed** (13 November 2026): on the live sandbox tmog66 set guest-test to colour
   0xF904E9 with territory and ships shown on turn 166, and turn 167 and tmog66's served view
   both kept them, confirmed on screen by Robert.
+
+- [ ] **Players can step through a galaxy's history in the viewer.** The original client had a
+  galaxy replay a player could step through, sent as the online-only commands `RQTM`, `RSMA`,
+  `RQTN` and `RQSV`. The fast-sim branch's viewer (`sim/viewer.py`) already shows a game turn by
+  turn as one self-contained page: the map with a slider, each civ's citizens, techs and fleet,
+  its posture and research line, and the events. It reads a film from the simulator, so a
+  player version would build that film from a galaxy's archived turns. Decide where players open
+  it (the launcher, the website or the client), and that a player sees only what their own civ
+  saw on each turn. Done when a player in the sandbox opens its history and steps through it.
