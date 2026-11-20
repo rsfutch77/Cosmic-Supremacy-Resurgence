@@ -162,8 +162,7 @@ def window():
           (app.view.scan['title'], app.view.scan['text'],
            app.view.scan['buttons']),
           ('Scan refused', 'The referee refused the scan: turn 179 has '
-           'closed. The scan stays in stock, so you can scan again.',
-           ['close']))
+           'closed. Your scan is not lost.', ['close']))
     check('    and the log keeps the reason', app.said[-1],
           'scans: The referee refused the scan: turn 179 has closed.')
     app.on_scan_press('close')

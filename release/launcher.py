@@ -4824,8 +4824,7 @@ class Launcher:
             self.scan_shown = {
                 "title": ("Scan refused" if kind == "refused"
                           else "Scan not sent"),
-                "text": f"{reason} The scan stays in stock, so you can scan "
-                        "again.".strip(),
+                "text": f"{reason} Your scan is not lost.".strip(),
                 "countdown": None, "buttons": ["close"]}
             self.view.show_scan(self.scan_shown)
         elif kind == "gave_up":
@@ -4833,8 +4832,7 @@ class Launcher:
             self.scan_shown = {
                 "title": "Scan cancelled",
                 "text": f"{facts.get('reason', '')} The game should respond "
-                        "again in a moment. If it does not, restart it: "
-                        "orders the launcher has not sent yet are lost.",
+                        "again in a moment. If it does not, restart it.",
                 "countdown": None,
                 "buttons": (["restart", "close"]
                             if self._scan_session() is not None

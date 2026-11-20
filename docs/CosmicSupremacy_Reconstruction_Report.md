@@ -672,7 +672,9 @@ Two things follow:
     is sent on connect. The login and the other online steps belong to the galaxy-pass
     path (`0x0057A73A`), which a `.dat` start never takes.
   - The wait `0x0056E930` reads the answer from the channel. On a lost connection it builds
-    a `FAIL` answer and shows a warning.
+    a `FAIL` answer. A `FAIL` only goes to the client's log (`0x005EBFD0`, "Warning:
+    Received FAIL command with the message '%s'"); nothing is shown (Robert, 19 November
+    2026).
   - Plan: a stub in the `int3` padding the save-message and tutorial patches use (their stubs
     sit at `0x006D20A0` and `0x006D30A0`). It
     sets the host and connects to the launcher's port. If that fails, it takes the offline
@@ -711,9 +713,9 @@ Two things follow:
   started for it misses that wait. The scan patch raises the wait past the launcher's own
   limit, and the launcher shows a scan-pending window above the client until it sends the
   answer (Robert, 18 November 2026). A scan that never comes has to fail gracefully: the
-  window's Retry button and the launcher's limit both close the socket, and the client is
-  read to warn of a lost connection and carry on (`0x0056E930` builds a `FAIL` answer). That
-  is read, not tried. A client still stuck after that is restarted on the current turn from
+  window's Retry button and the launcher's limit both close the socket, and the client
+  builds its own `FAIL` and carries on. The client shows no `FAIL`, so the launcher's
+  window says why a scan was refused or cancelled. A client still stuck after that is restarted on the current turn from
   the same window. A player who gives up keeps the scan (Robert, 18 November 2026): the
   referee builds an answer without recording it, the launcher says when it has handed the
   answer to the client, and the tick replays only those scans. A scan given up on is
@@ -776,8 +778,16 @@ Two things follow:
   30 seconds. Retry cancels the scan, which stays in stock, and closes the socket so the
   client can scan again. The window then offers to restart the game on the current turn, or
   to close. Robert approved the window on screen (19 November 2026).
-  `release/tests/test_scan_endpoint.py` runs it against a stand-in client. Not yet done: the
-  production client patch, and the real client's `FAIL` and lost connection seen on screen.
+  `release/tests/test_scan_endpoint.py` runs it against a stand-in client. A refusal shows
+  in the window with its reason, since the client only logs it.
+
+  The multiplayer client carries the scan patch (20 November 2026, `release/build.ps1`).
+  The client's wait reads 120 seconds from the patch's stub instead of the shared 20.0, so
+  the launcher's limit always comes first. `release/tests/test_scan_patch.py` checks the
+  bytes and the build's chain of patches. On screen, with the launcher and a stand-in
+  referee on a folder galaxy, a planetary scan was answered and shown in the game, a refused
+  one showed its reason in the window, and after Retry the game carried on with the scan
+  still in stock (Robert, 20 November 2026).
 - [ ] **A design with no scanner closes the client on the Ship Design tab.** The tab asks each
   design for its scanner range, and `0x005479C0` stops the client when `ShipDesign:152` is
   empty. The designer saved one in `unruled` (674, `e1x4`). Next step: find whether the
