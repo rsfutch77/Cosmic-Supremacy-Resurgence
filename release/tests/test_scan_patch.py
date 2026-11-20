@@ -35,7 +35,7 @@ def check(label, got, want):
 
 def ranges():
     """The byte ranges the patch may write, as file offsets."""
-    _c, _k, code = P.stubs()
+    code = P.stubs()[-1]
     spans = [(P.HOOK, len(P.HOOK_ORIGINAL)), (P.STUB, len(code)),
              (P.WAIT_SITE, 4)] + [(a, 5) for a in P.EXITS]
     return {P.offset(a) + i for a, n in spans for i in range(n)}
@@ -57,8 +57,24 @@ print("\n2. only the hook, the two exits, the stub and the wait change")
 changed = {i for i, (a, b) in enumerate(zip(original, data)) if a != b}
 check("no byte outside them changed", changed - ranges(), set())
 check("the file is the same size", len(data), len(original))
-_c, _k, code = P.stubs()
+connect_at, seen_at, close_at, code = P.stubs()
 check("the stub fits its room", len(code) <= P.STUB_ROOM, True)
+
+
+def jump_target(at):
+    return at + 5 + struct.unpack_from("<i", data, P.offset(at) + 1)[0]
+
+
+check("a scan answered runs the sight pass before closing",
+      jump_target(P.EXITS[0]), seen_at)
+check("    which calls what the offline branch calls after a scan",
+      [at + 5 + struct.unpack_from("<i", code, at - P.STUB + 1)[0]
+       for at in range(seen_at, close_at) if code[at - P.STUB] == 0xE8],
+      [P.SIGHT, P.SIGHT_REFRESH, P.VIEW_REFRESH])
+check("    as its offline branch does, in that order",
+      [jump_target(a) for a in (0x00577072, 0x00577077, 0x00577081)],
+      [P.SIGHT, P.SIGHT_REFRESH, P.VIEW_REFRESH])
+check("a refused or lost scan only closes", jump_target(P.EXITS[1]), close_at)
 
 print("\n3. the scan's wait outlasts the launcher's limit")
 TWENTY = 0x00750290 - 0x0074E000 + 0x0034C800   # .rdata, file offset 0x34C800

@@ -23,6 +23,11 @@ client does. Otherwise the online branch runs, and both of its exits to
 slot 2, which `0x00562EA0` also calls before connecting) and clears the up
 byte `+0x4CD`. No other command sees the connection up.
 
+The online branch applies the answer and skips what the offline branch does
+next: the sight pass (`0x00542850`) and the two refreshes after it. So its
+normal exit, `0x00576F2D`, runs those for the local civ first, and a system
+scan's sight shows at once, as it does offline.
+
 The client waits for an answer in `0x0056E930`, which gives up after the
 20.0 at `0x00750290`. Seven other routines read that double, so the wait's
 `fcomp` at `0x0056E9C7` reads `WAIT_SECONDS` from the stub instead. The
@@ -56,6 +61,10 @@ OFFLINE = 0x00576F49                    # the offline branch
 EXITS = (0x00576F2D, 0x00576F44)        # the online branch's jmp 0x00577090
 EXIT_ORIGINAL = (bytes.fromhex("e95e010000"), bytes.fromhex("e947010000"))
 TAIL = 0x00577090
+SIGHT = 0x00542850                      # __thiscall(Owner*): the local civ's sight
+SIGHT_REFRESH = 0x00566560              # called after it, no arguments
+VIEW = 0x0082AA1C                       # the galaxy view
+VIEW_REFRESH = 0x00480040               # __thiscall on VIEW
 STUB = 0x006D2200                       # inside 3947 bytes of int3 padding
 STUB_ROOM = 0x100
 
@@ -80,7 +89,7 @@ def _rel(at, to, size=5):
 
 
 def stubs():
-    """(connect stub address, close stub address, bytes at STUB)."""
+    """(connect stub, sight-then-close stub, close stub, bytes at STUB)."""
     code = bytearray()
 
     def here():
@@ -117,6 +126,16 @@ def stubs():
     jcc(0x84, OFFLINE)                                     # jz OFFLINE
     jmp(ONLINE)
 
+    # ebx holds the local Owner, as the offline branch uses it.
+    seen_at = here()
+    emit(b"\x60")                                          # pushad
+    emit(b"\x8B\xCB")                                      # mov ecx, ebx
+    call(SIGHT)
+    call(SIGHT_REFRESH)
+    emit(b"\xB9" + struct.pack("<I", VIEW))                # mov ecx, view
+    call(VIEW_REFRESH)
+    emit(b"\x61")                                          # popad
+
     close_at = here()
     emit(b"\x60")                                          # pushad
     emit(b"\x8B\x35" + struct.pack("<I", CONNECTION))      # mov esi, [connection]
@@ -139,13 +158,12 @@ def stubs():
     struct.pack_into("<I", code, host_at, host)
     emit(struct.pack("<d", WAIT_SECONDS))
     assert len(code) <= STUB_ROOM
-    return connect_at, close_at, bytes(code)
+    return connect_at, seen_at, close_at, bytes(code)
 
 
 def wait_at():
     """The address of `WAIT_SECONDS` in the stub: its last 8 bytes."""
-    _c, _k, code = stubs()
-    return STUB + len(code) - 8
+    return STUB + len(stubs()[-1]) - 8
 
 
 def wait_bytes():
@@ -153,17 +171,18 @@ def wait_bytes():
 
 
 def hook_bytes():
-    connect_at, _close, _code = stubs()
+    connect_at = stubs()[0]
     return b"\xE9" + _rel(HOOK, connect_at) + b"\x90" * (len(HOOK_ORIGINAL) - 5)
 
 
 def exit_bytes(at):
-    _connect, close_at, _code = stubs()
-    return b"\xE9" + _rel(at, close_at)
+    """The normal exit runs the sight pass first; the other only closes."""
+    _connect, seen_at, close_at, _code = stubs()
+    return b"\xE9" + _rel(at, seen_at if at == EXITS[0] else close_at)
 
 
 def state(data):
-    _c, _k, code = stubs()
+    code = stubs()[-1]
     hook = bytes(data[offset(HOOK):offset(HOOK) + len(HOOK_ORIGINAL)])
     exits = [bytes(data[offset(a):offset(a) + 5]) for a in EXITS]
     room = bytes(data[offset(STUB):offset(STUB) + len(code)])
@@ -184,7 +203,7 @@ def patch(data):
         raise SystemExit("DOSC or the padding is not where it was measured")
     if now == "patched":
         return 0
-    _c, _k, code = stubs()
+    code = stubs()[-1]
     data[offset(STUB):offset(STUB) + len(code)] = code
     data[offset(HOOK):offset(HOOK) + len(HOOK_ORIGINAL)] = hook_bytes()
     for a in EXITS:
