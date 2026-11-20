@@ -119,12 +119,21 @@ def carries_orders(served: bytes, submitted: bytes, civ: str) -> bool:
     client changes a blob on its own (the `EXSY` cache, default `Unnamed` star
     names, a nondeterministic `KNPL` field). A submission that cannot be merged
     counts as carrying orders.
+
+    Scan reports also count. The merge never takes one, since the referee
+    adds each delivered answer itself, but a game reopened without them
+    loses this turn's scans until the next.
     """
     try:
+        import fog
         import merge_orders
         merged = merge_orders.merge(served, [(civ, submitted)],
                                     log=lambda *a: None)
-        return merged != served
+        if merged != served:
+            return True
+        oid = fog._owners(served, sp.parse_blob(served))[civ][0]
+        return (merge_orders.reports_of(submitted, oid)
+                != merge_orders.reports_of(served, oid))
     except Exception:                                       # noqa: BLE001
         return True
 

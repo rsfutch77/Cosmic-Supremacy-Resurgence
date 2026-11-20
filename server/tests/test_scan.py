@@ -94,6 +94,14 @@ def main():
     except scan.ScanError:
         check('more reports than the civ holds is refused', True)
 
+    print('a launcher started again in the turn')
+    import player_turn
+    d4 = sp.load_any(os.path.join(FIX, 'd4.b64'))
+    check('reopens from a submission holding only scan reports',
+          player_turn.carries_orders(d4, sc1, 'GoodGuy'), True)
+    check('    and serves the turn fresh when nothing changed',
+          player_turn.carries_orders(d4, d4, 'GoodGuy'), False)
+
     store_and_worker()
     turn_close()
 
