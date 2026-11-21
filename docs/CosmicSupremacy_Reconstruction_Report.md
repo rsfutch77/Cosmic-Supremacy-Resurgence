@@ -852,11 +852,18 @@ Two things follow:
   does nothing, so a served galaxy answers neither. Done when the replay screen has been opened
   on a served galaxy, what it asks for is known, and it either shows the turns it asks for or
   says plainly that the replay is not available.
-- [ ] **People on another civ's planet or ship are refused.** A colony keeps the owner of the
+- [x] **People on another civ's planet or ship are refused.** A colony keeps the owner of the
   colonists that founded it, so a civ can hold citizens on a rival's planet, but the people rule
   carries changes only on the submitter's own planets and ships. Done when a Single Player
   capture shows what the client lets a civ do with its people there, and the merge carries that
-  and refuses the rest.
+  and refuses the rest. **Closed** (21 November 2026), from the per-civ save rather than a
+  capture: it writes a planet the target does not own as a population and no citizens
+  (`0x4EE641`), and another civ's ship with no `SHPR`, so no crew (`0x4E8640`). The original
+  client never held a civ's people on a rival's planet or ship, and had nothing to offer for
+  them. A view serves the same planet as its owner's farmers, `restore` returns every planet the
+  civ does not own whole, and a change to a rival ship's crew is refused and named
+  (`test_fog.py`: 3 of BadGuy's citizens on GoodGuy's planet 265). No fixture holds a civ's
+  citizens on another civ's planet.
 - [ ] **The design editor's space and cloaking checks are not encoded.** Its OK (`0x004A5D40`)
   refuses a design over its hull's space and a cloaked heavy design; the merge takes a new or
   modified design without either check.

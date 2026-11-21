@@ -114,7 +114,9 @@ owner of the colonists that founded it, so a civ can hold citizens on another
 civ's planet. The checks compare how many people each owner holds, not their
 jobs. People are carried only on the submitter's own planets and ships; a
 change on a planet or ship another civ owns is refused and named, its own
-citizens included, as the client has not been measured managing them.
+citizens included. The per-civ save writes such a planet as a population with
+no citizens (`0x4EE641`) and such a ship with no crew (`0x4E8640`), so the
+original client never managed them.
 
 **Military recruitment rate** (`PLRR`), `PLPR+27`, a percentage in one byte.
 

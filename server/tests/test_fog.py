@@ -231,6 +231,28 @@ def main():
           (o[0], o[3], o[5], o[6]), no_state)
     check('and restored whole', fog.restore(now, 'BadGuy', nview) == now)
 
+    print('\nthe viewer\'s own citizens on a rival\'s planet')
+    mixed = bytearray(now)
+    plpr = next(sections(now)[265].find('PLPR'))
+    for i in range(3):
+        struct.pack_into('<I', mixed, plpr.payload + fog.PLPR_HEAD + 4
+                         + fog.CITIZEN * i + fog.CITIZEN_OWNER, BAD)
+    mixed = bytes(mixed)
+    mview = fog.project(mixed, 'BadGuy', log=quiet)
+    at = plpr.payload + fog.PLPR_HEAD
+    check('planet 265 is GoodGuy\'s, here holding 3 of BadGuy\'s citizens',
+          (fog._owner(mixed, sections(mixed)[265]),
+           [struct.unpack_from('<I', mixed, at + 4 + fog.CITIZEN * i
+                               + fog.CITIZEN_OWNER)[0]
+            for i in range(struct.unpack_from('<I', mixed, at)[0])].count(BAD)),
+          (GOOD, 3))
+    check('BadGuy is served its population as GoodGuy\'s farmers, as the '
+          'per-civ save writes a population and no citizens (0x4EE641)',
+          (set(owner_state(mview, sections(mview)[265])[1]),
+           planets(mview)[265][1]), ({GOOD}, planets(mixed)[265][1]))
+    check('and restore gives the planet back with them',
+          fog.restore(mixed, 'BadGuy', mview) == mixed)
+
     print('\nanother civ\'s private state')
     check('GoodGuy holds credits, research and resources in the turn',
           (mo.credits_of(blob, GOOD) > 0, len(mo.completed_research(blob, GOOD)) > 2,
