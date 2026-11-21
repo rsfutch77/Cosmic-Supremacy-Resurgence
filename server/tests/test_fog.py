@@ -241,9 +241,18 @@ def main():
            mo.resources_of(view, GOOD)), (0, [0, 1], [0, 0, 0, 0, 0]))
     check('and no research topic',
           mo.research_of(view, GOOD), (b'\xff' * 4, b'\xff' * 4))
-    check('and no known players, memory, governors or queues',
+    check('and no memory, governors or queues',
           [mo._civ_section(view, GOOD, t)[1].size for t in
-           ('KNPL', 'EXSY', 'GOVS', 'SPQS')], [4, 4, 4, 4])
+           ('EXSY', 'GOVS', 'SPQS')], [4, 4, 4])
+    theirs = mo.knpl.parse(owner_section(blob, GOOD, 'KNPL')[8:])
+    check('and of the civs it has met, only BadGuy, as first contact makes '
+          'the record, with the stance, the turn met and the war fields',
+          mo.knpl.parse(owner_section(view, GOOD, 'KNPL')[8:]),
+          [dict(mo.FIRST_CONTACT, civ=BAD, handle=BAD, met=r['met'],
+                **{k: r[k] for k in fog.KNPL_KEPT})
+           for r in theirs if r['civ'] == BAD])
+    check('    which d9 holds, at war', [r['stance'] for r in theirs
+                                         if r['civ'] == BAD], [1])
     check('and every trait 0', set(mo.traits_of(view, GOOD) or (None,)), {0})
     owpr_at = mo._civ_section(blob, GOOD, 'OWPR')[1]
     v_at = mo._civ_section(view, GOOD, 'OWPR')[1]
@@ -357,11 +366,15 @@ def main():
 
     print('\na caller with no seat')
     pview = fog.project(blob, None, log=quiet)
+    rest = [t for t in fog.WITHHELD if t != b'KNPL']
     check('is served each civ\'s private sections as its rival is',
-          ([owner_section(pview, GOOD, t) for t in fog.WITHHELD],
-           [owner_section(pview, BAD, t) for t in fog.WITHHELD]),
-          ([owner_section(view, GOOD, t) for t in fog.WITHHELD],
-           [owner_section(gview, BAD, t) for t in fog.WITHHELD]))
+          ([owner_section(pview, GOOD, t) for t in rest],
+           [owner_section(pview, BAD, t) for t in rest]),
+          ([owner_section(view, GOOD, t) for t in rest],
+           [owner_section(gview, BAD, t) for t in rest]))
+    check('    and no civ\'s known players, since it is no civ',
+          [mo._civ_section(pview, c, 'KNPL')[1].size for c in (GOOD, BAD)],
+          [4, 4])
     check('and only the designs each civ\'s ships use',
           (mo.designs_of(pview, GOOD), mo.designs_of(pview, BAD)),
           (set(mo.designs_in_use(blob, GOOD)) & mo.designs_of(blob, GOOD),

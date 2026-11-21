@@ -1654,6 +1654,18 @@ civ's own answers and new proposals (`test_fog.py`, d9: BadGuy deleted
 treaty 680 and is served 682 and 683). The referee has to be restaged for
 players to be served it.
 
+[x] **Accepting a peace in a view closes the client.** BadGuy accepting
+GoodGuy's peace on the diplomacy test galaxy (Robert, 21 November 2026) closed
+the client with a dump and no exception: its own iterator check. Acceptance
+(`0x55BD40`) writes the stance into both civs' `KNPL` records through
+`0x534340`, which finds nothing in a rival's `KNPL` served empty. The original
+client sent an acceptance to its server, so it never ran this offline.
+**Fixed** (21 November 2026): a rival's `KNPL` holds only its record of the
+viewer, as first contact makes one, keeping the stance, the turn met and the
+war fields; a caller with no seat is served none. Accepted again on screen,
+the client wrote treaty 700 accepted and both stances at Peace
+(`test_fog.py`).
+
 A scan the client carries out (`DOSC`) runs on its own copy, so in a view a
 technology or planetary scan reads a rival's sections at their defaults and
 its planets without their owner's state. The `DOSC` todo, a report built by

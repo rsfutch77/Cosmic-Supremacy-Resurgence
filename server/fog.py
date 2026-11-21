@@ -48,7 +48,12 @@ it holds at the `Owner` constructor's defaults (`0x546430`):
   which every civ's score row shows, and the colour, setup flags, position,
   `Owner:400`, name, checkbox and arms stay. The tick's pass over other civs
   (`0x542850`) needs a technology in each completed list.
-- `KNPL`, `EXSY`, `GOVS` and `SPQS` empty, and every `CVTR` trait 0.
+- `KNPL` holding only its record of the viewer, as first contact makes one
+  with the stance, the turn met and the war fields kept: the client's
+  acceptance of a stance treaty and its declaration of war write both civs'
+  records (`0x534340`) and stop when one is missing. The original client
+  never ran either offline.
+- `EXSY`, `GOVS` and `SPQS` empty, and every `CVTR` trait 0.
 - Only the admirals their ships and fleets follow, only the designs their
   ships are built to or those admirals' rules name, and no scan reports.
 - The end-galaxy vote in `USSE` at 0. The rest of `USSE` is interface
@@ -88,6 +93,7 @@ for _d in (HERE, os.path.join(HERE, 'dev_tools')):
 
 import save_parser as sp
 import inject_civ as icv
+import knpl
 import activity
 import exsy
 import merge_orders as mo
@@ -144,6 +150,7 @@ CVTR_PAIRS = 20
 CVTR_PAIR = 8
 EMPTY_LIST = struct.pack('<I', 0)
 WITHHELD = (b'OWPR', b'KNPL', b'EXSY', b'CVTR', b'GOVS', b'SPQS')
+KNPL_KEPT = ('stance', 'declared', 'w17', 'battled', 'inactivity')
 SECTION_HEAD = 8        # tag, then size and version
 SERV_BASELINE = 4       # SERV: Owner:652, then the turn last seen active
 SERV_FLAG = 8           # SERV: 1 while the civ is active this turn
@@ -442,12 +449,29 @@ def _blank_cvtr(d: bytes):
     return bytes(out)
 
 
-def _withheld(tag, d):
+def _withheld(tag, d, viewer=None):
     if tag == b'OWPR':
         return _blank_owpr(d)
     if tag == b'CVTR':
         return _blank_cvtr(d)
+    if tag == b'KNPL':
+        return _viewer_record(d, viewer)
     return EMPTY_LIST
+
+
+def _viewer_record(d: bytes, viewer):
+    """A rival's KNPL holding only its record of the viewer, as first contact
+    makes one, with the stance, the turn met and the war fields kept. The
+    client's acceptance and declaration write both civs' records
+    (`0x534340`), and stop when one is missing. None when it does not walk."""
+    try:
+        records = knpl.parse(d)
+    except (ValueError, struct.error):
+        return None
+    out = [dict(mo.FIRST_CONTACT, civ=r['civ'], handle=r['handle'],
+                met=r['met'], **{k: r[k] for k in KNPL_KEPT})
+           for r in records if r['civ'] == viewer]
+    return knpl.build(out)
 
 
 def _sections(o):
@@ -671,12 +695,14 @@ def _private(blob: bytes, civ: str, log=print) -> bytes:
     crews = mo._ship_crew_index(blob)
     objects = mo.space_objects(blob)[2]
     turn = icv.turn_of(blob)
+    owners = _owners(blob, tree)
+    viewer = owners[civ][0] if civ in owners else None
     edits = []
-    for name, (oid, o) in _owners(blob, tree).items():
+    for name, (oid, o) in owners.items():
         if name == civ:
             continue
         for tag, s in _sections(o).items():
-            new = _withheld(tag, blob[s.payload:s.end])
+            new = _withheld(tag, blob[s.payload:s.end], viewer)
             if new is None:
                 log(f"  fog: {civ}: {name}'s {tag.decode()} does not walk; "
                     f"served whole")
