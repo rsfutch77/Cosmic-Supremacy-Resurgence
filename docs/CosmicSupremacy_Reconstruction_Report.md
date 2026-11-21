@@ -1615,18 +1615,33 @@ from the conqueror list"):
   rules name (Robert, 21 November 2026), and no scan reports. Its vote in
   `USSE` reads 0; the rest of `USSE` is interface settings and stays.
   `restore` puts the designs, reports and vote back.
-- Its admirals stay whole, since its ships name them; an admiral no ship
-  follows is still served. Its `SERV` stays too: `Owner:652`, the turn it was
-  last seen active and the active flag.
+- Its admirals and `SERV`: the item below.
 
 `test_fog.py` covers each. The referee has to be restaged for players to be
 served it.
 
-[ ] **Another civ's idle admirals and its activity are served.** An admiral
+[x] **Another civ's idle admirals and its activity are served.** An admiral
 no ship follows shows its rules, and `SERV` shows the turn the civ was last
-active. Neither is in the per-civ save. Next step: decode `Owner:652` and
-what the client does with another civ's activity, then serve both at the
-constructor's defaults.
+active. Neither is in the per-civ save. **Fixed** (21 November 2026):
+- Another civ keeps only the admirals its ships and fleets follow (each names
+  its admiral in its `DYNO`), and its designs are judged against those
+  admirals' rules alone.
+- `Owner:652` (`Owner+0x2C0`) is read only by the `SERV` reader (`0x545E28`)
+  and set to 0 by the constructor (`0x5466D2`) and a reset (`0x545BD5`), so
+  nothing plays on it. It is served at 0, and so is the active flag
+  (`Owner+0x2FC`).
+- The baseline (`Owner+0x300`) feeds `0x5381D0`, the inactivity percentage:
+  `(turn - 72 - baseline) * 100 / 100`, clamped to 0 to 100, with 150 in
+  place of either figure under two galaxy options. The per-civ save carried
+  that percentage in every civ's `CLIE` (`Owner+0x2C8`), so a rival's
+  percentage was public and its last-active turn was not. A rival showing
+  inactive keeps the baseline its percentage pins; one showing 0% is served
+  the current turn as its baseline.
+
+`restore` puts both back (`test_fog.py`). Each view opened, saved and closed
+in the client as its viewer: d9 as BadGuy, GoodGuy and no seat, and
+`admirals/a10` with GoodGuy's admiral followed and idle. The referee has to be
+restaged for players to be served it.
 
 A scan the client carries out (`DOSC`) runs on its own copy, so in a view a
 technology or planetary scan reads a rival's sections at their defaults and

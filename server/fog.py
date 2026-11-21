@@ -49,10 +49,13 @@ it holds at the `Owner` constructor's defaults (`0x546430`):
   `Owner:400`, name, checkbox and arms stay. The tick's pass over other civs
   (`0x542850`) needs a technology in each completed list.
 - `KNPL`, `EXSY`, `GOVS` and `SPQS` empty, and every `CVTR` trait 0.
-- Only the designs their ships are built to or their admirals' rules name,
-  and no scan reports.
+- Only the admirals their ships and fleets follow, only the designs their
+  ships are built to or those admirals' rules name, and no scan reports.
 - The end-galaxy vote in `USSE` at 0. The rest of `USSE` is interface
   settings and stays.
+- `SERV` with `Owner:652` and the active flag at 0. The baseline stays while
+  the civ shows inactive, since every civ's `CLIE` published that percentage
+  (`0x5381D0`); otherwise it is the current turn, which shows 0%.
 - Their news is withheld: each list is served empty, and the news string
   table holds only the strings the civ's own list names, with its next id
   kept (`news.own_view`).
@@ -63,9 +66,9 @@ rival is, and no news.
 Object ids, systems and planets are all kept, so a view passes the referee's
 galaxy check and its new objects are numbered as in the authoritative blob.
 `restore` puts back every planet the civ does not own, the withheld sections,
-designs, reports and vote, and the withheld news ahead of anything the
-submission added (`news.restore_view`). The merge refuses any change to them,
-so nothing a civ may change is lost.
+admirals, designs, reports, vote and activity, and the withheld news ahead of
+anything the submission added (`news.restore_view`). The merge refuses any
+change to them, so nothing a civ may change is lost.
 """
 import argparse
 import bisect
@@ -80,6 +83,7 @@ for _d in (HERE, os.path.join(HERE, 'dev_tools')):
 
 import save_parser as sp
 import inject_civ as icv
+import activity
 import exsy
 import merge_orders as mo
 import news
@@ -136,6 +140,8 @@ CVTR_PAIR = 8
 EMPTY_LIST = struct.pack('<I', 0)
 WITHHELD = (b'OWPR', b'KNPL', b'EXSY', b'CVTR', b'GOVS', b'SPQS')
 SECTION_HEAD = 8        # tag, then size and version
+SERV_BASELINE = 4       # SERV: Owner:652, then the turn last seen active
+SERV_FLAG = 8           # SERV: 1 while the civ is active this turn
 USSE_SIZE = 45
 USSE_VOTE_VERSION = 2
 END_VOTE_AT = 44        # USSE: the end-galaxy vote, Owner+0x2F8
@@ -556,30 +562,50 @@ def _design_block(blob, data):
     return (start, designs, p) if p <= data.end else None
 
 
-def _named_designs(blob, oid, crews):
-    """The design ids a civ's ships are built to or its admirals' rules
-    name."""
-    out = {struct.unpack_from('<I', shpr)[0]
-           for owner, shpr in crews.values()
-           if owner == oid and shpr and len(shpr) >= 4}
-    rules = b''.join(r[SECTION_HEAD + mo.ADML_FIXED:]
-                     for _a, r in mo.admirals_of(blob, oid) or ())
-    return out, rules
+def _followed(blob, oid, objects):
+    """[whole ADML section] of the admirals a civ's ships and fleets follow,
+    in order, or None when its ADMS does not walk."""
+    admirals = mo.admirals_of(blob, oid)
+    if admirals is None:
+        return None
+    named = {mo.dyno_admiral(o.get('dyno')) for o in objects
+             if o.get('owner') == oid}
+    return [r for a, r in admirals if a in named]
 
 
-def _served_designs(blob, oid, data, crews):
+def _served_designs(blob, oid, data, crews, admirals):
     """(start, end, bytes) serving a civ's DATA with only the designs its
-    ships and admirals name and no scan reports, or None when the block does
-    not walk."""
+    ships are built to or `admirals`' rules name, and no scan reports, or
+    None when the block does not walk."""
     block = _design_block(blob, data)
     if block is None:
         return None
     start, designs, end = block
-    ships, rules = _named_designs(blob, oid, crews)
+    ships = {struct.unpack_from('<I', shpr)[0]
+             for owner, shpr in crews.values()
+             if owner == oid and shpr and len(shpr) >= 4}
+    rules = b''.join(r[SECTION_HEAD + mo.ADML_FIXED:] for r in admirals)
     kept = [blob[a:b] for d, a, b in designs
             if d in ships or struct.pack('<I', d) in rules]
     return (start, end, struct.pack('<I', len(kept)) + b''.join(kept)
             + EMPTY_LIST)
+
+
+def _served_serv(d: bytes, turn: int):
+    """A SERV payload as another civ is served it, or None when it holds no
+    baseline: `Owner:652` and the active flag at 0, and the baseline kept only
+    while the civ shows inactive, which every civ's `CLIE` published. Otherwise
+    the current turn, which shows 0% as the original did."""
+    if len(d) <= SERV_FLAG:
+        return None
+    baseline = struct.unpack_from('<I', d, SERV_BASELINE)[0]
+    if activity.penalty(turn, baseline) == 0:
+        baseline = turn
+    out = bytearray(d)
+    out[:SERV_BASELINE] = bytes(SERV_BASELINE)
+    struct.pack_into('<I', out, SERV_BASELINE, baseline)
+    out[SERV_FLAG] = 0
+    return bytes(out)
 
 
 def _usse(data):
@@ -593,9 +619,12 @@ def _usse(data):
 
 def _private(blob: bytes, civ: str, log=print) -> bytes:
     """`blob` with every other civ's private sections at their defaults, only
-    the designs its ships and admirals name, no scan reports and no vote."""
+    the admirals its ships follow and the designs they and its ships name, no
+    scan reports, no vote and no activity."""
     tree = sp.parse_blob(blob)
     crews = mo._ship_crew_index(blob)
+    objects = mo.space_objects(blob)[2]
+    turn = icv.turn_of(blob)
     edits = []
     for name, (oid, o) in _owners(blob, tree).items():
         if name == civ:
@@ -610,11 +639,30 @@ def _private(blob: bytes, civ: str, log=print) -> bytes:
         data = next(o.find('DATA'), None)
         if data is None:
             continue
-        designs = _served_designs(blob, oid, data, crews)
+        admirals = _followed(blob, oid, objects)
+        adms = next((c for c in data.children if c.tag == b'ADMS'), None)
+        if admirals is None or adms is None:
+            log(f"  fog: {civ}: {name}'s admirals do not walk; served whole")
+            admirals = [r for _a, r in mo.admirals_of(blob, oid) or ()]
+        else:
+            new = sp.build_section(b'ADMS', adms.version,
+                                   struct.pack('<I', len(admirals))
+                                   + b''.join(admirals))
+            if new != blob[adms.start:adms.end]:
+                edits.append((adms.start, adms.end, new))
+        designs = _served_designs(blob, oid, data, crews, admirals)
         if designs is None:
             log(f"  fog: {civ}: {name}'s designs do not walk; served whole")
         elif designs[2] != blob[designs[0]:designs[1]]:
             edits.append(designs)
+        serv = next((c for c in data.children if c.tag == b'SERV'), None)
+        if serv is not None:
+            new = _served_serv(blob[serv.payload:serv.end], turn)
+            if new is None:
+                log(f"  fog: {civ}: {name}'s SERV holds no baseline; served "
+                    f"whole")
+            elif new != blob[serv.payload:serv.end]:
+                edits.append((serv.payload, serv.end, new))
         usse = _usse(data)
         if usse is not None and blob[usse.payload + END_VOTE_AT]:
             vote = usse.payload + END_VOTE_AT
@@ -658,6 +706,11 @@ def restore(blob: bytes, civ: str, sub: bytes) -> bytes:
         if a_usse is not None and s_usse is not None:
             edits.append((s_usse.start, s_usse.end,
                           blob[a_usse.start:a_usse.end]))
+        for tag in (b'SERV', b'ADMS'):
+            a = next((c for c in a_data.children if c.tag == tag), None)
+            s = next((c for c in s_data.children if c.tag == tag), None)
+            if a is not None and s is not None:
+                edits.append((s.start, s.end, blob[a.start:a.end]))
     planets = {_pid(blob, pl): pl
                for pls in _systems(blob, a_tree).values() for pl in pls
                if _owner(blob, pl) != oid}

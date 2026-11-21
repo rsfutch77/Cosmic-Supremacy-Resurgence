@@ -27,6 +27,7 @@ for d in (os.path.join(ROOT, 'server'),
         sys.path.insert(0, d)
 
 import save_parser as sp
+import activity
 import inject_civ as icv
 import inject_design as idg
 import exsy
@@ -39,6 +40,8 @@ import turn_store
 import wipe_civ
 
 GALAXY = os.path.join(ROOT, 'server', 'tests', 'fixtures', 'diplomacy', 'd9.b64')
+ADMIRALS = os.path.join(ROOT, 'server', 'tests', 'fixtures', 'admirals',
+                        'a10.b64')
 SPGALAXY = os.path.join(ROOT, 'client', 'SinglePlayerGalaxy.dat')
 GOOD, BAD = 656, 660
 PASS, FAIL = [], []
@@ -296,6 +299,35 @@ def main():
           ([report], 1))
     check('restore puts GoodGuy\'s back',
           fog.restore(voted, 'BadGuy', vview) == voted, True)
+
+    print('\nanother civ\'s admirals and activity')
+    a10 = sp.load_any(ADMIRALS)
+    aview = fog.project(a10, 'BadGuy', log=quiet)
+    check('GoodGuy\'s admiral 674 stays, since one of its ships follows it',
+          [a for a, _r in mo.admirals_of(aview, GOOD)], [674])
+    ship = next(o for o in mo.space_objects(a10)[2]
+                if o['owner'] == GOOD and mo.dyno_admiral(o['dyno']) == 674)
+    idle = a10.replace(ship['dyno'], mo.with_dyno_admiral(ship['dyno'], 0), 1)
+    iview = fog.project(idle, 'BadGuy', log=quiet)
+    check('with no ship following it, it is withheld',
+          mo.admirals_of(iview, GOOD), [])
+    check('    and restore puts it back',
+          fog.restore(idle, 'BadGuy', iview) == idle, True)
+    turn = icv.turn_of(idle)
+    active = activity.mark_present(activity.set_baseline(idle, 'GoodGuy',
+                                                         turn - 1), ['GoodGuy'])
+    sview = fog.project(active, 'BadGuy', log=quiet)
+    check('a civ active last turn shows active this turn, with no flag',
+          activity.state(sview)['GoodGuy'], (turn, 0))
+    check('    and restore puts its baseline and flag back',
+          fog.restore(active, 'BadGuy', sview) == active, True)
+    check('a civ showing inactive keeps the baseline its percentage pins',
+          (activity.penalty(turn, 0), activity.state(fog.project(
+              activity.set_baseline(idle, 'GoodGuy', 0), 'BadGuy',
+              log=quiet))['GoodGuy']), (turn - 72, (0, 0)))
+    check('BadGuy\'s own activity is untouched',
+          activity.state(fog.project(activity.mark_present(
+              idle, ['BadGuy']), 'BadGuy', log=quiet))['BadGuy'][1], 1)
 
     print('\na caller with no seat')
     pview = fog.project(blob, None, log=quiet)
