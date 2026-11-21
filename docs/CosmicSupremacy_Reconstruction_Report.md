@@ -3280,11 +3280,18 @@ with `set_blob_player.py` to answer. Every capture's `waronly` bytes read `01 00
   Not yet done: `SHBR` seen in an ally's news, which needs a third civ to fight; `CRLS`
   accepted in the client; `SHWH` once a galaxy has a wormhole.
 
-- [ ] **The referee's tick can advance two turns.** On the diplomacy galaxy one tick published
+- [x] **The referee's tick can advance two turns.** On the diplomacy galaxy one tick published
   turn 182 from 180 (21 November 2026), while the same base went from 180 to 181 in the scan
   check. `advance_turns.py` polls the turn counter once a second at a 10-second turn length
   and puts the length back only after it sees the target, so a second turn can end first. Done
   when a tick advances exactly the turns asked for, or the referee refuses a capture past them.
+  Fixed, 21 November 2026: not a race. After a boundary the engine re-applies the galaxy's own
+  length, and a write that shortens it ends another turn within 0.1 s, even to a day. d1's is
+  30 days, so putting back 3600 (or a one-day hold) ended turn 182 every time; a longer write
+  ends nothing. `advance_turns.py` now only lengthens once the target shows and exits 3 past
+  it; `referee.tick` checks the captured turn, reloads up to three times and then refuses
+  (`test_tick_turn_count.py`). On the client: d1 ticked 180 to 181 five times out of five, and
+  at a 3600 length; three turns landed on 183 at both lengths.
 
 - [x] **Admirals and diplomacy are carried as measured** (`merge_orders.py`,
   `test_admirals_diplomacy_merge.py`). An admiral is judged like a governor: a new id, a printable
