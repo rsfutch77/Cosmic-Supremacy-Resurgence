@@ -3263,8 +3263,28 @@ with `set_blob_player.py` to answer. Every capture's `waronly` bytes read `01 00
     lands in the ally's own news on the tick.
   - **`SHWH`**: no galaxy holds a wormhole.
 
-  Not yet done: a peace and an alliance accepted in the client, a treaty running out, and the
-  shared map, sight and battle reports each seen in the partner's client.
+  **Seen on screen** (Robert, 21 November 2026), with the launcher and the referee's tick on a
+  folder galaxy from `d4` at turn 180, both stances set to Neutral:
+  - BadGuy accepted GoodGuy's peace (treaty 700, staged as GoodGuy's proposal). The tick
+    published it in force for 50 turns from turn 180 with both stances at Peace. The first try
+    closed the client; the item "Accepting a peace in a view closes the client" above.
+  - A trade accepted at turn 170 for 10 turns (701, staged) read Expired after the tick.
+  - GoodGuy proposed an alliance in the client (702) sharing map, sight and battle reports both
+    ways: each item an empty section, in both lists. The proposer's own proposal offers only
+    Withdraw. BadGuy accepted it; its client ended the peace and set both stances to Alliance.
+  - At the merge both maps were copied. GoodGuy's map showed BadGuy's 10 systems it had never
+    entered, and BadGuy took GoodGuy's later rows of systems 151 and 267.
+  - After the tick BadGuy's row of GoodGuy's home system 260 read the current turn (it had
+    read turn 34), and BadGuy saw GoodGuy's home planets and ships live.
+
+  Not yet done: `SHBR` seen in an ally's news, which needs a third civ to fight; `CRLS`
+  accepted in the client; `SHWH` once a galaxy has a wormhole.
+
+- [ ] **The referee's tick can advance two turns.** On the diplomacy galaxy one tick published
+  turn 182 from 180 (21 November 2026), while the same base went from 180 to 181 in the scan
+  check. `advance_turns.py` polls the turn counter once a second at a 10-second turn length
+  and puts the length back only after it sees the target, so a second turn can end first. Done
+  when a tick advances exactly the turns asked for, or the referee refuses a capture past them.
 
 - [x] **Admirals and diplomacy are carried as measured** (`merge_orders.py`,
   `test_admirals_diplomacy_merge.py`). An admiral is judged like a governor: a new id, a printable
