@@ -206,11 +206,15 @@ Carried as the client takes each step, applied to both civs at once:
 - Accepting one made to it: status, length (its `TRLE`, or what a stance
   treaty binds for) and start turn as the client writes them. The referee
   moves the lump sums itself, from the merged credits and resources, and
-  refuses the acceptance when the payer is short. A cease-fire, peace or
-  alliance ends the stance treaty or war before it and sets both stances.
+  refuses the acceptance when the payer is short. It copies a shared galaxy
+  map (`SHGM`) too, since neither civ's view holds the other's `EXSY`: the
+  giver's systems merge into the receiver's, and the receiver meets each civ
+  they name. A cease-fire, peace or alliance ends the stance treaty or war
+  before it and sets both stances.
 
 A step on a treaty that the other party already changed in this merge is
-refused. Per-turn payments and a treaty running out are the engine's.
+refused. Per-turn payments, shared sight and battle reports, and a treaty
+running out are the engine's.
 
 **Display choices** (`STCL`, `TGST`, `TGSS`), in the civ's own `KNPL` record
 for each civ it has met: whether that civ's territory (`+29`) and ships (`+30`)
@@ -310,6 +314,8 @@ import inject_civ as icv
 import inject_design as idg
 import facility_rules
 import news
+import exsy
+import knpl
 
 # The original client's 56 commands, each with the rule above that carries its
 # effect, or None and what the command does. A command with no rule is refused
@@ -3286,6 +3292,15 @@ TREATY_ITEMS = frozenset((b'CRLS', b'CRPT', b'RSLS', b'RSPT', b'SLOS', b'SHBR',
 CREDIT_SUM = b'CRLS'        # u32 amount; not measured, read like CRPT
 RESOURCE_SUM = b'RSLS'      # u32 amount ; u32 resource, 0 metal
 TREATY_LENGTH = b'TRLE'     # u32 turns
+# Copied once on acceptance (0x55D090): one in the demands gives the
+# recipient's EXSY to the proposer, one in the offers the proposer's to the
+# recipient, demands first.
+MAP_SHARE = b'SHGM'
+# A KNPL record as first contact makes it (0x532E60), less the civ and turn.
+FIRST_CONTACT = {'stance': 0, 'declared': 0, 'w17': 0, 'battled': 0,
+                 'inactivity': -1, 'cooldown': 0, 'biobombed': 0,
+                 'leader_known': 0, 'territory': 0, 'ships': 1,
+                 'by_stance': 1, 'colour': 0xFF000000}
 RESOURCE_KINDS = 5
 # A civ's resources in OWPR: a u32 count this far past the start of the second
 # research field, then a u8 resource and a u32 amount per resource.
@@ -3404,6 +3419,60 @@ def lump_sums(items):
             amount, kind = struct.unpack_from('<II', payload)
             resources[kind] += amount
     return credits, resources
+
+
+def map_shares(t):
+    """[(giver, receiver)] of the galaxy maps accepting `t` shares, in the
+    order the client applies them."""
+    out = []
+    if any(tag == MAP_SHARE for tag, _p in t['demands']):
+        out.append((t['recipient'], t['proposer']))
+    if any(tag == MAP_SHARE for tag, _p in t['offers']):
+        out.append((t['proposer'], t['recipient']))
+    return out
+
+
+def share_map(blob, giver, receiver, turn):
+    """(blob, civs met) with the giver's EXSY merged into the receiver's, as
+    `0x529290` does: a system the receiver lacks is added, and one it holds
+    is replaced when the giver looked later. The receiver then meets every
+    civ its table names as an owner (`0x534F90`). None when either table or
+    the receiver's KNPL does not walk."""
+    _tree, g = _civ_section(blob, giver, 'EXSY')
+    _tree, r = _civ_section(blob, receiver, 'EXSY')
+    if g is None or r is None:
+        return None
+    try:
+        given = exsy.parse(blob[g.payload:g.end])
+        rows = {s['system']: s for s in exsy.parse(blob[r.payload:r.end])}
+    except (ValueError, struct.error):
+        return None
+    for s in given:
+        held = rows.get(s['system'])
+        if held is None or s['turn'] > held['turn']:
+            rows[s['system']] = s
+    tree, r = _civ_section(blob, receiver, 'EXSY')
+    blob = sp.replace_payload(blob, tree, r, exsy.build(
+        [rows[k] for k in sorted(rows)]))
+
+    tree, kn = _civ_section(blob, receiver, 'KNPL')
+    if kn is None:
+        return None
+    try:
+        records = knpl.parse(blob[kn.payload:kn.end])
+    except (ValueError, struct.error):
+        return None
+    civs = {o['oid'] for o in icv.owner_records(blob)}
+    named = {p['owner'] for s in rows.values() for p in s['planets']}
+    met = sorted((named & civs) - {receiver} - {k['civ'] for k in records})
+    stance = WAR if gset_value(blob, 'waronly') == 1 else 0
+    for civ in met:
+        records.append(dict(FIRST_CONTACT, civ=civ, handle=civ, met=turn,
+                            stance=stance))
+    if met:
+        records.sort(key=lambda k: k['civ'])
+        blob = sp.replace_payload(blob, tree, kn, knpl.build(records))
+    return blob, met
 
 
 def treaty_length(t):
@@ -3830,7 +3899,8 @@ def take_treaty_step(blob, served_treaties, step, oid, record, civ_oid, turn,
         line = f'treaty {oid}: declined {kind} deleted from this side'
     else:
         # Accepting: the lump sums move between both civs at once.
-        pays = ((t['recipient'], t['proposer'], t['demands']),
+        unpaid = blob
+        pays =((t['recipient'], t['proposer'], t['demands']),
                 (t['proposer'], t['recipient'], t['offers']))
         wallet = {c: [credits_of(blob, c), resources_of(blob, c)]
                   for c in pair}
@@ -3858,12 +3928,25 @@ def take_treaty_step(blob, served_treaties, step, oid, record, civ_oid, turn,
                 blob = set_credits(blob, c, credits)
             if resources is not None and resources != resources_of(blob, c):
                 blob = set_resources(blob, c, resources)
+        shared = []
+        for giver, receiver in map_shares(t):
+            done = share_map(blob, giver, receiver, turn)
+            if done is None:
+                return (unpaid, '', f'treaty {oid} DROPPED, the galaxy map of '
+                        f'{who(giver)} cannot be shared: a known-systems or '
+                        f'known-civs table does not read', oid)
+            blob, met = done
+            shared.append(f"{who(giver)}'s galaxy map shared with "
+                          f"{who(receiver)}" + (
+                              f", who meets {', '.join(who(c) for c in met)}"
+                              if met else ''))
         merged[oid] = record
         if t['kind'] in STANCE_OF:
             # The stance treaty it replaces ends, and a war with it.
             merged = {k: r for k, r in merged.items()
                       if k == oid or not _stance_in_force(r, pair)}
-        line = f'treaty {oid}: {kind} from {who(other)} accepted'
+        line = '; '.join([f'treaty {oid}: {kind} from {who(other)} accepted']
+                         + shared)
     blob = set_treaties(blob, list(merged.values()))
     if step == 'accept' and t['kind'] in STANCE_OF:
         blob = set_stance(blob, civ_oid, other, STANCE_OF[t['kind']])

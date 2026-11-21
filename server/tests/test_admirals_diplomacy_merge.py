@@ -148,6 +148,22 @@ def without(blob, oid):
                                 if t != oid])
 
 
+def section(blob, civ, tag):
+    """The payload of a civ's section."""
+    s = mo._civ_section(blob, civ, tag)[1]
+    return blob[s.payload:s.end]
+
+
+def with_section(blob, civ, tag, payload):
+    tree, s = mo._civ_section(blob, civ, tag)
+    return sp.replace_payload(blob, tree, s, payload)
+
+
+def known(blob, civ):
+    """{system: row} of a civ's EXSY."""
+    return {s['system']: s for s in mo.exsy.parse(section(blob, civ, 'EXSY'))}
+
+
 def both_stances(blob, a, b, code):
     return mo.set_stance(mo.set_stance(blob, a, b, code), b, a, code)
 
@@ -599,6 +615,57 @@ def diplomacy():
            (mo.stances(out)[(GOOD, BAD)], mo.stances(out)[(BAD, GOOD)]),
            notes.get('BadGuy')),
           ((1, 100, turn), (4, 4), None))
+
+    print('a shared galaxy map is copied on acceptance (0x55D090, 0x529290)')
+    d1 = d['d1']
+    turn1 = mo.icv.turn_of(d1)
+    alliance = mo.treaties(d1)[679]
+    share = sp.build_section(mo.MAP_SHARE, 0, b'')
+    g0, b0 = known(d1, GOOD), known(d1, BAD)
+    newest = {k: max((m[k] for m in (g0, b0) if k in m),
+                     key=lambda s: s['turn']) for k in set(g0) | set(b0)}
+    check('d1: BadGuy holds systems GoodGuy lacks, and GoodGuy looked later '
+          'at some both hold',
+          (len(set(b0) - set(g0)),
+           len([k for k in set(g0) & set(b0)
+                if g0[k]['turn'] > b0[k]['turn']])), (10, 3))
+    lines = []
+    out = mo.merge(d1, [('BadGuy', with_treaties(d1, [mo.with_trdt(
+        alliance, 1, 100, turn1)]))], log=lines.append, notes=(notes := {}))
+    check('an alliance sharing both maps leaves each civ the newest row of '
+          'every system either held',
+          (known(out, GOOD), known(out, BAD), notes.get('BadGuy')),
+          (newest, newest, None))
+    check('and says so',
+          any("BadGuy's galaxy map shared with GoodGuy; GoodGuy's galaxy map "
+              "shared with BadGuy" in line for line in lines))
+    one = with_treaties(d['d0'], [trty(700, GOOD, BAD, turn, kind=0,
+                                       theirs=(share,))])
+    one = mo.set_high_water(one, 700)
+    out, notes = merged(one, ('BadGuy', with_treaties(one, [mo.with_trdt(
+        mo.treaties(one)[700], 1, -2, turn)])))
+    g1, b1 = known(one, GOOD), known(one, BAD)
+    check('one offered by the proposer reaches only the recipient',
+          (known(out, GOOD) == g1, set(known(out, BAD)) == set(g1) | set(b1),
+           notes.get('BadGuy')), (True, True, None))
+    unmet = with_section(d1, BAD, 'KNPL', struct.pack('<I', 0))
+    shared, met = mo.share_map(unmet, GOOD, BAD, turn1)
+    check('the receiver meets each civ the map names as an owner, as first '
+          'contact makes the record (0x534F90)',
+          (met, mo.knpl.parse(section(shared, BAD, 'KNPL'))),
+          ([GOOD], [dict(mo.FIRST_CONTACT, civ=GOOD, handle=GOOD, met=turn1)]))
+    shared, _met = mo.share_map(sp.set_gset(unmet, {'waronly': 1}), GOOD,
+                                BAD, turn1)
+    check('at war under waronly',
+          mo.knpl.parse(section(shared, BAD, 'KNPL'))[0]['stance'], 1)
+    broken = with_section(d1, GOOD, 'EXSY', b'\1')
+    out, notes = merged(broken, ('BadGuy', with_treaties(broken, [
+        mo.with_trdt(alliance, 1, 100, turn1)])))
+    check('an acceptance whose map does not read is refused, and nothing '
+          'moves', (out, notes.get('BadGuy')),
+          (broken, ['treaty 679 DROPPED, the galaxy map of BadGuy cannot be '
+                    'shared: a known-systems or known-civs table does not '
+                    'read']))
 
     print('one submission with admirals and diplomacy keeps the rest')
     sub = made(d['d0'], GOOD, [adml(700, b'a1')], 700)

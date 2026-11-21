@@ -60,14 +60,19 @@ it holds at the `Owner` constructor's defaults (`0x546430`):
   table holds only the strings the civ's own list names, with its next id
   kept (`news.own_view`).
 
+Treaties. The per-civ save writes only the treaties the civ is party to and
+has not deleted from its side (`0x55B250`). A partner's shared line of sight
+needs nothing more: the client finds it in those treaties (`0x559EE0`), and
+the tick refreshes the civ's `EXSY` with it.
+
 A caller with no seat (`civ` None) is served every planet and every civ as a
-rival is, and no news.
+rival is, no news and no treaties.
 
 Object ids, systems and planets are all kept, so a view passes the referee's
 galaxy check and its new objects are numbered as in the authoritative blob.
 `restore` puts back every planet the civ does not own, the withheld sections,
-admirals, designs, reports, vote and activity, and the withheld news ahead of
-anything the submission added (`news.restore_view`). The merge refuses any
+admirals, designs, reports, vote, activity and treaties, and the withheld news
+ahead of anything the submission added (`news.restore_view`). The merge refuses any
 change to them, so nothing a civ may change is lost.
 """
 import argparse
@@ -142,6 +147,8 @@ WITHHELD = (b'OWPR', b'KNPL', b'EXSY', b'CVTR', b'GOVS', b'SPQS')
 SECTION_HEAD = 8        # tag, then size and version
 SERV_BASELINE = 4       # SERV: Owner:652, then the turn last seen active
 SERV_FLAG = 8           # SERV: 1 while the civ is active this turn
+TRDT_PARTIES = 8 + mo.TRTY_PARTIES_AT  # in a whole TRTY: proposer, recipient
+TRDT_DELETED = 28       # past the parties: a byte per party, 1 once deleted
 USSE_SIZE = 45
 USSE_VOTE_VERSION = 2
 END_VOTE_AT = 44        # USSE: the end-galaxy vote, Owner+0x2F8
@@ -498,7 +505,46 @@ def project(blob: bytes, civ: str, log=print) -> bytes:
     view = news.own_view(blob, oid)
     if view != blob:
         log(f"  fog: {civ or 'no seat'}: other civs' news withheld")
-    return _private(view, civ, log)
+    return _own_treaties(_private(view, civ, log), civ, oid, log)
+
+
+def _party(record, oid):
+    """Whether the per-civ save writes this TRTY for `oid` (`0x55B250`): a
+    party to it that has not deleted it from its side."""
+    proposer, recipient = struct.unpack_from('<II', record, TRDT_PARTIES)
+    deleted = record[TRDT_PARTIES + TRDT_DELETED:][:2]
+    return ((proposer == oid and not deleted[0])
+            or (recipient == oid and not deleted[1]))
+
+
+def _own_treaties(blob: bytes, civ: str, oid, log=print) -> bytes:
+    """`blob` with only the treaties `civ` is served."""
+    records = mo.treaties(blob)
+    if records is None:
+        log(f"  fog: {civ or 'no seat'}: the treaty list does not walk; "
+            f"served whole")
+        return blob
+    kept = [r for r in records.values() if _party(r, oid)]
+    if len(kept) == len(records):
+        return blob
+    log(f"  fog: {civ or 'no seat'}: {len(records) - len(kept)} of "
+        f"{len(records)} treaties withheld")
+    return mo.set_treaties(blob, kept)
+
+
+def _restore_treaties(blob: bytes, oid, sub: bytes) -> bytes:
+    """`sub` with the treaties `oid` was not served put back where `blob`
+    holds them. A submitted treaty under a withheld id is not kept."""
+    a, s = mo.treaties(blob), mo.treaties(sub)
+    if a is None or s is None:
+        return sub
+    hidden = {k: r for k, r in a.items() if not _party(r, oid)}
+    if not hidden:
+        return sub
+    out = [hidden[k] if k in hidden else s[k] for k in a
+           if k in hidden or k in s]
+    out += [r for k, r in s.items() if k not in a]
+    return mo.set_treaties(sub, out)
 
 
 def _others_planets(blob: bytes, civ: str, log=print) -> bytes:
@@ -719,7 +765,7 @@ def restore(blob: bytes, civ: str, sub: bytes) -> bytes:
             a = planets.get(_pid(sub, pl))
             if a is not None:
                 edits.append((pl.start, pl.end, blob[a.start:a.end]))
-    return _apply(sub, s_tree, edits)
+    return _restore_treaties(blob, oid, _apply(sub, s_tree, edits))
 
 
 def main():

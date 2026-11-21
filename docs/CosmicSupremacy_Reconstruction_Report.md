@@ -1643,6 +1643,17 @@ in the client as its viewer: d9 as BadGuy, GoodGuy and no seat, and
 `admirals/a10` with GoodGuy's admiral followed and idle. The referee has to be
 restaged for players to be served it.
 
+[x] **Every treaty is served to every civ.** The per-civ save writes only the
+treaties the target is party to and has not deleted from its side
+(`0x55B250`, called from the save at `0x56D3C2` when it has a target; the
+whole list goes out only with none). Each `TRDT`'s two bytes after the turn
+proposed are those deleted marks, proposer first. **Fixed** (21 November
+2026): a view holds only those, and a caller with no seat none. `restore`
+puts the rest back where the authoritative list holds them and keeps the
+civ's own answers and new proposals (`test_fog.py`, d9: BadGuy deleted
+treaty 680 and is served 682 and 683). The referee has to be restaged for
+players to be served it.
+
 A scan the client carries out (`DOSC`) runs on its own copy, so in a view a
 technology or planetary scan reads a rival's sections at their defaults and
 its planets without their owner's state. The `DOSC` todo, a report built by
@@ -3218,6 +3229,30 @@ with `set_blob_player.py` to answer. Every capture's `waronly` bytes read `01 00
   `SHBR` and `SHWH` reach the partner's fogged view, which withholds other civs' `EXSY` and
   `KNPL` (`server/fog.py`). Done when each is answered in the client on the sandbox or in a
   Single Player capture, and a shared map or line of sight shows in the partner's served view.
+
+  **The sharing items, read off the client** (21 November 2026). Each item is a class
+  (`Treaty::ShareLineOfSight`, `ShareBattleReports`, `ShareGalaxyMap`, `ResourcesLumpSum` and
+  the rest) whose apply (vtable slot 7) acceptance (`0x55BD40`) calls with 1 for each demand and
+  0 for each offer; 1 means the recipient gives, as a lump sum shows (`0x55CB50`).
+  - **`SHGM`** applies once (`0x55D090`): the giver's `EXSY` merges into the receiver's
+    (`0x529290`), adding each system the receiver lacks and replacing one the giver looked at
+    later, and the receiver then meets every civ the table names as an owner (`0x534F90`).
+    Neither civ's view holds the other's `EXSY`, so the acceptor's client copies nothing.
+    **Done**: the merge copies it on acceptance (`merge_orders.share_map`,
+    `test_admirals_diplomacy_merge.py`, d1's alliance leaves both civs the newest row of all 14
+    systems).
+  - **`SLOS`** is asked each sight pass: `0x540F30` gathers the civs whose sight a civ shares,
+    each one `0x559EE0` finds in an in-force treaty that gives it, not deleted on the
+    viewer's side; a team galaxy uses the team instead. The tick runs it on the authoritative
+    galaxy, so the viewer's `EXSY` holds what its partner saw, and the client asks the same of
+    the treaties it is served. Nothing to carry, once a view holds the civ's own treaties (the
+    item "Every treaty is served to every civ" above).
+  - **`SHBR`** is the battle builder's (`Owner::AddNewsToAllies`, `0x543760`), so the copy
+    lands in the ally's own news on the tick.
+  - **`SHWH`**: no galaxy holds a wormhole.
+
+  Not yet done: a peace and an alliance accepted in the client, a treaty running out, and the
+  shared map, sight and battle reports each seen in the partner's client.
 
 - [x] **Admirals and diplomacy are carried as measured** (`merge_orders.py`,
   `test_admirals_diplomacy_merge.py`). An admiral is judged like a governor: a new id, a printable

@@ -329,6 +329,32 @@ def main():
           activity.state(fog.project(activity.mark_present(
               idle, ['BadGuy']), 'BadGuy', log=quiet))['BadGuy'][1], 1)
 
+    print('\ntreaties, as the per-civ save writes them (0x55B250)')
+    check('d9: treaty 680 is GoodGuy\'s declined trade, deleted from '
+          'BadGuy\'s side', sorted(mo.treaties(blob)), [680, 682, 683])
+    check('BadGuy is served the treaties it is party to and has not deleted',
+          sorted(mo.treaties(view)), [682, 683])
+    check('GoodGuy is served all three',
+          sorted(mo.treaties(gview)), [680, 682, 683])
+    stranger = mo.set_treaties(blob, list(mo.treaties(blob).values()) + [
+        mo.treaties(blob)[683][:8] + struct.pack('<I', 690)
+        + mo.treaties(blob)[683][12:20] + struct.pack('<II', GOOD, 999)
+        + mo.treaties(blob)[683][28:]])
+    check('a treaty between two other civs is not served',
+          sorted(mo.treaties(fog.project(stranger, 'BadGuy', log=quiet))),
+          [682, 683])
+    accepted = mo.with_trdt(mo.treaties(view)[683], 1, 20, icv.turn_of(blob))
+    answered = mo.set_treaties(view, [mo.treaties(view)[682], accepted])
+    check('restore puts the withheld one back in its place and keeps the '
+          'civ\'s answer', mo.treaties(fog.restore(blob, 'BadGuy', answered)),
+          {**mo.treaties(blob), 683: accepted})
+    check('and keeps a new proposal after them',
+          list(mo.treaties(fog.restore(blob, 'BadGuy', mo.set_treaties(
+              view, list(mo.treaties(view).values()) + [mo.treaties(
+                  stranger)[690][:8] + struct.pack('<I', 700)
+                  + mo.treaties(stranger)[690][12:]])))),
+          [680, 682, 683, 700])
+
     print('\na caller with no seat')
     pview = fog.project(blob, None, log=quiet)
     check('is served each civ\'s private sections as its rival is',
@@ -352,6 +378,7 @@ def main():
     check('no civ\'s news',
           [news.items_of(pview, o['oid']) for o in icv.owner_records(pview)],
           [[] for _o in icv.owner_records(pview)])
+    check('no treaties', mo.treaties(pview), {})
     check('it parses and is the same galaxy',
           (sp.parse_blob(pview)[0].end == len(pview),
            referee.galaxy_id(pview) == referee.galaxy_id(blob)), (True, True))
