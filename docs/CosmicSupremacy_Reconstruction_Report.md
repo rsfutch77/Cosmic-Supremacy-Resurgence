@@ -801,12 +801,45 @@ Two things follow:
     zero). The target must not be the scanner's own. On `d4` neither civ has a name, so
     the test names BadGuy; without one the scan makes no report and keeps the scan.
   - A fleet scan casts each target to `Fleet`, and no galaxy here holds one, so it makes
-    no report on either side. Whether the client offers it on a ship is a checklist item
-    (Multiplayer Checklist M25).
+    no report on either side. The client greys Fleet Scan out on a ship (Robert, 20
+    November 2026).
   - Route, fleet and military scans group their target ships first (`0x00462BC0`); the
     others scan each target alone.
 
-  Not yet done: a scan carried by the live relay and referee, and M25's rows seen on screen.
+  An online scan runs the sight pass (20 November 2026). The online branch applies the
+  answer and jumps past the offline branch's sight pass (`0x00542850` on the local `Owner`
+  in `ebx`, then `0x00566560` and `0x00480040` on the view `0x0082AA1C`). So a system scan
+  answered online revealed nothing until the next load. The patch's normal exit now runs
+  those three calls before it closes the socket, and a system scan of a sun in 2/0/3 showed
+  its planets at once. A live system scan in `Owner:320` is an eye at the scanned sun with
+  twice the range of the civ's best scanner (the last of `0x004A7EC0`'s list, read through
+  `0x0055FE20`, `+0x14`). The scanner ranges are 30, 50, 70 and 100 (the table at
+  `0x0080F838`, filled at startup). On `d4`, BadGuy's ship 662 in flight 57 units from sun
+  232 went from unseen to seen (`+0x18` of the object, 0 then 1) after a system scan of 232
+  from the scan button.
+
+  A launcher started again in the turn reopens the game with its delivered scans (20
+  November 2026). `player_turn.carries_orders` asked only whether the merge takes anything
+  from a submission, and the merge never takes a scan report. So a turn where the player
+  only scanned counted as orderless, the launcher served the published turn, and the scan
+  was gone until the next turn. A submission holding scan reports the published turn lacks
+  now counts as carrying orders.
+
+  M25 seen on screen (Robert, 20 and 21 November 2026), with the launcher and a stand-in
+  referee on a folder galaxy from `d4`:
+  - Planetary, military, technology and leader name reports show as the original's do.
+  - A system scan of sun 232 shows its planets and ship 662 in flight, after a launcher
+    restart as well.
+  - A route scan of ship 662 shows where it started, where it is going and when it arrives.
+  - After the referee's tick to turn 181, the Scanning screen shows 0 system scans (2 used)
+    and 1 route scan (1 used), and 2/0/2 and 2/0/3 still show their planets. Refused and
+    abandoned scans cost nothing.
+  - A turn opened after its deadline, while the referee has not yet published the next,
+    closes the game again a moment after it opens: the launcher sees the time is up and
+    collects. It looks like a crash.
+
+  Not yet done: a scan carried by the live relay and referee, and an energy grid scan on a
+  galaxy with a grid.
 - [ ] **A design with no scanner closes the client on the Ship Design tab.** The tab asks each
   design for its scanner range, and `0x005479C0` stops the client when `ShipDesign:152` is
   empty. The designer saved one in `unruled` (674, `e1x4`). Next step: find whether the

@@ -154,7 +154,7 @@ M = [
           '[x] Technology scan of an enemy planet: the research done, in order, and the current research (20 November 2026).',
           'Energy grid scan of an enemy planet: its hyperspace energy network, or none. No galaxy here has a grid yet.',
           '[x] Leader name scan of a planet whose owner has chosen a civ name: a report appears (20 November 2026). On a civ with no name chosen it makes no report and keeps the scan.',
-          'Each scan used is one fewer in the Scanning screen\'s stock after the next turn.',
+          '[x] Each scan used is one fewer in the Scanning screen\'s stock after the next turn (21 November 2026).',
           '[x] A scan the referee refuses shows the reason in the launcher\'s scan window, and the scan stays in stock (20 November 2026).',
           '[x] Retry, once its 30-second countdown ends, cancels a scan with no answer; the game carries on and the scan stays in stock (20 November 2026).']),
     ]),
