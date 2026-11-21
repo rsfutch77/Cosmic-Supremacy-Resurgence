@@ -1574,12 +1574,15 @@ orbit also marks its planet's system, and a seen civ goes into the viewer's
 systems also broke `project_blob.py` (the `min_suns` guard and the galaxy
 check).
 
-[ ] **The view without news holds every civ's private state.** A caller with
+[x] **The view without news holds every civ's private state.** A caller with
 no seat is served `news.own_view(blob, None)`. Since the item below, that is
 a caller naming no unheld civ: a sign-in reading a galaxy it has not joined,
-or any galaxy with first-use off. Next step: decide what that caller should
-load, then serve it every planet in the compact form and every civ's private
-sections at their defaults.
+or any galaxy with first-use off. **Fixed** (21 November 2026): that caller is
+served a spectator's view, `fog.project(blob, None)` (Robert chose it over a
+refusal). Every planet is served as a rival sees it, with its live owner and
+population and no memory, and every civ as its rivals see it, with no news.
+The referee publishes it as `turn_store.PUBLIC_VIEW` (`test_fog.py`). The
+referee has to be restaged for players to be served it.
 
 [x] **A first-use player was served the view without news before its first
 submission.** The relay chose a copy by seat alone, and under `first-use` a
@@ -1595,13 +1598,35 @@ the roster, a civ with no view and a galaxy with first-use off all still get
 the view without news (`test_relay_function.py`). The relay has to be
 redeployed for players to see it.
 
-[ ] **Another civ's planet keeps the bytes after its `PROD`, and its admirals,
+[x] **Another civ's planet keeps the bytes after its `PROD`, and its admirals,
 designs and settings stay.** Past `PROD` a `PLPR` holds eight `u16`, a `u32`,
 a list of 16-byte records, a `u16`, the deposits and the energy link
 (`ENLI`); the per-civ save keeps only the deposits, and the energy-grid scan
 is what reveals a link. `ADMS`, every `DSGN` and `USSE` (the end-galaxy vote
-among them) stay whole while ships are served whole. Next step: decode the
-three unknown fields and the record list, then serve them and `ENLI` empty.
+among them) stay whole while ships are served whole. **Fixed** (21 November
+2026), with the fields as the Memory report decodes them ("Loyalty is derived
+from the conqueror list"):
+- After its queue another civ's planet holds no population history,
+  `Planet:368` at 8 as on a never-colonised planet, the owner it is served
+  with as its only ruler (`[owner, 100.0, 0, -1]`, none when unowned), no
+  rebellion count, its deposits and an empty `ENLI`. Its farmers arrived at
+  turn 0, so each reads fully loyal.
+- Another civ keeps only the designs its ships are built to or its admirals'
+  rules name (Robert, 21 November 2026), and no scan reports. Its vote in
+  `USSE` reads 0; the rest of `USSE` is interface settings and stays.
+  `restore` puts the designs, reports and vote back.
+- Its admirals stay whole, since its ships name them; an admiral no ship
+  follows is still served. Its `SERV` stays too: `Owner:652`, the turn it was
+  last seen active and the active flag.
+
+`test_fog.py` covers each. The referee has to be restaged for players to be
+served it.
+
+[ ] **Another civ's idle admirals and its activity are served.** An admiral
+no ship follows shows its rules, and `SERV` shows the turn the civ was last
+active. Neither is in the per-civ save. Next step: decode `Owner:652` and
+what the client does with another civ's activity, then serve both at the
+constructor's defaults.
 
 A scan the client carries out (`DOSC`) runs on its own copy, so in a view a
 technology or planetary scan reads a rival's sections at their defaults and

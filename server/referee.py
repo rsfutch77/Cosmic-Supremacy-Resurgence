@@ -212,13 +212,13 @@ def _unfogged(blob: bytes, civ: str, sub: bytes, log=print) -> bytes:
 
 def views(blob: bytes, civs, log=print) -> dict:
     """{civ: the blob as that civ is served it}, for each named civ the
-    blob holds, and under `turn_store.PUBLIC_VIEW` the blob with every civ's
-    news withheld, for a caller served no view of its own."""
-    import news
+    blob holds, and under `turn_store.PUBLIC_VIEW` the blob as a caller with
+    no seat is served it: every planet and every civ as a rival sees them,
+    and no news."""
     import turn_store
     held = {o['name'] for o in icv.owner_records(blob)}
     out = {civ: fog.project(blob, civ, log=log) for civ in civs if civ in held}
-    out[turn_store.PUBLIC_VIEW] = news.own_view(blob, None)
+    out[turn_store.PUBLIC_VIEW] = fog.project(blob, None, log=log)
     return out
 
 

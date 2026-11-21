@@ -22,7 +22,10 @@ since a populated planet with no citizens has no ruler (`0x4F1440` reads
 content in it: the population as farmers of the owner, a shipyard when it has
 one and no other facility, no soldiers and an idle queue, with the governor,
 the damage pool, the byte after the soldiers and the owner's running counters
-at 0. The natural bytes, food store size, food per soldier and deposits stay.
+at 0. After the queue: no population history, `Planet:368` at 8 as on a
+never-colonised planet, the served owner as the only ruler at full influence
+since turn 0, no rebellion count and no energy links. The natural bytes, food
+store size, food per soldier and deposits stay.
 
 The owner, population and name are what the civ knows. In a system it has
 left they come from its `EXSY` memory, as the writer's own lookup
@@ -34,9 +37,9 @@ planet whose memory names the viewer or a civ the galaxy does not hold, or
 reads as a misread population. The name is the remembered one only when the
 owner changed.
 
-Other civs. Their `OWNR` keeps its sections, since ships name their design
-and admiral, but what the per-civ save leaves out (`0x53C27D`) is served at
-the `Owner` constructor's defaults (`0x546430`):
+Other civs. The per-civ save leaves out their `DATA` (`0x53C27D`). A view
+keeps it, since their ships name their design and admiral, and serves what
+it holds at the `Owner` constructor's defaults (`0x546430`):
 
 - `OWPR`: no credits, no research progress, only the two starting
   technologies, no topic, no resources, and the unknown words at `Owner:12`,
@@ -46,16 +49,23 @@ the `Owner` constructor's defaults (`0x546430`):
   `Owner:400`, name, checkbox and arms stay. The tick's pass over other civs
   (`0x542850`) needs a technology in each completed list.
 - `KNPL`, `EXSY`, `GOVS` and `SPQS` empty, and every `CVTR` trait 0.
+- Only the designs their ships are built to or their admirals' rules name,
+  and no scan reports.
+- The end-galaxy vote in `USSE` at 0. The rest of `USSE` is interface
+  settings and stays.
 - Their news is withheld: each list is served empty, and the news string
   table holds only the strings the civ's own list names, with its next id
   kept (`news.own_view`).
 
+A caller with no seat (`civ` None) is served every planet and every civ as a
+rival is, and no news.
+
 Object ids, systems and planets are all kept, so a view passes the referee's
 galaxy check and its new objects are numbered as in the authoritative blob.
-`restore` puts back every planet the civ does not own, the withheld sections
-and the withheld news ahead of anything the submission added
-(`news.restore_view`). The merge refuses any change to them, so nothing a
-civ may change is lost.
+`restore` puts back every planet the civ does not own, the withheld sections,
+designs, reports and vote, and the withheld news ahead of anything the
+submission added (`news.restore_view`). The merge refuses any change to them,
+so nothing a civ may change is lost.
 """
 import argparse
 import bisect
@@ -71,6 +81,7 @@ for _d in (HERE, os.path.join(HERE, 'dev_tools')):
 import save_parser as sp
 import inject_civ as icv
 import exsy
+import merge_orders as mo
 import news
 
 PLNT_OWNER = 16         # u32, the owning civ's object id
@@ -91,6 +102,14 @@ GOVERNOR = 4            # the PLNT's last u32, Planet:496, 0 for none
 UNNAMED = b'Unnamed'    # what EXSY calls a planet nobody has named
 MAX_REMEMBERED = 1000   # a remembered population above this is a misread
 DEPOSIT = 5             # a u8 kind and a u32 amount, as in OWPR's resources
+# Between PROD and ENLI: the population history, Planet:368, the conqueror
+# list, the rebellion counter, then the deposits.
+HISTORY = 8             # u16 slots, served at 0
+SETTLED = 8             # Planet:368, as a never-colonised planet holds it
+RULER = struct.Struct('<IfIi')  # owner, influence, first turn, last turn
+FULL_INFLUENCE = 100.0
+RULING = -1             # a ruler's last turn while it holds the planet
+REBELLION = 2           # u16, served at 0
 
 # OWPR: credits and Owner:12, a map of 8-byte pairs counted at +8, the
 # completed technologies (u32 count, 8-byte records), then two topic records.
@@ -116,6 +135,10 @@ CVTR_PAIRS = 20
 CVTR_PAIR = 8
 EMPTY_LIST = struct.pack('<I', 0)
 WITHHELD = (b'OWPR', b'KNPL', b'EXSY', b'CVTR', b'GOVS', b'SPQS')
+SECTION_HEAD = 8        # tag, then size and version
+USSE_SIZE = 45
+USSE_VOTE_VERSION = 2
+END_VOTE_AT = 44        # USSE: the end-galaxy vote, Owner+0x2F8
 
 
 def _civs(blob, tree):
@@ -221,9 +244,9 @@ def _plan(blob: bytes, civ: str, tree=None):
     tree = tree or sp.parse_blob(blob)
     turn = icv.turn_of(blob)
     civs = _civs(blob, tree)
-    if civ not in civs:
+    if civ is not None and civ not in civs:
         raise KeyError(f'no civ named {civ!r} in this blob')
-    me, table = civs[civ]
+    me, table = civs[civ] if civ is not None else (None, None)
     oids = {oid for oid, _t in civs.values()}
     rows = exsy.parse(blob[table.payload:table.end]) if table is not None else []
     stale = {row['system']: row for row in remembered_rows(blob, me, rows, tree)}
@@ -297,12 +320,36 @@ def _served_plpr(blob, plpr, owner: int, pop: int, blank_prod):
     out = bytes(head) + struct.pack('<I', pop) + _farmer(owner) * pop
     out += struct.pack('<I', 0) + bytes(1)
     out += struct.pack('<I', len(yards)) + b''.join(yards) + struct.pack('<I', 0)
-    rest = d[first:]
-    prod = next(plpr.find('PROD'), None)
-    if blank_prod is not None and prod is not None:
-        a, b = prod.start - plpr.payload, prod.end - plpr.payload
-        rest = d[first:a] + blank_prod + d[b:]
-    return out + rest
+    if [c.tag for c in plpr.children] != [b'PROD', b'ENLI']:
+        return None
+    prod, enli = plpr.children
+    p0, p1 = prod.start - plpr.payload, prod.end - plpr.payload
+    e0, e1 = enli.start - plpr.payload, enli.end - plpr.payload
+    settled = _settled(d[p1:e0], owner)
+    if settled is None or e1 != len(d):
+        return None
+    queue = blank_prod if blank_prod is not None else d[p0:p1]
+    return (out + d[first:p0] + queue + settled
+            + sp.build_section(b'ENLI', enli.version, EMPTY_LIST))
+
+
+def _settled(d: bytes, owner: int):
+    """The block between PROD and ENLI as another civ is served it, or None
+    when it does not walk to its deposits: no population history, settled,
+    `owner` the only ruler, no rebellion, and the deposits kept."""
+    n_at = 2 * HISTORY + 4
+    if n_at + 4 > len(d):
+        return None
+    n = struct.unpack_from('<I', d, n_at)[0]
+    at = n_at + 4 + RULER.size * n + REBELLION
+    if at + 4 > len(d):
+        return None
+    k = struct.unpack_from('<I', d, at)[0]
+    if at + 4 + DEPOSIT * k != len(d):
+        return None
+    rulers = [RULER.pack(owner, FULL_INFLUENCE, 0, RULING)] if owner else []
+    return (bytes(2 * HISTORY) + struct.pack('<II', SETTLED, len(rulers))
+            + b''.join(rulers) + bytes(REBELLION) + d[at:])
 
 
 def _served(blob, pl, owner, pop, name, blank_prod):
@@ -435,15 +482,16 @@ def _apply(blob: bytes, tree, edits) -> bytes:
 def project(blob: bytes, civ: str, log=print) -> bytes:
     """The blob as `civ` is served it: every planet it does not own without
     its owner's state, only its own news, and other civs' private sections
-    at their defaults."""
+    at their defaults. `civ` None is a caller with no seat, served every
+    planet and every civ that way, and no news."""
     blob = _others_planets(blob, civ, log)
     oid = next((o['oid'] for o in icv.owner_records(blob) if o['name'] == civ),
                None)
-    if oid is None:
+    if oid is None and civ is not None:
         return blob
     view = news.own_view(blob, oid)
     if view != blob:
-        log(f"  fog: {civ}: other civs' news withheld")
+        log(f"  fog: {civ or 'no seat'}: other civs' news withheld")
     return _private(view, civ, log)
 
 
@@ -473,11 +521,83 @@ def _others_planets(blob: bytes, civ: str, log=print) -> bytes:
     return blob
 
 
+def _design_block(blob, data):
+    """(start, [(design id, start, end)], end) of the designs and scan reports
+    in a civ's DATA: a u32 count of DSGN sections after SERV, then a u32 count
+    of report sections. None when it does not walk."""
+    serv = next((c for c in data.children if c.tag == b'SERV'), None)
+    if serv is None:
+        return None
+
+    def section_end(p):
+        return p + SECTION_HEAD + (struct.unpack_from('<I', blob, p + 4)[0]
+                                   & sp.SIZE_MASK)
+
+    start = serv.end
+    if start + 4 > data.end:
+        return None
+    p, designs = start + 4, []
+    for _ in range(struct.unpack_from('<I', blob, start)[0]):
+        if p + SECTION_HEAD + 4 > data.end or bytes(blob[p:p + 4]) != b'DSGN':
+            return None
+        end = section_end(p)
+        designs.append((struct.unpack_from('<I', blob, p + SECTION_HEAD)[0],
+                        p, end))
+        p = end
+    if p + 4 > data.end:
+        return None
+    reports = struct.unpack_from('<I', blob, p)[0]
+    p += 4
+    for _ in range(reports):
+        if (p + SECTION_HEAD > data.end
+                or bytes(blob[p:p + 4]) not in mo.REPORT_TAGS):
+            return None
+        p = section_end(p)
+    return (start, designs, p) if p <= data.end else None
+
+
+def _named_designs(blob, oid, crews):
+    """The design ids a civ's ships are built to or its admirals' rules
+    name."""
+    out = {struct.unpack_from('<I', shpr)[0]
+           for owner, shpr in crews.values()
+           if owner == oid and shpr and len(shpr) >= 4}
+    rules = b''.join(r[SECTION_HEAD + mo.ADML_FIXED:]
+                     for _a, r in mo.admirals_of(blob, oid) or ())
+    return out, rules
+
+
+def _served_designs(blob, oid, data, crews):
+    """(start, end, bytes) serving a civ's DATA with only the designs its
+    ships and admirals name and no scan reports, or None when the block does
+    not walk."""
+    block = _design_block(blob, data)
+    if block is None:
+        return None
+    start, designs, end = block
+    ships, rules = _named_designs(blob, oid, crews)
+    kept = [blob[a:b] for d, a, b in designs
+            if d in ships or struct.pack('<I', d) in rules]
+    return (start, end, struct.pack('<I', len(kept)) + b''.join(kept)
+            + EMPTY_LIST)
+
+
+def _usse(data):
+    """A civ's USSE section, when it is one that holds the vote."""
+    usse = next((c for c in data.children if c.tag == b'USSE'), None)
+    if (usse is None or usse.end - usse.payload != USSE_SIZE
+            or usse.version < USSE_VOTE_VERSION):
+        return None
+    return usse
+
+
 def _private(blob: bytes, civ: str, log=print) -> bytes:
-    """`blob` with every other civ's private sections at their defaults."""
+    """`blob` with every other civ's private sections at their defaults, only
+    the designs its ships and admirals name, no scan reports and no vote."""
     tree = sp.parse_blob(blob)
+    crews = mo._ship_crew_index(blob)
     edits = []
-    for name, (_oid, o) in _owners(blob, tree).items():
+    for name, (oid, o) in _owners(blob, tree).items():
         if name == civ:
             continue
         for tag, s in _sections(o).items():
@@ -487,6 +607,18 @@ def _private(blob: bytes, civ: str, log=print) -> bytes:
                     f"served whole")
                 continue
             edits.append((s.start, s.end, sp.build_section(tag, s.version, new)))
+        data = next(o.find('DATA'), None)
+        if data is None:
+            continue
+        designs = _served_designs(blob, oid, data, crews)
+        if designs is None:
+            log(f"  fog: {civ}: {name}'s designs do not walk; served whole")
+        elif designs[2] != blob[designs[0]:designs[1]]:
+            edits.append(designs)
+        usse = _usse(data)
+        if usse is not None and blob[usse.payload + END_VOTE_AT]:
+            vote = usse.payload + END_VOTE_AT
+            edits.append((vote, vote + 1, b'\x00'))
     blob = _apply(blob, tree, edits)
     if edits:
         log(f"  fog: {civ}: other civs' private sections withheld")
@@ -514,6 +646,18 @@ def restore(blob: bytes, civ: str, sub: bytes) -> bytes:
             if tag in theirs:
                 edits.append((s.start, s.end,
                               blob[theirs[tag].start:theirs[tag].end]))
+        a_data = next(auth[name][1].find('DATA'), None)
+        s_data = next(o.find('DATA'), None)
+        if a_data is None or s_data is None:
+            continue
+        a_block, s_block = _design_block(blob, a_data), _design_block(sub, s_data)
+        if a_block is not None and s_block is not None:
+            edits.append((s_block[0], s_block[2],
+                          blob[a_block[0]:a_block[2]]))
+        a_usse, s_usse = _usse(a_data), _usse(s_data)
+        if a_usse is not None and s_usse is not None:
+            edits.append((s_usse.start, s_usse.end,
+                          blob[a_usse.start:a_usse.end]))
     planets = {_pid(blob, pl): pl
                for pls in _systems(blob, a_tree).values() for pl in pls
                if _owner(blob, pl) != oid}
