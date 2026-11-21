@@ -17,7 +17,7 @@ The mirror does not hold these, but the Wayback Machine might. The site
 shows each link as plain text. Check the CDX API before never_archived.txt.
 
 
-## Never archived (29 images, 153 link targets)
+## Never archived (29 images, 152 link targets)
 
 The Wayback Machine has no capture of these (`never_archived.txt`).
 Images show a grey `image not archived` marker; links show as plain text.
@@ -202,5 +202,4 @@ Images show a grey `image not archived` marker; links show as plain text.
 - `wiki/_detail/guides/unsguide/turn-431@id=guides_unsguide_fleetsplit&cache=cache.png.html`, 1 reference(s)
 - `wiki/_detail/guides/unsguide/turn-432@id=guides_unsguide_fleetsplit&cache=cache.png.html`, 1 reference(s)
 - `wiki/_detail/guides/unsguide/turn-433@id=guides_unsguide_fleetsplit&cache=cache.png.html`, 1 reference(s)
-- `wiki/gecko@do=backlink.html`, 1 reference(s)
 - `wiki/jacksguide/videotutorials.html`, 1 reference(s)
