@@ -86,6 +86,13 @@ are gone and `robots.txt` allows crawling, so indexing is decided in
 the archive carried, so no page overrides them. The 404 page keeps its own
 `noindex`, which is about that page and nothing else.
 
+Some pages are served but kept out of the index: DokuWiki's `@do=` backlink and
+index views, the `wiki/_detail/` image viewers, and the feeds. `firebase.json`
+sends `X-Robots-Tag: noindex` for them and `stage.py` leaves them out of the
+sitemap. Empty wiki stubs ("This topic does not exist yet") are not staged, so
+they 404. `/wiki/1manual/` was an unwritten copy of the manual and redirects to
+`/wiki/manual/`.
+
 ## How links get fixed
 
 The mirror stores pages under filenames encoding the original query string
