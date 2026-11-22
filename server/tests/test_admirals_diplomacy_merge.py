@@ -484,6 +484,32 @@ def diplomacy():
     check('the lump sum moves once with both civs submitting',
           [mo.resources_of(out, c)[0] for c in (GOOD, BAD)], [625, 635])
 
+    print('a credit lump sum, laid out as the client writes it (0x0055C740)')
+    turn = mo.icv.turn_of(d['d5b'])
+
+    def crls(amount, paid=0):
+        return sp.build_section(b'CRLS', 1, struct.pack('<IB', amount, paid))
+    length = sp.build_section(b'TRLE', 0, struct.pack('<I', 10))
+    offer = trty(681, GOOD, BAD, turn, kind=0, theirs=(crls(7), length))
+    served = with_treaties(d['d5b'], [r for t, r in mo.treaties(d['d5b']).items()
+                                      if t != 681] + [offer])
+    taken = mo.with_trdt(offer, 1, 10, turn)
+    before = [mo.credits_of(served, c) for c in (GOOD, BAD)]
+    for label, record in (('paid by the client', mo.with_sums_paid(taken)),
+                          ('left unpaid', taken)):
+        sub = with_treaties(served, [r for t, r in mo.treaties(served).items()
+                                     if t != 681] + [record])
+        out, notes = merged(served, ('BadGuy', sub))
+        check(f'accepted with the lump sum {label}: 7 credits move once and '
+              f'the treaty reads paid',
+              ([mo.credits_of(out, c) for c in (GOOD, BAD)],
+               mo.treaties(out)[681], notes.get('BadGuy')),
+              ([before[0] - 7, before[1] + 7], mo.with_sums_paid(taken), None))
+    out, notes = merged(d['d0'], ('GoodGuy', proposing(d['d0'], trty(
+        700, GOOD, BAD, mo.icv.turn_of(d['d0']), kind=0, mine=(crls(7),)))))
+    check('proposing one is kept', (sorted(mo.treaties(out)),
+                                    notes.get('GoodGuy')), ([700], None))
+
     out, _notes = merged(d['d6'], (civ[BAD], d['d7']))
     check('a war declared writes both records as the client does: declared '
           'on the declarer, and each the other\'s Inactivity (0x0055BD40)',
@@ -573,7 +599,15 @@ def diplomacy():
             ('a metal lump sum naming a sixth resource',
              trty(700, GOOD, BAD, turn, kind=0,
                   mine=(sp.build_section(b'RSLS', 0, struct.pack('<II', 5, 5)),)),
-             'not an amount and a resource')):
+             'not an amount and a resource'),
+            ('a credit lump sum of one u32',
+             trty(700, GOOD, BAD, turn, kind=0,
+                  mine=(sp.build_section(b'CRLS', 0, struct.pack('<I', 7)),)),
+             'not an unpaid amount'),
+            ('a credit lump sum already paid',
+             trty(700, GOOD, BAD, turn, kind=0,
+                  mine=(sp.build_section(b'CRLS', 1, struct.pack('<IB', 7, 1)),)),
+             'not an unpaid amount')):
         out, notes = merged(d['d0'], ('GoodGuy', proposing(d['d0'], record)))
         check(f'{label} is refused', (mo.treaties(out),
                                       len(said(notes, 'GoodGuy', why))),

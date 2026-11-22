@@ -3486,7 +3486,11 @@ BINDS_FOR = {2: 20, 3: 50, 4: 100}
 BINDING = (2, 3)            # a cease-fire or a peace in force forbids war
 TREATY_ITEMS = frozenset((b'CRLS', b'CRPT', b'RSLS', b'RSPT', b'SLOS', b'SHBR',
                           b'SHGM', b'SHWH', b'TRLE'))
-CREDIT_SUM = b'CRLS'        # u32 amount; not measured, read like CRPT
+# v1: u32 amount ; u8 paid (writer 0x55C740). Accepting applies it once
+# (0x55C780), which moves the amount and sets paid; a proposal reads 0.
+CREDIT_SUM = b'CRLS'
+CREDIT_SUM_SIZE = 5
+CREDIT_SUM_PAID_AT = 4
 RESOURCE_SUM = b'RSLS'      # u32 amount ; u32 resource, 0 metal
 TREATY_LENGTH = b'TRLE'     # u32 turns
 # Copied once on acceptance (0x55D090): one in the demands gives the
@@ -3601,9 +3605,29 @@ def item_refusal(t):
                 len(payload) != 8
                 or struct.unpack_from('<I', payload, 4)[0] >= RESOURCE_KINDS):
             return 'a resource lump sum is not an amount and a resource'
-        if tag in (CREDIT_SUM, TREATY_LENGTH) and len(payload) != 4:
+        if tag == CREDIT_SUM and (len(payload) != CREDIT_SUM_SIZE
+                                  or payload[CREDIT_SUM_PAID_AT]):
+            return 'a credit lump sum is not an unpaid amount'
+        if tag == TREATY_LENGTH and len(payload) != 4:
             return f'item {tag!r} is not one u32'
     return ''
+
+
+def with_sums_paid(record):
+    """A whole TRTY section with each credit lump sum marked paid, as the
+    client's acceptance leaves it. Expects a record read_trdt reads."""
+    out = bytearray(record)
+    _tag, at, _end = _sections(record, 8 + 4, len(record))[0]
+    at += TRDT_FIXED
+    for _side in range(2):
+        n = struct.unpack_from('<I', out, at)[0]
+        at += 4
+        for _i in range(n):
+            size = struct.unpack_from('<I', out, at + 4)[0] & sp.SIZE_MASK
+            if bytes(out[at:at + 4]) == CREDIT_SUM and size == CREDIT_SUM_SIZE:
+                out[at + 8 + CREDIT_SUM_PAID_AT] = 1
+            at += 8 + size
+    return bytes(out)
 
 
 def lump_sums(items):
@@ -4006,15 +4030,21 @@ def diplomacy_orders(served, sub, civ_oid, names):
             length = treaty_length(ts)
             if length is None:
                 length = tt['length']
-            want = (with_trdt(a, ACCEPTED, length, turn) if tt['status'] == ACCEPTED
-                    else with_trdt(a, DECLINED))
-            if b != want:
+            if tt['status'] == ACCEPTED:
+                # The acceptor's client pays its credit lump sums itself.
+                bare = with_trdt(a, ACCEPTED, length, turn)
+                want = with_sums_paid(bare)
+                answers = (want, bare)
+            else:
+                want = with_trdt(a, DECLINED)
+                answers = (want,)
+            if b not in answers:
                 refusals.append(f'{name} DROPPED, the answer changes more than '
                                 f'its status, length and start turn as the '
                                 f'client does')
             else:
                 orders.append(('accept' if tt['status'] == ACCEPTED
-                               else 'decline', oid, b))
+                               else 'decline', oid, want))
         elif (ts['status'] == DECLINED and not ts['deleted'][side]
               and b == with_trdt(a, deleted=tuple(
                   1 if i == side else ts['deleted'][i] for i in range(2)))):
