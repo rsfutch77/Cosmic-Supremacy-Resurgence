@@ -3266,6 +3266,61 @@ ADMIRAL_RULES = frozenset((
     b'TRSM', b'WUFL', b'WLSL', b'ASFL', b'ASAD', b'MASH', b'SCSP', b'SCRG'))
 
 
+# Each rule's section as its writer lays it out: (version, fields). `ids` is a
+# u32 count and an object id per element (0x5241D0), `u32s` a count and the
+# values (0x4D3160), `str` a u32 length and its characters (0x4516E0).
+RULE_LAYOUTS = {
+    b'ASAD': (0, ('u32', 'ids', 'u8')),                     # 0x5AD940
+    b'ASFL': (1, ('u32', 'u32', 'str', 'u8')),              # 0x5ACB20
+    b'ATPL': (0, ('ids',)),                                 # 0x5B0790
+    b'ATSH': (1, ('ids', 'u32s')),                          # 0x5B0EF0
+    b'DFPL': (0, ('ids',)),                                 # 0x5B2730
+    b'FSHP': (0, ()),                                       # 0x5B3ED0
+    b'ICSH': (2, ('u32', 'u32', 'u32')),                    # 0x5B2DF0
+    b'LSSL': (0, ()),                                       # 0x5B4040
+    b'MASH': (2, ('u32', 'ids', 'u32', 'u32', 'u8', 'u8')),  # 0x5AEC30
+    b'RECQ': (0, ()),                                       # 0x5B14A0
+    b'RLYP': (0, ('u32',) * 6 + ('ids', 'u8')),             # 0x5B38E0
+    b'RTCN': (2, ('ids', 'u8', 'u32', 'u32', 'u32')),       # 0x5B4570
+    b'RZPT': (0, ('u32',) * 6 + ('ids', 'u8', 'u32', 'u32')),  # 0x5B1860
+    b'SCRG': (0, ('u32',) * 6 + ('ids', 'u8', 'u32')),      # 0x5AFEC0
+    b'SCSP': (0, ('ids',)),                                 # 0x5AF790
+    b'SPTS': (1, ('u32', 'u8')),                            # 0x5A7A40
+    b'STLS': (0, ('ids', 'u32', 'u32', 'u32', 'u32')),      # 0x5B5B90
+    b'STPF': (0, ('u32',)),                                 # 0x5A8650
+    b'TMMR': (1, ('u32', 'u32')),                           # 0x5A7ED0
+    b'TMSC': (1, ('u32', 'u8')),                            # 0x5A8330
+    b'TRSM': (2, ('ids', 'ids')),                           # 0x5ABAA0
+    b'TSCQ': (0, ('u32',)),                                 # 0x5B2180
+    b'WLSL': (0, ('u32',)),                                 # 0x5B6360
+    b'WUFL': (0, ()),                                       # 0x5AC9B0
+}
+
+
+def rule_layout_refusal(tag, version, payload):
+    """Why a rule's own section is not laid out as its writer writes it, or ''."""
+    want, fields = RULE_LAYOUTS[tag]
+    name = tag.decode('latin1')
+    if version != want:
+        return f'rule {name} is version {version}, not {want}'
+    at = 0
+    for field in fields:
+        if field == 'u8':
+            at += 1
+        elif field == 'u32':
+            at += 4
+        else:
+            if at + 4 > len(payload):
+                return f'rule {name} is cut short'
+            n = struct.unpack_from('<I', payload, at)[0]
+            at += 4 + (n if field == 'str' else 4 * n)
+        if at > len(payload):
+            return f'rule {name} is cut short'
+    if at != len(payload):
+        return f'rule {name} holds {len(payload) - at} byte(s) past its fields'
+    return ''
+
+
 def admirals_of(blob, civ_oid):
     """[(objectId, whole ADML section)] of a civ in order, or None unless its
     ADMS holds exactly its count of ADML sections."""
@@ -3319,11 +3374,15 @@ def read_admiral(record):
     secs = _sections(record, kind_at + 8, end)
     if secs is None or len(secs) != 2 * rules:
         return None, f'its ADDT does not hold the {rules} rule(s) it counts'
-    for (flag, f_at, f_end), (rule, _a, _e) in zip(secs[::2], secs[1::2]):
+    for (flag, f_at, f_end), (rule, r_at, r_end) in zip(secs[::2], secs[1::2]):
         if flag != b'RULE' or f_end - f_at != RULE_FLAG:
             return None, 'a rule is not a RULE followed by its own section'
         if rule not in ADMIRAL_RULES:
             return None, f'rule {rule!r} is not one the client knows'
+        why = rule_layout_refusal(rule, sp.read_header(record, r_at - 8)[1],
+                                  record[r_at:r_end])
+        if why:
+            return None, why
     if not name:
         return None, 'the name is empty'
     ok, why = name_acceptable(name)

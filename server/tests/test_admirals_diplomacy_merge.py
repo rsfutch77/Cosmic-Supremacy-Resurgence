@@ -106,6 +106,19 @@ def adml(oid, name, kind=2, ships=0, rules=((b'TSCQ', 0, b'\x05\0\0\0'),)):
                             + b'\x00' + sp.build_section(b'ADDT', 0, body))
 
 
+def glob_fixtures():
+    import glob
+    return sorted(glob.glob(os.path.join(FIX, '*', '*.b64')))
+
+
+def rule_tags(record):
+    """The rule tags a whole ADML section holds, in order."""
+    _tag, at, end = mo._sections(record, 8 + mo.ADML_FIXED, len(record))[0]
+    n = struct.unpack_from('<I', record, at)[0]
+    secs = mo._sections(record, at + 4 + n + 8, end)
+    return [tag for tag, _a, _e in secs[1::2]]
+
+
 def with_admirals(blob, civ, records):
     """`blob` with the civ's ADMS holding these whole ADML sections."""
     return mo.set_admirals(blob, civ, records)
@@ -317,12 +330,34 @@ def admirals():
                 (b'XXXX', 0, b''),)), "rule b'XXXX' is not one the client knows"),
             ('a fifth type', adml(230, b'a1', kind=4),
              'its type 4 is not one the client offers'),
+            ('a rule at another version', adml(230, b'a1', rules=(
+                (b'TSCQ', 1, b'\5\0\0\0'),)), 'rule TSCQ is version 1, not 0'),
+            ('a rule cut short', adml(230, b'a1', rules=(
+                (b'MASH', 2, b'\0' * 8 + struct.pack('<I', 3)),)),
+             'rule MASH is cut short'),
+            ('a rule with bytes past its fields', adml(230, b'a1', rules=(
+                (b'FSHP', 0, b'\0'),)), 'rule FSHP holds 1 byte(s) past'),
             ('an empty name', adml(230, b''), 'the name is empty')):
         sub = with_admirals(held, ME, [record, adml(232, b'a2')])
         out, notes = merged(held, ('DemoPlayer', sub))
         check(f'{label} is refused, the admiral as served',
               (mo.admirals_of(out, ME), said(notes, 'DemoPlayer', why) != []),
               (mo.admirals_of(held, ME), True))
+    every = tuple((tag, version, b''.join(
+        {'u8': b'\1', 'u32': b'\5\0\0\0', 'ids': struct.pack('<II', 1, 265),
+         'u32s': struct.pack('<II', 1, 7), 'str': struct.pack('<I', 2) + b'ab'}[f]
+        for f in fields)) for tag, (version, fields) in sorted(
+            mo.RULE_LAYOUTS.items()))
+    check('every one of the 24 rules laid out as its writer writes it is read',
+          (len(every), mo.read_admiral(adml(230, b'a1', rules=every))),
+          (24, (b'a1', '')))
+    records = [r for p in glob_fixtures() for b in [sp.load_any(p)]
+               for o in mo.icv.owner_records(b)
+               for _oid, r in mo.admirals_of(b, o['oid']) or []]
+    check('    and the rules the client wrote in the captures fit theirs',
+          (sorted({t for r in records for t in rule_tags(r)}),
+           {mo.read_admiral(r)[1] for r in records}),
+          ([b'FSHP', b'MASH', b'SCRG', b'TSCQ'], {''}))
     out, notes = merged(base, ('DemoPlayer', with_admirals(
         base, THEM, [adml(230, b'x')])))
     check("another civ's admirals are refused as theirs",

@@ -3440,6 +3440,24 @@ layout read off the client above held.
   has a Single Player capture with its choices changed one at a time, and the merge's checks
   follow those layouts.
 
+  **Every layout read off its writer** (22 November 2026). A rule is a `RULE` v0 holding its
+  checkbox byte (`0x5A4560`), then its own section. The writers (found from each tag's write,
+  listed in `merge_orders.RULE_LAYOUTS` with their addresses) use three list forms: object ids
+  as a `u32` count and an id each (`0x5241D0`), raw `u32` values the same way (`0x4D3160`), and
+  a string as a `u32` length and its characters (`0x4516E0`).
+
+  | Version | Rules and their fields |
+  |---|---|
+  | 0 | `FSHP`, `LSSL`, `RECQ`, `WUFL`: none. `ATPL`, `DFPL`, `SCSP`: ids. `STPF`, `TSCQ`, `WLSL`: `u32`. `ASAD`: `u32`, ids, `u8`. `STLS`: ids, four `u32`. `RLYP`: six `u32`, ids, `u8`. `SCRG`: the same and a `u32`. `RZPT`: the same and two `u32` |
+  | 1 | `ATSH`: ids, `u32` values. `ASFL`: two `u32`, a string, `u8`. `SPTS`, `TMSC`: `u32`, `u8`. `TMMR`: two `u32` |
+  | 2 | `ICSH`: three `u32`. `MASH`: `u32`, ids, two `u32`, two `u8`. `RTCN`: ids, `u8`, three `u32`. `TRSM`: ids, ids |
+
+  The captured rules fit: `TSCQ`, `MASH` (22 bytes with planet 265 as its one id) and `SCRG`
+  (37 bytes, sun 260 its one id and N last), and `FSHP` in the merge test. The merge now refuses a
+  rule at another version, cut short or with bytes past its fields
+  (`test_admirals_diplomacy_merge.py`). Not yet done: a capture of the 20 rules no session has
+  written, and what each field means, which the editor's choices name.
+
 **Measured in one Single Player session on 27 and 28 October 2026
 (`server/tests/fixtures/diplomacy`):** diplomacy on `control_fork_played.dat` written with
 `waronly = 0` and 30-day turns, at peace, turns 180 and 181, switching between GoodGuy and BadGuy
