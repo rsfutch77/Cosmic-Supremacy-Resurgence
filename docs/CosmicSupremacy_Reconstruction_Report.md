@@ -840,7 +840,12 @@ Two things follow:
     collects. It looks like a crash.
 
   Not yet done: a scan carried by the live relay and referee, and an energy grid scan on a
-  galaxy with a grid.
+  galaxy with a grid. The live relay, the sandbox referee (`f1bfc7c`) and the packaged
+  launcher are v0.7.2, from before the scan work, and the relay and store code have moved
+  since, so a v0.8 relay beside a v0.7.2 referee is not safe. Decided 22 November 2026: the
+  live scan is a v0.8 release check, run once the relay is deployed and the referee
+  restaged from the tag (`docs/DEVELOPMENT.md`, release steps 10 and 11), with one scan
+  from a packaged launcher in a sandbox galaxy.
 - [x] **A design with no scanner closes the client on the Ship Design tab.** The scanner-range
   getter `0x005479C0` throws "invalid vector<T> subscript" (`0x004E4E50`) when `ShipDesign:152`
   is empty. The Ship Design tab, the designer's stats (`0x004A92B0`), a ship filter and a
