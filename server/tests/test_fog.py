@@ -456,9 +456,14 @@ def main():
         check('and serves the new turn to everyone',
               player_turn.served_blob(store, 'BadGuy', turn + 1) == blob, True)
         store.publish(turn + 2, blob)
-        check('the publish after that removes them',
-              os.path.exists(os.path.dirname(store.view_path('BadGuy', turn))),
-              False)
+        check('the publish after that keeps them for the replay',
+              store.kept_view('BadGuy', turn) == view, True)
+        try:
+            player_turn.served_blob(store, 'BadGuy', turn)
+            served = True
+        except turn_store.NotServed:
+            served = False
+        check('but no longer serves them as a turn', served, False)
 
     print('\nwiping a civ leaves rivals remembering what they last saw')
     wiped, _planets, _ships = wipe_civ.wipe(blob, 'BadGuy', log=quiet)
