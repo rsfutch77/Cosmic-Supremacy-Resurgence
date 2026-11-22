@@ -400,13 +400,24 @@ table at `0x7FC898`. A type-8 order also sets `Ship:61`, its 11-turn countdown (
 **`Ship:76` is not simply "an order exists".** It reads `1` on the local player's ordered ships and `0`
 on the AI's, even when the AI ship carries a valid order type and a fully populated order object. It
 looks like a **pending/unsubmitted-orders flag for the local civ**, which would matter directly for
-turn submission in multiplayer. Two observations only. It also read a non-boolean `980156416` on a
+turn submission in multiplayer. Two observations only. (It is not: see the item below.) It also read a non-boolean `980156416` on a
 freshly built ship, so it may be uninitialised until an order is first set. Use `Ship:52` to ask
 whether an order exists.
 
-[ ] confirm or falsify `Ship:76` as the local civ's pending-orders flag: read it on several of
+[x] confirm or falsify `Ship:76` as the local civ's pending-orders flag: read it on several of
 the local civ's ships before and after an order and a submitted turn, and on a rival's ships in
-the same session.
+the same session. **Falsified** (22 November 2026): it is the byte that marks an order given by
+the player, and a tick does not clear it. `Ship:76` is object `+0x54`, the has-orders byte the
+`DYNO` writer puts after `SHCO` and its `u32` (`0x4DA310`, which writes the order only into the
+owner's own save, `0x52C570`); the third byte above it is padding, which is where the `u32` read
+of `980156416` (`0x3A6C0000`) came from. The order setter (`0x4D9DC0`) raises it only when its
+second argument is set, and only the set-order command (`0x56EBC0`, online and offline) passes
+1. Admirals' orders (`0x5A4xxx`) pass 0, and clearing an order (`0x4DA450`) or an empty one
+lowers it. The ship step reads it at `0x4DC230`: a ship whose order was not given by hand and
+which has an admiral is handed to the admiral (`0x4DAE70`). In the saves, every order Robert
+gave reads 1 (`unruled` `tg1`, `tw1`, `wo1`, `wh2`), ships with none read 0, BadGuy's ship 662
+reads 0 while it scouts, and GoodGuy's 669 and 670 still read 1 a tick later (`admirals` `a10`
+to `a13`).
 
 ### Combat damage: condition is the only per-ship state (July 2026)
 
