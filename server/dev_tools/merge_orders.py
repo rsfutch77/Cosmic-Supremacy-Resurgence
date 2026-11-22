@@ -231,7 +231,11 @@ Carried as the client takes each step, applied to both civs at once:
   map (`SHGM`) too, since neither civ's view holds the other's `EXSY`: the
   giver's systems merge into the receiver's, and the receiver meets each civ
   they name. A cease-fire, peace or alliance ends the stance treaty or war
-  before it and sets both stances.
+  before it and sets both stances. Then a wormhole connection (`SHWH`)
+  links its two wormholes, one of each party's, if both are unlinked and
+  the parties are allies, and every other pending proposal naming either
+  is erased. A treaty the merge ends, by war or by a new stance treaty,
+  unlinks its connected wormholes.
 
 A step on a treaty that the other party already changed in this merge is
 refused. Per-turn payments, shared sight and battle reports, and a treaty
@@ -285,7 +289,8 @@ menu opens on the civ's own unlinked wormhole and offers its other unlinked
 ones at any distance (`0x005080B0`); `CNWH` links the two to each other. An
 ally's wormhole is connected by a treaty instead, and no player command
 clears a link. Carried as two of the civ's own wormholes, unlinked as served,
-each naming the other. The f32 after a wormhole's owner changes between saves
+each naming the other. A wormhole a treaty of the civ's names is the treaty
+step's, so the links the client makes or clears on it are passed over. The f32 after a wormhole's owner changes between saves
 with no command, so it is neither read nor copied.
 
 **Market trades** (`TRRS`), `GLOB > RSMA`: five `i32` counts of the units the
@@ -1490,13 +1495,15 @@ def set_wormhole_link(blob, oid, link):
     raise KeyError(oid)
 
 
-def wormhole_orders(served, submitted, civ_oid):
+def wormhole_orders(served, submitted, civ_oid, by_treaty=frozenset()):
     """([(a, b)], refusals): the pairs of the civ's own wormholes it connected.
 
     The Connect To menu (`0x005080B0`) opens on the civ's own unlinked
     wormhole and lists every other unlinked one it owns, at any distance;
     `CNWH` links the two to each other. An ally's wormhole is offered too, but
     picking it proposes a treaty instead. A link is never cleared by a player.
+    A wormhole in `by_treaty` linked to another, or unlinked, is the treaty
+    step's to change and is passed over.
     """
     was, now = wormholes(served), wormholes(submitted)
     pairs, refused, seen = [], [], set()
@@ -1508,6 +1515,9 @@ def wormhole_orders(served, submitted, civ_oid):
         (owner, link_a, raw_a), (_o, link_b, raw_b) = was[oid], now[oid]
         if oid in seen or (link_a == link_b
                            and _worm_kept(raw_a) == _worm_kept(raw_b)):
+            continue
+        if (oid in by_treaty and _worm_kept(raw_a) == _worm_kept(raw_b)
+                and (link_b == 0 or link_b in by_treaty)):
             continue
         other = now.get(link_b)
         why = None
@@ -3493,6 +3503,15 @@ CREDIT_SUM_SIZE = 5
 CREDIT_SUM_PAID_AT = 4
 RESOURCE_SUM = b'RSLS'      # u32 amount ; u32 resource, 0 metal
 TREATY_LENGTH = b'TRLE'     # u32 turns
+# v0: two wormholes' object ids, one of each party's (writer 0x55D300). Its
+# apply (0x55D1C0) links them to each other when both are unlinked and their
+# owners are allies, and erases every other pending treaty naming either in a
+# SHWH (0x55B480, 0x55AA90). A treaty that ends (0x559C10) unlinks them again
+# if they still name each other (0x55D290). A trade applies its items at once;
+# a stance treaty sets the stance first, so an alliance can carry its own.
+WORMHOLE_SHARE = b'SHWH'
+WORMHOLE_SHARE_SIZE = 8
+ALLIANCE = 4
 # Copied once on acceptance (0x55D090): one in the demands gives the
 # recipient's EXSY to the proposer, one in the offers the proposer's to the
 # recipient, demands first.
@@ -3610,7 +3629,77 @@ def item_refusal(t):
             return 'a credit lump sum is not an unpaid amount'
         if tag == TREATY_LENGTH and len(payload) != 4:
             return f'item {tag!r} is not one u32'
+        if tag == WORMHOLE_SHARE and len(payload) != WORMHOLE_SHARE_SIZE:
+            return 'a wormhole connection is not two wormholes'
     return ''
+
+
+def wormhole_shares(t):
+    """[(wormhole, wormhole)] a treaty's SHWH items name, in item order."""
+    return [struct.unpack('<II', p) for tag, p in t['demands'] + t['offers']
+            if tag == WORMHOLE_SHARE and len(p) == WORMHOLE_SHARE_SIZE]
+
+
+def wormhole_share_refusal(t, worms):
+    """Why a proposal's wormhole connections are not ones the client offers,
+    or ''. `worms` is wormholes() of the galaxy served."""
+    for a, b in wormhole_shares(t):
+        if a not in worms or b not in worms:
+            return 'a wormhole connection names something that is not a wormhole'
+        if {worms[a][0], worms[b][0]} != {t['proposer'], t['recipient']}:
+            return "a wormhole connection is not one of each party's wormholes"
+        if worms[a][1] or worms[b][1]:
+            return 'a wormhole connection names a wormhole already linked'
+    return ''
+
+
+def link_shared_wormholes(blob, t, oid):
+    """(blob, [(a, b)] linked) for an accepted treaty's SHWH items, as the
+    client applies them (0x55D1C0), with the other pending treaties naming
+    either wormhole erased (0x55B480)."""
+    linked = []
+    for a, b in wormhole_shares(t):
+        worms = wormholes(blob)
+        if a not in worms or b not in worms or worms[a][1] or worms[b][1]:
+            continue
+        if (worms[a][0] == worms[b][0] or stances(blob).get(
+                (worms[a][0], worms[b][0])) != ALLIANCE):
+            continue
+        blob = set_wormhole_link(set_wormhole_link(blob, a, b), b, a)
+        linked.append((a, b))
+        kept = {}
+        for k, r in treaties(blob).items():
+            f = read_trdt(r)
+            if (k != oid and f is not None and f['status'] == PROPOSED
+                    and any({a, b} & set(pair) for pair in wormhole_shares(f))):
+                continue
+            kept[k] = r
+        blob = set_treaties(blob, list(kept.values()))
+    return blob, linked
+
+
+def unlink_shared_wormholes(blob, t):
+    """`blob` with an ended treaty's SHWH pairs unlinked where they still name
+    each other (0x55D290)."""
+    for a, b in wormhole_shares(t):
+        worms = wormholes(blob)
+        if (a in worms and b in worms and worms[a][1] == b
+                and worms[b][1] == a):
+            blob = set_wormhole_link(set_wormhole_link(blob, a, 0), b, 0)
+    return blob
+
+
+def treaty_wormholes(served, submitted, civ_oid):
+    """Wormholes named by a SHWH item in a treaty the civ is party to, served
+    or submitted. Their links are the treaty step's."""
+    out = set()
+    for blob in (served, submitted):
+        for r in (treaties(blob) or {}).values():
+            f = read_trdt(r)
+            if f is not None and civ_oid in (f['proposer'], f['recipient']):
+                for pair in wormhole_shares(f):
+                    out.update(pair)
+    return out
 
 
 def with_sums_paid(record):
@@ -3999,8 +4088,9 @@ def diplomacy_orders(served, sub, civ_oid, names):
         tt = read_trdt(b) if b is not None else None
         name = label(oid, tt or ts)
         if a is None:
-            why = new_treaty_refusal(tt, oid, civ_oid, high, turn, met, who,
-                                     war_only)
+            why = (new_treaty_refusal(tt, oid, civ_oid, high, turn, met, who,
+                                      war_only)
+                   or wormhole_share_refusal(tt, wormholes(served)))
             if why:
                 refusals.append(f'{name} DROPPED, {why}')
             else:
@@ -4055,13 +4145,19 @@ def diplomacy_orders(served, sub, civ_oid, names):
 
     # Treaties that went with a declaration of war or an acceptance, and the
     # stances they set, are the referee's to change; anything else is named.
-    ends = set()
+    ends, connected = set(), set()
     for step, oid, b in orders:
         t = read_trdt(b) if b is not None else None
         if step == 'war' or (step == 'accept' and t['kind'] in STANCE_OF):
             ends.add(frozenset((t['proposer'], t['recipient'])))
+        if step == 'accept':
+            for pair in wormhole_shares(t):
+                connected.update(pair)
     for oid, ts, name in removed:
         pair = frozenset((ts['proposer'], ts['recipient']))
+        if ts['status'] == PROPOSED and any(
+                connected & set(p) for p in wormhole_shares(ts)):
+            continue        # erased by the connection accepted (0x0055B480)
         if pair not in ends or ts['status'] not in (ACCEPTED, NON_BINDING):
             refusals.append(f'{name} DROPPED, ending a treaty this way is not '
                             f'something the client offers')
@@ -4149,6 +4245,8 @@ def take_treaty_step(blob, served_treaties, step, oid, record, civ_oid, turn,
                     return (blob, '', f"treaty {oid} DROPPED, the "
                             f"{KINDS[f['kind']]} with {who(other)} binds "
                             f"until turn {f['start'] + f['length']}", oid)
+            ended = [r for r in merged.values()
+                     if _between(r, pair) and read_trdt(r)['status'] == ACCEPTED]
             merged = {k: r for k, r in merged.items()
                       if not (_between(r, pair)
                               and read_trdt(r)['status'] == ACCEPTED)}
@@ -4159,6 +4257,9 @@ def take_treaty_step(blob, served_treaties, step, oid, record, civ_oid, turn,
         merged[new] = with_treaty_id(record, new)
         blob = set_treaties(blob, list(merged.values()))
         if step == 'war':
+            # The treaties in force it ends unlink their wormholes.
+            for r in ended:
+                blob = unlink_shared_wormholes(blob, read_trdt(r))
             blob = set_stance(blob, civ_oid, other, WAR)
             blob = set_stance(blob, other, civ_oid, WAR)
             # Each side records the other's Inactivity when the war began.
@@ -4232,10 +4333,20 @@ def take_treaty_step(blob, served_treaties, step, oid, record, civ_oid, turn,
                       if k == oid or not _stance_in_force(r, pair)}
         line = '; '.join([f'treaty {oid}: {kind} from {who(other)} accepted']
                          + shared)
+    ended = [r for k, r in (treaties(blob) or {}).items()
+             if k not in merged and k != oid]
     blob = set_treaties(blob, list(merged.values()))
+    for r in ended:
+        f = read_trdt(r)
+        if f is not None:
+            blob = unlink_shared_wormholes(blob, f)
     if step == 'accept' and t['kind'] in STANCE_OF:
         blob = set_stance(blob, civ_oid, other, STANCE_OF[t['kind']])
         blob = set_stance(blob, other, civ_oid, STANCE_OF[t['kind']])
+    if step == 'accept':
+        blob, linked = link_shared_wormholes(blob, t, oid)
+        line = '; '.join([line] + [f'wormholes {a} and {b} connected'
+                                   for a, b in linked])
     return blob, line, '', oid
 
 
@@ -5409,7 +5520,8 @@ def merge(blob, submissions, log=print, notes=None, arms=None, scans=None):
                 drop(why)
 
             # Wormholes connected, judged against the state served.
-            pairs, refusals = wormhole_orders(served, sub, mine)
+            pairs, refusals = wormhole_orders(
+                served, sub, mine, treaty_wormholes(served, sub, mine))
             for why in refusals:
                 drop(why)
             for a, b in pairs:

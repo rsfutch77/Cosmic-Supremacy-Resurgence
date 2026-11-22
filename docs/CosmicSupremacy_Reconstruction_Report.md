@@ -3453,7 +3453,7 @@ with `set_blob_player.py` to answer. Every capture's `waronly` bytes read `01 00
 - **A turn** leaves the treaties as they were.
 - **A per-turn payment** reaches the recipient on the first tick after acceptance (sandbox, 13
   November 2026).
-- [ ] **Peace, alliances, expiry and the sharing items are not measured.** Peace and alliance
+- [x] **Peace, alliances, expiry and the sharing items are not measured.** Peace and alliance
   acceptance were built on the UI's word and tried only with a synthesized submission
   (`server/dev_tools/alliance_acceptance.py`); a treaty running out is assumed to work, since
   the game's tick ends it; and nothing checks that `SHGM`, `SLOS`,
@@ -3480,8 +3480,23 @@ with `set_blob_player.py` to answer. Every capture's `waronly` bytes read `01 00
     item "Every treaty is served to every civ" above).
   - **`SHBR`** is the battle builder's (`Owner::AddNewsToAllies`, `0x543760`), so the copy
     lands in the ally's own news on the tick. **Done**: seen on screen, below.
-  - **`SHWH`**: not yet read off the client. Galaxies hold wormholes now (`fixtures/unruled`
-    `wh0` to `wh2`).
+  - **`SHWH`** connects an ally's wormhole to one of the civ's own, not a share. It is v0,
+    two wormhole object ids (writer `0x55D300`, reader `0x55D370`). Connect To on the civ's
+    own unlinked wormhole offers an ally's unlinked one, and picking it proposes a trade with
+    the item in both lists, the proposer's wormhole first. Its apply (`0x55D1C0`) links the
+    two to each other when both are unlinked, their owners differ and are allies (`0x5350C0`,
+    stance 4), then erases every other pending treaty naming either in a `SHWH` (`0x55B480`,
+    `0x55AA90`). The second copy finds them linked and does nothing. A treaty that ends
+    (`0x559C10`) unlinks them again if they still name each other (`0x55D290`). Acceptance
+    applies a trade's items at once, and sets a stance treaty's stance first, so an alliance
+    can carry its own. The merge had no step for it: the acceptor's client links both
+    wormholes in its own view, and the merge refused both links as connection orders, so the
+    pair never connected. **Done**: the merge checks a proposal names one unlinked wormhole of
+    each party, links the pair on acceptance under the client's conditions and erases the
+    other pending proposals naming them, unlinks it when the merge ends the treaty by war or
+    a new stance treaty, and leaves the links the client makes or clears on those wormholes to
+    the treaty step (`test_scans_notes_wormholes_merge.py`). A new object id now also clears
+    the ids of wormholes and treaties (`inject_design.max_object_id`).
   - **`CRLS`** is version 1, a `u32` amount and a paid byte (writer `0x55C740`, reader
     `0x55C810`), unlike `CRPT`'s bare `u32`. Its apply (`0x55C780`) moves the amount between
     the two civs' credits once and sets the byte. The merge refused both the 5-byte item and
@@ -3515,7 +3530,14 @@ with `set_blob_player.py` to answer. Every capture's `waronly` bytes read `01 00
     report. Both civs hold a category 11 item at that place, and BadGuy's served view keeps it.
   - The TestBed client does not end a turn on its own here; the Resurgence client ticked it.
 
-  Not yet done: `SHWH`.
+  **Seen on screen** (Robert, 22 November 2026), in TestBed on `wh0` with wormhole 683
+  handed to BadGuy and an alliance (684) in force (`fixtures/unruled` `sw0` to `sw2`):
+  - Connect To on GoodGuy's 682, picking BadGuy's 683, proposed trade 685 with `SHWH`
+    `682, 683` in both lists. The merge kept it.
+  - BadGuy accepted it. The trade read in force for 50 turns from turn 304, with no `TRLE`,
+    and 682 and 683 each named the other. The merge linked them the same way with nothing
+    refused; the merge before this change refused both links and left them unlinked.
+  - BadGuy's wormhole 683 showed as connected to GoodGuy's 682 on screen.
 
 - [x] **The referee's tick can advance two turns.** On the diplomacy galaxy one tick published
   turn 182 from 180 (21 November 2026), while the same base went from 180 to 181 in the scan

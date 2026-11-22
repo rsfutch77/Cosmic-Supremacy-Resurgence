@@ -28,6 +28,13 @@ The engine made 682; the client allows `planets / 10 + 1` (`0x0053A5A0`), so
     wh2  ship 681, holding at 683, sent through to beyond 682; one tick
          later the engine had it at 682
 
+An ally's wormhole connected by treaty, from `wh0` with 683 handed to BadGuy
+and an alliance (684) in force (22 November 2026):
+
+    sw0  staged; 682 GoodGuy's and 683 BadGuy's, both unlinked
+    sw1  Connect To on 682, picking 683: trade 685 proposed (TestBed)
+    sw2  BadGuy accepted it (TestBed)
+
 Orders on a planet, from `wo0` given a Colony Ship (684) over unowned 264,
 and a Troop Bay frigate (685) and a Bio Bombs frigate (686) over BadGuy's
 homeworld 384 (Robert, 22 November 2026):
@@ -245,6 +252,86 @@ def main():
     out, notes = merged(wh0, bytes(spun))
     check('a save where only that f32 moved changes nothing and says nothing',
           (out == wh0, notes), (True, []))
+
+    print("\nan ally's wormhole connected by treaty (SHWH, 0x0055D1C0)")
+    sw0, sw1, sw2 = load('sw0'), load('sw1'), load('sw2')
+
+    def links(blob):
+        return {k: v[1] for k, v in mo.wormholes(blob).items()}
+    proposed = mo.read_trdt(mo.treaties(sw1)[685])
+    pair = struct.pack('<II', 682, 683)
+    check('Connect To on an ally\'s wormhole proposes a trade naming both, '
+          'in both lists',
+          (proposed['kind'], proposed['demands'], proposed['offers'],
+           links(sw1)),
+          (0, [(b'SHWH', pair)], [(b'SHWH', pair)], {682: 0, 683: 0}))
+    out, notes = merged(sw0, sw1)
+    check('the proposal is kept', (mo.treaties(out), notes),
+          (mo.treaties(sw1), []))
+    check('accepting it links the pair in the client', links(sw2),
+          {682: 683, 683: 682})
+    out, notes = merged(sw1, sw2, civ='BadGuy')
+    check('and the merge links them too, nothing refused',
+          (links(out), mo.treaties(out), notes),
+          ({682: 683, 683: 682}, mo.treaties(sw2), []))
+
+    peace = sw1
+    for a, b in ((GOOD, BAD), (BAD, GOOD)):
+        peace = mo.set_stance(peace, a, b, 3)
+    taken = mo.treaties(sw2)[685]
+    sub = mo.set_treaties(peace, [r for k, r in mo.treaties(peace).items()
+                                  if k != 685] + [taken])
+    out, notes = merged(peace, sub, civ='BadGuy')
+    check('between civs not allied it is accepted and links nothing',
+          (mo.read_trdt(mo.treaties(out)[685])['status'], links(out), notes),
+          (mo.ACCEPTED, {682: 0, 683: 0}, []))
+
+    rival = mo.set_treaties(sw2, list(mo.treaties(sw2).values()) + [
+        mo.with_treaty_id(mo.treaties(sw1)[685], 690)])
+    served = mo.set_high_water(mo.set_treaties(
+        sw1, list(mo.treaties(sw1).values()) + [
+            mo.with_treaty_id(mo.treaties(sw1)[685], 690)]), 690)
+    out, notes = merged(served, sw2, civ='BadGuy')
+    check('another pending proposal naming either wormhole is erased '
+          '(0x0055B480), and its absence is not named',
+          (sorted(mo.treaties(out)), notes), ([684, 685], []))
+    check('    while one left in the submission is erased all the same',
+          sorted(mo.treaties(merged(served, mo.set_high_water(rival, 690),
+                                    civ='BadGuy')[0])), [684, 685])
+
+    linked = merged(sw1, sw2, civ='BadGuy')[0]
+    war = sp.build_section(b'TRTY', 2, struct.pack('<I', 700) + sp.build_section(
+        b'TRDT', 1, struct.pack('<IIIIiiI', BAD, GOOD, 1, 3, -1, 304, 304)
+        + b'\0\0' + struct.pack('<II', 0, 0)))
+    unlinked = mo.set_wormhole_link(mo.set_wormhole_link(linked, 682, 0), 683, 0)
+    declared = mo.set_high_water(mo.set_treaties(unlinked, [war]), 700)
+    for a, b in ((GOOD, BAD), (BAD, GOOD)):
+        declared = mo.set_stance(declared, a, b, 1)
+    out, notes = merged(linked, declared, civ='BadGuy')
+    check('a war that ends the treaty unlinks the pair (0x0055D290)',
+          (sorted(mo.treaties(out)), links(out), notes),
+          ([700], {682: 0, 683: 0}, []))
+
+    turn = icv.turn_of(sw0)
+
+    def offer(*items):
+        body = struct.pack('<IIIIiiI', GOOD, BAD, 0, 0, -2, -1, turn) + b'\0\0'
+        body += struct.pack('<I', 0) + struct.pack('<I', len(items)) + b''.join(
+            sp.build_section(b'SHWH', 0, i) for i in items)
+        return mo.set_high_water(mo.set_treaties(
+            sw0, list(mo.treaties(sw0).values()) + [sp.build_section(
+                b'TRTY', 2, struct.pack('<I', 700)
+                + sp.build_section(b'TRDT', 1, body))]), 700)
+    for label, sub, why in (
+            ('two wormholes of one civ', offer(struct.pack('<II', 682, 682)),
+             "not one of each party's"),
+            ('something that is not a wormhole',
+             offer(struct.pack('<II', 682, 384)), 'not a wormhole'),
+            ('one id', offer(struct.pack('<I', 682)), 'not two wormholes')):
+        out, notes = merged(sw0, sub)
+        check(f'a connection naming {label} is refused',
+              (sorted(mo.treaties(out)), sum(why in n for n in notes)),
+              ([684], 1))
 
     print('\nan order that needs a module (0x0050A110)')
     wo0, wo1 = load('wo0'), load('wo1')
