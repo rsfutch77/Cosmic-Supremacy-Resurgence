@@ -23,6 +23,8 @@ The engine made 682; the client allows `planets / 10 + 1` (`0x0053A5A0`), so
 
     wh0  682 and 683 unlinked, as the client saved them
     wh1  Connect To on 682, picking 683 (Robert)
+    wh2  ship 681, holding at 683, sent through to beyond 682; one tick
+         later the engine had it at 682
 
 Other notes and wormholes are built here from what the client's routines
 write.
@@ -203,6 +205,10 @@ def main():
     check('Connect To is carried',
           ({k: v[1] for k, v in mo.wormholes(out).items()}, notes),
           ({682: 683, 683: 682}, []))
+    wh2 = load('wh2')
+    out, notes = merged(wh1, wh2)
+    check('a course through the pair is carried as a ship order',
+          (mo.wormholes(out)[682][1], notes), (683, []))
     spun = bytearray(wh0)
     at = wh0.index(mo.wormholes(wh0)[682][2]) + mo.WORM_DRIFT
     spun[at:at + 4] = drift[1]

@@ -891,7 +891,9 @@ Two things follow:
   the `f32` after a wormhole's owner changes between any two saves of a running client, with no
   command, and the rule counted it as a change beyond the link. The rule now leaves that `f32`
   out of the comparison and keeps the served value (`test_scans_notes_wormholes_merge.py`). The
-  create-wormhole orders were carried by the ship order rule and reproduced the save exactly.
+  create-wormhole orders were carried by the ship order rule and reproduced the save exactly,
+  and so was a course through the pair: a move whose `ROUT` runs from 683 to 682 and names 683
+  (`wh2`). One tick later the engine had the ship at 682.
 
   The measurement also found the draft price missing from the merge (below).
 - [x] **Drafting a citizen was free in multiplayer.** The client charges each draft
