@@ -3451,7 +3451,7 @@ with `set_blob_player.py` to answer. Every capture's `waronly` bytes read `01 00
 - [ ] **Peace, alliances, expiry and the sharing items are not measured.** Peace and alliance
   acceptance were built on the UI's word and tried only with a synthesized submission
   (`server/dev_tools/alliance_acceptance.py`); a treaty running out is assumed to work, since
-  the game's tick ends it; `CRLS` is read like `CRPT`; and nothing checks that `SHGM`, `SLOS`,
+  the game's tick ends it; and nothing checks that `SHGM`, `SLOS`,
   `SHBR` and `SHWH` reach the partner's fogged view, which withholds other civs' `EXSY` and
   `KNPL` (`server/fog.py`). Done when each is answered in the client on the sandbox or in a
   Single Player capture, and a shared map or line of sight shows in the partner's served view.
@@ -3474,8 +3474,15 @@ with `set_blob_player.py` to answer. Every capture's `waronly` bytes read `01 00
     the treaties it is served. Nothing to carry, once a view holds the civ's own treaties (the
     item "Every treaty is served to every civ" above).
   - **`SHBR`** is the battle builder's (`Owner::AddNewsToAllies`, `0x543760`), so the copy
-    lands in the ally's own news on the tick.
-  - **`SHWH`**: no galaxy holds a wormhole.
+    lands in the ally's own news on the tick. **Done**: seen on screen, below.
+  - **`SHWH`**: not yet read off the client. Galaxies hold wormholes now (`fixtures/unruled`
+    `wh0` to `wh2`).
+  - **`CRLS`** is version 1, a `u32` amount and a paid byte (writer `0x55C740`, reader
+    `0x55C810`), unlike `CRPT`'s bare `u32`. Its apply (`0x55C780`) moves the amount between
+    the two civs' credits once and sets the byte. The merge refused both the 5-byte item and
+    the acceptance that sets the byte, so a credit lump sum made in the client was dropped.
+    **Done**: the merge takes the item unpaid in a proposal, takes an acceptance with the byte
+    set or not, stores it paid, and moves the credits once (`test_admirals_diplomacy_merge.py`).
 
   **Seen on screen** (Robert, 21 November 2026), with the launcher and the referee's tick on a
   folder galaxy from `d4` at turn 180, both stances set to Neutral:
@@ -3491,8 +3498,19 @@ with `set_blob_player.py` to answer. Every capture's `waronly` bytes read `01 00
   - After the tick BadGuy's row of GoodGuy's home system 260 read the current turn (it had
     read turn 34), and BadGuy saw GoodGuy's home planets and ships live.
 
-  Not yet done: `SHBR` seen in an ally's news, which needs a third civ to fight; `CRLS`
-  accepted in the client; `SHWH` once a galaxy has a wormhole.
+  **Seen on screen** (Robert, 22 November 2026), in Single Player on `d0` with a third civ,
+  Ceti, at war with GoodGuy and GoodGuy's two warships over Ceti's homeworld
+  (`fixtures/diplomacy` `cs0` to `cs3`):
+  - GoodGuy proposed an alliance (684) sharing battle reports both ways and offering 7 credits
+    as a lump sum. The `CRLS` read `07000000 00`, and the merge kept the proposal.
+  - BadGuy accepted it. The `CRLS` read `07000000 01`, GoodGuy's credits went from 10,793 to
+    10,786 and BadGuy's from 5,935 to 5,942, and the merge reproduced the treaties, stances
+    and credits with nothing refused.
+  - On turn 181 GoodGuy fought at Ceti's homeworld, and BadGuy's News screen showed the battle
+    report. Both civs hold a category 11 item at that place, and BadGuy's served view keeps it.
+  - The TestBed client does not end a turn on its own here; the Resurgence client ticked it.
+
+  Not yet done: `SHWH`.
 
 - [x] **The referee's tick can advance two turns.** On the diplomacy galaxy one tick published
   turn 182 from 180 (21 November 2026), while the same base went from 180 to 181 in the scan

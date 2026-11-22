@@ -24,6 +24,13 @@ proposes another (d5p); BadGuy accepts it (d5), deletes the declined one (d6),
 declares war (d7); a turn passes (d8); BadGuy proposes a cease-fire (d9);
 GoodGuy accepts it (d9a). d3b, d4g, d5b and d9g are the step before, reloaded
 as the other civ.
+
+cs0 to cs3 are a session on 22 November 2026: d0 with a third civ, Ceti (679),
+at war with GoodGuy and GoodGuy's warships over Ceti's homeworld (cs0).
+GoodGuy proposes an alliance sharing battle reports both ways and offering 7
+credits as a lump sum (cs1, TestBed); BadGuy accepts it (cs2, TestBed); the
+Resurgence client ticks turn 181 (cs3), where GoodGuy's battle at Ceti reaches
+BadGuy's news.
 """
 import os
 import struct
@@ -207,6 +214,22 @@ def ordered(blob, ship):
         return mo.replace_dyno(blob, ship, sp.build_section(
             b'DYNO', dyno.version, io.build_dyno(d)))
     raise SystemExit(f'ship {ship} not found')
+
+
+def battle_news(blob):
+    """[(civ name, turn, category, rounded position)] of every 44-byte NEWS
+    record, as two_sided_war.news reads them."""
+    owners = mo.icv.owner_records(blob)
+    out, at = [], blob.find(b'NEWS')
+    while at != -1:
+        if struct.unpack_from('<I', blob, at + 4)[0] & sp.SIZE_MASK == 44:
+            f = struct.unpack_from('<8I', blob, at + 8)
+            pos = struct.unpack_from('<3f', blob, at + 40)
+            who = next((o['name'] for o in owners
+                        if o['off'] < at < o['end']), '-')
+            out.append((who, f[2], f[5], tuple(round(p) for p in pos)))
+        at = blob.find(b'NEWS', at + 1)
+    return out
 
 
 def said(notes, civ, *words):
@@ -509,6 +532,38 @@ def diplomacy():
         700, GOOD, BAD, mo.icv.turn_of(d['d0']), kind=0, mine=(crls(7),)))))
     check('proposing one is kept', (sorted(mo.treaties(out)),
                                     notes.get('GoodGuy')), ([700], None))
+
+    print('the credit lump sum and shared battle reports in the client')
+    cs = {n: dip(n) for n in ('cs0', 'cs1', 'cs2', 'cs3')}
+    offered = mo.read_trdt(mo.treaties(cs['cs1'])[684])
+    check('the proposal holds the lump sum as 7 credits, unpaid',
+          (offered['kind'], offered['demands'], offered['offers']),
+          (4, [(b'SHBR', b'')],
+           [(b'SHBR', b''), (b'CRLS', struct.pack('<IB', 7, 0))]))
+    accepted = mo.read_trdt(mo.treaties(cs['cs2'])[684])
+    check('the acceptance leaves it paid, 7 credits moved once',
+          (accepted['offers'][1],
+           [mo.credits_of(cs[n], c) for n in ('cs1', 'cs2') for c in (GOOD, BAD)]),
+          ((b'CRLS', struct.pack('<IB', 7, 1)), [10793, 5935, 10786, 5942]))
+    for base, cur, who in (('cs0', 'cs1', 'GoodGuy'), ('cs1', 'cs2', 'BadGuy')):
+        out, notes = merged(cs[base], (who, cs[cur]))
+        check(f'{cur} over {base}: treaties, stances and credits as the client '
+              f'left them, unnamed',
+              (mo.treaties(out), mo.stances(out),
+               [mo.credits_of(out, c) for c in (GOOD, BAD)], notes.get(who)),
+              (mo.treaties(cs[cur]), mo.stances(cs[cur]),
+               [mo.credits_of(cs[cur], c) for c in (GOOD, BAD)], None))
+    import fog
+
+    def news_181(blob, civ):
+        return [n[1:] for n in battle_news(blob) if n[0] == civ and n[1] == 181]
+    battle = news_181(cs['cs3'], 'GoodGuy')
+    check("GoodGuy's battle at Ceti reaches BadGuy's news on the tick",
+          (battle, news_181(cs['cs3'], 'BadGuy')),
+          ([(181, 11, (1150, 540, 1089))],) * 2)
+    check("and BadGuy's served view keeps it",
+          news_181(fog.project(cs['cs3'], 'BadGuy', log=lambda *a: None),
+                   'BadGuy'), battle)
 
     out, _notes = merged(d['d6'], (civ[BAD], d['d7']))
     check('a war declared writes both records as the client does: declared '
