@@ -55,6 +55,9 @@ OWNER_REPORTS_END = 324
 # Keeps a console child from opening a window at every tick.
 _NO_WINDOW = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
 
+TICK_ATTEMPTS = 3       # fresh loads tried before a tick is refused
+ADVANCE_PAST = 3        # advance_turns.py's exit code past the target
+
 
 def turn_of(blob: bytes) -> int:
     """The turn a blob is at, as the engine numbers it."""
@@ -380,6 +383,10 @@ def tick(blob: bytes, turns: int = 1, secs: int = 10, work_dir=None,
     The save path is checked before the client is launched, since the tick
     ends in a `SaveGame`. `scans`, [(civ, type, [target id])], are replayed
     in the client before it advances (`replay_scans`).
+
+    A capture is returned only at exactly the load turn plus `turns`. One past
+    or short of it is ticked again from a fresh load, up to `TICK_ATTEMPTS`
+    times, and then refused.
     """
     import game_cycle as gc
     import player_turn
@@ -401,27 +408,47 @@ def tick(blob: bytes, turns: int = 1, secs: int = 10, work_dir=None,
         f.write(blob)
     log(f"  referee: {len(blob):,} bytes -> {os.path.basename(dat)}")
 
-    # `restart` takes the client lock before closing anything, so a client in
-    # use by a player is never closed.
-    snap = gc.restart(dat, purpose="referee tick", wait_for_lock=240.0)
-    start = snap.turn
-    replay_scans(snap, list(scans), log=log)
-    log(f"  referee: galaxy up at turn {start}, advancing {turns}")
+    # At least a day between the target turn and the capture; a galaxy's own
+    # longer length is kept, since shortening it ends another turn.
+    hold = player_turn.HOLD_SECONDS
+    got = want = None
+    for attempt in range(1, TICK_ATTEMPTS + 1):
+        # `restart` takes the client lock before closing anything, so a client
+        # in use by a player is never closed.
+        snap = gc.restart(dat, purpose="referee tick", wait_for_lock=240.0)
+        start = snap.turn
+        want = start + turns
+        replay_scans(snap, list(scans), log=log)
+        log(f"  referee: galaxy up at turn {start}, advancing {turns}")
 
-    # The referee runs from a checkout, so sys.executable is a real interpreter.
-    r = subprocess.run([sys.executable, os.path.join(DEV, "advance_turns.py"),
-                        str(turns), "--secs", str(secs)],
-                       capture_output=True, text=True, cwd=DEV,
-                       creationflags=_NO_WINDOW)
-    if r.returncode != 0:
-        log(r.stdout + r.stderr)
-        raise SystemExit("advance_turns failed")
+        # The referee runs from a checkout, so sys.executable is a real
+        # interpreter.
+        r = subprocess.run([sys.executable,
+                            os.path.join(DEV, "advance_turns.py"),
+                            str(turns), "--secs", str(secs),
+                            "--hold", str(hold)],
+                           capture_output=True, text=True, cwd=DEV,
+                           creationflags=_NO_WINDOW)
+        if r.returncode == ADVANCE_PAST:
+            log(r.stdout + r.stderr)
+            log(f"  referee: attempt {attempt} went past turn {want}")
+            gc.close_client()
+            continue
+        if r.returncode != 0:
+            log(r.stdout + r.stderr)
+            raise SystemExit("advance_turns failed")
 
-    capture = player_turn.collect("referee", save_dir=save_dir, log=log)
-    out = sp.load_any(capture)
-    gc.close_client()
-    log(f"  referee: turn {start} -> captured {len(out):,} bytes")
-    return out
+        capture = player_turn.collect("referee", save_dir=save_dir, log=log)
+        out = sp.load_any(capture)
+        gc.close_client()
+        got = turn_of(out)
+        if got == want:
+            log(f"  referee: turn {start} -> {got}, captured {len(out):,} bytes")
+            return out
+        log(f"  referee: attempt {attempt} captured turn {got}, not {want}")
+    raise SystemExit(f"refusing to publish: {TICK_ATTEMPTS} tick(s) of "
+                     f"{turns} turn(s) did not end at turn {want}"
+                     + (f", the last captured {got}" if got is not None else ""))
 
 
 def resolve_turn(store: TurnStore, save_dir=None, log=print) -> int:
