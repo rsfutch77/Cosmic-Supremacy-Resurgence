@@ -839,9 +839,16 @@ Two things follow:
     closes the game again a moment after it opens: the launcher sees the time is up and
     collects. It looks like a crash.
 
-  Not yet done: a scan carried by the live relay and referee, and an energy grid scan on a
-  galaxy with a grid. The live relay, the sandbox referee (`f1bfc7c`) and the packaged
-  launcher are v0.7.2, from before the scan work, and the relay and store code have moved
+  An energy grid scan on a galaxy with a grid makes the same report both ways (22 November
+  2026, `test_scan_types.py`). On `unruled/s2`, where GoodGuy's receiver on 263 is linked to
+  the transmitters on 262 and 261, BadGuy, served 263 with its links empty, scanned it with
+  the button and through the referee. Each took one scan and made one `SCEG` report, byte for
+  byte the same: the `SCAN` header, then `ENGR`, a `u32` count and per link the transmitter,
+  a `u32` (4,000 for 261 and 2,000 for 262, not yet decoded), a `u32` 1 and the receiver.
+  BadGuy's Scanning screen showed the report with both links (Robert, 22 November 2026).
+
+  Not yet done: a scan carried by the live relay and referee. The live relay, the sandbox
+  referee (`f1bfc7c`) and the packaged launcher are v0.7.2, from before the scan work, and the relay and store code have moved
   since, so a v0.8 relay beside a v0.7.2 referee is not safe. Decided 22 November 2026: the
   live scan is a v0.8 release check, run once the relay is deployed and the referee
   restaged from the tag (`docs/DEVELOPMENT.md`, release steps 10 and 11), with one scan

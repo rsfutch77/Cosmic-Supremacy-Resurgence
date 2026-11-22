@@ -18,6 +18,10 @@ never writes.
 
 A fleet scan needs a `Fleet` target, and no galaxy here holds one, so both
 sides make no report and keep the scan.
+
+`d4` has no energy grid, so an energy grid scan runs again on `unruled/s2`,
+where GoodGuy's receiver on 263 is linked to the transmitters on 262 and 261:
+BadGuy, with two energy grid scans, scans 263 both ways.
 """
 import os
 import socket
@@ -107,8 +111,8 @@ def masked(report):
     return report[:lo] + b'\0' * (hi - lo) + report[hi:]
 
 
-def by_button(blob):
-    """The capture after GoodGuy presses every scan, offline."""
+def by_button(blob, targets=TARGETS):
+    """The capture after the galaxy's player presses each scan, offline."""
     os.makedirs(WORK, exist_ok=True)
     dat = os.path.join(WORK, 'scan_types_button.dat')
     with open(dat, 'wb') as f:
@@ -120,7 +124,7 @@ def by_button(blob):
                  if not o['static']}
         rem = remote.Remote(snap.state.pid, log=log)
         try:
-            for t, target in TARGETS.items():
+            for t, target in targets.items():
                 rem.do_scan(t, [alloc[target]])
         finally:
             rem.close()
@@ -154,6 +158,7 @@ def main():
             while port_free(PORT) and time.time() < end:
                 time.sleep(0.2)
         run(galaxy())
+        run_grid(grid_galaxy())
     finally:
         if server is not None:
             server.terminate()
@@ -206,6 +211,45 @@ def run(blob):
     check('it counts the reports', n, len(want))
     check('    and holds them in order', body[4:4 + sum(map(len, answered))],
           b''.join(answered))
+
+
+GRID_TARGET = 263              # GoodGuy's receiver in s2, linked to 262 and 261
+ENERGY_GRID = 6
+
+
+def grid_galaxy():
+    import set_blob_player
+    s2 = sp.load_any(os.path.join(FIX, 's2.b64'))
+    blob = with_stock(s2, 'BadGuy', {ENERGY_GRID: 2})
+    return set_blob_player.set_player(blob, 'BadGuy', log=log)
+
+
+def run_grid(blob):
+    print('\nan energy grid scan on a galaxy with a grid')
+    check('BadGuy holds two energy grid scans', stock(blob, 'BadGuy')[ENERGY_GRID],
+          2)
+    view = fog.project(blob, 'BadGuy', log=log)
+    served = fog._systems(view, sp.parse_blob(view))
+    planet = next(pl for pls in served.values() for pl in pls
+                  if fog._pid(view, pl) == GRID_TARGET)
+    enli = next(planet.find('ENLI'))
+    check("BadGuy's view serves 263's energy links empty",
+          view[enli.payload:enli.end], struct.pack('<I', 0))
+
+    button = by_button(blob, {ENERGY_GRID: GRID_TARGET})
+    referee, made = scan.run_scans(blob, 'BadGuy',
+                                   [(ENERGY_GRID, [GRID_TARGET])], log=log)
+    pressed = [r for r in mo.reports_of(button, BAD) if r[:4] == b'SCEG']
+    answered = [r for r in mo.reports_of(referee, BAD) if r[:4] == b'SCEG']
+    check('the button and the referee each made one report',
+          (len(pressed), made), (1, [1]))
+    check("    and the referee's is the button's", answered, pressed)
+    check('    naming the receiver and both transmitters it links',
+          all(struct.pack('<I', p) in pressed[0] for p in (263, 262, 261)),
+          True)
+    check('each took one scan', (stock(button, 'BadGuy')[ENERGY_GRID],
+                                 stock(referee, 'BadGuy')[ENERGY_GRID]), (1, 1))
+    print(f'      the report: {pressed[0].hex()}')
 
 
 if __name__ == '__main__':
