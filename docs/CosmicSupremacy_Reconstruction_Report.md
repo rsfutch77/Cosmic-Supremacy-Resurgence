@@ -854,10 +854,11 @@ Two things follow:
   parts, that leaves no scanner (`test_design_edits_merge.py`). A design already served
   without one is kept. Whether the designer's minus sign takes the last scanner off, and
   whether the client stays up when it does, is Singleplayer checklist F9.
-- [ ] **Notes and wormhole links are carried as read, not measured.** Calling the note dialog's
+- [x] **Notes and wormhole links are carried as read, not measured.** Calling the note dialog's
   routine (`0x00538DD0`) from outside closed the client in a drawing routine, and no galaxy holds
   a wormhole. Measure a note written and edited through the News screen, and a wormhole pair
-  connected once a galaxy has one.
+  connected once a galaxy has one. **Closed** (22 November 2026): both measured in the client
+  (below), and the wormhole rule fixed for what the measurement showed.
 
   **Notes, measured** (22 November 2026): a note is made only from the News screen's category
   list, where the Notes row under Private Messages ends in a clickable `Create a New Note`
@@ -875,7 +876,37 @@ Two things follow:
   `0x006D2400` and the table entry `0x007FA874` points at it. The release build applies it to
   every client (`test_notes_label_patch.py`), and Robert saw the row on screen the same day.
 
-  Not yet done: a wormhole pair connected in the client.
+  **Wormholes, measured** (22 November 2026). `s0` was given a `wgen` design (cruiser, scanner,
+  four engines, Wormhole Generator, module 5) and two ships of it. Robert crewed them and sent
+  them out, then gave each the create-wormhole order (ship order 8), which the client offers only
+  for a point inside the civ's own sphere of influence. The order is a route to that point, and
+  the ship becomes the wormhole when it arrives: 680 made 682 by turn 259, ticked in a
+  Resurgence client. The second ship arrived with its order spent and no wormhole, and the
+  client said `You need to control more planets in order to create more wormholes.`: a civ may
+  hold `planets / 10 + 1` wormholes (`0x0053A5A0`; a civ whose `Owner+0x38` is 1 may hold 9,999).
+  So 683 is 682's record copied to the second ship's target. Robert connected them with Connect
+  To on turn 304 (`wh0`, `wh1`).
+
+  Connecting wrote each wormhole's link and nothing else a player did, but the merge refused it:
+  the `f32` after a wormhole's owner changes between any two saves of a running client, with no
+  command, and the rule counted it as a change beyond the link. The rule now leaves that `f32`
+  out of the comparison and keeps the served value (`test_scans_notes_wormholes_merge.py`). The
+  create-wormhole orders were carried by the ship order rule and reproduced the save exactly.
+
+  The measurement also found the draft price missing from the merge (below).
+- [x] **Drafting a citizen was free in multiplayer.** The client charges each draft
+  `5 * (T + k) + 105` credits (§13), but the merge carried the people and kept the credits served.
+  Found when Robert crewed the `wgen` ships: two drafts at `T = 10` cost 315 in the client and
+  nothing in the merge. **Fixed** (22 November 2026): the people rule charges the price, taking `T`
+  after the soldiers the submission retired (the cheapest order the client allows), refuses a
+  draft the civ cannot pay with the rest of its people changes, and charges nothing below content
+  version 150. The crewing save now merges exactly (`test_people_and_hurry.py`, `dr0`, `dr1`).
+- [ ] **Ship orders are carried without the client's checks.** The ship order rule copies a ship's
+  `DYNO` whole, so it takes any order type. The client offers create-wormhole only inside the
+  civ's sphere of influence, only for a ship carrying a Wormhole Generator, and the engine makes
+  no more than `planets / 10 + 1`; nothing in the merge checks any of these, nor a bio-bomb or
+  colonise order's module. Whether the engine re-checks an order at the tick is not measured.
+  Done when each order type's own check is encoded, or shown to be made by the engine.
 - [ ] **A player's interface settings are lost at every turn.** The merge carries only the vote
   byte of the civ's `USSE`, so a setting changed in the client (byte 27 changed while a note was
   written, 22 November 2026) is back as served next turn. Done when the settings bytes are named

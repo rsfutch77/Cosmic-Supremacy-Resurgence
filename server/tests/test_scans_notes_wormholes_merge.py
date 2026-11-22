@@ -15,8 +15,17 @@ New Note`) in TestBed, saved after each step (Robert, 22 November 2026):
     nt1  a note written: subject `testnote`, text `hellotestnote`
     nt2  that note edited: `testnoteedit`, `hellotestnoteedit`, important
 
-Other notes and the wormholes are built here from what the client's routines
-write, since no galaxy holds a wormhole.
+Wormholes the client connected, also from `s0`, given a `wgen` design with a
+Wormhole Generator and two ships of it, sent out and ordered to create
+wormholes in GoodGuy's sphere, then ticked to turn 304 (22 November 2026).
+The engine made 682; the client allows `planets / 10 + 1` (`0x0053A5A0`), so
+683 is 682's record copied to the second ship's target:
+
+    wh0  682 and 683 unlinked, as the client saved them
+    wh1  Connect To on 682, picking 683 (Robert)
+
+Other notes and wormholes are built here from what the client's routines
+write.
 """
 import os
 import struct
@@ -179,6 +188,27 @@ def main():
     check('a message rewritten as a note is refused',
           any('does not begin with the items served' in n for n in notes))
     check('    and stays', news.items_of(out, GOOD)[0]['type'], first['type'])
+
+    print('\nwormholes the client connected')
+    wh0, wh1 = load('wh0'), load('wh1')
+    check('the client saved both unlinked, then each naming the other',
+          ({k: v[1] for k, v in mo.wormholes(wh0).items()},
+           {k: v[1] for k, v in mo.wormholes(wh1).items()}),
+          ({682: 0, 683: 0}, {682: 683, 683: 682}))
+    drift = [mo.wormholes(b)[682][2][mo.WORM_DRIFT:mo.WORM_DRIFT + 4]
+             for b in (wh0, wh1)]
+    check('the f32 after the owner changed between the saves on its own',
+          drift[0] != drift[1])
+    out, notes = merged(wh0, wh1)
+    check('Connect To is carried',
+          ({k: v[1] for k, v in mo.wormholes(out).items()}, notes),
+          ({682: 683, 683: 682}, []))
+    spun = bytearray(wh0)
+    at = wh0.index(mo.wormholes(wh0)[682][2]) + mo.WORM_DRIFT
+    spun[at:at + 4] = drift[1]
+    out, notes = merged(wh0, bytes(spun))
+    check('a save where only that f32 moved changes nothing and says nothing',
+          (out == wh0, notes), (True, []))
 
     print('\nwormholes')
     base = with_worms(s0, worm(900, GOOD), worm(901, GOOD), worm(902, GOOD),

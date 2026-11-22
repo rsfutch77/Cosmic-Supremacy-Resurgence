@@ -100,6 +100,13 @@ hands. The per-citizen value and opaque bytes are judged against the state
 served, across all three arrays at once. Across a tick the total does change:
 the engine's recruitment makes soldiers from food.
 
+Each citizen drafted is charged the draft price (`GetDraftCost`, `0x00516060`):
+`5 * (T + k) + 105` credits for the k-th, from 0, where `T` is the civ's
+military across its planets and ships. A submission shows only where people
+ended up, so `T` is taken after the soldiers it retired, the cheapest order
+the client allows. A draft the civ cannot pay is refused with the rest of its
+people changes. Below content version 150 drafting is free.
+
 `PLPR+36` is a `u32` population count and `PLPR+40` begins that many
 nine-byte records, kept sorted by job:
 
@@ -265,7 +272,8 @@ menu opens on the civ's own unlinked wormhole and offers its other unlinked
 ones at any distance (`0x005080B0`); `CNWH` links the two to each other. An
 ally's wormhole is connected by a treaty instead, and no player command
 clears a link. Carried as two of the civ's own wormholes, unlinked as served,
-each naming the other.
+each naming the other. The f32 after a wormhole's owner changes between saves
+with no command, so it is neither read nor copied.
 
 **Market trades** (`TRRS`), `GLOB > RSMA`: five `i32` counts of the units the
 market holds, which a sale raises and a purchase lowers. How far each count
@@ -1237,6 +1245,30 @@ def people_acceptable(served, submitted, civ_oid):
     return True, ''
 
 
+DRAFT_FREE_BELOW = 150      # content version gate at 0x00516060
+
+
+def draft_cost(military, count):
+    """Credits for drafting `count` citizens with `military` already held."""
+    return sum(5 * (military + k) + 105 for k in range(count))
+
+
+def draft_price(served, submitted, civ_oid):
+    """(citizens drafted, credits owed) for one civ's people changes, which
+    `people_acceptable` has passed."""
+    import set_blob_player
+    pa, sa = population(served, civ_oid)
+    pb, sb = population(submitted, civ_oid)
+    cit_a, sol_a = _everyone(pa, sa)
+    cit_b, sol_b = _everyone(pb, sb)
+    drafted = len(cit_a) - len(cit_b)
+    if drafted <= 0 or set_blob_player.get_content_version(
+            served) < DRAFT_FREE_BELOW:
+        return max(drafted, 0), 0
+    retired = len(cit_a) + len(sol_a) - len(cit_b) - len(sol_b)
+    return drafted, draft_cost(len(sol_a) - min(retired, len(sol_a)), drafted)
+
+
 def foreign_people_refusals(planets, crews, submitted, civ_oid, names):
     """[reason] for people changed on a planet or ship another civ owns.
 
@@ -1279,9 +1311,16 @@ def foreign_people_refusals(planets, crews, submitted, civ_oid, names):
 
 
 # A wormhole is a `WORM` v0 among `GLXY`'s children, after its objects (writer
-# 0x004FEF50): the object header (id, x, z, y, owner), a u32, a u32-length
+# 0x004FEF50): the object header (id, x, z, y, owner), a f32, a u32-length
 # string, and last the object id of the wormhole it is linked to, 0 for none.
+# The f32 changes between any two saves of a running client with no command.
 WORM_LINK_BACK = 4
+WORM_DRIFT = OBJECT_HEADER          # the f32 the client changes on its own
+
+
+def _worm_kept(raw):
+    """A WORM payload less its drifting f32 and its link."""
+    return raw[:WORM_DRIFT] + raw[WORM_DRIFT + 4:-WORM_LINK_BACK]
 
 
 def wormholes(blob):
@@ -1327,11 +1366,12 @@ def wormhole_orders(served, submitted, civ_oid):
                            f'{"added" if oid in now else "removed"}')
             continue
         (owner, link_a, raw_a), (_o, link_b, raw_b) = was[oid], now[oid]
-        if raw_a == raw_b or oid in seen:
+        if oid in seen or (link_a == link_b
+                           and _worm_kept(raw_a) == _worm_kept(raw_b)):
             continue
         other = now.get(link_b)
         why = None
-        if raw_a[:-WORM_LINK_BACK] != raw_b[:-WORM_LINK_BACK]:
+        if _worm_kept(raw_a) != _worm_kept(raw_b):
             why = 'it came back changed beyond its link'
         elif owner != civ_oid:
             why = f"it is civ {owner}'s"
@@ -1344,7 +1384,7 @@ def wormhole_orders(served, submitted, civ_oid):
                    f'connected by treaty')
         elif was[link_b][1] or other[1] != oid:
             why = f'wormhole {link_b} was linked, or does not name it back'
-        elif other[2][:-WORM_LINK_BACK] != was[link_b][2][:-WORM_LINK_BACK]:
+        elif _worm_kept(other[2]) != _worm_kept(was[link_b][2]):
             why = f'wormhole {link_b} came back changed beyond its link'
         if why:
             refused.append(f'wormhole {oid} connection DROPPED, {why}')
@@ -5086,11 +5126,21 @@ def merge(blob, submissions, log=print, notes=None, arms=None, scans=None):
             ok, why = people_acceptable(blob, sub, mine)
             planets_before, ships_before = population(blob, mine)
             planets_after, ships_after = population(sub, mine)
+            drafted, price = (draft_price(blob, sub, mine) if ok
+                              else (0, 0))
+            if ok and price > (credits_of(blob, mine) or 0):
+                ok, why = False, (f"drafting {drafted} costs {price:,} "
+                                  f"credits and the civ holds "
+                                  f"{credits_of(blob, mine) or 0:,}")
             if planets_after is None:
                 pass                   # unreadable; people_acceptable said so
             elif not ok:
                 drop(f"people DROPPED, {why}")
             else:
+                if price:
+                    blob = set_credits(blob, mine,
+                                       credits_of(blob, mine) - price)
+                    log(f"    drafted {drafted}: {price:,} credits")
                 for oid in sorted(planets_after):
                     cz_b, mil_b = planets_before[oid]
                     cz_a, mil_a = planets_after[oid]
