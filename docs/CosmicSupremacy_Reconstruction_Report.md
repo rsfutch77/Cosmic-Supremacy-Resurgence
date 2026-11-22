@@ -2521,6 +2521,8 @@ The main window's `OnCreate` (`0x00404CA0`) first restores the `MainWindowPos` v
 
 A saved `MainWindowPos` still wins outside the Tutorial, so an existing player sees the change only after holding Ctrl at startup or in the Tutorial. **CONFIRMED** on screen in the Tutorial.
 
+- [ ] **The Tutorial's window is small.** Robert played the Tutorial to the end on 22 November 2026 and found 1,045 by 670 a little small. The Tutorial always opens at the default, since it clears `0x0081A843` and its layout calls `0x00403CB0`, so a player cannot keep a larger window there. The default is a fixed size, and a larger fixed one would overflow a 1,366 by 768 screen. Done when the default scales with the screen's work area, or a larger size is chosen that fits the smallest screen a player is expected to have.
+
 ### Patches 36–40, The Tutorial (October 2026)
 
 **Release only**: `client/dev_tools/patch_tutorial.py`, applied to `CosmicSupremacy.exe`, which runs the Tutorial and the Demo. They fix GitHub issues #1 to #4.
