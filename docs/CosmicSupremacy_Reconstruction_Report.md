@@ -849,10 +849,12 @@ Two things follow:
   routine (`0x00538DD0`) from outside closed the client in a drawing routine, and no galaxy holds
   a wormhole. Measure a note written and edited through the News screen, and a wormhole pair
   connected once a galaxy has one.
-- [ ] **The replay is not served.** `RQTN` and `RQSV` are online only, and their offline branch
+- [x] **The replay is not served.** `RQTN` and `RQSV` are online only, and their offline branch
   does nothing, so a served galaxy answers neither. Done when the replay screen has been opened
   on a served galaxy, what it asks for is known, and it either shows the turns it asks for or
-  says plainly that the replay is not available.
+  says plainly that the replay is not available. **Closed** (21 November 2026): the launcher's
+  Replay button opens the client's own replay, which steps through the civ's own view of each
+  kept turn and says `Turn Data Not Available` for the rest (below).
 
   **What it asks for** (21 November 2026, read from the disassembly and run in TestBed against
   a probe server on `127.0.0.1:4710` serving the diplomacy galaxy as GoodGuy):
@@ -878,8 +880,38 @@ Two things follow:
 
   Seen on screen (Robert, 21 November 2026): turns 184, 183 and 182 stepped back, turn 181 (never
   kept, the double tick) showed `Turn Data Not Available`, and with `GLOB` stamped 184 the
-  client stepped forward again. Next step: decide where a player's history comes from and how
-  the launcher opens it.
+  client stepped forward again.
+
+  **How it is served** (decided 21 November 2026: keep every view, Robert):
+  - Every store keeps each turn's views (`kept_view`); before, only the last two turns' were kept.
+    The state still names only those two, so the galaxy document does not grow. A view is about
+    120 KB per civ per turn. Turns published before this change have only their last two views,
+    so the replay shows `Turn Data Not Available` for the rest.
+  - `turn_store.replay_view` serves a civ only its own view, never the turn itself, of a turn up
+    to the current one, and nothing before the turn the civ was seated (`joined`), so a later
+    holder of a name never reads an earlier holder's turns. The relay's `replay/<turn>` takes the
+    civ from the caller's seat, and `turn_server.py` and the folder store from the civ named
+    (`test_replay.py`, the relay on the emulators).
+  - The launcher's Replay button, on a row the player plays or an ended galaxy it was in, writes
+    the 32-character pass (`replay_endpoint.pass_text`), starts the multiplayer client on it, and
+    answers on `127.0.0.1:4710` (`release/replay_endpoint.py`, `test_replay_endpoint.py`). Each
+    save goes out with `GLOB`'s last turn set to the newest turn. Replay refuses while a game is
+    running, and the turn loop serves no new turn while the replay is open (`follow`'s `hold`),
+    since serving closes whatever runs on the client.
+  - The scan patch sends a scan made in the replay to the launcher, which refuses it while no
+    turn is being played.
+
+  Seen on screen (Robert, 21 November 2026), from a checkout launcher on the diplomacy galaxy as
+  GoodGuy, with the views of 180 and 182 rebuilt from the archived turns: Replay opened turn 184,
+  stepped back to 183 and 182, said `Turn Data Not Available` for 181, and stepped forward to 184
+  again. The slider was not used to reach 180.
+
+- [ ] **The replay is not seen in a release.** Done when a packaged launcher opens a replay on
+  the live relay. Not yet done: the release client
+  (`CosmicSupremacy_Player.exe`, TestBed with the release patches) has not opened a replay, only
+  TestBed has, and the relay's route is not deployed. Galaxies already running keep only their
+  last two views; the referee could rebuild older views from the archived turns
+  (`referee.views`) if those turns are wanted in the replay.
 - [x] **People on another civ's planet or ship are refused.** A colony keeps the owner of the
   colonists that founded it, so a civ can hold citizens on a rival's planet, but the people rule
   carries changes only on the submitter's own planets and ships. Done when a Single Player
