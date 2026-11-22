@@ -2506,22 +2506,22 @@ Each replacement is written into its original's slot and the remainder is NUL-fi
 
 [x] Patch 31 is seen on screen (14 November 2026). A scratch copy of the patched TestBed with the success branch at `0x005728D0` (`74 4F`, `je 0x00572921`) NOPped takes the `CreateDevice` failure path on a working machine. Its dialog reads `Failed to initialize the Renderer.`, `DirextX CreateDevice returned an unknown error: 00000000`, then the patched paragraph: attach the saved file to an issue at the tracker URL with the latest log file, saved at the client's `log.txt` path. No host appears in it. The forced copy is a probe only and never ships.
 
-### Patches 32–35, Main window opens 10% larger (16 bytes, October 2026)
+### Patches 32–33, Main window sized to the screen (165 bytes, November 2026)
 
-**Release only**, like 28–31: `client/dev_tools/patch_window_size.py` patches each client `release/build.ps1` stages. The bytes are at the same offsets in all four clients.
+**Release only**, like 28–31: `client/dev_tools/patch_window_size.py` patches each client `release/build.ps1` stages. The bytes are at the same offsets in all four clients. It replaces the October patch, which raised the fixed default 10% to 1,045 by 670, and accepts a client carrying it as a starting point.
 
-The main window's `OnCreate` (`0x00404CA0`) first restores the `MainWindowPos` value from `HKCU\Software\CosmicSupremacy` through a `WindowPosition` helper (`0x0062CB30`). The value is 24 bytes, `x, y, w, h`, their sum, and a Jenkins one-at-a-time hash of `"%d%d%d%d"` over the four, and it is applied only if both checks pass, the centre and top-centre lie in a monitor's work area, Ctrl is not held, and the byte at `0x0081A843` is set. The Tutorial clears that byte at `0x0057E96C`. Otherwise the default comes from `0x00403CB0`, a fixed 950 by 609 placed 40 pixels in from the right and bottom of the screen, floored at 60. The Tutorial's layout (`0x0057E597`) calls the same function.
+The main window's `OnCreate` (`0x00404CA0`) first restores the `MainWindowPos` value from `HKCU\Software\CosmicSupremacy` through a `WindowPosition` helper (`0x0062CB30`). The value is 24 bytes, `x, y, w, h`, their sum, and a Jenkins one-at-a-time hash of `"%d%d%d%d"` over the four, and it is applied only if both checks pass, the centre and top-centre lie in a monitor's work area, Ctrl is not held, and the byte at `0x0081A843` is set. The Tutorial clears that byte at `0x0057E96C`. Otherwise the default comes from `0x00403CB0`, `__stdcall(RECT*)` with `ret 4`, a fixed 950 by 609 placed 40 pixels in from the right and bottom of the screen, floored at 60. It returns the `RECT*` in `eax`, and `OnCreate` reads the rectangle through it at `0x00404D05`. The Tutorial's layout (`0x0057E597`) calls the same function.
 
 | # | file | VA | original | patched |
 |---|---|---|---|---|
-| 32 | `0x30C4` | `0x00403CC4` | `lea ecx, [edi-0x3DE]`, screen width − 990 | − 1,085 |
-| 33 | `0x30D6` | `0x00403CD6` | `lea edx, [eax-0x289]`, screen height − 649 | − 710 |
-| 34 | `0x30EF` | `0x00403CEF` | `add ecx, 0x3B6`, width 950 | 1,045 |
-| 35 | `0x30F5` | `0x00403CF5` | `add edx, 0x261`, height 609 | 670 |
+| 32 | `0x30B0` | `0x00403CB0` | `push esi; mov esi, [GetSystemMetrics]` | `jmp 0x006D2480` |
+| 33 | `0x2D1880` | `0x006D2480` | `int3` padding | the sizing stub, 160 bytes |
 
-A saved `MainWindowPos` still wins outside the Tutorial, so an existing player sees the change only after holding Ctrl at startup or in the Tutorial. **CONFIRMED** on screen in the Tutorial.
+The stub reads the screen size from `GetSystemMetrics` (slot `0x0074E678`) and opens the window at three quarters of the screen's width in the original's 950:609 shape, no taller than three fifths of the screen's height, and never smaller than 950 by 609. It places it as the original does and returns the `RECT*` in `eax`. A 3,440 by 1,440 or 2,560 by 1,440 screen gets 1,347 by 864, a 1,920 by 1,080 screen 1,010 by 648, and 1,366 by 768 or smaller the original 950 by 609. The stub sits after the Notes label at `0x006D2400` and ends before `0x006D2530`.
 
-- [ ] **The Tutorial's window is small.** Robert played the Tutorial to the end on 22 November 2026 and found 1,045 by 670 a little small. The Tutorial always opens at the default, since it clears `0x0081A843` and its layout calls `0x00403CB0`, so a player cannot keep a larger window there. The default is a fixed size, and a larger fixed one would overflow a 1,366 by 768 screen. Done when the default scales with the screen's work area, or a larger size is chosen that fits the smallest screen a player is expected to have.
+A saved `MainWindowPos` still wins outside the Tutorial, so an existing player sees the change only after holding Ctrl at startup or in the Tutorial. **CONFIRMED** on screen in the Tutorial on a 3,440 by 1,440 screen (22 November 2026). Robert found four fifths of the height too big and three fifths right.
+
+- [x] **The Tutorial's window is small.** Robert played the Tutorial to the end on 22 November 2026 and found 1,045 by 670 a little small. The default now scales with the screen, as above.
 
 ### Patches 36–40, The Tutorial (October 2026)
 
@@ -2584,7 +2584,7 @@ Patches 12–17 (14 bytes, T1, T4a, T4b and T5) bypass turn-pipeline sync checks
 
 Patches 28–31 (1,571 bytes) rewrite the setup and login messages to send a player to the launcher, and the renderer failure message to send a report to the issue tracker instead of an email address at the host. Applied only to the clients a release ships.
 
-Patches 32–35 (16 bytes) open the main window 10% larger by default. Applied to every client a release ships.
+Patches 32–33 (165 bytes) open the main window sized to the screen by default. Applied to every client a release ships.
 
 Patches 36–40 fix the Tutorial: a larger panel, early orders that count, a one-turn Scout Ship with a free soldier, and coloured tasks in a new `.tutor` section. Applied only to `CosmicSupremacy.exe` in a release.
 
