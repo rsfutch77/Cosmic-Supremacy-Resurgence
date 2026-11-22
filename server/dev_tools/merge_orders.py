@@ -224,8 +224,9 @@ Carried as the client takes each step, applied to both civs at once:
   there (`0x442510`).
 - Withdrawing the submitter's own proposal; declining one made to it;
   deleting a declined one from its side.
-- Accepting one made to it: status, length (its `TRLE`, or what a stance
-  treaty binds for) and start turn as the client writes them. The referee
+- Accepting one made to it: status, length (its `TRLE`, else the larger of
+  its kind's minimum, shorter under `speed`, and a wormhole connection's) and
+  start turn as the client writes them. The referee
   moves the lump sums itself, from the merged credits and resources, and
   refuses the acceptance when the payer is short. It copies a shared galaxy
   map (`SHGM`) too, since neither civ's view holds the other's `EXSY`: the
@@ -3490,9 +3491,16 @@ WAR = 1
 PROPOSED, ACCEPTED, DECLINED, NON_BINDING = 0, 1, 2, 3
 UNSET_LENGTH, UNSET_START = -2, -1
 STANCE_OF = {2: 2, 3: 3, 4: 4}          # the stance a kind sets when accepted
-# What a stance treaty binds for when it carries no TRLE, as the UI says.
-# Only the cease-fire's 20 is measured in the save.
+# Accepting a treaty with no TRLE above 0 gives it the larger of its kind's
+# minimum and each item's (0x559CE0, 0x5592B0). The kinds' minimums are
+# 0x80B564, or 0x80B578 when the galaxy's `speed` setting is on; a trade or a
+# war has none (-1). Only a wormhole connection's item has one of its own
+# (0x55C720); every other item's is 0.
 BINDS_FOR = {2: 20, 3: 50, 4: 100}
+BINDS_FOR_SPEED = {2: 10, 3: 20, 4: 30}
+NO_MINIMUM = -1
+WORMHOLE_SHARE_MINIMUM = 50
+WORMHOLE_SHARE_MINIMUM_SPEED = 25
 BINDING = (2, 3)            # a cease-fire or a peace in force forbids war
 TREATY_ITEMS = frozenset((b'CRLS', b'CRPT', b'RSLS', b'RSPT', b'SLOS', b'SHBR',
                           b'SHGM', b'SHWH', b'TRLE'))
@@ -3785,13 +3793,26 @@ def share_map(blob, giver, receiver, turn):
     return blob, met
 
 
-def treaty_length(t):
-    """The length accepting a treaty gives it: its TRLE, else what a stance
-    treaty binds for, else None."""
-    for tag, payload in t['demands'] + t['offers']:
+def treaty_length(t, speed=False):
+    """The length accepting a treaty gives it, as the client works it out:
+    its first TRLE above 0, else the larger of the kind's minimum and each
+    item's. `speed` is the galaxy's `speed` setting."""
+    items = t['demands'] + t['offers']
+    for tag, payload in items:
         if tag == TREATY_LENGTH:
-            return struct.unpack_from('<I', payload)[0]
-    return BINDS_FOR.get(t['kind'])
+            value = struct.unpack_from('<i', payload)[0]
+            if value > 0:
+                return value
+            break
+    length = (BINDS_FOR_SPEED if speed else BINDS_FOR).get(t['kind'],
+                                                           NO_MINIMUM)
+    for tag, _payload in items:
+        floor = 0
+        if tag == WORMHOLE_SHARE:
+            floor = (WORMHOLE_SHARE_MINIMUM_SPEED if speed
+                     else WORMHOLE_SHARE_MINIMUM)
+        length = max(length, floor)
+    return length
 
 
 def stances(blob):
@@ -4117,9 +4138,7 @@ def diplomacy_orders(served, sub, civ_oid, names):
             if tt['status'] == ACCEPTED and item_refusal(ts):
                 refusals.append(f'{name} DROPPED, {item_refusal(ts)}')
                 continue
-            length = treaty_length(ts)
-            if length is None:
-                length = tt['length']
+            length = treaty_length(ts, gset_value(served, 'speed') == 1)
             if tt['status'] == ACCEPTED:
                 # The acceptor's client pays its credit lump sums itself.
                 bare = with_trdt(a, ACCEPTED, length, turn)

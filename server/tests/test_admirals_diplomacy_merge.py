@@ -533,6 +533,37 @@ def diplomacy():
     check('proposing one is kept', (sorted(mo.treaties(out)),
                                     notes.get('GoodGuy')), ([700], None))
 
+    print('the length an acceptance gives (0x00559CE0, 0x005592B0)')
+    bare = trty(681, GOOD, BAD, turn, kind=0, theirs=(crls(7),))
+    served = with_treaties(d['d5b'], [r for t, r in mo.treaties(d['d5b']).items()
+                                      if t != 681] + [bare])
+    for length, refused in ((0, 0), (10, 1)):
+        sub = with_treaties(served, [r for t, r in mo.treaties(served).items()
+                                     if t != 681] + [mo.with_sums_paid(
+                                         mo.with_trdt(bare, 1, length, turn))])
+        out, notes = merged(served, ('BadGuy', sub))
+        check(f'a trade with items and no TRLE accepted at length {length}: '
+              f'{"refused" if refused else "kept, as the client gives it"}',
+              len(said(notes, 'BadGuy', 'answer changes more')), refused)
+    speedy = {n: sp.set_gset(d[n], {'speed': 1}) for n in ('d9g', 'd9a')}
+    for length, refused in ((10, 0), (20, 1)):
+        ceased = mo.treaties(speedy['d9a'])
+        ceased[683] = mo.with_trdt(ceased[683], length=length)
+        out, notes = merged(speedy['d9g'], ('GoodGuy', with_treaties(
+            speedy['d9a'], list(ceased.values()))))
+        check(f'in a speed galaxy a cease-fire accepted for {length} turns is '
+              f'{"refused" if refused else "kept: 0x0080B578 gives 10"}',
+              (trdt(mo.treaties(out)[683])[3:5],
+               len(said(notes, 'GoodGuy', 'answer changes more'))),
+              ((0, -2), 1) if refused else ((1, 10), 0))
+    check('the minimums by kind, and a wormhole connection\'s',
+          [mo.treaty_length({'kind': k, 'demands': [], 'offers': items}, s)
+           for s in (False, True)
+           for k, items in ((0, []), (2, []), (3, []), (4, []),
+                            (0, [(b'SHWH', b'\0' * 8)]),
+                            (0, [(b'TRLE', struct.pack('<I', 7))]))],
+          [-1, 20, 50, 100, 50, 7, -1, 10, 20, 30, 25, 7])
+
     print('the credit lump sum and shared battle reports in the client')
     cs = {n: dip(n) for n in ('cs0', 'cs1', 'cs2', 'cs3')}
     offered = mo.read_trdt(mo.treaties(cs['cs1'])[684])
@@ -754,7 +785,7 @@ def diplomacy():
                                        theirs=(share,))])
     one = mo.set_high_water(one, 700)
     out, notes = merged(one, ('BadGuy', with_treaties(one, [mo.with_trdt(
-        mo.treaties(one)[700], 1, -2, turn)])))
+        mo.treaties(one)[700], 1, 0, turn)])))
     g1, b1 = known(one, GOOD), known(one, BAD)
     check('one offered by the proposer reaches only the recipient',
           (known(out, GOOD) == g1, set(known(out, BAD)) == set(g1) | set(b1),
