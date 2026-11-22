@@ -121,11 +121,15 @@ def main():
           canonical.canonical_hash(a), canonical.canonical_hash(b))
     check('version 1 does not', canonical.canonical_hash(a, 1)
           != canonical.canonical_hash(b, 1), True)
-    check('both versions agree on one-record and empty tables',
-          sum(canonical.canonical_hash(sp.load_any(p)) ==
-              canonical.canonical_hash(sp.load_any(p), 1)
-              for p in sorted(glob.glob(os.path.join(FIX, '*', '*.b64')))),
-          len(glob.glob(os.path.join(FIX, '*', '*.b64'))))
+    small = [b for b in map(sp.load_any, paths)
+             if all(len(recs) <= 1 for _s, recs in tables(b).values())]
+    check('both versions agree on every fixture whose tables hold one record '
+          'or none',
+          sum(canonical.canonical_hash(b) == canonical.canonical_hash(b, 1)
+              for b in small), len(small))
+    check('    which is all but the three-civ captures',
+          len(paths) - len(small),
+          len(glob.glob(os.path.join(FIX, 'diplomacy', 'cs*.b64'))))
 
     print(f'\n{len(PASS)} passed, {len(FAIL)} failed')
     return 1 if FAIL else 0

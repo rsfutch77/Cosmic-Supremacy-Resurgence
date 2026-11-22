@@ -1998,10 +1998,18 @@ the client, with `+26` and `+28` beside them; `knpl.py` keys and documents each.
   down as `cooldown`. The planet loyalty tooltip lists it per civ as a loyalty penalty in percent.
 - `+28` `leader_known`: set at `0x54EF99`; a second "name of the Empire Leader" message is refused.
 
-[ ] **Find what sets `+17`** (`w17`, record `+0x0A` behind the getter, map node `+0x1E`). Accepting
+[x] **Find what sets `+17`** (`w17`, record `+0x0A` behind the getter, map node `+0x1E`). Accepting
 a war zeroes it on both sides and the constructor zeroes it; nothing reached through `0x534340`,
 `0x5343A0` or the map's find (`0x533C70`) writes it, yet `d8` reads 1 on the declarer's side.
 **Next step**: a write watchpoint on that word in a live client across a war's first tick.
+**Found** (22 November 2026): it counts the battles a civ has started against the other since
+the war began. A hardware write watch on BadGuy's record of GoodGuy and back, set in the
+Resurgence client on `d7` across the tick to 181, caught two writes on BadGuy's side and none on
+GoodGuy's: `inc word ptr [rec+0x0A]` in `0x534CB0`, called once from the battle (`0x51ED50`, at
+`0x51EE49`) on the attacker's record of the defender, and `battled` at the getter's `+9` from
+`0x534D10` (called at `0x51F489`). `0x534CB0` has no other caller, and nothing else touches
+`+0x0A` besides the zeroing in acceptance (`0x55BF72`, `0x55BFA4`) and the save, so no rule reads
+it. `server/dev_tools/knpl.py` says so; the key stays `w17`.
 
 [x] **`canonical.py` masks only the last record's colour.** Every record's colour is unset until
 a player picks one, so a civ that meets its second rival in a tick carries unset bytes in a record
@@ -2010,9 +2018,9 @@ the stored hash of every galaxy with three or more civs, so it waits for a hash 
 (14 November 2026): hash version 2 masks every record's colour, and the referee records
 `hash_version` beside its hashes. `verify_turn` and `level_store_turn.py` hash with a record's own
 version, 1 when it has none, so archived turns still verify. The colour getter (`0x534E40`) reads
-the colour only for a civ coloured by choice. Versions 1 and 2 agree on every tracked fixture,
-which hold at most one record per table; a two-record table differs only under version 1
-(`test_knpl.py`).
+the colour only for a civ coloured by choice. Versions 1 and 2 agree on every tracked fixture
+whose tables hold at most one record, all but the three-civ captures `diplomacy/cs0` to `cs3`;
+a two-record table differs only under version 1 (`test_knpl.py`).
 
 [x] **NOT A DATA-LOSS BUG. It is an unbounded re-grant exploit (measured September 2026).** This
 item previously read "BUG, DATA LOSS, confirming the customisation popup overwrites server-restored
