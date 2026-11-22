@@ -35,6 +35,8 @@ What it enforces:
   * a scan is asked only for the caller's own civ on the turn being played,
     and read, delivered or cancelled only by that civ; only the referee
     answers one
+  * a past turn is replayed only as the caller's own civ's view, never the
+    turn itself, and not from before the turn that civ was seated
   * a coat of arms is uploaded only by an account seated on the galaxy, as a
     small PNG, and up to `ARMS_PER_UID` of them; it is shown to its owner at
     once and to anyone else only once the operator approves it
@@ -1264,6 +1266,21 @@ def _route(method: str, path: str, headers: dict, body: bytes):
                 return _redirect(signed_url(store, store.view_object(copy, turn),
                                             'GET'))
             return _redirect(signed_url(store, store.turn_object(turn), 'GET'))
+        if len(parts) == 2 and parts[0] == 'replay':
+            turn = _turn_number(parts[1])
+            doc = galaxy_doc(store)
+            guest_or_refuse(doc, claims)
+            civ = seat_of(doc, uid)
+            if civ is None:
+                raise Refused(403, f'the replay of {store.galaxy} is served '
+                                   f'only to a seat in it')
+            problem = turn_store.replay_problem(doc, civ, turn)
+            if problem:
+                raise Refused(403, problem)
+            if not store.has_kept_view(civ, turn):
+                raise Refused(404, f'turn {turn} is not kept for {civ}')
+            return _redirect(signed_url(store, store.view_object(civ, turn),
+                                        'GET'))
         if len(parts) == 2 and parts[0] == 'submissions':
             # The store answers the current turn from the document already
             # read; see `FirebaseTurnStore.submitted_civs`.

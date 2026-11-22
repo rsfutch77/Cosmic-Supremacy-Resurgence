@@ -41,7 +41,6 @@ import base64
 import hashlib
 import json
 import os
-import shutil
 import struct
 import sys
 import threading
@@ -88,7 +87,7 @@ MIN_BUILD_KEY = 'min_build'
 # The civs served their own view of a turn (`fog.project`), as
 # `{"<turn>": [civ, ...]}`, for the current turn and the one before it. A
 # roster civ not named is served the turn itself, which is its view; see
-# `served_copy`.
+# `served_copy`. Every turn's views are kept for the replay (`replay_problem`).
 VIEWS_KEY = 'views'
 # The view a caller with none of its own is served: the turn with every civ's
 # news withheld. Longer than NAME_LIMIT, so no civ can hold the name.
@@ -255,6 +254,47 @@ def serve(store, state, civ: str, turn: int) -> bytes:
     blob = store.view_blob(copy, turn)
     if blob is None:
         raise NotServed(f'the view of turn {turn} for {copy} is missing')
+    return blob
+
+
+def replay_problem(state, civ: str, turn: int) -> str:
+    """Why `civ` may not replay `turn`, or ''.
+
+    The replay serves only a civ's own view (`kept_view`), never the turn
+    itself, of a turn up to the current one. A civ that joined is served
+    nothing before the turn it was seated, so a later holder of a name never
+    reads an earlier holder's turns.
+    """
+    state = state or {}
+    if not civ or civ not in (state.get('civs') or ()):
+        return 'the replay is served only to a civ on the roster'
+    turn = int(turn)
+    if turn < 1 or turn > int(state.get('turn') or 0):
+        return f'turn {turn} has not been played; the current turn is ' \
+               f'{state.get("turn")}'
+    joined = ((state.get(JOINED_KEY) or {}).get(civ) or {}).get('turn')
+    if joined is not None and turn < int(joined):
+        return f'{civ} was seated at turn {joined}'
+    return ''
+
+
+def _error_of(exc) -> str:
+    """The `error` of a refusal's JSON body, or ''."""
+    try:
+        return str(json.loads(exc.read()).get('error') or '')
+    except (OSError, ValueError, AttributeError):
+        return ''
+
+
+def replay_view(store, state, civ: str, turn: int) -> bytes:
+    """`civ`'s own view of `turn` for the replay. Raises `NotServed` with
+    `replay_problem`'s reason, or when the view was not kept."""
+    problem = replay_problem(state, civ, turn)
+    if problem:
+        raise NotServed(problem)
+    blob = store.kept_view(civ, turn)
+    if blob is None:
+        raise NotServed(f'turn {turn} is not kept for {civ}')
     return blob
 
 
@@ -640,9 +680,9 @@ class TurnStore:
         """The referee's move: a new turn exists, and the clock restarts.
 
         `views` is `{civ: blob}` for the civs served their own view. They are
-        written before the turn. The previous turn's views are kept, for a
-        launcher that asks for that turn as this one is published, and older
-        ones are removed.
+        written before the turn. `VIEWS_KEY` names this turn's and the one
+        before, for a launcher that asks for that turn as this one is
+        published. Every view stays on disk for the replay (`kept_view`).
         """
         import canonical
         state = self.state()
@@ -660,15 +700,17 @@ class TurnStore:
                             str(int(turn)): sorted(views)}
         self._put_state(state)
         os.makedirs(self.submission_dir(turn), exist_ok=True)
-        self._prune_views(int(turn) - 1)
 
-    def _prune_views(self, before: int) -> None:
-        root = os.path.join(self.root, 'views')
-        if not os.path.isdir(root):
-            return
-        for name in os.listdir(root):
-            if name.isdigit() and int(name) < before:
-                shutil.rmtree(os.path.join(root, name), ignore_errors=True)
+    def kept_view(self, civ: str, turn: int):
+        """`civ`'s own view of any published turn, or None (`replay_problem`)."""
+        try:
+            return sp.load_any(self.view_path(civ, turn))
+        except FileNotFoundError:
+            return None
+
+    def replay_view(self, civ: str, turn: int) -> bytes:
+        """`civ`'s own view of `turn` for the replay (`replay_view`)."""
+        return replay_view(self, self.state(), civ, turn)
 
     def submit(self, civ: str, turn: int, blob: bytes) -> str:
         """Hand a player's state back. A later submission replaces an earlier
@@ -1262,6 +1304,23 @@ class HttpTurnStore:
             raise
         if blob is None:
             raise FileNotFoundError(f'no turn {turn} at {self.base}')
+        return blob
+
+    def replay_view(self, civ: str, turn: int) -> bytes:
+        """`civ`'s own view of `turn` for the replay (`replay_view`).
+        `turn_server` takes the civ from the query; the relay from the
+        caller's seat. Raises `NotServed` with the far end's reason."""
+        import urllib.error
+        q = f'?civ={urllib.parse.quote(civ)}' if civ else ''
+        try:
+            blob = self._blob(f'/replay/{int(turn)}{q}')
+        except urllib.error.HTTPError as exc:
+            if exc.code == 403:
+                raise NotServed(_error_of(exc) or f'turn {turn} is not '
+                                f'served to {civ} for the replay') from exc
+            raise
+        if blob is None:
+            raise NotServed(f'turn {turn} is not kept for {civ}')
         return blob
 
     def publish(self, turn: int, blob: bytes, turn_seconds: int = None,

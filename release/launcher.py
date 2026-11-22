@@ -1342,6 +1342,8 @@ MP_CONFIG = "multiplayer.json"
 
 # What the turn loop may start. Not in the manifest: the loop picks the build.
 MP_CLIENTS = ("CosmicSupremacy_Player.exe", "CosmicSupremacy_TestBed.exe")
+# The replay's galaxy pass, written to the data directory.
+REPLAY_PASS = "replay.csgalaxy"
 
 
 def multiplayer_file(data_dir: str):
@@ -2339,6 +2341,8 @@ ENDED = "ended"
 RECLAIMED = "reclaimed"
 ACTION_TEXT = {PLAY: "Play", VIEW: "View", REASON: "Review",
                ENDED: "Review", RECLAIMED: "Review"}
+# Rows of galaxies the player still has a seat in, which carry Replay.
+REPLAY_ROWS = (PLAY, ENDED)
 
 # The status column orders by how far along a galaxy is, not alphabetically.
 STATUS_ORDER = (OPEN, FORMING, CLOSED)
@@ -3106,13 +3110,15 @@ class GalaxyRow(typing.NamedTuple):
     """One row of the galaxy table as the window draws it.
 
     `cells` is (text, colour) per column of GALAXY_COLUMNS. `action` is the
-    label of the row's one button, or None for a row without one, and
-    `on_action` is what pressing it does.
+    label of the row's button, or None for a row without one, and
+    `on_action` is what pressing it does. `on_replay` is the Replay button
+    beside it, on a galaxy the player has a seat in, or None.
     """
     cells: list
     action: "str | None" = None
     on_action: "typing.Callable | None" = None
     enabled: bool = True
+    on_replay: "typing.Callable | None" = None
 
 
 # What the followed galaxy's turn is doing while every row's Play is greyed
@@ -3234,6 +3240,10 @@ class Launcher:
         # The socket a patched client sends its scans to, started with the
         # first multiplayer galaxy and kept until the launcher closes.
         self.scan_endpoint = None
+        # The replay: a client in replay mode and the socket that serves it
+        # (replay_endpoint.py), both kept only while that client runs.
+        self.replay_proc = None
+        self.replay_endpoint = None
         # Set when this machine's internet connection comes or goes, so the
         # loop reads the galaxy at once (see `_watch_network`).
         self.mp_check_now = threading.Event()
@@ -4137,7 +4147,9 @@ class Launcher:
             drawn.append(GalaxyRow(
                 cells, ACTION_TEXT[action] if action is not None else None,
                 (lambda gg=g, a=action: self.on_row(gg, a)) if live else None,
-                enabled=live or action is None))
+                enabled=live or action is None,
+                on_replay=((lambda gg=g: self.on_replay(gg))
+                           if action in REPLAY_ROWS else None)))
         self.view.draw_galaxies(drawn)
         self._show_hint(rows, view)
 
@@ -4319,6 +4331,81 @@ class Launcher:
             self.warn("This build does not offer multiplayer.")
             return
         self.start_multiplayer(mode, g)
+
+    # The replay. The client's own replay screen steps through the turns of a
+    # galaxy as this player's civ saw them, each read through the store
+    # (replay_endpoint.py). It runs on the one game client, so it opens only
+    # with no game running, and the turn loop serves nothing until it closes.
+    def replay_open(self) -> bool:
+        proc = self.replay_proc
+        return proc is not None and proc.poll() is None
+
+    def on_replay(self, g):
+        """Open the replay of one row's galaxy."""
+        if self.replay_open():
+            self.warn("The replay is already open.")
+            return
+        busy = running_clients(self.client_exes)
+        if busy:
+            self.warn("Close the game first, then press Replay.\n\nThis "
+                      "machine runs one game at a time. Closing it during a "
+                      "turn sends your orders, as it always does.")
+            return
+        exe = next((os.path.join(self.game_root, e) for e in MP_CLIENTS
+                    if os.path.exists(os.path.join(self.game_root, e))), None)
+        if exe is None:
+            self.warn("This build ships no multiplayer client, so it cannot "
+                      "open a replay.")
+            return
+        cfg = self.galaxy_config(g)
+        civ = self.player
+        mods = multiplayer_modules()
+        if cfg is None or not civ or mods is None:
+            self.warn("The replay opens for a galaxy you play in.")
+            return
+        _player_turn, turn_store = mods
+        bind_multiplayer_paths(self.game_root, self.data_dir)
+        if store_wants_token(cfg) and not (self._email_ready()
+                                          and self._guest_ready()):
+            return
+        token = player_token(self.data_dir) if store_wants_token(cfg) else None
+        try:
+            store = open_player_store(turn_store, cfg["store"], token)
+            newest = int(store.state()["turn"])
+        except Exception as exc:                            # noqa: BLE001
+            said = relay_refusal(exc)
+            self.warn("The galaxy could not be read, so the replay cannot "
+                      f"open.\n\n{said[1] if said else exc}")
+            return
+
+        import replay_endpoint
+        name = g.name or g.id
+        ep = replay_endpoint.ReplayEndpoint(
+            lambda: (store, civ, newest), log=self.say_threadsafe)
+        if not ep.start():
+            self.warn("The replay could not open: another program holds "
+                      f"port {replay_endpoint.PORT}.")
+            return
+        pass_file = os.path.join(self.data_dir, REPLAY_PASS)
+        try:
+            with open(pass_file, "wb") as f:
+                f.write(replay_endpoint.pass_text())
+            proc = subprocess.Popen([exe, pass_file], cwd=self.game_root)
+        except OSError as exc:
+            ep.stop()
+            self.warn(f"The replay could not start the game.\n\n{exc}")
+            return
+        self.replay_proc, self.replay_endpoint = proc, ep
+        self.say(f"replay: {name} as {civ}, turns up to {newest}")
+
+        def watch():
+            proc.wait()
+            ep.stop()
+            if self.replay_endpoint is ep:
+                self.replay_endpoint = None
+            self.say_threadsafe(f"replay: {name} closed")
+
+        threading.Thread(target=watch, daemon=True, name="replay").start()
 
     def show_beta_notice(self, body: str, g, civ: str = None) -> bool:
         """Show the notice and answer whether the player joined from it.
@@ -4745,6 +4832,7 @@ class Launcher:
                     send_now=self.mp_send_now,
                     reopen=self.mp_reopen,
                     check_now=self.mp_check_now,
+                    hold=self.replay_open,
                     log=self.say_threadsafe)
             except BaseException as exc:            # noqa: BLE001
                 # A dead worker must say so. A relay refusal is said in the
@@ -4989,6 +5077,7 @@ class Launcher:
             "submitted": "orders sent",
             "retrying": RETRYING_LEAD + outage_note(facts.get("outage")),
             "reopening": "opening the game again",
+            "held": "the replay is open; your turn starts when it closes",
             "waiting": "waiting for the next turn",
             "overtaken": "that turn closed without you",
             "lost": "that turn could not be sent",
@@ -5701,6 +5790,10 @@ class Launcher:
         if endpoint is not None:
             endpoint.stop()
             self.scan_endpoint = None
+        replay = getattr(self, "replay_endpoint", None)
+        if replay is not None:
+            replay.stop()
+            self.replay_endpoint = None
         self.stop_multiplayer(why)
         self.stop_ai(why)
         for srv in self.servers:

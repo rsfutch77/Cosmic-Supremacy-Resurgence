@@ -460,6 +460,21 @@ class FirebaseTurnStore:
         doc = (snap.to_dict() or {}) if snap.exists else {}
         return turn_store.serve(self, doc, civ, turn)
 
+    def kept_view(self, civ: str, turn: int):
+        """`civ`'s own view of any published turn, or None
+        (`turn_store.replay_problem`)."""
+        data = self._get(self.view_object(civ, turn))
+        return sp.decode_save(data) if data is not None else None
+
+    def has_kept_view(self, civ: str, turn: int) -> bool:
+        return self._has(self.view_object(civ, turn))
+
+    def replay_view(self, civ: str, turn: int) -> bytes:
+        """`civ`'s own view of `turn` for the replay (`turn_store.replay_view`)."""
+        snap = self.doc.get()
+        doc = (snap.to_dict() or {}) if snap.exists else {}
+        return turn_store.replay_view(self, doc, civ, turn)
+
     def publish(self, turn: int, blob: bytes, turn_seconds: int = None,
                 views: dict = None) -> None:
         """The referee's move: a new turn exists, and the clock restarts.
@@ -470,9 +485,9 @@ class FirebaseTurnStore:
         submissions and scans older than `SUBMISSION_TURNS_KEPT` turns.
 
         `views` is `{civ: blob}` for the civs served their own view. They are
-        written before the turn. The previous turn's views are kept, for a
-        launcher that asks for that turn as this one is published, and older
-        ones are deleted after it.
+        written before the turn. `VIEWS_KEY` names this turn's and the one
+        before, for a launcher that asks for that turn as this one is
+        published. Every view object stays for the replay (`kept_view`).
         """
         import canonical
         snap = self.doc.get()
@@ -501,19 +516,6 @@ class FirebaseTurnStore:
         self.prune_submissions(int(turn) - SUBMISSION_TURNS_KEPT + 1)
         # Kept as long as submissions, so `referee --verify` replays them.
         self.prune_scans(int(turn) - SUBMISSION_TURNS_KEPT + 1)
-        self._drop_views(named, {int(turn), int(turn) - 1})
-
-    def _drop_views(self, named: dict, keep) -> None:
-        """Delete the view objects `named` lists for every turn not in `keep`."""
-        from google.api_core import exceptions
-        for t, civs in named.items():
-            if not str(t).isdigit() or int(t) in keep:
-                continue
-            for civ in civs:
-                try:
-                    self.bucket.blob(self.view_object(civ, int(t))).delete()
-                except exceptions.NotFound:
-                    pass
 
     def submit(self, civ: str, turn: int, blob: bytes) -> str:
         """Hand a player's state back. A later submission replaces an earlier

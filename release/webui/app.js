@@ -107,11 +107,14 @@ function drawRows(galaxies) {
       cell.id = `cell-${r}-${i}`;
       line.appendChild(cell);
     });
-    const act = el("div");
+    const act = el("div", "gacts");
     if (row.action) {
       const b = gbtn(row.action, () => call("row", r), "small");
       b.disabled = row.enabled === false;
       act.appendChild(b);
+    }
+    if (row.replay) {
+      act.appendChild(gbtn("Replay", () => call("replay", r), "small"));
     }
     line.appendChild(act);
     box.appendChild(line);

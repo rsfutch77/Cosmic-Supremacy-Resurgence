@@ -9,6 +9,7 @@ and `open_store("some/dir")` are interchangeable to every caller.
 
     GET  /state                     the turn number, deadline, roster
     GET  /turn/<n>?civ=<civ>        that turn as the civ is served it
+    GET  /replay/<n>?civ=<civ>      the civ's own view of any played turn
     GET  /turn/<n>?whole=1          the turn itself, for the referee
     POST /view/<n>/<civ>            one civ's view of a turn not yet published
     POST /turn/<n>?seconds=<s>&view=<civ>...
@@ -134,6 +135,13 @@ class Handler(BaseHTTPRequestHandler):
                 civ = (q.get('civ') or [None])[0]
                 try:
                     return self._blob(STORE.served_turn(civ, n))
+                except turn_store.NotServed as exc:
+                    return self._fail(403, str(exc))
+            if len(parts) == 2 and parts[0] == 'replay':
+                civ = (q.get('civ') or [None])[0]
+                try:
+                    return self._blob(turn_store.replay_view(
+                        STORE, STORE.state(), civ, int(parts[1])))
                 except turn_store.NotServed as exc:
                     return self._fail(403, str(exc))
             if len(parts) == 2 and parts[0] == 'submissions':

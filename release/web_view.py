@@ -106,6 +106,9 @@ class Bridge:
     def row(self, index):
         self._post(lambda app: self._view.row_pressed(index))
 
+    def replay(self, index):
+        self._post(lambda app: self._view.replay_pressed(index))
+
     def control(self, key):
         def act(app):
             action = {"load": app.on_load, "save": app.on_save,
@@ -178,6 +181,7 @@ class WebView:
         self._prompt_ids = itertools.count(1)
         self._answers: dict = {}
         self._row_actions: list = []
+        self._row_replays: list = []
         # What the page shows now, so a repaint that changes nothing sends
         # nothing.
         self._sent: dict = {}
@@ -450,22 +454,30 @@ class WebView:
                       if not (isinstance(k, tuple) and k[0] == "cell")}
         if rows is None:
             self._row_actions = []
+            self._row_replays = []
             self._set(galaxies={"rows": None, "note": note})
             return
         # A greyed-out button presses nothing, whatever the page sends.
         self._row_actions = [row.on_action if row.enabled else None
                              for row in rows]
+        self._row_replays = [getattr(row, "on_replay", None) for row in rows]
         drawn = []
         for r, row in enumerate(rows):
             for i, cell in enumerate(row.cells):
                 self._sent[("cell", r, i)] = tuple(cell)
             drawn.append({"cells": [[t, ON_DARK.get(c, c)] for t, c in row.cells],
-                          "action": row.action, "enabled": row.enabled})
+                          "action": row.action, "enabled": row.enabled,
+                          "replay": self._row_replays[r] is not None})
         self._set(galaxies={"rows": drawn, "note": ""})
 
     def row_pressed(self, index: int) -> None:
         if 0 <= index < len(self._row_actions) and self._row_actions[index]:
             self._row_actions[index]()
+
+    def replay_pressed(self, index: int) -> None:
+        replays = getattr(self, "_row_replays", [])
+        if 0 <= index < len(replays) and replays[index]:
+            replays[index]()
 
     def set_cell(self, row: int, column: int, text: str, colour: str) -> None:
         key = ("cell", row, column)

@@ -350,7 +350,8 @@ def follow(store: TurnStore, civ: str, poll: float = 5.0, rounds: int = 0,
            capture_every: float = CAPTURE_EVERY,
            uploads_per_turn: int = UPLOADS_PER_TURN,
            submit_every: float = None, send_now=None, reopen=None,
-           check_now=None, log=print, clock=time.time, sleep=time.sleep):
+           check_now=None, hold=None, log=print, clock=time.time,
+           sleep=time.sleep):
     """Play one civ's turns as the store publishes them.
 
     One pass is: serve the current turn, wait until its deadline, take the
@@ -371,6 +372,8 @@ def follow(store: TurnStore, civ: str, poll: float = 5.0, rounds: int = 0,
     submission. Both go through this loop because it owns the client.
     `check_now` reads the store at once, outside the schedule (the launcher
     sets it when this machine's internet connection comes or goes).
+    `hold()`, while true, keeps a turn from being served, since serving
+    closes whatever runs on the client (the launcher's replay).
 
     The state is captured every `capture_every` seconds and uploaded
     `uploads_per_turn` times across the turn, the last at the deadline.
@@ -455,6 +458,14 @@ def follow(store: TurnStore, civ: str, poll: float = 5.0, rounds: int = 0,
                         f"retrying in {poll}s")
                     nap(poll)
             return None
+
+        if hold is not None and hold():
+            emit("held")
+            log(f"[{civ}] the game is in use; serving waits")
+            while hold() and not halted():
+                sleep(0.5)
+            if halted():
+                break
 
         got = current_or_wait()
         if got is None:

@@ -719,9 +719,11 @@ def run_views(referee, galaxy, token_a, token_b):
     check('a current turn published with no views sends every seat to the turn',
           (code, referee.turn_object(turn + 1) in where), (302, True))
     referee.publish(turn + 2, make_blob(turn + 2))
-    check('the publish after that deletes them',
+    check('the publish after that keeps them for the replay',
           (referee._has(referee.view_object('DemoPlayer', turn)),
-           referee._has(referee.view_object(public, turn))), (False, False))
+           referee._has(referee.view_object(public, turn))), (True, True))
+    code, _where = location(token_a, turn)
+    check('but the turn route no longer serves them', code, 403)
     code, _where = location(token_a, turn + 1)
     check('and an earlier turn with no views is not served whole', code, 403)
 
