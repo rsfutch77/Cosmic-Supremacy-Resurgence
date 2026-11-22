@@ -1021,8 +1021,14 @@ another civ's vote cast kept both across the client's tick. The checks were made
 client's own handler, by setting the box and sending its `BN_CLICKED`, with the Overview Screen
 not on screen.
 
-[ ] find whether the engine's end turn `[0x80AA04]` is in the save. Until it is known, a galaxy
+[x] find whether the engine's end turn `[0x80AA04]` is in the save. Until it is known, a galaxy
 past turn 600 with a majority voting may set an end turn of its own in the referee's tick.
+**It is**: `GLOB`'s second `u32`, after the turn. The `GLOB` loader reads it from version 16
+on (`0x52DA20`, Reconstruction report, "The `GLOB` loader also writes settings"), and every
+blob here is `GLOB` v17 with it at `-1` (`d4`, `wh0`, `cs3`, 22 November 2026). The replay
+writes the same field to bound Next. So an end turn the tick's client sets stays in the
+authoritative galaxy and is served to every civ; the merge copies `GLOB` from the galaxy it
+builds on, so no submission changes it.
 
 ### Audit sweep, closed items, and the Owner registry (August 2026)
 
