@@ -39,6 +39,8 @@ for d in (os.path.join(ROOT, 'server'),
 import save_parser as sp                                        # noqa: E402
 import inject_order as io                                       # noqa: E402
 import merge_orders as mo                                       # noqa: E402
+import canonical                                                # noqa: E402
+import knpl                                                     # noqa: E402
 
 FIX = os.path.join(HERE, 'fixtures')
 PASS, FAIL = [], []
@@ -481,6 +483,26 @@ def diplomacy():
     out, _notes = merged(d['d5b'], ('GoodGuy', d['d5b']), ('BadGuy', d['d5']))
     check('the lump sum moves once with both civs submitting',
           [mo.resources_of(out, c)[0] for c in (GOOD, BAD)], [625, 635])
+
+    out, _notes = merged(d['d6'], (civ[BAD], d['d7']))
+    check('a war declared writes both records as the client does: declared '
+          'on the declarer, and each the other\'s Inactivity (0x0055BD40)',
+          [mo.knpl_records(out, c) for c in (GOOD, BAD)],
+          [mo.knpl_records(d['d7'], c) for c in (GOOD, BAD)])
+    unruled = os.path.join(FIX, 'unruled')
+    tw0, tw1 = (sp.load_any(os.path.join(unruled, n + '.b64'))
+                for n in ('tw0', 'tw1'))
+    out, notes = merged(tw0, ('GoodGuy', tw1))
+    check("    and Robert's declaration on unruled reproduces his save",
+          (canonical.canonical_hash(out), notes.get('GoodGuy')),
+          (canonical.canonical_hash(tw1), None))
+
+    def field(blob, a, b, key):
+        rec = mo.knpl_records(blob, a)[b][1]
+        return knpl.parse(struct.pack('<I', 1) + rec)[0][key]
+    check('    with GoodGuy marked the declarer and 100 recorded both ways',
+          [field(out, a, b, k) for a, b in ((GOOD, BAD), (BAD, GOOD))
+           for k in ('declared', 'inactivity')], [1, 100, 0, 100])
 
     print('a war-only galaxy (waronly = 1), as the client greys Propose New '
           'Treaty (0x442510)')

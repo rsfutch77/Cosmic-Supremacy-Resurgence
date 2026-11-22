@@ -3722,6 +3722,36 @@ def set_stance(blob, civ_oid, other, code):
     raise SystemExit(f'civ {civ_oid} has not met {other}')
 
 
+INACTIVITY_FROM_CONTENT = 0x25  # below this content version it reads 0
+
+
+def inactivity_percent(blob, civ_oid, turn):
+    """A civ's Inactivity percentage as the client reads it (`0x005381D0`)."""
+    import activity
+    import set_blob_player
+    if set_blob_player.get_content_version(blob) < INACTIVITY_FROM_CONTENT:
+        return 0
+    name = next((o['name'] for o in icv.owner_records(blob)
+                 if o['oid'] == civ_oid), None)
+    baseline = (activity.state(blob).get(name) or (turn, 0))[0]
+    return activity.penalty(turn, baseline, gset_value(blob, 'sandbox') == 1)
+
+
+def set_war_record(blob, civ_oid, other, declared, inactivity):
+    """Write the fields accepting a war sets in a civ's record of another
+    (`0x0055BD40`): `declared`, `w17` cleared and `inactivity`."""
+    rec = (knpl_records(blob, civ_oid) or {}).get(other)
+    if rec is None:
+        raise SystemExit(f'civ {civ_oid} has not met {other}')
+    at = rec[0]
+    out = bytearray(blob)
+    for key, value in (('declared', declared), ('w17', 0),
+                       ('inactivity', inactivity)):
+        off, fmt = next((o, f) for k, o, f in knpl.FIELDS if k == key)
+        struct.pack_into(fmt, out, at + off, int(value))
+    return bytes(out)
+
+
 def knpl_records(blob, civ_oid):
     """{other civ: (record offset, 36 record bytes)} from a civ's KNPL, or None
     when it does not read as a count of whole records."""
@@ -4075,6 +4105,11 @@ def take_treaty_step(blob, served_treaties, step, oid, record, civ_oid, turn,
         if step == 'war':
             blob = set_stance(blob, civ_oid, other, WAR)
             blob = set_stance(blob, other, civ_oid, WAR)
+            # Each side records the other's Inactivity when the war began.
+            mine_now = inactivity_percent(blob, civ_oid, turn)
+            theirs_now = inactivity_percent(blob, other, turn)
+            blob = set_war_record(blob, civ_oid, other, 1, theirs_now)
+            blob = set_war_record(blob, other, civ_oid, 0, mine_now)
             line = f'treaty {new}: war declared on {who(other)}'
         else:
             line = f'treaty {new}: {kind} proposed to {who(other)}'

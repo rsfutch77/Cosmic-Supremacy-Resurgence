@@ -61,6 +61,9 @@ def main():
     check('a point a turn after that', activity.penalty(120, 0), 48)
     check('none for a civ seen last turn', activity.penalty(120, 119), 0)
     check('never past 100', activity.penalty(400, 0), 100)
+    check('a sandbox galaxy waits 150 turns and spreads it over 150',
+          [activity.penalty(t, 0, sandbox=True) for t in (150, 151, 225, 400)],
+          [0, 0, 50, 100])
 
     print('\nmark_present')
     marked = activity.mark_present(blob, ['BadGuy'], log=quiet)

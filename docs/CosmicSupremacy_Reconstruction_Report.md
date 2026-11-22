@@ -958,12 +958,21 @@ Two things follow:
   judged: a wrong one only sends a ship somewhere.
 
   The war declaration also showed the merge leaving two `KNPL` fields unset (below).
-- [ ] **A war declared through the merge leaves two `KNPL` fields unset.** Accepting a war
+- [x] **A war declared through the merge leaves two `KNPL` fields unset.** Accepting a war
   (`0x0055BD40`) sets `declared` on the declaring side and records each side's view of the other's
   Inactivity percent in `inactivity`; Robert's declaration on 22 November 2026 wrote `declared` 1
   on GoodGuy's record of BadGuy and 100 in `inactivity` on both, and the merge carried the stance
   only. Both feed the reputation rules (`knpl.py`). Done when the merge writes them as the client
-  does, with the Inactivity percent computed as the client computes it.
+  does, with the Inactivity percent computed as the client computes it. **Fixed** (22 November
+  2026): the merge's war step writes `declared` 1 on the declarer's record and 0 on the other's,
+  clears `w17` on both, and records each side's Inactivity percent of the other, computed as
+  `0x005381D0` does: `(turn - 72 - baseline) * 100 / 100` from the civ's `SERV` baseline, clamped to
+  0 to 100, with 150 for both figures when the galaxy's `sandbox` setting is on, and 0 below content
+  version 0x25 (`merge_orders.inactivity_percent`, `activity.penalty`). Robert's declaration now
+  merges byte for byte, and so does BadGuy's in the diplomacy fixtures (`d6` to `d7`), which had
+  missed the same two fields unnoticed (`test_admirals_diplomacy_merge.py`, `test_activity.py`).
+  The routine also returns 0 while either of two client flags, `[0x0086F45C]` and the Tutorial's
+  `[0x0086F4F8]`, is set; neither is set in a multiplayer client.
 - [ ] **A player's interface settings are lost at every turn.** The merge carries only the vote
   byte of the civ's `USSE`, so a setting changed in the client (byte 27 changed while a note was
   written, 22 November 2026) is back as served next turn. Done when the settings bytes are named
