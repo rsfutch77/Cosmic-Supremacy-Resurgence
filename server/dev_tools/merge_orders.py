@@ -380,8 +380,8 @@ COMMANDS = {
     # Online only: the offline branch changes nothing.
     'RQTM': (None, 'asks for the time after a galaxy loads'),
     'RSMA': (None, "asks for the market's prices"),
-    'RQTN': (None, 'asks for a replay turn'),
-    'RQSV': (None, 'asks for a replay save'),
+    'RQTN': (None, 'asks the replay server for one turn (0x0056E550)'),
+    'RQSV': (None, 'asks for a fresh save when the client is out of sync'),
     'STTP': (None, 'a setting from the team dialog'),
     'ALIV': (None, 'keep-alive'),
 }

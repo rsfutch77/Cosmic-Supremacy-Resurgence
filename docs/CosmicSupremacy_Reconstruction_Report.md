@@ -620,7 +620,8 @@ Two things follow:
   its commands, and `merge_orders.COMMANDS` gives all 56 a rule or says why none carries it, read
   from each routine's offline branch on 14 November 2026 (`test_online_commands.py`). 48 have a
   rule. `RNGV` runs a governor at once, and the other rules judge what it changes. Six are online
-  only: `RQTM`, `RSMA`, `RQTN` and `RQSV` (the replay), `STTP` (the team dialog) and `ALIV`.
+  only: `RQTM`, `RSMA`, `RQTN` (the replay), `RQSV` (a resync), `STTP` (the team dialog) and
+  `ALIV`.
   `DOSC` is refused and named (below).
 - [x] **Ten commands a player can make have no rule, and the merge refuses their effect.**
   Nine are carried and `DOSC` is refused and named, read off each command's sender, its offline
@@ -852,6 +853,33 @@ Two things follow:
   does nothing, so a served galaxy answers neither. Done when the replay screen has been opened
   on a served galaxy, what it asks for is known, and it either shows the turns it asks for or
   says plainly that the replay is not available.
+
+  **What it asks for** (21 November 2026, read from the disassembly and run in TestBed against
+  a probe server on `127.0.0.1:4710` serving the diplomacy galaxy as GoodGuy):
+  - The replay is a mode of its own. A pass naming port 4710 sets `[0x0086F1A2]`, and the client
+    connects, sends `RQLG` and then `LGIN`, and loads the `SAVE` that follows. `LGIN` carries
+    `#Galaxy@Pass#` and a 512-character pass field.
+  - The pass field is the pass file's raw text repeated 16 times, and the login goes on only at
+    exactly 512 characters (`0x0057A8F4`). Any other length shows `Please login via the ...
+    portal`. So a replay pass file is exactly 32 characters, 22 to 24 bytes decoded, for example
+    `127.0.0.1 4710 x GoodGuy`. The answer to `RQLG` and `LGIN` is `SUCC` holding a
+    `u32`-length string, which may be empty.
+  - Previous, next and the turn slider each call `0x0056E550(turn)`, which sends `RQTN` v0 with a
+    `u32` turn and titles the screen `Loading...`. A `SAVE` answer loads that turn (`0x0056DDA0`)
+    and titles it `Galaxy Replay`. A `FAIL` answer titles it `Turn Data Not Available`
+    (`0x0056DD40`). After the first `SAVE`, the client asks `RQTN` 0, which the probe answered
+    with the newest turn.
+  - Next is offered while the turn is below `[0x0080AA04]`, the second `u32` of `GLOB`
+    (`0x0052DA20`). Every save here carries -1 there, so next stays greyed out until the server
+    writes the newest turn into each replay save.
+  - Outside replay mode the same routine sends `RQSV`, an empty section asking for a fresh save,
+    after logging `detected client is out-of-sync, requesting save-game`. It is a resync, not
+    the replay.
+
+  Seen on screen (Robert, 21 November 2026): turns 184, 183 and 182 stepped back, turn 181 (never
+  kept, the double tick) showed `Turn Data Not Available`, and with `GLOB` stamped 184 the
+  client stepped forward again. Next step: decide where a player's history comes from and how
+  the launcher opens it.
 - [x] **People on another civ's planet or ship are refused.** A colony keeps the owner of the
   colonists that founded it, so a civ can hold citizens on a rival's planet, but the people rule
   carries changes only on the submitter's own planets and ships. Done when a Single Player
