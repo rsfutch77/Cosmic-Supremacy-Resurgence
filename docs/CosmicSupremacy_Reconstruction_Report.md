@@ -1407,7 +1407,7 @@ the rest of the record misread. An id is not checked to name a civ.
   `Stranger`). The client titles a message with the sender's chosen civ name (`tmog66-`); the
   referee at `00d7548` wrote the player name, and the merge keeps the client's title from
   `ab2e6d3`.
-- [ ] **Messages arrive between ticks, close to instantly.** A message travels inside its
+- [x] **Messages arrive between ticks, close to instantly.** A message travels inside its
   sender's submission, so it reaches the recipient with the next tick, up to a whole turn later.
   Per tick is acceptable for now (Robert, 13 November 2026). The original did it over its socket:
   the send routine at `0x00575970` writes one `NEWS` (writer `0x005355B0`) into an `SDNW` v0
@@ -1444,7 +1444,14 @@ the rest of the record misread. An id is not checked to name a civ.
   listener that answers `RQLG` and `LGIN` and sends a served view as `SAVE`, then the client's
   `SDNW` and a pushed `NEWS`. Done when a message sent in the client reaches a recipient whose
   launcher is open within a minute, shows in the recipient's news without waiting for the tick,
-  and is still in the turn the referee publishes.
+  and is still in the turn the referee publishes. **Closed, kept per tick** (Robert, 22 November
+  2026): not wanted for v0.8. Three ways were weighed: the launcher showing a message as soon as
+  the sender's 5-second capture finds it; that plus a client patch pulling it into the News
+  screen through the push handler, with a merge rule so the recipient's copy is not doubled at
+  the tick; or neither. Read for the second, 22 November 2026: the push handler reads the record
+  with the save's own `NEWS` reader (`0x00535E70`), so an inline message as a note is kept would
+  do, adds it with `Owner::AddNews` (`0x00543720`) and refreshes the list (`0x00541240`), but
+  only while `[0x0086F1A1]`, the galaxy-is-current flag, is set.
 - [x] **Each civ is served only its own news.** `fog.project` empties every other civ's news list
   and keeps only the strings its own list names, with the next id unchanged (`news.own_view`),
   and `fog.restore` puts them back ahead of anything the submission added, so a restored view is
