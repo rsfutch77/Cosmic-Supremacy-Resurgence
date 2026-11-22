@@ -21,7 +21,12 @@ submission. `COMMANDS` lists all 56, those with no rule among them.
 **Ship orders** (`STCO`), `SHIP > DYNO`. A move or a colonise is three edits
 inside the ship's `DYNO`: the `SHCO` order-type byte (1 move, 3 colonise), the
 has-orders byte, and an appended `ROUT` plus `u32`. Taking the order is copying
-the `DYNO`.
+the `DYNO`. An order that needs a module is refused when the ship, or every ship
+of the fleet, has none, as the client's order menu (`0x0050A110`) offers it:
+Colonize Planet a Colony Module, Conquer Planet a Troop Bay, Bio-Bombing Planet
+Bio Bombs, Create Wormhole a Wormhole Generator. The engine itself drops a Create
+Wormhole order whose ship has no generator, leaves the civ's sphere of influence
+before its 11-turn countdown ends, or is past `planets / 10 + 1` wormholes.
 
 **Research topic** (`STRS`), `OWNR > DATA > OWPR`, the technology id written
 twice, 8 bytes apart, after the completed technologies (`research_offsets`): at
@@ -585,6 +590,74 @@ CREDITS_AFTER_ID = 20           # past the object id, which is itself past
 HURRY_PER_POINT = 4
 
 
+# The orders a ship can carry (the engine's names at 0x007FC898), and the
+# module each one needs, as the client's order menu (0x0050A110) offers them.
+ORDER_NAMES = ('Hold Position', 'Move To', 'Scout', 'Colonize Planet',
+               'Attack', 'Conquer Planet', 'Bio-Bombing Planet', 'Move Near',
+               'Create Wormhole')
+MODULE_NAMES = {0: 'Colony Module', 1: 'Troop Bay', 4: 'Bio Bombs',
+                5: 'Wormhole Generator'}
+ORDER_MODULE = {3: 0, 5: 1, 6: 4, 8: 5}
+
+
+def order_type(dyno):
+    """The order type a whole DYNO section holds, or None."""
+    at = 8 + DYNO_ORBIT
+    if dyno is None or len(dyno) < at + 9 or dyno[at:at + 4] != b'SHCO':
+        return None
+    return dyno[at + 8]
+
+
+def ship_designs(blob):
+    """{shipObjectId: design id} for every ship, in or out of a fleet. A
+    SHPR begins with its design and ends with its ship's own id."""
+    tree = sp.parse_blob(blob)
+    glxy = next(tree[0].find('GLXY'))
+    out = {}
+    for sec in glxy.find('SHIP'):
+        shpr = next(sec.find('SHPR'), None)
+        if shpr is not None and shpr.size >= 4:
+            out[struct.unpack_from('<I', blob, sec.payload)[0]] = \
+                struct.unpack_from('<I', blob, shpr.payload)[0]
+    for flet in glxy.find('FLET'):
+        for fldt in flet.find('FLDT'):
+            for shpr in fldt.find('SHPR'):
+                if shpr.size >= 8:
+                    out[struct.unpack_from('<I', blob, shpr.end - 4)[0]] = \
+                        struct.unpack_from('<I', blob, shpr.payload)[0]
+    return out
+
+
+def design_modules(blob):
+    """{design id: set of module ids} for every design in the blob."""
+    out = {}
+    for off, oid, _name in idg.design_records(blob):
+        try:
+            out[oid] = set(idg.read_design(blob, off)[2].get('modules', ()))
+        except (ValueError, struct.error):
+            out[oid] = set()
+    return out
+
+
+def order_module_refusal(dyno, ships, designs, modules):
+    """Why an order may not be given to these ships, or None.
+
+    `ships` are the ship ids carrying it (one ship, or a fleet's members).
+    The engine drops a Create Wormhole order whose ship has no generator, is
+    outside the civ's sphere or is past its allowance; the module checks are
+    made here for every order that needs one, as the client makes them.
+    """
+    kind = order_type(dyno)
+    need = ORDER_MODULE.get(kind)
+    if need is None:
+        return None
+    if any(need in modules.get(designs.get(s), ()) for s in ships):
+        return None
+    carried = ('no ship of the fleet carries one' if len(ships) > 1
+               else 'the ship carries none')
+    return f'{ORDER_NAMES[kind]} needs a {MODULE_NAMES[need]}, and {carried}'
+
+
 def ship_index(blob):
     """{shipObjectId: (owner, dyno_bytes)} for every ship carrying a DYNO."""
     tree = sp.parse_blob(blob)
@@ -799,6 +872,7 @@ def fleet_orders(served, sub, civ_oid, names, admirals=(), remap=None):
     t_objects = space_objects(sub)[2]
     high = struct.unpack_from('<I', served, idg.HIGH_WATER_ID)[0]
     refusals, log = [], []
+    designs, modules = ship_designs(served), design_modules(served)
 
     def who(civ):
         return names.get(civ, civ)
@@ -973,7 +1047,11 @@ def fleet_orders(served, sub, civ_oid, names, admirals=(), remap=None):
                     remap or {})
                 if why:
                     refusals.append(f'fleet {fid}: {why}')
-                if taken != was['dyno']:
+                why = (order_module_refusal(taken, members, designs, modules)
+                       if taken != was['dyno'] else None)
+                if why:
+                    refusals.append(f'fleet {fid}: order DROPPED, {why}')
+                elif taken != was['dyno']:
                     dyno = taken
                     log.append(f'fleet {fid}: order taken ({len(was["dyno"])} '
                                f'-> {len(dyno)} bytes)')
@@ -4710,6 +4788,8 @@ def merge(blob, submissions, log=print, notes=None, arms=None, scans=None):
     served_ships = ship_index(blob)
     served_members = {m: f['owner'] for f in fleet_index(blob).values()
                       for m, _s, _v in f['members']}
+    ship_design_of = ship_designs(blob)
+    served_modules = design_modules(blob)
     served_planets = planet_index(blob)
     served_crews = _ship_crew_index(blob)
     served_designs = design_index(blob)
@@ -4916,6 +4996,11 @@ def merge(blob, submissions, log=print, notes=None, arms=None, scans=None):
                 if why:
                     drop(f"ship {ship_oid}: {why}")
                 if dyno == as_served:
+                    continue
+                why = order_module_refusal(dyno, [ship_oid], ship_design_of,
+                                           served_modules)
+                if why:
+                    drop(f"ship {ship_oid}: order DROPPED, {why}")
                     continue
                 blob = replace_dyno(blob, ship_oid, dyno)
                 log(f"    ship {ship_oid}: order taken "

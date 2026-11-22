@@ -21,6 +21,8 @@ wormholes in GoodGuy's sphere, then ticked to turn 304 (22 November 2026).
 The engine made 682; the client allows `planets / 10 + 1` (`0x0053A5A0`), so
 683 is 682's record copied to the second ship's target:
 
+    wo0  turn 230, both wgen ships at their targets, unordered
+    wo1  each given Create Wormhole (order 8) by Robert
     wh0  682 and 683 unlinked, as the client saved them
     wh1  Connect To on 682, picking 683 (Robert)
     wh2  ship 681, holding at 683, sent through to beyond 682; one tick
@@ -215,6 +217,57 @@ def main():
     out, notes = merged(wh0, bytes(spun))
     check('a save where only that f32 moved changes nothing and says nothing',
           (out == wh0, notes), (True, []))
+
+    print('\nan order that needs a module (0x0050A110)')
+    wo0, wo1 = load('wo0'), load('wo1')
+    out, notes = merged(wo0, wo1)
+    check('Create Wormhole on two generator ships is carried',
+          ([mo.order_type(mo.ship_index(out)[s][1]) for s in (680, 681)],
+           notes), ([8, 8], []))
+
+    def on_design(blob, ship, design):
+        """`blob` with one ship rebuilt on another design."""
+        out = bytearray(blob)
+        glxy = next(sp.parse_blob(blob)[0].find('GLXY'))
+        for sec in glxy.find('SHIP'):
+            if struct.unpack_from('<I', blob, sec.payload)[0] == ship:
+                shpr = next(sec.find('SHPR'))
+                struct.pack_into('<I', out, shpr.payload, design)
+        return bytes(out)
+
+    def as_order(blob, ship, kind):
+        """`blob` with one ship's order type changed."""
+        out = bytearray(blob)
+        glxy = next(sp.parse_blob(blob)[0].find('GLXY'))
+        for sec in glxy.find('SHIP'):
+            if struct.unpack_from('<I', blob, sec.payload)[0] == ship:
+                dyno = next(sec.find('DYNO'))
+                out[dyno.start + 8 + mo.DYNO_ORBIT + 8] = kind
+        return bytes(out)
+
+    scout = 675                     # GoodGuy's design with no module
+    out, notes = merged(on_design(wo0, 680, scout),
+                        on_design(wo1, 680, scout))
+    check('on a ship with no generator it is refused and named',
+          notes, ['ship 680: order DROPPED, Create Wormhole needs a Wormhole '
+                  'Generator, and the ship carries none'])
+    check('    and the ship keeps its order as served, the other its new one',
+          [mo.order_type(mo.ship_index(out)[s][1]) for s in (680, 681)],
+          [0, 8])
+    for kind, module in ((3, 'Colony Module'), (5, 'Troop Bay'),
+                         (6, 'Bio Bombs')):
+        out, notes = merged(wo0, as_order(wo1, 680, kind))
+        check(f'{mo.ORDER_NAMES[kind]} without a {module} is refused',
+              any(f'needs a {module}' in n for n in notes))
+    out, notes = merged(wo0, as_order(wo1, 680, 1))
+    check('an order needing no module is not judged here', notes, [])
+    designs, modules = mo.ship_designs(wo0), mo.design_modules(wo0)
+    check('a fleet passes when any ship of it has the module',
+          (mo.order_module_refusal(mo.ship_index(wo1)[680][1], [669, 680],
+                                   designs, modules),
+           'no ship of the fleet' in mo.order_module_refusal(
+               mo.ship_index(wo1)[680][1], [669, 670], designs, modules)),
+          (None, True))
 
     print('\nwormholes')
     base = with_worms(s0, worm(900, GOOD), worm(901, GOOD), worm(902, GOOD),

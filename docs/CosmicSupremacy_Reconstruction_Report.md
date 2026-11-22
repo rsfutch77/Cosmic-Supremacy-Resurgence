@@ -903,12 +903,39 @@ Two things follow:
   after the soldiers the submission retired (the cheapest order the client allows), refuses a
   draft the civ cannot pay with the rest of its people changes, and charges nothing below content
   version 150. The crewing save now merges exactly (`test_people_and_hurry.py`, `dr0`, `dr1`).
-- [ ] **Ship orders are carried without the client's checks.** The ship order rule copies a ship's
+- [x] **Ship orders are carried without the client's checks.** The ship order rule copies a ship's
   `DYNO` whole, so it takes any order type. The client offers create-wormhole only inside the
   civ's sphere of influence, only for a ship carrying a Wormhole Generator, and the engine makes
   no more than `planets / 10 + 1`; nothing in the merge checks any of these, nor a bio-bomb or
   colonise order's module. Whether the engine re-checks an order at the tick is not measured.
   Done when each order type's own check is encoded, or shown to be made by the engine.
+  **Closed** (22 November 2026). The order types are the engine's table at `0x007FC898`: 0 Hold
+  Position, 1 Move To, 2 Scout, 3 Colonize Planet, 4 Attack, 5 Conquer Planet, 6 Bio-Bombing
+  Planet, 7 Move Near, 8 Create Wormhole, the first byte of the `DYNO`'s `SHCO`.
+  - **The engine checks Create Wormhole itself**, measured by planting orders in Robert's turn-230
+    save (`wo1`) and ticking a Resurgence client. The order flies the ship to its point; on
+    arrival a countdown of 11 runs in the `SHCO`'s last byte, and the wormhole appears when it
+    ends (control: arrived turn 247, made turn 257). A ship on a design with no generator lost
+    the order on arrival and made nothing. A ship moved during its countdown into BadGuy's
+    sphere lost the order on the next tick and made nothing, while the same move to another
+    point in GoodGuy's sphere made the wormhole. A second order accepted while the civ held
+    none was dropped on arrival once the first wormhole stood, as the allowance says.
+  - **The merge checks the modules**, as the client's order menu (`0x0050A110`) offers them
+    (decided 22 November 2026: encode rather than measure, Robert). A ship order, or a fleet
+    order, that needs a module is refused when the ship, or every ship of the fleet, has none:
+    Colonize Planet a Colony Module, Conquer Planet a Troop Bay, Bio-Bombing Planet Bio Bombs,
+    Create Wormhole a Wormhole Generator (`order_module_refusal`,
+    `test_scans_notes_wormholes_merge.py`). The ship keeps its order as served.
+
+  Planting needed care: the engine moves a ship from the position its `ROUT` holds, not its
+  header, so editing only the header does not move it. During the countdown the route is the
+  ship's position three times over.
+- [ ] **An order's target is not judged.** The merge takes any target an order names. The client
+  offers Colonize only on an unowned planet, Conquer and Bio-Bombing only on another civ's planet,
+  Scout only on a system. Whether the engine drops an order whose target is wrong, as it does for
+  Create Wormhole, is not measured: no fixture holds a colonise, conquer or bio-bomb order. Done
+  when real orders of each are captured, planted on wrong targets and ticked, and each check the
+  engine does not make is encoded.
 - [ ] **A player's interface settings are lost at every turn.** The merge carries only the vote
   byte of the civ's `USSE`, so a setting changed in the client (byte 27 changed while a note was
   written, 22 November 2026) is back as served next turn. Done when the settings bytes are named
