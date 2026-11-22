@@ -79,8 +79,10 @@ opens a design in use read-only and greys Delete (`0x0050E490`): no ship of
 the civ's is built to it, no planet of its builds it, no queue of its lists
 it, and no admiral rule of its holds its id. The editor keeps a modified
 design's name and owner. A civ's last design is not deleted, as the referee
-finds the count from a design. The space and cloaking checks the editor's OK
-makes (`0x004A5D40`) are not encoded for a new or a modified design.
+finds the count from a design. A new or a modified design with no scanner is
+refused: the editor starts every design with one, and the client closes on a
+design without one (`0x005479C0`). The space and cloaking checks the editor's
+OK makes (`0x004A5D40`) are not encoded for a new or a modified design.
 
 `OWPR` `+49`, `+77`, `+78`, `+100` and `+110` also move in a design submission
 and are not carried: they move without a design too and differ between
@@ -1736,6 +1738,13 @@ def add_design(blob, civ_oid, record):
     raise SystemExit(f'civ {civ_oid} is not in this blob')
 
 
+# The client's scanner-range getter `0x005479C0` throws on an empty scanner
+# list, and the Ship Design tab, the editor's stats and a fleet's scan range
+# all call it. The editor starts every design with a scanner.
+NO_SCANNER = ('it has no scanner, and the client closes on a design without '
+              'one')
+
+
 def design_orders(served, submitted, civ_oid, in_use=None):
     """(new, toggled, edited, deleted, refusals) for one civ's ship designs.
 
@@ -1798,6 +1807,9 @@ def design_orders(served, submitted, civ_oid, in_use=None):
             refused.append(f'{label} edit DROPPED, it is in use: '
                            f'{in_use[oid]}, and the client opens it read-only')
             continue
+        if now['parts'] != was['parts'] and not now['parts']['scanners']:
+            refused.append(f'{label} edit DROPPED, {NO_SCANNER}')
+            continue
         edited.append((oid, now['record']))
 
     for oid in sorted(set(submitted) - set(served)):
@@ -1815,6 +1827,9 @@ def design_orders(served, submitted, civ_oid, in_use=None):
             refused.append(f'design {oid} ({d["name"]!r}) DROPPED, its payload '
                            f'names civ {d["claims"]} as the owner, not the '
                            f'submitter')
+            continue
+        if not d['parts']['scanners']:
+            refused.append(f'design {oid} ({d["name"]!r}) DROPPED, {NO_SCANNER}')
             continue
         new.append((oid, d))
     return new, toggled, edited, deleted, refused

@@ -700,8 +700,8 @@ Two things follow:
   - Both runs closed the client when the Ship Design tab opened. That crash is the
     fixture's, not the scan's. GoodGuy's design 674 (`e1x4`) has no scanner, and the tab's
     scanner-range getter `0x005479C0` stops the client on an empty scanner list
-    (`ShipDesign:152`). The client writes a dump with no exception stream. That is the
-    Singleplayer checklist's F9, and it is open below.
+    (`ShipDesign:152`). The client writes a dump with no exception stream. The item "A
+    design with no scanner", below, records the cause, and the merge refuses such a design.
 
   The referee runs the client's own scan (decided 18 November 2026: Robert counts seconds as
   instant, and the engine's code needs no copy in Python). It loads the authoritative galaxy
@@ -841,10 +841,19 @@ Two things follow:
 
   Not yet done: a scan carried by the live relay and referee, and an energy grid scan on a
   galaxy with a grid.
-- [ ] **A design with no scanner closes the client on the Ship Design tab.** The tab asks each
-  design for its scanner range, and `0x005479C0` stops the client when `ShipDesign:152` is
-  empty. The designer saved one in `unruled` (674, `e1x4`). Next step: find whether the
-  designer or the merge should refuse such a design (Singleplayer checklist F9).
+- [x] **A design with no scanner closes the client on the Ship Design tab.** The scanner-range
+  getter `0x005479C0` throws "invalid vector<T> subscript" (`0x004E4E50`) when `ShipDesign:152`
+  is empty. The Ship Design tab, the designer's stats (`0x004A92B0`), a ship filter and a
+  fleet's scan range (`0x004D9A20`) all call it, so the client takes one scanner per design as
+  given. The designer writes a default scanner into a new design when it opens. Its OK
+  (`0x004A5D40`) checks the name, the space and cloaking, and asks before saving a design with
+  no engines, but never looks at scanners, and neither do `CRSD` and `MOSD`. What the original
+  server did is not known. 674 (`e1x4`) did not come from the designer: it and 673 (`e1x2`) are
+  the hand-made probes of September 2026, already in `unruled/s0`, and every other design on
+  disk carries one scanner. **The merge refuses** a new design, or a change to a design's
+  parts, that leaves no scanner (`test_design_edits_merge.py`). A design already served
+  without one is kept. Whether the designer's minus sign takes the last scanner off, and
+  whether the client stays up when it does, is Singleplayer checklist F9.
 - [ ] **Notes and wormhole links are carried as read, not measured.** Calling the note dialog's
   routine (`0x00538DD0`) from outside closed the client in a drawing routine, and no galaxy holds
   a wormhole. Measure a note written and edited through the News screen, and a wormhole pair
