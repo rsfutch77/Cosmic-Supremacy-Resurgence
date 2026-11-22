@@ -246,7 +246,10 @@ change only what the submitter's own map shows.
 **The end-galaxy vote** (`SVUS`), the last byte of the civ's `OWNR > DATA > USSE`, 1
 when the Overview Screen's "Vote to End the Galaxy" box is ticked. Carried as 0
 or 1. Nothing acts on it; the referee archives the votes and the operator page
-shows them. The rest of `USSE` is the civ's interface settings and is not read.
+shows them. The rest of `USSE` is the News screen's category tick-boxes and the
+numbers it takes, set only from that screen (`0x00412910`, `0x00412A30`,
+`0x00412DC0`) and the vote box (`0x0048C250`), and is carried as the client
+saved it, as the original server kept what `SVUS` sent.
 
 **Messages** (`SDNW`, `CHNW`, `SEEN`, `EDNW`), news items naming their title
 and body in `NWDB`, the galaxy's string table (`news.py`). A message is taken when the
@@ -395,7 +398,7 @@ COMMANDS = {
     'EDNW': ('Messages', 'edits a note'),
     # Refused and named: the report is the referee's to make (Scan reports).
     'DOSC': (None, 'carries out scans'),
-    # Only the vote byte of the civ's `USSE` is carried.
+    # The civ's `USSE`: the vote judged, the News screen's settings kept.
     'SVUS': ('The end-galaxy vote', 'saves user settings, the vote among them'),
     # Online only: the offline branch changes nothing.
     'RQTM': (None, 'asks for the time after a galaxy loads'),
@@ -3873,6 +3876,29 @@ def vote_orders(served, sub, civ_oid):
     return now, []
 
 
+def settings_orders(served, sub, civ_oid):
+    """The submitter's `USSE` bytes before the vote, when it changed them, or
+    None. They are the News screen's category tick-boxes and the numbers it
+    takes (clamped to 0 to 999 as typed), set only from that screen and saved
+    with `SVUS`; the original server kept whatever `SVUS` sent."""
+    was, now = _usse(served, civ_oid), _usse(sub, civ_oid)
+    if was is None or now is None or was.version != now.version:
+        return None
+    old = bytes(served[was.payload:was.payload + END_VOTE_AT])
+    new = bytes(sub[now.payload:now.payload + END_VOTE_AT])
+    return new if new != old else None
+
+
+def set_settings(blob, civ_oid, settings):
+    """Write a civ's `USSE` bytes before the vote. Sizes do not change."""
+    usse = _usse(blob, civ_oid)
+    if usse is None or len(settings) != END_VOTE_AT:
+        raise SystemExit(f'civ {civ_oid} has no readable USSE')
+    out = bytearray(blob)
+    out[usse.payload:usse.payload + END_VOTE_AT] = settings
+    return bytes(out)
+
+
 def _resources_at(blob, civ_oid):
     """Where a civ's resource count sits, or None unless the count is
     RESOURCE_KINDS records naming 0, 1, 2 ... in order."""
@@ -5536,6 +5562,11 @@ def merge(blob, submissions, log=print, notes=None, arms=None, scans=None):
             if vote is not None:
                 blob = set_end_vote(blob, mine, vote)
                 log(f"    end-galaxy vote: {'cast' if vote else 'withdrawn'}")
+                accepted += 1
+            settings = settings_orders(served, sub, mine)
+            if settings is not None:
+                blob = set_settings(blob, mine, settings)
+                log("    News screen settings: as the client saved them")
                 accepted += 1
 
             # News: messages to other civs, and its own items marked

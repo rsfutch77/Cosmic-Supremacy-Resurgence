@@ -168,6 +168,24 @@ def main():
     check('and no string was added', news.read_table(nt2),
           news.read_table(s0))
 
+    print("\nthe News screen's settings (USSE, sent with SVUS)")
+    import canonical
+    settings = [mo.settings_orders(s0, b, GOOD) for b in (s0, nt1, nt2)]
+    check('using the screen changed one setting, byte 27, and only once',
+          ([i for i in range(mo.END_VOTE_AT)
+            if settings[1] and settings[1][i] != load('s0')[
+                mo._usse(s0, GOOD).payload + i]],
+           mo.settings_orders(nt1, nt2, GOOD)), ([27], None))
+    out, notes = merged(s0, nt1)
+    check('it is carried, and the whole save is the client\'s',
+          (canonical.canonical_hash(out), notes),
+          (canonical.canonical_hash(nt1), []))
+    voted = mo.set_end_vote(nt1, GOOD, 1)
+    out, notes = merged(s0, voted)
+    check('the vote beside it is still judged on its own',
+          (mo.end_vote_of(out, GOOD), mo.settings_orders(s0, out, GOOD)),
+          (1, settings[1]))
+
     print('\nnotes')
     out, notes = merged(s0, news.append_item(s0, GOOD, note(turn)))
     items = news.items_of(out, GOOD)

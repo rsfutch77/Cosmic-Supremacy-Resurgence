@@ -56,8 +56,8 @@ it holds at the `Owner` constructor's defaults (`0x546430`):
 - `EXSY`, `GOVS` and `SPQS` empty, and every `CVTR` trait 0.
 - Only the admirals their ships and fleets follow, only the designs their
   ships are built to or those admirals' rules name, and no scan reports.
-- The end-galaxy vote in `USSE` at 0. The rest of `USSE` is interface
-  settings and stays.
+- The end-galaxy vote in `USSE` at 0. The rest of `USSE` is the News
+  screen's settings and stays.
 - `SERV` with `Owner:652` and the active flag at 0. The baseline stays while
   the civ shows inactive, since every civ's `CLIE` published that percentage
   (`0x5381D0`); otherwise it is the current turn, which shows 0%.

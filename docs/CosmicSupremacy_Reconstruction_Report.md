@@ -976,7 +976,17 @@ Two things follow:
 - [ ] **A player's interface settings are lost at every turn.** The merge carries only the vote
   byte of the civ's `USSE`, so a setting changed in the client (byte 27 changed while a note was
   written, 22 November 2026) is back as served next turn. Done when the settings bytes are named
-  and either carried or shown to be safe to drop.
+  and either carried or shown to be safe to drop. **Fixed** (22 November 2026). `USSE` is the
+  block at `Owner+0x2CC`, written by `0x0057ED00` as eleven bytes, a run of thirteen, two runs of
+  four, three `u32`s and the vote byte, 45 in all. `SVUS` sends it from only four places: three
+  on the News screen (`0x00412910`, `0x00412A30`, `0x00412DC0`), one of which clamps a typed
+  number to 0 to 999, and the Overview Screen's vote box (`0x0048C250`). So the bytes before the
+  vote are the News screen's category tick-boxes and numbers; which byte is which of its 17 rows
+  is not traced. The original server kept whatever `SVUS` sent, so the merge now carries those
+  44 bytes as the client saved them when the record's version matches the one served, and still
+  judges the vote on its own (`settings_orders`). Robert's note session now merges byte for byte,
+  byte 27 included (`test_scans_notes_wormholes_merge.py`). A rival's settings are served as they
+  stand, as before; only its vote reads 0.
 - [x] **The replay is not served.** `RQTN` and `RQSV` are online only, and their offline branch
   does nothing, so a served galaxy answers neither. Done when the replay screen has been opened
   on a served galaxy, what it asks for is known, and it either shows the turns it asks for or
