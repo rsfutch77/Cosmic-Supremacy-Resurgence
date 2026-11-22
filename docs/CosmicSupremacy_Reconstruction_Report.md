@@ -935,7 +935,35 @@ Two things follow:
   Scout only on a system. Whether the engine drops an order whose target is wrong, as it does for
   Create Wormhole, is not measured: no fixture holds a colonise, conquer or bio-bomb order. Done
   when real orders of each are captured, planted on wrong targets and ticked, and each check the
-  engine does not make is encoded.
+  engine does not make is encoded. **Closed** (22 November 2026).
+
+  `wo0` was given a Colony Ship over unowned planet 264 and a Troop Bay frigate and a Bio Bombs
+  frigate over BadGuy's homeworld 384 (`tg0`). Robert colonised 264 (`tg1`). The client would not
+  offer Conquer or Bio-Bombing until GoodGuy was at war with BadGuy; he declared war and gave both
+  (`tw1`), the bio-bombing set to two runs of one module, which the order record carries after the
+  type. An order names its target as the planet its route ends on, exactly that planet's
+  position. Each order was ticked alone in a Resurgence client, then planted elsewhere:
+  - **As given:** 264 became GoodGuy's on the first tick and the colony ship was used up.
+    Bio-bombing cut 384 from 21 citizens to 2 in one tick. The conquer cost 384 one citizen and
+    did not take it, and 384's defences destroyed both frigates on the next tick.
+  - **At peace** (the orders copied into the save before the war): the engine dropped Conquer and
+    Bio-Bombing on the first tick and nothing happened.
+  - **On BadGuy's planet**, a colonise did nothing; the ship kept its order.
+  - **On GoodGuy's own planet 261**, a colonise, a conquer and a bio-bombing each scrapped the ship
+    and landed its crew on 261 as soldiers, which the client never offers.
+
+  The merge now refuses an order whose planet is not one the client offers: Colonize Planet an
+  unowned planet, Conquer Planet and Bio-Bombing Planet another civ's (`order_target_refusal`,
+  `test_scans_notes_wormholes_merge.py`). War is left to the engine. A Scout's system is not
+  judged: a wrong one only sends a ship somewhere.
+
+  The war declaration also showed the merge leaving two `KNPL` fields unset (below).
+- [ ] **A war declared through the merge leaves two `KNPL` fields unset.** Accepting a war
+  (`0x0055BD40`) sets `declared` on the declaring side and records each side's view of the other's
+  Inactivity percent in `inactivity`; Robert's declaration on 22 November 2026 wrote `declared` 1
+  on GoodGuy's record of BadGuy and 100 in `inactivity` on both, and the merge carried the stance
+  only. Both feed the reputation rules (`knpl.py`). Done when the merge writes them as the client
+  does, with the Inactivity percent computed as the client computes it.
 - [ ] **A player's interface settings are lost at every turn.** The merge carries only the vote
   byte of the civ's `USSE`, so a setting changed in the client (byte 27 changed while a note was
   written, 22 November 2026) is back as served next turn. Done when the settings bytes are named

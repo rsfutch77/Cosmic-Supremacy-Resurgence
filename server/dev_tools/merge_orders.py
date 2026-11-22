@@ -27,6 +27,11 @@ Colonize Planet a Colony Module, Conquer Planet a Troop Bay, Bio-Bombing Planet
 Bio Bombs, Create Wormhole a Wormhole Generator. The engine itself drops a Create
 Wormhole order whose ship has no generator, leaves the civ's sphere of influence
 before its 11-turn countdown ends, or is past `planets / 10 + 1` wormholes.
+An order names the planet its route ends on, and is refused unless it is one
+the client offers: Colonize Planet an unowned planet, Conquer Planet and
+Bio-Bombing Planet another civ's. On the civ's own planet the engine scraps the
+ship and lands its crew as soldiers; it ignores a colonise of another civ's
+planet, and drops Conquer and Bio-Bombing at peace.
 
 **Research topic** (`STRS`), `OWNR > DATA > OWPR`, the technology id written
 twice, 8 bytes apart, after the completed technologies (`research_offsets`): at
@@ -658,6 +663,57 @@ def order_module_refusal(dyno, ships, designs, modules):
     return f'{ORDER_NAMES[kind]} needs a {MODULE_NAMES[need]}, and {carried}'
 
 
+# The planet an order may name, as the client offers it: Colonize an unowned
+# one, Conquer and Bio-Bombing another civ's. On the civ's own planet the
+# engine scraps the ship and lands its crew there as soldiers; on another
+# civ's it ignores a colonise. It drops Conquer and Bio-Bombing at peace.
+ORDER_TARGET = {3: 'unowned', 5: 'foreign', 6: 'foreign'}
+ROUT_END = 2 + 12               # in a ROUT payload: two bytes, the start xyz
+
+
+def order_target(dyno, planets):
+    """The planet a whole DYNO section's route ends on, or None. `planets` is
+    {(x, z, y) bytes: planet id}."""
+    at = dyno.find(b'ROUT', 8) if dyno is not None else -1
+    if at < 0 or len(dyno) < at + 8 + ROUT_END + 12:
+        return None
+    end = bytes(dyno[at + 8 + ROUT_END:at + 8 + ROUT_END + 12])
+    return planets.get(end)
+
+
+def planet_places(blob):
+    """({(x, z, y) bytes: planet id}, {planet id: owner}) for every planet."""
+    tree = sp.parse_blob(blob)
+    glxy = next(tree[0].find('GLXY'))
+    places, owners = {}, {}
+    for sec in glxy.find('PLNT'):
+        oid = struct.unpack_from('<I', blob, sec.payload)[0]
+        places[bytes(blob[sec.payload + 4:sec.payload + 16])] = oid
+        owners[oid] = struct.unpack_from('<I', blob, sec.payload + 16)[0]
+    return places, owners
+
+
+def order_target_refusal(dyno, civ_oid, places, owners):
+    """Why an order's target is not one the client offers, or None."""
+    kind = order_type(dyno)
+    want = ORDER_TARGET.get(kind)
+    if want is None:
+        return None
+    planet = order_target(dyno, places)
+    if planet is None:
+        return f'{ORDER_NAMES[kind]} names no planet'
+    owner = owners.get(planet, 0)
+    whose = ('unowned' if not owner else "the civ's own" if owner == civ_oid
+             else "another civ's")
+    if want == 'unowned' and owner:
+        return (f'{ORDER_NAMES[kind]} is offered only on an unowned planet, '
+                f'and planet {planet} is {whose}')
+    if want == 'foreign' and owner in (0, civ_oid):
+        return (f"{ORDER_NAMES[kind]} is offered only on another civ's "
+                f'planet, and planet {planet} is {whose}')
+    return None
+
+
 def ship_index(blob):
     """{shipObjectId: (owner, dyno_bytes)} for every ship carrying a DYNO."""
     tree = sp.parse_blob(blob)
@@ -873,6 +929,7 @@ def fleet_orders(served, sub, civ_oid, names, admirals=(), remap=None):
     high = struct.unpack_from('<I', served, idg.HIGH_WATER_ID)[0]
     refusals, log = [], []
     designs, modules = ship_designs(served), design_modules(served)
+    target_places, target_owners = planet_places(served)
 
     def who(civ):
         return names.get(civ, civ)
@@ -1047,7 +1104,9 @@ def fleet_orders(served, sub, civ_oid, names, admirals=(), remap=None):
                     remap or {})
                 if why:
                     refusals.append(f'fleet {fid}: {why}')
-                why = (order_module_refusal(taken, members, designs, modules)
+                why = ((order_module_refusal(taken, members, designs, modules)
+                        or order_target_refusal(taken, civ_oid, target_places,
+                                                target_owners))
                        if taken != was['dyno'] else None)
                 if why:
                     refusals.append(f'fleet {fid}: order DROPPED, {why}')
@@ -4790,6 +4849,7 @@ def merge(blob, submissions, log=print, notes=None, arms=None, scans=None):
                       for m, _s, _v in f['members']}
     ship_design_of = ship_designs(blob)
     served_modules = design_modules(blob)
+    order_places, order_owners = planet_places(blob)
     served_planets = planet_index(blob)
     served_crews = _ship_crew_index(blob)
     served_designs = design_index(blob)
@@ -4997,8 +5057,10 @@ def merge(blob, submissions, log=print, notes=None, arms=None, scans=None):
                     drop(f"ship {ship_oid}: {why}")
                 if dyno == as_served:
                     continue
-                why = order_module_refusal(dyno, [ship_oid], ship_design_of,
-                                           served_modules)
+                why = (order_module_refusal(dyno, [ship_oid], ship_design_of,
+                                            served_modules)
+                       or order_target_refusal(dyno, mine, order_places,
+                                               order_owners))
                 if why:
                     drop(f"ship {ship_oid}: order DROPPED, {why}")
                     continue

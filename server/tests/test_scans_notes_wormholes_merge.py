@@ -28,6 +28,16 @@ The engine made 682; the client allows `planets / 10 + 1` (`0x0053A5A0`), so
     wh2  ship 681, holding at 683, sent through to beyond 682; one tick
          later the engine had it at 682
 
+Orders on a planet, from `wo0` given a Colony Ship (684) over unowned 264,
+and a Troop Bay frigate (685) and a Bio Bombs frigate (686) over BadGuy's
+homeworld 384 (Robert, 22 November 2026):
+
+    tg0  the three ships placed, unordered
+    tg1  684 given Colonize Planet on 264
+    tw0  tg1 as reopened
+    tw1  war declared on BadGuy, 685 given Conquer Planet and 686
+         Bio-Bombing Planet (two runs of one module) on 384
+
 Other notes and wormholes are built here from what the client's routines
 write.
 """
@@ -268,6 +278,44 @@ def main():
            'no ship of the fleet' in mo.order_module_refusal(
                mo.ship_index(wo1)[680][1], [669, 670], designs, modules)),
           (None, True))
+
+    print('\nthe planet an order names, as the client offers it')
+    tg0, tg1, tw0, tw1 = (load(n) for n in ('tg0', 'tg1', 'tw0', 'tw1'))
+    places, owners = mo.planet_places(tg0)
+    check('each order names the planet its route ends on',
+          [mo.order_target(mo.ship_index(b)[s][1], places)
+           for b, s in ((tg1, 684), (tw1, 685), (tw1, 686))], [264, 384, 384])
+    out, notes = merged(tg0, tg1)
+    check('Colonize Planet on an unowned planet is carried', notes, [])
+    out, notes = merged(tw0, tw1)
+    check('war, Conquer Planet and Bio-Bombing Planet on its planet are '
+          'carried', notes, [])
+
+    def aimed(blob, ship, planet):
+        """`blob` with one ship's order moved onto another planet."""
+        spot = {p: k for k, p in places.items()}
+        dyno = mo.ship_index(blob)[ship][1]
+        was = mo.order_target(dyno, places)
+        moved = dyno.replace(spot[was], spot[planet]).replace(
+            struct.pack('<I', was), struct.pack('<I', planet))
+        return mo.replace_dyno(blob, ship, moved)
+
+    own, theirs = 261, 384
+    for served, sub, ship, planet, why in (
+            (tg0, tg1, 684, own, "an unowned planet, and planet 261 is "
+                                 "the civ's own"),
+            (tg0, tg1, 684, theirs, "an unowned planet, and planet 384 is "
+                                    "another civ's"),
+            (tw0, tw1, 685, own, "another civ's planet, and planet 261 is "
+                                 "the civ's own"),
+            (tw0, tw1, 686, 264, "another civ's planet, and planet 264 is "
+                                 "unowned")):
+        kind = mo.ORDER_NAMES[mo.order_type(mo.ship_index(sub)[ship][1])]
+        out, notes = merged(served, aimed(sub, ship, planet))
+        check(f'{kind} on planet {planet} is refused',
+              [n for n in notes if f'ship {ship}:' in n],
+              [f'ship {ship}: order DROPPED, {kind} is offered only on '
+               f'{why}'])
 
     print('\nwormholes')
     base = with_worms(s0, worm(900, GOOD), worm(901, GOOD), worm(902, GOOD),
