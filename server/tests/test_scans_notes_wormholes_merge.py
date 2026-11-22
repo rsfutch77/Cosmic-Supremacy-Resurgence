@@ -9,9 +9,14 @@ Scans use `fixtures/unruled` (see `test_design_edits_merge.py`), from `d4`:
          BadGuy's ship 677, two reports after GoodGuy's designs
     sc2  DLSC: the planetary report deleted
 
-Notes and wormholes are built here from what the client's routines write:
-driving the note dialog's routine from outside closed the client, and no
-galaxy holds a wormhole.
+Notes the client wrote, from `s0` on the News screen's Notes row (`Create a
+New Note`) in TestBed, saved after each step (Robert, 22 November 2026):
+
+    nt1  a note written: subject `testnote`, text `hellotestnote`
+    nt2  that note edited: `testnoteedit`, `hellotestnoteedit`, important
+
+Other notes and the wormholes are built here from what the client's routines
+write, since no galaxy holds a wormhole.
 """
 import os
 import struct
@@ -51,6 +56,12 @@ def merged(served, sub, civ='GoodGuy', scans=None):
     out = mo.merge(served, [(civ, sub)], log=lambda *_: None, notes=notes,
                    scans=scans)
     return out, notes.get(civ, [])
+
+
+def news_of(blob):
+    """GoodGuy's news items, less where each sits in the blob."""
+    return [{k: v for k, v in it.items() if k != 'sec'}
+            for it in news.items_of(blob, GOOD)]
 
 
 def note(turn, subject=b'Plan', body=b'Hold 262\r\nthen 263', flags=0, **kw):
@@ -112,9 +123,29 @@ def main():
     check('    and kept as served', mo.reports_of(out, GOOD),
           mo.reports_of(sc1, GOOD))
 
-    print('\nnotes')
-    s0 = load('s0')
+    print('\nnotes the client wrote')
+    s0, nt1, nt2 = load('s0'), load('nt1'), load('nt2')
     turn = icv.turn_of(s0)
+    written = news.items_of(nt1, GOOD)[-1]
+    check('the Note dialog wrote one item, dated this turn, naming nothing',
+          (len(news.items_of(nt1, GOOD)) - len(news.items_of(s0, GOOD)),
+           written['type'], written['turn'], written['title'],
+           mo.note_refusal(written, turn)),
+          (1, news.NOTE, turn, b'Note - Subject: testnote', None))
+    for served, sub, what in ((s0, nt1, 'writing it'),
+                              (nt1, nt2, 'editing it'),
+                              (s0, nt2, 'both in one turn')):
+        out, notes = merged(served, sub)
+        check(f'{what} is carried as the client saved it',
+              (news_of(out), notes), (news_of(sub), []))
+    edited = news.items_of(nt2, GOOD)[-1]
+    check('the edit kept the item and set only the important mark',
+          (edited['body'], edited['flags'], mo.note_refusal(edited, turn)),
+          (b'hellotestnoteedit', news.IMPORTANT, None))
+    check('and no string was added', news.read_table(nt2),
+          news.read_table(s0))
+
+    print('\nnotes')
     out, notes = merged(s0, news.append_item(s0, GOOD, note(turn)))
     items = news.items_of(out, GOOD)
     check('a note written is carried', (items[-1]['type'], notes),

@@ -858,6 +858,28 @@ Two things follow:
   routine (`0x00538DD0`) from outside closed the client in a drawing routine, and no galaxy holds
   a wormhole. Measure a note written and edited through the News screen, and a wormhole pair
   connected once a galaxy has one.
+
+  **Notes, measured** (22 November 2026): a note is made only from the News screen's category
+  list, where the Notes row under Private Messages ends in a clickable `Create a New Note`
+  (`NewsPage`'s row table at `0x007FA868`, command `0xB1C1`, `0x0040C8E0`), and edited with the
+  `Edit Note` button (`0x0040EF10`). Robert wrote one and edited it in TestBed on
+  `unruled/s0`, saved after each step (`nt1`, `nt2`). The Note dialog wrote a kind-8 item dated
+  this turn, titled `Note - Subject: <subject>`, inline, naming nobody and no string; the edit
+  replaced the subject and text and set only the important mark. Merging each save over the one
+  before carries it with no refusal and reproduces the civ's news exactly
+  (`test_scans_notes_wormholes_merge.py`). The first save also set byte 27 of GoodGuy's `USSE`, an
+  interface setting, which the merge drops as it drops all but the vote.
+
+  Nobody found the link unaided, so `patch_notes_label.py` makes the row read `Notes (Make new
+  note --->)` ahead of the icon and the link: the new string sits in the `.text` padding at
+  `0x006D2400` and the table entry `0x007FA874` points at it. The release build applies it to
+  every client (`test_notes_label_patch.py`), and Robert saw the row on screen the same day.
+
+  Not yet done: a wormhole pair connected in the client.
+- [ ] **A player's interface settings are lost at every turn.** The merge carries only the vote
+  byte of the civ's `USSE`, so a setting changed in the client (byte 27 changed while a note was
+  written, 22 November 2026) is back as served next turn. Done when the settings bytes are named
+  and either carried or shown to be safe to drop.
 - [x] **The replay is not served.** `RQTN` and `RQSV` are online only, and their offline branch
   does nothing, so a served galaxy answers neither. Done when the replay screen has been opened
   on a served galaxy, what it asks for is known, and it either shows the turns it asks for or

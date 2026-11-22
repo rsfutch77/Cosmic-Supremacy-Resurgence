@@ -883,9 +883,12 @@ if (Test-Path $License) {
 # and patch_civ_name.py makes Single Player send a chosen civ name every time.
 # patch_save_message.py gives every client a handler that saves on a window
 # message, so the launcher captures a turn without a remote thread.
+# patch_notes_label.py makes the News screen's Notes row say that its link
+# makes a new note.
 $PatchMessages = Join-Path $ClientDir 'dev_tools\patch_launch_messages.py'
 $PatchWindow   = Join-Path $ClientDir 'dev_tools\patch_window_size.py'
 $PatchSave     = Join-Path $ClientDir 'dev_tools\patch_save_message.py'
+$PatchNotes    = Join-Path $ClientDir 'dev_tools\patch_notes_label.py'
 $PatchTutorial = Join-Path $ClientDir 'dev_tools\patch_tutorial.py'
 $PatchCivName  = Join-Path $ClientDir 'dev_tools\patch_civ_name.py'
 function Copy-Client {
@@ -896,6 +899,8 @@ function Copy-Client {
     if ($LASTEXITCODE -ne 0) { throw "patch_window_size failed for $(Split-Path -Leaf $src)" }
     & $VenvPy $PatchSave --source $dst --out $dst | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "patch_save_message failed for $(Split-Path -Leaf $src)" }
+    & $VenvPy $PatchNotes --source $dst --out $dst | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "patch_notes_label failed for $(Split-Path -Leaf $src)" }
     if ((Split-Path -Leaf $src) -eq 'CosmicSupremacy.exe') {
         & $VenvPy $PatchTutorial --source $dst --out $dst | Out-Null
         if ($LASTEXITCODE -ne 0) { throw "patch_tutorial failed for $(Split-Path -Leaf $src)" }
