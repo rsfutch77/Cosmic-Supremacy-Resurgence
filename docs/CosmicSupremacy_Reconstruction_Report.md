@@ -3223,7 +3223,11 @@ hurries, trades and treaty sums itself. Checking every order type is not planned
     ship names: an ally's copy of a battle report is the participant's own report byte for
     byte (`diplomacy/cs3`), so it names the participant's designs where the enemy's copy shows
     only classes.
-  - [ ] Point each forum link at its copy in the local wayback mirror where one exists.
+  - [x] Point each forum link at its copy in the local wayback mirror where one exists. The
+    CSV's `mirror` column holds each copy's path under `tools/wayback/cosmicsupremacy_mirror`
+    (24 November 2026): 74 of 83 links, matched as written, without the fragment, on
+    `cosmicsupremacy.com` for `spaceciv.com`, or by thread and page. The other 9 were never
+    captured: threads 1627, 2893, 3275, 3977, 4166 and 4909 and posts 19017, 43030 and 62237.
   - [ ] Post the rows as GitHub issues, labelled by category and by the bug check's result.
   - [ ] Delete the CSV.
 
