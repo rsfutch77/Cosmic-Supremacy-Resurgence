@@ -1,8 +1,9 @@
 /* Accessibility fixes over the archive's own styles. patches.link_access_css
    links this from every page, after the archive's stylesheets. */
 
-/* Contrast (WCAG 1.4.3): the wiki's page-name link on its blue-grey bar. */
-#bar__topleft a { color: #2b4a56; }
+/* Contrast (WCAG 1.4.3): the wiki's page-name link on its blue-grey bar, a
+   24px line clear of the breadcrumbs below (2.5.8). */
+#bar__topleft a { color: #2b4a56; display: inline-block; line-height: 24px; }
 
 /* The wiki's plain links on its dark page. */
 div.dokuwiki div.page a:not([class]):link, div.dokuwiki div.page a:not([class]):visited { color: #8cc0d6; }
@@ -20,7 +21,7 @@ div.plugin_translation li { margin: 0 4px; }
 div.plugin_translation a { display: inline-block; min-width: 24px; text-align: center; }
 
 /* The footer's Privacy link is a full 24px line. */
-a[href="/support_terms.php.html#privacy"] { display: inline-block; line-height: 24px; }
+a[href^="/support_terms.php.html"][style] { display: inline-block; line-height: 24px; }
 
 /* The wiki's back-to-top link, drawn as the button it replaces. */
 div.dokuwiki a.backtotop:link, div.dokuwiki a.backtotop:visited {
