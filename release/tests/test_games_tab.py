@@ -60,9 +60,9 @@ def make_galaxy(root, civs, turn=4, deadline=None, extra=None):
 
 
 def row(gid="sandbox", name="Sandbox", status="open", turn=4, deadline=None,
-        players=2, joined=False, store="C:\\g\\sandbox"):
+        players=2, joined=False, store="C:\\g\\sandbox", joining=0):
     return galaxy_directory.Galaxy(gid, name, status, turn, deadline, players,
-                                   joined, store)
+                                   joined, store, joining=joining)
 
 
 print("1. multiplayer.json is read once, and still means what it meant")
@@ -287,6 +287,11 @@ check("a forming galaxy prints no turn", forming["turn"], "")
 check("and no clock", forming["left"], "")
 check("and says what it is", forming["status"], "forming")
 check("and counts nobody", forming["players"], "0")
+check("joins waiting are added to the seats and named as joining",
+      cells(row(turn=0, players=1, joining=1))["players"], "2 (1 joining)")
+check("and sort with them",
+      L.galaxy_column("players").value(row(players=1, joining=3),
+                                       L.View(now=now)), 4)
 check("an overdue turn says so", cells(row(deadline=now - 5))["left"],
       "time is up")
 check("a galaxy this player is in says so",
@@ -470,6 +475,10 @@ check("no galaxy path was written into a config file",
 again = {gx.id: gx for gx in directory.galaxies(player="Alice")}["sandbox"]
 check("and the row shows the join as waiting, not as a seat",
       L.pending_join(again, L.load_joined(data)), True)
+check("the row counts the waiting join beside the seats",
+      (again.players, again.joining), (2, 1))
+check("and the players cell adds it in",
+      cells(again)["players"], "3 (1 joining)")
 check("so it offers no second Join",
       L.joinable(again, L.load_joined(data)), False)
 

@@ -102,6 +102,10 @@ PLACEMENT_KEY = 'placement'
 # a civ not named is never played by a bot.
 BOTS_KEY = 'bots'
 
+# How many join requests are waiting, on a galaxy's listing row. Counted when
+# the galaxies are listed, never stored in the state.
+JOINING_KEY = 'joining'
+
 # Player name rules: the engine's civ name is a 15-character ASCII buffer, and a
 # folder store names files for the civ, so Windows-forbidden characters and a
 # trailing full stop are refused. `release/launcher.py` `validate_player_name`
@@ -835,6 +839,10 @@ class TurnStore:
             rec['key'] = entry[:-len('.json')]
             out.append(rec)
         return sorted(out, key=join_order)
+
+    def join_count(self) -> int:
+        """How many requests are waiting, naming nobody."""
+        return len(self.join_requests())
 
     def join_request(self, key: str):
         """The one request filed under this key, or None while there is none."""

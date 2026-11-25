@@ -835,6 +835,10 @@ def run_catalog(referee, galaxy, root, token_a, token_c):
           directory.galaxy(galaxy, player='Nobody').joined, False)
     check('players is how many civs the galaxy has',
           g.players, len(referee.state()['civs']))
+    check('joining is how many requests are waiting',
+          g.joining, len(referee.join_requests()))
+    check('and the listing row says the same without naming anyone',
+          row.get(turn_store.JOINING_KEY), len(referee.join_requests()))
     check('the row names a store back through this same relay',
           g.store, f'{root}/{galaxy}')
     # The store a row names is one the player can open.

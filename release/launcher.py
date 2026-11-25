@@ -2434,12 +2434,21 @@ def _left_text(g, view):
             if left > 0 else "time is up")
 
 
+def _joining(g) -> int:
+    """Join requests waiting on the galaxy. A row from a directory older than
+    the count carries none."""
+    return getattr(g, "joining", 0) or 0
+
+
 def _players_value(g, view):
-    return g.players or 0
+    """Seated civs, bots included, and the players waiting to join."""
+    return (g.players or 0) + _joining(g)
 
 
 def _players_text(g, view):
-    return str(g.players or 0)
+    joining = _joining(g)
+    total = _players_value(g, view)
+    return f"{total} ({joining} joining)" if joining else str(total)
 
 
 def _you_value(g, view):

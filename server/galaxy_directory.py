@@ -10,7 +10,8 @@ galaxy_directory.py: the list of galaxies above the store
     store = d.store('sandbox')          # and now the store interface as usual
 
 A directory lists galaxies and hands out store specs for `open_store`. A row
-carries a player count and a `joined` flag, never the roster.
+carries a player count, a count of join requests waiting, and a `joined` flag,
+never the roster.
 
 Status is `forming` (no first turn published), `open` or `closed`. A closed
 galaxy stays listed and readable. `set_status` writes into the galaxy's own
@@ -46,7 +47,8 @@ class Galaxy(typing.NamedTuple):
 
     `turn_seconds` is the galaxy's turn length, for judging how late a deadline
     is. `closed_reason` is the operator's sentence for a closed galaxy, and None
-    for any other.
+    for any other. `players` counts the seated civs, bots included; `joining`
+    counts the requests waiting for the next boundary.
     """
     id: str
     name: str
@@ -58,23 +60,38 @@ class Galaxy(typing.NamedTuple):
     store: str
     turn_seconds: int = None
     closed_reason: str = None
+    joining: int = 0
 
     def as_dict(self) -> dict:
         return dict(self._asdict())
 
 
-def _row(gid, name, status, state, player, spec):
+def _row(gid, name, status, state, player, spec, joining=0):
     """A row from a galaxy's state. No state means forming. The store's own
     status wins over the listing's."""
+    joining = int(joining or 0)
     if not state:
-        return Galaxy(gid, name, FORMING, None, None, 0, False, spec)
+        return Galaxy(gid, name, FORMING, None, None, 0, False, spec,
+                      joining=joining)
     civs = list(state.get('civs', []))
     status = state.get(turn_store.STATUS_KEY) or status
     reason = (state.get(turn_store.CLOSED_REASON_KEY) if status == CLOSED
               else None)
     return Galaxy(gid, name, status, state.get('turn'), state.get('deadline'),
                   len(civs), bool(player) and player in civs, spec,
-                  state.get('turn_seconds'), reason)
+                  state.get('turn_seconds'), reason, joining)
+
+
+def _join_count(store) -> int:
+    """How many requests wait on a folder's galaxy. A store that cannot count
+    them, or cannot be read, counts none."""
+    count = getattr(store, 'join_count', None)
+    if count is None:
+        return 0
+    try:
+        return count()
+    except OSError:
+        return 0
 
 
 class LocalGalaxyDirectory:
@@ -138,7 +155,8 @@ class LocalGalaxyDirectory:
         except OSError:
             # An unreachable store is listed as forming so the rest still show.
             state = None
-        return _row(gid, e['name'], e['status'], state, player, e['store'])
+        return _row(gid, e['name'], e['status'], state, player, e['store'],
+                    _join_count(store))
 
     def store(self, gid: str):
         e = self._entries().get(gid)
@@ -211,10 +229,13 @@ class FirebaseGalaxyDirectory:
         return spec + ('?' + '&'.join(q) if q else '')
 
     def _one(self, gid, data, player):
+        import firebase_store
         data = data or {}
         state = data if 'turn' in data else None
+        joining = firebase_store.count_joins(
+            self.fs.collection(self.prefix).document(gid))
         return _row(gid, data.get('name') or gid, data.get('status') or OPEN,
-                    state, player, self._spec(gid))
+                    state, player, self._spec(gid), joining)
 
     def galaxies(self, player: str = None) -> list:
         out = []
@@ -273,7 +294,8 @@ class HttpGalaxyDirectory:
         gid = row.get('id')
         state = row if 'turn' in row else None
         return _row(gid, row.get('name') or gid, row.get(turn_store.STATUS_KEY)
-                    or OPEN, state, player, self._spec(gid))
+                    or OPEN, state, player, self._spec(gid),
+                    row.get(turn_store.JOINING_KEY))
 
     def galaxies(self, player: str = None) -> list:
         listing = self.http.get_json('/') or {}
