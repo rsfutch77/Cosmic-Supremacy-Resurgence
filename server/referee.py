@@ -173,15 +173,17 @@ def apply_orders(blob: bytes, submissions, log=print, notes=None,
     rewrote are put back first and the merge judges the rest.
     """
     scans = list(scans or [])
-    if not submissions:
-        return with_scan_reports(blob, scans, log=log)
-    submissions = [(civ, _unfogged(blob, civ, sub, log))
-                   for civ, sub in submissions]
-    merged = merge_orders.merge(blob, submissions, log=log, notes=notes,
-                                arms=arms, scans=scan_counts(scans))
-    merged = with_scan_reports(merged, scans, log=log)
-    return activity.mark_present(merged, [civ for civ, _sub in submissions],
-                                 log=log)
+    if submissions:
+        submissions = [(civ, _unfogged(blob, civ, sub, log))
+                       for civ, sub in submissions]
+        blob = merge_orders.merge(blob, submissions, log=log, notes=notes,
+                                  arms=arms, scans=scan_counts(scans))
+        blob = with_scan_reports(blob, scans, log=log)
+        blob = activity.mark_present(blob, [civ for civ, _sub in submissions],
+                                     log=log)
+    else:
+        blob = with_scan_reports(blob, scans, log=log)
+    return merge_orders.repair_wars(blob, log=log)
 
 
 def arms_of(store: TurnStore, civs, log=print) -> dict:
@@ -334,8 +336,10 @@ def hold_empty(store: TurnStore, turn: int, outcomes, log=print) -> int:
     Refused joins in `outcomes` are answered now.
     """
     joins.commit(store, turn, turn, outcomes or [], log=log)
-    seconds = int(store.state().get("turn_seconds") or 3600)
-    store.update_state({"deadline": time.time() + seconds})
+    state = store.state()
+    seconds = int(state.get("turn_seconds") or 3600)
+    store.update_state({"deadline": turn_store.next_deadline(
+        state.get("deadline"), seconds)})
     log(f"  referee: no civ in this galaxy holds a planet and nobody is "
         f"waiting to join; turn {turn} is held for {seconds}s")
     return turn

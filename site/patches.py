@@ -412,7 +412,7 @@ def replace_galaxy_list(html):
     that either 404 or show a snapshot of a game from 2023. Each page was
     captured on a different day, so the counts disagree with each other as well
     as with reality. `galaxies.js` fills the panel with the open galaxies'
-    titles, and the coming-soon note stays until it does.
+    titles and turns, and the coming-soon note stays until it does.
 
     Only the panel's content is replaced. The header and footer divs carry the
     panel's background art, so the box keeps its place in the column.

@@ -4,7 +4,7 @@ test_public_listing.py: the galaxy listing the website reads
     server\\.venv\\Scripts\\python.exe server\\tests\\test_public_listing.py
 
 The referee writes `public/galaxies.json` after each tick, listing the open
-galaxies by title. Without the emulators only the rows and the skips are
+galaxies by title and turn. Without the emulators only the rows and the skips are
 checked; with them (`functions/emulators.py --only firestore,storage,auth`),
 the object is written, and an unsigned read gets it and nothing else.
 """
@@ -48,18 +48,21 @@ class Directory:
         self.rows = rows
 
     def galaxies(self, player=None):
-        return [types.SimpleNamespace(name=n, status=s) for n, s in self.rows]
+        return [types.SimpleNamespace(name=n, status=s, turn=t)
+                for n, s, t in self.rows]
 
 
 def offline():
     print('\nthe rows')
-    d = Directory([('Sandbox', OPEN), ('Old One', CLOSED), ('Next', FORMING)])
-    check('only open galaxies are listed, by title alone',
-          public_listing.rows(d), [{'title': 'Sandbox'}])
+    d = Directory([('Sandbox', OPEN, 180), ('Old One', CLOSED, 9),
+                   ('Next', FORMING, 0)])
+    check('only open galaxies are listed, by title and turn',
+          public_listing.rows(d), [{'title': 'Sandbox', 'turn': 180}])
     check('the document is the rows under "galaxies"',
-          json.loads(public_listing.document(d)), {'galaxies': [{'title': 'Sandbox'}]})
+          json.loads(public_listing.document(d)),
+          {'galaxies': [{'title': 'Sandbox', 'turn': 180}]})
     check('no open galaxy lists nothing',
-          json.loads(public_listing.document(Directory([('Old', CLOSED)]))),
+          json.loads(public_listing.document(Directory([('Old', CLOSED, 3)]))),
           {'galaxies': []})
 
     print('\nwhat is skipped')
@@ -118,11 +121,14 @@ def emulated():
     check('as JSON', blob.content_type, 'application/json')
     check('cached for five minutes', blob.cache_control,
           public_listing.CACHE_CONTROL)
+    want = {'galaxies': [{'title': 'Sandbox',
+                          'turn': [g.turn for g in d.galaxies()
+                                   if g.name == 'Sandbox'][0]}]}
     check('naming the open galaxy only, not one still forming',
-          json.loads(blob.download_as_bytes()), {'galaxies': [{'title': 'Sandbox'}]})
+          json.loads(blob.download_as_bytes()), want)
     status, body = unsigned_get(public_listing.OBJECT)
     check('an unsigned read gets it', (status, json.loads(body or b'null')),
-          (200, {'galaxies': [{'title': 'Sandbox'}]}))
+          (200, want))
     other = f'{prefix}/probe.json'
     store.bucket.blob(other).upload_from_string(b'{}')
     check('and is refused anything else', unsigned_get(other)[0] in (401, 403),

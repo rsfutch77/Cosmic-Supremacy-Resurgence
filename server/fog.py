@@ -30,12 +30,16 @@ store size, food per soldier and deposits stay.
 The owner, population and name are what the civ knows. In a system it has
 left they come from its `EXSY` memory, as the writer's own lookup
 (`0x526DC0`) does. A system is left when its `EXSY` turn is before the blob's
-turn and the civ holds no planet in it. Elsewhere they are live: a row
-looked at this turn matches the live planet, and the client hides systems a
-civ has never entered. The live owner and population stay on a remembered
-planet whose memory names the viewer or a civ the galaxy does not hold, or
-reads as a misread population. The name is the remembered one only when the
-owner changed.
+turn and the civ holds no planet in it. In a system it looked at this turn
+they are live, which matches its row. The live owner and population stay on a
+remembered planet whose memory names the viewer or a civ the galaxy does not
+hold, or reads as a misread population. The name is the remembered one only
+when the owner changed.
+
+A planet in a system the civ has never entered, one with no `EXSY` row, is
+served unowned, empty and unnamed, with no shipyard. The recon screen hides
+those systems, but the diplomacy screen's Planets column counts every planet
+a civ owns in the save, and the manual has it count only known planets.
 
 Other civs. The per-civ save leaves out their `DATA` (`0x53C27D`). A view
 keeps it, since their ships name their design and admiral, and serves what
@@ -115,6 +119,9 @@ FACILITY_RECORD = 8     # u32 type, u32 count
 SHIPYARD = 2            # the facility type the per-civ save carries
 GOVERNOR = 4            # the PLNT's last u32, Planet:496, 0 for none
 UNNAMED = b'Unnamed'    # what EXSY calls a planet nobody has named
+# The name `_plan` gives a planet in a system the civ has never entered: it is
+# served unowned, empty and unnamed, so it counts toward no civ's planets.
+UNSEEN = object()
 MAX_REMEMBERED = 1000   # a remembered population above this is a misread
 DEPOSIT = 5             # a u8 kind and a u32 amount, as in OWPR's resources
 # Between PROD and ENLI: the population history, Planet:368, the conqueror
@@ -269,9 +276,16 @@ def _plan(blob: bytes, civ: str, tree=None):
     me, table = civs[civ] if civ is not None else (None, None)
     oids = {oid for oid, _t in civs.values()}
     rows = exsy.parse(blob[table.payload:table.end]) if table is not None else []
+    entered = {row['system'] for row in rows}
     stale = {row['system']: row for row in remembered_rows(blob, me, rows, tree)}
     out = []
     for sid, planets in _systems(blob, tree).items():
+        # No civ has no memory to hide behind: it is served every planet live.
+        if civ is not None and sid not in entered:
+            out.extend((pl, 0, 0, UNSEEN) for pl in planets
+                       if _owner(blob, pl) != me
+                       and next(pl.find('PLPR'), None) is not None)
+            continue
         row = stale.get(sid)
         mems = (row['planets'] if row and len(row['planets']) == len(planets)
                 else [None] * len(planets))
@@ -294,7 +308,15 @@ def _plan(blob: bytes, civ: str, tree=None):
 def stale_planets(blob: bytes, civ: str):
     """[planet id] that `project` serves from `civ`'s memory."""
     plan, _turn = _plan(blob, civ)
-    return [_pid(blob, pl) for pl, _o, _p, name in plan if name is not None]
+    return [_pid(blob, pl) for pl, _o, _p, name in plan
+            if name is not None and name is not UNSEEN]
+
+
+def unseen_planets(blob: bytes, civ: str):
+    """[planet id] that `project` serves unowned, in systems `civ` has never
+    entered."""
+    plan, _turn = _plan(blob, civ)
+    return [_pid(blob, pl) for pl, _o, _p, name in plan if name is UNSEEN]
 
 
 def withheld_planets(blob: bytes, civ: str):
@@ -318,7 +340,7 @@ def _farmer(oid: int) -> bytes:
     return b'\x00\x00\x00' + struct.pack('<I', oid) + b'\x00\x00'
 
 
-def _served_plpr(blob, plpr, owner: int, pop: int, blank_prod):
+def _served_plpr(blob, plpr, owner: int, pop: int, blank_prod, yard=True):
     """The PLPR payload as another civ is served it, or None when it does not
     walk: the owner's running state zeroed, `pop` farmers of `owner`, no
     soldiers, a shipyard when it has one and no other facility, and an idle
@@ -335,7 +357,7 @@ def _served_plpr(blob, plpr, owner: int, pop: int, blank_prod):
     head = bytearray(d[:PLPR_HEAD])
     for off, size in OWNER_FIELDS:
         head[off:off + size] = bytes(size)
-    yards = ([struct.pack('<II', SHIPYARD, 1)] if _shipyard(d[:first])
+    yards = ([struct.pack('<II', SHIPYARD, 1)] if yard and _shipyard(d[:first])
              else [])
     out = bytes(head) + struct.pack('<I', pop) + _farmer(owner) * pop
     out += struct.pack('<I', 0) + bytes(1)
@@ -376,7 +398,8 @@ def _served(blob, pl, owner, pop, name, blank_prod):
     """The PLNT payload as another civ is served it, or None when its PLPR
     does not walk."""
     plpr = next(pl.find('PLPR'))
-    new_plpr = _served_plpr(blob, plpr, owner, pop, blank_prod)
+    new_plpr = _served_plpr(blob, plpr, owner, pop, blank_prod,
+                            yard=name is not UNSEEN)
     if new_plpr is None:
         return None
     nlen = struct.unpack_from('<I', blob, pl.payload + PLNT_NAME)[0]
@@ -578,19 +601,21 @@ def _others_planets(blob: bytes, civ: str, log=print) -> bytes:
     if not plan:
         return blob
     blank_prod = icv.empty_prod(blob)
-    edits, remembered = [], 0
+    edits, remembered, unseen = [], 0, 0
     for pl, owner, pop, name in plan:
         new = _served(blob, pl, owner, pop, name, blank_prod)
         if new is None:
             log(f"  fog: {civ}: planet {_pid(blob, pl)} does not walk; "
                 f"served whole")
             continue
-        remembered += name is not None
+        unseen += name is UNSEEN
+        remembered += name is not None and name is not UNSEEN
         if new != blob[pl.payload:pl.end]:
             edits.append((pl.payload, pl.end, new))
     blob = _apply(blob, tree, edits)
     log(f"  fog: {civ}: {len(plan)} planet(s) of other civs served as seen, "
-        f"{remembered} as last seen before turn {turn}")
+        f"{remembered} as last seen before turn {turn}, {unseen} unowned in "
+        f"systems never entered")
     if blank_prod is None:
         log(f"  fog: {civ}: no never-colonised planet left; production queues "
             f"served live")

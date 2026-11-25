@@ -40,6 +40,7 @@ many missed) so a refusal can explain itself.
 import base64
 import hashlib
 import json
+import math
 import os
 import struct
 import sys
@@ -105,6 +106,10 @@ BOTS_KEY = 'bots'
 # How many join requests are waiting, on a galaxy's listing row. Counted when
 # the galaxies are listed, never stored in the state.
 JOINING_KEY = 'joining'
+
+# A turn that would open with less than this share of its length left skips
+# to the next slot.
+MIN_TURN_SHARE = 0.5
 
 # Player name rules: the engine's civ name is a 15-character ASCII buffer, and a
 # folder store names files for the civ, so Windows-forbidden characters and a
@@ -209,6 +214,22 @@ def status_of(state) -> str:
     """`open` or `closed` for a galaxy's state. Absent means open."""
     value = (state or {}).get(STATUS_KEY)
     return CLOSED if value == CLOSED else OPEN
+
+
+def next_deadline(prev, seconds, now=None) -> float:
+    """The deadline one turn length after `prev`, so the clock keeps the same
+    times however long a tick runs. A slot that leaves less than
+    `MIN_TURN_SHARE` of a turn is skipped. Without `prev` the clock starts
+    from now."""
+    now = time.time() if now is None else now
+    seconds = float(seconds)
+    if not prev or seconds <= 0:
+        return now + seconds
+    nxt = float(prev) + seconds
+    short = now + seconds * MIN_TURN_SHARE - nxt
+    if short > 0:
+        nxt += math.ceil(short / seconds) * seconds
+    return nxt
 
 
 def bots_of(state) -> list:
@@ -697,7 +718,9 @@ class TurnStore:
         for civ, view in views.items():
             _atomic_write(self.view_path(civ, turn), sp.encode_save(view))
         _atomic_write(self.turn_path(turn), sp.encode_save(blob))
-        state.update(turn=int(turn), deadline=time.time() + seconds,
+        prev = (state.get('deadline')
+                if state.get('turn') == int(turn) - 1 else None)
+        state.update(turn=int(turn), deadline=next_deadline(prev, seconds),
                      turn_seconds=int(seconds),
                      hash=canonical.canonical_hash(blob))
         state[VIEWS_KEY] = {**({last: named[last]} if last in named else {}),

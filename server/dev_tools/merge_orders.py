@@ -340,13 +340,15 @@ import struct
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import save_parser as sp
 import inject_civ as icv
 import inject_design as idg
 import facility_rules
+import knpl
 import news
 import exsy
-import knpl
+import activity
 
 # The original client's 56 commands, each with the rule above that carries its
 # effect, or None and what the command does. A command with no rule is refused
@@ -3172,11 +3174,10 @@ def governor_orders(served, sub, civ_oid, served_planets, names):
     against the state served.
 
     new and edited are [(objectId, GVNR)], new ones under the id submitted;
-    deleted is a list of ids; links is [(planet, governor)]. The number of
-    planets each governor governs is the referee's to count, so it is ignored
-    here. Deleting a governor that would still govern a planet, and
-    unassigning one, are not something the client was seen to do, and are
-    refused.
+    deleted is a list of ids; links is [(planet, governor)], governor 0 for
+    a planet left blank. The number of planets each governor governs is the
+    referee's to count, so it is ignored here. Deleting a governor that would
+    still govern a planet is refused.
     """
     refusals = []
     for o in icv.owner_records(served):
@@ -3217,10 +3218,7 @@ def governor_orders(served, sub, civ_oid, served_planets, names):
         if owner != civ_oid:
             refusals.append(f'planet {planet}: governor DROPPED, owned by '
                             f'{names.get(owner, owner)}')
-        elif gov == 0:
-            refusals.append(f'planet {planet}: governor DROPPED, unassigning '
-                            f'one is not something the client offers')
-        elif gov not in usable:
+        elif gov != 0 and gov not in usable:
             refusals.append(f'planet {planet}: governor DROPPED, {gov} is not '
                             f'a governor this civ holds')
         else:
@@ -3546,7 +3544,7 @@ KNPL_COLOUR_AT = 32             # u32, B, G, R, A; the reader forces A to 0xFF
 KNPL_FLAGS = (KNPL_SHOW_TERRITORY_AT, KNPL_SHOW_SHIPS_AT, KNPL_BY_STANCE_AT)
 STANCES = {0: 'Neutral', 1: 'War', 2: 'Cease-Fire', 3: 'Peace', 4: 'Alliance'}
 KINDS = {0: 'trade', 1: 'war', 2: 'cease-fire', 3: 'peace', 4: 'alliance'}
-WAR = 1
+WAR, CEASE_FIRE = 1, 2
 PROPOSED, ACCEPTED, DECLINED, NON_BINDING = 0, 1, 2, 3
 UNSET_LENGTH, UNSET_START = -2, -1
 STANCE_OF = {2: 2, 3: 3, 4: 4}          # the stance a kind sets when accepted
@@ -3907,13 +3905,22 @@ def bio_penalties(blob):
 
 def set_stance(blob, civ_oid, other, code):
     """Write a civ's stance toward another it has met. Sizes do not change."""
-    _tree, knpl = _civ_section(blob, civ_oid, 'KNPL')
-    count = struct.unpack_from('<I', blob, knpl.payload)[0]
+    return set_known(blob, civ_oid, other, stance=code)
+
+
+def set_known(blob, civ_oid, other, **fields):
+    """Write `knpl.FIELDS` of a civ's record for another it has met. Sizes do
+    not change."""
+    _tree, sec = _civ_section(blob, civ_oid, 'KNPL')
+    count = struct.unpack_from('<I', blob, sec.payload)[0]
+    layout = {k: (off, f) for k, off, f in knpl.FIELDS}
     for i in range(count):
-        at = knpl.payload + KNPL_COUNT + i * KNPL_RECORD
+        at = sec.payload + KNPL_COUNT + i * KNPL_RECORD
         if struct.unpack_from('<I', blob, at)[0] == other:
             out = bytearray(blob)
-            struct.pack_into('<I', out, at + KNPL_STANCE_AT, int(code))
+            for key, value in fields.items():
+                off, f = layout[key]
+                struct.pack_into(f, out, at + off, int(value))
             return bytes(out)
     raise SystemExit(f'civ {civ_oid} has not met {other}')
 
@@ -3933,19 +3940,47 @@ def inactivity_percent(blob, civ_oid, turn):
     return activity.penalty(turn, baseline, gset_value(blob, 'sandbox') == 1)
 
 
-def set_war_record(blob, civ_oid, other, declared, inactivity):
-    """Write the fields accepting a war sets in a civ's record of another
-    (`0x0055BD40`): `declared`, `w17` cleared and `inactivity`."""
-    rec = (knpl_records(blob, civ_oid) or {}).get(other)
-    if rec is None:
-        raise SystemExit(f'civ {civ_oid} has not met {other}')
-    at = rec[0]
-    out = bytearray(blob)
-    for key, value in (('declared', declared), ('w17', 0),
-                       ('inactivity', inactivity)):
-        off, fmt = next((o, f) for k, o, f in knpl.FIELDS if k == key)
-        struct.pack_into(fmt, out, at + off, int(value))
-    return bytes(out)
+
+def known(blob, civ_oid, other):
+    """A civ's `knpl` record for another it has met, or None."""
+    _tree, sec = _civ_section(blob, civ_oid, 'KNPL')
+    if sec is None:
+        return None
+    try:
+        records = knpl.parse(blob[sec.payload:sec.end])
+    except ValueError:
+        return None
+    return next((r for r in records if r['civ'] == other), None)
+
+
+def repair_wars(blob, log=print):
+    """The blob with `declared` set on the proposer's side of each war in
+    force that neither side's record says was declared."""
+    names = {o['oid']: o['name'] for o in icv.owner_records(blob)}
+    for oid, record in sorted((treaties(blob) or {}).items()):
+        t = read_trdt(record)
+        if t is None or t['kind'] != WAR or t['status'] != NON_BINDING:
+            continue
+        a, b = t['proposer'], t['recipient']
+        ka, kb = known(blob, a, b), known(blob, b, a)
+        if (ka is None or kb is None or ka['stance'] != WAR
+                or kb['stance'] != WAR or ka['declared'] or kb['declared']):
+            continue
+        blob = set_known(blob, a, b, declared=1)
+        log(f'  referee: war {oid} recorded as declared by '
+            f'{names.get(a, a)} on {names.get(b, b)}')
+    return blob
+
+
+def declare_war(blob, declarer, target, turn):
+    """Both civs' records of a war `declarer` declared at `turn`, as accepting
+    a war (0x55BD40) writes them: war both ways, `declared` on the declarer's
+    side only, `w17` cleared, and each side's record of the other's
+    Inactivity."""
+    for civ, other, declared in ((declarer, target, 1), (target, declarer, 0)):
+        blob = set_known(blob, civ, other, stance=WAR, declared=declared,
+                         w17=0, inactivity=inactivity_percent(blob, other, turn))
+    return blob
 
 
 def knpl_records(blob, civ_oid):
@@ -4338,13 +4373,7 @@ def take_treaty_step(blob, served_treaties, step, oid, record, civ_oid, turn,
             # The treaties in force it ends unlink their wormholes.
             for r in ended:
                 blob = unlink_shared_wormholes(blob, read_trdt(r))
-            blob = set_stance(blob, civ_oid, other, WAR)
-            blob = set_stance(blob, other, civ_oid, WAR)
-            # Each side records the other's Inactivity when the war began.
-            mine_now = inactivity_percent(blob, civ_oid, turn)
-            theirs_now = inactivity_percent(blob, other, turn)
-            blob = set_war_record(blob, civ_oid, other, 1, theirs_now)
-            blob = set_war_record(blob, other, civ_oid, 0, mine_now)
+            blob = declare_war(blob, civ_oid, other, turn)
             line = f'treaty {new}: war declared on {who(other)}'
         else:
             line = f'treaty {new}: {kind} proposed to {who(other)}'
@@ -4421,6 +4450,10 @@ def take_treaty_step(blob, served_treaties, step, oid, record, civ_oid, turn,
     if step == 'accept' and t['kind'] in STANCE_OF:
         blob = set_stance(blob, civ_oid, other, STANCE_OF[t['kind']])
         blob = set_stance(blob, other, civ_oid, STANCE_OF[t['kind']])
+    if step == 'accept' and t['kind'] not in (WAR, CEASE_FIRE):
+        # The next war's first battle moves reputation again.
+        blob = set_known(blob, civ_oid, other, battled=0)
+        blob = set_known(blob, other, civ_oid, battled=0)
     if step == 'accept':
         blob, linked = link_shared_wormholes(blob, t, oid)
         line = '; '.join([line] + [f'wormholes {a} and {b} connected'
@@ -5720,7 +5753,9 @@ def merge(blob, submissions, log=print, notes=None, arms=None, scans=None):
                 for planet_oid, gov in links:
                     gov = renumbered.get(gov, gov)
                     blob = set_governor_link(blob, planet_oid, gov)
-                    log(f"    planet {planet_oid}: governor {gov} assigned")
+                    log(f"    planet {planet_oid}: "
+                        + (f"governor {gov} assigned" if gov else
+                           "governor unassigned"))
                     accepted += 1
                 for oid in deleted:
                     del records[oid]

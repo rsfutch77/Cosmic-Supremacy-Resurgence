@@ -88,6 +88,15 @@ JUNK_PATH_RE = re.compile(
     r"[+'()\[\]]|;|this\.|\.get\(|indexOf|className|DOKU_BASE|XMLHTTP"
     r"|domLib|ajax_qsearch|=file", re.I)
 
+# DokuWiki's page for a topic nobody wrote, archived under the topic's name.
+# Served with a 200 it is a soft 404, so it is not staged and its links unlink.
+STUB_MARKER = 'id="this-topic-does-not-exist-yet"'
+STUBS = set()
+
+# Backlink and index views and image viewers are served but left out of the
+# sitemap. firebase.json sends noindex for the same patterns.
+UNINDEXED_RE = re.compile(r"@do=|^wiki/_detail/")
+
 # Whole pages that are deliberately not republished. Nav entries for some are
 # stripped by patches.py, other links show as plain text, and firebase.json
 # must not rewrite anything to them.
@@ -603,6 +612,9 @@ def copy(rel, copied, missing):
         return False
     if rel in copied:
         return True
+    if rel in STUBS or is_stub(rel, src):
+        STUBS.add(rel)
+        return False
     dst = os.path.join(DST, rel.replace("/", os.sep))
     os.makedirs(os.path.dirname(dst) or DST, exist_ok=True)
     shutil.copy2(src, dst)
@@ -612,6 +624,13 @@ def copy(rel, copied, missing):
 
 def is_page(rel):
     return os.path.splitext(rel)[1].lower() in PAGE_EXT
+
+
+def is_stub(rel, src):
+    if not (rel.startswith("wiki/") and is_page(rel)):
+        return False
+    with open(src, "r", encoding="utf-8", errors="replace") as fh:
+        return STUB_MARKER in fh.read()
 
 
 FOLLOW_PREFIXES = ("wiki/", "community_", "game_news@", "galaxy@", "galaxyscores@")
@@ -788,7 +807,8 @@ def main():
         # After the patches, which repoint some links that would otherwise go.
         text, gone = unlink_dead_links(text, rel, staged)
         for target in gone:
-            if target not in EXCLUDE_PAGES and not target.startswith(EXCLUDE_PREFIXES):
+            if (target not in EXCLUDE_PAGES and target not in STUBS
+                    and not target.startswith(EXCLUDE_PREFIXES)):
                 dead_links[target] = dead_links.get(target, 0) + 1
         text, missing_imgs = mark_missing_images(text, rel, staged)
         for src in missing_imgs:
@@ -806,7 +826,8 @@ def main():
     # Crawling and indexing are both allowed. The forum and everything else
     # withheld is absent from public/ entirely, so there is nothing here that a
     # Disallow would need to protect.
-    pages = [r for r in copied if os.path.splitext(r)[1].lower() in PAGE_EXT]
+    pages = [r for r in copied if os.path.splitext(r)[1].lower() in PAGE_EXT
+             and not UNINDEXED_RE.search(r)]
     sitemap_count = write_sitemap(os.path.join(DST, "sitemap.xml"), pages, args.seed)
     print("  sitemap.xml: %d pages" % sitemap_count)
     with open(os.path.join(DST, "robots.txt"), "w", encoding="utf-8") as fh:
@@ -824,6 +845,7 @@ def main():
     print("  linked pages staged from outside the set: %d" % followed)
     print("  red links to unwritten wiki pages unlinked: %d" % red_links)
     print("  links to unpublished targets unlinked: %d" % sum(dead_links.values()))
+    print("  empty wiki stubs not staged:     %d" % len(STUBS))
     if override_count:
         print("  hand-written overrides applied:  %d" % override_count)
     if news_count is None:

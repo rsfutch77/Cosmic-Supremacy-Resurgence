@@ -62,8 +62,37 @@
           {
             "key": "Content-Type",
             "value": "application/rss+xml; charset=utf-8"
+          },
+          {
+            "key": "X-Robots-Tag",
+            "value": "noindex"
           }
         ]
+      },
+      {
+        "source": "**/*@do=*",
+        "headers": [
+          {
+            "key": "X-Robots-Tag",
+            "value": "noindex"
+          }
+        ]
+      },
+      {
+        "source": "/wiki/_detail/**",
+        "headers": [
+          {
+            "key": "X-Robots-Tag",
+            "value": "noindex"
+          }
+        ]
+      }
+    ],
+    "redirects": [
+      {
+        "source": "/wiki/1manual/:page",
+        "destination": "/wiki/manual/:page",
+        "type": 301
       }
     ],
     "rewrites": [

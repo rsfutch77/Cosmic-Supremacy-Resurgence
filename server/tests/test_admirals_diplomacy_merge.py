@@ -654,6 +654,41 @@ def diplomacy():
           [field(out, a, b, k) for a, b in ((GOOD, BAD), (BAD, GOOD))
            for k in ('declared', 'inactivity')], [1, 100, 0, 100])
 
+    def war_fields(blob):
+        return [{k: mo.known(blob, a, b)[k]
+                 for k in ('stance', 'declared', 'w17', 'battled',
+                           'inactivity')}
+                for a, b in ((BAD, GOOD), (GOOD, BAD))]
+
+    out, _notes = merged(d['d6'], ('BadGuy', d['d7']))
+    check('war declared: each side\'s record as the client wrote it, the '
+          'declarer\'s alone saying it declared',
+          war_fields(out), war_fields(d['d7']))
+    check('  which is declared on BadGuy\'s side and not GoodGuy\'s',
+          [r['declared'] for r in war_fields(out)], [1, 0])
+
+    undeclared = mo.set_known(d['d8'], BAD, GOOD, declared=0)
+    check('a war in force that neither side declared is given back to its '
+          'proposer', mo.repair_wars(undeclared, log=lambda *_: None), d['d8'])
+    check('  and a war already declared is left alone',
+          mo.repair_wars(d['d8'], log=lambda *_: None), d['d8'])
+    check('  as is a galaxy whose war a cease-fire ended',
+          mo.repair_wars(d['d9a'], log=lambda *_: None), d['d9a'])
+
+    def battled(blob):
+        for a, b in ((BAD, GOOD), (GOOD, BAD)):
+            blob = mo.set_known(blob, a, b, battled=1)
+        return blob
+
+    out, _notes = merged(battled(d['d5b']), ('BadGuy', battled(d['d5'])))
+    check('accepting a trade clears battled on both sides',
+          [mo.known(out, a, b)['battled'] for a, b in ((BAD, GOOD), (GOOD, BAD))],
+          [0, 0])
+    out, _notes = merged(battled(d['d9g']), ('GoodGuy', battled(d['d9a'])))
+    check('accepting a cease-fire leaves it',
+          [mo.known(out, a, b)['battled'] for a, b in ((BAD, GOOD), (GOOD, BAD))],
+          [1, 1])
+
     print('a war-only galaxy (waronly = 1), as the client greys Propose New '
           'Treaty (0x442510)')
 
