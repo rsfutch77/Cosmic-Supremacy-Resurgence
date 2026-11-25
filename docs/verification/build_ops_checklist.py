@@ -115,7 +115,7 @@ SS = {
     'SS-3': ('apply', None, ['Release order: build, sign, then zip, then compute the SHA-256. Nothing is patched after signing; the client\'s binary patches happen before.']),
     'SS-4': ('apply', None, ['The launcher behaves like an ordinary program: no bundled extras, no autostart, no elevation, nothing written outside its folder (REL-1).', 'The updater keeps to the same rules: no elevation, nothing written outside the launcher\'s folder.']),
     'SS-5': ('apply', None, ['One signing identity for every release; record it here once chosen.']),
-    'SS-6': ('apply', None, ['[x] The download page warns about the unrecognised publisher.', 'Add what Smart App Control does and what to do (Website_Checklist R9).']),
+    'SS-6': ('done', None, ['[x] The download page warns about the unrecognised publisher.', "[x] It also says to check that the publisher is Robert Futch before clicking Run anyway, and that Smart App Control need not be turned off (Website_Checklist R9)."]),
 }
 
 # ICO Age appropriate design code (Children's code)

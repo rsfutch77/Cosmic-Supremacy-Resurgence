@@ -25,11 +25,16 @@ server, and closing it will stop the game from saving.
 "WINDOWS PROTECTED YOUR PC"
 --------------------------
 
-The launcher is code-signed. Windows may
-still show a blue warning box the first time you run it, because a new
-signature takes time to earn Windows' trust.
+The launcher and the game are code-signed by their publisher, Robert Futch.
+Windows may still show a blue warning box the first time you run the
+launcher, because a new signature takes time to earn Windows' trust.
 
-To continue: click "More info", then click "Run anyway".
+To continue: click "More info" and check that the publisher is Robert Futch,
+then click "Run anyway". If it names anyone else, or no publisher at all,
+don't run it: download it again from the project's download page.
+
+On Windows 11 there is no need to turn off Smart App Control. It lets signed
+apps run, and once off it can be hard to turn back on.
 
 The launcher is open source. You can read its code and build it yourself
 from the project repository.
