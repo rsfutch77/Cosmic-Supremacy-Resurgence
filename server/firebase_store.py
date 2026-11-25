@@ -145,6 +145,15 @@ def join_doc_id(key: str) -> str:
                    for b in key.encode('utf-8'))
 
 
+def count_joins(galaxy_ref) -> int:
+    """How many join requests wait under a galaxy document.
+
+    One aggregation query, billed as a single read however many there are.
+    """
+    rows = galaxy_ref.collection(JOIN_COLLECTION).count().get()
+    return int(rows[0][0].value) if rows and rows[0] else 0
+
+
 def submitted_of(doc: dict, turn: int):
     """The civs a galaxy document records as having submitted for `turn`.
 
@@ -797,6 +806,10 @@ class FirebaseTurnStore:
             rec['key'] = data.get('key') or turn_store.join_key(data)
             out.append(rec)
         return sorted(out, key=turn_store.join_order)
+
+    def join_count(self) -> int:
+        """How many requests are waiting, naming nobody."""
+        return count_joins(self.doc)
 
     def join_request(self, key: str):
         """The one request filed under this key, or None while there is none."""

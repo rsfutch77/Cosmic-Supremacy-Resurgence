@@ -306,7 +306,12 @@ def catalog():
 
 
 def catalog_rows() -> list:
-    """Every galaxy, with the fields `/state` serves plus `id` and `name`."""
+    """Every galaxy, with the fields `/state` serves plus `id`, `name` and how
+    many join requests are waiting.
+
+    The count names nobody; `_own_join` is still the only route that reads a
+    request.
+    """
     rows = []
     for snap in catalog().stream():
         doc = snap.to_dict() or {}
@@ -314,6 +319,7 @@ def catalog_rows() -> list:
                if k in doc and k not in PRIVATE_FIELDS}
         row['id'] = snap.id
         row['name'] = doc.get('name') or snap.id
+        row[turn_store.JOINING_KEY] = firebase_store.count_joins(snap.reference)
         rows.append(row)
     return sorted(rows, key=lambda r: r['id'])
 
