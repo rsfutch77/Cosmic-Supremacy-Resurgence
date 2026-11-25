@@ -150,7 +150,7 @@ def remove_firewall_subtab(html):
 
 
 def remove_todo_subtab(html):
-    """The list is captured in cosmic_supremacy_original_todo.csv and retired.
+    """The list lives on as GitHub issues labelled `original list`, and is retired.
 
     It tracked a live game's backlog against a forum that is not published,
     so every item linked somewhere that cannot be read.
@@ -323,7 +323,7 @@ def _is_retired(href):
 def remove_retired_links(html):
     """Drop links to the retired ToDo pages.
 
-    Both were captured to cosmic_supremacy_original_todo.csv before removal.
+    Both are GitHub issues labelled `original list`.
     A list entry goes whole, because the text beside it describes a page that
     no longer exists. Anywhere else the anchor goes on its own, taking a
     following breadcrumb separator with it so no trail ends in a chevron.
