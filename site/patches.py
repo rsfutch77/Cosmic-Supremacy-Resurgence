@@ -502,6 +502,92 @@ def mark_main(html):
     return new
 
 
+# Every image has a text alternative (WCAG 1.1.1). Score graphs, logos,
+# screenshots and installer dialogs say what they show; the news and feature
+# illustrations sit beside text that names them, so they are decoration.
+_ALT_FOR = [
+    (re.compile(r"/scoregraphs/scoregraph_\d+\.png"), "Graph of the players' scores by turn"),
+    (re.compile(r"/downloads/(CS_Logo_\w+|CosmicSupremacy)\.(jpg|gif)"), "Cosmic Supremacy logo"),
+    (re.compile(r"/images/GalaxyPass\.png"),
+     "Firefox asking what to do with GalaxyPass.csgalaxy, set to open it with the Cosmic Supremacy client"),
+    (re.compile(r"/images/GalaxyPassManual\.png"),
+     "A browser asking whether to save GalaxyPass.csgalaxy, a file type it does not know"),
+    (re.compile(r"/pageimages/download\.png"), "Download the installer"),
+]
+_NO_ALT_IMG_RE = re.compile(r"<img\b(?![^>]*\balt=)([^>]*?)(\s*/?)>", re.I)
+_SRC_RE = re.compile(r"\bsrc=['\"]([^'\"]*)", re.I)
+_SCREENSHOT_RE = re.compile(r"/images/screen\d+\.png")
+_CAPTION_RE = re.compile(r"\s*<br>\s*([^:<]+)", re.I)
+
+
+def describe_images(html):
+    def alt(m):
+        src = _SRC_RE.search(m.group(1))
+        src = src.group(1) if src else ""
+        text = next((t for pat, t in _ALT_FOR if pat.search(src)), "")
+        if _SCREENSHOT_RE.search(src):
+            cap = _CAPTION_RE.match(html, m.end())
+            text = cap.group(1).strip() if cap else "Screenshot"
+        return f'<img{m.group(1)} alt="{text}"{m.group(2)}>'
+    return _NO_ALT_IMG_RE.sub(alt, html)
+
+
+# A final-score table's first row holds its column headings (WCAG 1.3.1). The
+# archive marks them as bold data cells, after a table tag left unclosed.
+_SCORE_TABLE_RE = re.compile(r"<table id='list'<tr>(.*?)</tr>", re.S)
+_BOLD_CELL_RE = re.compile(r"<td\b([^>]*)><b>(.*?)</b></td>", re.S)
+
+
+def _heading_cell(m):
+    attrs = m.group(1) if "align=" in m.group(1) else m.group(1) + " align='left'"
+    return f"<th scope='col'{attrs}>{m.group(2)}</th>"
+
+
+def label_score_tables(html):
+    return _SCORE_TABLE_RE.sub(
+        lambda m: f"<table id='list'><tr>{_BOLD_CELL_RE.sub(_heading_cell, m.group(1))}</tr>", html)
+
+
+# The galaxy history lays its galaxies out in a grid of cells, not a data table.
+_GALAXY_GRID = "<table id='list' width='100%'>"
+
+
+def mark_galaxy_grid(html):
+    return html.replace(_GALAXY_GRID, "<table id='list' width='100%' role='presentation'>")
+
+
+# overrides/css/access.css holds the contrast, target size and reflow fixes.
+# It comes last in the head, so it wins over the archive's stylesheets.
+ACCESS_CSS = "<link href='/css/access.css' rel='stylesheet' type='text/css' />"
+VIEWPORT = '<meta name="viewport" content="width=device-width, initial-scale=1" />'
+_HEAD_END_RE = re.compile(r"</head>", re.I)
+
+
+def link_access_css(html):
+    if ACCESS_CSS in html:
+        return html
+    return _HEAD_END_RE.sub(lambda m: ACCESS_CSS + "\n" + m.group(0), html, count=1)
+
+
+# Phones lay a page out at the screen's width, so the stacked layout applies.
+def fit_the_screen(html):
+    if re.search(r"<meta[^>]+name=['\"]viewport['\"]", html, re.I):
+        return html
+    return _HEAD_END_RE.sub(lambda m: VIEWPORT + "\n" + m.group(0), html, count=1)
+
+
+# The wiki's back-to-top control is a button inside a link, two targets on one
+# spot (WCAG 2.5.8). A plain link does the same without script.
+_BACK_TO_TOP_RE = re.compile(
+    r'<a class="nolink" href="#dokuwiki__top"><input type="button" class="button" '
+    r'value="Back to top"[^>]*/></a>')
+BACK_TO_TOP = '<a class="backtotop" href="#dokuwiki__top">Back to top</a>'
+
+
+def plain_back_to_top(html):
+    return _BACK_TO_TOP_RE.sub(BACK_TO_TOP, html)
+
+
 PATCHES = [
     ("remove the Live Chat tab", remove_live_chat),
     ("point the Forum tab at the Facebook group", repoint_forum_tab),
@@ -523,6 +609,12 @@ PATCHES = [
     ("declare the page's language", declare_language),
     ("let an autoplaying video be paused", pausable_video),
     ("mark the main column as the main landmark", mark_main),
+    ("give every image a text alternative", describe_images),
+    ("give the score tables column headings", label_score_tables),
+    ("mark the galaxy history grid as layout", mark_galaxy_grid),
+    ("replace the wiki's back-to-top button with a link", plain_back_to_top),
+    ("fit the page to the screen", fit_the_screen),
+    ("link the accessibility stylesheet", link_access_css),
 ]
 
 

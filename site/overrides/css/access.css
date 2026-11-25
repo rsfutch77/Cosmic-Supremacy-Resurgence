@@ -1,0 +1,64 @@
+/* Accessibility fixes over the archive's own styles. patches.link_access_css
+   links this from every page, after the archive's stylesheets. */
+
+/* Contrast (WCAG 1.4.3): the wiki's page-name link on its blue-grey bar. */
+#bar__topleft a { color: #2b4a56; }
+
+/* The wiki's plain links on its dark page. */
+div.dokuwiki div.page a:not([class]):link, div.dokuwiki div.page a:not([class]):visited { color: #8cc0d6; }
+
+/* Links in text are underlined, not told from it by colour alone (1.4.1). */
+div.dokuwiki div.breadcrumbs a:link, div.dokuwiki div.breadcrumbs a:visited,
+div.dokuwiki div.page p a:not(:has(img)), div.dokuwiki div.page td a:not(:has(img)),
+.content_pane td a:not(:has(img)), div#right_content .section_content a:not(:has(img)) {
+  text-decoration: underline;
+}
+
+/* Target size (2.5.8): links in the wiki's lists sit a 24px line apart. */
+div.dokuwiki li, div.dokuwiki div.li { line-height: 24px; }
+div.plugin_translation li { margin: 0 4px; }
+div.plugin_translation a { display: inline-block; min-width: 24px; text-align: center; }
+
+/* The footer's Privacy link is a full 24px line. */
+a[href="/support_terms.php.html#privacy"] { display: inline-block; line-height: 24px; }
+
+/* The wiki's back-to-top link, drawn as the button it replaces. */
+div.dokuwiki a.backtotop:link, div.dokuwiki a.backtotop:visited {
+  display: inline-block; min-height: 22px; line-height: 22px; padding: 0 0.6em;
+  border: 1px solid #8cacbb; background: #efefef; color: #000; text-decoration: none;
+}
+
+/* The score tables' heading cells keep the data cells' spacing. */
+table#list th { padding: 0; }
+
+/* Reflow (1.4.10): below the archive's 990px width the columns stack and
+   fixed widths give way, so nothing scrolls sideways at 320 CSS px. Data
+   tables wider than the screen still scroll, as 1.4.10 allows. */
+@media (max-width: 989px) {
+  html, body { background-size: auto; }
+  div#centered_page, div#content_tile, div#content_footer,
+  div#content_tile div#content_header, div#left_content, div#right_content,
+  .content .content_pane, div#left_content .wiki_pane, .content .chat_pane {
+    width: auto !important; float: none; max-width: 100%;
+  }
+  div#page_header {
+    width: auto; height: 0; padding-bottom: 14.5%;
+    background-size: 100% auto; background-repeat: no-repeat;
+  }
+  ul#menu { height: auto; overflow: hidden; background: none; }
+  ul#menu li, ul#menu li a { width: auto !important; padding: 0 8px; }
+  table, td, th, div { max-width: 100%; box-sizing: border-box; }
+  table[width], td[width], table.content, table.forum_content { width: auto !important; }
+  /* The wiki's layout tables stack as blocks. */
+  table.forum_content, table.forum_content > tbody, table.forum_content > tbody > tr,
+  table.forum_content > tbody > tr > td, table.forum_content table[width],
+  table.forum_content table[width] > tbody, table.forum_content table[width] > tbody > tr,
+  table.forum_content table[width] > tbody > tr > td { display: block; }
+  /* A wiki data table wider than the screen scrolls on its own. */
+  div.dokuwiki table.inline { display: block; overflow-x: auto; }
+  img, video, embed, iframe { max-width: 100%; height: auto; }
+  div.dokuwiki img.media { margin-left: 0; margin-right: 0; }
+  pre, code { white-space: pre-wrap; }
+  body { overflow-wrap: break-word; }
+  div#content_footer { background-size: 100% auto; }
+}
