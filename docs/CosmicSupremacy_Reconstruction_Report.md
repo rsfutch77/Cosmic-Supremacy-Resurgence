@@ -1,7 +1,7 @@
 # Cosmic Supremacy, Reconstruction Reference
 *Binary analysis of `CosmicSupremacy.exe`*
 
-- [ ] **Close what is left by name, and fix the text the closes left stale** (v0.8). Fields
+- [x] **Close what is left by name, and fix the text the closes left stale** (v0.8). Fields
   named "not established", "unnamed" or "not traced" without a box each get a closing line with
   the reason, or a box if play needs them: what `Owner:4` is, the unknown `OWPR` words and
   `+49/+77/+78/+100/+110`, `ASKY`, the `GLOB` `i32, u8`, `u32 99999` and `0x857900`, the `SUN`
@@ -12,6 +12,29 @@
   the admirals item in §14 still lists an admiral on a fleet as refused, which the merge
   carries; `TRDT`'s "four `u32`s not yet decoded", which the diplomacy session decoded; and §8's
   "Mechanism TBD" and "Save blob format remains unknown", which §12 answers.
+
+  **Closed** (24 November 2026). The stale text is corrected where it stood (§8 now names the
+  `TicksHalted` marker file and the "Paused from Error" flag instead of the blob). Play needs a
+  field named only if the merge judges a submitted change to it, fog hides or serves it, or a
+  tool writes it; the referee's own client computes and saves everything else.
+
+  | Field | Closed because |
+  |---|---|
+  | `Owner:4` | Named: the civ's user id, the `u32` ending `OWNR`, 0 for none (Memory report) |
+  | `OWPR` unknown words, `+49/+77/+78/+100/+110` | The merge builds each civ's `OWPR` on the one served and takes only named fields, fog blanks a rival's, and the tick rewrites the ones that move |
+  | `ASKY` | Fog serves a rival's empty and the civ's own whole; no submission's is taken |
+  | `GLOB` `i32, u8` and `0x857900` | Named: the end turn `[0x80AA04]` (Memory report) and a flag the end-galaxy tally sets to 1 when its progress-rate test passes (`0x52F6F6`) and the Overview screen shows (`0x419EDA`) |
+  | `GLOB` `u32 99999` | Carried as served; `set_blob_player.py` steps over it to the local player |
+  | `SUN` `+16` and trailing `u32`s | Carried as served; only the name at `+24` is written, by the rename rule |
+  | `DYNO`'s `Ship:72` | Named: the order setter (`0x4D9DC0`) copies into it the id behind the order's handle at `+0x40` |
+  | `DYNO`'s `Ship:100`, `ROUT`'s flag byte | Carried inside the `DYNO` the merge copies when it takes an order |
+  | `PLNT` six bytes and trailing `u32` | Carried as served; the merge writes only names and `PLPR` fields |
+  | The compact record's `PlanetProperties` fields | The original per-civ save's form; fog serves a rival's planet with a full `PLPR` instead |
+  | A queued `PROD`'s fields | The merge reads the design from its last four bytes and carries the rest as the client wrote it (`test_queues_merge.py`) |
+  | `density`'s five values | The galaxy generator's only; the referee never generates a galaxy |
+  | The sandbox branch at `0x52F640` | Named: it skips the end-galaxy vote tally (`0x52F6B1`) |
+  | What gates dialog 222 | The dialog is never created and the patch for it is applied to nothing |
+  | Failing system-drop projections (`SAVE+12`) | Fog serves the whole galaxy with withheld data and drops no system |
 
 ---
 
@@ -225,7 +248,7 @@ This also **resolves two previously separate readings of the order object into o
 |---|---|---|---|
 | `u32` | `+0x34` | `Ship:44` | orbit planet id, 0 when not in orbit |
 | `SHCO` v2, 9-byte payload | `+0x3c` | `Ship:52` | **payload byte 0 is the order type** |
-| `u32` | `+0x50` | `Ship:72` | |
+| `u32` | `+0x50` | `Ship:72` | the id behind the order's handle at `+0x40`, copied by the setter `0x4D9DC0` |
 | `u8` | `+0x54` | `Ship:76` | has-orders |
 | `u32` | `+0x58` | `Ship:80` | admiral id, 0 when unassigned |
 | *only when the order pointer `+0x38` is non-null:* | | | |
@@ -2156,7 +2179,7 @@ Our galaxies carry `speed` 0, `density` 0, `rank` (0, 999), no `startticks`, `pr
   **Done** (14 November 2026). **The live `sandbox` galaxy is not war-only today: it reads `waronly = 0`** at turns 0, 1 and 173 (read from Firebase, nothing written), as does every blob on disk. The `1` recorded here before was the bool's flag byte (see the entry layout above). Nothing in this work changes the live value; setting it to 1 is a `GSET` write on the live galaxy and is Robert's call.
   What the client does under `waronly = 1`, from its four readers: first contact (`0x534F90`, read at `0x534FF5`) opens every stance at War, where it would be Neutral, or by team in a team game; the diplomacy menu (`0x442510`) adds "Propose New Treaty" (command `0xB798`) disabled, the only way the client proposes any treaty, so no trade, cease-fire, peace or alliance can be proposed; and the reputation forecast (`0x443160`) and battle (`0x51EE1A`) treat every war as one this civ declared, where otherwise only a war it declared (`0x535100`, the `KNPL` `declared` byte) counts. "Declare War" (`0xB79D`) and answering a treaty already made are not gated. The engine ends no treaty for it: an alliance accepted through the merge on `fixtures/diplomacy/d1.b64` survives a real tick with `waronly` 0 and 1 alike (`server/dev_tools/alliance_acceptance.py run --waronly 1`).
   `merge_orders.py` carries diplomacy step by step (the note above that it refuses diplomacy is out of date) and, when the served galaxy holds `waronly = 1`, refuses every new treaty but a declaration of war, naming it; declaring war, accepting, declining, withdrawing and deleting are taken as before (`test_admirals_diplomacy_merge.py`, an alliance, a trade and a cease-fire proposal refused). Nothing the referee writes changes the setting: the merge builds on the served blob, so a submission's `GSET` is never taken (tested both ways); fog, joins, `inject_civ`, `make_multiplayer_galaxy`, `galaxy_tool.py` and the turn tools write no `GSET`; the `GLOB` loader writes settings only below `GLOB` v16 (item above); and the engine saves the `waronly` it loaded, which the acceptance run checks after its tick. `save_parser.set_gset` writes a setting for tests and `set_turnlength.py --set`; no galaxy tool calls it.
-  **What `sandbox` does** (index 4; it reads 0 on the live galaxy and stays so). Set to 1 it turns on: the 300-turn build-up protection in the declare-war validator, counted from the civ's join turn (`0x52AC40`); a cap of 30 colonised planets (`0x53A640`, `0x76F380`) and 50 conquered (`0x53A5F0`, `0x76F37C`), each sticky once reached; a warning at 900 turns played that the civ's term is ending (`0x52F230`); the Sandbox welcome text (`0x546430`); and at `0x52F640` it clears `0x857900` and sets `0x80AA04` to -1, two `GLOB` fields, in place of a check the function otherwise runs (not traced). The protection is enforced only in the client's UI, and the merge does not reproduce it.
+  **What `sandbox` does** (index 4; it reads 0 on the live galaxy and stays so). Set to 1 it turns on: the 300-turn build-up protection in the declare-war validator, counted from the civ's join turn (`0x52AC40`); a cap of 30 colonised planets (`0x53A640`, `0x76F380`) and 50 conquered (`0x53A5F0`, `0x76F37C`), each sticky once reached; a warning at 900 turns played that the civ's term is ending (`0x52F230`); the Sandbox welcome text (`0x546430`); and at `0x52F640` it clears `0x857900` and sets `0x80AA04` to -1, two `GLOB` fields, in place of the end-galaxy vote tally the function otherwise runs (`0x52F6B1`). The protection is enforced only in the client's UI, and the merge does not reproduce it.
 
 **`turnlength` drives the game's clock, and the engine re-applies it AT EVERY TURN BOUNDARY.** A galaxy set to 75 was observed writing 75 back over a driven 15 at each boundary, so a galaxy configured above the floor runs at its configured rate with nothing driving it, `ai.py --drive` is only needed to go faster than the game wants to.
 

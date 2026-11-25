@@ -25,7 +25,7 @@ Open [ ] items below are kept only where play needs them. The v0.7 triage closed
 the rest, each with its reason, since the save blob carries every field whether
 or not it has a name. Reopen one if in-process AI work needs it.
 
-[ ] Close what is left by name, and fix the text the closes left stale (v0.8). Fields named
+[x] Close what is left by name, and fix the text the closes left stale (v0.8). Fields named
 "unidentified", "not established" or "unexplained" without a box (`Planet:512`, the low half of
 `Planet:104`, the citizen and military `+4` words, the `Owner` members and arrays, `Owner:1180`
 to `1216`, the 9999 golden-age sentinel, the `Ship:88` to `96` constants, the ETA rounding, the
@@ -33,6 +33,23 @@ to `1216`, the 9999 golden-age sentinel, the `Ship:88` to `96` constants, the ET
 the reason, or a box if play needs them. Stale: "Object extents" still calls `Owner:144/152`
 against `Owner:4` unresolved, and the table under "`Planet:284` farm id confirmed" still names
 `Owner:4` the science topic.
+
+**Closed** (24 November 2026). Both stale passages now say `Owner:4` is the civ's user id and
+the topic is `Owner:144`/`:152`. Every field below is read only from live memory. Play runs on
+saves the client writes, which the merge judges by section and the referee's client ticks, so
+none of them is needed for play; a memory tool that comes to need one names it first.
+
+| Field | Closed because |
+|---|---|
+| `Planet:512` | A per-system counter whose unit is open; nothing outside the client reads it |
+| The low half of `Planet:104` | Zero on 509 of 525 planets; space, the high half, is what the save and the tools use |
+| The citizen and military `+4` words | Inside the citizen arrays the merge carries as the client wrote them |
+| The `Owner` members and arrays, `Owner:1180` to `1216` | The civ's state reaches play through `OWPR` and its sections, judged there |
+| The 9999 golden-age sentinel | The engine sets and counts it down; no tool writes it |
+| The `Ship:88` to `96` constants | Constant or zero on every ship read; the save's `DYNO` and `ROUT` carry the order |
+| The ETA rounding | Computed for display only, like maximum population |
+| The `ShipDesign` extent above `+190` | The save's `DSGN` is read by section, not by a memory window |
+| The known-players growth step | The save writes `KNPL` as a count and whole records (`knpl.py`) |
 
 ---
 
