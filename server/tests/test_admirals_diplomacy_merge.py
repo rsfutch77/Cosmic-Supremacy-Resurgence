@@ -15,7 +15,9 @@ and tier5 sessions. `fixtures/admirals` is a session in the client on
 b1 assigned (a3), a rule added and one unticked (a4), renamed (a5), Scout
 created (a6), b1 moved to Scout (a7), b1 given a manual move (a8), b1 set to
 none (a9), Scout deleted (a10), one turn advanced (a13). Turn 111 ticked on its
-own between a2 and a3.
+own between a2 and a3. ar1 is a0 with an admiral of each type holding every
+rule the editor offered it (24 November 2026); ar2 is diplomacy's cs0 with an
+assault admiral holding the three that need an enemy in sight.
 
 `fixtures/diplomacy` is a session in the client on `control_fork_played.dat`
 with waronly off (27 and 28 October 2026). GoodGuy proposes an alliance (d1)
@@ -354,10 +356,11 @@ def admirals():
     records = [r for p in glob_fixtures() for b in [sp.load_any(p)]
                for o in mo.icv.owner_records(b)
                for _oid, r in mo.admirals_of(b, o['oid']) or []]
-    check('    and the rules the client wrote in the captures fit theirs',
+    check('    and the client wrote all 24 in the captures, each fitting its '
+          'layout (ar1, ar2)',
           (sorted({t for r in records for t in rule_tags(r)}),
            {mo.read_admiral(r)[1] for r in records}),
-          ([b'FSHP', b'MASH', b'SCRG', b'TSCQ'], {''}))
+          (sorted(mo.RULE_LAYOUTS), {''}))
     out, notes = merged(base, ('DemoPlayer', with_admirals(
         base, THEM, [adml(230, b'x')])))
     check("another civ's admirals are refused as theirs",

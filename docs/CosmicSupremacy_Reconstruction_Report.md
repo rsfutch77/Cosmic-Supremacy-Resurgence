@@ -2019,7 +2019,7 @@ the stored hash of every galaxy with three or more civs, so it waits for a hash 
 `hash_version` beside its hashes. `verify_turn` and `level_store_turn.py` hash with a record's own
 version, 1 when it has none, so archived turns still verify. The colour getter (`0x534E40`) reads
 the colour only for a civ coloured by choice. Versions 1 and 2 agree on every tracked fixture
-whose tables hold at most one record, all but the three-civ captures `diplomacy/cs0` to `cs3`;
+whose tables hold at most one record, all but the captures holding three civs or more;
 a two-record table differs only under version 1 (`test_knpl.py`).
 
 [x] **NOT A DATA-LOSS BUG. It is an unbounded re-grant exploit (measured September 2026).** This
@@ -3433,7 +3433,7 @@ layout read off the client above held.
 - **An admiral on a fleet** (9 November 2026, `fixtures/admirals` `af0` and `af1`, DemoPlayer's
   fleet 202 on `tier5/f1`): assigning admiral 203 wrote its id into the `FLET`'s own `DYNO`, the
   `u32` after the has-orders byte as for a ship, and the `ADML` counts one command, the fleet.
-- [ ] **The other admiral rule types and choices are not measured.** Only `TSCQ`, `MASH` and
+- [x] **The other admiral rule types and choices are not measured.** Only `TSCQ`, `MASH` and
   `SCRG` were captured, and `MASH`'s values beside the planet id, `SCRG`'s 260, the six `u32`s
   of `RLYP` and `RZPT`, and the `ADDT` type field are inferred. Since an unknown tag crashes the
   load, a rule the merge accepts must be one the client wrote. Done when each of the 24 tags
@@ -3455,8 +3455,21 @@ layout read off the client above held.
   The captured rules fit: `TSCQ`, `MASH` (22 bytes with planet 265 as its one id) and `SCRG`
   (37 bytes, sun 260 its one id and N last), and `FSHP` in the merge test. The merge now refuses a
   rule at another version, cut short or with bytes past its fields
-  (`test_admirals_diplomacy_merge.py`). Not yet done: a capture of the 20 rules no session has
-  written, and what each field means, which the editor's choices name.
+  (`test_admirals_diplomacy_merge.py`).
+
+  **All 24 captured** (Robert, 24 November 2026, `fixtures/admirals` `ar1` and `ar2`), and each
+  fits its writer's layout. In `ar1`, on `a0`, an admiral of each type holds every rule the
+  editor offered it: transport1 (type 0) nine, defense1 (1) eleven, assault1 (2) ten, scout1 (3)
+  five. `ASAD`, `MASH` and `ASFL` appear under every type. An assault admiral cannot add an
+  attack on a specific planet or ship until an enemy's is in sight, nor `RECQ` without the
+  attack list, so `ar2` adds those three on `diplomacy/cs0`, where GoodGuy's warships sit over
+  Ceti's homeworld. `ATPL` lists planet 655, and `ATSH` lists ship 681 and then holds 681
+  again among its raw `u32` values. `STLS`'s four `u32`s after its id are another id and three
+  floats, which read as a position.
+
+- [ ] **What each admiral rule's fields mean.** The layouts are confirmed (above), but most
+  fields are named only by their type. Done when each rule's fields are matched to the editor's
+  choices, one choice changed at a time, and any value the merge should bound is bounded.
 
 **Measured in one Single Player session on 27 and 28 October 2026
 (`server/tests/fixtures/diplomacy`):** diplomacy on `control_fork_played.dat` written with

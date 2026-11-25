@@ -127,9 +127,9 @@ def main():
           'or none',
           sum(canonical.canonical_hash(b) == canonical.canonical_hash(b, 1)
               for b in small), len(small))
-    check('    which is all but the three-civ captures',
+    check('    which is all but the captures holding three civs or more',
           len(paths) - len(small),
-          len(glob.glob(os.path.join(FIX, 'diplomacy', 'cs*.b64'))))
+          sum(len(icv.owner_records(sp.load_any(p))) >= 3 for p in paths))
 
     print(f'\n{len(PASS)} passed, {len(FAIL)} failed')
     return 1 if FAIL else 0
