@@ -454,6 +454,21 @@ def remove_wiki_buttons(html):
     return _WIKI_FORM_RE.sub("", html)
 
 
+# The sidebar's Game Preview box plays the trailer through a Flash player,
+# which no browser runs. The override pages show the same trailer as an MP4
+# in a video element; the archive pages get the same markup.
+_FLASH_PREVIEW_RE = re.compile(
+    r"<embed\b[^>]*?src=['\"]/images/preloadFLV\.swf['\"][^>]*?/?>", re.I | re.S)
+PREVIEW_VIDEO = ("<video width='180' height='132' autoplay loop >\n"
+                 "    <source type='video/mp4' src='/images/preview.mp4' ></source>\n"
+                 "    Videos not supported by this browser\n"
+                 "</video>")
+
+
+def replace_flash_preview(html):
+    return _FLASH_PREVIEW_RE.sub(lambda _m: PREVIEW_VIDEO, html)
+
+
 PATCHES = [
     ("remove the Live Chat tab", remove_live_chat),
     ("point the Forum tab at the Facebook group", repoint_forum_tab),
@@ -471,6 +486,7 @@ PATCHES = [
     ("point support e-mail at GitHub", redirect_support_email),
     ("remove the social bookmark bar", remove_social_bar),
     ("remove the wiki's engine buttons", remove_wiki_buttons),
+    ("play the Game Preview without Flash", replace_flash_preview),
 ]
 
 

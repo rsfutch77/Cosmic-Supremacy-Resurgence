@@ -271,10 +271,11 @@ R = [
     ('R4', 'Opquast 27, 28, 205; OWASP ASVS V14.2.1',
      'No page on the site collects a password or personal data it cannot use.',
      ['[x] Every archived form is wrapped in a disabled fieldset with a note saying it no longer works (`stage.py`, `disable_forms`); live on 8 October 2026 on `register.php` and `forgotpw.php`.',
-      'The archived premium and upgrade pages carry no working purchase controls.']),
+      '[x] The archived premium and upgrade pages carry no working purchase controls: neither has a form, an input, a button or a payment link (the staged site, 24 November 2026).']),
     ('R5', 'WCAG 2.2 SC 2.1.2 and 1.1.1; Opquast 120',
      'No page depends on a browser plug-in.',
-     ['Four pages embed a Flash player (`/images/preloadFLV.swf`): `galaxysettings`, `premiumoverview`, `premiumupgrade`, `voting`. Replace each embed with a still image and a caption, or remove it.']),
+     ['[x] The Flash player (`/images/preloadFLV.swf`) is the sidebar\'s Game Preview box on 217 archive pages, not only `galaxysettings`, `premiumoverview`, `premiumupgrade` and `voting`. `patches.replace_flash_preview` gives each the HTML5 video the override pages already play (`/images/preview.mp4`); the staged site holds no embed (`site/tests/test_patches.py`, 24 November 2026).',
+      'Live after the next site deploy.']),
     ('R6', 'W3C WCAG-EM 2.0 (Group Note, 23 July 2026)',
      'Conformance of the archive is judged on a structured sample, not on every page.',
      ['Sample: the home page, every override page, the download page, the 404 page, five wiki/manual pages chosen by type (index, long text, data tables, media, concept art), and five randomly chosen archive pages.',
@@ -366,9 +367,11 @@ def main():
 
     out = []
     for rid, source, req, subs in R:
-        counts['R items']['apply'] = counts['R items'].get('apply', 0) + 1
-        out += [f'- [ ] **{rid}** {req}', f'  - Source: {source}.']
-        out += [f'  - [ ] {s}' for s in subs]
+        status = 'done' if all(s.startswith('[x] ') for s in subs) else 'apply'
+        counts['R items'][status] = counts['R items'].get(status, 0) + 1
+        out += [f'{MARK[status]} **{rid}** {req}', f'  - Source: {source}.']
+        out += [f'  - [x] {s[4:]}' if s.startswith('[x] ') else f'  - [ ] {s}'
+                for s in subs]
     ritems = out
 
     order = ['apply', 'done', 'deviation', 'na', 'out', 'untailored']
