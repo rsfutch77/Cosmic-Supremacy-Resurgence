@@ -35,6 +35,7 @@ WAYBACK = os.path.join(REPO, "tools", "wayback")
 sys.path.insert(0, WAYBACK)
 import wayback_grab as wg  # noqa: E402  (reuse the mirror's own path logic)
 import patches            # noqa: E402  site-wide edits, see patches.py
+import heads              # noqa: E402  each page's own title and description
 import inventory          # noqa: E402  writes TODO-content.md
 import news               # noqa: E402  the home page's news items
 
@@ -569,10 +570,25 @@ def inject(html):
 _CANONICAL_RE = re.compile(r"<link\b[^>]*\brel=['\"]canonical['\"][^>]*>\s*", re.I)
 
 
+# Wiki pages the archive holds at a second address, each a capture of the same
+# page on another date. The second address names the first as canonical, so
+# search engines and the sitemap know the page once.
+WIKI_ALIASES = {
+    "wiki/index.html": "wiki/start.html",
+    "wiki/doku.php.html": "wiki/start.html",
+    "wiki/faq/index.html": "wiki/faq.html",
+    "wiki/getstarted/index.html": "wiki/getstarted.html",
+    "wiki/guides/index.html": "wiki/guides.html",
+    "wiki/manual/index.html": "wiki/manual.html",
+    "wiki/manual/loyalty-corruption_.html": "wiki/manual/loyalty-corruption.html",
+}
+
+
 def canonical_url(rel, seed):
     """The address a page is known by. The seed is also served at /, and / wins."""
     if rel in ("index.html", seed):
         return SITE
+    rel = WIKI_ALIASES.get(rel, rel)
     return SITE + urllib.parse.quote(rel, safe="/@=&;,+")
 
 
@@ -816,7 +832,7 @@ def main():
         for name in hit:
             patch_hits[name] = patch_hits.get(name, 0) + 1
         with open(full, "w", encoding="utf-8") as fh:
-            fh.write(canonical(inject(text), rel, args.seed))
+            fh.write(canonical(heads.retitle(inject(text), rel), rel, args.seed))
 
     # Release binaries are not staged here. The client zip is attached to the
     # GitHub release for its tag, which serves the download and counts it, and

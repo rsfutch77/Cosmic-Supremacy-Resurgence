@@ -284,7 +284,7 @@ R = [
     ('R7', 'Google Search Central, "SEO Starter Guide" (updated 10 Dec 2025) and Search Essentials',
      'Search engines can find, understand and correctly attribute the site.',
      ['[x] A canonical URL on every page, so `.php` and `.php.html` addresses do not compete. `stage.py` adds one to each page; the home page\'s is `/` (v0.7).',
-      'Unique titles and descriptions (Opquast 3, 103).',
+      '[x] Unique titles and descriptions (Opquast 3, 103). `site/heads.py` gives every page the archive titled "Cosmic Supremacy" or with the shared tagline a title of its own (its tab, else its heading, plus the page number on a list), and every page without a description, or with the shared one, the opening of its own text. Seven wiki pages held at a second address name the first as canonical (`stage.WIKI_ALIASES`). On the staged site (24 November 2026) the 427 indexed pages carry 427 titles and 427 descriptions, all distinct; before, 316 pages shared three titles and 745 had no description (`site/tests/test_heads.py`). Live after the next site deploy.',
       '[x] Register the site in Google Search Console and submit `https://cosmicresurgence.com/sitemap.xml`, which `stage.py` writes and robots.txt names (Opquast 220). A Domain property, verified by Robert on 14 November 2026; the sitemap is submitted by its full address, which a Domain property needs.']),
     ('R8', 'Apache Software Foundation, "Release Download Pages for Projects"',
      'The download page links the file, its checksum, and how to verify it, all over HTTPS.',
