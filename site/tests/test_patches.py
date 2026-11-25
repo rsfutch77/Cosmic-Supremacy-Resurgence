@@ -45,6 +45,15 @@ def main():
           and "<video width='180' height='132' autoplay loop >" in page, True)
     check('a page with no embed is left alone',
           patches.replace_flash_preview(page), page)
+
+    print('the page\'s language (Lighthouse html-has-lang)')
+    check('a bare html element says English',
+          patches.declare_language('<html>\n<head>'), '<html lang="en">\n<head>')
+    wiki = '<html xmlns="http://www.w3.org/1999/xhtml" xml:lang="en" lang="en" dir="ltr">'
+    check('one that states a language is left alone',
+          patches.declare_language(wiki), wiki)
+    check('and running it twice changes nothing',
+          patches.declare_language(patches.declare_language('<html>')), '<html lang="en">')
     print(f'\n{len(PASS)} passed, {len(FAIL)} failed')
     return 1 if FAIL else 0
 

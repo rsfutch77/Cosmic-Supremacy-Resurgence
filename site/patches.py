@@ -469,6 +469,15 @@ def replace_flash_preview(html):
     return _FLASH_PREVIEW_RE.sub(lambda _m: PREVIEW_VIDEO, html)
 
 
+# Screen readers pick a page's language from the html element. The archive's
+# pages state none; the wiki's already say English.
+_HTML_TAG_RE = re.compile(r"<html\b(?![^>]*\blang=)([^>]*)>", re.I)
+
+
+def declare_language(html):
+    return _HTML_TAG_RE.sub(lambda m: f'<html lang="en"{m.group(1)}>', html, count=1)
+
+
 PATCHES = [
     ("remove the Live Chat tab", remove_live_chat),
     ("point the Forum tab at the Facebook group", repoint_forum_tab),
@@ -487,6 +496,7 @@ PATCHES = [
     ("remove the social bookmark bar", remove_social_bar),
     ("remove the wiki's engine buttons", remove_wiki_buttons),
     ("play the Game Preview without Flash", replace_flash_preview),
+    ("declare the page's language", declare_language),
 ]
 
 
