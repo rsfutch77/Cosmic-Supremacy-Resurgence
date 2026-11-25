@@ -19,6 +19,7 @@ Re-running wipes and rebuilds public/, so it is always reproducible.
 """
 
 import argparse
+import json
 import os
 import posixpath
 import re
@@ -476,6 +477,39 @@ def unlink_dead_links(html, page_rel, staged):
     return _PAGER_RE.sub(pager, _ANCHOR_RE.sub(sub, html)), dead
 
 
+# Google Analytics 4. Empty serves no tag. The id is public: every page carries it.
+GA_MEASUREMENT_ID = "G-K0M04EEN4W"     # the "Cosmic Resurgence" web stream
+
+# Consent Mode: no ad storage anywhere, and in the EEA, UK and Switzerland no
+# analytics cookies either, so those visitors send cookieless pings.
+CONSENT_REGIONS = ["AT", "BE", "BG", "HR", "CY", "CZ", "DK", "EE", "FI", "FR", "DE",
+                   "GR", "HU", "IE", "IT", "LV", "LT", "LU", "MT", "NL", "PL", "PT",
+                   "RO", "SK", "SI", "ES", "SE", "IS", "LI", "NO", "GB", "CH"]
+ANALYTICS_MARK = "gtag('config'"
+ANALYTICS = """<script async src="https://www.googletagmanager.com/gtag/js?id={id}"></script>
+<script>
+window.dataLayer = window.dataLayer || [];
+function gtag(){{dataLayer.push(arguments);}}
+gtag('consent', 'default', {{ad_storage: 'denied', ad_user_data: 'denied',
+  ad_personalization: 'denied', analytics_storage: 'granted'}});
+gtag('consent', 'default', {{analytics_storage: 'denied', region: {regions}}});
+gtag('js', new Date());
+gtag('config', '{id}');
+</script>
+"""
+
+
+def analytics(html):
+    """Add the analytics tag before </head>. Idempotent; nothing without an id."""
+    if not GA_MEASUREMENT_ID or ANALYTICS_MARK in html:
+        return html
+    m = re.search(r"</head>", html, re.I)
+    if not m:
+        return html
+    tag = ANALYTICS.format(id=GA_MEASUREMENT_ID, regions=json.dumps(CONSENT_REGIONS))
+    return html[:m.start()] + tag + html[m.start():]
+
+
 NOTICE_MARK = "property of their original creator"
 _ANY_ROBOTS_RE = re.compile(r"\s*<meta[^>]+name=[\"']robots[\"'][^>]*>", re.I)
 
@@ -515,6 +549,7 @@ def inject(html):
     """
     html = _ANY_ROBOTS_RE.sub("", html)
     html = disable_forms(html)
+    html = analytics(html)
 
     if NOTICE_MARK not in html:
         m = re.search(r"</body>", html, re.I)
