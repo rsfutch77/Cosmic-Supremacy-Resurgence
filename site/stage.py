@@ -415,11 +415,14 @@ def rewrite_links(text, page_rel, staged):
 
     def sub(match):
         nonlocal count
-        for cand in candidates(match.group("url"), base_dir):
+        url = match.group("url")
+        # The link keeps its anchor, such as the footer's #privacy.
+        frag = url[url.index("#"):] if "#" in url else ""
+        for cand in candidates(url, base_dir):
             if cand in staged:
                 count += 1
                 q = match.group("q")
-                return match.group("pre") + q + "/" + cand + q
+                return match.group("pre") + q + "/" + cand + frag + q
         return match.group(0)
 
     return REF_RE.sub(sub, text), count
