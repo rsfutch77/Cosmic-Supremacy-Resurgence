@@ -490,6 +490,7 @@ R-XTM-03 then engaged. Gated behind `ALLOW_DECLARE_WAR`, which is on for AI-vs-A
 ```
 WHEN   at least WARSHIP_TARGET crewed warships are at the staging planet (R-XTM-08)
 AND    a planet of civ C is in our discovery set
+AND    we have met C: a relation record for C exists in Owner:248
 AND    relation code for C in Owner:248 != 1 (War)
 THEN   declare war on C
 USES   actions.declare_war

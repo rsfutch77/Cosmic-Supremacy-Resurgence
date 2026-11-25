@@ -48,15 +48,37 @@ WAR = 1                   # Owner:248 relation code
 
 
 _REL_CACHE = {}
+_MET_CACHE = {}
 
 
 def clear_relation_cache():
-    """Drop the cached relation codes.
+    """Drop the cached relation codes and contacts.
 
     Must be called after anything changes a relation: the cache key is
     (turn, civ, other), which a declaration does not change.
     """
     _REL_CACHE.clear()
+    _MET_CACHE.clear()
+
+
+def has_met(snap, civ, other, act=None):
+    """True when `civ` has met `other`. None when it cannot be determined.
+
+    Met means a relation record in Owner:248, which only first contact makes.
+    The diplomacy screen lists only these civs, and the referee drops a
+    treaty naming any other. A planet in a discovered system is not contact.
+    Cached per (turn, civ pair).
+    """
+    if act is None or act.remote is None:
+        return None
+    key = (snap.turn, civ.addr, other.addr)
+    if key not in _MET_CACHE:
+        try:
+            rec = act.remote.relation_record(civ.addr, other.addr)
+        except (RuntimeError, OSError):
+            return None
+        _MET_CACHE[key] = rec is not None
+    return _MET_CACHE[key]
 
 
 def relation_code(snap, civ, other, act=None):
@@ -133,7 +155,10 @@ def _why(snap, civ, act, foes):
 
 
 def contacted(snap, civ, hist):
-    """Rival civs we have met: a planet of theirs is in our discovery set."""
+    """Rival civs in sight: a planet of theirs is in our discovery set.
+
+    Enough to arm against, not first contact: has_met decides diplomacy.
+    """
     out = []
     for other in snap.civs:
         if other.addr == civ.addr:
@@ -1303,7 +1328,9 @@ def run_xtm08(snap, civ, act, hist, log=print):
 def run_xtm00(snap, civ, act, hist, log=print):
     """R-XTM-00: declare war on a civ we can reach and are equipped to fight.
 
-    Through the engine's own declaration (actions.declare_war). A civ still in
+    Through the engine's own declaration (actions.declare_war), which makes
+    first contact itself, so the rule checks contact first as the declare-war
+    button does: only a civ we have met (has_met) is a target. A civ still in
     its build-up protection is left alone, as the declare-war validator
     refuses it. Gated by ALLOW_DECLARE_WAR.
     """
@@ -1322,6 +1349,12 @@ def run_xtm00(snap, civ, act, hist, log=print):
                 if p.owner is not None and p.owner.addr == other.addr
                 and hist.can_see(snap, p)]
         if not seen:
+            continue
+        met = has_met(snap, civ, other, act)
+        if not met:
+            log(f"R-XTM-00: {other.civ_name!r} is in sight but "
+                + ("not met" if met is False else "contact cannot be read")
+                + "; war is refused")
             continue
         if act.remote is not None:
             try:
