@@ -35,7 +35,7 @@ def main():
     check('the Flash embed is gone', ('preloadFLV' in out, '<embed' in out),
           (False, False))
     check('and the trailer plays as the override pages play it',
-          patches.PREVIEW_VIDEO in out, True)
+          patches.pausable_video(patches.PREVIEW_VIDEO) in out, True)
     check('the patch says so', 'play the Game Preview without Flash' in hit, True)
     override = os.path.join(os.path.dirname(HERE), 'overrides', 'game_news.php.html')
     with open(override, encoding='utf-8') as fh:
@@ -54,6 +54,26 @@ def main():
           patches.declare_language(wiki), wiki)
     check('and running it twice changes nothing',
           patches.declare_language(patches.declare_language('<html>')), '<html lang="en">')
+
+    print('the Game Preview can be paused (WCAG 2.2.2)')
+    video = "<video width='180' height='132' autoplay loop >"
+    check('an autoplaying video gets controls and is muted',
+          patches.pausable_video(video),
+          "<video width='180' height='132' autoplay loop controls muted>")
+    check('    on the archive pages too, after the Flash patch',
+          "autoplay loop controls muted>" in patches.apply_all(ARCHIVED)[0], True)
+    check('    and a second run changes nothing',
+          patches.pausable_video(patches.pausable_video(video)), patches.pausable_video(video))
+
+    print('the main landmark (WCAG 1.3.1)')
+    check('the main column is marked',
+          patches.mark_main("<body><div id='left_content'>x</div>"),
+          "<body><div id='left_content' role='main'>x</div>")
+    check('    else the wiki page div, as on the 404 page',
+          patches.mark_main('<div class="page">x</div>'), '<div class="page" role="main">x</div>')
+    once = patches.mark_main("<div id='left_content'>x</div><div class=\"page\">y</div>")
+    check('    once only, and a second run changes nothing',
+          (once.count('role='), patches.mark_main(once)), (1, once))
     print(f'\n{len(PASS)} passed, {len(FAIL)} failed')
     return 1 if FAIL else 0
 

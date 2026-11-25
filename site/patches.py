@@ -478,6 +478,30 @@ def declare_language(html):
     return _HTML_TAG_RE.sub(lambda m: f'<html lang="en"{m.group(1)}>', html, count=1)
 
 
+# A video that starts by itself needs a way to pause it (WCAG 2.2.2): the
+# Game Preview loops for two minutes. Muted, so browsers allow the autoplay.
+_AUTOPLAY_RE = re.compile(r"<video\b(?![^>]*\bcontrols)([^>]*\bautoplay\b[^>]*?)\s*>", re.I)
+
+
+def pausable_video(html):
+    return _AUTOPLAY_RE.sub(lambda m: f"<video{m.group(1)} controls muted>", html)
+
+
+# Each page's main column is its main landmark (WCAG 1.3.1): the archive and
+# the wiki keep it in left_content, the 404 page in its page div.
+_MAIN_COLUMN_RE = re.compile(r"<div\b(?![^>]*\brole=)([^>]*\bid=['\"]left_content['\"][^>]*)>", re.I)
+_PAGE_DIV_RE = re.compile(r'<div\b(?![^>]*\brole=)([^>]*\bclass="page\b[^"]*"[^>]*)>', re.I)
+
+
+def mark_main(html):
+    if re.search(r"\brole=['\"]main['\"]", html, re.I):
+        return html
+    new = _MAIN_COLUMN_RE.sub(lambda m: f"<div{m.group(1)} role='main'>", html, count=1)
+    if new == html:
+        new = _PAGE_DIV_RE.sub(lambda m: f'<div{m.group(1)} role="main">', html, count=1)
+    return new
+
+
 PATCHES = [
     ("remove the Live Chat tab", remove_live_chat),
     ("point the Forum tab at the Facebook group", repoint_forum_tab),
@@ -497,6 +521,8 @@ PATCHES = [
     ("remove the wiki's engine buttons", remove_wiki_buttons),
     ("play the Game Preview without Flash", replace_flash_preview),
     ("declare the page's language", declare_language),
+    ("let an autoplaying video be paused", pausable_video),
+    ("mark the main column as the main landmark", mark_main),
 ]
 
 
