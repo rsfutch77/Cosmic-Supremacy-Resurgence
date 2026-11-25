@@ -3206,11 +3206,13 @@ hurries, trades and treaty sums itself. Checking every order type is not planned
 - [ ] **The original developers' list moves to GitHub issues** (Robert, 15 November 2026).
   `cosmic_supremacy_original_todo.csv` is the list the original developers kept, with player
   suggestions added since. Done when every row is an issue and the CSV is deleted.
-  - [ ] Make it a real CSV: the `task,category` header on the first line, and the "merge
-    original todo list into github" note, which this item replaces, removed.
-  - [ ] Merge the duplicates, keeping every forum link: waypoints, ship upgrading and
+  - [x] Make it a real CSV: the `task,category` header on the first line, and the "merge
+    original todo list into github" note, which this item replaces, removed. 168 rows parse.
+  - [x] Merge the duplicates, keeping every forum link: waypoints, ship upgrading and
     recycling, Earendel's bombing mechanics, blockades, colonizing admirals, ship-class bonuses
-    and rock-paper-scissors combat, and RRS news with the mobile companion app.
+    and rock-paper-scissors combat, and RRS news with the mobile companion app. Each group is
+    its first row, with the others' text after "also:" and every link; "Ship based Attack
+    Advantages" joined the ship-class row (same thread, 1097). 159 rows (24 November 2026).
   - [ ] Check each bug against the current client and referee, and record whether it is fixed,
     still reproduces, or now depends on the referee (ally ship names in a battle report,
     reputation for a neutral bystander, a message or a bio-bombing news item sent twice, a tick

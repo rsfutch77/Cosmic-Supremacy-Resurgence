@@ -1,4 +1,3 @@
-[ ] merge original todo list into github
 task,category
 "BUG: scout admiral with more than one rule: first completely execute the first rule, then disable that if another scout rule exists",Bugs
 admiral box slow when >50 admirals (astax),Bugs
@@ -38,7 +37,7 @@ find a better solution for right clicking link-style paramaters in govs and admi
 governor: “if conditions” know if they should be “if” or “while” (as well as “all” or “a”) -> While currently no production ->->Convert a Worker to a Farmer,Governor Suggestions
 better solution for governor endless loop check -> http://cosmicsupremacy.com/forum/thread.php?postid=37894#post37894,Governor Suggestions
 "when loading a governor with the same name as one that’s existing, offer the option to replace the existing one",Governor Suggestions
-colonization admiral: tests for -> No other player in the system. -> commodity output at least x -> commodity quality at least x%,Admiral Suggestions
+colonization admiral: tests for -> No other player in the system. -> commodity output at least x -> commodity quality at least x% | also: Colonizing Admirals -> http://cosmicsupremacy.com/forum/thread.php?threadid=2893&hilight=Colonizing+Admirals,Admiral Suggestions
 extend the “number of ship-designs” condition by the following variants In the galaxy In the same solar system as the planet the governor is running on In orbit around the planet the governor is running on__ -> see http://www.spaceciv.com/forum/thread.php?postid=11666#post11666,Admiral Suggestions
 some more retreat options -> http://spaceciv.com/forum/thread.php?postid=34704#post34704,Admiral Suggestions
 intercept within certain radius from rally-point -> http://spaceciv.com/forum/thread.php?postid=35226#post35226,Admiral Suggestions
@@ -75,7 +74,7 @@ scan multiple ships/planets from recon screen,Game-Play and User-Interface
 feature that allows to include planet’s and sun’s names with coordinates into message just by dragging them from galaxy map,Game-Play and User-Interface
 "ability to add command-centers to the battle-calc, since they do influence a battle outcome.",Game-Play and User-Interface
 battle-calculator: set default tech levels for planetary defense,Minor Gameplay Suggestions
-ability to set waypoints,Minor Gameplay Suggestions
+ability to set waypoints | also: way-points -> http://cosmicsupremacy.com/forum/thread.php?threadid=3275,Minor Gameplay Suggestions
 battlecalc: form groups of ships with average and total summary displayed,Minor Gameplay Suggestions
 merge with fleet fleets/ships on the galaxy map (drag and drop?),Minor Gameplay Suggestions
 allied fleet -> http://www.spaceciv.com/forum/thread.php?threadid=2416,Minor Gameplay Suggestions
@@ -96,7 +95,7 @@ military classes http://www.spaceciv.com/forum/thread.php?threadid=3036,Minor Ga
 don’t tick governor before the tick (auto-run them for all planets if rules changed),Minor Gameplay Suggestions
 "team galaxy: members vote for #1 and #2, and then they set up their wish list -> http://spaceciv.com/forum/thread.php?threadid=2811",Minor Gameplay Suggestions
 gain small reputation for completing trade agreements -> http://www.spaceciv.com/forum/thread.php?postid=26613#post26613,Minor Gameplay Suggestions
-blockades and piracy -> http://www.spaceciv.com/forum/thread.php?postid=26642#post26642,Minor Gameplay Suggestions
+blockades and piracy | also: Blockading planets -> http://www.spaceciv.com/forum/thread.php?postid=26642#post26642 ; http://cosmicsupremacy.com/forum/thread.php?postid=43030#post43030,Advanced Combat
 "overall statistics, like how many ships destroyed, planets conquered, planets lost, etc, in the galaxy achievement sections -> http://www.spaceciv.com/forum/thread.php?postid=29760#post29760",Minor Gameplay Suggestions
 "PD scanner module, that allows you to see PD strength once you are close to a planet",Minor Gameplay Suggestions
 "when sharing line-of-sight share fleet and planet strengths/details as well -> either send the full info, or attach a info chunk -> something similar could be done for scans, instead of checking the scan-database, store the ship details with the ship itself",Minor Gameplay Suggestions
@@ -113,16 +112,15 @@ earendel’s ground combat -> http://cosmicsupremacy.com/forum/thread.php?postid
 new doctrine tree -> http://cosmicsupremacy.com/forum/thread.php?postid=57764#post57764,Minor Gameplay Suggestions
 suggestion: implement a real 2d style map galaxy,Major Gameplay Suggestions
 "ship-design attributes (agility, precision, aggressive/defensive, etc), can be assigned RPG-style from say 10 available points -> discuss with players -> one could be, instead of 1% per iteration some ships are allowed to shoot a higher percentage earlier (giving them an advantage against overwhelming enemy)",Major Gameplay Suggestions
-suggestion: ship-class firepower bonuses per ship-class -> see http://www.spaceciv.com/forum/thread.php?threadid=1097,Major Gameplay Suggestions
+"suggestion: ship-class firepower bonuses per ship-class | also: firepower distribution / rpg style attributes -> “well, a rock-paper-scissor system would be awesome... I tried to find a good solution to it, saw a design idea couple years ago from freeorion, but can’t find anymore.” -> “Ship-classes have primary and secondary class-targets, which they pick first. They receive bonuses when attacking their primary/secondary target classes and, depending on size, penalties when attacking other classes (battleship -> shuttle/corvette)” -> missile-ships defeats heavy-ships, heavy-ships defeats light-ships, light-ships defs missiles from missile-ships (nullifying their damage (ie use FP to reduce opponents FP)) | also: Size based evasion & Rock-Paper-Scissor combat | also: Ship based Attack Advantages -> http://www.spaceciv.com/forum/thread.php?threadid=1097 ; http://www.spaceciv.com/forum/thread.php?postid=19066#post19066 ; http://cosmicsupremacy.com/forum/thread.php?postid=19017#post19017 ; http://cosmicsupremacy.com/forum/thread.php?threadid=1097&hilight=combat+system",Advanced Combat
 "suggestion: exchange planets, see http://www.spaceciv.com/forum/thread.php?postid=7355#post7355",Major Gameplay Suggestions
 "suggestion: newbie gal, before you can play in the regular galaxies -> sandbox galaxy",Major Gameplay Suggestions
 "suggestion: forming real alliances that show in the highscore list, so that factions and counter factions can form early in the game",Major Gameplay Suggestions
 "Allow forming of Federations (extended alliances), allow resource pooling, sharing among members http://www.spaceciv.com/forum/thread.php?postid=9174#post9174",Major Gameplay Suggestions
 being able to set a marker (a beacon) in the 3d-galaxy and attach a note that your allies can see (prem only?),Major Gameplay Suggestions
-"firepower distribution / rpg style attributes -> “well, a rock-paper-scissor system would be awesome... I tried to find a good solution to it, saw a design idea couple years ago from freeorion, but can’t find anymore.” -> “Ship-classes have primary and secondary class-targets, which they pick first. They receive bonuses when attacking their primary/secondary target classes and, depending on size, penalties when attacking other classes (battleship -> shuttle/corvette)” -> missile-ships defeats heavy-ships, heavy-ships defeats light-ships, light-ships defs missiles from missile-ships (nullifying their damage (ie use FP to reduce opponents FP)) -> http://www.spaceciv.com/forum/thread.php?postid=19066#post19066",Major Gameplay Suggestions
 "empire-wide planetary defense system with added strategy, through transmitters and receivers (by ThePhantom) -> http://www.spaceciv.com/forum/thread.php?threadid=1530 -> http://spaceciv.com/forum/thread.php?postid=11818#post11818",Major Gameplay Suggestions
 "different sizes and shapes of galaxies, customizable by users -> allow editing number, type and size of solar-systems, as well as sector size -> prem only: http://www.spaceciv.com/forum/thread.php?postid=17593#post17593",Major Gameplay Suggestions
-"allow upgrading of ships: “upgrade ship” option to ships context menu, switches the planet into a ship-upgrade mode -> http://www.spaceciv.com/forum/thread.php?postid=13387#post13387",Major Gameplay Suggestions
+"allow upgrading of ships: “upgrade ship” option to ships context menu, switches the planet into a ship-upgrade mode | also: Upgrading ships/Recycling -> http://www.spaceciv.com/forum/thread.php?postid=13387#post13387 ; http://cosmicsupremacy.com/forum/thread.php?threadid=1627&threadview=0&hilight=&hilightuser=0&page=1",Major Gameplay Suggestions
 more sophisticated PD damage model,Major Gameplay Suggestions
 "improved territory calculation -> order player to leave territory (tell admiral to avoid territory), after warning period player can be attacked freely \\-> pirate ships can attack without rep loss or declaration of war -> http://www.spaceciv.com/forum/thread.php?postid=19874#post19874",Major Gameplay Suggestions
 "trade planets and technologies: stronger player can give to weaker, but not the other way around -> or actually it is possible to give away 10% of your planets your own planets, so that it is still possible to trade individual planets -> also a strong player should still be allowed (if he wants) to give several of his planets to a weaker planet, in order to support him",Major Gameplay Suggestions
@@ -132,7 +130,7 @@ Earendel’s tech tree -> http://spaceciv.com/forum/thread.php?postid=35127#post
 Earendel’s Loyalty & Rebellion suggestion -> http://cosmicsupremacy.com/forum/thread.php?postid=36837#post36837,Major Gameplay Suggestions
 "improved combat (more variations, rpg style, initiative, scrips, etc?) -> change combat code so that every single ship has its target, shoots its firepower -> visualize battles (shields block shots, visualize that too, possible slow flying rockets?) -> speed, scanner range and stealth should have an effect within combat -> G104, Battle at Planet ‘Come and Get some’ (4/1/4-4) with Skinnyloser, jackjack, Ruger - rugers ships only making very little damage...",Major Gameplay Suggestions
 Earendel’s Event-Driven Output Bonus & Reputation -> http://cosmicsupremacy.com/forum/thread.php?threadid=4051,Major Gameplay Suggestions
-earendel’s different bombing mechanics -> http://cosmicsupremacy.com/forum/thread.php?threadid=3991,Major Gameplay Suggestions
+earendel’s different bombing mechanics | also: Advanced Plant bombing mechanics -> http://cosmicsupremacy.com/forum/thread.php?threadid=3991,Advanced Combat
 Earendel’s real combat -> http://cosmicsupremacy.com/forum/thread.php?postid=44420#post44420,Major Gameplay Suggestions
 Earendel’s always outnumbered -> http://cosmicsupremacy.com/forum/thread.php?postid=42567#post42567,Major Gameplay Suggestions
 Ideas for team galaxies -> http://cosmicsupremacy.com/forum/thread.php?postid=45813#post45813,Major Gameplay Suggestions
@@ -143,18 +141,11 @@ Earendel’s Corruption Reputation Morale Loyalty -> http://cosmicsupremacy.com/
 "manual: governor rules more detailed info (food-surplus, base food, food output, etc)","Webpage, Game Startup, and Tutorial Galaxy"
 "manual: more experienced steps: try (shared) prod-queues for production, use govs to manage your population (examples)","Webpage, Game Startup, and Tutorial Galaxy"
 "tutorial galaxy: adapt to work with new design (2 food bars, etc)","Webpage, Game Startup, and Tutorial Galaxy"
-Size based evasion & Rock-Paper-Scissor combat (http://cosmicsupremacy.com/forum/thread.php?postid=19017#post19017),Advanced Combat
 Ground Combat Rock-Paper-Scissors (http://cosmicsupremacy.com/forum/thread.php?postid=27316#post27316),Advanced Combat
-Ship based Attack Advantages (http://cosmicsupremacy.com/forum/thread.php?threadid=1097&hilight=combat+system),Advanced Combat
-Advanced Plant bombing mechanics (http://cosmicsupremacy.com/forum/thread.php?threadid=3991),Advanced Combat
 DeathStar/Space Stations (http://cosmicsupremacy.com/forum/thread.php?threadid=3977&hilight=death+star),Advanced Combat
 "Carriers, Fighters and other such (http://cosmicsupremacy.com/forum/thread.php?threadid=4166&hilight=death+star)",Advanced Combat
-Blockading planets (http://cosmicsupremacy.com/forum/thread.php?postid=43030#post43030),Advanced Combat
-Upgrading ships/Recycling (http://cosmicsupremacy.com/forum/thread.php?threadid=1627&threadview=0&hilight=&hilightuser=0&page=1),General/Misc
 Galaxy Score chart (http://cosmicsupremacy.com/forum/thread.php?threadid=4770),General/Misc
-RRS News / Phone Interface (http://cosmicsupremacy.com/forum/thread.php?postid=62237#post62237),General/Misc
-Colonizing Admirals (http://cosmicsupremacy.com/forum/thread.php?threadid=2893&hilight=Colonizing+Admirals),Admirals
-way-points (http://cosmicsupremacy.com/forum/thread.php?threadid=3275),Admirals
+"RRS News / Phone Interface | also: Mobile companion app (player suggestion): not a full port, a lighter app for checking turn status, news and messages and queuing simple orders on the go; overlaps RRS News / Phone Interface -> http://cosmicsupremacy.com/forum/thread.php?postid=62237#post62237",General/Misc
 Patrol Admiral (http://cosmicsupremacy.com/forum/thread.php?threadid=4909),Admirals
 Awards and honours have come up a couple of times... (http://cosmicsupremacy.com/forum/thread.php?threadid=4416),Profile
 Extended Hall of Fame stats. (http://cosmicsupremacy.com/forum/thread.php?threadid=4410),Profile
@@ -166,5 +157,4 @@ Diplomacy Scans (http://cosmicsupremacy.com/forum/thread.php?threadid=5799),Scan
 "AI players: local play, a bot-filled galaxy running entirely on the player machine, no server dependency and no waiting",AI Players
 "AI players: lobby seat filling, offer a waiting multiplayer galaxy the option to start early with bots in the remaining seats",AI Players
 "AI players: keep at least one AI civ seated in a galaxy while any human is, so a galaxy is never a human alone and abandonment never empties it under a player who returns",AI Players
-"Mobile companion app (player suggestion): not a full port, a lighter app for checking turn status, news and messages and queuing simple orders on the go; overlaps RRS News / Phone Interface",General/Misc
 "Check joining when no seat is open: a limited-seat galaxy that is full, and a sandbox galaxy with no planets left to assign; confirm the player gets a clear message and no broken half-joined state","Webpage, Game Startup, and Tutorial Galaxy"
