@@ -2398,12 +2398,20 @@ def _status_value(g, view):
             else len(STATUS_ORDER))
 
 
+def starting(g) -> bool:
+    """An open galaxy whose first turn has not closed yet."""
+    return g.status == OPEN and g.turn == 0
+
+
 def _status_text(g, view):
-    """The galaxy's own word, or "stopped" when its turns have stopped. The
-    column still sorts on the stored word.
+    """The galaxy's own word, "stopped" when its turns have stopped, or
+    "starting" before its first turn closes. The column still sorts on the
+    stored word.
     """
     if row_stalled_for(g, view):
         return "stopped"
+    if starting(g):
+        return "starting"
     return g.status or ""
 
 
@@ -4107,10 +4115,13 @@ class Launcher:
         """What colour one cell is drawn in.
 
         Lit for galaxies that are this player's business, dim for the rest. A
-        stopped galaxy's status cell takes the warning colour regardless.
+        stopped galaxy's status cell takes the warning colour regardless, and a
+        starting one's the good colour.
         """
         if col is GALAXY_STATUS and row_stalled_for(g, view):
             return WARN
+        if col is GALAXY_STATUS and starting(g):
+            return OK
         return TEXT if near else DIM
 
     def _galaxy_view(self):
