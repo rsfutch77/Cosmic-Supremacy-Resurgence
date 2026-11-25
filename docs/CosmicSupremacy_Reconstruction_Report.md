@@ -3218,8 +3218,8 @@ hurries, trades and treaty sums itself. Checking every order type is not planned
     reputation for a neutral bystander, a message or a bio-bombing news item sent twice, a tick
     while synchronising). Recorded in the CSV's `check` column (24 November 2026): of 22 bug
     rows, 12 are the client's own UI, unchanged and not checked on screen; 6 are engine rules
-    the referee's tick now runs, not reproduced; 3 no longer apply (no team galaxy, the player's
-    client never ticks, the client plays offline); and 1 reproduces. That one is the ally's
+    the referee's tick now runs, not reproduced; 3 are not testable yet, since each could come
+    back with a later feature (team galaxies, local play, an online client); and 1 reproduces. That one is the ally's
     ship names: an ally's copy of a battle report is the participant's own report byte for
     byte (`diplomacy/cs3`), so it names the participant's designs where the enemy's copy shows
     only classes.
