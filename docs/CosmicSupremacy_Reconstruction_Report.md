@@ -3213,10 +3213,16 @@ hurries, trades and treaty sums itself. Checking every order type is not planned
     and rock-paper-scissors combat, and RRS news with the mobile companion app. Each group is
     its first row, with the others' text after "also:" and every link; "Ship based Attack
     Advantages" joined the ship-class row (same thread, 1097). 159 rows (24 November 2026).
-  - [ ] Check each bug against the current client and referee, and record whether it is fixed,
+  - [x] Check each bug against the current client and referee, and record whether it is fixed,
     still reproduces, or now depends on the referee (ally ship names in a battle report,
     reputation for a neutral bystander, a message or a bio-bombing news item sent twice, a tick
-    while synchronising).
+    while synchronising). Recorded in the CSV's `check` column (24 November 2026): of 22 bug
+    rows, 12 are the client's own UI, unchanged and not checked on screen; 6 are engine rules
+    the referee's tick now runs, not reproduced; 3 no longer apply (no team galaxy, the player's
+    client never ticks, the client plays offline); and 1 reproduces. That one is the ally's
+    ship names: an ally's copy of a battle report is the participant's own report byte for
+    byte (`diplomacy/cs3`), so it names the participant's designs where the enemy's copy shows
+    only classes.
   - [ ] Point each forum link at its copy in the local wayback mirror where one exists.
   - [ ] Post the rows as GitHub issues, labelled by category and by the bug check's result.
   - [ ] Delete the CSV.
