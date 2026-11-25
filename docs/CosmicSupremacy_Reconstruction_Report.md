@@ -3203,7 +3203,7 @@ hurries, trades and treaty sums itself. Checking every order type is not planned
   passes on `v0.8` (8 tests; the 2 it lacks are the training tests), as does
   `server/tests/test_scan_table.py`, the one server test that imports `sim`.
 
-- [ ] **The original developers' list moves to GitHub issues** (Robert, 15 November 2026).
+- [x] **The original developers' list moves to GitHub issues** (Robert, 15 November 2026).
   `cosmic_supremacy_original_todo.csv` is the list the original developers kept, with player
   suggestions added since. Done when every row is an issue and the CSV is deleted.
   - [x] Make it a real CSV: the `task,category` header on the first line, and the "merge
@@ -3228,8 +3228,16 @@ hurries, trades and treaty sums itself. Checking every order type is not planned
     (24 November 2026): 74 of 83 links, matched as written, without the fragment, on
     `cosmicsupremacy.com` for `spaceciv.com`, or by thread and page. The other 9 were never
     captured: threads 1627, 2893, 3275, 3977, 4166 and 4909 and posts 19017, 43030 and 62237.
-  - [ ] Post the rows as GitHub issues, labelled by category and by the bug check's result.
-  - [ ] Delete the CSV.
+  - [x] Post the rows as GitHub issues, labelled by category and by the bug check's result.
+    Posted 24 November 2026 with Robert's approval: 159 issues, #6 to #164 on
+    `rsfutch77/Cosmic-Supremacy-Resurgence`, each labelled `original list`. The 22 bugs are type
+    Bug with a `check:` label, the 137 suggestions type Feature labelled by category (`Admirals`
+    folded into `Admiral Suggestions`, `Scans / Tech` into `Scans`, `Planetry` spelled
+    `Planetary`, and the commas of "Webpage, Game Startup, and Tutorial Galaxy" made slashes,
+    since GitHub refuses a comma in a label). Archived forum copies are linked on the Wayback
+    Machine. Milestones: #147 (tutorial galaxy and the new design) in v0.8, #44 (colonization
+    admiral) in v0.9.
+  - [x] Delete the CSV.
 
 - [x] **The home page carries news items.** The home page is `site/overrides/game_news.php.html`,
   served at `/`, and holds one post, "Welcome to Resurgence" (13 September 2026). Done when a
