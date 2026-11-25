@@ -2679,11 +2679,11 @@ Key observations from running the patched EXE through the complete tutorial gala
 **Tick behaviour**
 - Tutorial galaxy advances at ~1 tick/minute with no server involvement.
 - Tick timing is controlled client-side (confirmed by `c:\\SpeedTicks.txt` debug string in binary).
-- The "Ticks Halted" state in the Demo galaxy is a server-controlled pause, the server must release it. Mechanism TBD (likely part of the `loadgame` response blob).
+- The "Ticks Halted" state in the Demo galaxy is a server-controlled pause, the server must release it. Mechanism TBD (likely part of the `loadgame` response blob). **Corrected** (24 November 2026): it is not in the blob. `0x52B0F0` (called from the turn setup at `0x52D88D`) sets `[0x8578F6]` when `GetFileAttributesA` finds a file named `TicksHalted` in the directory held at `0x871430`, a marker file like `SpeedTicks.txt`; and the status line prints "Ticks Halted (Paused from Error)" from the byte at `[0x86F410]` (`0x406165`). Which of the two the Demo galaxy showed is not traced; the referee's clients tick, so neither is set in play.
 
 **Save blob**
 - `savegame` was never called during tutorial, game state was not persisted.
-- Save blob format remains unknown; must be captured from a real (non-tutorial) galaxy session.
+- Save blob format remains unknown; must be captured from a real (non-tutorial) galaxy session. **Answered** in §12: the blob is captured from the client's own `SaveGame`, and its sections are decoded throughout this report.
 
 **`testconnection` response**
 - Must return the exact string `READY` (confirmed from binary string `'tutorial communication test response from server: '%s''`).
@@ -3086,9 +3086,10 @@ hurries, trades and treaty sums itself. Checking every order type is not planned
   proposed a trade of 5 metal for 1 credit a turn over 10 turns, Sir Blorpington accepted it the
   next turn, and after the tick it was in force from turn 96 with the metal moved once (630 to
   625 and 635). The two civs had not met, so their contact was written into turn 95 at the
-  publish. Still refused: an admiral on a fleet. Built on the UI's word, not a save: a peace
-  binding for 50 turns and an alliance for 100, a credit lump sum as one `u32`, and no war while
-  a cease-fire or peace binds.
+  publish. Since then an admiral on a fleet is carried (9 November 2026), peace and an alliance
+  were accepted in the client (21 November), and a credit lump sum is a `u32` and a paid byte
+  (22 November); see "Peace, alliances, expiry and the sharing items". Still built on the UI's
+  word: no war while a cease-fire or peace binds.
   - [x] An admiral made in the client UI and a treaty answered in it go through a live galaxy
     (13 November 2026, sandbox turns 166 to 168): tmog66 made admiral 337 "scout2a" and gave it a
     ship, and proposed trade 338 to guest-test; guest-test accepted it on turn 167, and turn 168
@@ -3388,9 +3389,10 @@ treaty list), so each layout below is the writer's and reader's, checked only fo
   keeps one registry (`0x86ED6C`) and `SaveGame` writes all of it after `SAVE`'s last section as
   a `u32` count and one `TRTY` v2 per treaty (writer `0x55A4D0`, reader `0x55BD00`). `TRTY` holds
   the treaty's object id and a `TRDT` v1: the two parties' civ ids, a `u32` kind (`1` declares
-  war, from the setter `0x55AD90`, which also empties both item lists), four `u32`s not yet
-  decoded (the memory capture of a war read `3`, `-1` and the turn twice), two bytes, then two
-  item lists, inferred to be what the proposer demands and offers. An item is its own section:
+  war, from the setter `0x55AD90`, which also empties both item lists), the status, an `i32`
+  length, an `i32` start turn and the turn proposed (decoded by the diplomacy session below; a
+  war reads `3`, `-1` and the turn twice), a deleted byte per party, then the proposer's demands
+  and its offers. An item is its own section:
   `CRLS`, `CRPT`, `RSLS`, `RSPT` (credits and resources, lump sum and per turn), `SLOS`, `SHBR`,
   `SHGM`, `SHWH` (sharing), `TRLE` (treaty length). Offline the client applies a proposal itself
   (`0x55C3E0`, from `0x56F310`); accept, decline, withdraw and delete go through `0x56F470`
@@ -3606,8 +3608,7 @@ with `set_blob_player.py` to answer. Every capture's `waronly` bytes read `01 00
   against the treaty as served, and refused when the other party changed that treaty earlier in
   the merge. On acceptance the referee moves the lump sums from the merged `OWPR` resources (a
   `u32` count of 5 at the second research field `+55`, then a resource byte and a `u32` per
-  resource) and credits, and refuses it when the payer is short. Refused: an admiral on a fleet,
-  another civ's admirals, a treaty ended any other way, and a stance moved without a treaty.
+  resource) and credits, and refuses it when the payer is short. Refused: another civ's admirals, a treaty ended any other way, and a stance moved without a treaty.
 - [x] **A rival's colour and its territory checkbox are lost at every turn.** The diplomacy
   screen's Change Color (right-click a civ) and the checkbox beside each civ, which shows or
   hides its sphere of control on the map, do not survive to the next served turn (Robert, 6

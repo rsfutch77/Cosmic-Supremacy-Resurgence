@@ -164,7 +164,11 @@ Known open discrepancy: `Owner:144` / `Owner:152` are annotated as current/selec
 science topic, but the constructor analysis below puts the current science topic at
 `[civ+0x38]` = `Owner:4`. One of the two is wrong; unresolved. Live `Owner:4` reads
 `0` and `21` for the two civilisations, which is consistent with a tech id and
-therefore with the constructor analysis.
+therefore with the constructor analysis. **Resolved**: the annotation is right and the
+constructor reading wrong. `Owner:12` is progress and `Owner:144`/`:152` the topic, as
+read directly ("Correction to the constructor-derived layout"), and `Owner:4` is the civ's
+user id, the `u32` that ends `OWNR`'s payload; 0 marks a civ with no user, which is why it
+read 0 and 21 (`Owner:4 == 0` marks it, below).
 
 ### Field-shape signatures (July 2026)
 
@@ -2918,11 +2922,13 @@ now use `Owner:*`:
 
 | Runtime offset | EJBO offset | Field |
 |---|---|---|
-| `[civ+0x38]` | `Owner:4` | Current science topic (tech id); `-1` = none (“No Research”) |
+| `[civ+0x38]` | `Owner:4` | The civ's user id, the `u32` ending `OWNR`; 0 for none. Recorded here first as the current science topic, which direct reads refuted: the topic is `Owner:144`/`:152` |
 | `[civ+0x40]` | `Owner:12` | Current research progress |
 | `[civ+0x54]` / `[civ+0x58]` | `Owner:32/36` | Reputation / reputation pending this tick (floats) |
 
 Research-topic display and the `No Research` branch are at `0x00554DE1` (`cmp [civ+0x38], -1`).
+The register there (`esi`, read again at `+0x48`) is not shown to hold the `Owner`, and with
+`Owner:4` the user id it is most likely another object's field.
 
 ### Tools
 
