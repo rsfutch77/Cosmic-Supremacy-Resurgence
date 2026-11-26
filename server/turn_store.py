@@ -291,14 +291,17 @@ def serve(store, state, civ: str, turn: int) -> bytes:
 def replay_problem(state, civ: str, turn: int) -> str:
     """Why `civ` may not replay `turn`, or ''.
 
-    The replay serves only a civ's own view (`kept_view`), never the turn
-    itself, of a turn up to the current one. A civ that joined is served
-    nothing before the turn it was seated, so a later holder of a name never
-    reads an earlier holder's turns.
+    The replay opens only once the galaxy has ended, as in the original. It
+    serves only a civ's own view (`kept_view`), never the turn itself, of a
+    turn up to the current one. A civ that joined is served nothing before the
+    turn it was seated, so a later holder of a name never reads an earlier
+    holder's turns.
     """
     state = state or {}
     if not civ or civ not in (state.get('civs') or ()):
         return 'the replay is served only to a civ on the roster'
+    if state.get(STATUS_KEY) != CLOSED:
+        return 'the replay opens once the galaxy has ended'
     turn = int(turn)
     if turn < 1 or turn > int(state.get('turn') or 0):
         return f'turn {turn} has not been played; the current turn is ' \

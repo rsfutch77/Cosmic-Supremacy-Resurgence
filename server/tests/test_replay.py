@@ -31,8 +31,9 @@ import save_parser as sp
 import referee
 import turn_server
 import turn_store
-from turn_store import (JOINED_KEY, PUBLIC_VIEW, VIEWS_KEY, HttpTurnStore,
-                        NotServed, TurnStore, replay_problem)
+from turn_store import (CLOSED, JOINED_KEY, OPEN, PUBLIC_VIEW, STATUS_KEY,
+                        VIEWS_KEY, HttpTurnStore, NotServed, TurnStore,
+                        replay_problem)
 
 FIXTURES = os.path.join(ROOT, 'server', 'tests', 'fixtures', 'diplomacy')
 FIRST = sp.load_any(os.path.join(FIXTURES, 'd0.b64'))
@@ -77,9 +78,19 @@ def publish_three(store, published):
     store.publish(183, BLOB, views=published)
 
 
+def end(store):
+    store.update_state({STATUS_KEY: CLOSED})
+
+
 def run_rule():
     print('the rule')
     state = {'turn': 9, 'civs': ['A', 'B'], JOINED_KEY: {'B': {'turn': 6}}}
+    check('a galaxy still running is refused the replay',
+          replay_problem(state, 'A', 1), 'the replay opens once the galaxy has ended')
+    check('and so is one marked open',
+          replay_problem({**state, STATUS_KEY: OPEN}, 'A', 1),
+          'the replay opens once the galaxy has ended')
+    state[STATUS_KEY] = CLOSED
     check('a roster civ may replay any played turn',
           (replay_problem(state, 'A', 1), replay_problem(state, 'A', 9)),
           ('', ''))
@@ -103,7 +114,11 @@ def run_folder(tmp, held, published):
           sorted(store.state()[VIEWS_KEY]), ['182', '183'])
     check('and turn 181\'s views stay on disk',
           store.kept_view('BadGuy', 181) == held['BadGuy'])
-    check('BadGuy replays turn 181 as its own view',
+    check('while the galaxy runs, its own view is refused',
+          why(store.replay_view, 'BadGuy', 181),
+          'the replay opens once the galaxy has ended')
+    end(store)
+    check('once it ends, BadGuy replays turn 181 as its own view',
           store.replay_view('BadGuy', 181) == held['BadGuy'])
     check('and the current turn',
           store.replay_view('BadGuy', 183) == held['BadGuy'])
@@ -134,7 +149,11 @@ def run_http(tmp, held, published):
         # of the turn its blob carries, and every turn here is one blob.
         publish_three(TurnStore(root), published)
         player = HttpTurnStore(base, state_seconds=0)
-        check('a launcher replays its civ\'s view of turn 181',
+        check('a launcher is refused the replay while the galaxy runs',
+              why(player.replay_view, 'BadGuy', 181),
+              'the replay opens once the galaxy has ended')
+        end(TurnStore(root))
+        check('and once it ends, replays its civ\'s view of turn 181',
               player.replay_view('BadGuy', 181) == held['BadGuy'])
         check('a turn with no view for the civ is refused with the reason',
               why(player.replay_view, 'GoodGuy', 182),
@@ -180,7 +199,11 @@ def run_relay(held, published):
         stranger = HttpTurnStore(base, token=lambda: account(none))
         check('every view object stays after two more publishes',
               store.has_kept_view('BadGuy', 181))
-        check('a seat replays its own view of turn 181',
+        check('a seat is refused the replay while the galaxy runs',
+              why(as_bad.replay_view, 'BadGuy', 181),
+              'the replay opens once the galaxy has ended')
+        end(store)
+        check('once it ends, a seat replays its own view of turn 181',
               as_bad.replay_view('BadGuy', 181) == held['BadGuy'])
         check('the civ named in the query is ignored for the seat\'s own',
               as_bad.replay_view('GoodGuy', 181) == held['BadGuy'])
