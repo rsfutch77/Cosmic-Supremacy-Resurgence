@@ -305,7 +305,7 @@ R = [
       "[x] When the launcher is code-signed (M3), say so and name the publisher. The page says the launcher is code-signed by its publisher, Robert Futch, the certificate's subject (CN=Robert Futch, Tucson, AZ, US), read off the installed launcher on 25 November 2026."]),
     ('R9', 'Microsoft Learn, "SmartScreen reputation for Windows app developers" (2026)',
      'Players are told in advance what Windows will show on first run of an unsigned or newly signed build, and what to do.',
-     ["[x] The download page and the zip's `PLAYER_README.txt` say Windows may still show \"Windows protected your PC\" on first run of the signed launcher, to click More info, check that the publisher is Robert Futch, then click Run anyway, and not to run it if any other publisher or none is named.",
+     ["[x] The download page and the zip's `PLAYER_README.txt` say Windows may still show \"Windows protected your PC\" on first run of the signed launcher, to click More info, check that the publisher is Robert Futch, then click Run anyway, and not to run it if any other publisher or none is named; live on 25 November 2026.",
       "[x] Smart App Control: the page says there is no need to turn it off, since it lets signed apps run. Microsoft's Smart App Control overview says a validly signed app runs when the service has no prediction for it. All five executables in v0.7.2 carry a valid signature from CN=Robert Futch (read 25 November 2026), so the unsigned-build warning of 8 October no longer applies."]),
 ]
 
