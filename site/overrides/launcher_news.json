@@ -1,6 +1,6 @@
 {
-  "title": "Galaxy One starts Saturday",
-  "date": "2026-11-24",
-  "text": "The first regular galaxy is open to join now and starts Saturday 28 November at noon Mountain time (19:00 UTC), with 2-hour turns. Everyone who joins before then starts on the same turn.",
-  "image": "images/News1.png"
+  "title": "v0.8: scans and wormholes work in multiplayer",
+  "date": "2026-11-25",
+  "text": "Scans now last into the next turn, and ships travel through connected wormholes. Update to v0.8.0 from the launcher so your scans work: an older launcher still plays, but its scans are undone. Galaxy One starts Saturday 28 November at noon Mountain time (19:00 UTC), and everyone who joins before then starts on the same turn.",
+  "image": "images/News_wormhole.png"
 }

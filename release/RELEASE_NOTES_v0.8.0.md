@@ -68,7 +68,7 @@ anyway**. On Windows 11 there is no need to turn off Smart App Control.
 
 ## Verifying the download
 
-    SHA-256  [filled in after the build]
+    SHA-256  7b809ff388841d8d0288c6eece2bc3828b831a4e3fda11b0cd4939897d553eac
 
     Get-FileHash CosmicSupremacy-Resurgence-v0.8.0.zip -Algorithm SHA256
 
