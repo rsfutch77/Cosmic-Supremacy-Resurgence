@@ -1824,6 +1824,11 @@ system scan in the client lists that sun's planets and the ships near it from
 its own copy, and keeping them is what makes it instant. A modified client can
 read every rival ship's position.
 
+The replay screen does not apply that sight, so a replay of a running galaxy
+showed every empire's ships and systems (Robert, 26 November 2026). The
+replay opens only once a galaxy has ended (`turn_store.replay_problem`), and
+the served data stays as it is: the gate is enough.
+
 `+0x18` is the local civ's sight, and the client works it out itself on every
 load: `0x542850`, called for the local `Owner` (`0x52A8D0`) from `0x4D10A5` and
 `0x488F1B`, builds a list of eyes, then `0x4DC6D0` sets the byte on ships and
