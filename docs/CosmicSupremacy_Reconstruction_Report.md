@@ -2903,6 +2903,6 @@ with `set_blob_player.py` to answer. Every capture's `waronly` bytes read `01 00
   header bar, buttons, tickboxes and slider. Zoom, center, info and menu buttons are new, drawn
   on the client's blank help button. Labels use the client's wording, and orders a ship cannot
   give are greyed, as in the client. A build still needs a bundled font close to Tahoma, and the
-  icons need sharper versions for phone screens. The scripts that cut the art are not in the
-  repo; the canvas keeps the finished images. Done when a player in the sandbox gives a turn's
+  icons need sharper versions for phone screens. `mobile/build_art.py` cuts every image the
+  canvas uses from the client exe. Done when a player in the sandbox gives a turn's
   orders from a phone.
