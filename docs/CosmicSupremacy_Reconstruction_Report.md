@@ -1027,7 +1027,7 @@ Two things follow:
   missed the same two fields unnoticed (`test_admirals_diplomacy_merge.py`, `test_activity.py`).
   The routine also returns 0 while either of two client flags, `[0x0086F45C]` and the Tutorial's
   `[0x0086F4F8]`, is set; neither is set in a multiplayer client.
-- [ ] **A player's interface settings are lost at every turn.** The merge carries only the vote
+- [x] **A player's interface settings are lost at every turn.** The merge carries only the vote
   byte of the civ's `USSE`, so a setting changed in the client (byte 27 changed while a note was
   written, 22 November 2026) is back as served next turn. Done when the settings bytes are named
   and either carried or shown to be safe to drop. **Fixed** (22 November 2026). `USSE` is the
@@ -3534,6 +3534,9 @@ layout read off the client above held.
 - [ ] **What each admiral rule's fields mean.** The layouts are confirmed (above), but most
   fields are named only by their type. Done when each rule's fields are matched to the editor's
   choices, one choice changed at a time, and any value the merge should bound is bounded.
+  Left for a future milestone (Robert, 25 November 2026): the merge already refuses a
+  rule at another version, cut short or with bytes past its fields, and bounding the
+  values is order legality, which stays open on purpose.
 
 **Measured in one Single Player session on 27 and 28 October 2026
 (`server/tests/fixtures/diplomacy`):** diplomacy on `control_fork_played.dat` written with
