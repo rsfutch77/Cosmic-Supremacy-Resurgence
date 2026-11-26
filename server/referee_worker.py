@@ -34,6 +34,10 @@ own backoff, and its own operator page, `operator_<galaxy>.html`, with
 7.  Between deadlines, every `SCAN_POLL` seconds, a scan a player's client
     sent online is run in the client and answered (`scan.py`). `--once` answers
     none.
+8.  During a galaxy's opening turn, every `referee.SEAT_EVERY` seconds, the
+    joins waiting on it are seated straight into that turn
+    (`referee.seat_early`), so players set up their first turn before the
+    galaxy starts.
 
 The game client needs a desktop session, so the scheduled task
 (`referee_worker_task.xml`) triggers at logon, not at boot; an unattended reboot
@@ -710,6 +714,28 @@ class Watched:
         self.failure_page_at = None
         self.said_closed = False
         self.turn = None
+        self.seated_at = None
+
+
+def seat_early(g, now: float, log=print) -> None:
+    """Seat the joins waiting on `g`'s opening turn, at most every
+    `referee.SEAT_EVERY` seconds. A failure is logged and is not a failed
+    turn; the boundary still seats whoever is left."""
+    if g.seated_at is not None and now - g.seated_at < referee.SEAT_EVERY:
+        return
+    g.seated_at = now
+    try:
+        seated = referee.seat_early(g.store, log=log)
+    except (Exception, SystemExit) as exc:                  # noqa: BLE001
+        log(f'  worker: {g.tag}early seating failed ({type(exc).__name__}: '
+            f'{exc}); the boundary seats whoever is left')
+        log(traceback.format_exc())
+        return
+    if seated:
+        write_operator_page(g.store, g.page, f'after seating '
+                            f'{len(seated)} early on turn {g.turn}',
+                            gid=g.gid, log=log)
+        public_listing.publish(g.store, log=log)
 
 
 IDLE, WAITING, CLOSED_TURN, FAILED = 'idle', 'waiting', 'closed', 'failed'
@@ -742,10 +768,14 @@ def tend(g, save_dir=None, grace: float = GRACE, poll: float = POLL,
             g.guard.write(turn=g.turn, seconds_left=round(left, 1),
                           failures=g.fails)
         if left > 0:
+            gap = min(poll_gap(left, poll), left)
+            if referee.seats_early(state):
+                seat_early(g, clock(), log=log)
+                gap = min(gap, referee.SEAT_EVERY)
             if once:
                 log(f'  worker: {g.tag}turn {g.turn} has {left:.0f}s left, '
                     f'nothing to do')
-            return min(poll_gap(left, poll), left), IDLE
+            return gap, IDLE
         if -left < grace:
             return min(poll, grace + left), WAITING
 

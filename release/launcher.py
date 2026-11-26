@@ -1967,7 +1967,8 @@ def galaxy_to_play(data_dir: str):
 
 
 # A join is a request. The worker applies it at a turn boundary, so a player
-# who clicks Join during turn N plays from turn N+1.
+# who clicks Join during turn N plays from turn N+1. On a starting galaxy the
+# worker seats it within minutes, into turn 0.
 def join_request(name: str, uid, build: str, turn=None, now=None) -> dict:
     """The request a Join writes, read by the worker at the next turn boundary.
 
@@ -2484,7 +2485,10 @@ def _you_text(g, view):
         return "seat reclaimed"
     if pending_join(g, view.recs):
         # A request lodged before the galaxy ended is never going to land.
-        return "galaxy ended" if g.status == CLOSED else "joining next turn"
+        if g.status == CLOSED:
+            return "galaxy ended"
+        # The referee seats a join on a starting galaxy within minutes.
+        return "joining shortly" if starting(g) else "joining next turn"
     return ""
 
 
@@ -4233,6 +4237,11 @@ class Launcher:
                 text = ("You are not in a galaxy yet. Press View on one to "
                         "read what you would be joining, and join from "
                         "there.")
+            elif any(awaiting_answer(g, view.recs) and starting(g)
+                     for g in rows):
+                text = ("Your empire appears within a few minutes, before "
+                        "the galaxy starts, so you can set up your first "
+                        "turn.")
             elif any(awaiting_answer(g, view.recs) for g in rows):
                 text = ("Your join request is pending until the next turn.")
         # Called once a second; the view repaints only on a change.
@@ -4438,9 +4447,15 @@ class Launcher:
         heading = notice.title(body) if notice else "Before you join the beta"
         when = f"turn {g.turn + 1}" if g.turn is not None else "its first turn"
         who = f" as {civ}" if civ else ""
-        lead = (f"You are about to join {g.name or g.id}{who}. New players "
-                "arrive at a turn boundary, your empire appears at "
-                f"{when}.")
+        if starting(g):
+            lead = (f"You are about to join {g.name or g.id}{who}. It has not "
+                    "started yet, so your empire appears within a few "
+                    "minutes and you can set up your first turn before it "
+                    "starts.")
+        else:
+            lead = (f"You are about to join {g.name or g.id}{who}. New "
+                    "players arrive at a turn boundary, your empire appears "
+                    f"at {when}.")
         return self.view.beta_notice(heading, lead, body)
 
     def on_join(self, g):

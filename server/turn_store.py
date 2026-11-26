@@ -21,6 +21,7 @@ The directory layout:
 
     state.json              turn number, deadline, turn length, the civ roster
     turns/0007.b64          the authoritative state for turn 7
+    copies/0000/1.b64       turn 0 as it was before an early seating replaced it
     submissions/0007/X.b64  what civ X handed back for turn 7
     notes/0007/X.txt        what the referee refused from civ X's turn 7
     archive/0007.json       what the referee did, once it has done it
@@ -94,6 +95,11 @@ VIEWS_KEY = 'views'
 # news withheld. Longer than NAME_LIMIT, so no civ can hold the name.
 PUBLIC_VIEW = 'public-without-news'
 WARN_KEY, RECLAIM_KEY = 'warn_after_misses', 'reclaim_after_misses'
+
+# How many copies of a turn an early seating replaced, as `{"<turn>": n}`.
+# Copy 1 is the turn as first published; the current copy is not counted.
+# Kept for the referee only, never served.
+COPIES_KEY = 'copies'
 
 # How a joiner's homeworld is placed, one of `inject_civ.PLACEMENTS`; absent is
 # `farthest`. Read by `joins.apply`, written by `galaxy_tool.py placement`.
@@ -727,6 +733,45 @@ class TurnStore:
                             str(int(turn)): sorted(views)}
         self._put_state(state)
         os.makedirs(self.submission_dir(turn), exist_ok=True)
+
+    def copy_path(self, turn: int, n: int) -> str:
+        return os.path.join(self.root, 'copies', f'{turn:04d}', f'{n}.b64')
+
+    def reseat(self, turn: int, blob: bytes, views: dict = None) -> int:
+        """The current turn again, holding civs an early seating added.
+
+        The copy it replaces is kept (`earlier_copies`) and the deadline, the
+        roster and the submissions stay. `views` replaces this turn's views.
+        Returns the number the replaced copy is kept under.
+        """
+        import canonical
+        state = self.state()
+        if state.get('turn') != int(turn):
+            raise ValueError(f'turn {turn} is not the current turn, '
+                             f'{state.get("turn")}')
+        copies = dict(state.get(COPIES_KEY) or {})
+        n = int(copies.get(str(int(turn)), 0)) + 1
+        _atomic_write(self.copy_path(turn, n),
+                      sp.encode_save(self.turn_blob(turn)))
+        views = views or {}
+        for civ, view in views.items():
+            _atomic_write(self.view_path(civ, turn), sp.encode_save(view))
+        _atomic_write(self.turn_path(turn), sp.encode_save(blob))
+        copies[str(int(turn))] = n
+        state = self.state()
+        state[COPIES_KEY] = copies
+        state['hash'] = canonical.canonical_hash(blob)
+        state[VIEWS_KEY] = {**(state.get(VIEWS_KEY) or {}),
+                            str(int(turn)): sorted(views)}
+        self._put_state(state)
+        return n
+
+    def earlier_copies(self, turn: int) -> list:
+        """`[(n, blob)]`, the copies of `turn` an early seating replaced,
+        oldest first."""
+        count = int((self.state().get(COPIES_KEY) or {}).get(str(int(turn)), 0))
+        return [(n, sp.load_any(self.copy_path(turn, n)))
+                for n in range(1, count + 1)]
 
     def kept_view(self, civ: str, turn: int):
         """`civ`'s own view of any published turn, or None (`replay_problem`)."""

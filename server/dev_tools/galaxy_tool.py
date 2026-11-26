@@ -5,6 +5,7 @@ galaxy_tool.py: the operator ends a galaxy and starts the next one
     python galaxy_tool.py firebase://cs-resurgence reopen sandbox
     python galaxy_tool.py firebase://cs-resurgence min-build sandbox 0.4.0
     python galaxy_tool.py firebase://cs-resurgence placement sandbox random
+    python galaxy_tool.py firebase://cs-resurgence seat-now galaxy-one --dry-run
     python galaxy_tool.py firebase://cs-resurgence start season2 --name "Season Two" \\
         --generate fresh.b64 --player Alice --player Bob --replaces sandbox \\
         --min-build 0.2.0
@@ -24,6 +25,10 @@ refuses to lower one, and reads the value back after the write.
 
 `placement` sets how the referee places a joiner's homeworld, `farthest` or
 `random` (`joins.placement_of`), and reads the value back after the write.
+
+`seat-now` seats the joins waiting on a galaxy's opening turn into that turn
+(`referee.seat_early`), which the referee worker does on its own every
+minute, and reads the roster back after the write.
 
 `start` registers a galaxy and publishes its first turn with the roster, from
 one of:
@@ -60,6 +65,7 @@ for _d in (SERVER, HERE, os.path.join(os.path.dirname(SERVER), 'client',
 import abandonment                                              # noqa: E402
 import galaxy_directory as gd                                   # noqa: E402
 import inject_civ as icv                                        # noqa: E402
+import joins                                                    # noqa: E402
 import set_blob_player as sbp                                   # noqa: E402
 import turn_store                                               # noqa: E402
 
@@ -209,6 +215,47 @@ def set_placement(directory, gid: str, placement: str, dry_run: bool = False,
     print(f'{gid} ({g.name}) now places joiners {placement}, from '
           f'{was or icv.FARTHEST}', file=out)
     return {'gid': gid, 'dry_run': False, 'was': was}
+
+
+def seat_now(directory, gid: str, dry_run: bool = False, out=None) -> list:
+    """Seat the joins waiting on a galaxy's opening turn into that turn, as
+    the referee worker does every `referee.SEAT_EVERY` seconds. Returns the
+    granted outcomes."""
+    import referee
+    out = out or sys.stdout
+    g = row(directory, gid)
+    store = directory.store(gid)
+    state = store.state()
+    if not referee.seats_early(state):
+        raise Refused(f'{gid} is {g.status} on turn {state.get("turn")}; joins '
+                      f'are seated early only on turn {referee.OPENING_TURN} '
+                      f'of an open galaxy, more than '
+                      f'{referee.SEAT_MARGIN:.0f}s before its deadline')
+    waiting = joins.pending(store, log=lambda *a: None)
+    print(f'{gid} ({g.name}): {len(waiting)} join request(s) waiting, roster '
+          f'{state.get("civs") or []}', file=out)
+
+    def log(*parts):
+        print(*parts, file=out)
+
+    seated = referee.seat_early(store, log=log, dry_run=dry_run)
+    if not seated:
+        print('  nobody seated', file=out)
+        return seated
+    for o in seated:
+        print(f'  {"would seat" if dry_run else "seated"} {o["name"]} on '
+              f'planet #{o["planet"]} in {o["system"]}', file=out)
+    if not dry_run:
+        state = store.state()
+        missing = [o['name'] for o in seated
+                   if o['name'] not in (state.get('civs') or [])]
+        if missing:
+            raise Refused(f'{missing} were seated and are not on the roster '
+                          f'read back')
+        copies = len(referee.earlier_copies(store, state['turn']))
+        print(f'  roster {state["civs"]}, {copies} earlier copy(ies) of turn '
+              f'{state["turn"]} kept', file=out)
+    return seated
 
 
 def first_blob(players, blob_path: str = None, generate: str = None,
@@ -367,6 +414,10 @@ def main(argv=None, out=None) -> int:
     p.add_argument('galaxy')
     p.add_argument('placement', choices=icv.PLACEMENTS)
     p.add_argument('--dry-run', action='store_true')
+    n = sub.add_parser('seat-now', help='seat the joins waiting on an opening '
+                                        'turn into it')
+    n.add_argument('galaxy')
+    n.add_argument('--dry-run', action='store_true')
     s = sub.add_parser('start', help='register a galaxy and publish turn one')
     s.add_argument('galaxy')
     s.add_argument('--name', help='what the Galaxies page calls it')
@@ -407,6 +458,9 @@ def main(argv=None, out=None) -> int:
         if a.cmd == 'placement':
             set_placement(directory, a.galaxy, a.placement,
                           dry_run=a.dry_run, out=out)
+            return 0
+        if a.cmd == 'seat-now':
+            seat_now(directory, a.galaxy, dry_run=a.dry_run, out=out)
             return 0
         start(directory, a.galaxy, a.name, a.player, blob_path=a.blob,
               generate=a.generate, turn_seconds=a.turn_seconds, warn=a.warn,

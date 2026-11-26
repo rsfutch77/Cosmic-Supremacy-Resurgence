@@ -5147,7 +5147,8 @@ def _ship_crew_index(blob):
     return out
 
 
-def merge(blob, submissions, log=print, notes=None, arms=None, scans=None):
+def merge(blob, submissions, log=print, notes=None, arms=None, scans=None,
+          served=None):
     """submissions: [(civ_name, submitted_blob)]. Returns the merged blob.
 
     `notes` is an optional `{civ: [reason]}` that every refusal is recorded in
@@ -5156,26 +5157,31 @@ def merge(blob, submissions, log=print, notes=None, arms=None, scans=None):
     optional `{civ: {coat-of-arms id}}` of the uploads each player may choose;
     without it only no arms is carried. `scans` is an optional `{civ: count}`
     of the reports the referee answered each civ this turn.
+
+    `served` is the copy of the turn these submissions were served, when it is
+    not `blob`: an earlier copy of an opening turn that has since seated more
+    civs. The submissions are judged against it and their orders land in
+    `blob`.
     """
-    served_ships = ship_index(blob)
-    served_members = {m: f['owner'] for f in fleet_index(blob).values()
+    served = blob if served is None else served
+    served_ships = ship_index(served)
+    served_members = {m: f['owner'] for f in fleet_index(served).values()
                       for m, _s, _v in f['members']}
-    ship_design_of = ship_designs(blob)
-    served_modules = design_modules(blob)
-    order_places, order_owners = planet_places(blob)
-    served_planets = planet_index(blob)
-    served_crews = _ship_crew_index(blob)
-    served_designs = design_index(blob)
+    ship_design_of = ship_designs(served)
+    served_modules = design_modules(served)
+    order_places, order_owners = planet_places(served)
+    served_planets = planet_index(served)
+    served_crews = _ship_crew_index(served)
+    served_designs = design_index(served)
     # Research as it was served, like the three indexes above: every
     # submission is compared against the state served, not the merged blob.
-    served_research = {o['oid']: research_of(blob, o['oid'])
-                       for o in icv.owner_records(blob)}
-    served_completed = {o['oid']: completed_research(blob, o['oid']) or []
-                        for o in icv.owner_records(blob)}
+    served_research = {o['oid']: research_of(served, o['oid'])
+                       for o in icv.owner_records(served)}
+    served_completed = {o['oid']: completed_research(served, o['oid']) or []
+                        for o in icv.owner_records(served)}
     names = {o['oid']: o['name'] for o in icv.owner_records(blob)}
-    served_treaties = treaties(blob) or {}
-    served_market = market_of(blob)
-    served = blob
+    served_treaties = treaties(served) or {}
+    served_market = market_of(served)
     accepted = dropped = 0
 
     for civ_name, sub in submissions:

@@ -17,7 +17,8 @@ without it; no submission may end the tick. `screen_submission` and
 `merge_orders.merge` do this. They are not a security measure.
 
 `loop` watches a `TurnStore` and resolves each turn when its deadline passes,
-never waiting for a submission.
+never waiting for a submission. During a galaxy's opening turn it also seats
+each waiting join straight into that turn (`seat_early`).
 
 Requirements: `cs_server.py` on port 8888 (the capture arrives over its
 `savegame` endpoint) and the Resurgence client.
@@ -57,6 +58,12 @@ _NO_WINDOW = getattr(subprocess, 'CREATE_NO_WINDOW', 0)
 
 TICK_ATTEMPTS = 3       # fresh loads tried before a tick is refused
 ADVANCE_PAST = 3        # advance_turns.py's exit code past the target
+
+# A join during this turn is seated into it (`seat_early`). The launcher's
+# `starting` reads the same turn.
+OPENING_TURN = 0
+SEAT_MARGIN = 300.0     # seconds before the deadline after which joins wait
+SEAT_EVERY = 60.0       # seconds between looks for joins to seat early
 
 
 def turn_of(blob: bytes) -> int:
@@ -154,7 +161,7 @@ def replays(recs) -> list:
 
 
 def apply_orders(blob: bytes, submissions, log=print, notes=None,
-                 arms=None, scans=None) -> bytes:
+                 arms=None, scans=None, served=None) -> bytes:
     """Take each player's orders out of the state they returned.
 
     submissions: [(civ_name, submitted_blob)]. Only changes on objects the
@@ -165,6 +172,9 @@ def apply_orders(blob: bytes, submissions, log=print, notes=None,
     `arms` is an optional `{civ: {coat-of-arms id}}` each civ may choose from.
     `scans` is the turn's delivered scans; their reports are added after the
     merge, never taken from a submission.
+    `served` is an optional `{civ: blob}` naming the earlier copy of an opening
+    turn a civ was served (`earlier_served`). A civ it leaves out was served
+    `blob`. Each submission is judged against its own copy.
 
     Each submitting civ is marked active for the tick, so its Inactivity
     penalty does not grow.
@@ -174,11 +184,21 @@ def apply_orders(blob: bytes, submissions, log=print, notes=None,
     """
     scans = list(scans or [])
     if submissions:
-        submissions = [(civ, _unfogged(blob, civ, sub, log))
-                       for civ, sub in submissions]
-        blob = merge_orders.merge(blob, submissions, log=log, notes=notes,
-                                  arms=arms, scans=scan_counts(scans))
-        blob = with_scan_reports(blob, scans, log=log)
+        served = served or {}
+        groups = []
+        for civ, sub in submissions:
+            copy = served.get(civ, blob)
+            group = next((g for g in groups if g[0] is copy), None)
+            if group is None:
+                group = (copy, [])
+                groups.append(group)
+            group[1].append((civ, _unfogged(copy, civ, sub, log)))
+        merged = blob
+        for copy, subs in groups:
+            merged = merge_orders.merge(merged, subs, log=log, notes=notes,
+                                        arms=arms, scans=scan_counts(scans),
+                                        served=copy)
+        blob = with_scan_reports(merged, scans, log=log)
         blob = activity.mark_present(blob, [civ for civ, _sub in submissions],
                                      log=log)
     else:
@@ -290,6 +310,27 @@ def screen_submission(blob: bytes, civ: str, sub: bytes, turn: int,
         return False, ('submission DROPPED, it is not this galaxy: its civs, '
                        'systems or planets are not the ones that were served')
     return True, ''
+
+
+def earlier_copies(store, turn: int) -> list:
+    """`[(n, blob)]`, the copies of `turn` an early seating replaced, oldest
+    first (`seat_early`). Empty for a store that keeps none."""
+    read = getattr(store, 'earlier_copies', None)
+    return list(read(turn)) if read is not None else []
+
+
+def earlier_served(copies, civ: str, sub: bytes, turn: int, ids=None):
+    """`(n, copy)` for the earlier copy of the turn `sub` is a save of, or
+    `(None, None)`. `copies` is `earlier_copies`; the newest is tried first.
+    `ids` caches each copy's `galaxy_id` by n."""
+    ids = {} if ids is None else ids
+    for n, copy in reversed(copies):
+        if n not in ids:
+            ids[n] = galaxy_id(copy)
+        ok, _why = screen_submission(copy, civ, sub, turn, served_id=ids[n])
+        if ok:
+            return n, copy
+    return None, None
 
 
 def read_submissions(store: TurnStore, turn: int, roster, log=print,
@@ -455,6 +496,60 @@ def tick(blob: bytes, turns: int = 1, secs: int = 10, work_dir=None,
                      + (f", the last captured {got}" if got is not None else ""))
 
 
+def seats_early(state, now: float = None) -> bool:
+    """Whether a join is seated straight into the current turn: an open
+    galaxy on its opening turn with more than `SEAT_MARGIN` seconds left."""
+    state = state or {}
+    now = time.time() if now is None else now
+    return (turn_store.status_of(state) == turn_store.OPEN
+            and state.get('turn') == OPENING_TURN
+            and float(state.get('deadline') or 0) - now > SEAT_MARGIN)
+
+
+def seat_early(store: TurnStore, log=print, dry_run: bool = False,
+               placement=None) -> list:
+    """Seat the joins waiting on an opening turn into that turn, so the
+    players set it up before the galaxy starts. Returns the granted outcomes.
+
+    The turn is republished with the new civs (`reseat`), which keeps the copy
+    it replaces, and a submission sent against that copy is judged against it
+    at the tick. The deadline and the submissions stay. A request whose name
+    is refused, or that has no room, is left for the boundary to answer.
+    `dry_run` writes nothing.
+    """
+    state = store.state()
+    if not seats_early(state):
+        return []
+    waiting = joins.pending(store, log=lambda *a: None)
+    if not waiting:
+        return []
+    turn = int(state['turn'])
+    blob = store.turn_blob(turn)
+    roster = list(state.get('civs') or [])
+    # A name the boundary would refuse is left to it, so it is answered once.
+    waiting = [r for r in waiting
+               if not joins.refusal(str(r.get('name') or '').strip(), roster,
+                                    blob)]
+    if not waiting:
+        return []
+    seated, outcomes = joins.apply(store, turn, turn, blob, log=log,
+                                   placement=placement, waiting=waiting)
+    granted = [o for o in outcomes if o['outcome'] == joins.GRANTED]
+    if len(granted) < len(outcomes):
+        log(f"  referee: {len(outcomes) - len(granted)} request(s) left for "
+            f"the turn {turn} boundary to answer")
+    if not granted or dry_run:
+        return granted
+    held = views(seated, [o['name'] for o in icv.owner_records(seated)],
+                 log=log)
+    n = store.reseat(turn, seated, views=published_views(seated, held))
+    joins.commit(store, turn, turn, granted, log=log)
+    log(f"  referee: seated {', '.join(o['name'] for o in granted)} in turn "
+        f"{turn}, the copy it replaced kept as copy {n}, canonical "
+        f"{canonical.canonical_hash(seated)[:16]}")
+    return granted
+
+
 def resolve_turn(store: TurnStore, save_dir=None, log=print) -> int:
     """Close the current turn and publish the next one. Returns the new turn.
 
@@ -477,11 +572,21 @@ def resolve_turn(store: TurnStore, save_dir=None, log=print) -> int:
 
     taken, ignored = [], []
     served_id = galaxy_id(blob) if submitted else None
+    # A submission sent against a copy of an opening turn that a later seating
+    # replaced is judged against that copy.
+    copies = earlier_copies(store, turn) if submitted else []
+    served, served_n, copy_ids = {}, {}, {}
     for civ, sub in submitted.items():
         if roster and civ not in roster:
             ignored.append(civ)
             continue
         ok, why = screen_submission(blob, civ, sub, turn, served_id=served_id)
+        if not ok and copies:
+            n, copy = earlier_served(copies, civ, sub, turn, ids=copy_ids)
+            if copy is not None:
+                ok, why = True, ''
+                served[civ], served_n[civ] = copy, n
+                log(f"  referee: {civ} was served copy {n} of turn {turn}")
         if not ok:
             # Only the sender is told; the reason is archived for the operator.
             refused[civ] = why
@@ -502,7 +607,7 @@ def resolve_turn(store: TurnStore, save_dir=None, log=print) -> int:
     if scans:
         log(f"  referee: {len(scans)} scan(s) delivered this turn")
     merged = apply_orders(blob, taken, log=log, notes=notes, arms=arms,
-                          scans=scans)
+                          scans=scans, served=served)
 
     # Refusal notes are written before the tick, appended to any note the turn
     # already holds (such as a welcome note).
@@ -564,6 +669,10 @@ def resolve_turn(store: TurnStore, save_dir=None, log=print) -> int:
         "hash_out": canonical.canonical_hash(nxt),
         "hash_submissions": {civ: canonical.canonical_hash(s)
                              for civ, s in taken},
+        # The earlier copy of this turn each of those civs was served, when
+        # an early seating replaced it.
+        "served_copies": {civ: n for civ, n in served_n.items()
+                          if civ in dict(taken)},
         # The coats of arms each civ could choose, for `verify_turn`.
         "arms": arms,
         # The scans delivered and replayed, for `verify_turn`.
@@ -634,7 +743,16 @@ def verify_turn(store: TurnStore, turn: int, recompute: bool = True,
         log(f"  verify: turn {turn}'s delivered scans are not the ones that "
             f"were replayed; a rerun would not be comparable")
         return False
-    merged = apply_orders(blob, taken, log=log, arms=arms, scans=scans)
+    copies = dict(earlier_copies(store, turn))
+    served = {}
+    for civ, n in (rec.get("served_copies") or {}).items():
+        if n not in copies:
+            log(f"  verify: copy {n} of turn {turn}, which {civ} was served, "
+                f"is missing")
+            return False
+        served[civ] = copies[n]
+    merged = apply_orders(blob, taken, log=log, arms=arms, scans=scans,
+                          served=served)
     again = tick(merged, turns=1, save_dir=save_dir, log=log,
                  scans=replays(scans))
     got = canonical.canonical_hash(again, version)
@@ -675,9 +793,13 @@ def loop(store: TurnStore, poll: float = 5.0, once: bool = False,
     `grace` is how many seconds after the deadline to keep accepting
     submissions, for launchers still capturing and uploading.
     """
+    seated_at = None
     while True:
         left = store.seconds_left()
         if left > 0:
+            if seated_at is None or time.time() - seated_at >= SEAT_EVERY:
+                seated_at = time.time()
+                seat_early(store, log=log)
             if once:
                 log(f"  referee: turn {store.current()[0]} has "
                     f"{left:.0f}s left, nothing to do")
