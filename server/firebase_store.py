@@ -540,6 +540,54 @@ class FirebaseTurnStore:
         # Kept as long as submissions, so `referee --verify` replays them.
         self.prune_scans(int(turn) - SUBMISSION_TURNS_KEPT + 1)
 
+    def copy_object(self, turn: int, n: int) -> str:
+        return self._object('copies', f'{turn:04d}', f'{n}.b64')
+
+    def reseat(self, turn: int, blob: bytes, views: dict = None) -> int:
+        """The current turn again, holding civs an early seating added
+        (`turn_store.TurnStore.reseat`). Returns the number the replaced copy
+        is kept under."""
+        import canonical
+        snap = self.doc.get()
+        doc = (snap.to_dict() or {}) if snap.exists else {}
+        if doc.get('turn') != int(turn):
+            raise ValueError(f'turn {turn} is not the current turn, '
+                             f'{doc.get("turn")}')
+        key = str(int(turn))
+        n = int((doc.get(turn_store.COPIES_KEY) or {}).get(key, 0)) + 1
+        old = self._get(self.turn_object(turn))
+        if old is None:
+            raise FileNotFoundError(f'no turn {turn} in {self.galaxy}')
+        self._put(self.copy_object(turn, n), old, 'text/plain')
+        views = views or {}
+        for civ, view in views.items():
+            self._put(self.view_object(civ, turn), sp.encode_save(view),
+                      'text/plain')
+        self._put(self.turn_object(turn), sp.encode_save(blob), 'text/plain')
+        # Nested maps merge entry by entry, so other turns' entries stay.
+        self.doc.set({
+            'hash': canonical.canonical_hash(blob),
+            turn_store.COPIES_KEY: {key: n},
+            turn_store.VIEWS_KEY: {key: sorted(views)},
+        }, merge=True)
+        return n
+
+    def earlier_copies(self, turn: int) -> list:
+        """`[(n, blob)]`, the copies of `turn` an early seating replaced,
+        oldest first."""
+        snap = self.doc.get()
+        doc = (snap.to_dict() or {}) if snap.exists else {}
+        count = int((doc.get(turn_store.COPIES_KEY) or {})
+                    .get(str(int(turn)), 0))
+        out = []
+        for n in range(1, count + 1):
+            data = self._get(self.copy_object(turn, n))
+            if data is None:
+                raise FileNotFoundError(f'copy {n} of turn {turn} is missing '
+                                        f'from {self.galaxy}')
+            out.append((n, sp.decode_save(data)))
+        return out
+
     def submit(self, civ: str, turn: int, blob: bytes) -> str:
         """Hand a player's state back. A later submission replaces an earlier
         one. Raises `GalaxyClosed` on a closed galaxy. The relay calls
