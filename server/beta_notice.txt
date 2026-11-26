@@ -4,6 +4,8 @@ Before you join the beta
 - Please don't cheat on purpose, and treat other players with respect:
 https://cosmicresurgence.com/support_guidelines.php.html
 - If you miss a bunch of days, your empire may be removed
+- How a multiplayer turn works:
+https://cosmicresurgence.com/support_turns.php.html
 - The galaxy may be restarted at any time while we fix bugs
 - There may be game breaking bugs, submit them here:
 https://github.com/rsfutch77/Cosmic-Supremacy-Resurgence

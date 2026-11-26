@@ -82,6 +82,9 @@ SET_PRODUCTION = 0x004F8290
 SCAN_COUNT = 0x0053B8F0
 USE_SCANS  = 0x0054E840
 SCAN_VEC_SIZE = 0x18              # proxy, ..., first +0xC, last +0x10, end +0x14
+# The scan button's own routine, __cdecl(Vec* targets, int type), as the local
+# player. Offline it runs UseScans, posts the news and runs the sight pass.
+DO_SCAN    = 0x00576D40
 
 # Declaring war the way the declare-war button does (0x00442A70): a Treaty
 # proposal of kind 1, applied by the engine. The apply copies it into a
@@ -685,6 +688,32 @@ class Remote:
                               CALL_EAX + ADD_ESP_4 + RET_4, "free a UseScans buffer")
         self.free(block)
         return made
+
+    def do_scan(self, scan_type, target_allocs):
+        """Scan as the scan button does, as the local player.
+
+        Runs `DO_SCAN`, which takes the scan's online branch only on a client
+        that is online. The reports land on the local player's list.
+        """
+        n = len(target_allocs)
+        if not n:
+            return
+        block = self.alloc(0x28 + 4 * n)
+        targets, proxy, arr = block, block + 0x20, block + 0x28
+        vec = bytearray(SCAN_VEC_SIZE)
+        struct.pack_into("<I", vec, 0, proxy)
+        struct.pack_into("<III", vec, 0xC, arr, arr + 4 * n, arr + 4 * n)
+        self.write(targets, bytes(vec))
+        self.write(proxy, struct.pack("<I", targets))
+        self.write(arr, struct.pack(f"<{n}I", *target_allocs))
+        code = (push_imm(scan_type) +
+                push_imm(targets) +
+                mov_eax_imm(DO_SCAN) +
+                CALL_EAX +
+                ADD_ESP_8 +
+                RET_4)
+        self.run_stub(code, f"scan button: {n} scan(s) of type {scan_type}")
+        self.free(block)
 
     def design_min_crew(self, design_tag):
         """ShipDesign:76: the minimum crew a design needs to function."""

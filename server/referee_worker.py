@@ -4,13 +4,24 @@ referee_worker.py: the referee as something that survives a reboot
     python referee_worker.py --store ..\\galaxies\\sandbox
     python referee_worker.py --store ..\\galaxies\\sandbox --once
     python referee_worker.py --store <spec> --status
+    python referee_worker.py --store "firebase://cs-resurgence/*"
+    python referee_worker.py --store <spec> --store <spec>
 
 Wraps `referee`'s turn loop for unattended running; turns are still closed by
 `referee.resolve_turn`.
 
+One worker can referee several galaxies: `--store` repeated, or a `*` in place
+of the galaxy, which is every galaxy in that Firebase project (or every galaxy
+folder the pattern matches) and is listed again every `POLL_CEILING` seconds,
+so a new galaxy is picked up without a restart. The galaxies share the one
+client and the one capture port, so their turns close one after another,
+soonest deadline first. Each galaxy has its own mutex and status file, its
+own backoff, and its own operator page, `operator_<galaxy>.html`, with
+`operator.html` an index of them.
+
 1.  An overdue turn is closed at startup.
 2.  One worker per galaxy, enforced by a named mutex taken before anything is
-    read.
+    read. A worker on several galaxies holds one per galaxy.
 3.  The worker starts its own `cs_server.py` on 8888 so it knows where captures
     land, and refuses to start if a server it cannot account for holds the port.
 4.  The machine is asked not to sleep (`SetThreadExecutionState`), and the
@@ -20,6 +31,13 @@ Wraps `referee`'s turn loop for unattended running; turns are still closed by
 6.  `operator_view`'s page is written to `<work-dir>\\operator.html` at startup,
     after every tick and after a failure. `run_worker.ps1 -WriteShortcut` makes
     a shortcut to it.
+7.  Between deadlines, every `SCAN_POLL` seconds, a scan a player's client
+    sent online is run in the client and answered (`scan.py`). `--once` answers
+    none.
+8.  During a galaxy's opening turn, every `referee.SEAT_EVERY` seconds, the
+    joins waiting on it are seated straight into that turn
+    (`referee.seat_early`), so players set up their first turn before the
+    galaxy starts.
 
 The game client needs a desktop session, so the scheduled task
 (`referee_worker_task.xml`) triggers at logon, not at boot; an unattended reboot
@@ -27,6 +45,8 @@ needs automatic logon.
 """
 import argparse
 import ctypes
+import glob
+import html
 import json
 import hashlib
 import logging
@@ -76,6 +96,10 @@ GRACE = 20.0
 POLL = 5.0
 POLL_CEILING = 120.0
 POLL_SHARE = 20.0
+
+# Seconds between looks for scans waiting on an answer, while the worker waits
+# for a deadline. A player's client waits on the answer.
+SCAN_POLL = 2.0
 
 # Retry wait after a failed resolution, in seconds: doubles from the first
 # value up to the ceiling.
@@ -673,11 +697,245 @@ def poll_gap(left: float, poll: float = POLL) -> float:
     return max(poll, min(POLL_CEILING, left / POLL_SHARE))
 
 
+class Watched:
+    """One galaxy this worker referees, and what it carries between passes.
+
+    `tag` prefixes its log lines, empty when the worker has one galaxy.
+    `retry_in` is the backoff left after a failure, in seconds. `deadline` is
+    the last one read, for ordering galaxies without another read.
+    """
+
+    def __init__(self, spec, store, guard=None, page=None, gid=None, tag=''):
+        self.spec, self.store, self.guard = spec, store, guard
+        self.page, self.gid, self.tag = page, gid, tag
+        self.deadline = float('inf')
+        self.fails = 0
+        self.retry_in = 0.0
+        self.failure_page_at = None
+        self.said_closed = False
+        self.turn = None
+        self.seated_at = None
+
+
+def seat_early(g, now: float, log=print) -> None:
+    """Seat the joins waiting on `g`'s opening turn, at most every
+    `referee.SEAT_EVERY` seconds. A failure is logged and is not a failed
+    turn; the boundary still seats whoever is left."""
+    if g.seated_at is not None and now - g.seated_at < referee.SEAT_EVERY:
+        return
+    g.seated_at = now
+    try:
+        seated = referee.seat_early(g.store, log=log)
+    except (Exception, SystemExit) as exc:                  # noqa: BLE001
+        log(f'  worker: {g.tag}early seating failed ({type(exc).__name__}: '
+            f'{exc}); the boundary seats whoever is left')
+        log(traceback.format_exc())
+        return
+    if seated:
+        write_operator_page(g.store, g.page, f'after seating '
+                            f'{len(seated)} early on turn {g.turn}',
+                            gid=g.gid, log=log)
+        public_listing.publish(g.store, log=log)
+
+
+IDLE, WAITING, CLOSED_TURN, FAILED = 'idle', 'waiting', 'closed', 'failed'
+
+
+def tend(g, save_dir=None, grace: float = GRACE, poll: float = POLL,
+         once: bool = False, log=print, clock=time.time):
+    """One look at one galaxy: close its turn if it is due.
+
+    Returns `(gap, outcome)`, the seconds until it next wants a look and one
+    of IDLE, WAITING (inside the grace window), CLOSED_TURN or FAILED.
+    """
+    if g.retry_in > 0:
+        return g.retry_in, IDLE
+    try:
+        # One state read per pass serves status, clock and turn.
+        state = g.store.state()
+        if turn_store.status_of(state) == turn_store.CLOSED:
+            if not g.said_closed:
+                log(f'  worker: {g.tag}this galaxy is closed, so no turn will '
+                    f'be ticked. The worker stays up, and will resume if it '
+                    f'is reopened.')
+                g.said_closed = True
+            return max(poll, POLL_CEILING), IDLE
+        g.said_closed = False
+
+        g.deadline = state['deadline']
+        g.turn, left = state['turn'], g.deadline - time.time()
+        if g.guard is not None:
+            g.guard.write(turn=g.turn, seconds_left=round(left, 1),
+                          failures=g.fails)
+        if left > 0:
+            gap = min(poll_gap(left, poll), left)
+            if referee.seats_early(state):
+                seat_early(g, clock(), log=log)
+                gap = min(gap, referee.SEAT_EVERY)
+            if once:
+                log(f'  worker: {g.tag}turn {g.turn} has {left:.0f}s left, '
+                    f'nothing to do')
+            return gap, IDLE
+        if -left < grace:
+            return min(poll, grace + left), WAITING
+
+        turn = g.turn
+        referee.wait_for_client_free(log=log)
+        published = referee.resolve_turn(g.store, save_dir=save_dir, log=log)
+        g.fails = 0
+        g.failure_page_at = None
+        heartbeat(g.store, g.fails, log=log)
+        event = (f'after closing turn {turn}' if published != turn else
+                 f'after holding turn {turn}: no civ holds a planet and '
+                 f'nobody is waiting to join')
+        write_operator_page(g.store, g.page, event, gid=g.gid, log=log)
+        public_listing.publish(g.store, log=log)
+        return 0.0, CLOSED_TURN
+    except (Exception, SystemExit) as exc:                  # noqa: BLE001
+        g.fails += 1
+        wait = min(BACKOFF_FIRST * (2 ** (g.fails - 1)), BACKOFF_MAX)
+        log(f'  worker: {g.tag}turn not closed ({type(exc).__name__}: {exc}); '
+            f'attempt {g.fails}, waiting {wait:.0f}s')
+        log(traceback.format_exc())
+        if g.guard is not None:
+            g.guard.write(failures=g.fails,
+                          last_error=f'{type(exc).__name__}: {exc}',
+                          last_error_at=time.time())
+        heartbeat(g.store, g.fails, log=log)
+        now = clock()
+        if (g.failure_page_at is None
+                or now - g.failure_page_at >= FAILURE_PAGE_EVERY):
+            g.failure_page_at = now
+            write_operator_page(
+                g.store, g.page, f'after failure {g.fails} on turn {g.turn} '
+                f'({type(exc).__name__}: {exc})', gid=g.gid, log=log)
+        g.retry_in = wait
+        return wait, FAILED
+
+
+def answer_scan(store, rec, save_dir=None, log=print):
+    """Run one asked scan in the client and answer it, or refuse it.
+
+    The scan is run on the turn's authoritative blob after the civ's scans
+    delivered earlier this turn, so its stock is what the player's client
+    holds. Nothing is charged here: a scan cancelled while it ran keeps its
+    cancel, and only the tick replays delivered scans.
+    """
+    import scan
+    sid, civ = rec['id'], rec['civ']
+    what = f'{civ}\'s {scan.SCAN_TYPES.get(rec["type"], rec["type"])} scan'
+    try:
+        state = store.state()
+        if turn_store.status_of(state) == turn_store.CLOSED:
+            raise scan.ScanError('the galaxy is closed')
+        if rec['turn'] != state['turn']:
+            raise scan.ScanError(f'turn {rec["turn"]} has closed')
+        earlier = [(r['type'], r['targets'])
+                   for r in store.delivered_scans(rec['turn'], civ)]
+        body = scan.answer(store.turn_blob(rec['turn']), civ, rec['type'],
+                           rec['targets'], earlier, save_dir=save_dir, log=log)
+    except scan.ScanError as exc:
+        store.move_scan(sid, turn_store.SCAN_REFUSED, reason=str(exc))
+        log(f'  worker: refused {what} ({exc})')
+        return
+    except (Exception, SystemExit) as exc:                  # noqa: BLE001
+        log(f'  worker: {what} failed ({type(exc).__name__}: {exc})')
+        log(traceback.format_exc())
+        store.move_scan(sid, turn_store.SCAN_REFUSED)
+        return
+    now = store.move_scan(sid, turn_store.SCAN_ANSWERED, answer=body)
+    state = (now or {}).get('state')
+    log(f'  worker: answered {what}, {len(body):,} bytes'
+        if state == turn_store.SCAN_ANSWERED else
+        f'  worker: {what} was {state} before its answer was ready')
+
+
+def answer_scans(galaxies, save_dir=None, log=print) -> int:
+    """Answer every scan waiting on these galaxies. Returns how many."""
+    done = 0
+    for g in galaxies:
+        try:
+            waiting = g.store.scans_waiting()
+        except Exception as exc:                            # noqa: BLE001
+            log(f'  worker: {g.tag}scans not read ({type(exc).__name__}: '
+                f'{exc})')
+            continue
+        for rec in waiting:
+            answer_scan(g.store, rec, save_dir=save_dir, log=log)
+            done += 1
+    return done
+
+
+def wait_answering(galaxies, gap, save_dir=None, log=print,
+                   sleeper=time.sleep, clock=time.time) -> None:
+    """Wait `gap` seconds, answering scans every `SCAN_POLL` seconds."""
+    end = clock() + gap
+    while True:
+        answer_scans(galaxies, save_dir=save_dir, log=log)
+        left = end - clock()
+        if left <= 0:
+            return
+        sleeper(min(SCAN_POLL, left))
+
+
+def run_many(watch, save_dir=None, grace: float = GRACE, poll: float = POLL,
+             once: bool = False, stop=None, log=print, server=None,
+             sleeper=time.sleep, clock=time.time, scans=False) -> int:
+    """Close each galaxy's turn as its deadline passes, one at a time.
+
+    `watch()` returns the `Watched` galaxies for this pass. The client and the
+    capture port are shared, so turns close one after another, soonest
+    deadline first, and the worker sleeps until the soonest galaxy wants a
+    look. A failure backs off that galaxy alone.
+
+    With `once`, each galaxy is looked at until it is idle, closed a turn or
+    failed, and the result is 1 if any failed.
+    """
+    settled, failed = set(), False
+    while True:
+        if stop is not None and stop():
+            log('  worker: asked to stop')
+            return EXIT_OK
+        started = time.time()
+        if server is not None and not server.alive():
+            log('  worker: the cs_server it started has exited; restarting it')
+            try:
+                server.start()
+                server.wait_until_listening()
+            except (Exception, SystemExit) as exc:          # noqa: BLE001
+                log(f'  worker: the cs_server did not restart '
+                    f'({type(exc).__name__}: {exc}); waiting '
+                    f'{BACKOFF_FIRST:.0f}s')
+                sleeper(BACKOFF_FIRST)
+                continue
+        galaxies = [g for g in watch() if g.spec not in settled]
+        gaps = []
+        for g in galaxies:
+            gap, outcome = tend(g, save_dir=save_dir, grace=grace, poll=poll,
+                                once=once, log=log, clock=clock)
+            gaps.append(gap)
+            if once and outcome != WAITING:
+                settled.add(g.spec)
+                failed = failed or outcome == FAILED
+        if once and all(g.spec in settled for g in galaxies):
+            return 1 if failed else EXIT_OK
+        gap = min(gaps) if gaps else max(poll, POLL_CEILING)
+        if gap > 0 and scans:
+            wait_answering(galaxies, gap, save_dir=save_dir, log=log,
+                           sleeper=sleeper, clock=clock)
+        elif gap > 0:
+            sleeper(gap)
+        spent = max(gap, time.time() - started)
+        for g in galaxies:
+            g.retry_in = max(0.0, g.retry_in - spent)
+
+
 def run(store, save_dir=None, grace: float = GRACE, poll: float = POLL,
         once: bool = False, stop=None, guard=None, log=print,
         server=None, sleeper=time.sleep, page=None, gid=None,
-        clock=time.time) -> int:
-    """Close each turn as its deadline passes, for as long as the machine is up.
+        clock=time.time, scans=False) -> int:
+    """Close each turn of one galaxy as its deadline passes, for as long as
+    the machine is up.
 
     Like `referee.loop`, but a failed resolution (`SystemExit` included, which
     the referee raises for conditions that clear on their own) is logged,
@@ -687,80 +945,139 @@ def run(store, save_dir=None, grace: float = GRACE, poll: float = POLL,
     after a failure (at most every `FAILURE_PAGE_EVERY` seconds after the
     first), never on an idle pass.
     """
-    fails = 0
-    said_closed = False
-    turn = None
-    failure_page_at = None
-    while True:
-        if stop is not None and stop():
-            log('  worker: asked to stop')
-            return EXIT_OK
+    one = [Watched(getattr(store, 'root', 'galaxy'), store, guard=guard,
+                   page=page, gid=gid)]
+    return run_many(lambda: one, save_dir=save_dir, grace=grace, poll=poll,
+                    once=once, stop=stop, log=log, server=server,
+                    sleeper=sleeper, clock=clock, scans=scans)
+
+
+def expand(specs) -> list:
+    """Each spec, with a `*` galaxy replaced by the galaxies it matches."""
+    out = []
+    for spec in specs:
+        if spec.startswith('firebase://') and _galaxy_part(spec) == '*':
+            import firebase_store
+            out.extend(firebase_store.galaxy_specs(spec))
+        elif '*' in spec and '://' not in spec:
+            out.extend(sorted(d for d in glob.glob(spec) if os.path.isfile(
+                os.path.join(d, 'state.json'))))
+        else:
+            out.append(spec)
+    seen = set()
+    return [s for s in out if not (s in seen or seen.add(s))]
+
+
+def _galaxy_part(spec: str) -> str:
+    path = spec.split('://', 1)[1].split('?', 1)[0]
+    parts = [p for p in path.split('/') if p]
+    return parts[1] if len(parts) > 1 else ''
+
+
+def is_pattern(specs) -> bool:
+    """Whether `specs` can name more than one galaxy."""
+    return len(specs) > 1 or any('*' in s for s in specs)
+
+
+class Roster:
+    """The galaxies a many-galaxy worker referees, re-listed as they change.
+
+    `*` specs are listed again at most every `POLL_CEILING` seconds, so a new
+    galaxy is picked up without a restart. Each galaxy gets its own guard, so
+    a galaxy another worker holds is left to it, and its own operator page,
+    with `operator.html` an index of them.
+    """
+
+    def __init__(self, specs, work_dir=WORK_DIR, pages=True, log=print,
+                 open_store=None, listing=expand, guard_class=None,
+                 clock=time.time):
+        self.specs, self.work_dir, self.pages = list(specs), work_dir, pages
+        self.log, self.listing, self.clock = log, listing, clock
+        self.open_store = open_store or turn_store.open_store
+        self.guard_class = guard_class or GalaxyGuard
+        self.watched = {}           # spec -> Watched
+        self.refused = set()        # specs another worker holds, said once
+        self.listed_at = None
+        self.server_pid = None      # recorded in each guard, for the next worker
+
+    def __call__(self):
+        now = self.clock()
+        if self.listed_at is None or now - self.listed_at >= POLL_CEILING:
+            self.listed_at = now
+            self.refresh()
+        return sorted(self.watched.values(), key=lambda g: g.deadline)
+
+    def refresh(self):
         try:
-            if server is not None and not server.alive():
-                log('  worker: the cs_server it started has exited; '
-                    'restarting it')
-                server.start()
-                server.wait_until_listening()
-
-            # One state read per pass serves status, clock and turn.
-            state = store.state()
-            if turn_store.status_of(state) == turn_store.CLOSED:
-                if not said_closed:
-                    log('  worker: this galaxy is closed, so no turn will be '
-                        'ticked. The worker stays up, and will resume if it '
-                        'is reopened.')
-                    said_closed = True
-                sleeper(max(poll, POLL_CEILING))
+            specs = self.listing(self.specs)
+        except Exception as exc:                            # noqa: BLE001
+            self.log(f'  worker: could not list galaxies ({type(exc).__name__}:'
+                     f' {exc}); keeping the {len(self.watched)} it has')
+            return
+        changed = False
+        for spec in specs:
+            if spec in self.watched:
                 continue
-            said_closed = False
-
-            turn, left = state['turn'], state['deadline'] - time.time()
-            if guard is not None:
-                guard.write(turn=turn, seconds_left=round(left, 1),
-                            failures=fails)
-            if left > 0:
-                if once:
-                    log(f'  worker: turn {turn} has {left:.0f}s left, '
-                        f'nothing to do')
-                    return EXIT_OK
-                sleeper(min(poll_gap(left, poll), left))
+            gid = galaxy_name(spec)
+            try:
+                store = self.open_store(spec)
+                if not store.exists():
+                    continue
+                guard = self.guard_class(spec, work_dir=self.work_dir)
+                guard.acquire()
+                if self.server_pid:
+                    guard.write(cs_server_pid=self.server_pid)
+            except AnotherWorker as exc:
+                if spec not in self.refused:
+                    self.log(f'  worker: {gid}: {exc}')
+                    self.refused.add(spec)
                 continue
-            if -left < grace:
-                sleeper(min(poll, grace + left))
+            except Exception as exc:                        # noqa: BLE001
+                self.log(f'  worker: {gid}: not opened ({type(exc).__name__}: '
+                         f'{exc}); trying again at the next listing')
                 continue
+            self.refused.discard(spec)
+            page = (os.path.join(self.work_dir, f'operator_{gid}.html')
+                    if self.pages else None)
+            g = Watched(spec, store, guard=guard, page=page, gid=gid,
+                        tag=f'{gid}: ')
+            try:
+                g.deadline = store.state()['deadline']
+            except Exception:                               # noqa: BLE001
+                pass                # read again, and logged, by `tend`
+            self.watched[spec] = g
+            describe(store, spec, log=self.log)
+            write_operator_page(store, page, 'at startup', gid=gid,
+                                log=self.log)
+            changed = True
+        if changed and self.pages:
+            write_index(os.path.join(self.work_dir, OPERATOR_PAGE),
+                        sorted(self.watched.values(), key=lambda g: g.gid),
+                        log=self.log)
 
-            referee.wait_for_client_free(log=log)
-            published = referee.resolve_turn(store, save_dir=save_dir, log=log)
-            fails = 0
-            failure_page_at = None
-            heartbeat(store, fails, log=log)
-            event = (f'after closing turn {turn}' if published != turn else
-                     f'after holding turn {turn}: no civ holds a planet and '
-                     f'nobody is waiting to join')
-            write_operator_page(store, page, event, gid=gid, log=log)
-            public_listing.publish(store, log=log)
-            if once:
-                return EXIT_OK
-        except (Exception, SystemExit) as exc:              # noqa: BLE001
-            fails += 1
-            wait = min(BACKOFF_FIRST * (2 ** (fails - 1)), BACKOFF_MAX)
-            log(f'  worker: turn not closed ({type(exc).__name__}: {exc}); '
-                f'attempt {fails}, waiting {wait:.0f}s')
-            log(traceback.format_exc())
-            if guard is not None:
-                guard.write(failures=fails, last_error=f'{type(exc).__name__}: {exc}',
-                            last_error_at=time.time())
-            heartbeat(store, fails, log=log)
-            now = clock()
-            if (failure_page_at is None
-                    or now - failure_page_at >= FAILURE_PAGE_EVERY):
-                failure_page_at = now
-                write_operator_page(
-                    store, page, f'after failure {fails} on turn {turn} '
-                    f'({type(exc).__name__}: {exc})', gid=gid, log=log)
-            if once:
-                return 1
-            sleeper(wait)
+    def release(self):
+        for g in self.watched.values():
+            if g.guard is not None:
+                g.guard.release()
+
+
+def write_index(path, galaxies, log=print) -> bool:
+    """`operator.html` as a list of each galaxy's own page."""
+    rows = ''.join(
+        f'<li><a href="{html.escape(os.path.basename(g.page))}">'
+        f'{html.escape(g.gid)}</a></li>' for g in galaxies if g.page)
+    text = ('<!doctype html><meta charset="utf-8"><title>Referee</title>'
+            f'<h1>Galaxies this referee ticks</h1><ul>{rows}</ul>')
+    try:
+        os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
+        tmp = f'{path}.{os.getpid()}.tmp'
+        with open(tmp, 'w', encoding='utf-8') as f:
+            f.write(text)
+        os.replace(tmp, path)
+        return True
+    except OSError as exc:
+        log(f'  worker: could not write the index page {path} ({exc})')
+        return False
 
 
 def describe(store, spec: str, log=print) -> None:
@@ -781,10 +1098,11 @@ def describe(store, spec: str, log=print) -> None:
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(
-        description='Run the referee unattended over one galaxy.')
-    ap.add_argument('--store', required=True,
+        description='Run the referee unattended over one galaxy or several.')
+    ap.add_argument('--store', required=True, action='append',
                     help='the galaxy: a directory, a turn_server.py base URL '
-                         'or a firebase:// spec')
+                         'or a firebase:// spec. Repeat it, or put * in place '
+                         'of the galaxy, to referee several')
     ap.add_argument('--data-dir', default=HERE,
                     help='what cs_server.py is given as CS_DATA_DIR; captures '
                          'arrive in its saves subdirectory. Defaults to the '
@@ -826,6 +1144,9 @@ def main(argv=None) -> int:
                     help='say what the worker for this galaxy last wrote '
                          'about itself, and exit')
     a = ap.parse_args(argv)
+    if is_pattern(a.store):
+        return main_many(a)
+    a.store = a.store[0]
 
     guard = GalaxyGuard(a.store, work_dir=a.work_dir)
     if a.status:
@@ -905,7 +1226,7 @@ def main(argv=None) -> int:
 
         return run(store, save_dir=save_dir, grace=a.grace, poll=a.poll,
                    once=a.once, guard=guard, log=log, server=server,
-                   page=page, gid=gid)
+                   page=page, gid=gid, scans=not a.once)
     except KeyboardInterrupt:
         log('  worker: stopped from the console')
         return EXIT_OK
@@ -913,6 +1234,73 @@ def main(argv=None) -> int:
         if server is not None:
             server.stop()
         guard.release()
+        log('  worker: stopped')
+
+
+def main_many(a) -> int:
+    """`main` for a worker given several galaxies or a pattern."""
+    if a.status:
+        for spec in expand(a.store):
+            held = GalaxyGuard(spec, work_dir=a.work_dir).holder()
+            print(json.dumps(held, indent=2) if held else
+                  f'no worker has written a status file for {spec}')
+        return EXIT_OK
+
+    log = make_log(a.log, work_dir=a.work_dir)
+    log('')
+    log(f'  worker: starting, pid {os.getpid()}, logging to {log.path}, '
+        f'refereeing {", ".join(a.store)}')
+    roster = Roster(a.store, work_dir=a.work_dir,
+                    pages=a.operator_page != '', log=log)
+    server = None
+    try:
+        for line in sleep_report(sleep_settings()):
+            log(line)
+        if keep_awake():
+            log('  worker: asked Windows not to sleep while this runs')
+        else:
+            log('  worker: WARNING could not ask Windows to stay awake; the '
+                'idle timer is whatever the power scheme says')
+
+        roster()
+        if not roster.watched:
+            log(f'  worker: no galaxy found at {", ".join(a.store)} that '
+                f'another worker does not already have')
+            if a.once:
+                return EXIT_NO_GALAXY
+        previous = [(g.guard.previous or {}).get('cs_server_pid')
+                    for g in roster.watched.values() if g.guard]
+        save_dir = a.save_dir or os.path.join(os.path.abspath(a.data_dir),
+                                              'saves')
+        if a.no_cs_server:
+            log(f'  worker: not managing a stub server; captures will be '
+                f'collected from {save_dir}')
+        else:
+            try:
+                server = ensure_stub_server(
+                    a.data_dir, port=a.port, adopt=a.adopt_server,
+                    work_dir=a.work_dir, log=log,
+                    left_over=next((p for p in previous if p), None))
+            except ServerRefused as exc:
+                log(f'  worker: {exc}')
+                return EXIT_SERVER
+            if server is not None:
+                save_dir = a.save_dir or server.save_dir
+                roster.server_pid = server.listener_pid
+                for g in roster.watched.values():
+                    g.guard.write(cs_server_pid=server.listener_pid)
+        log(f'  worker: captures are collected from {save_dir}')
+
+        return run_many(roster, save_dir=save_dir, grace=a.grace,
+                        poll=a.poll, once=a.once, log=log, server=server,
+                        scans=not a.once)
+    except KeyboardInterrupt:
+        log('  worker: stopped from the console')
+        return EXIT_OK
+    finally:
+        if server is not None:
+            server.stop()
+        roster.release()
         log('  worker: stopped')
 
 

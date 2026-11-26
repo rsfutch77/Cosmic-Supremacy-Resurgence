@@ -41,6 +41,7 @@ SERV_FLAG = 8           # u8, 1 while the civ is active this turn
 SERV_MIN_VERSION = 3    # the first version that saves the flag
 OFFSET = 72             # turns of grace, with the galaxy option at its default
 DIVISOR = 100           # turns from 0% to 100% after the grace
+SANDBOX_TURNS = 150     # both figures when the galaxy's `sandbox` is set
 
 
 def _servs(blob: bytes, tree=None):
@@ -70,10 +71,12 @@ def state(blob: bytes) -> dict:
     return out
 
 
-def penalty(turn: int, baseline: int) -> int:
-    """The tooltip's Inactivity percentage, with the galaxy option at its
-    default."""
-    return max(0, min(100, (turn - OFFSET - baseline) * 100 // DIVISOR))
+def penalty(turn: int, baseline: int, sandbox: bool = False) -> int:
+    """The tooltip's Inactivity percentage (`0x005381D0`). The galaxy's
+    `sandbox` setting puts 150 in place of the grace and of the span."""
+    grace, span = (SANDBOX_TURNS, SANDBOX_TURNS) if sandbox else (OFFSET,
+                                                                  DIVISOR)
+    return max(0, min(100, (turn - grace - baseline) * 100 // span))
 
 
 def mark_present(blob: bytes, civs, log=print) -> bytes:

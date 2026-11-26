@@ -55,14 +55,22 @@ def main():
     creds.refresh(google.auth.transport.requests.Request())
     step(f'  token for {getattr(creds, "service_account_email", "a user")}')
     step(f'open {store}')
+    specs = [store]
+    if '/*' in store:
+        step(f'list {store}')
+        from firebase_store import galaxy_specs
+        specs = galaxy_specs(store)
+        step(f'  {", ".join(specs) or "no galaxies"}')
     from turn_store import open_store
-    s = open_store(store)
-    step('read state')
-    st = s.state()
-    step(f'  turn {st.get("turn")}')
-    step(f'download turn {st.get("turn")}')
-    blob = s.turn_blob(st['turn'])
-    step(f'  {len(blob):,} bytes')
+    for spec in specs:
+        step(f'open {spec}')
+        s = open_store(spec)
+        step('read state')
+        st = s.state()
+        step(f'  turn {st.get("turn")}')
+        step(f'download turn {st.get("turn")}')
+        blob = s.turn_blob(st['turn'])
+        step(f'  {len(blob):,} bytes')
     faulthandler.cancel_dump_traceback_later()
     step('preflight passed')
     return 0

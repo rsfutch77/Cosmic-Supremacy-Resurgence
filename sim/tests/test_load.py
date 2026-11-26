@@ -53,7 +53,7 @@ def single_player():
         check(f'{civ.name}: one homeworld', len(home), 1)
         check(f'{civ.name}: seven citizens', len(home[0].citizens), 7)
         check(f'{civ.name}: citizens are its own',
-              {w for _j, w in home[0].citizens}, {civ.oid})
+              {c[1] for c in home[0].citizens}, {civ.oid})
         check(f'{civ.name}: two ships', len(g.civ_ships(civ.oid)), 2)
         check(f'{civ.name}: credits', civ.credits, 200)
         check(f'{civ.name}: resources', civ.resources, [630, 350, 260, 0, 0])
@@ -94,7 +94,7 @@ def fixtures():
         check(f'{name}: every fleet member is a loaded ship',
               all(s in g.ships for f in g.fleets.values() for s in f.ships), True)
         check(f'{name}: citizens hold known jobs',
-              {j for p in g.planets.values() for j, _w in p.citizens}
+              {c[0] for p in g.planets.values() for c in p.citizens}
               <= {0, 1, 2, 5, 6}, True)
 
 

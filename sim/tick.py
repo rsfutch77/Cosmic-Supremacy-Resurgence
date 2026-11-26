@@ -3,7 +3,7 @@ One simulated turn, in the order the manual's tick page gives, except that the
 planets' science is banked before the research step, which the engine does:
 
     science, research, planets (production, growth, food, income), movement,
-    combat, then what each civ saw
+    combat, then what each civ saw and the score rebuild
 
 Governors and admirals run before and after in the client; the policy stands in
 for both, so the simulator runs neither. Each step is a module that mutates the
@@ -16,9 +16,11 @@ from . import combat
 from . import economy
 from . import fog
 from . import movement
+from . import renown
 from . import research
 
 STEPS = (                           # (name, function(galaxy)), in tick order
+    ('score start', renown.score_before),
     # The turn's science is banked before a topic is checked: a store of
     # 4706 with 407 coming in paid a 4800 topic in the same tick. A doctrine
     # bought then already raises that tick's food, income and metal.
@@ -28,6 +30,9 @@ STEPS = (                           # (name, function(galaxy)), in tick order
     ('movement', movement.ships),
     ('combat', combat.battles),
     ('activity', economy.activity),
+    ('bio penalties', economy.bio_penalties),
+    # The tick ends in the score rebuild (0x0052DFE0).
+    ('score', renown.score_rebuild),
 )
 
 

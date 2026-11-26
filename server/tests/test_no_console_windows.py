@@ -244,6 +244,8 @@ def test_referee_tick():
             FakeClient.closed.append(True)
 
     class FakePlayerTurn:
+        HOLD_SECONDS = 86400
+
         @staticmethod
         def collect(who, save_dir=None, log=None):
             return capture
@@ -251,15 +253,17 @@ def test_referee_tick():
     kept = {n: sys.modules.get(n) for n in ('game_cycle', 'player_turn')}
     sys.modules['game_cycle'] = FakeClient
     sys.modules['player_turn'] = FakePlayerTurn
-    stamp = referee.stamp_for_a_holder
+    stamp, turn_of = referee.stamp_for_a_holder, referee.turn_of
     referee.stamp_for_a_holder = lambda b, log=None: b
+    # The stand-in capture carries no GLOB; it reads as the turn asked for.
+    referee.turn_of = lambda b: Snap.turn + 1
     got = []
     try:
         rec = with_recorder(referee, {}, lambda: got.append(referee.tick(
             blob, turns=1, secs=10, work_dir=tmp, log=lambda *_: None,
             check_save_path=False)))
     finally:
-        referee.stamp_for_a_holder = stamp
+        referee.stamp_for_a_holder, referee.turn_of = stamp, turn_of
         for n, m in kept.items():
             if m is None:
                 sys.modules.pop(n, None)

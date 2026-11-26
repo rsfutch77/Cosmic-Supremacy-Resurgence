@@ -34,6 +34,10 @@ import relay as core
     service_account='cs-relay@cs-resurgence.iam.gserviceaccount.com',
 )
 def relay(req: https_fn.Request) -> https_fn.Response:
+    # The query goes too: `/turn` reads the civ a seatless caller names.
+    path = req.path
+    if req.query_string:
+        path += '?' + req.query_string.decode('latin-1')
     status, headers, body = core.handle(
-        req.method, req.path, dict(req.headers), req.get_data())
+        req.method, path, dict(req.headers), req.get_data())
     return https_fn.Response(body, status=status, headers=headers)

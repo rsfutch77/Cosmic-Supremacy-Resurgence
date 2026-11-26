@@ -134,7 +134,7 @@ def max_object_id(blob):
     """
     best = struct.unpack_from("<I", blob, HIGH_WATER_ID)[0]
     for tag in (b"DSGN", b"SHIP", b"PLNT", b"SUN ", b"SOLA", b"OWNR", b"GOVS",
-                b"ADMS", b"DYNO"):
+                b"ADMS", b"DYNO", b"WORM", b"TRTY"):
         for off in find_all(blob, tag):
             try:
                 v = struct.unpack_from("<I", blob, off + 8)[0]

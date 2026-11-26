@@ -25,6 +25,7 @@ import traceback
 import launcher as L
 
 PAGE_W, PAGE_H = 720, 540
+SCAN_W, SCAN_H = 420, 190       # the scan-pending window
 
 # The launcher's meaning colours (launcher.OK and the rest), mapped to ones
 # that read on the table's slate and on the status line's light blue.
@@ -105,6 +106,9 @@ class Bridge:
     def row(self, index):
         self._post(lambda app: self._view.row_pressed(index))
 
+    def replay(self, index):
+        self._post(lambda app: self._view.replay_pressed(index))
+
     def control(self, key):
         def act(app):
             action = {"load": app.on_load, "save": app.on_save,
@@ -130,6 +134,22 @@ class Bridge:
 
     def close(self):
         self._post(lambda app: app.on_close())
+
+
+class ScanBridge:
+    """What the scan-pending window can ask for: its buttons."""
+
+    def __init__(self, view: "WebView"):
+        self._view = view
+
+    def ready(self):
+        view = self._view
+        view.post(view._scan_page_ready)
+
+    def press(self, name):
+        view = self._view
+        view.post(lambda: view.app is not None
+                  and view.app.on_scan_press(str(name)))
 
 
 class _Either:
@@ -161,9 +181,14 @@ class WebView:
         self._prompt_ids = itertools.count(1)
         self._answers: dict = {}
         self._row_actions: list = []
+        self._row_replays: list = []
         # What the page shows now, so a repaint that changes nothing sends
         # nothing.
         self._sent: dict = {}
+        # The scan-pending window, its page loaded, and what it shows.
+        self._scan_win = None
+        self._scan_ready = False
+        self._scan_state = None
 
     def run(self, make_app) -> None:
         """Open the window and run `make_app()` on the controller thread once
@@ -231,6 +256,42 @@ class WebView:
     def _js(self, fn: str, arg) -> None:
         if self.window is not None and not self._closed:
             self.window.run_js(f"window.ui.{fn}({json.dumps(arg)})")
+
+    def show_scan(self, state) -> None:
+        """The scan-pending window, kept above the game, or None to close it.
+
+        `state` is `{"title", "text", "countdown", "buttons"}`, the buttons
+        named `retry`, `restart` and `close`; `retry` waits out `countdown`
+        seconds. The client draws nothing while it waits on an answer, so
+        this is its own window, not a prompt here.
+        """
+        if state is None:
+            win, self._scan_win = self._scan_win, None
+            self._scan_state = None
+            if win is not None:
+                try:
+                    win.destroy()
+                except Exception:                           # noqa: BLE001
+                    pass
+            return
+        self._scan_state = state
+        if self._scan_win is None:
+            import webview
+            self._scan_ready = False
+            self._scan_win = webview.create_window(
+                "Scan", os.path.join(webui_dir(), "scan.html"),
+                js_api=ScanBridge(self), width=SCAN_W, height=SCAN_H,
+                resizable=False, frameless=True, easy_drag=True, on_top=True,
+                background_color="#001428")
+            return
+        if self._scan_ready:
+            self._scan_win.run_js(f"window.scan.set({json.dumps(state)})")
+
+    def _scan_page_ready(self) -> None:
+        self._scan_ready = True
+        if self._scan_win is not None and self._scan_state is not None:
+            self._scan_win.run_js(
+                f"window.scan.set({json.dumps(self._scan_state)})")
 
     def _set(self, **state) -> None:
         self._js("set", state)
@@ -393,22 +454,30 @@ class WebView:
                       if not (isinstance(k, tuple) and k[0] == "cell")}
         if rows is None:
             self._row_actions = []
+            self._row_replays = []
             self._set(galaxies={"rows": None, "note": note})
             return
         # A greyed-out button presses nothing, whatever the page sends.
         self._row_actions = [row.on_action if row.enabled else None
                              for row in rows]
+        self._row_replays = [getattr(row, "on_replay", None) for row in rows]
         drawn = []
         for r, row in enumerate(rows):
             for i, cell in enumerate(row.cells):
                 self._sent[("cell", r, i)] = tuple(cell)
             drawn.append({"cells": [[t, ON_DARK.get(c, c)] for t, c in row.cells],
-                          "action": row.action, "enabled": row.enabled})
+                          "action": row.action, "enabled": row.enabled,
+                          "replay": self._row_replays[r] is not None})
         self._set(galaxies={"rows": drawn, "note": ""})
 
     def row_pressed(self, index: int) -> None:
         if 0 <= index < len(self._row_actions) and self._row_actions[index]:
             self._row_actions[index]()
+
+    def replay_pressed(self, index: int) -> None:
+        replays = getattr(self, "_row_replays", [])
+        if 0 <= index < len(replays) and replays[index]:
+            replays[index]()
 
     def set_cell(self, row: int, column: int, text: str, colour: str) -> None:
         key = ("cell", row, column)

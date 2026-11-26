@@ -24,6 +24,7 @@ import set_blob_player as sbp                                   # noqa: E402
 import facility_rules as fr                                     # noqa: E402
 import activity                                                 # noqa: E402
 import exsy                                                     # noqa: E402
+import knpl                                                     # noqa: E402
 
 from . import state as st                                       # noqa: E402
 from . import economy as ec                                     # noqa: E402
@@ -172,7 +173,6 @@ def _queue_items(blob, galaxy):
 
 def _planets(blob, tree, galaxy):
     gaps = galaxy.gaps
-    bio = mo.bio_penalties(blob)
     glxy = next(tree[0].find('GLXY'))
     for sola in (c for c in glxy.children if c.tag == b'SOLA'):
         sun = next((c for c in sola.children if c.tag == b'SUN '), None)
@@ -204,7 +204,7 @@ def _planets(blob, tree, galaxy):
             fac = mo.facilities_of(plpr)
             if cz is None or mil is None or fac is None:
                 gaps.append(f'planet {oid}: people or facilities do not read')
-            planet.citizens = [(j, w) for j, w, _e, _r in cz or []]
+            planet.citizens = [(j, w, mo.arrived(c)) for c in cz or [] for j, w in (c[:2],)]
             planet.military = _people(mil or [])
             planet.military_xp = [struct.unpack_from('<e', r, SOLDIER_XP_AT)[0]
                                   for r in mil or []]
@@ -236,9 +236,7 @@ def _planets(blob, tree, galaxy):
                 planet.history_len = struct.unpack_from(
                     '<I', blob, at + mo.SETTLED_COUNTER_OFF)[0]
                 planet.rulers, planet.unrest = mo.influence_of(blob, plpr_sec)
-                planet.loyalty = ec.planet_loyalty(
-                    [(mo.arrived(c), c[1]) for c in cz or []], owner, planet.rulers,
-                    {o: n for (r, o), n in bio.items() if r == owner})
+                # Loyalty is set once the bio-bomb penalties are read (_relations).
                 taken_from = [r for r in planet.rulers if r[3] != mo.RULING]
                 if taken_from:
                     planet.prior_owner = max(taken_from, key=lambda r: r[3])[0]
@@ -282,6 +280,32 @@ def _civs(blob, galaxy):
             if getattr(civ, what) is None:
                 gaps.append(f'civ {oid} {rec["name"]}: {what} does not read')
         galaxy.civs[oid] = civ
+
+
+def _relations(blob, galaxy):
+    """Who declared each war and which civs have had their first scoring
+    battle against which, from each civ's KNPL record of the other: the
+    declared byte (+16) and the byte set in the tick of the civ's first battle
+    against it (+19), which stays set and is set only on the side that scored."""
+    for oid in galaxy.civs:
+        _tree, sec = mo._civ_section(blob, oid, 'KNPL')
+        if sec is None:
+            continue
+        try:
+            records = knpl.parse(bytes(blob[sec.payload:sec.payload + sec.size]))
+        except (ValueError, struct.error):
+            galaxy.gaps.append(f'civ {oid}: KNPL does not read')
+            continue
+        for r in records:
+            if r['declared']:
+                galaxy.declared.add((oid, r['civ']))
+            if r['battled']:
+                galaxy.fought.add((oid, r['civ']))
+            if r['biobombed']:
+                galaxy.biobombed[(oid, r['civ'])] = r['biobombed']
+    for p in galaxy.planets.values():
+        if p.owner and p.rulers:
+            ec.refresh_loyalty(galaxy, p)
 
 
 def _explored(blob, tree, galaxy):
@@ -381,6 +405,7 @@ def _load(blob):
     _planets(blob, tree, galaxy)
     _space_objects(blob, galaxy)
     _treaties(blob, galaxy)
+    _relations(blob, galaxy)
     _explored(blob, tree, galaxy)
     _queue_items(blob, galaxy)
     for ship in galaxy.ships.values():

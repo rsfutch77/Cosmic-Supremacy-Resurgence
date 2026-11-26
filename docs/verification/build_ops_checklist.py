@@ -115,7 +115,7 @@ SS = {
     'SS-3': ('apply', None, ['Release order: build, sign, then zip, then compute the SHA-256. Nothing is patched after signing; the client\'s binary patches happen before.']),
     'SS-4': ('apply', None, ['The launcher behaves like an ordinary program: no bundled extras, no autostart, no elevation, nothing written outside its folder (REL-1).', 'The updater keeps to the same rules: no elevation, nothing written outside the launcher\'s folder.']),
     'SS-5': ('apply', None, ['One signing identity for every release; record it here once chosen.']),
-    'SS-6': ('apply', None, ['[x] The download page warns about the unrecognised publisher.', 'Add what Smart App Control does and what to do (Website_Checklist R9).']),
+    'SS-6': ('done', None, ['[x] The download page warns about the unrecognised publisher.', "[x] It also says to check that the publisher is Robert Futch before clicking Run anyway, and that Smart App Control need not be turned off (Website_Checklist R9)."]),
 }
 
 # ICO Age appropriate design code (Children's code)
@@ -227,7 +227,8 @@ OPS = [
       'Move the referee to a cloud VM (the next phase) or to the Windows Sandbox once the client is signed.',
       '[x] The Windows Sandbox runs the live referee since the client is signed (14 November 2026).',
       '[x] Cloud VM spike (21 November 2026): an e2-medium Windows Server 2022 VM with no GPU and no service account ran the staged referee (f1bfc7c) on a folder copy of the sandbox at turn 213 and closed two turns, 240 and 236 seconds each. The client ticks on software rendering in 34 seconds against 22 at home; fog is about 19 seconds per civ against 4, on a shared core. List price is about $0.034 an hour for the machine plus $0.046 per vCPU-hour for the Windows licence, before the disk.',
-      'Decide between the home sandbox and a cloud VM, and if the VM, write its deploy script and a switchover that stops one referee before the other starts: the galaxy guard is a mutex on one machine.']),
+      '[x] Decided 21 November 2026: the home sandbox stays the referee and a cloud VM is its cold standby. `server/standby/standby_vm.py` prepares the bundle after each restage, starts and stops the VM, and holds a marker in the bucket that keeps bootstrap.ps1 idle on whichever host does not hold the galaxies; its docstring has the switchover steps.',
+      'Restage so the bootstrap.ps1 in the live sandbox reads the standby marker, then run `standby_vm.py prepare` after every restage.']),
     ('OPS-6', 'The project does not depend on one person\'s memory: the runbook is written and someone else could follow it.',
      'Firebase launch checklist FB-MSYF-6 (more than one owner), extended to knowledge',
      ['Write the runbook: starting, closing and restoring a galaxy, rebinding a seat, and deploying the relay.']),

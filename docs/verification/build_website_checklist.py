@@ -256,44 +256,57 @@ O = {
 R = [
     ('R1', 'Core Web Vitals, web.dev "Web Vitals" (Google, updated 31 Oct 2024)',
      'At the 75th percentile of page loads, Largest Contentful Paint is 2.5 s or less, Interaction to Next Paint 200 ms or less, and Cumulative Layout Shift 0.1 or less.',
-     ['Measure the home page, the download page and a long manual page with Lighthouse (mobile and desktop).',
-      'Images without width and height in the archive are the likely layout-shift cause.']),
+     ["[x] Measured with Lighthouse 13.6.0 on the live site (25 November 2026, after the front page art fix), lab figures only: Google holds no field data for the site, and PageSpeed Insights refuses requests without a key. Largest Contentful Paint, mobile / desktop: home 2.1 s / 0.4 s (median of eight mobile runs, one outlier at 4.5 s on a slow image fetch), download 1.0 s / 0.4 s, the long manual page (`wiki/manual/ship-components`) 1.8 s / 0.4 s. Cumulative Layout Shift 0.016 or less and Total Blocking Time 90 ms or less on every run.",
+      "[x] Layout shift is not a problem: it reads 0.016 or less, unsized images notwithstanding.",
+      "[x] The home page on a throttled phone painted its largest element, the header's background, in 3.8 s. The cause was the front page art, 380 KB at 1448 px drawn at 640, taking the bandwidth the header needed; first paint was already 1.0 s, so the head's scripts were not it. The art now comes in 640, 960 and 1280 px copies chosen by screen width (`patches.size_front_art`), and the home page paints in 2.1 s. Preloading the header image made no difference.",
+      "The 75th percentile needs field data, which Google gathers only once enough Chrome users visit; read Search Console's Core Web Vitals report when it has some."]),
     ('R2', 'Lighthouse v13 (Google), default configuration',
      'The automated audits for performance, accessibility, best practices and SEO run against the site and their failures are triaged.',
-     ['Run Lighthouse on the same three pages before each site deploy; record the scores here.',
-      'Lighthouse catches only part of WCAG; it does not replace the manual items above.']),
+     ["[x] Run Lighthouse on the same three pages before each site deploy; record the scores here. Live site, 25 November 2026, mobile / desktop: home performance 89 / 99, accessibility 80 / 72, best practices 69 / 73, SEO 100 / 100; download 99 / 83, 69 / 60, 69 / 73, 92 / 92; manual 100 / 100, 85 / 85, 88 / 92, 92 / 92.",
+      "[x] Lighthouse catches only part of WCAG; it does not replace the manual items above.",
+      "[x] Triaged (25 November 2026). Fixed on the staged site: no `lang` on 338 pages (`patches.declare_language`), the download button and the home page's three image buttons without text (their `alt` in the overrides), missing or shared descriptions (R7) and the Flash object (R5). Left as the archive's: no doctype (one would switch the old table layout into standards mode), no `main` landmark, low-contrast wiki links, small tap targets, Prototype's unload handler (no back-forward cache, and a deprecation warning), unminified and unused script, and four wiki skin images the archive never captured. Left for a deploy: an hour's cache lifetime on images, scripts and style sheets, Firebase's default."]),
     ('R3', 'MDN HTTP Observatory, "Tests & Scoring" (Mozilla), with the OWASP Secure Headers Project list',
      'The site\'s response headers pass the Observatory tests: Content-Security-Policy, Strict-Transport-Security, X-Content-Type-Options, frame-ancestors, Referrer-Policy, and the rest.',
-     ['[x] `site/firebase.json` sends `X-Content-Type-Options: nosniff`, `Referrer-Policy: strict-origin-when-cross-origin` and `X-Frame-Options: SAMEORIGIN` on every path; Firebase Hosting already sends HSTS (live on 8 October 2026).',
-      'Content-Security-Policy, report-only first (Opquast 212). `site/firebase.json` sends a report-only policy since v0.7, allowing inline script for the archive; after a deploy, read the console on a few pages, then enforce it.',
-      'Scan `https://cosmicresurgence.com` and record the grade here.',
-      'Add the headers in `site/firebase.json`. Do not take `Cache-Control: no-store` or `Clear-Site-Data` from the OWASP list: both are wrong for a cached public site.']),
+     ["[x] `site/firebase.json` sends `X-Content-Type-Options: nosniff`, `Referrer-Policy: strict-origin-when-cross-origin` and `X-Frame-Options: SAMEORIGIN` on every path; Firebase Hosting already sends HSTS (live on 8 October 2026).",
+      "[x] Content-Security-Policy, report-only first (Opquast 212). `site/firebase.json` sends a report-only policy since v0.7, allowing inline script for the archive; after a deploy, read the console on a few pages, then enforce it. The console on five live pages (25 November 2026) showed two violations: `premium.js` starting a timer from a string, and the archive's Flash object. `site/overrides/scripts/premium.js` passes a function instead, the Flash object is gone (R5), and ten staged pages loaded with the policy enforced and no violation. `site/firebase.json` sends `Content-Security-Policy`, live since 25 November 2026.",
+      "[x] Scan `https://cosmicresurgence.com` and record the grade here. B, 70 of 100, 10 of 12 tests passed (25 November 2026). Lost: the report-only policy (-25) and no Subresource Integrity on external scripts (-5; Google's tag changes and cannot carry a hash).",
+      "[x] Add the headers in `site/firebase.json`. Do not take `Cache-Control: no-store` or `Clear-Site-Data` from the OWASP list: both are wrong for a cached public site.",
+      "[x] Scan again after the deploy that enforces the policy, and record the grade. B, 75 of 100 after the deploy of 25 November 2026, with the console on five live pages clean under the enforced policy, Google's tag included. Lost: 'unsafe-inline' in script-src (-20) and Subresource Integrity (-5).",
+      "Left for a later milestone (Robert, 25 November 2026): drop 'unsafe-inline' from script-src, or accept it as a deviation: the archive's pages run inline scripts and inline event handlers, which would each move to a file or carry a hash ('unsafe-hashes' for the handlers)."]),
     ('R4', 'Opquast 27, 28, 205; OWASP ASVS V14.2.1',
      'No page on the site collects a password or personal data it cannot use.',
      ['[x] Every archived form is wrapped in a disabled fieldset with a note saying it no longer works (`stage.py`, `disable_forms`); live on 8 October 2026 on `register.php` and `forgotpw.php`.',
-      'The archived premium and upgrade pages carry no working purchase controls.']),
+      '[x] The archived premium and upgrade pages carry no working purchase controls: neither has a form, an input, a button or a payment link (the staged site, 24 November 2026).']),
     ('R5', 'WCAG 2.2 SC 2.1.2 and 1.1.1; Opquast 120',
      'No page depends on a browser plug-in.',
-     ['Four pages embed a Flash player (`/images/preloadFLV.swf`): `galaxysettings`, `premiumoverview`, `premiumupgrade`, `voting`. Replace each embed with a still image and a caption, or remove it.']),
+     ['[x] The Flash player (`/images/preloadFLV.swf`) is the sidebar\'s Game Preview box on 217 archive pages, not only `galaxysettings`, `premiumoverview`, `premiumupgrade` and `voting`. `patches.replace_flash_preview` gives each the HTML5 video the override pages already play (`/images/preview.mp4`); the staged site holds no embed (`site/tests/test_patches.py`, 24 November 2026).',
+      '[x] Live since the site deploy of 25 November 2026.']),
     ('R6', 'W3C WCAG-EM 2.0 (Group Note, 23 July 2026)',
      'Conformance of the archive is judged on a structured sample, not on every page.',
-     ['Sample: the home page, every override page, the download page, the 404 page, five wiki/manual pages chosen by type (index, long text, data tables, media, concept art), and five randomly chosen archive pages.',
-      'Record the sample and its results in this file.',
-      'Scope: every page the live site serves is held to this checklist, archived or not (on 8 October 2026 `register.php`, `forgotpw.php`, `voting.php` and `premiumupgrade.php` all answered 200). Archive content that is not published, such as the forum, is out of scope until it is migrated and published.']),
+     ["[x] Sample: the home page, every override page, the download page, the 404 page, five wiki/manual pages chosen by type (index, long text, data tables, media, concept art), and five randomly chosen archive pages. Drawn 25 November 2026: the home page; the overrides `download_client` (the download page), `download_stability`, `game_news`, `game_team`, `support_contact`, `support_guidelines`, `support_terms`, `support_turns`, `wiki/conceptart` (also the concept art type), `wiki/faq`, `wiki/getstarted`, `wiki/manual/score-reputation-and-rank` and `wiki/warstories`; the 404 page; `wiki/manual` (index), `wiki/manual/admiral-rules` (long text), `wiki/manual/planetary-modules` (data tables) and `wiki/quickstrike` (media); and at random from the sitemap's other 409 pages with seed 20261125, `community_galhistory@action=0&page=2`, `galaxy@galid=712`, `galaxyscores@galid=374`, `galaxyscores@galid=8` and `galaxy@galid=407`.",
+      "[x] Record the sample and its results in this file. Each page had Lighthouse's accessibility audits (axe-core; the 404 page axe-core alone, since Lighthouse will not audit a 404 answer) and scripted checks for what they miss: reflow at 320 CSS px, media playing by itself, and the keyboard. Scores 78 to 90. Keyboard: no trap on any page, Tab reached the links and focus showed on every one. Failed on every page: no `main` landmark (1.3.1) and small targets (2.5.8); on the 15 archive-template pages the Game Preview video looped for two minutes with no way to pause it (2.2.2; it has no sound, so 1.4.2 does not apply); and on all but the 404 page the 990 px layout needs sideways scrolling at 320 px (1.4.10). On the wiki pages and the 404 page, low-contrast links (1.4.3) and links told from text only by colour (1.4.1). Data cells without headers in the galaxy history and score tables (1.3.1), and one image without `alt` on a scores page (1.1.1).",
+      "[x] Scope: every page the live site serves is held to this checklist, archived or not (on 8 October 2026 `register.php`, `forgotpw.php`, `voting.php` and `premiumupgrade.php` all answered 200). Archive content that is not published, such as the forum, is out of scope until it is migrated and published.",
+      "[x] Fixed, live since the site deploy of 25 November 2026: every autoplaying video gets controls and is muted (`patches.pausable_video`), and every page marks its main column as the main landmark (`patches.mark_main`, and `site/404.html`).",
+      "[x] Reflow (1.4.10): below 990 px the columns stack and fixed widths give way (`overrides/css/access.css`, with a viewport tag from `patches.fit_the_screen`); a wiki data table wider than the screen scrolls on its own, as 1.4.10 allows. Every sampled page is 320 px wide at 320 CSS px.",
+      "[x] Target size (2.5.8): links in the wiki's lists sit a 24 px line apart, the translation links and the footer's Privacy link are 24 px, and the wiki's back-to-top button inside a link is now one link (`patches.plain_back_to_top`).",
+      "[x] Link colour (1.4.3, 1.4.1): the page-name link on the wiki's bar is #2b4a56 (5.8:1), plain wiki links on the dark page are #8cc0d6 (5.5:1 or more), and links in text, breadcrumbs and the sidebar are underlined. The 404 page's notice is #8a9fb8 (6.3:1) with underlined links. axe-core cannot judge text over the archive's background images, so those colours were sampled from screenshots.",
+      "[x] Tables and images (1.3.1, 1.1.1): the score tables' first row is column headings (`patches.label_score_tables`), the galaxy history grid is marked as layout (`patches.mark_galaxy_grid`), and the concept art table's corner cell is a heading. All 162 images without `alt` have it (`patches.describe_images`): score graphs, logos, screenshots (from their captions) and installer dialogs say what they show; news and feature illustrations are decoration.",
+      "[x] Re-checked on the staged site, 25 November 2026: axe-core with every rule finds no WCAG failure on the 24 sampled pages, leaving only its best-practice rules (no h1 on the archive pages, content outside landmarks). Lighthouse accessibility scores 100 on the 23 pages Lighthouse audits (78 to 90 before). Reflow, keyboard and focus checks pass on every page. Live since the site deploy of 25 November 2026."]),
     ('R7', 'Google Search Central, "SEO Starter Guide" (updated 10 Dec 2025) and Search Essentials',
      'Search engines can find, understand and correctly attribute the site.',
      ['[x] A canonical URL on every page, so `.php` and `.php.html` addresses do not compete. `stage.py` adds one to each page; the home page\'s is `/` (v0.7).',
-      'Unique titles and descriptions (Opquast 3, 103).',
+      '[x] Unique titles and descriptions (Opquast 3, 103). `site/heads.py` gives every page the archive titled "Cosmic Supremacy" or with the shared tagline a title of its own (its tab, else its heading, plus the page number on a list), and every page without a description, or with the shared one, the opening of its own text. Seven wiki pages held at a second address name the first as canonical (`stage.WIKI_ALIASES`). On the staged site (24 November 2026) the 427 indexed pages carry 427 titles and 427 descriptions, all distinct; before, 316 pages shared three titles and 745 had no description (`site/tests/test_heads.py`). Live since the site deploy of 25 November 2026.',
       '[x] Register the site in Google Search Console and submit `https://cosmicresurgence.com/sitemap.xml`, which `stage.py` writes and robots.txt names (Opquast 220). A Domain property, verified by Robert on 14 November 2026; the sitemap is submitted by its full address, which a Domain property needs.']),
     ('R8', 'Apache Software Foundation, "Release Download Pages for Projects"',
      'The download page links the file, its checksum, and how to verify it, all over HTTPS.',
-     ['[x] The download page offered v0.1.0. It now offers v0.1.1, the latest published release, with its size, date and SHA-256 (matching GitHub\'s digest); live on 8 October 2026.',
-      'Make updating the download page part of the release steps (`5 - Release_Checklist.md` REL-3), including when v0.1.8 or later is published.',
+     ['[x] The download page offered v0.1.0. It now offers the latest published release, v0.7.2 on 25 November 2026, with its size, date and SHA-256 (matching GitHub\'s digest); first live on 8 October 2026.',
+      '[x] Make updating the download page part of the release steps (`5 - Release_Checklist.md` REL-3), including when v0.1.8 or later is published. Release step 9 in `docs/DEVELOPMENT.md` updates it with the file name, size, date and SHA-256, then stages and deploys the site.',
       '[x] The page explains how to check the SHA-256 (`certutil -hashfile <zip> SHA256`).',
-      'When the launcher is code-signed (M3), say so and name the publisher.']),
+      "[x] When the launcher is code-signed (M3), say so and name the publisher. The page says the launcher is code-signed by its publisher, Robert Futch, the certificate's subject (CN=Robert Futch, Tucson, AZ, US), read off the installed launcher on 25 November 2026."]),
     ('R9', 'Microsoft Learn, "SmartScreen reputation for Windows app developers" (2026)',
      'Players are told in advance what Windows will show on first run of an unsigned or newly signed build, and what to do.',
-     ['[x] The download page warns about the unrecognised publisher and says Smart App Control can block an unsigned build outright on Windows 11; live on 8 October 2026.']),
+     ["[x] The download page and the zip's `PLAYER_README.txt` say Windows may still show \"Windows protected your PC\" on first run of the signed launcher, to click More info, check that the publisher is Robert Futch, then click Run anyway, and not to run it if any other publisher or none is named; live on 25 November 2026.",
+      "[x] Smart App Control: the page says there is no need to turn it off, since it lets signed apps run. Microsoft's Smart App Control overview says a validly signed app runs when the service has no prediction for it. All five executables in v0.7.2 carry a valid signature from CN=Robert Futch (read 25 November 2026), so the unsigned-build warning of 8 October no longer applies."]),
 ]
 
 
@@ -366,9 +379,11 @@ def main():
 
     out = []
     for rid, source, req, subs in R:
-        counts['R items']['apply'] = counts['R items'].get('apply', 0) + 1
-        out += [f'- [ ] **{rid}** {req}', f'  - Source: {source}.']
-        out += [f'  - [ ] {s}' for s in subs]
+        status = 'done' if all(s.startswith('[x] ') for s in subs) else 'apply'
+        counts['R items'][status] = counts['R items'].get(status, 0) + 1
+        out += [f'{MARK[status]} **{rid}** {req}', f'  - Source: {source}.']
+        out += [f'  - [x] {s[4:]}' if s.startswith('[x] ') else f'  - [ ] {s}'
+                for s in subs]
     ritems = out
 
     order = ['apply', 'done', 'deviation', 'na', 'out', 'untailored']

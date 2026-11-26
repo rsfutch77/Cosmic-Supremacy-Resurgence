@@ -11,7 +11,9 @@ joins.py: the seat a stranger asked for
 
 At a turn boundary the referee adds each requested civ to the blob the tick
 produced and seats the player on the roster, so a player who asks during turn N
-plays at turn N+1. The launcher writes the request, a JSON object:
+plays at turn N+1. During a galaxy's opening turn the referee also seats them
+straight into that turn (`referee.seat_early`), so they set up their first
+turn before the galaxy starts. The launcher writes the request, a JSON object:
 
     {"name": "Ada", "uid": null, "build": "0.1.0+dev",
      "requested_at": 1790486818.25, "requested_turn": 11}
@@ -436,8 +438,9 @@ def _grant(store, blob, req: dict, roster, turn: int, log=print,
             f'{type(exc).__name__}: {exc}')
 
     try:
-        # As if the newcomer had played the turn just closed.
-        joined = activity.set_baseline(joined, name, int(turn) - 1)
+        # As if the newcomer had played the turn just closed, or the opening
+        # turn they were seated in.
+        joined = activity.set_baseline(joined, name, max(int(turn) - 1, 0))
     except Exception as exc:                                # noqa: BLE001
         # The join stands; the civ starts with the donor's Inactivity.
         log(f'  joins: {name} kept the donor\'s Inactivity baseline, '
@@ -452,14 +455,17 @@ def _grant(store, blob, req: dict, roster, turn: int, log=print,
 
 
 def apply(store, turn: int, new_turn: int, blob: bytes, log=print,
-          placement=None):
+          placement=None, waiting=None):
     """Grant every join waiting on this galaxy.
 
     Called with the turn just closed, the turn about to be published, and the
     blob the tick produced for it, before `publish`. Returns `(blob, outcomes)`
     for `commit` once the blob is published. Nothing durable is written here.
     A closed galaxy grants nothing and leaves its requests waiting.
-    `placement` overrides the galaxy's (`placement_of`).
+    `placement` overrides the galaxy's (`placement_of`). `waiting` limits it
+    to those requests (`pending`'s records).
+
+    An early seating passes the opening turn as both turns and its own blob.
     """
     if store.is_closed():
         if pending(store, log=lambda *a: None):
@@ -467,7 +473,8 @@ def apply(store, turn: int, new_turn: int, blob: bytes, log=print,
                 'the requests are left where they are')
         return blob, []
 
-    waiting = pending(store, log=log)
+    if waiting is None:
+        waiting = pending(store, log=log)
     if not waiting:
         return blob, []
 

@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Scan</title>
+<link rel="stylesheet" href="app.css">
+<style>
+  .scan { box-sizing: border-box; height: 100%; display: flex; flex-direction: column; gap: 10px;
+          padding: 0 14px 12px; border: 1px solid #3a5266; }
+  .scan .hdr { margin: 0 -14px; color: #0a1a33; font-weight: bold; }
+  .scan .text { flex: 1; line-height: 16px; }
+  .scan .buttons { display: flex; gap: 8px; justify-content: flex-end; }
+  .scan .gbtn:disabled { color: #000; }
+</style>
+</head>
+<body>
+<div class="scan pywebview-drag-region">
+  <div class="hdr" id="title">Scan</div>
+  <div class="text" id="text"></div>
+  <div class="buttons" id="buttons"></div>
+</div>
+<script src="skin.js"></script>
+<script>
+"use strict";
+// The scan-pending window. Python sends what it shows through window.scan.set
+// and hears each press through window.pywebview.api.press.
+const LABELS = { retry: "Retry", restart: "Restart the game", close: "Close" };
+const $ = (id) => document.getElementById(id);
+
+function press(name) {
+  const api = window.pywebview && window.pywebview.api;
+  if (api) api.press(name);
+}
+
+window.scan = {
+  set(state) {
+    $("title").textContent = state.title || "Scan";
+    $("text").textContent = state.text || "";
+    // Retry counts down and can be pressed once the count reaches 0.
+    const row = $("buttons");
+    row.replaceChildren(...(state.buttons || []).map((name) => {
+      const b = document.createElement("button");
+      const wait = name === "retry" && state.countdown > 0;
+      b.className = "gbtn";
+      b.textContent = wait ? `${LABELS[name]} (${state.countdown})` : (LABELS[name] || name);
+      b.disabled = wait;
+      b.addEventListener("click", () => press(name));
+      return b;
+    }));
+  },
+};
+
+// The text needs no skin, so it is asked for at once and the skin fills in
+// as its images load.
+buildSkin().catch((e) => console.error(e));
+function ready() {
+  const api = window.pywebview && window.pywebview.api;
+  if (api && api.ready) api.ready();
+}
+if (window.pywebview && window.pywebview.api && window.pywebview.api.ready) ready();
+else window.addEventListener("pywebviewready", ready);
+</script>
+</body>
+</html>

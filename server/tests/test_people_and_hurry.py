@@ -190,6 +190,34 @@ def main():
     check('and a value written comes back',
           mo.recruit_of(mo.planet_index(moved)[planet][2]), 60)
 
+    print('a draft is charged the draft price (0x00516060)')
+    import save_parser as sp
+    fix = os.path.join(ROOT, 'server', 'tests', 'fixtures', 'unruled')
+    dr0 = sp.load_any(os.path.join(fix, 'dr0.b64'))
+    dr1 = sp.load_any(os.path.join(fix, 'dr1.b64'))
+    good = 656
+    check('the price is 5 * (T + k) + 105 for the k-th draft',
+          (mo.draft_cost(10, 1), mo.draft_cost(10, 2), mo.draft_cost(0, 0)),
+          (155, 315, 0))
+    check('the client drafted 2 with 10 military and charged 315',
+          (mo.draft_price(dr0, dr1, good),
+           mo.credits_of(dr0, good) - mo.credits_of(dr1, good)), ((2, 315), 315))
+    notes = {}
+    out = mo.merge(dr0, [('GoodGuy', dr1)], log=lambda *_: None, notes=notes)
+    check('the merge charges it and carries the crews',
+          (mo.credits_of(out, good), notes), (mo.credits_of(dr1, good), {}))
+    import canonical
+    check('    reproducing the client\'s save exactly',
+          canonical.canonical_hash(out), canonical.canonical_hash(dr1))
+    poor = mo.set_credits(dr0, good, 300)
+    notes = {}
+    out = mo.merge(poor, [('GoodGuy', dr1)], log=lambda *_: None, notes=notes)
+    check('a draft the civ cannot pay is refused with its people changes',
+          (any('costs 315 credits' in n for n in notes.get('GoodGuy', [])),
+           mo.credits_of(out, good),
+           mo.population(out, good) == mo.population(poor, good)),
+          (True, 300, True))
+
     print(f'\n{len(PASS)} passed, {len(FAIL)} failed')
     return 1 if FAIL else 0
 

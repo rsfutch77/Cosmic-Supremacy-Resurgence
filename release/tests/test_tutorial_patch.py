@@ -103,7 +103,7 @@ check("step 11 selects both ships before Create Fleet",
 step22 = img.cstring(struct.unpack_from("<I", data, P.table_entry(img, 22))[0])
 check("step 22 offers drafting a citizen", "draft it" in step22, True)
 
-print("\n6. every client's main window opens 10% larger")
+print("\n6. every client's main window opens sized to the screen")
 import patch_window_size as W                                   # noqa: E402
 for name in ("CosmicSupremacy.exe", "CosmicSupremacy_Resurgence.exe",
              "CosmicSupremacy_TestBed.exe"):
@@ -111,9 +111,18 @@ for name in ("CosmicSupremacy.exe", "CosmicSupremacy_Resurgence.exe",
         client = bytearray(f.read())
     check(f"{name} starts at 950 x 609", W.state(client), "original")
     W.patch(client)
-    size = (struct.unpack_from("<H", client, 0x30EF)[0],
-            struct.unpack_from("<H", client, 0x30F5)[0])
-    check(f"and opens at {W.WIDTH} x {W.HEIGHT}", size, (W.WIDTH, W.HEIGHT))
+    check("and its default placement jumps to the sizing stub",
+          (bytes(client[W.offset(W.HOOK):W.offset(W.HOOK) + 5]) == W.hook(),
+           bytes(client[W.offset(W.STUB):W.offset(W.STUB) + len(W.stub())])
+           == W.stub()), (True, True))
+check("the size follows the screen, in the original's shape",
+      [W.size_for(*s) for s in ((1920, 1080), (2560, 1440), (3440, 1440))],
+      [(1010, 648), (1347, 864), (1347, 864)])
+check("and is never below the original's 950 x 609",
+      [W.size_for(*s) for s in ((1366, 768), (1280, 720), (1024, 768))],
+      [(950, 609)] * 3)
+check("the stub sits clear of the save, scan and Notes label stubs",
+      W.STUB >= 0x006D2400 + 0x80 and W.STUB + W.STUB_ROOM <= 0x006D3000, True)
 both = bytearray(original)
 P.patch(both)
 W.patch(both)

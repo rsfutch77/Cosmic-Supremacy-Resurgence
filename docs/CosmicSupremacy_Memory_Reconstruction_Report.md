@@ -25,6 +25,32 @@ Open [ ] items below are kept only where play needs them. The v0.7 triage closed
 the rest, each with its reason, since the save blob carries every field whether
 or not it has a name. Reopen one if in-process AI work needs it.
 
+[x] Close what is left by name, and fix the text the closes left stale (v0.8). Fields named
+"unidentified", "not established" or "unexplained" without a box (`Planet:512`, the low half of
+`Planet:104`, the citizen and military `+4` words, the `Owner` members and arrays, `Owner:1180`
+to `1216`, the 9999 golden-age sentinel, the `Ship:88` to `96` constants, the ETA rounding, the
+`ShipDesign` extent above `+190`, the known-players growth step) each get a closing line with
+the reason, or a box if play needs them. Stale: "Object extents" still calls `Owner:144/152`
+against `Owner:4` unresolved, and the table under "`Planet:284` farm id confirmed" still names
+`Owner:4` the science topic.
+
+**Closed** (24 November 2026). Both stale passages now say `Owner:4` is the civ's user id and
+the topic is `Owner:144`/`:152`. Every field below is read only from live memory. Play runs on
+saves the client writes, which the merge judges by section and the referee's client ticks, so
+none of them is needed for play; a memory tool that comes to need one names it first.
+
+| Field | Closed because |
+|---|---|
+| `Planet:512` | A per-system counter whose unit is open; nothing outside the client reads it |
+| The low half of `Planet:104` | Zero on 509 of 525 planets; space, the high half, is what the save and the tools use |
+| The citizen and military `+4` words | Inside the citizen arrays the merge carries as the client wrote them |
+| The `Owner` members and arrays, `Owner:1180` to `1216` | The civ's state reaches play through `OWPR` and its sections, judged there |
+| The 9999 golden-age sentinel | The engine sets and counts it down; no tool writes it |
+| The `Ship:88` to `96` constants | Constant or zero on every ship read; the save's `DYNO` and `ROUT` carry the order |
+| The ETA rounding | Computed for display only, like maximum population |
+| The `ShipDesign` extent above `+190` | The save's `DSGN` is read by section, not by a memory window |
+| The known-players growth step | The save writes `KNPL` as a count and whole records (`knpl.py`) |
+
 ---
 
 ## 1. Live Memory Object System (EJBO)
@@ -155,7 +181,11 @@ Known open discrepancy: `Owner:144` / `Owner:152` are annotated as current/selec
 science topic, but the constructor analysis below puts the current science topic at
 `[civ+0x38]` = `Owner:4`. One of the two is wrong; unresolved. Live `Owner:4` reads
 `0` and `21` for the two civilisations, which is consistent with a tech id and
-therefore with the constructor analysis.
+therefore with the constructor analysis. **Resolved**: the annotation is right and the
+constructor reading wrong. `Owner:12` is progress and `Owner:144`/`:152` the topic, as
+read directly ("Correction to the constructor-derived layout"), and `Owner:4` is the civ's
+user id, the `u32` that ends `OWNR`'s payload; 0 marks a civ with no user, which is why it
+read 0 and 21 (`Owner:4 == 0` marks it, below).
 
 ### Field-shape signatures (July 2026)
 
@@ -391,9 +421,24 @@ table at `0x7FC898`. A type-8 order also sets `Ship:61`, its 11-turn countdown (
 **`Ship:76` is not simply "an order exists".** It reads `1` on the local player's ordered ships and `0`
 on the AI's, even when the AI ship carries a valid order type and a fully populated order object. It
 looks like a **pending/unsubmitted-orders flag for the local civ**, which would matter directly for
-turn submission in multiplayer. Two observations only. It also read a non-boolean `980156416` on a
+turn submission in multiplayer. Two observations only. (It is not: see the item below.) It also read a non-boolean `980156416` on a
 freshly built ship, so it may be uninitialised until an order is first set. Use `Ship:52` to ask
 whether an order exists.
+
+[x] confirm or falsify `Ship:76` as the local civ's pending-orders flag: read it on several of
+the local civ's ships before and after an order and a submitted turn, and on a rival's ships in
+the same session. **Falsified** (22 November 2026): it is the byte that marks an order given by
+the player, and a tick does not clear it. `Ship:76` is object `+0x54`, the has-orders byte the
+`DYNO` writer puts after `SHCO` and its `u32` (`0x4DA310`, which writes the order only into the
+owner's own save, `0x52C570`); the third byte above it is padding, which is where the `u32` read
+of `980156416` (`0x3A6C0000`) came from. The order setter (`0x4D9DC0`) raises it only when its
+second argument is set, and only the set-order command (`0x56EBC0`, online and offline) passes
+1. Admirals' orders (`0x5A4xxx`) pass 0, and clearing an order (`0x4DA450`) or an empty one
+lowers it. The ship step reads it at `0x4DC230`: a ship whose order was not given by hand and
+which has an admiral is handed to the admiral (`0x4DAE70`). In the saves, every order Robert
+gave reads 1 (`unruled` `tg1`, `tw1`, `wo1`, `wh2`), ships with none read 0, BadGuy's ship 662
+reads 0 while it scouts, and GoodGuy's 669 and 670 still read 1 a tick later (`admirals` `a10`
+to `a13`).
 
 ### Combat damage: condition is the only per-ship state (July 2026)
 
@@ -421,6 +466,13 @@ looking for a death flag.
 **Only the armed ships took damage.** All five zero-firepower `Scout` ships in the same fleet came
 through at exactly 1.0000 while every `invader2` was hit or destroyed. Whether that is because
 combat engages only armed ships or because it targets them first is not established from one battle.
+
+[x] close this from the fast sim's battle probes once they are on the release line: `sim/combat.py`
+on `fast-sim` records that unarmed ships taking no part are shot last. **Closed** (15 November
+2026, v0.8): combat targets them first rather than engaging them only. The probes on the live
+client (turn 123 of the q7 galaxy) saw a turret pass over troopers holding a Conquer order for
+an idle armed frigate: unarmed ships taking no part are shot last, so the Scouts here were last
+in line when the battle ended. `sim/combat.py` does the same.
 
 ### Deleting a ship safely, what is and is not possible (July 2026)
 
@@ -596,13 +648,14 @@ static's presence carries no diplomatic meaning, which cost one wrong conclusion
   - **Proposing** registers a `Treaty` at once: apply `0x55C3E0` copies the proposal under a new id, dates it, makes first contact both ways and adds it to the registry `0x86ED6C`. Only a war is accepted on the spot; every other kind stays Pending (0).
   - **Responses** go through `0x56F470`: withdraw removes and deletes it (`0x55AA90`), accept is `0x55BD40`, decline sets 2 (`0x558590`), and cancel (`0x55C2F0`) sets both stances to Neutral and the status to 4. Each party's deleted byte is written by the news-screen UI.
   - **Accepting** checks the terms and each party's means, then sets status 1, the start turn (`Treaty:24`) and, while the length (`Treaty:20`) is still -2, the length; a war's length is -1. A non-trade kind sets both stances and ends the earlier non-trade treaties between the pair. A war ends every treaty between the pair, and breaking a cease-fire, peace or alliance that still binds costs the declarer reputation (inferred from the field it debits).
-  - **Length** is the `TreatyLength` item's value, else the kind's minimum: 20 for a cease-fire, 50 for peace, 100 for an alliance (`0x80B564`), or 10, 20 and 30 when a galaxy setting's flag is set (`0x80B578`, setting unidentified). A `TreatyLength` must be under 1000 and at least that minimum.
+  - **Length** is the first `TreatyLength` item's value when above 0 (`0x559CE0`), else the larger of the kind's minimum and each item's (`0x5592B0`): 20 for a cease-fire, 50 for peace, 100 for an alliance (`0x80B564`), or 10, 20 and 30 in a galaxy with the `speed` setting on (`0x80B578`); a trade or a war has none (-1). Only `ShareWormhole` has an item minimum, 50 or 25 under `speed` (`0x55C720`); every other item's is 0, so a trade with items and no length gets 0. A `TreatyLength` must be under 1000 and at least that minimum.
   - **Each tick** (`0x55AC40`) runs the per-turn items of a Binding treaty and turns it Non-Binding once the turn reaches start plus length.
   - **The items** are sections named by tag, with no number: `CRLS`, `CRPT`, `RSLS`, `RSPT` (credits and resources, lump sum or per turn), `SLOS` (share line of sight), `SHBR` (share battle reports), `SHGM` (share galaxy map, once on acceptance), `TRLE` (length) and `SHWH` (share wormhole). A per-turn resource payment the payer cannot meet raises news kind `0x45`, "We lost reputation".
   - **Shared battle reports:** the battle builder also sends a shorter copy of each report through `Owner::AddNewsToAllies` (`0x543760`) to every civ allied with the recipient (stance 4) by an in-force treaty carrying `SHBR`. No treaty step itself raises news
 [x] find where "send message" state lives, RTTI has `SendMessageDlg` and `MessageListener`, so there is likely a message list per civ **Answered (v0.7 triage):** messages are `NEWS` records on `Owner:344` ("News items located" below), carried since v0.6.
 [x] find the per-civ colour field behind "change color", likely a plain value on `Owner`, and a cheap write test would confirm it **Answered (v0.7 triage):** the colour a civ gives a rival is in that rival's 36-byte `KNPL` record, not on `Owner`, carried since v0.6 (Reconstruction Report §14).
 [x] locate the `Fleet` registry so a fabricated fleet can be registered, make a fleet, scan memory for pointers to it, then find the `.data` vector holding the array, exactly as the `Treaty` registry was found **Closed, not needed for play (v0.7 triage):** fleets are made in the client and travel in `FLET`, which the merge carries; nothing fabricates one in memory.
+[x] find the galaxy setting behind the shorter treaty minimums: 10, 20 and 30 turns in place of 20, 50 and 100 when the flag at `0x80B578` is set. The merge and the served length depend on it. **It is `speed`** (22 November 2026): `0x80B578` is the second table, not a flag. Each of its three readers (`0x5586F4`, `0x55873A`, `0x5592CD`) picks it when galaxy setting 1, `speed`, reads non-zero (`0x4D4320(1)`, `+0x30`). `merge_orders.treaty_length` follows the rule above and refuses an acceptance with any other length (`test_admirals_diplomacy_merge.py`).
 
 ### `Owner` is a multiple-inheritance class, the civ name is in front of the tag (August 2026)
 
@@ -1000,8 +1053,14 @@ another civ's vote cast kept both across the client's tick. The checks were made
 client's own handler, by setting the box and sending its `BN_CLICKED`, with the Overview Screen
 not on screen.
 
-[ ] find whether the engine's end turn `[0x80AA04]` is in the save. Until it is known, a galaxy
+[x] find whether the engine's end turn `[0x80AA04]` is in the save. Until it is known, a galaxy
 past turn 600 with a majority voting may set an end turn of its own in the referee's tick.
+**It is**: `GLOB`'s second `u32`, after the turn. The `GLOB` loader reads it from version 16
+on (`0x52DA20`, Reconstruction report, "The `GLOB` loader also writes settings"), and every
+blob here is `GLOB` v17 with it at `-1` (`d4`, `wh0`, `cs3`, 22 November 2026). The replay
+writes the same field to bound Next. So an end turn the tick's client sets stays in the
+authoritative galaxy and is served to every civ; the merge copies `GLOB` from the galaxy it
+builds on, so no submission changes it.
 
 ### Audit sweep, closed items, and the Owner registry (August 2026)
 
@@ -2066,10 +2125,15 @@ memory, and `capture_rep+100_t0123` carries 99 at `+26` in both civs' records, t
 value among the 44 galaxies in `sim/corpus`. `merge_orders.bio_penalties` reads it and `sim/load.py` applies
 it to each planet's loyalty.
 
-[ ] The fast sim's bio-bombing (`sim/combat.bio_bomb`) takes its sets off the loyalty of the
+[x] The fast sim's bio-bombing (`sim/combat.bio_bomb`) takes its sets off the loyalty of the
 bomber's planets taken from the victim once. The client keeps them as a standing penalty per civ
 pair, felt by every citizen of the victim's origin under the bomber, on planets taken later too.
-Carry it on the civ and subtract it where `sim/economy.settle` moves loyalty.
+Carry it on the civ and subtract it where `sim/economy.settle` moves loyalty. **Done** (14
+November 2026): `Galaxy.biobombed` holds each pair's sets, capped at 100, loaded from `KNPL`
+`+26` and stepped down 1 a tick (`economy.bio_penalties`; the faster galaxy option is not read).
+Since the simulator now steps the conqueror list with each citizen's origin and arrival,
+`economy.refresh_loyalty` takes the ruler's penalty off each citizen of the victim's origin,
+as the client does, and the output bonus, rebellion and the scripted roles read that loyalty.
 
 [x] Read planet #384's loyalty on screen from `capture_live_invade_t0129.after`; the derivation
 gives 36.29%. The TestBed's Planet View tooltip shows 36.29% (14 Nov 2026), with the list as
@@ -2099,12 +2163,13 @@ the more interesting reading, which is the way that usually goes.
 
 [x] **Loyalty and corruption are still not located.** Both are derived. Loyalty comes from the
 conqueror list at `Planet:384` and each citizen's origin and arrival turn (the section above).
-Corruption is the manual's formula over planet count and reputation (`docs/Fast_Sim_Plan.md`
-§5b). `Planet:100` bytes 0-2, the old candidate, read `100/100/100` on freshly captured planets as
+Corruption is the manual's formula over planet count and reputation (`sim/economy.py`).
+`Planet:100` bytes 0-2, the old candidate, read `100/100/100` on freshly captured planets as
 on planets held for 268 turns.
 
-[ ] A single out-of-trend sample here is a TORN READ, not a signal: #476 read 8, 8, 7, 8 on
-consecutive turns with nothing happening to it.
+**Caution, standing:** a single out-of-trend sample here is a torn read, not a signal: #476 read
+8, 8, 7, 8 on consecutive turns with nothing happening to it. Confirm any one-sample change with a
+second read before acting on it.
 
 The historical observations below still hold and were the first clue.
 
@@ -2748,7 +2813,7 @@ The low 16 bits are `0` on 509 of 525 planets and remain unidentified.
 
 Loyalty (100% on all three) and corruption (+0.68% / −0.61% / −0.47%) have no field either.
 Both are derived: loyalty from the conqueror list at `Planet:384` ("Loyalty is derived from the
-conqueror list"), corruption from planet count and reputation (`docs/Fast_Sim_Plan.md` §5b).
+conqueror list"), corruption from planet count and reputation (`sim/economy.py`).
 
 [x] **UNDERSTAND REPUTATION BEFORE MULTIPLAYER.** Reputation is a signed word at `+0x10`
 of each relation record inside `Owner:248`, added to by `AddReputation` `0x00534D50`
@@ -2802,7 +2867,7 @@ turn term:** `0x00518480` scales the figure by the turn over 120 while the engin
 resolves on turn 111, and 12.6009 x 111/120 = 11.6558, the save's 11.65582. Every other battle
 on record is at turn 123 or 125, where the factor is 1. `sim/renown.reputation` applies it.
 
-[x] test whether loyalty and corruption are derived rather than stored, populate one planet's population, buildings and military fully, and check whether both values follow from those inputs without any field of their own changing. Corruption does (`docs/Fast_Sim_Plan.md` §5b). Loyalty does too, from the conqueror list and the citizens (`0x004ED270`, `0x004F47A0`); the list's influences are its stored inputs, moved by soldiers and propaganda each tick.
+[x] test whether loyalty and corruption are derived rather than stored, populate one planet's population, buildings and military fully, and check whether both values follow from those inputs without any field of their own changing. Corruption does (`sim/economy.py`). Loyalty does too, from the conqueror list and the citizens (`0x004ED270`, `0x004F47A0`); the list's influences are its stored inputs, moved by soldiers and propaganda each tick.
 
 ### Governor, located and confirmed (July 2026)
 
@@ -2874,11 +2939,13 @@ now use `Owner:*`:
 
 | Runtime offset | EJBO offset | Field |
 |---|---|---|
-| `[civ+0x38]` | `Owner:4` | Current science topic (tech id); `-1` = none (“No Research”) |
+| `[civ+0x38]` | `Owner:4` | The civ's user id, the `u32` ending `OWNR`; 0 for none. Recorded here first as the current science topic, which direct reads refuted: the topic is `Owner:144`/`:152` |
 | `[civ+0x40]` | `Owner:12` | Current research progress |
 | `[civ+0x54]` / `[civ+0x58]` | `Owner:32/36` | Reputation / reputation pending this tick (floats) |
 
 Research-topic display and the `No Research` branch are at `0x00554DE1` (`cmp [civ+0x38], -1`).
+The register there (`esi`, read again at `+0x48`) is not shown to hold the `Owner`, and with
+`Owner:4` the user id it is most likely another object's field.
 
 ### Tools
 

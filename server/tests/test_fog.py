@@ -27,6 +27,7 @@ for d in (os.path.join(ROOT, 'server'),
         sys.path.insert(0, d)
 
 import save_parser as sp
+import activity
 import inject_civ as icv
 import inject_design as idg
 import exsy
@@ -39,6 +40,8 @@ import turn_store
 import wipe_civ
 
 GALAXY = os.path.join(ROOT, 'server', 'tests', 'fixtures', 'diplomacy', 'd9.b64')
+ADMIRALS = os.path.join(ROOT, 'server', 'tests', 'fixtures', 'admirals',
+                        'a10.b64')
 SPGALAXY = os.path.join(ROOT, 'client', 'SinglePlayerGalaxy.dat')
 GOOD, BAD = 656, 660
 PASS, FAIL = [], []
@@ -184,14 +187,33 @@ def main():
 
     print('\nwhat the per-civ save shows of a planet stays')
 
-    def natural(b, pid):
+    def after_queue(b, pid):
+        """(natural bytes and food store size, history, Planet:368, rulers,
+        rebellion, deposits, ENLI payload) of a planet."""
         plpr = next(sections(b)[pid].find('PLPR'))
         d = b[plpr.payload:plpr.end]
-        prod = next(plpr.find('PROD'))
-        return d[4:15] + d[19:23], b[prod.end:plpr.end]
+        prod, enli = plpr.children
+        t = b[prod.end:enli.start]
+        n = struct.unpack_from('<I', t, 20)[0]
+        at = 24 + fog.RULER.size * n
+        return (d[4:15] + d[19:23], t[:16], struct.unpack_from('<I', t, 16)[0],
+                [fog.RULER.unpack_from(t, 24 + fog.RULER.size * i)
+                 for i in range(n)],
+                t[at:at + 2], t[at + 2:], b[enli.payload:enli.end])
     for pid in (261, 265, 100):
-        check(f'planet {pid}: its natural bytes, food store size, deposits '
-              f'and energy link', natural(view, pid), natural(blob, pid))
+        got, auth = after_queue(view, pid), after_queue(blob, pid)
+        owner = fog._owner(view, sections(view)[pid])
+        check(f'planet {pid}: its natural bytes, food store size and deposits '
+              f'stay', (got[0], got[5]), (auth[0], auth[5]))
+        check(f'    no population history, settled, its served owner the only '
+              f'ruler since turn 0, no rebellion and no energy link',
+              got[1:5] + got[6:],
+              (bytes(16), 8, [(owner, 100.0, 0, -1)] if owner else [],
+               bytes(2), bytes(4)))
+    check('GoodGuy\'s planet 261 has a population history and a ruler since '
+          'a later turn in the turn',
+          (after_queue(blob, 261)[1] != bytes(16),
+           after_queue(blob, 261)[3][0][2] > 0), (True, True))
     check('GoodGuy\'s planet 265 holds soldiers and several facilities in the '
           'turn', (owner_state(blob, live[265])[3] > 0,
                    len(owner_state(blob, live[265])[4]) > 1), (True, True))
@@ -209,6 +231,28 @@ def main():
           (o[0], o[3], o[5], o[6]), no_state)
     check('and restored whole', fog.restore(now, 'BadGuy', nview) == now)
 
+    print('\nthe viewer\'s own citizens on a rival\'s planet')
+    mixed = bytearray(now)
+    plpr = next(sections(now)[265].find('PLPR'))
+    for i in range(3):
+        struct.pack_into('<I', mixed, plpr.payload + fog.PLPR_HEAD + 4
+                         + fog.CITIZEN * i + fog.CITIZEN_OWNER, BAD)
+    mixed = bytes(mixed)
+    mview = fog.project(mixed, 'BadGuy', log=quiet)
+    at = plpr.payload + fog.PLPR_HEAD
+    check('planet 265 is GoodGuy\'s, here holding 3 of BadGuy\'s citizens',
+          (fog._owner(mixed, sections(mixed)[265]),
+           [struct.unpack_from('<I', mixed, at + 4 + fog.CITIZEN * i
+                               + fog.CITIZEN_OWNER)[0]
+            for i in range(struct.unpack_from('<I', mixed, at)[0])].count(BAD)),
+          (GOOD, 3))
+    check('BadGuy is served its population as GoodGuy\'s farmers, as the '
+          'per-civ save writes a population and no citizens (0x4EE641)',
+          (set(owner_state(mview, sections(mview)[265])[1]),
+           planets(mview)[265][1]), ({GOOD}, planets(mixed)[265][1]))
+    check('and restore gives the planet back with them',
+          fog.restore(mixed, 'BadGuy', mview) == mixed)
+
     print('\nanother civ\'s private state')
     check('GoodGuy holds credits, research and resources in the turn',
           (mo.credits_of(blob, GOOD) > 0, len(mo.completed_research(blob, GOOD)) > 2,
@@ -219,9 +263,18 @@ def main():
            mo.resources_of(view, GOOD)), (0, [0, 1], [0, 0, 0, 0, 0]))
     check('and no research topic',
           mo.research_of(view, GOOD), (b'\xff' * 4, b'\xff' * 4))
-    check('and no known players, memory, governors or queues',
+    check('and no memory, governors or queues',
           [mo._civ_section(view, GOOD, t)[1].size for t in
-           ('KNPL', 'EXSY', 'GOVS', 'SPQS')], [4, 4, 4, 4])
+           ('EXSY', 'GOVS', 'SPQS')], [4, 4, 4])
+    theirs = mo.knpl.parse(owner_section(blob, GOOD, 'KNPL')[8:])
+    check('and of the civs it has met, only BadGuy, as first contact makes '
+          'the record, with the stance, the turn met and the war fields',
+          mo.knpl.parse(owner_section(view, GOOD, 'KNPL')[8:]),
+          [dict(mo.FIRST_CONTACT, civ=BAD, handle=BAD, met=r['met'],
+                **{k: r[k] for k in fog.KNPL_KEPT})
+           for r in theirs if r['civ'] == BAD])
+    check('    which d9 holds, at war', [r['stance'] for r in theirs
+                                         if r['civ'] == BAD], [1])
     check('and every trait 0', set(mo.traits_of(view, GOOD) or (None,)), {0})
     owpr_at = mo._civ_section(blob, GOOD, 'OWPR')[1]
     v_at = mo._civ_section(view, GOOD, 'OWPR')[1]
@@ -234,8 +287,12 @@ def main():
           view[r_view + 31:r_view + 55], blob[r_auth + 31:r_auth + 55])
     check('its name, checkbox and arms stay',
           mo.civ_identity(view, GOOD), mo.civ_identity(blob, GOOD))
-    check('its designs stay, since its ships name them',
-          mo.designs_of(view, GOOD), mo.designs_of(blob, GOOD))
+    check('only the designs its ships are built to stay',
+          (mo.designs_of(view, GOOD), set(mo.designs_in_use(blob, GOOD)),
+           len(mo.designs_of(blob, GOOD))), ({657}, {657}, 8))
+    check('    and restore puts the other seven back',
+          mo.designs_of(fog.restore(blob, 'BadGuy', view), GOOD),
+          mo.designs_of(blob, GOOD))
     check('BadGuy\'s own private sections are untouched',
           [owner_section(view, BAD, t) for t in fog.WITHHELD],
           [owner_section(blob, BAD, t) for t in fog.WITHHELD])
@@ -256,6 +313,110 @@ def main():
     struct.pack_into('<f', want, live[min(mine)].payload + 20, 1.5)
     check('a change to the civ\'s own planet is kept by restore',
           fog.restore(blob, 'BadGuy', bytes(sub)) == bytes(want), True)
+
+    print('\nanother civ\'s scan reports and end-galaxy vote')
+    report = sp.build_section(b'SCPL', 0, bytes(12))
+    voted = bytearray(mo.set_reports(mo.set_reports(blob, GOOD, [report]),
+                                     BAD, [report]))
+    tree = sp.parse_blob(bytes(voted))
+    for _name, (_oid, o) in fog._owners(bytes(voted), tree).items():
+        voted[fog._usse(next(o.find('DATA'))).payload + fog.END_VOTE_AT] = 1
+    voted = bytes(voted)
+    vview = fog.project(voted, 'BadGuy', log=quiet)
+    check('GoodGuy\'s reports and vote are withheld',
+          (mo.reports_of(vview, GOOD), mo.end_vote_of(vview, GOOD)), ([], 0))
+    check('BadGuy keeps its own',
+          (mo.reports_of(vview, BAD), mo.end_vote_of(vview, BAD)),
+          ([report], 1))
+    check('restore puts GoodGuy\'s back',
+          fog.restore(voted, 'BadGuy', vview) == voted, True)
+
+    print('\nanother civ\'s admirals and activity')
+    a10 = sp.load_any(ADMIRALS)
+    aview = fog.project(a10, 'BadGuy', log=quiet)
+    check('GoodGuy\'s admiral 674 stays, since one of its ships follows it',
+          [a for a, _r in mo.admirals_of(aview, GOOD)], [674])
+    ship = next(o for o in mo.space_objects(a10)[2]
+                if o['owner'] == GOOD and mo.dyno_admiral(o['dyno']) == 674)
+    idle = a10.replace(ship['dyno'], mo.with_dyno_admiral(ship['dyno'], 0), 1)
+    iview = fog.project(idle, 'BadGuy', log=quiet)
+    check('with no ship following it, it is withheld',
+          mo.admirals_of(iview, GOOD), [])
+    check('    and restore puts it back',
+          fog.restore(idle, 'BadGuy', iview) == idle, True)
+    turn = icv.turn_of(idle)
+    active = activity.mark_present(activity.set_baseline(idle, 'GoodGuy',
+                                                         turn - 1), ['GoodGuy'])
+    sview = fog.project(active, 'BadGuy', log=quiet)
+    check('a civ active last turn shows active this turn, with no flag',
+          activity.state(sview)['GoodGuy'], (turn, 0))
+    check('    and restore puts its baseline and flag back',
+          fog.restore(active, 'BadGuy', sview) == active, True)
+    check('a civ showing inactive keeps the baseline its percentage pins',
+          (activity.penalty(turn, 0), activity.state(fog.project(
+              activity.set_baseline(idle, 'GoodGuy', 0), 'BadGuy',
+              log=quiet))['GoodGuy']), (turn - 72, (0, 0)))
+    check('BadGuy\'s own activity is untouched',
+          activity.state(fog.project(activity.mark_present(
+              idle, ['BadGuy']), 'BadGuy', log=quiet))['BadGuy'][1], 1)
+
+    print('\ntreaties, as the per-civ save writes them (0x55B250)')
+    check('d9: treaty 680 is GoodGuy\'s declined trade, deleted from '
+          'BadGuy\'s side', sorted(mo.treaties(blob)), [680, 682, 683])
+    check('BadGuy is served the treaties it is party to and has not deleted',
+          sorted(mo.treaties(view)), [682, 683])
+    check('GoodGuy is served all three',
+          sorted(mo.treaties(gview)), [680, 682, 683])
+    stranger = mo.set_treaties(blob, list(mo.treaties(blob).values()) + [
+        mo.treaties(blob)[683][:8] + struct.pack('<I', 690)
+        + mo.treaties(blob)[683][12:20] + struct.pack('<II', GOOD, 999)
+        + mo.treaties(blob)[683][28:]])
+    check('a treaty between two other civs is not served',
+          sorted(mo.treaties(fog.project(stranger, 'BadGuy', log=quiet))),
+          [682, 683])
+    accepted = mo.with_trdt(mo.treaties(view)[683], 1, 20, icv.turn_of(blob))
+    answered = mo.set_treaties(view, [mo.treaties(view)[682], accepted])
+    check('restore puts the withheld one back in its place and keeps the '
+          'civ\'s answer', mo.treaties(fog.restore(blob, 'BadGuy', answered)),
+          {**mo.treaties(blob), 683: accepted})
+    check('and keeps a new proposal after them',
+          list(mo.treaties(fog.restore(blob, 'BadGuy', mo.set_treaties(
+              view, list(mo.treaties(view).values()) + [mo.treaties(
+                  stranger)[690][:8] + struct.pack('<I', 700)
+                  + mo.treaties(stranger)[690][12:]])))),
+          [680, 682, 683, 700])
+
+    print('\na caller with no seat')
+    pview = fog.project(blob, None, log=quiet)
+    rest = [t for t in fog.WITHHELD if t != b'KNPL']
+    check('is served each civ\'s private sections as its rival is',
+          ([owner_section(pview, GOOD, t) for t in rest],
+           [owner_section(pview, BAD, t) for t in rest]),
+          ([owner_section(view, GOOD, t) for t in rest],
+           [owner_section(gview, BAD, t) for t in rest]))
+    check('    and no civ\'s known players, since it is no civ',
+          [mo._civ_section(pview, c, 'KNPL')[1].size for c in (GOOD, BAD)],
+          [4, 4])
+    check('and only the designs each civ\'s ships use',
+          (mo.designs_of(pview, GOOD), mo.designs_of(pview, BAD)),
+          (set(mo.designs_in_use(blob, GOOD)) & mo.designs_of(blob, GOOD),
+           {d for d in mo.designs_of(blob, BAD)
+            if d in mo.designs_of(view, BAD)
+            and d in mo.designs_of(gview, BAD)}))
+    check('every planet with its live owner and population, from no memory',
+          {p: v[:2] for p, v in planets(pview).items()},
+          {p: v[:2] for p, v in planets(blob).items()})
+    check('and none with its owner\'s state',
+          sorted(p for p, pl in sections(pview).items()
+                 if owner_state(pview, pl)[3]
+                 or owner_state(pview, pl)[4] not in ([], [(2, 1)])), [])
+    check('no civ\'s news',
+          [news.items_of(pview, o['oid']) for o in icv.owner_records(pview)],
+          [[] for _o in icv.owner_records(pview)])
+    check('no treaties', mo.treaties(pview), {})
+    check('it parses and is the same galaxy',
+          (sp.parse_blob(pview)[0].end == len(pview),
+           referee.galaxy_id(pview) == referee.galaxy_id(blob)), (True, True))
 
     print('\nthe merge takes a fogged civ\'s orders as an unfogged one\'s')
     notes_fogged, notes_plain = {}, {}
@@ -295,9 +456,14 @@ def main():
         check('and serves the new turn to everyone',
               player_turn.served_blob(store, 'BadGuy', turn + 1) == blob, True)
         store.publish(turn + 2, blob)
-        check('the publish after that removes them',
-              os.path.exists(os.path.dirname(store.view_path('BadGuy', turn))),
-              False)
+        check('the publish after that keeps them for the replay',
+              store.kept_view('BadGuy', turn) == view, True)
+        try:
+            player_turn.served_blob(store, 'BadGuy', turn)
+            served = True
+        except turn_store.NotServed:
+            served = False
+        check('but no longer serves them as a turn', served, False)
 
     print('\nwiping a civ leaves rivals remembering what they last saw')
     wiped, _planets, _ships = wipe_civ.wipe(blob, 'BadGuy', log=quiet)

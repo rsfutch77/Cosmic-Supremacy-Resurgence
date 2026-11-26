@@ -98,6 +98,8 @@ MAX_DOC_ID = 1500   # longest Firestore document id, in bytes
 JOIN_COLLECTION = 'joins'
 JOIN_DONE_COLLECTION = 'joins_done'
 
+SCAN_COLLECTION = 'scans'               # one document per scan, keyed by its id
+
 # Characters a document id carries unescaped. Escaping `.` and `_` rules out
 # `.`, `..` and `__reserved__` ids.
 ID_SAFE = frozenset(string.ascii_letters + string.digits + '-~')
@@ -153,6 +155,15 @@ def join_doc_id(key: str) -> str:
     """
     return ''.join(chr(b) if chr(b) in ID_SAFE else f'%{b:02X}'
                    for b in key.encode('utf-8'))
+
+
+def count_joins(galaxy_ref) -> int:
+    """How many join requests wait under a galaxy document.
+
+    One aggregation query, billed as a single read however many there are.
+    """
+    rows = galaxy_ref.collection(JOIN_COLLECTION).count().get()
+    return int(rows[0][0].value) if rows and rows[0] else 0
 
 
 def submitted_of(doc: dict, turn: int):
@@ -470,6 +481,21 @@ class FirebaseTurnStore:
         doc = (snap.to_dict() or {}) if snap.exists else {}
         return turn_store.serve(self, doc, civ, turn)
 
+    def kept_view(self, civ: str, turn: int):
+        """`civ`'s own view of any published turn, or None
+        (`turn_store.replay_problem`)."""
+        data = self._get(self.view_object(civ, turn))
+        return sp.decode_save(data) if data is not None else None
+
+    def has_kept_view(self, civ: str, turn: int) -> bool:
+        return self._has(self.view_object(civ, turn))
+
+    def replay_view(self, civ: str, turn: int) -> bytes:
+        """`civ`'s own view of `turn` for the replay (`turn_store.replay_view`)."""
+        snap = self.doc.get()
+        doc = (snap.to_dict() or {}) if snap.exists else {}
+        return turn_store.replay_view(self, doc, civ, turn)
+
     def publish(self, turn: int, blob: bytes, turn_seconds: int = None,
                 views: dict = None) -> None:
         """The referee's move: a new turn exists, and the clock restarts.
@@ -477,12 +503,12 @@ class FirebaseTurnStore:
         Merges only the fields it names, so status and name survive and
         `SUBMITTED_KEY` and `VIEWS_KEY` are replaced whole. Sets
         `SUBMISSIONS_FROM_KEY` on a galaxy that lacks it, then prunes
-        submissions older than `SUBMISSION_TURNS_KEPT` turns.
+        submissions and scans older than `SUBMISSION_TURNS_KEPT` turns.
 
         `views` is `{civ: blob}` for the civs served their own view. They are
-        written before the turn. The previous turn's views are kept, for a
-        launcher that asks for that turn as this one is published, and older
-        ones are deleted after it.
+        written before the turn. `VIEWS_KEY` names this turn's and the one
+        before, for a launcher that asks for that turn as this one is
+        published. Every view object stays for the replay (`kept_view`).
         """
         import canonical
         snap = self.doc.get()
@@ -511,19 +537,56 @@ class FirebaseTurnStore:
             fields[SUBMISSIONS_FROM_KEY] = int(turn)
         self.doc.set(fields, merge=list(fields))
         self.prune_submissions(int(turn) - SUBMISSION_TURNS_KEPT + 1)
-        self._drop_views(named, {int(turn), int(turn) - 1})
+        # Kept as long as submissions, so `referee --verify` replays them.
+        self.prune_scans(int(turn) - SUBMISSION_TURNS_KEPT + 1)
 
-    def _drop_views(self, named: dict, keep) -> None:
-        """Delete the view objects `named` lists for every turn not in `keep`."""
-        from google.api_core import exceptions
-        for t, civs in named.items():
-            if not str(t).isdigit() or int(t) in keep:
-                continue
-            for civ in civs:
-                try:
-                    self.bucket.blob(self.view_object(civ, int(t))).delete()
-                except exceptions.NotFound:
-                    pass
+    def copy_object(self, turn: int, n: int) -> str:
+        return self._object('copies', f'{turn:04d}', f'{n}.b64')
+
+    def reseat(self, turn: int, blob: bytes, views: dict = None) -> int:
+        """The current turn again, holding civs an early seating added
+        (`turn_store.TurnStore.reseat`). Returns the number the replaced copy
+        is kept under."""
+        import canonical
+        snap = self.doc.get()
+        doc = (snap.to_dict() or {}) if snap.exists else {}
+        if doc.get('turn') != int(turn):
+            raise ValueError(f'turn {turn} is not the current turn, '
+                             f'{doc.get("turn")}')
+        key = str(int(turn))
+        n = int((doc.get(turn_store.COPIES_KEY) or {}).get(key, 0)) + 1
+        old = self._get(self.turn_object(turn))
+        if old is None:
+            raise FileNotFoundError(f'no turn {turn} in {self.galaxy}')
+        self._put(self.copy_object(turn, n), old, 'text/plain')
+        views = views or {}
+        for civ, view in views.items():
+            self._put(self.view_object(civ, turn), sp.encode_save(view),
+                      'text/plain')
+        self._put(self.turn_object(turn), sp.encode_save(blob), 'text/plain')
+        # Nested maps merge entry by entry, so other turns' entries stay.
+        self.doc.set({
+            'hash': canonical.canonical_hash(blob),
+            turn_store.COPIES_KEY: {key: n},
+            turn_store.VIEWS_KEY: {key: sorted(views)},
+        }, merge=True)
+        return n
+
+    def earlier_copies(self, turn: int) -> list:
+        """`[(n, blob)]`, the copies of `turn` an early seating replaced,
+        oldest first."""
+        snap = self.doc.get()
+        doc = (snap.to_dict() or {}) if snap.exists else {}
+        count = int((doc.get(turn_store.COPIES_KEY) or {})
+                    .get(str(int(turn)), 0))
+        out = []
+        for n in range(1, count + 1):
+            data = self._get(self.copy_object(turn, n))
+            if data is None:
+                raise FileNotFoundError(f'copy {n} of turn {turn} is missing '
+                                        f'from {self.galaxy}')
+            out.append((n, sp.decode_save(data)))
+        return out
 
     def submit(self, civ: str, turn: int, blob: bytes) -> str:
         """Hand a player's state back. A later submission replaces an earlier
@@ -808,6 +871,10 @@ class FirebaseTurnStore:
             out.append(rec)
         return sorted(out, key=turn_store.join_order)
 
+    def join_count(self) -> int:
+        """How many requests are waiting, naming nobody."""
+        return count_joins(self.doc)
+
     def join_request(self, key: str):
         """The one request filed under this key, or None while there is none."""
         snap = self.join_doc(key).get()
@@ -837,6 +904,77 @@ class FirebaseTurnStore:
         snap = self.join_done_doc(key).get()
         return snap.to_dict() if snap.exists else None
 
+    # Scans: one document each, its answer a bytes field.
+    @property
+    def scan_collection(self):
+        return self.doc.collection(SCAN_COLLECTION)
+
+    def scan_doc(self, scan_id: str):
+        if not turn_store.scan_id_ok(scan_id):
+            raise ValueError(f'{scan_id!r} is not a scan id')
+        return self.scan_collection.document(scan_id)
+
+    def ask_scan(self, civ: str, turn: int, kind: int, targets) -> str:
+        """File an asked scan. Returns its id."""
+        rec = turn_store.new_scan(civ, turn, kind, targets)
+        self.scan_doc(rec['id']).set(rec)
+        return rec['id']
+
+    def scan(self, scan_id: str):
+        """One scan's record, or None while there is none."""
+        snap = self.scan_doc(scan_id).get()
+        return snap.to_dict() if snap.exists else None
+
+    def _scans_where(self, field: str, value) -> list:
+        from google.cloud.firestore_v1.base_query import FieldFilter
+        q = self.scan_collection.where(filter=FieldFilter(field, '==', value))
+        return sorted((s.to_dict() for s in q.stream()),
+                      key=turn_store.scan_order)
+
+    def scans_waiting(self) -> list:
+        """Every asked scan, oldest first."""
+        return self._scans_where('state', turn_store.SCAN_ASKED)
+
+    def delivered_scans(self, turn: int, civ: str = None) -> list:
+        """The scans delivered on this turn, oldest first. Filtered here
+        rather than in the query, so no composite index is needed."""
+        return [r for r in self._scans_where('turn', int(turn))
+                if r.get('state') == turn_store.SCAN_DELIVERED
+                and (civ is None or r.get('civ') == civ)]
+
+    def move_scan(self, scan_id: str, to: str, answer: bytes = None,
+                  reason: str = None):
+        """Move a scan to state `to` in a transaction. Returns the record as
+        it now stands, moved or not, or None when there is no such scan."""
+        from google.cloud import firestore
+        ref = self.scan_doc(scan_id)
+
+        @firestore.transactional
+        def move(tx):
+            snap = ref.get(transaction=tx)
+            rec = snap.to_dict() if snap.exists else None
+            moved = turn_store.scan_moved(rec, to, answer=answer,
+                                          reason=reason)
+            if moved is None:
+                return rec
+            tx.set(ref, moved)
+            return moved
+
+        return move(self.fs.transaction())
+
+    def prune_scans(self, before: int) -> int:
+        """Delete the scans of turns before `before`. Returns how many."""
+        from google.cloud.firestore_v1.base_query import FieldFilter
+        snaps = list(self.scan_collection.where(
+            filter=FieldFilter('turn', '<', int(before))).select(
+                ['turn']).stream())
+        for i in range(0, len(snaps), 400):
+            batch = self.fs.batch()
+            for snap in snaps[i:i + 400]:
+                batch.delete(snap.reference)
+            batch.commit()
+        return len(snaps)
+
     def delete_everything(self) -> int:
         """Remove this galaxy from both services, and say how many things went.
 
@@ -849,7 +987,7 @@ class FirebaseTurnStore:
             n += 1
         for name in ('archive', SUBMISSION_COLLECTION, NOTE_COLLECTION,
                      JOIN_COLLECTION,
-                     JOIN_DONE_COLLECTION):
+                     JOIN_DONE_COLLECTION, SCAN_COLLECTION):
             for snap in self.doc.collection(name).stream():
                 snap.reference.delete()
                 n += 1

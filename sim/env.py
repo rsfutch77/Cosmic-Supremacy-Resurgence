@@ -25,8 +25,10 @@ from . import tick as tk
 
 
 class Env:
-    def __init__(self, galaxy, played=None, horizon=200, k=rw.K_TURNS):
+    def __init__(self, galaxy, played=None, horizon=200, k=rw.K_TURNS, observe=True, reward=True):
         self.start = galaxy
+        self.observing = observe     # False: reset and step return no observations
+        self.rewarding = reward      # False: step leaves D alone and returns no rewards
         self.played = list(played or galaxy.civs)
         self.horizon, self.k = horizon, k
         self.g = None
@@ -38,8 +40,8 @@ class Env:
     def reset(self):
         self.g = copy.deepcopy(self.start)
         self.t = 0
-        self.d = rw.dominance(self.g, self.played)
-        return {c: observe(self.g, c) for c in self.played}
+        self.d = rw.dominance(self.g, self.played) if self.rewarding else None
+        return self.observations()
 
     def step(self, actions):
         info = {c: [] for c in self.played}
@@ -52,11 +54,20 @@ class Env:
             self.g.civs[civ].active = True
         self.g = tk.tick(self.g, copy_first=False)
         self.t += 1
+        if not self.rewarding:
+            alive = {p.owner for p in self.g.planets.values()} | {s.owner for s in self.g.ships.values()}
+            done = self.t >= self.horizon or sum(1 for c in self.played if c in alive) <= 1
+            return self.observations(), None, done, info
         d = rw.dominance(self.g, self.played)
         done = self.t >= self.horizon or sum(1 for v in d.values() if v > 0) <= 1
         rewards = {c: (d[c] if done else d[c] - self.d[c]) for c in self.played}
         self.d = d
-        return {c: observe(self.g, c) for c in self.played}, rewards, done, info
+        return self.observations(), rewards, done, info
+
+    def observations(self):
+        if not self.observing:
+            return None
+        return {c: observe(self.g, c) for c in self.played}
 
 
 def observe(g, civ):

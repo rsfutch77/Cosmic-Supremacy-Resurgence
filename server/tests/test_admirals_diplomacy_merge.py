@@ -15,7 +15,9 @@ and tier5 sessions. `fixtures/admirals` is a session in the client on
 b1 assigned (a3), a rule added and one unticked (a4), renamed (a5), Scout
 created (a6), b1 moved to Scout (a7), b1 given a manual move (a8), b1 set to
 none (a9), Scout deleted (a10), one turn advanced (a13). Turn 111 ticked on its
-own between a2 and a3.
+own between a2 and a3. ar1 is a0 with an admiral of each type holding every
+rule the editor offered it (24 November 2026); ar2 is diplomacy's cs0 with an
+assault admiral holding the three that need an enemy in sight.
 
 `fixtures/diplomacy` is a session in the client on `control_fork_played.dat`
 with waronly off (27 and 28 October 2026). GoodGuy proposes an alliance (d1)
@@ -24,6 +26,13 @@ proposes another (d5p); BadGuy accepts it (d5), deletes the declined one (d6),
 declares war (d7); a turn passes (d8); BadGuy proposes a cease-fire (d9);
 GoodGuy accepts it (d9a). d3b, d4g, d5b and d9g are the step before, reloaded
 as the other civ.
+
+cs0 to cs3 are a session on 22 November 2026: d0 with a third civ, Ceti (679),
+at war with GoodGuy and GoodGuy's warships over Ceti's homeworld (cs0).
+GoodGuy proposes an alliance sharing battle reports both ways and offering 7
+credits as a lump sum (cs1, TestBed); BadGuy accepts it (cs2, TestBed); the
+Resurgence client ticks turn 181 (cs3), where GoodGuy's battle at Ceti reaches
+BadGuy's news.
 """
 import os
 import struct
@@ -39,6 +48,8 @@ for d in (os.path.join(ROOT, 'server'),
 import save_parser as sp                                        # noqa: E402
 import inject_order as io                                       # noqa: E402
 import merge_orders as mo                                       # noqa: E402
+import canonical                                                # noqa: E402
+import knpl                                                     # noqa: E402
 
 FIX = os.path.join(HERE, 'fixtures')
 PASS, FAIL = [], []
@@ -97,6 +108,19 @@ def adml(oid, name, kind=2, ships=0, rules=((b'TSCQ', 0, b'\x05\0\0\0'),)):
                             + b'\x00' + sp.build_section(b'ADDT', 0, body))
 
 
+def glob_fixtures():
+    import glob
+    return sorted(glob.glob(os.path.join(FIX, '*', '*.b64')))
+
+
+def rule_tags(record):
+    """The rule tags a whole ADML section holds, in order."""
+    _tag, at, end = mo._sections(record, 8 + mo.ADML_FIXED, len(record))[0]
+    n = struct.unpack_from('<I', record, at)[0]
+    secs = mo._sections(record, at + 4 + n + 8, end)
+    return [tag for tag, _a, _e in secs[1::2]]
+
+
 def with_admirals(blob, civ, records):
     """`blob` with the civ's ADMS holding these whole ADML sections."""
     return mo.set_admirals(blob, civ, records)
@@ -148,6 +172,22 @@ def without(blob, oid):
                                 if t != oid])
 
 
+def section(blob, civ, tag):
+    """The payload of a civ's section."""
+    s = mo._civ_section(blob, civ, tag)[1]
+    return blob[s.payload:s.end]
+
+
+def with_section(blob, civ, tag, payload):
+    tree, s = mo._civ_section(blob, civ, tag)
+    return sp.replace_payload(blob, tree, s, payload)
+
+
+def known(blob, civ):
+    """{system: row} of a civ's EXSY."""
+    return {s['system']: s for s in mo.exsy.parse(section(blob, civ, 'EXSY'))}
+
+
 def both_stances(blob, a, b, code):
     return mo.set_stance(mo.set_stance(blob, a, b, code), b, a, code)
 
@@ -189,6 +229,22 @@ def ordered(blob, ship):
         return mo.replace_dyno(blob, ship, sp.build_section(
             b'DYNO', dyno.version, io.build_dyno(d)))
     raise SystemExit(f'ship {ship} not found')
+
+
+def battle_news(blob):
+    """[(civ name, turn, category, rounded position)] of every 44-byte NEWS
+    record, as two_sided_war.news reads them."""
+    owners = mo.icv.owner_records(blob)
+    out, at = [], blob.find(b'NEWS')
+    while at != -1:
+        if struct.unpack_from('<I', blob, at + 4)[0] & sp.SIZE_MASK == 44:
+            f = struct.unpack_from('<8I', blob, at + 8)
+            pos = struct.unpack_from('<3f', blob, at + 40)
+            who = next((o['name'] for o in owners
+                        if o['off'] < at < o['end']), '-')
+            out.append((who, f[2], f[5], tuple(round(p) for p in pos)))
+        at = blob.find(b'NEWS', at + 1)
+    return out
 
 
 def said(notes, civ, *words):
@@ -276,12 +332,35 @@ def admirals():
                 (b'XXXX', 0, b''),)), "rule b'XXXX' is not one the client knows"),
             ('a fifth type', adml(230, b'a1', kind=4),
              'its type 4 is not one the client offers'),
+            ('a rule at another version', adml(230, b'a1', rules=(
+                (b'TSCQ', 1, b'\5\0\0\0'),)), 'rule TSCQ is version 1, not 0'),
+            ('a rule cut short', adml(230, b'a1', rules=(
+                (b'MASH', 2, b'\0' * 8 + struct.pack('<I', 3)),)),
+             'rule MASH is cut short'),
+            ('a rule with bytes past its fields', adml(230, b'a1', rules=(
+                (b'FSHP', 0, b'\0'),)), 'rule FSHP holds 1 byte(s) past'),
             ('an empty name', adml(230, b''), 'the name is empty')):
         sub = with_admirals(held, ME, [record, adml(232, b'a2')])
         out, notes = merged(held, ('DemoPlayer', sub))
         check(f'{label} is refused, the admiral as served',
               (mo.admirals_of(out, ME), said(notes, 'DemoPlayer', why) != []),
               (mo.admirals_of(held, ME), True))
+    every = tuple((tag, version, b''.join(
+        {'u8': b'\1', 'u32': b'\5\0\0\0', 'ids': struct.pack('<II', 1, 265),
+         'u32s': struct.pack('<II', 1, 7), 'str': struct.pack('<I', 2) + b'ab'}[f]
+        for f in fields)) for tag, (version, fields) in sorted(
+            mo.RULE_LAYOUTS.items()))
+    check('every one of the 24 rules laid out as its writer writes it is read',
+          (len(every), mo.read_admiral(adml(230, b'a1', rules=every))),
+          (24, (b'a1', '')))
+    records = [r for p in glob_fixtures() for b in [sp.load_any(p)]
+               for o in mo.icv.owner_records(b)
+               for _oid, r in mo.admirals_of(b, o['oid']) or []]
+    check('    and the client wrote all 24 in the captures, each fitting its '
+          'layout (ar1, ar2)',
+          (sorted({t for r in records for t in rule_tags(r)}),
+           {mo.read_admiral(r)[1] for r in records}),
+          (sorted(mo.RULE_LAYOUTS), {''}))
     out, notes = merged(base, ('DemoPlayer', with_admirals(
         base, THEM, [adml(230, b'x')])))
     check("another civ's admirals are refused as theirs",
@@ -466,6 +545,115 @@ def diplomacy():
     check('the lump sum moves once with both civs submitting',
           [mo.resources_of(out, c)[0] for c in (GOOD, BAD)], [625, 635])
 
+    print('a credit lump sum, laid out as the client writes it (0x0055C740)')
+    turn = mo.icv.turn_of(d['d5b'])
+
+    def crls(amount, paid=0):
+        return sp.build_section(b'CRLS', 1, struct.pack('<IB', amount, paid))
+    length = sp.build_section(b'TRLE', 0, struct.pack('<I', 10))
+    offer = trty(681, GOOD, BAD, turn, kind=0, theirs=(crls(7), length))
+    served = with_treaties(d['d5b'], [r for t, r in mo.treaties(d['d5b']).items()
+                                      if t != 681] + [offer])
+    taken = mo.with_trdt(offer, 1, 10, turn)
+    before = [mo.credits_of(served, c) for c in (GOOD, BAD)]
+    for label, record in (('paid by the client', mo.with_sums_paid(taken)),
+                          ('left unpaid', taken)):
+        sub = with_treaties(served, [r for t, r in mo.treaties(served).items()
+                                     if t != 681] + [record])
+        out, notes = merged(served, ('BadGuy', sub))
+        check(f'accepted with the lump sum {label}: 7 credits move once and '
+              f'the treaty reads paid',
+              ([mo.credits_of(out, c) for c in (GOOD, BAD)],
+               mo.treaties(out)[681], notes.get('BadGuy')),
+              ([before[0] - 7, before[1] + 7], mo.with_sums_paid(taken), None))
+    out, notes = merged(d['d0'], ('GoodGuy', proposing(d['d0'], trty(
+        700, GOOD, BAD, mo.icv.turn_of(d['d0']), kind=0, mine=(crls(7),)))))
+    check('proposing one is kept', (sorted(mo.treaties(out)),
+                                    notes.get('GoodGuy')), ([700], None))
+
+    print('the length an acceptance gives (0x00559CE0, 0x005592B0)')
+    bare = trty(681, GOOD, BAD, turn, kind=0, theirs=(crls(7),))
+    served = with_treaties(d['d5b'], [r for t, r in mo.treaties(d['d5b']).items()
+                                      if t != 681] + [bare])
+    for length, refused in ((0, 0), (10, 1)):
+        sub = with_treaties(served, [r for t, r in mo.treaties(served).items()
+                                     if t != 681] + [mo.with_sums_paid(
+                                         mo.with_trdt(bare, 1, length, turn))])
+        out, notes = merged(served, ('BadGuy', sub))
+        check(f'a trade with items and no TRLE accepted at length {length}: '
+              f'{"refused" if refused else "kept, as the client gives it"}',
+              len(said(notes, 'BadGuy', 'answer changes more')), refused)
+    speedy = {n: sp.set_gset(d[n], {'speed': 1}) for n in ('d9g', 'd9a')}
+    for length, refused in ((10, 0), (20, 1)):
+        ceased = mo.treaties(speedy['d9a'])
+        ceased[683] = mo.with_trdt(ceased[683], length=length)
+        out, notes = merged(speedy['d9g'], ('GoodGuy', with_treaties(
+            speedy['d9a'], list(ceased.values()))))
+        check(f'in a speed galaxy a cease-fire accepted for {length} turns is '
+              f'{"refused" if refused else "kept: 0x0080B578 gives 10"}',
+              (trdt(mo.treaties(out)[683])[3:5],
+               len(said(notes, 'GoodGuy', 'answer changes more'))),
+              ((0, -2), 1) if refused else ((1, 10), 0))
+    check('the minimums by kind, and a wormhole connection\'s',
+          [mo.treaty_length({'kind': k, 'demands': [], 'offers': items}, s)
+           for s in (False, True)
+           for k, items in ((0, []), (2, []), (3, []), (4, []),
+                            (0, [(b'SHWH', b'\0' * 8)]),
+                            (0, [(b'TRLE', struct.pack('<I', 7))]))],
+          [-1, 20, 50, 100, 50, 7, -1, 10, 20, 30, 25, 7])
+
+    print('the credit lump sum and shared battle reports in the client')
+    cs = {n: dip(n) for n in ('cs0', 'cs1', 'cs2', 'cs3')}
+    offered = mo.read_trdt(mo.treaties(cs['cs1'])[684])
+    check('the proposal holds the lump sum as 7 credits, unpaid',
+          (offered['kind'], offered['demands'], offered['offers']),
+          (4, [(b'SHBR', b'')],
+           [(b'SHBR', b''), (b'CRLS', struct.pack('<IB', 7, 0))]))
+    accepted = mo.read_trdt(mo.treaties(cs['cs2'])[684])
+    check('the acceptance leaves it paid, 7 credits moved once',
+          (accepted['offers'][1],
+           [mo.credits_of(cs[n], c) for n in ('cs1', 'cs2') for c in (GOOD, BAD)]),
+          ((b'CRLS', struct.pack('<IB', 7, 1)), [10793, 5935, 10786, 5942]))
+    for base, cur, who in (('cs0', 'cs1', 'GoodGuy'), ('cs1', 'cs2', 'BadGuy')):
+        out, notes = merged(cs[base], (who, cs[cur]))
+        check(f'{cur} over {base}: treaties, stances and credits as the client '
+              f'left them, unnamed',
+              (mo.treaties(out), mo.stances(out),
+               [mo.credits_of(out, c) for c in (GOOD, BAD)], notes.get(who)),
+              (mo.treaties(cs[cur]), mo.stances(cs[cur]),
+               [mo.credits_of(cs[cur], c) for c in (GOOD, BAD)], None))
+    import fog
+
+    def news_181(blob, civ):
+        return [n[1:] for n in battle_news(blob) if n[0] == civ and n[1] == 181]
+    battle = news_181(cs['cs3'], 'GoodGuy')
+    check("GoodGuy's battle at Ceti reaches BadGuy's news on the tick",
+          (battle, news_181(cs['cs3'], 'BadGuy')),
+          ([(181, 11, (1150, 540, 1089))],) * 2)
+    check("and BadGuy's served view keeps it",
+          news_181(fog.project(cs['cs3'], 'BadGuy', log=lambda *a: None),
+                   'BadGuy'), battle)
+
+    out, _notes = merged(d['d6'], (civ[BAD], d['d7']))
+    check('a war declared writes both records as the client does: declared '
+          'on the declarer, and each the other\'s Inactivity (0x0055BD40)',
+          [mo.knpl_records(out, c) for c in (GOOD, BAD)],
+          [mo.knpl_records(d['d7'], c) for c in (GOOD, BAD)])
+    unruled = os.path.join(FIX, 'unruled')
+    tw0, tw1 = (sp.load_any(os.path.join(unruled, n + '.b64'))
+                for n in ('tw0', 'tw1'))
+    out, notes = merged(tw0, ('GoodGuy', tw1))
+    check("    and Robert's declaration on unruled reproduces his save",
+          (canonical.canonical_hash(out), notes.get('GoodGuy')),
+          (canonical.canonical_hash(tw1), None))
+
+    def field(blob, a, b, key):
+        rec = mo.knpl_records(blob, a)[b][1]
+        return knpl.parse(struct.pack('<I', 1) + rec)[0][key]
+    check('    with GoodGuy marked the declarer and 100 recorded both ways',
+          [field(out, a, b, k) for a, b in ((GOOD, BAD), (BAD, GOOD))
+           for k in ('declared', 'inactivity')], [1, 100, 0, 100])
+
     def war_fields(blob):
         return [{k: mo.known(blob, a, b)[k]
                  for k in ('stance', 'declared', 'w17', 'battled',
@@ -570,7 +758,15 @@ def diplomacy():
             ('a metal lump sum naming a sixth resource',
              trty(700, GOOD, BAD, turn, kind=0,
                   mine=(sp.build_section(b'RSLS', 0, struct.pack('<II', 5, 5)),)),
-             'not an amount and a resource')):
+             'not an amount and a resource'),
+            ('a credit lump sum of one u32',
+             trty(700, GOOD, BAD, turn, kind=0,
+                  mine=(sp.build_section(b'CRLS', 0, struct.pack('<I', 7)),)),
+             'not an unpaid amount'),
+            ('a credit lump sum already paid',
+             trty(700, GOOD, BAD, turn, kind=0,
+                  mine=(sp.build_section(b'CRLS', 1, struct.pack('<IB', 7, 1)),)),
+             'not an unpaid amount')):
         out, notes = merged(d['d0'], ('GoodGuy', proposing(d['d0'], record)))
         check(f'{label} is refused', (mo.treaties(out),
                                       len(said(notes, 'GoodGuy', why))),
@@ -634,6 +830,57 @@ def diplomacy():
            (mo.stances(out)[(GOOD, BAD)], mo.stances(out)[(BAD, GOOD)]),
            notes.get('BadGuy')),
           ((1, 100, turn), (4, 4), None))
+
+    print('a shared galaxy map is copied on acceptance (0x55D090, 0x529290)')
+    d1 = d['d1']
+    turn1 = mo.icv.turn_of(d1)
+    alliance = mo.treaties(d1)[679]
+    share = sp.build_section(mo.MAP_SHARE, 0, b'')
+    g0, b0 = known(d1, GOOD), known(d1, BAD)
+    newest = {k: max((m[k] for m in (g0, b0) if k in m),
+                     key=lambda s: s['turn']) for k in set(g0) | set(b0)}
+    check('d1: BadGuy holds systems GoodGuy lacks, and GoodGuy looked later '
+          'at some both hold',
+          (len(set(b0) - set(g0)),
+           len([k for k in set(g0) & set(b0)
+                if g0[k]['turn'] > b0[k]['turn']])), (10, 3))
+    lines = []
+    out = mo.merge(d1, [('BadGuy', with_treaties(d1, [mo.with_trdt(
+        alliance, 1, 100, turn1)]))], log=lines.append, notes=(notes := {}))
+    check('an alliance sharing both maps leaves each civ the newest row of '
+          'every system either held',
+          (known(out, GOOD), known(out, BAD), notes.get('BadGuy')),
+          (newest, newest, None))
+    check('and says so',
+          any("BadGuy's galaxy map shared with GoodGuy; GoodGuy's galaxy map "
+              "shared with BadGuy" in line for line in lines))
+    one = with_treaties(d['d0'], [trty(700, GOOD, BAD, turn, kind=0,
+                                       theirs=(share,))])
+    one = mo.set_high_water(one, 700)
+    out, notes = merged(one, ('BadGuy', with_treaties(one, [mo.with_trdt(
+        mo.treaties(one)[700], 1, 0, turn)])))
+    g1, b1 = known(one, GOOD), known(one, BAD)
+    check('one offered by the proposer reaches only the recipient',
+          (known(out, GOOD) == g1, set(known(out, BAD)) == set(g1) | set(b1),
+           notes.get('BadGuy')), (True, True, None))
+    unmet = with_section(d1, BAD, 'KNPL', struct.pack('<I', 0))
+    shared, met = mo.share_map(unmet, GOOD, BAD, turn1)
+    check('the receiver meets each civ the map names as an owner, as first '
+          'contact makes the record (0x534F90)',
+          (met, mo.knpl.parse(section(shared, BAD, 'KNPL'))),
+          ([GOOD], [dict(mo.FIRST_CONTACT, civ=GOOD, handle=GOOD, met=turn1)]))
+    shared, _met = mo.share_map(sp.set_gset(unmet, {'waronly': 1}), GOOD,
+                                BAD, turn1)
+    check('at war under waronly',
+          mo.knpl.parse(section(shared, BAD, 'KNPL'))[0]['stance'], 1)
+    broken = with_section(d1, GOOD, 'EXSY', b'\1')
+    out, notes = merged(broken, ('BadGuy', with_treaties(broken, [
+        mo.with_trdt(alliance, 1, 100, turn1)])))
+    check('an acceptance whose map does not read is refused, and nothing '
+          'moves', (out, notes.get('BadGuy')),
+          (broken, ['treaty 679 DROPPED, the galaxy map of BadGuy cannot be '
+                    'shared: a known-systems or known-civs table does not '
+                    'read']))
 
     print('one submission with admirals and diplomacy keeps the rest')
     sub = made(d['d0'], GOOD, [adml(700, b'a1')], 700)

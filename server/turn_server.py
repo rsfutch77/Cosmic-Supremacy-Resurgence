@@ -9,6 +9,7 @@ and `open_store("some/dir")` are interchangeable to every caller.
 
     GET  /state                     the turn number, deadline, roster
     GET  /turn/<n>?civ=<civ>        that turn as the civ is served it
+    GET  /replay/<n>?civ=<civ>      the civ's own view of any played turn
     GET  /turn/<n>?whole=1          the turn itself, for the referee
     POST /view/<n>/<civ>            one civ's view of a turn not yet published
     POST /turn/<n>?seconds=<s>&view=<civ>...
@@ -136,6 +137,13 @@ class Handler(BaseHTTPRequestHandler):
                     return self._blob(STORE.served_turn(civ, n))
                 except turn_store.NotServed as exc:
                     return self._fail(403, str(exc))
+            if len(parts) == 2 and parts[0] == 'replay':
+                civ = (q.get('civ') or [None])[0]
+                try:
+                    return self._blob(turn_store.replay_view(
+                        STORE, STORE.state(), civ, int(parts[1])))
+                except turn_store.NotServed as exc:
+                    return self._fail(403, str(exc))
             if len(parts) == 2 and parts[0] == 'submissions':
                 # Names only, without reading any submission.
                 return self._json(STORE.submitted_civs(int(parts[1])))
@@ -167,6 +175,11 @@ class Handler(BaseHTTPRequestHandler):
                     return self._fail(404, f'nothing has been decided about '
                                            f'{parts[1]}')
                 return self._json(answer)
+            if len(parts) == 2 and parts[0] == 'scan':
+                rec = STORE.scan(parts[1])
+                if rec is None:
+                    return self._fail(404, f'no scan {parts[1]}')
+                return self._json(turn_store.scan_to_json(rec))
             if len(parts) == 3 and parts[0] == 'note':
                 lines = STORE.note(parts[2], int(parts[1]))
                 if not lines:
@@ -258,6 +271,24 @@ class Handler(BaseHTTPRequestHandler):
                 STORE.answer_join(key, json.loads(body or b'{}'))
                 log(f'  answered the join request filed under {key}')
                 return self._json({'key': key})
+            if len(parts) == 3 and parts[0] == 'scan' \
+                    and turn_store.scan_id_ok(parts[1]):
+                if parts[2] not in (turn_store.SCAN_DELIVERED,
+                                    turn_store.SCAN_CANCELLED):
+                    return self._fail(403, 'only the worker answers a scan')
+                rec = STORE.move_scan(parts[1], parts[2])
+                if rec is None:
+                    return self._fail(404, f'no scan {parts[1]}')
+                log(f'  scan {parts[1]} is {rec.get("state")}{self._who()}')
+                return self._json(turn_store.scan_to_json(rec))
+            if len(parts) == 3 and parts[0] == 'scan':
+                n, civ = int(parts[1]), parts[2]
+                if STORE.is_closed() or n != STORE.current()[0]:
+                    return self._fail(409, f'turn {n} is not being played')
+                kind, targets = turn_store.parse_scan_request(body)
+                scan_id = STORE.ask_scan(civ, n, kind, targets)
+                log(f'  {civ} asked scan type {kind} on {targets}{self._who()}')
+                return self._json({'id': scan_id})
         except ValueError as exc:
             return self._fail(400, str(exc))
         except Exception as exc:                            # noqa: BLE001

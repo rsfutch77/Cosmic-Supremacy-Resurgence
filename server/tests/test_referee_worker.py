@@ -15,6 +15,7 @@ Each check is paired with its control:
 A real tick needs the game client, so `referee.resolve_turn` is stubbed and
 the worker's decision to call it is what is tested.
 """
+import glob
 import inspect
 import json
 import os
@@ -615,7 +616,7 @@ def test_heartbeat():
     check('and a store too old to carry one simply has none', True, True)
 
     # An idle pass writes nothing; only a closed turn sends a heartbeat.
-    src = inspect.getsource(rw.run)
+    src = inspect.getsource(rw.tend)
     idle = src.split('referee.wait_for_client_free')[0]
     check('no heartbeat on an idle pass', 'heartbeat(' in idle, False)
     check('one after a turn closes',
@@ -821,6 +822,109 @@ def test_operator_page():
           "'worker_work\\operator.html'" in script, True)
 
 
+def test_many():
+    """One worker over several galaxies, sharing the client."""
+    print('several galaxies')
+    quiet = lambda *a: None                                 # noqa: E731
+    root = tmpdir('many')
+
+    def galaxy(name, seconds_left):
+        s = TurnStore(os.path.join(root, name))
+        s.start(b'BASE' * 64, ['DemoPlayer', 'Neighbor'], turn_seconds=3600,
+                turn=12)
+        s.update_state({'deadline': time.time() + seconds_left})
+        return s
+
+    galaxy('alpha', -300)
+    galaxy('beta', -600)
+    work = tmpdir('many_work')
+    pattern = os.path.join(root, '*')
+    calls = Calls()
+    undo = stub_referee(calls)
+    roster = rw.Roster([pattern], work_dir=work, log=quiet)
+    try:
+        check('a pattern names several galaxies', rw.is_pattern([pattern]),
+              True)
+        check('one plain store does not', rw.is_pattern([root]), False)
+        check('once over two overdue galaxies closes both',
+              rw.run_many(roster, once=True, log=quiet, sleeper=quiet),
+              rw.EXIT_OK)
+        names = [os.path.basename(c['store'].root) for c in calls.args]
+        check('the soonest deadline first, one at a time', names,
+              ['beta', 'alpha'])
+        check('each galaxy has its own status file',
+              len(glob.glob(os.path.join(work, 'worker_*.json'))), 2)
+        index = open(os.path.join(work, 'operator.html'),
+                     encoding='utf-8').read()
+        check('operator.html lists each galaxy\'s page',
+              'operator_alpha.html' in index and 'operator_beta.html' in index,
+              True)
+    finally:
+        roster.release()
+        undo()
+
+    # A failing galaxy backs off alone; the other still closes.
+    root = tmpdir('many')
+    bad, good = galaxy('bad', -600), galaxy('good', -300)
+
+    class Picky(Calls):
+        def __call__(self, store, save_dir=None, log=print):
+            if os.path.basename(store.root) == 'bad':
+                self.args.append({'store': store, 'save_dir': save_dir})
+                raise OSError('the share went away')
+            return super().__call__(store, save_dir=save_dir, log=log)
+
+    calls = Picky()
+    undo = stub_referee(calls)
+    roster = rw.Roster([os.path.join(root, '*')], work_dir=tmpdir('many_work'),
+                       log=quiet)
+    slept = []
+    try:
+        rw.run_many(roster, log=quiet, sleeper=slept.append,
+                    stop=lambda: len(slept) >= 3)
+        tries = [os.path.basename(c['store'].root) for c in calls.args]
+        check('a failing galaxy does not hold up the other',
+              good.current()[0], 13)
+        check('and the good galaxy closed once', tries.count('good'), 1)
+        check('the failing one waits out what is left of its backoff',
+              rw.BACKOFF_FIRST - 1 < slept[0] <= rw.BACKOFF_FIRST, True)
+        check('and the turn it failed on is left where it was',
+              bad.current()[0], 12)
+    finally:
+        roster.release()
+        undo()
+
+    # A galaxy started later is picked up at the next listing, and one
+    # another worker holds is left to it.
+    root = tmpdir('many')
+    galaxy('first', 3600)
+    clock = [1000.0]
+    said, log = lines()
+    roster = rw.Roster([os.path.join(root, '*')], work_dir=tmpdir('many_work'),
+                       log=log, clock=lambda: clock[0])
+    held = None
+    try:
+        check('the first listing has one galaxy', len(roster()), 1)
+        galaxy('second', 3600)
+        galaxy('taken', 3600)
+        held = rw.GalaxyGuard(os.path.join(root, 'taken'),
+                              work_dir=tmpdir('other_work')).acquire()
+        check('a new galaxy waits for the next listing', len(roster()), 1)
+        clock[0] += rw.POLL_CEILING
+        got = sorted(g.gid for g in roster())
+        check('and is picked up at it', got, ['first', 'second'])
+        check('a galaxy another worker holds is left to it, and said',
+              any('taken' in x and 'another worker' in x for x in said), True)
+        clock[0] += rw.POLL_CEILING
+        roster()
+        check('and said only once',
+              sum('another worker' in x for x in said), 1)
+    finally:
+        roster.release()
+        if held is not None:
+            held.release()
+
+
 if __name__ == '__main__':
     test_overdue()
     test_loop()
@@ -832,6 +936,7 @@ if __name__ == '__main__':
     test_heartbeat()
     test_log()
     test_operator_page()
+    test_many()
     print(f'\n{len(PASS)} passed, {len(FAIL)} failed')
     if FAIL:
         for n in FAIL:

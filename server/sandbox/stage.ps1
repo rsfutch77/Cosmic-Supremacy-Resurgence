@@ -20,8 +20,9 @@
     a folder store and fails a firebase:// one.
 
 .PARAMETER Store
-    The galaxy, as the worker's --store takes it. A folder path is read inside the
-    sandbox, so a folder galaxy is given with -Seed.
+    The galaxy, as the worker's --store takes it. firebase://<project>/* is every
+    galaxy in the project, including ones started after the stage. A folder path
+    is read inside the sandbox, so a folder galaxy is given with -Seed.
 
 .PARAMETER Seed
     A folder galaxy on the host, copied into the stage and from there to a

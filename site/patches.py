@@ -150,7 +150,7 @@ def remove_firewall_subtab(html):
 
 
 def remove_todo_subtab(html):
-    """The list is captured in cosmic_supremacy_original_todo.csv and retired.
+    """The list lives on as GitHub issues labelled `original list`, and is retired.
 
     It tracked a live game's backlog against a forum that is not published,
     so every item linked somewhere that cannot be read.
@@ -323,7 +323,7 @@ def _is_retired(href):
 def remove_retired_links(html):
     """Drop links to the retired ToDo pages.
 
-    Both were captured to cosmic_supremacy_original_todo.csv before removal.
+    Both are GitHub issues labelled `original list`.
     A list entry goes whole, because the text beside it describes a page that
     no longer exists. Anywhere else the anchor goes on its own, taking a
     following breadcrumb separator with it so no trail ends in a chevron.
@@ -454,6 +454,153 @@ def remove_wiki_buttons(html):
     return _WIKI_FORM_RE.sub("", html)
 
 
+# The sidebar's Game Preview box plays the trailer through a Flash player,
+# which no browser runs. The override pages show the same trailer as an MP4
+# in a video element; the archive pages get the same markup.
+_FLASH_PREVIEW_RE = re.compile(
+    r"<embed\b[^>]*?src=['\"]/images/preloadFLV\.swf['\"][^>]*?/?>", re.I | re.S)
+PREVIEW_VIDEO = ("<video width='180' height='132' autoplay loop >\n"
+                 "    <source type='video/mp4' src='/images/preview.mp4' ></source>\n"
+                 "    Videos not supported by this browser\n"
+                 "</video>")
+
+
+def replace_flash_preview(html):
+    return _FLASH_PREVIEW_RE.sub(lambda _m: PREVIEW_VIDEO, html)
+
+
+# Screen readers pick a page's language from the html element. The archive's
+# pages state none; the wiki's already say English.
+_HTML_TAG_RE = re.compile(r"<html\b(?![^>]*\blang=)([^>]*)>", re.I)
+
+
+def declare_language(html):
+    return _HTML_TAG_RE.sub(lambda m: f'<html lang="en"{m.group(1)}>', html, count=1)
+
+
+# A video that starts by itself needs a way to pause it (WCAG 2.2.2): the
+# Game Preview loops for two minutes. Muted, so browsers allow the autoplay.
+_AUTOPLAY_RE = re.compile(r"<video\b(?![^>]*\bcontrols)([^>]*\bautoplay\b[^>]*?)\s*>", re.I)
+
+
+def pausable_video(html):
+    return _AUTOPLAY_RE.sub(lambda m: f"<video{m.group(1)} controls muted>", html)
+
+
+# Each page's main column is its main landmark (WCAG 1.3.1): the archive and
+# the wiki keep it in left_content, the 404 page in its page div.
+_MAIN_COLUMN_RE = re.compile(r"<div\b(?![^>]*\brole=)([^>]*\bid=['\"]left_content['\"][^>]*)>", re.I)
+_PAGE_DIV_RE = re.compile(r'<div\b(?![^>]*\brole=)([^>]*\bclass="page\b[^"]*"[^>]*)>', re.I)
+
+
+def mark_main(html):
+    if re.search(r"\brole=['\"]main['\"]", html, re.I):
+        return html
+    new = _MAIN_COLUMN_RE.sub(lambda m: f"<div{m.group(1)} role='main'>", html, count=1)
+    if new == html:
+        new = _PAGE_DIV_RE.sub(lambda m: f'<div{m.group(1)} role="main">', html, count=1)
+    return new
+
+
+# Every image has a text alternative (WCAG 1.1.1). Score graphs, logos,
+# screenshots and installer dialogs say what they show; the news and feature
+# illustrations sit beside text that names them, so they are decoration.
+_ALT_FOR = [
+    (re.compile(r"/scoregraphs/scoregraph_\d+\.png"), "Graph of the players' scores by turn"),
+    (re.compile(r"/downloads/(CS_Logo_\w+|CosmicSupremacy)\.(jpg|gif)"), "Cosmic Supremacy logo"),
+    (re.compile(r"/images/GalaxyPass\.png"),
+     "Firefox asking what to do with GalaxyPass.csgalaxy, set to open it with the Cosmic Supremacy client"),
+    (re.compile(r"/images/GalaxyPassManual\.png"),
+     "A browser asking whether to save GalaxyPass.csgalaxy, a file type it does not know"),
+    (re.compile(r"/pageimages/download\.png"), "Download the installer"),
+]
+_NO_ALT_IMG_RE = re.compile(r"<img\b(?![^>]*\balt=)([^>]*?)(\s*/?)>", re.I)
+_SRC_RE = re.compile(r"\bsrc=['\"]([^'\"]*)", re.I)
+_SCREENSHOT_RE = re.compile(r"/images/screen\d+\.png")
+_CAPTION_RE = re.compile(r"\s*<br>\s*([^:<]+)", re.I)
+
+
+def describe_images(html):
+    def alt(m):
+        src = _SRC_RE.search(m.group(1))
+        src = src.group(1) if src else ""
+        text = next((t for pat, t in _ALT_FOR if pat.search(src)), "")
+        if _SCREENSHOT_RE.search(src):
+            cap = _CAPTION_RE.match(html, m.end())
+            text = cap.group(1).strip() if cap else "Screenshot"
+        return f'<img{m.group(1)} alt="{text}"{m.group(2)}>'
+    return _NO_ALT_IMG_RE.sub(alt, html)
+
+
+# A final-score table's first row holds its column headings (WCAG 1.3.1). The
+# archive marks them as bold data cells, after a table tag left unclosed.
+_SCORE_TABLE_RE = re.compile(r"<table id='list'<tr>(.*?)</tr>", re.S)
+_BOLD_CELL_RE = re.compile(r"<td\b([^>]*)><b>(.*?)</b></td>", re.S)
+
+
+def _heading_cell(m):
+    attrs = m.group(1) if "align=" in m.group(1) else m.group(1) + " align='left'"
+    return f"<th scope='col'{attrs}>{m.group(2)}</th>"
+
+
+def label_score_tables(html):
+    return _SCORE_TABLE_RE.sub(
+        lambda m: f"<table id='list'><tr>{_BOLD_CELL_RE.sub(_heading_cell, m.group(1))}</tr>", html)
+
+
+# The galaxy history lays its galaxies out in a grid of cells, not a data table.
+_GALAXY_GRID = "<table id='list' width='100%'>"
+
+
+def mark_galaxy_grid(html):
+    return html.replace(_GALAXY_GRID, "<table id='list' width='100%' role='presentation'>")
+
+
+# overrides/css/access.css holds the contrast, target size and reflow fixes.
+# It comes last in the head, so it wins over the archive's stylesheets.
+ACCESS_CSS = "<link href='/css/access.css' rel='stylesheet' type='text/css' />"
+VIEWPORT = '<meta name="viewport" content="width=device-width, initial-scale=1" />'
+_HEAD_END_RE = re.compile(r"</head>", re.I)
+
+
+def link_access_css(html):
+    if ACCESS_CSS in html:
+        return html
+    return _HEAD_END_RE.sub(lambda m: ACCESS_CSS + "\n" + m.group(0), html, count=1)
+
+
+# Phones lay a page out at the screen's width, so the stacked layout applies.
+def fit_the_screen(html):
+    if re.search(r"<meta[^>]+name=['\"]viewport['\"]", html, re.I):
+        return html
+    return _HEAD_END_RE.sub(lambda m: VIEWPORT + "\n" + m.group(0), html, count=1)
+
+
+# The wiki's back-to-top control is a button inside a link, two targets on one
+# spot (WCAG 2.5.8). A plain link does the same without script.
+_BACK_TO_TOP_RE = re.compile(
+    r'<a class="nolink" href="#dokuwiki__top"><input type="button" class="button" '
+    r'value="Back to top"[^>]*/></a>')
+BACK_TO_TOP = '<a class="backtotop" href="#dokuwiki__top">Back to top</a>'
+
+
+def plain_back_to_top(html):
+    return _BACK_TO_TOP_RE.sub(BACK_TO_TOP, html)
+
+
+# The front page's art is 1448 px wide, drawn at 640. Each screen fetches the
+# copy its width needs (overrides/wiki/_media/manual/karei-s-art-*.jpg).
+_ART = '/wiki/_media/manual/karei-s-art'
+_FRONT_ART = f'<img src="{_ART}.jpg" alt="" border="0" width="640" height="480"'
+FRONT_ART = (f'<img src="{_ART}-640.jpg" srcset="{_ART}-640.jpg 640w, {_ART}-960.jpg 960w, '
+             f'{_ART}-1280.jpg 1280w" sizes="(max-width: 989px) 100vw, 640px" alt="" border="0" '
+             f'width="640" height="480"')
+
+
+def size_front_art(html):
+    return html.replace(_FRONT_ART, FRONT_ART)
+
+
 PATCHES = [
     ("remove the Live Chat tab", remove_live_chat),
     ("point the Forum tab at the Facebook group", repoint_forum_tab),
@@ -471,6 +618,17 @@ PATCHES = [
     ("point support e-mail at GitHub", redirect_support_email),
     ("remove the social bookmark bar", remove_social_bar),
     ("remove the wiki's engine buttons", remove_wiki_buttons),
+    ("play the Game Preview without Flash", replace_flash_preview),
+    ("declare the page's language", declare_language),
+    ("let an autoplaying video be paused", pausable_video),
+    ("mark the main column as the main landmark", mark_main),
+    ("give every image a text alternative", describe_images),
+    ("give the score tables column headings", label_score_tables),
+    ("mark the galaxy history grid as layout", mark_galaxy_grid),
+    ("replace the wiki's back-to-top button with a link", plain_back_to_top),
+    ("serve the front page's art at the size drawn", size_front_art),
+    ("fit the page to the screen", fit_the_screen),
+    ("link the accessibility stylesheet", link_access_css),
 ]
 
 

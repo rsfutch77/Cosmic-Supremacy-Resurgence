@@ -19,6 +19,7 @@ Re-running wipes and rebuilds public/, so it is always reproducible.
 """
 
 import argparse
+import json
 import os
 import posixpath
 import re
@@ -34,6 +35,7 @@ WAYBACK = os.path.join(REPO, "tools", "wayback")
 sys.path.insert(0, WAYBACK)
 import wayback_grab as wg  # noqa: E402  (reuse the mirror's own path logic)
 import patches            # noqa: E402  site-wide edits, see patches.py
+import heads              # noqa: E402  each page's own title and description
 import inventory          # noqa: E402  writes TODO-content.md
 import news               # noqa: E402  the home page's news items
 
@@ -413,11 +415,14 @@ def rewrite_links(text, page_rel, staged):
 
     def sub(match):
         nonlocal count
-        for cand in candidates(match.group("url"), base_dir):
+        url = match.group("url")
+        # The link keeps its anchor, such as the footer's #privacy.
+        frag = url[url.index("#"):] if "#" in url else ""
+        for cand in candidates(url, base_dir):
             if cand in staged:
                 count += 1
                 q = match.group("q")
-                return match.group("pre") + q + "/" + cand + q
+                return match.group("pre") + q + "/" + cand + frag + q
         return match.group(0)
 
     return REF_RE.sub(sub, text), count
@@ -485,6 +490,39 @@ def unlink_dead_links(html, page_rel, staged):
     return _PAGER_RE.sub(pager, _ANCHOR_RE.sub(sub, html)), dead
 
 
+# Google Analytics 4. Empty serves no tag. The id is public: every page carries it.
+GA_MEASUREMENT_ID = "G-K0M04EEN4W"     # the "Cosmic Resurgence" web stream
+
+# Consent Mode: no ad storage anywhere, and in the EEA, UK and Switzerland no
+# analytics cookies either, so those visitors send cookieless pings.
+CONSENT_REGIONS = ["AT", "BE", "BG", "HR", "CY", "CZ", "DK", "EE", "FI", "FR", "DE",
+                   "GR", "HU", "IE", "IT", "LV", "LT", "LU", "MT", "NL", "PL", "PT",
+                   "RO", "SK", "SI", "ES", "SE", "IS", "LI", "NO", "GB", "CH"]
+ANALYTICS_MARK = "gtag('config'"
+ANALYTICS = """<script async src="https://www.googletagmanager.com/gtag/js?id={id}"></script>
+<script>
+window.dataLayer = window.dataLayer || [];
+function gtag(){{dataLayer.push(arguments);}}
+gtag('consent', 'default', {{ad_storage: 'denied', ad_user_data: 'denied',
+  ad_personalization: 'denied', analytics_storage: 'granted'}});
+gtag('consent', 'default', {{analytics_storage: 'denied', region: {regions}}});
+gtag('js', new Date());
+gtag('config', '{id}');
+</script>
+"""
+
+
+def analytics(html):
+    """Add the analytics tag before </head>. Idempotent; nothing without an id."""
+    if not GA_MEASUREMENT_ID or ANALYTICS_MARK in html:
+        return html
+    m = re.search(r"</head>", html, re.I)
+    if not m:
+        return html
+    tag = ANALYTICS.format(id=GA_MEASUREMENT_ID, regions=json.dumps(CONSENT_REGIONS))
+    return html[:m.start()] + tag + html[m.start():]
+
+
 NOTICE_MARK = "property of their original creator"
 _ANY_ROBOTS_RE = re.compile(r"\s*<meta[^>]+name=[\"']robots[\"'][^>]*>", re.I)
 
@@ -524,6 +562,7 @@ def inject(html):
     """
     html = _ANY_ROBOTS_RE.sub("", html)
     html = disable_forms(html)
+    html = analytics(html)
 
     if NOTICE_MARK not in html:
         m = re.search(r"</body>", html, re.I)
@@ -534,10 +573,25 @@ def inject(html):
 _CANONICAL_RE = re.compile(r"<link\b[^>]*\brel=['\"]canonical['\"][^>]*>\s*", re.I)
 
 
+# Wiki pages the archive holds at a second address, each a capture of the same
+# page on another date. The second address names the first as canonical, so
+# search engines and the sitemap know the page once.
+WIKI_ALIASES = {
+    "wiki/index.html": "wiki/start.html",
+    "wiki/doku.php.html": "wiki/start.html",
+    "wiki/faq/index.html": "wiki/faq.html",
+    "wiki/getstarted/index.html": "wiki/getstarted.html",
+    "wiki/guides/index.html": "wiki/guides.html",
+    "wiki/manual/index.html": "wiki/manual.html",
+    "wiki/manual/loyalty-corruption_.html": "wiki/manual/loyalty-corruption.html",
+}
+
+
 def canonical_url(rel, seed):
     """The address a page is known by. The seed is also served at /, and / wins."""
     if rel in ("index.html", seed):
         return SITE
+    rel = WIKI_ALIASES.get(rel, rel)
     return SITE + urllib.parse.quote(rel, safe="/@=&;,+")
 
 
@@ -781,7 +835,7 @@ def main():
         for name in hit:
             patch_hits[name] = patch_hits.get(name, 0) + 1
         with open(full, "w", encoding="utf-8") as fh:
-            fh.write(canonical(inject(text), rel, args.seed))
+            fh.write(canonical(heads.retitle(inject(text), rel), rel, args.seed))
 
     # Release binaries are not staged here. The client zip is attached to the
     # GitHub release for its tag, which serves the download and counts it, and

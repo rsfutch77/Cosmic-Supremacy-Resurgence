@@ -1126,6 +1126,9 @@ def closed_problem(state) -> "str | None":
             "from the Galaxies list to keep playing.")
 
 
+# Seconds the scan window's Retry counts down before it can be pressed.
+SCAN_RETRY_AFTER = 30
+
 # What the turn readout says once the galaxy being followed has closed.
 GALAXY_ENDED_NOTE = "this galaxy has ended"
 
@@ -1339,6 +1342,8 @@ MP_CONFIG = "multiplayer.json"
 
 # What the turn loop may start. Not in the manifest: the loop picks the build.
 MP_CLIENTS = ("CosmicSupremacy_Player.exe", "CosmicSupremacy_TestBed.exe")
+# The replay's galaxy pass, written to the data directory.
+REPLAY_PASS = "replay.csgalaxy"
 
 
 def multiplayer_file(data_dir: str):
@@ -1962,7 +1967,8 @@ def galaxy_to_play(data_dir: str):
 
 
 # A join is a request. The worker applies it at a turn boundary, so a player
-# who clicks Join during turn N plays from turn N+1.
+# who clicks Join during turn N plays from turn N+1. On a starting galaxy the
+# worker seats it within minutes, into turn 0.
 def join_request(name: str, uid, build: str, turn=None, now=None) -> dict:
     """The request a Join writes, read by the worker at the next turn boundary.
 
@@ -2336,6 +2342,8 @@ ENDED = "ended"
 RECLAIMED = "reclaimed"
 ACTION_TEXT = {PLAY: "Play", VIEW: "View", REASON: "Review",
                ENDED: "Review", RECLAIMED: "Review"}
+# Rows of galaxies the player still has a seat in, which carry Replay.
+REPLAY_ROWS = (PLAY, ENDED)
 
 # The status column orders by how far along a galaxy is, not alphabetically.
 STATUS_ORDER = (OPEN, FORMING, CLOSED)
@@ -2391,12 +2399,20 @@ def _status_value(g, view):
             else len(STATUS_ORDER))
 
 
+def starting(g) -> bool:
+    """An open galaxy whose first turn has not closed yet."""
+    return g.status == OPEN and g.turn == 0
+
+
 def _status_text(g, view):
-    """The galaxy's own word, or "stopped" when its turns have stopped. The
-    column still sorts on the stored word.
+    """The galaxy's own word, "stopped" when its turns have stopped, or
+    "starting" before its first turn closes. The column still sorts on the
+    stored word.
     """
     if row_stalled_for(g, view):
         return "stopped"
+    if starting(g):
+        return "starting"
     return g.status or ""
 
 
@@ -2427,12 +2443,21 @@ def _left_text(g, view):
             if left > 0 else "time is up")
 
 
+def _joining(g) -> int:
+    """Join requests waiting on the galaxy. A row from a directory older than
+    the count carries none."""
+    return getattr(g, "joining", 0) or 0
+
+
 def _players_value(g, view):
-    return g.players or 0
+    """Seated civs, bots included, and the players waiting to join."""
+    return (g.players or 0) + _joining(g)
 
 
 def _players_text(g, view):
-    return str(g.players or 0)
+    joining = _joining(g)
+    total = _players_value(g, view)
+    return f"{total} ({joining} joining)" if joining else str(total)
 
 
 def _you_value(g, view):
@@ -2460,7 +2485,10 @@ def _you_text(g, view):
         return "seat reclaimed"
     if pending_join(g, view.recs):
         # A request lodged before the galaxy ended is never going to land.
-        return "galaxy ended" if g.status == CLOSED else "joining next turn"
+        if g.status == CLOSED:
+            return "galaxy ended"
+        # The referee seats a join on a starting galaxy within minutes.
+        return "joining shortly" if starting(g) else "joining next turn"
     return ""
 
 
@@ -3103,13 +3131,15 @@ class GalaxyRow(typing.NamedTuple):
     """One row of the galaxy table as the window draws it.
 
     `cells` is (text, colour) per column of GALAXY_COLUMNS. `action` is the
-    label of the row's one button, or None for a row without one, and
-    `on_action` is what pressing it does.
+    label of the row's button, or None for a row without one, and
+    `on_action` is what pressing it does. `on_replay` is the Replay button
+    beside it, on a galaxy the player has a seat in, or None.
     """
     cells: list
     action: "str | None" = None
     on_action: "typing.Callable | None" = None
     enabled: bool = True
+    on_replay: "typing.Callable | None" = None
 
 
 # What the followed galaxy's turn is doing while every row's Play is greyed
@@ -3228,6 +3258,13 @@ class Launcher:
         # the UI says until the client is back up.
         self.mp_reopen = threading.Event()
         self.mp_reopening = False
+        # The socket a patched client sends its scans to, started with the
+        # first multiplayer galaxy and kept until the launcher closes.
+        self.scan_endpoint = None
+        # The replay: a client in replay mode and the socket that serves it
+        # (replay_endpoint.py), both kept only while that client runs.
+        self.replay_proc = None
+        self.replay_endpoint = None
         # Set when this machine's internet connection comes or goes, so the
         # loop reads the galaxy at once (see `_watch_network`).
         self.mp_check_now = threading.Event()
@@ -4082,10 +4119,13 @@ class Launcher:
         """What colour one cell is drawn in.
 
         Lit for galaxies that are this player's business, dim for the rest. A
-        stopped galaxy's status cell takes the warning colour regardless.
+        stopped galaxy's status cell takes the warning colour regardless, and a
+        starting one's the good colour.
         """
         if col is GALAXY_STATUS and row_stalled_for(g, view):
             return WARN
+        if col is GALAXY_STATUS and starting(g):
+            return OK
         return TEXT if near else DIM
 
     def _galaxy_view(self):
@@ -4131,7 +4171,9 @@ class Launcher:
             drawn.append(GalaxyRow(
                 cells, ACTION_TEXT[action] if action is not None else None,
                 (lambda gg=g, a=action: self.on_row(gg, a)) if live else None,
-                enabled=live or action is None))
+                enabled=live or action is None,
+                on_replay=((lambda gg=g: self.on_replay(gg))
+                           if action in REPLAY_ROWS else None)))
         self.view.draw_galaxies(drawn)
         self._show_hint(rows, view)
 
@@ -4195,6 +4237,11 @@ class Launcher:
                 text = ("You are not in a galaxy yet. Press View on one to "
                         "read what you would be joining, and join from "
                         "there.")
+            elif any(awaiting_answer(g, view.recs) and starting(g)
+                     for g in rows):
+                text = ("Your empire appears within a few minutes, before "
+                        "the galaxy starts, so you can set up your first "
+                        "turn.")
             elif any(awaiting_answer(g, view.recs) for g in rows):
                 text = ("Your join request is pending until the next turn.")
         # Called once a second; the view repaints only on a change.
@@ -4314,6 +4361,81 @@ class Launcher:
             return
         self.start_multiplayer(mode, g)
 
+    # The replay. The client's own replay screen steps through the turns of a
+    # galaxy as this player's civ saw them, each read through the store
+    # (replay_endpoint.py). It runs on the one game client, so it opens only
+    # with no game running, and the turn loop serves nothing until it closes.
+    def replay_open(self) -> bool:
+        proc = self.replay_proc
+        return proc is not None and proc.poll() is None
+
+    def on_replay(self, g):
+        """Open the replay of one row's galaxy."""
+        if self.replay_open():
+            self.warn("The replay is already open.")
+            return
+        busy = running_clients(self.client_exes)
+        if busy:
+            self.warn("Close the game first, then press Replay.\n\nThis "
+                      "machine runs one game at a time. Closing it during a "
+                      "turn sends your orders, as it always does.")
+            return
+        exe = next((os.path.join(self.game_root, e) for e in MP_CLIENTS
+                    if os.path.exists(os.path.join(self.game_root, e))), None)
+        if exe is None:
+            self.warn("This build ships no multiplayer client, so it cannot "
+                      "open a replay.")
+            return
+        cfg = self.galaxy_config(g)
+        civ = self.player
+        mods = multiplayer_modules()
+        if cfg is None or not civ or mods is None:
+            self.warn("The replay opens for a galaxy you play in.")
+            return
+        _player_turn, turn_store = mods
+        bind_multiplayer_paths(self.game_root, self.data_dir)
+        if store_wants_token(cfg) and not (self._email_ready()
+                                          and self._guest_ready()):
+            return
+        token = player_token(self.data_dir) if store_wants_token(cfg) else None
+        try:
+            store = open_player_store(turn_store, cfg["store"], token)
+            newest = int(store.state()["turn"])
+        except Exception as exc:                            # noqa: BLE001
+            said = relay_refusal(exc)
+            self.warn("The galaxy could not be read, so the replay cannot "
+                      f"open.\n\n{said[1] if said else exc}")
+            return
+
+        import replay_endpoint
+        name = g.name or g.id
+        ep = replay_endpoint.ReplayEndpoint(
+            lambda: (store, civ, newest), log=self.say_threadsafe)
+        if not ep.start():
+            self.warn("The replay could not open: another program holds "
+                      f"port {replay_endpoint.PORT}.")
+            return
+        pass_file = os.path.join(self.data_dir, REPLAY_PASS)
+        try:
+            with open(pass_file, "wb") as f:
+                f.write(replay_endpoint.pass_text())
+            proc = subprocess.Popen([exe, pass_file], cwd=self.game_root)
+        except OSError as exc:
+            ep.stop()
+            self.warn(f"The replay could not start the game.\n\n{exc}")
+            return
+        self.replay_proc, self.replay_endpoint = proc, ep
+        self.say(f"replay: {name} as {civ}, turns up to {newest}")
+
+        def watch():
+            proc.wait()
+            ep.stop()
+            if self.replay_endpoint is ep:
+                self.replay_endpoint = None
+            self.say_threadsafe(f"replay: {name} closed")
+
+        threading.Thread(target=watch, daemon=True, name="replay").start()
+
     def show_beta_notice(self, body: str, g, civ: str = None) -> bool:
         """Show the notice and answer whether the player joined from it.
 
@@ -4325,9 +4447,15 @@ class Launcher:
         heading = notice.title(body) if notice else "Before you join the beta"
         when = f"turn {g.turn + 1}" if g.turn is not None else "its first turn"
         who = f" as {civ}" if civ else ""
-        lead = (f"You are about to join {g.name or g.id}{who}. New players "
-                "arrive at a turn boundary, your empire appears at "
-                f"{when}.")
+        if starting(g):
+            lead = (f"You are about to join {g.name or g.id}{who}. It has not "
+                    "started yet, so your empire appears within a few "
+                    "minutes and you can set up your first turn before it "
+                    "starts.")
+        else:
+            lead = (f"You are about to join {g.name or g.id}{who}. New "
+                    "players arrive at a turn boundary, your empire appears "
+                    f"at {when}.")
         return self.view.beta_notice(heading, lead, body)
 
     def on_join(self, g):
@@ -4739,6 +4867,7 @@ class Launcher:
                     send_now=self.mp_send_now,
                     reopen=self.mp_reopen,
                     check_now=self.mp_check_now,
+                    hold=self.replay_open,
                     log=self.say_threadsafe)
             except BaseException as exc:            # noqa: BLE001
                 # A dead worker must say so. A relay refusal is said in the
@@ -4755,6 +4884,126 @@ class Launcher:
         self.mp_thread = threading.Thread(target=work, daemon=True,
                                           name="multiplayer")
         self.mp_thread.start()
+        self._start_scans()
+
+    # Scans. The patched multiplayer client sends a scan to the launcher,
+    # which files it with the galaxy and hands back the referee's answer
+    # (scan_endpoint.py). The client draws nothing while it waits, so a
+    # window of the launcher's own shows the wait above the game.
+    def _start_scans(self):
+        """Listen for scans, once per launcher. A port that is held leaves
+        scans to the client's own copy, which the referee does not carry."""
+        if self.scan_endpoint is not None:
+            return
+        import scan_endpoint
+        ep = scan_endpoint.ScanEndpoint(
+            self._scan_session, log=self.say_threadsafe,
+            on_event=lambda kind, **facts: self.msgs.put(
+                ("__scan__", kind, facts)))
+        if ep.start():
+            self.scan_endpoint = ep
+            self.say(f"scans: listening on {ep.host}:{ep.port}")
+
+    def _scan_session(self):
+        """(store, civ, turn) of the galaxy being played, or None. Asked from
+        the endpoint's thread."""
+        thread = self.mp_thread
+        if thread is None or not thread.is_alive():
+            return None
+        store, civ = self.mp_store, self.mp_civ
+        turn = getattr(self, "mp_turn", None)
+        if store is None or not civ or turn is None:
+            return None
+        return store, civ, turn
+
+    def _on_scan(self, kind, facts):
+        import scan_endpoint
+        if kind == "asked":
+            name = scan_endpoint.SCAN_NAMES.get(facts.get("type"), "")
+            self.scan_shown = {
+                "title": f"Scanning: {name} scan" if name else "Scanning",
+                "text": "The referee is running your scan.",
+                "countdown": SCAN_RETRY_AFTER, "buttons": ["retry"]}
+            self.say(f"scans: the referee is running your {name} scan")
+            self.view.show_scan(self.scan_shown)
+        elif kind == "waiting":
+            shown = getattr(self, "scan_shown", None)
+            if shown is not None and "retry" in shown["buttons"]:
+                left = max(0, int(SCAN_RETRY_AFTER
+                                  - facts.get("seconds", 0) + 0.999))
+                if left != shown.get("countdown"):
+                    shown = dict(shown, countdown=left)
+                    self.scan_shown = shown
+                    self.view.show_scan(shown)
+        elif kind == "answered":
+            self.say("scans: answered, and shown in the game")
+            self._close_scan()
+        elif kind in ("refused", "failed"):
+            # The client only logs a FAIL, so the reason is shown here.
+            reason = facts.get("reason", "").strip()
+            if reason and not reason.endswith("."):
+                reason += "."
+            self.say(f"scans: {reason}")
+            self.scan_shown = {
+                "title": ("Scan refused" if kind == "refused"
+                          else "Scan not sent"),
+                "text": f"{reason} Your scan is not lost.".strip(),
+                "countdown": None, "buttons": ["close"]}
+            self.view.show_scan(self.scan_shown)
+        elif kind == "gave_up":
+            self.say(f"scans: {facts.get('reason', '')}")
+            self.scan_shown = {
+                "title": "Scan cancelled",
+                "text": f"{facts.get('reason', '')} The game should respond "
+                        "again in a moment. If it does not, restart it.",
+                "countdown": None,
+                "buttons": (["restart", "close"]
+                            if self._scan_session() is not None
+                            else ["close"])}
+            self.view.show_scan(self.scan_shown)
+        elif kind == "restarted":
+            self._close_scan()
+
+    def _close_scan(self):
+        self.scan_shown = None
+        self.view.show_scan(None)
+
+    def on_scan_press(self, name):
+        """A button in the scan window."""
+        if name == "retry" and self.scan_endpoint is not None:
+            # The scan is cancelled and the game freed, so the player can
+            # scan again from it.
+            self.say("scans: cancelling the scan to retry, you asked")
+            self.scan_endpoint.abandon()
+            if getattr(self, "scan_shown", None):
+                self.scan_shown = dict(self.scan_shown, buttons=[],
+                                       text="Cancelling the scan…")
+                self.view.show_scan(self.scan_shown)
+        elif name == "restart":
+            self._restart_for_scan()
+        elif name == "close":
+            self._close_scan()
+
+    def _restart_for_scan(self):
+        """Close a game that stays stuck after a scan, and have the turn loop
+        open it again on this turn with the orders already sent."""
+        self.scan_shown = {"title": "Restarting the game",
+                           "text": "Closing the game. It opens again on this "
+                                   "turn with the orders already sent.",
+                           "countdown": None, "buttons": []}
+        self.view.show_scan(self.scan_shown)
+        self.say("scans: closing the game to restart it, you asked")
+
+        def work():
+            import game_cycle as gc
+            try:
+                gc.close_client()
+            except (Exception, SystemExit) as exc:          # noqa: BLE001
+                self.say_threadsafe(f"scans: the game was not closed ({exc})")
+            self.mp_reopen.set()
+            self.mp_reopening = True
+            self.msgs.put(("__scan__", "restarted", {}))
+        threading.Thread(target=work, daemon=True, name="scan-restart").start()
 
     def _mp_state(self, kind, **facts):
         """Called from the worker thread. Records a line for the turn readout."""
@@ -4863,6 +5112,7 @@ class Launcher:
             "submitted": "orders sent",
             "retrying": RETRYING_LEAD + outage_note(facts.get("outage")),
             "reopening": "opening the game again",
+            "held": "the replay is open; your turn starts when it closes",
             "waiting": "waiting for the next turn",
             "overtaken": "that turn closed without you",
             "lost": "that turn could not be sent",
@@ -5571,6 +5821,14 @@ class Launcher:
         self._shut_down("the launcher is closing")
 
     def _shut_down(self, why: str):
+        endpoint = getattr(self, "scan_endpoint", None)
+        if endpoint is not None:
+            endpoint.stop()
+            self.scan_endpoint = None
+        replay = getattr(self, "replay_endpoint", None)
+        if replay is not None:
+            replay.stop()
+            self.replay_endpoint = None
         self.stop_multiplayer(why)
         self.stop_ai(why)
         for srv in self.servers:
@@ -5905,6 +6163,9 @@ class Launcher:
                 elif isinstance(msg, tuple) and msg and msg[0] == "__mp_played__":
                     _tag, gid, turn = msg
                     self._on_mp_played(gid, turn)
+                elif isinstance(msg, tuple) and msg and msg[0] == "__scan__":
+                    _tag, kind, facts = msg
+                    self._on_scan(kind, facts)
                 elif isinstance(msg, tuple) and msg and msg[0] == "__update__":
                     self._on_update_checked(*msg[1:])
                 elif isinstance(msg, tuple) and msg and msg[0] == "__news__":

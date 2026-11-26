@@ -38,10 +38,15 @@ try {
 
     # Smart App Control refuses the unsigned interpreter, so it is switched off
     # inside this disposable sandbox. The host's setting is not touched.
-    $Ci = 'HKLM:\SYSTEM\CurrentControlSet\Control\CI\Policy'
-    Set-ItemProperty -Path $Ci -Name VerifiedAndReputablePolicyState -Value 0 -Type DWord
-    $Refresh = (& CiTool.exe --refresh --json 2>&1 | Out-String).Trim()
-    Say "smart app control: off for this sandbox, state $((Get-ItemProperty $Ci).VerifiedAndReputablePolicyState), refresh $Refresh"
+    # Windows Server has no Smart App Control and no CiTool.
+    if (Get-Command CiTool.exe -ErrorAction SilentlyContinue) {
+        $Ci = 'HKLM:\SYSTEM\CurrentControlSet\Control\CI\Policy'
+        Set-ItemProperty -Path $Ci -Name VerifiedAndReputablePolicyState -Value 0 -Type DWord
+        $Refresh = (& CiTool.exe --refresh --json 2>&1 | Out-String).Trim()
+        Say "smart app control: off for this sandbox, state $((Get-ItemProperty $Ci).VerifiedAndReputablePolicyState), refresh $Refresh"
+    } else {
+        Say 'smart app control: not on this Windows'
+    }
 
     $Config = Get-Content C:\stage\config.json -Raw | ConvertFrom-Json
     $Store = $Config.store
@@ -74,6 +79,11 @@ try {
     & $Python (Join-Path $Code 'server\sandbox\preflight.py') $Store 2>&1 |
         Out-File -Append -Encoding utf8 (Join-Path $Out 'preflight.log')
     Say "preflight exited with $LASTEXITCODE"
+
+    # The standby VM and this host never run the referee together.
+    $Check = (& $Python (Join-Path $Code 'server\sandbox\standby_check.py') $Config.bucket 2>&1 | Out-String).Trim()
+    Say "standby: $Check"
+    if ($LASTEXITCODE -eq 3) { return }
 
     # The bot worker plays every bot civ in every galaxy of the store's project,
     # or in the seed galaxy, and shares the client with the referee through its

@@ -883,9 +883,12 @@ if (Test-Path $License) {
 # and patch_civ_name.py makes Single Player send a chosen civ name every time.
 # patch_save_message.py gives every client a handler that saves on a window
 # message, so the launcher captures a turn without a remote thread.
+# patch_notes_label.py makes the News screen's Notes row say that its link
+# makes a new note.
 $PatchMessages = Join-Path $ClientDir 'dev_tools\patch_launch_messages.py'
 $PatchWindow   = Join-Path $ClientDir 'dev_tools\patch_window_size.py'
 $PatchSave     = Join-Path $ClientDir 'dev_tools\patch_save_message.py'
+$PatchNotes    = Join-Path $ClientDir 'dev_tools\patch_notes_label.py'
 $PatchTutorial = Join-Path $ClientDir 'dev_tools\patch_tutorial.py'
 $PatchCivName  = Join-Path $ClientDir 'dev_tools\patch_civ_name.py'
 function Copy-Client {
@@ -896,6 +899,8 @@ function Copy-Client {
     if ($LASTEXITCODE -ne 0) { throw "patch_window_size failed for $(Split-Path -Leaf $src)" }
     & $VenvPy $PatchSave --source $dst --out $dst | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "patch_save_message failed for $(Split-Path -Leaf $src)" }
+    & $VenvPy $PatchNotes --source $dst --out $dst | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "patch_notes_label failed for $(Split-Path -Leaf $src)" }
     if ((Split-Path -Leaf $src) -eq 'CosmicSupremacy.exe') {
         & $VenvPy $PatchTutorial --source $dst --out $dst | Out-Null
         if ($LASTEXITCODE -ne 0) { throw "patch_tutorial failed for $(Split-Path -Leaf $src)" }
@@ -937,8 +942,10 @@ foreach ($m in $playable) {
 # client\CosmicSupremacy_Player.exe is neither read nor written.
 # patch_status_bar.py cuts its status bar down to the turn number: the in-game
 # countdown runs off the clock the launcher holds, and the launcher shows the
-# deadline and the connection instead.
+# deadline and the connection instead. patch_scan_online.py sends each scan to
+# the launcher's endpoint, where the referee runs it.
 $PatchStatusBar = Join-Path $ClientDir 'dev_tools\patch_status_bar.py'
+$PatchScan      = Join-Path $ClientDir 'dev_tools\patch_scan_online.py'
 $mpModes = @($modes | Where-Object { $_.session -eq 'multiplayer' })
 if ($mpModes.Count -gt 0) {
     Write-Step "Adding the multiplayer client"
@@ -946,6 +953,8 @@ if ($mpModes.Count -gt 0) {
     Copy-Client (Join-Path $ClientDir 'CosmicSupremacy_TestBed.exe') $player
     & $VenvPy $PatchStatusBar --source $player --out $player | Out-Null
     if ($LASTEXITCODE -ne 0) { throw "patch_status_bar failed for CosmicSupremacy_Player.exe" }
+    & $VenvPy $PatchScan --source $player --out $player | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "patch_scan_online failed for CosmicSupremacy_Player.exe" }
     Write-Ok 'game\CosmicSupremacy_Player.exe, from CosmicSupremacy_TestBed.exe'
 }
 

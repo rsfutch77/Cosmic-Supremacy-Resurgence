@@ -21,7 +21,17 @@ submission. `COMMANDS` lists all 56, those with no rule among them.
 **Ship orders** (`STCO`), `SHIP > DYNO`. A move or a colonise is three edits
 inside the ship's `DYNO`: the `SHCO` order-type byte (1 move, 3 colonise), the
 has-orders byte, and an appended `ROUT` plus `u32`. Taking the order is copying
-the `DYNO`.
+the `DYNO`. An order that needs a module is refused when the ship, or every ship
+of the fleet, has none, as the client's order menu (`0x0050A110`) offers it:
+Colonize Planet a Colony Module, Conquer Planet a Troop Bay, Bio-Bombing Planet
+Bio Bombs, Create Wormhole a Wormhole Generator. The engine itself drops a Create
+Wormhole order whose ship has no generator, leaves the civ's sphere of influence
+before its 11-turn countdown ends, or is past `planets / 10 + 1` wormholes.
+An order names the planet its route ends on, and is refused unless it is one
+the client offers: Colonize Planet an unowned planet, Conquer Planet and
+Bio-Bombing Planet another civ's. On the civ's own planet the engine scraps the
+ship and lands its crew as soldiers; it ignores a colonise of another civ's
+planet, and drops Conquer and Bio-Bombing at peace.
 
 **Research topic** (`STRS`), `OWNR > DATA > OWPR`, the technology id written
 twice, 8 bytes apart, after the completed technologies (`research_offsets`): at
@@ -79,8 +89,10 @@ opens a design in use read-only and greys Delete (`0x0050E490`): no ship of
 the civ's is built to it, no planet of its builds it, no queue of its lists
 it, and no admiral rule of its holds its id. The editor keeps a modified
 design's name and owner. A civ's last design is not deleted, as the referee
-finds the count from a design. The space and cloaking checks the editor's OK
-makes (`0x004A5D40`) are not encoded for a new or a modified design.
+finds the count from a design. A new or a modified design with no scanner is
+refused: the editor starts every design with one, and the client closes on a
+design without one (`0x005479C0`). The space and cloaking checks the editor's
+OK makes (`0x004A5D40`) are not encoded for a new or a modified design.
 
 `OWPR` `+49`, `+77`, `+78`, `+100` and `+110` also move in a design submission
 and are not carried: they move without a design too and differ between
@@ -98,6 +110,13 @@ hands. The per-citizen value and opaque bytes are judged against the state
 served, across all three arrays at once. Across a tick the total does change:
 the engine's recruitment makes soldiers from food.
 
+Each citizen drafted is charged the draft price (`GetDraftCost`, `0x00516060`):
+`5 * (T + k) + 105` credits for the k-th, from 0, where `T` is the civ's
+military across its planets and ships. A submission shows only where people
+ended up, so `T` is taken after the soldiers it retired, the cheapest order
+the client allows. A draft the civ cannot pay is refused with the rest of its
+people changes. Below content version 150 drafting is free.
+
 `PLPR+36` is a `u32` population count and `PLPR+40` begins that many
 nine-byte records, kept sorted by job:
 
@@ -114,7 +133,9 @@ owner of the colonists that founded it, so a civ can hold citizens on another
 civ's planet. The checks compare how many people each owner holds, not their
 jobs. People are carried only on the submitter's own planets and ships; a
 change on a planet or ship another civ owns is refused and named, its own
-citizens included, as the client has not been measured managing them.
+citizens included. The per-civ save writes such a planet as a population with
+no citizens (`0x4EE641`) and such a ship with no crew (`0x4E8640`), so the
+original client never managed them.
 
 **Military recruitment rate** (`PLRR`), `PLPR+27`, a percentage in one byte.
 
@@ -203,14 +224,23 @@ Carried as the client takes each step, applied to both civs at once:
   there (`0x442510`).
 - Withdrawing the submitter's own proposal; declining one made to it;
   deleting a declined one from its side.
-- Accepting one made to it: status, length (its `TRLE`, or what a stance
-  treaty binds for) and start turn as the client writes them. The referee
+- Accepting one made to it: status, length (its `TRLE`, else the larger of
+  its kind's minimum, shorter under `speed`, and a wormhole connection's) and
+  start turn as the client writes them. The referee
   moves the lump sums itself, from the merged credits and resources, and
-  refuses the acceptance when the payer is short. A cease-fire, peace or
-  alliance ends the stance treaty or war before it and sets both stances.
+  refuses the acceptance when the payer is short. It copies a shared galaxy
+  map (`SHGM`) too, since neither civ's view holds the other's `EXSY`: the
+  giver's systems merge into the receiver's, and the receiver meets each civ
+  they name. A cease-fire, peace or alliance ends the stance treaty or war
+  before it and sets both stances. Then a wormhole connection (`SHWH`)
+  links its two wormholes, one of each party's, if both are unlinked and
+  the parties are allies, and every other pending proposal naming either
+  is erased. A treaty the merge ends, by war or by a new stance treaty,
+  unlinks its connected wormholes.
 
 A step on a treaty that the other party already changed in this merge is
-refused. Per-turn payments and a treaty running out are the engine's.
+refused. Per-turn payments, shared sight and battle reports, and a treaty
+running out are the engine's.
 
 **Display choices** (`STCL`, `TGST`, `TGSS`), in the civ's own `KNPL` record
 for each civ it has met: whether that civ's territory (`+29`) and ships (`+30`)
@@ -221,7 +251,10 @@ change only what the submitter's own map shows.
 **The end-galaxy vote** (`SVUS`), the last byte of the civ's `OWNR > DATA > USSE`, 1
 when the Overview Screen's "Vote to End the Galaxy" box is ticked. Carried as 0
 or 1. Nothing acts on it; the referee archives the votes and the operator page
-shows them. The rest of `USSE` is the civ's interface settings and is not read.
+shows them. The rest of `USSE` is the News screen's category tick-boxes and the
+numbers it takes, set only from that screen (`0x00412910`, `0x00412A30`,
+`0x00412DC0`) and the vote box (`0x0048C250`), and is carried as the client
+saved it, as the original server kept what `SVUS` sent.
 
 **Messages** (`SDNW`, `CHNW`, `SEEN`, `EDNW`), news items naming their title
 and body in `NWDB`, the galaxy's string table (`news.py`). A message is taken when the
@@ -244,11 +277,12 @@ important mark. Any other change to a news list is refused.
 count, then one section per report named for its class (`SCPL`, `SCSY`,
 `SCRO`, `SCFL`, `SCML`, `SCTE`, `SCEG`, `SCLN`). The Scanning page deletes any
 of the civ's own reports (`0x0043C610`), with no other effect. Carried as the
-reports served, in order, less those deleted. Carrying out a scan (`DOSC`)
-is refused and named and the scan stays in stock: online the server answered
-with the reports, `OWPR` and `KNPL`; a scan posts a detection item to the
-scanned civ by the C runtime's `rand()`, and a fogged client cannot make a
-true report, so the report is the referee's to make.
+reports served, in order, less those deleted. A scan (`DOSC`) goes online and
+the referee answers it in its own client (`scan.py`). The new reports a
+submission holds are never taken from it: up to the count the referee
+answered the civ, they are expected, and the referee adds its own copies
+before the tick. Any more are refused and named, and those scans stay in
+stock.
 
 **Wormholes** (`CNWH`), `GLXY > WORM`: the object header, a `u32`, a string
 and last the id of the wormhole it is linked to, 0 for none. The Connect To
@@ -256,7 +290,9 @@ menu opens on the civ's own unlinked wormhole and offers its other unlinked
 ones at any distance (`0x005080B0`); `CNWH` links the two to each other. An
 ally's wormhole is connected by a treaty instead, and no player command
 clears a link. Carried as two of the civ's own wormholes, unlinked as served,
-each naming the other.
+each naming the other. A wormhole a treaty of the civ's names is the treaty
+step's, so the links the client makes or clears on it are passed over. The f32 after a wormhole's owner changes between saves
+with no command, so it is neither read nor copied.
 
 **Market trades** (`TRRS`), `GLOB > RSMA`: five `i32` counts of the units the
 market holds, which a sale raises and a purchase lowers. How far each count
@@ -311,6 +347,7 @@ import inject_design as idg
 import facility_rules
 import knpl
 import news
+import exsy
 import activity
 
 # The original client's 56 commands, each with the rule above that carries its
@@ -369,13 +406,13 @@ COMMANDS = {
     'EDNW': ('Messages', 'edits a note'),
     # Refused and named: the report is the referee's to make (Scan reports).
     'DOSC': (None, 'carries out scans'),
-    # Only the vote byte of the civ's `USSE` is carried.
+    # The civ's `USSE`: the vote judged, the News screen's settings kept.
     'SVUS': ('The end-galaxy vote', 'saves user settings, the vote among them'),
     # Online only: the offline branch changes nothing.
     'RQTM': (None, 'asks for the time after a galaxy loads'),
     'RSMA': (None, "asks for the market's prices"),
-    'RQTN': (None, 'asks for a replay turn'),
-    'RQSV': (None, 'asks for a replay save'),
+    'RQTN': (None, 'asks the replay server for one turn (0x0056E550)'),
+    'RQSV': (None, 'asks for a fresh save when the client is out of sync'),
     'STTP': (None, 'a setting from the team dialog'),
     'ALIV': (None, 'keep-alive'),
 }
@@ -567,6 +604,125 @@ PROD_HURRIED_OFF = 8            # PROD's own payload begins after its header
 CREDITS_AFTER_ID = 20           # past the object id, which is itself past
                                 # OWNR's length-prefixed name
 HURRY_PER_POINT = 4
+
+
+# The orders a ship can carry (the engine's names at 0x007FC898), and the
+# module each one needs, as the client's order menu (0x0050A110) offers them.
+ORDER_NAMES = ('Hold Position', 'Move To', 'Scout', 'Colonize Planet',
+               'Attack', 'Conquer Planet', 'Bio-Bombing Planet', 'Move Near',
+               'Create Wormhole')
+MODULE_NAMES = {0: 'Colony Module', 1: 'Troop Bay', 4: 'Bio Bombs',
+                5: 'Wormhole Generator'}
+ORDER_MODULE = {3: 0, 5: 1, 6: 4, 8: 5}
+
+
+def order_type(dyno):
+    """The order type a whole DYNO section holds, or None."""
+    at = 8 + DYNO_ORBIT
+    if dyno is None or len(dyno) < at + 9 or dyno[at:at + 4] != b'SHCO':
+        return None
+    return dyno[at + 8]
+
+
+def ship_designs(blob):
+    """{shipObjectId: design id} for every ship, in or out of a fleet. A
+    SHPR begins with its design and ends with its ship's own id."""
+    tree = sp.parse_blob(blob)
+    glxy = next(tree[0].find('GLXY'))
+    out = {}
+    for sec in glxy.find('SHIP'):
+        shpr = next(sec.find('SHPR'), None)
+        if shpr is not None and shpr.size >= 4:
+            out[struct.unpack_from('<I', blob, sec.payload)[0]] = \
+                struct.unpack_from('<I', blob, shpr.payload)[0]
+    for flet in glxy.find('FLET'):
+        for fldt in flet.find('FLDT'):
+            for shpr in fldt.find('SHPR'):
+                if shpr.size >= 8:
+                    out[struct.unpack_from('<I', blob, shpr.end - 4)[0]] = \
+                        struct.unpack_from('<I', blob, shpr.payload)[0]
+    return out
+
+
+def design_modules(blob):
+    """{design id: set of module ids} for every design in the blob."""
+    out = {}
+    for off, oid, _name in idg.design_records(blob):
+        try:
+            out[oid] = set(idg.read_design(blob, off)[2].get('modules', ()))
+        except (ValueError, struct.error):
+            out[oid] = set()
+    return out
+
+
+def order_module_refusal(dyno, ships, designs, modules):
+    """Why an order may not be given to these ships, or None.
+
+    `ships` are the ship ids carrying it (one ship, or a fleet's members).
+    The engine drops a Create Wormhole order whose ship has no generator, is
+    outside the civ's sphere or is past its allowance; the module checks are
+    made here for every order that needs one, as the client makes them.
+    """
+    kind = order_type(dyno)
+    need = ORDER_MODULE.get(kind)
+    if need is None:
+        return None
+    if any(need in modules.get(designs.get(s), ()) for s in ships):
+        return None
+    carried = ('no ship of the fleet carries one' if len(ships) > 1
+               else 'the ship carries none')
+    return f'{ORDER_NAMES[kind]} needs a {MODULE_NAMES[need]}, and {carried}'
+
+
+# The planet an order may name, as the client offers it: Colonize an unowned
+# one, Conquer and Bio-Bombing another civ's. On the civ's own planet the
+# engine scraps the ship and lands its crew there as soldiers; on another
+# civ's it ignores a colonise. It drops Conquer and Bio-Bombing at peace.
+ORDER_TARGET = {3: 'unowned', 5: 'foreign', 6: 'foreign'}
+ROUT_END = 2 + 12               # in a ROUT payload: two bytes, the start xyz
+
+
+def order_target(dyno, planets):
+    """The planet a whole DYNO section's route ends on, or None. `planets` is
+    {(x, z, y) bytes: planet id}."""
+    at = dyno.find(b'ROUT', 8) if dyno is not None else -1
+    if at < 0 or len(dyno) < at + 8 + ROUT_END + 12:
+        return None
+    end = bytes(dyno[at + 8 + ROUT_END:at + 8 + ROUT_END + 12])
+    return planets.get(end)
+
+
+def planet_places(blob):
+    """({(x, z, y) bytes: planet id}, {planet id: owner}) for every planet."""
+    tree = sp.parse_blob(blob)
+    glxy = next(tree[0].find('GLXY'))
+    places, owners = {}, {}
+    for sec in glxy.find('PLNT'):
+        oid = struct.unpack_from('<I', blob, sec.payload)[0]
+        places[bytes(blob[sec.payload + 4:sec.payload + 16])] = oid
+        owners[oid] = struct.unpack_from('<I', blob, sec.payload + 16)[0]
+    return places, owners
+
+
+def order_target_refusal(dyno, civ_oid, places, owners):
+    """Why an order's target is not one the client offers, or None."""
+    kind = order_type(dyno)
+    want = ORDER_TARGET.get(kind)
+    if want is None:
+        return None
+    planet = order_target(dyno, places)
+    if planet is None:
+        return f'{ORDER_NAMES[kind]} names no planet'
+    owner = owners.get(planet, 0)
+    whose = ('unowned' if not owner else "the civ's own" if owner == civ_oid
+             else "another civ's")
+    if want == 'unowned' and owner:
+        return (f'{ORDER_NAMES[kind]} is offered only on an unowned planet, '
+                f'and planet {planet} is {whose}')
+    if want == 'foreign' and owner in (0, civ_oid):
+        return (f"{ORDER_NAMES[kind]} is offered only on another civ's "
+                f'planet, and planet {planet} is {whose}')
+    return None
 
 
 def ship_index(blob):
@@ -783,6 +939,8 @@ def fleet_orders(served, sub, civ_oid, names, admirals=(), remap=None):
     t_objects = space_objects(sub)[2]
     high = struct.unpack_from('<I', served, idg.HIGH_WATER_ID)[0]
     refusals, log = [], []
+    designs, modules = ship_designs(served), design_modules(served)
+    target_places, target_owners = planet_places(served)
 
     def who(civ):
         return names.get(civ, civ)
@@ -957,7 +1115,13 @@ def fleet_orders(served, sub, civ_oid, names, admirals=(), remap=None):
                     remap or {})
                 if why:
                     refusals.append(f'fleet {fid}: {why}')
-                if taken != was['dyno']:
+                why = ((order_module_refusal(taken, members, designs, modules)
+                        or order_target_refusal(taken, civ_oid, target_places,
+                                                target_owners))
+                       if taken != was['dyno'] else None)
+                if why:
+                    refusals.append(f'fleet {fid}: order DROPPED, {why}')
+                elif taken != was['dyno']:
                     dyno = taken
                     log.append(f'fleet {fid}: order taken ({len(was["dyno"])} '
                                f'-> {len(dyno)} bytes)')
@@ -1229,6 +1393,30 @@ def people_acceptable(served, submitted, civ_oid):
     return True, ''
 
 
+DRAFT_FREE_BELOW = 150      # content version gate at 0x00516060
+
+
+def draft_cost(military, count):
+    """Credits for drafting `count` citizens with `military` already held."""
+    return sum(5 * (military + k) + 105 for k in range(count))
+
+
+def draft_price(served, submitted, civ_oid):
+    """(citizens drafted, credits owed) for one civ's people changes, which
+    `people_acceptable` has passed."""
+    import set_blob_player
+    pa, sa = population(served, civ_oid)
+    pb, sb = population(submitted, civ_oid)
+    cit_a, sol_a = _everyone(pa, sa)
+    cit_b, sol_b = _everyone(pb, sb)
+    drafted = len(cit_a) - len(cit_b)
+    if drafted <= 0 or set_blob_player.get_content_version(
+            served) < DRAFT_FREE_BELOW:
+        return max(drafted, 0), 0
+    retired = len(cit_a) + len(sol_a) - len(cit_b) - len(sol_b)
+    return drafted, draft_cost(len(sol_a) - min(retired, len(sol_a)), drafted)
+
+
 def foreign_people_refusals(planets, crews, submitted, civ_oid, names):
     """[reason] for people changed on a planet or ship another civ owns.
 
@@ -1271,9 +1459,16 @@ def foreign_people_refusals(planets, crews, submitted, civ_oid, names):
 
 
 # A wormhole is a `WORM` v0 among `GLXY`'s children, after its objects (writer
-# 0x004FEF50): the object header (id, x, z, y, owner), a u32, a u32-length
+# 0x004FEF50): the object header (id, x, z, y, owner), a f32, a u32-length
 # string, and last the object id of the wormhole it is linked to, 0 for none.
+# The f32 changes between any two saves of a running client with no command.
 WORM_LINK_BACK = 4
+WORM_DRIFT = OBJECT_HEADER          # the f32 the client changes on its own
+
+
+def _worm_kept(raw):
+    """A WORM payload less its drifting f32 and its link."""
+    return raw[:WORM_DRIFT] + raw[WORM_DRIFT + 4:-WORM_LINK_BACK]
 
 
 def wormholes(blob):
@@ -1303,13 +1498,15 @@ def set_wormhole_link(blob, oid, link):
     raise KeyError(oid)
 
 
-def wormhole_orders(served, submitted, civ_oid):
+def wormhole_orders(served, submitted, civ_oid, by_treaty=frozenset()):
     """([(a, b)], refusals): the pairs of the civ's own wormholes it connected.
 
     The Connect To menu (`0x005080B0`) opens on the civ's own unlinked
     wormhole and lists every other unlinked one it owns, at any distance;
     `CNWH` links the two to each other. An ally's wormhole is offered too, but
     picking it proposes a treaty instead. A link is never cleared by a player.
+    A wormhole in `by_treaty` linked to another, or unlinked, is the treaty
+    step's to change and is passed over.
     """
     was, now = wormholes(served), wormholes(submitted)
     pairs, refused, seen = [], [], set()
@@ -1319,11 +1516,15 @@ def wormhole_orders(served, submitted, civ_oid):
                            f'{"added" if oid in now else "removed"}')
             continue
         (owner, link_a, raw_a), (_o, link_b, raw_b) = was[oid], now[oid]
-        if raw_a == raw_b or oid in seen:
+        if oid in seen or (link_a == link_b
+                           and _worm_kept(raw_a) == _worm_kept(raw_b)):
+            continue
+        if (oid in by_treaty and _worm_kept(raw_a) == _worm_kept(raw_b)
+                and (link_b == 0 or link_b in by_treaty)):
             continue
         other = now.get(link_b)
         why = None
-        if raw_a[:-WORM_LINK_BACK] != raw_b[:-WORM_LINK_BACK]:
+        if _worm_kept(raw_a) != _worm_kept(raw_b):
             why = 'it came back changed beyond its link'
         elif owner != civ_oid:
             why = f"it is civ {owner}'s"
@@ -1336,7 +1537,7 @@ def wormhole_orders(served, submitted, civ_oid):
                    f'connected by treaty')
         elif was[link_b][1] or other[1] != oid:
             why = f'wormhole {link_b} was linked, or does not name it back'
-        elif other[2][:-WORM_LINK_BACK] != was[link_b][2][:-WORM_LINK_BACK]:
+        elif _worm_kept(other[2]) != _worm_kept(was[link_b][2]):
             why = f'wormhole {link_b} came back changed beyond its link'
         if why:
             refused.append(f'wormhole {oid} connection DROPPED, {why}')
@@ -1730,6 +1931,13 @@ def add_design(blob, civ_oid, record):
     raise SystemExit(f'civ {civ_oid} is not in this blob')
 
 
+# The client's scanner-range getter `0x005479C0` throws on an empty scanner
+# list, and the Ship Design tab, the editor's stats and a fleet's scan range
+# all call it. The editor starts every design with a scanner.
+NO_SCANNER = ('it has no scanner, and the client closes on a design without '
+              'one')
+
+
 def design_orders(served, submitted, civ_oid, in_use=None):
     """(new, toggled, edited, deleted, refusals) for one civ's ship designs.
 
@@ -1792,6 +2000,9 @@ def design_orders(served, submitted, civ_oid, in_use=None):
             refused.append(f'{label} edit DROPPED, it is in use: '
                            f'{in_use[oid]}, and the client opens it read-only')
             continue
+        if now['parts'] != was['parts'] and not now['parts']['scanners']:
+            refused.append(f'{label} edit DROPPED, {NO_SCANNER}')
+            continue
         edited.append((oid, now['record']))
 
     for oid in sorted(set(submitted) - set(served)):
@@ -1809,6 +2020,9 @@ def design_orders(served, submitted, civ_oid, in_use=None):
             refused.append(f'design {oid} ({d["name"]!r}) DROPPED, its payload '
                            f'names civ {d["claims"]} as the owner, not the '
                            f'submitter')
+            continue
+        if not d['parts']['scanners']:
+            refused.append(f'design {oid} ({d["name"]!r}) DROPPED, {NO_SCANNER}')
             continue
         new.append((oid, d))
     return new, toggled, edited, deleted, refused
@@ -3050,6 +3264,61 @@ ADMIRAL_RULES = frozenset((
     b'TRSM', b'WUFL', b'WLSL', b'ASFL', b'ASAD', b'MASH', b'SCSP', b'SCRG'))
 
 
+# Each rule's section as its writer lays it out: (version, fields). `ids` is a
+# u32 count and an object id per element (0x5241D0), `u32s` a count and the
+# values (0x4D3160), `str` a u32 length and its characters (0x4516E0).
+RULE_LAYOUTS = {
+    b'ASAD': (0, ('u32', 'ids', 'u8')),                     # 0x5AD940
+    b'ASFL': (1, ('u32', 'u32', 'str', 'u8')),              # 0x5ACB20
+    b'ATPL': (0, ('ids',)),                                 # 0x5B0790
+    b'ATSH': (1, ('ids', 'u32s')),                          # 0x5B0EF0
+    b'DFPL': (0, ('ids',)),                                 # 0x5B2730
+    b'FSHP': (0, ()),                                       # 0x5B3ED0
+    b'ICSH': (2, ('u32', 'u32', 'u32')),                    # 0x5B2DF0
+    b'LSSL': (0, ()),                                       # 0x5B4040
+    b'MASH': (2, ('u32', 'ids', 'u32', 'u32', 'u8', 'u8')),  # 0x5AEC30
+    b'RECQ': (0, ()),                                       # 0x5B14A0
+    b'RLYP': (0, ('u32',) * 6 + ('ids', 'u8')),             # 0x5B38E0
+    b'RTCN': (2, ('ids', 'u8', 'u32', 'u32', 'u32')),       # 0x5B4570
+    b'RZPT': (0, ('u32',) * 6 + ('ids', 'u8', 'u32', 'u32')),  # 0x5B1860
+    b'SCRG': (0, ('u32',) * 6 + ('ids', 'u8', 'u32')),      # 0x5AFEC0
+    b'SCSP': (0, ('ids',)),                                 # 0x5AF790
+    b'SPTS': (1, ('u32', 'u8')),                            # 0x5A7A40
+    b'STLS': (0, ('ids', 'u32', 'u32', 'u32', 'u32')),      # 0x5B5B90
+    b'STPF': (0, ('u32',)),                                 # 0x5A8650
+    b'TMMR': (1, ('u32', 'u32')),                           # 0x5A7ED0
+    b'TMSC': (1, ('u32', 'u8')),                            # 0x5A8330
+    b'TRSM': (2, ('ids', 'ids')),                           # 0x5ABAA0
+    b'TSCQ': (0, ('u32',)),                                 # 0x5B2180
+    b'WLSL': (0, ('u32',)),                                 # 0x5B6360
+    b'WUFL': (0, ()),                                       # 0x5AC9B0
+}
+
+
+def rule_layout_refusal(tag, version, payload):
+    """Why a rule's own section is not laid out as its writer writes it, or ''."""
+    want, fields = RULE_LAYOUTS[tag]
+    name = tag.decode('latin1')
+    if version != want:
+        return f'rule {name} is version {version}, not {want}'
+    at = 0
+    for field in fields:
+        if field == 'u8':
+            at += 1
+        elif field == 'u32':
+            at += 4
+        else:
+            if at + 4 > len(payload):
+                return f'rule {name} is cut short'
+            n = struct.unpack_from('<I', payload, at)[0]
+            at += 4 + (n if field == 'str' else 4 * n)
+        if at > len(payload):
+            return f'rule {name} is cut short'
+    if at != len(payload):
+        return f'rule {name} holds {len(payload) - at} byte(s) past its fields'
+    return ''
+
+
 def admirals_of(blob, civ_oid):
     """[(objectId, whole ADML section)] of a civ in order, or None unless its
     ADMS holds exactly its count of ADML sections."""
@@ -3103,11 +3372,15 @@ def read_admiral(record):
     secs = _sections(record, kind_at + 8, end)
     if secs is None or len(secs) != 2 * rules:
         return None, f'its ADDT does not hold the {rules} rule(s) it counts'
-    for (flag, f_at, f_end), (rule, _a, _e) in zip(secs[::2], secs[1::2]):
+    for (flag, f_at, f_end), (rule, r_at, r_end) in zip(secs[::2], secs[1::2]):
         if flag != b'RULE' or f_end - f_at != RULE_FLAG:
             return None, 'a rule is not a RULE followed by its own section'
         if rule not in ADMIRAL_RULES:
             return None, f'rule {rule!r} is not one the client knows'
+        why = rule_layout_refusal(rule, sp.read_header(record, r_at - 8)[1],
+                                  record[r_at:r_end])
+        if why:
+            return None, why
     if not name:
         return None, 'the name is empty'
     ok, why = name_acceptable(name)
@@ -3275,15 +3548,44 @@ WAR, CEASE_FIRE = 1, 2
 PROPOSED, ACCEPTED, DECLINED, NON_BINDING = 0, 1, 2, 3
 UNSET_LENGTH, UNSET_START = -2, -1
 STANCE_OF = {2: 2, 3: 3, 4: 4}          # the stance a kind sets when accepted
-# What a stance treaty binds for when it carries no TRLE, as the UI says.
-# Only the cease-fire's 20 is measured in the save.
+# Accepting a treaty with no TRLE above 0 gives it the larger of its kind's
+# minimum and each item's (0x559CE0, 0x5592B0). The kinds' minimums are
+# 0x80B564, or 0x80B578 when the galaxy's `speed` setting is on; a trade or a
+# war has none (-1). Only a wormhole connection's item has one of its own
+# (0x55C720); every other item's is 0.
 BINDS_FOR = {2: 20, 3: 50, 4: 100}
+BINDS_FOR_SPEED = {2: 10, 3: 20, 4: 30}
+NO_MINIMUM = -1
+WORMHOLE_SHARE_MINIMUM = 50
+WORMHOLE_SHARE_MINIMUM_SPEED = 25
 BINDING = (2, 3)            # a cease-fire or a peace in force forbids war
 TREATY_ITEMS = frozenset((b'CRLS', b'CRPT', b'RSLS', b'RSPT', b'SLOS', b'SHBR',
                           b'SHGM', b'SHWH', b'TRLE'))
-CREDIT_SUM = b'CRLS'        # u32 amount; not measured, read like CRPT
+# v1: u32 amount ; u8 paid (writer 0x55C740). Accepting applies it once
+# (0x55C780), which moves the amount and sets paid; a proposal reads 0.
+CREDIT_SUM = b'CRLS'
+CREDIT_SUM_SIZE = 5
+CREDIT_SUM_PAID_AT = 4
 RESOURCE_SUM = b'RSLS'      # u32 amount ; u32 resource, 0 metal
 TREATY_LENGTH = b'TRLE'     # u32 turns
+# v0: two wormholes' object ids, one of each party's (writer 0x55D300). Its
+# apply (0x55D1C0) links them to each other when both are unlinked and their
+# owners are allies, and erases every other pending treaty naming either in a
+# SHWH (0x55B480, 0x55AA90). A treaty that ends (0x559C10) unlinks them again
+# if they still name each other (0x55D290). A trade applies its items at once;
+# a stance treaty sets the stance first, so an alliance can carry its own.
+WORMHOLE_SHARE = b'SHWH'
+WORMHOLE_SHARE_SIZE = 8
+ALLIANCE = 4
+# Copied once on acceptance (0x55D090): one in the demands gives the
+# recipient's EXSY to the proposer, one in the offers the proposer's to the
+# recipient, demands first.
+MAP_SHARE = b'SHGM'
+# A KNPL record as first contact makes it (0x532E60), less the civ and turn.
+FIRST_CONTACT = {'stance': 0, 'declared': 0, 'w17': 0, 'battled': 0,
+                 'inactivity': -1, 'cooldown': 0, 'biobombed': 0,
+                 'leader_known': 0, 'territory': 0, 'ships': 1,
+                 'by_stance': 1, 'colour': 0xFF000000}
 RESOURCE_KINDS = 5
 # A civ's resources in OWPR: a u32 count this far past the start of the second
 # research field, then a u8 resource and a u32 amount per resource.
@@ -3387,9 +3689,99 @@ def item_refusal(t):
                 len(payload) != 8
                 or struct.unpack_from('<I', payload, 4)[0] >= RESOURCE_KINDS):
             return 'a resource lump sum is not an amount and a resource'
-        if tag in (CREDIT_SUM, TREATY_LENGTH) and len(payload) != 4:
+        if tag == CREDIT_SUM and (len(payload) != CREDIT_SUM_SIZE
+                                  or payload[CREDIT_SUM_PAID_AT]):
+            return 'a credit lump sum is not an unpaid amount'
+        if tag == TREATY_LENGTH and len(payload) != 4:
             return f'item {tag!r} is not one u32'
+        if tag == WORMHOLE_SHARE and len(payload) != WORMHOLE_SHARE_SIZE:
+            return 'a wormhole connection is not two wormholes'
     return ''
+
+
+def wormhole_shares(t):
+    """[(wormhole, wormhole)] a treaty's SHWH items name, in item order."""
+    return [struct.unpack('<II', p) for tag, p in t['demands'] + t['offers']
+            if tag == WORMHOLE_SHARE and len(p) == WORMHOLE_SHARE_SIZE]
+
+
+def wormhole_share_refusal(t, worms):
+    """Why a proposal's wormhole connections are not ones the client offers,
+    or ''. `worms` is wormholes() of the galaxy served."""
+    for a, b in wormhole_shares(t):
+        if a not in worms or b not in worms:
+            return 'a wormhole connection names something that is not a wormhole'
+        if {worms[a][0], worms[b][0]} != {t['proposer'], t['recipient']}:
+            return "a wormhole connection is not one of each party's wormholes"
+        if worms[a][1] or worms[b][1]:
+            return 'a wormhole connection names a wormhole already linked'
+    return ''
+
+
+def link_shared_wormholes(blob, t, oid):
+    """(blob, [(a, b)] linked) for an accepted treaty's SHWH items, as the
+    client applies them (0x55D1C0), with the other pending treaties naming
+    either wormhole erased (0x55B480)."""
+    linked = []
+    for a, b in wormhole_shares(t):
+        worms = wormholes(blob)
+        if a not in worms or b not in worms or worms[a][1] or worms[b][1]:
+            continue
+        if (worms[a][0] == worms[b][0] or stances(blob).get(
+                (worms[a][0], worms[b][0])) != ALLIANCE):
+            continue
+        blob = set_wormhole_link(set_wormhole_link(blob, a, b), b, a)
+        linked.append((a, b))
+        kept = {}
+        for k, r in treaties(blob).items():
+            f = read_trdt(r)
+            if (k != oid and f is not None and f['status'] == PROPOSED
+                    and any({a, b} & set(pair) for pair in wormhole_shares(f))):
+                continue
+            kept[k] = r
+        blob = set_treaties(blob, list(kept.values()))
+    return blob, linked
+
+
+def unlink_shared_wormholes(blob, t):
+    """`blob` with an ended treaty's SHWH pairs unlinked where they still name
+    each other (0x55D290)."""
+    for a, b in wormhole_shares(t):
+        worms = wormholes(blob)
+        if (a in worms and b in worms and worms[a][1] == b
+                and worms[b][1] == a):
+            blob = set_wormhole_link(set_wormhole_link(blob, a, 0), b, 0)
+    return blob
+
+
+def treaty_wormholes(served, submitted, civ_oid):
+    """Wormholes named by a SHWH item in a treaty the civ is party to, served
+    or submitted. Their links are the treaty step's."""
+    out = set()
+    for blob in (served, submitted):
+        for r in (treaties(blob) or {}).values():
+            f = read_trdt(r)
+            if f is not None and civ_oid in (f['proposer'], f['recipient']):
+                for pair in wormhole_shares(f):
+                    out.update(pair)
+    return out
+
+
+def with_sums_paid(record):
+    """A whole TRTY section with each credit lump sum marked paid, as the
+    client's acceptance leaves it. Expects a record read_trdt reads."""
+    out = bytearray(record)
+    _tag, at, _end = _sections(record, 8 + 4, len(record))[0]
+    at += TRDT_FIXED
+    for _side in range(2):
+        n = struct.unpack_from('<I', out, at)[0]
+        at += 4
+        for _i in range(n):
+            size = struct.unpack_from('<I', out, at + 4)[0] & sp.SIZE_MASK
+            if bytes(out[at:at + 4]) == CREDIT_SUM and size == CREDIT_SUM_SIZE:
+                out[at + 8 + CREDIT_SUM_PAID_AT] = 1
+            at += 8 + size
+    return bytes(out)
 
 
 def lump_sums(items):
@@ -3404,13 +3796,80 @@ def lump_sums(items):
     return credits, resources
 
 
-def treaty_length(t):
-    """The length accepting a treaty gives it: its TRLE, else what a stance
-    treaty binds for, else None."""
-    for tag, payload in t['demands'] + t['offers']:
+def map_shares(t):
+    """[(giver, receiver)] of the galaxy maps accepting `t` shares, in the
+    order the client applies them."""
+    out = []
+    if any(tag == MAP_SHARE for tag, _p in t['demands']):
+        out.append((t['recipient'], t['proposer']))
+    if any(tag == MAP_SHARE for tag, _p in t['offers']):
+        out.append((t['proposer'], t['recipient']))
+    return out
+
+
+def share_map(blob, giver, receiver, turn):
+    """(blob, civs met) with the giver's EXSY merged into the receiver's, as
+    `0x529290` does: a system the receiver lacks is added, and one it holds
+    is replaced when the giver looked later. The receiver then meets every
+    civ its table names as an owner (`0x534F90`). None when either table or
+    the receiver's KNPL does not walk."""
+    _tree, g = _civ_section(blob, giver, 'EXSY')
+    _tree, r = _civ_section(blob, receiver, 'EXSY')
+    if g is None or r is None:
+        return None
+    try:
+        given = exsy.parse(blob[g.payload:g.end])
+        rows = {s['system']: s for s in exsy.parse(blob[r.payload:r.end])}
+    except (ValueError, struct.error):
+        return None
+    for s in given:
+        held = rows.get(s['system'])
+        if held is None or s['turn'] > held['turn']:
+            rows[s['system']] = s
+    tree, r = _civ_section(blob, receiver, 'EXSY')
+    blob = sp.replace_payload(blob, tree, r, exsy.build(
+        [rows[k] for k in sorted(rows)]))
+
+    tree, kn = _civ_section(blob, receiver, 'KNPL')
+    if kn is None:
+        return None
+    try:
+        records = knpl.parse(blob[kn.payload:kn.end])
+    except (ValueError, struct.error):
+        return None
+    civs = {o['oid'] for o in icv.owner_records(blob)}
+    named = {p['owner'] for s in rows.values() for p in s['planets']}
+    met = sorted((named & civs) - {receiver} - {k['civ'] for k in records})
+    stance = WAR if gset_value(blob, 'waronly') == 1 else 0
+    for civ in met:
+        records.append(dict(FIRST_CONTACT, civ=civ, handle=civ, met=turn,
+                            stance=stance))
+    if met:
+        records.sort(key=lambda k: k['civ'])
+        blob = sp.replace_payload(blob, tree, kn, knpl.build(records))
+    return blob, met
+
+
+def treaty_length(t, speed=False):
+    """The length accepting a treaty gives it, as the client works it out:
+    its first TRLE above 0, else the larger of the kind's minimum and each
+    item's. `speed` is the galaxy's `speed` setting."""
+    items = t['demands'] + t['offers']
+    for tag, payload in items:
         if tag == TREATY_LENGTH:
-            return struct.unpack_from('<I', payload)[0]
-    return BINDS_FOR.get(t['kind'])
+            value = struct.unpack_from('<i', payload)[0]
+            if value > 0:
+                return value
+            break
+    length = (BINDS_FOR_SPEED if speed else BINDS_FOR).get(t['kind'],
+                                                           NO_MINIMUM)
+    for tag, _payload in items:
+        floor = 0
+        if tag == WORMHOLE_SHARE:
+            floor = (WORMHOLE_SHARE_MINIMUM_SPEED if speed
+                     else WORMHOLE_SHARE_MINIMUM)
+        length = max(length, floor)
+    return length
 
 
 def stances(blob):
@@ -3466,6 +3925,22 @@ def set_known(blob, civ_oid, other, **fields):
     raise SystemExit(f'civ {civ_oid} has not met {other}')
 
 
+INACTIVITY_FROM_CONTENT = 0x25  # below this content version it reads 0
+
+
+def inactivity_percent(blob, civ_oid, turn):
+    """A civ's Inactivity percentage as the client reads it (`0x005381D0`)."""
+    import activity
+    import set_blob_player
+    if set_blob_player.get_content_version(blob) < INACTIVITY_FROM_CONTENT:
+        return 0
+    name = next((o['name'] for o in icv.owner_records(blob)
+                 if o['oid'] == civ_oid), None)
+    baseline = (activity.state(blob).get(name) or (turn, 0))[0]
+    return activity.penalty(turn, baseline, gset_value(blob, 'sandbox') == 1)
+
+
+
 def known(blob, civ_oid, other):
     """A civ's `knpl` record for another it has met, or None."""
     _tree, sec = _civ_section(blob, civ_oid, 'KNPL')
@@ -3476,15 +3951,6 @@ def known(blob, civ_oid, other):
     except ValueError:
         return None
     return next((r for r in records if r['civ'] == other), None)
-
-
-def inactivity_of(blob, civ_oid, turn):
-    """The civ's Inactivity percent at `turn`, from its SERV baseline; 0 for
-    a civ whose SERV does not hold one."""
-    name = next((o['name'] for o in icv.owner_records(blob)
-                 if o['oid'] == civ_oid), None)
-    seen = activity.state(blob).get(name)
-    return activity.penalty(turn, seen[0]) if seen else 0
 
 
 def repair_wars(blob, log=print):
@@ -3513,7 +3979,7 @@ def declare_war(blob, declarer, target, turn):
     Inactivity."""
     for civ, other, declared in ((declarer, target, 1), (target, declarer, 0)):
         blob = set_known(blob, civ, other, stance=WAR, declared=declared,
-                         w17=0, inactivity=inactivity_of(blob, other, turn))
+                         w17=0, inactivity=inactivity_percent(blob, other, turn))
     return blob
 
 
@@ -3638,6 +4104,29 @@ def vote_orders(served, sub, civ_oid):
     return now, []
 
 
+def settings_orders(served, sub, civ_oid):
+    """The submitter's `USSE` bytes before the vote, when it changed them, or
+    None. They are the News screen's category tick-boxes and the numbers it
+    takes (clamped to 0 to 999 as typed), set only from that screen and saved
+    with `SVUS`; the original server kept whatever `SVUS` sent."""
+    was, now = _usse(served, civ_oid), _usse(sub, civ_oid)
+    if was is None or now is None or was.version != now.version:
+        return None
+    old = bytes(served[was.payload:was.payload + END_VOTE_AT])
+    new = bytes(sub[now.payload:now.payload + END_VOTE_AT])
+    return new if new != old else None
+
+
+def set_settings(blob, civ_oid, settings):
+    """Write a civ's `USSE` bytes before the vote. Sizes do not change."""
+    usse = _usse(blob, civ_oid)
+    if usse is None or len(settings) != END_VOTE_AT:
+        raise SystemExit(f'civ {civ_oid} has no readable USSE')
+    out = bytearray(blob)
+    out[usse.payload:usse.payload + END_VOTE_AT] = settings
+    return bytes(out)
+
+
 def _resources_at(blob, civ_oid):
     """Where a civ's resource count sits, or None unless the count is
     RESOURCE_KINDS records naming 0, 1, 2 ... in order."""
@@ -3714,8 +4203,9 @@ def diplomacy_orders(served, sub, civ_oid, names):
         tt = read_trdt(b) if b is not None else None
         name = label(oid, tt or ts)
         if a is None:
-            why = new_treaty_refusal(tt, oid, civ_oid, high, turn, met, who,
-                                     war_only)
+            why = (new_treaty_refusal(tt, oid, civ_oid, high, turn, met, who,
+                                      war_only)
+                   or wormhole_share_refusal(tt, wormholes(served)))
             if why:
                 refusals.append(f'{name} DROPPED, {why}')
             else:
@@ -3742,18 +4232,22 @@ def diplomacy_orders(served, sub, civ_oid, names):
             if tt['status'] == ACCEPTED and item_refusal(ts):
                 refusals.append(f'{name} DROPPED, {item_refusal(ts)}')
                 continue
-            length = treaty_length(ts)
-            if length is None:
-                length = tt['length']
-            want = (with_trdt(a, ACCEPTED, length, turn) if tt['status'] == ACCEPTED
-                    else with_trdt(a, DECLINED))
-            if b != want:
+            length = treaty_length(ts, gset_value(served, 'speed') == 1)
+            if tt['status'] == ACCEPTED:
+                # The acceptor's client pays its credit lump sums itself.
+                bare = with_trdt(a, ACCEPTED, length, turn)
+                want = with_sums_paid(bare)
+                answers = (want, bare)
+            else:
+                want = with_trdt(a, DECLINED)
+                answers = (want,)
+            if b not in answers:
                 refusals.append(f'{name} DROPPED, the answer changes more than '
                                 f'its status, length and start turn as the '
                                 f'client does')
             else:
                 orders.append(('accept' if tt['status'] == ACCEPTED
-                               else 'decline', oid, b))
+                               else 'decline', oid, want))
         elif (ts['status'] == DECLINED and not ts['deleted'][side]
               and b == with_trdt(a, deleted=tuple(
                   1 if i == side else ts['deleted'][i] for i in range(2)))):
@@ -3764,13 +4258,19 @@ def diplomacy_orders(served, sub, civ_oid, names):
 
     # Treaties that went with a declaration of war or an acceptance, and the
     # stances they set, are the referee's to change; anything else is named.
-    ends = set()
+    ends, connected = set(), set()
     for step, oid, b in orders:
         t = read_trdt(b) if b is not None else None
         if step == 'war' or (step == 'accept' and t['kind'] in STANCE_OF):
             ends.add(frozenset((t['proposer'], t['recipient'])))
+        if step == 'accept':
+            for pair in wormhole_shares(t):
+                connected.update(pair)
     for oid, ts, name in removed:
         pair = frozenset((ts['proposer'], ts['recipient']))
+        if ts['status'] == PROPOSED and any(
+                connected & set(p) for p in wormhole_shares(ts)):
+            continue        # erased by the connection accepted (0x0055B480)
         if pair not in ends or ts['status'] not in (ACCEPTED, NON_BINDING):
             refusals.append(f'{name} DROPPED, ending a treaty this way is not '
                             f'something the client offers')
@@ -3858,6 +4358,8 @@ def take_treaty_step(blob, served_treaties, step, oid, record, civ_oid, turn,
                     return (blob, '', f"treaty {oid} DROPPED, the "
                             f"{KINDS[f['kind']]} with {who(other)} binds "
                             f"until turn {f['start'] + f['length']}", oid)
+            ended = [r for r in merged.values()
+                     if _between(r, pair) and read_trdt(r)['status'] == ACCEPTED]
             merged = {k: r for k, r in merged.items()
                       if not (_between(r, pair)
                               and read_trdt(r)['status'] == ACCEPTED)}
@@ -3868,6 +4370,9 @@ def take_treaty_step(blob, served_treaties, step, oid, record, civ_oid, turn,
         merged[new] = with_treaty_id(record, new)
         blob = set_treaties(blob, list(merged.values()))
         if step == 'war':
+            # The treaties in force it ends unlink their wormholes.
+            for r in ended:
+                blob = unlink_shared_wormholes(blob, read_trdt(r))
             blob = declare_war(blob, civ_oid, other, turn)
             line = f'treaty {new}: war declared on {who(other)}'
         else:
@@ -3887,7 +4392,8 @@ def take_treaty_step(blob, served_treaties, step, oid, record, civ_oid, turn,
         line = f'treaty {oid}: declined {kind} deleted from this side'
     else:
         # Accepting: the lump sums move between both civs at once.
-        pays = ((t['recipient'], t['proposer'], t['demands']),
+        unpaid = blob
+        pays =((t['recipient'], t['proposer'], t['demands']),
                 (t['proposer'], t['recipient'], t['offers']))
         wallet = {c: [credits_of(blob, c), resources_of(blob, c)]
                   for c in pair}
@@ -3915,13 +4421,32 @@ def take_treaty_step(blob, served_treaties, step, oid, record, civ_oid, turn,
                 blob = set_credits(blob, c, credits)
             if resources is not None and resources != resources_of(blob, c):
                 blob = set_resources(blob, c, resources)
+        shared = []
+        for giver, receiver in map_shares(t):
+            done = share_map(blob, giver, receiver, turn)
+            if done is None:
+                return (unpaid, '', f'treaty {oid} DROPPED, the galaxy map of '
+                        f'{who(giver)} cannot be shared: a known-systems or '
+                        f'known-civs table does not read', oid)
+            blob, met = done
+            shared.append(f"{who(giver)}'s galaxy map shared with "
+                          f"{who(receiver)}" + (
+                              f", who meets {', '.join(who(c) for c in met)}"
+                              if met else ''))
         merged[oid] = record
         if t['kind'] in STANCE_OF:
             # The stance treaty it replaces ends, and a war with it.
             merged = {k: r for k, r in merged.items()
                       if k == oid or not _stance_in_force(r, pair)}
-        line = f'treaty {oid}: {kind} from {who(other)} accepted'
+        line = '; '.join([f'treaty {oid}: {kind} from {who(other)} accepted']
+                         + shared)
+    ended = [r for k, r in (treaties(blob) or {}).items()
+             if k not in merged and k != oid]
     blob = set_treaties(blob, list(merged.values()))
+    for r in ended:
+        f = read_trdt(r)
+        if f is not None:
+            blob = unlink_shared_wormholes(blob, f)
     if step == 'accept' and t['kind'] in STANCE_OF:
         blob = set_stance(blob, civ_oid, other, STANCE_OF[t['kind']])
         blob = set_stance(blob, other, civ_oid, STANCE_OF[t['kind']])
@@ -3929,6 +4454,10 @@ def take_treaty_step(blob, served_treaties, step, oid, record, civ_oid, turn,
         # The next war's first battle moves reputation again.
         blob = set_known(blob, civ_oid, other, battled=0)
         blob = set_known(blob, other, civ_oid, battled=0)
+    if step == 'accept':
+        blob, linked = link_shared_wormholes(blob, t, oid)
+        line = '; '.join([line] + [f'wormholes {a} and {b} connected'
+                                   for a, b in linked])
     return blob, line, '', oid
 
 
@@ -4618,31 +5147,41 @@ def _ship_crew_index(blob):
     return out
 
 
-def merge(blob, submissions, log=print, notes=None, arms=None):
+def merge(blob, submissions, log=print, notes=None, arms=None, scans=None,
+          served=None):
     """submissions: [(civ_name, submitted_blob)]. Returns the merged blob.
 
     `notes` is an optional `{civ: [reason]}` that every refusal is recorded in
     as well as logged. `referee.py` writes it beside the turn so
     `player_turn.follow` can print it into the launcher's log. `arms` is an
     optional `{civ: {coat-of-arms id}}` of the uploads each player may choose;
-    without it only no arms is carried.
+    without it only no arms is carried. `scans` is an optional `{civ: count}`
+    of the reports the referee answered each civ this turn.
+
+    `served` is the copy of the turn these submissions were served, when it is
+    not `blob`: an earlier copy of an opening turn that has since seated more
+    civs. The submissions are judged against it and their orders land in
+    `blob`.
     """
-    served_ships = ship_index(blob)
-    served_members = {m: f['owner'] for f in fleet_index(blob).values()
+    served = blob if served is None else served
+    served_ships = ship_index(served)
+    served_members = {m: f['owner'] for f in fleet_index(served).values()
                       for m, _s, _v in f['members']}
-    served_planets = planet_index(blob)
-    served_crews = _ship_crew_index(blob)
-    served_designs = design_index(blob)
+    ship_design_of = ship_designs(served)
+    served_modules = design_modules(served)
+    order_places, order_owners = planet_places(served)
+    served_planets = planet_index(served)
+    served_crews = _ship_crew_index(served)
+    served_designs = design_index(served)
     # Research as it was served, like the three indexes above: every
     # submission is compared against the state served, not the merged blob.
-    served_research = {o['oid']: research_of(blob, o['oid'])
-                       for o in icv.owner_records(blob)}
-    served_completed = {o['oid']: completed_research(blob, o['oid']) or []
-                        for o in icv.owner_records(blob)}
+    served_research = {o['oid']: research_of(served, o['oid'])
+                       for o in icv.owner_records(served)}
+    served_completed = {o['oid']: completed_research(served, o['oid']) or []
+                        for o in icv.owner_records(served)}
     names = {o['oid']: o['name'] for o in icv.owner_records(blob)}
-    served_treaties = treaties(blob) or {}
-    served_market = market_of(blob)
-    served = blob
+    served_treaties = treaties(served) or {}
+    served_market = market_of(served)
     accepted = dropped = 0
 
     for civ_name, sub in submissions:
@@ -4670,10 +5209,14 @@ def merge(blob, submissions, log=print, notes=None, arms=None):
             had, now = reports_of(served, mine), reports_of(sub, mine)
             if had is not None and now is not None and had != now:
                 kept, deleted, made, why = report_orders(had, now)
-                if made:
-                    drop(f"{made} scan(s) DROPPED: carrying out a scan is not "
-                         f"carried, as its report is the referee's to make; "
-                         f"the scans stay in stock")
+                answered = min(made, (scans or {}).get(civ_name, 0))
+                if answered:
+                    log(f"    {answered} scan report(s) the referee answered, "
+                        f"added from its own record")
+                if made > answered:
+                    drop(f"{made - answered} scan report(s) DROPPED: a scan "
+                         f"is carried only when the referee answered it "
+                         f"online; the scans stay in stock")
                 if why:
                     drop(f"scan reports DROPPED, {why}")
                 elif deleted:
@@ -4832,6 +5375,13 @@ def merge(blob, submissions, log=print, notes=None, arms=None):
                 if why:
                     drop(f"ship {ship_oid}: {why}")
                 if dyno == as_served:
+                    continue
+                why = (order_module_refusal(dyno, [ship_oid], ship_design_of,
+                                            served_modules)
+                       or order_target_refusal(dyno, mine, order_places,
+                                               order_owners))
+                if why:
+                    drop(f"ship {ship_oid}: order DROPPED, {why}")
                     continue
                 blob = replace_dyno(blob, ship_oid, dyno)
                 log(f"    ship {ship_oid}: order taken "
@@ -5042,11 +5592,21 @@ def merge(blob, submissions, log=print, notes=None, arms=None):
             ok, why = people_acceptable(blob, sub, mine)
             planets_before, ships_before = population(blob, mine)
             planets_after, ships_after = population(sub, mine)
+            drafted, price = (draft_price(blob, sub, mine) if ok
+                              else (0, 0))
+            if ok and price > (credits_of(blob, mine) or 0):
+                ok, why = False, (f"drafting {drafted} costs {price:,} "
+                                  f"credits and the civ holds "
+                                  f"{credits_of(blob, mine) or 0:,}")
             if planets_after is None:
                 pass                   # unreadable; people_acceptable said so
             elif not ok:
                 drop(f"people DROPPED, {why}")
             else:
+                if price:
+                    blob = set_credits(blob, mine,
+                                       credits_of(blob, mine) - price)
+                    log(f"    drafted {drafted}: {price:,} credits")
                 for oid in sorted(planets_after):
                     cz_b, mil_b = planets_before[oid]
                     cz_a, mil_a = planets_after[oid]
@@ -5077,7 +5637,8 @@ def merge(blob, submissions, log=print, notes=None, arms=None):
                 drop(why)
 
             # Wormholes connected, judged against the state served.
-            pairs, refusals = wormhole_orders(served, sub, mine)
+            pairs, refusals = wormhole_orders(
+                served, sub, mine, treaty_wormholes(served, sub, mine))
             for why in refusals:
                 drop(why)
             for a, b in pairs:
@@ -5262,6 +5823,11 @@ def merge(blob, submissions, log=print, notes=None, arms=None):
             if vote is not None:
                 blob = set_end_vote(blob, mine, vote)
                 log(f"    end-galaxy vote: {'cast' if vote else 'withdrawn'}")
+                accepted += 1
+            settings = settings_orders(served, sub, mine)
+            if settings is not None:
+                blob = set_settings(blob, mine, settings)
+                log("    News screen settings: as the client saved them")
                 accepted += 1
 
             # News: messages to other civs, and its own items marked

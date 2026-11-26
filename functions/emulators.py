@@ -44,20 +44,24 @@ def port_is_free(port: int, host: str = '127.0.0.1') -> bool:
 
     Do not set `SO_REUSEADDR`: on Windows it allows binding a port that is in
     use. `SO_EXCLUSIVEADDRUSE` is the strict Windows flag; a bare bind is strict
-    elsewhere.
+    elsewhere. Windows still binds `127.0.0.1` beside a listener on `0.0.0.0`,
+    and the loopback bind then takes that listener's local traffic, so the
+    wildcard is tried too.
     """
-    with contextlib.closing(socket.socket(socket.AF_INET, socket.SOCK_STREAM)) as s:
-        excl = getattr(socket, 'SO_EXCLUSIVEADDRUSE', None)
-        if excl is not None:
+    for addr in dict.fromkeys((host, '0.0.0.0')):
+        with contextlib.closing(socket.socket(socket.AF_INET,
+                                              socket.SOCK_STREAM)) as s:
+            excl = getattr(socket, 'SO_EXCLUSIVEADDRUSE', None)
+            if excl is not None:
+                try:
+                    s.setsockopt(socket.SOL_SOCKET, excl, 1)
+                except OSError:
+                    pass
             try:
-                s.setsockopt(socket.SOL_SOCKET, excl, 1)
+                s.bind((addr, port))
             except OSError:
-                pass
-        try:
-            s.bind((host, port))
-            return True
-        except OSError:
-            return False
+                return False
+    return True
 
 
 def free_port_from(preferred: int, taken=(), host: str = '127.0.0.1') -> int:

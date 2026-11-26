@@ -28,6 +28,14 @@ defence at nothing and no hostile ship left in orbit; troopers already in
 orbit never landed. A finished Attack or Conquer order at a planet is
 cleared after the battle. Fire goes to one target at a time, weakest first,
 where the engine spreads it at random.
+
+Every side of a battle is sent a report, as the client's News tab is
+(client/dev_tools/ai_player/intel.py): each side's firepower and ship
+hitpoints as the battle began and the ships it lost, and at a planet the
+defence's hitpoints, the share of them knocked off and what is left. A side
+that landed troops is told how many and whether the planet fell; what the
+client says of a ground battle has not been read, so the defenders' count is
+left out.
 """
 import math
 
@@ -66,19 +74,25 @@ class Unit:
         self.max = hitpoints(civ, d)
         self.hp = self.max * ship.condition
         light, heavy, bomb = d.firepower
-        need = tb.CHASSIS[d.chassis].crew[0] if d.chassis is not None else 0
         crewed = d.chassis is not None and len(ship.crew) >= crew_needed(d, civ)
-        boost = (1 + RANK_BONUS * ship_rank(ship, need)) * fire_bonus(civ, d)
+        boost = (1 + RANK_BONUS * ship_rank(ship)) * fire_bonus(civ, d)
         self.fire = (light * boost, heavy * boost, bomb * boost) if crewed else (0, 0, 0)
         self.armed = crewed and (light or heavy)
 
 
 def hitpoints(civ, d):
-    """Units raised by trait 11, shields by the design's strength plus trait
-    10's points, then trait 17. The order the client applies them in is not
-    checked; no captured battle had any of these traits."""
+    """The design's hitpoints as the client caches them (0x00547FC0): units
+    raised by the shield strength as a percent, then by trait 17's percent,
+    each step rounded. The shield strength is the fitted shields' sum raised
+    by trait 10 as a percent (0x00547A50), so an unshielded ship gains
+    nothing. Traits 10 and 17 are the civ's research grants (0x00516180);
+    where a civ's own base traits enter is not read. Trait 11 is not applied
+    in the client's units getter (0x005473F0); the simulator keeps it here."""
+    granted = traits.granted(civ.completed) if civ is not None else {}
     units = traits.pct(civ, 11, d.units)
-    return traits.pct(civ, 17, units * (100 + d.shield + traits.value(civ, 10)) / 100)
+    shield = d.shield + economy.R(d.shield * granted.get(10, 0) / 100)
+    hp = units + economy.R(units * shield / 100)
+    return hp + economy.R(hp * granted.get(17, 0) / 100)
 
 
 def fire_bonus(civ, d):
@@ -87,11 +101,13 @@ def fire_bonus(civ, d):
     return 1 + pct / 100
 
 
-def ship_rank(ship, need):
-    """The crew's total experience over the crew the ship needs, as a rank."""
-    if not need or not ship.crew_xp:
+def ship_rank(ship):
+    """The crew's mean experience, as a rank. Four heavy ships of 4 to 7 crew at
+    8 each fired at rank 3, where the total over the 3 they need gives 4 at 6
+    and 7 (`capture_live_mix*`)."""
+    if not ship.crew_xp:
         return 0
-    return economy.rank(sum(ship.crew_xp) / need)
+    return economy.rank(sum(ship.crew_xp) / len(ship.crew_xp))
 
 
 class Planet:
@@ -206,9 +222,10 @@ def fight(g, p, friends, foes, passive=()):
                                                    or u.ship.arrived == g.turn)]
     every = opposed or any(holds_order(u.ship) for u in shooters)
     # Taking part: guns under an order, on arrival or against armed ships,
-    # and bombs over a planet.
-    active = shooters + [u for u in taking if u not in shooters and p is not None and u.fire[2] > 0]
+    # and bombs over a planet with a defence left to bomb.
+    active = shooters + [u for u in taking if u not in shooters and planet.max and u.fire[2] > 0]
     marks = home if every else [u for u in home if u.armed]
+    report = _report(g, p, home, away, planet)
     for _round in range(SUB_ROUNDS):
         if not alive(away):
             break
@@ -238,9 +255,19 @@ def fight(g, p, friends, foes, passive=()):
     killed_away = sum(g.designs[u.ship.design].units for u in away if u.hp <= 1e-9)
     if planet.max and planet.hp <= 1e-9:
         killed_home += defence_units(p)
+    for u in home + away:
+        if u.hp <= 1e-9:
+            report['sides'][u.ship.owner]['destroyed'] += 1
+    if planet.max:
+        report['defence_damage'] = round(100 * (1 - planet.hp / planet.max))
+    report['defence_left'] = planet.hp
+    for civ in report['sides']:
+        if civ in g.civs:
+            g.civs[civ].news.append((g.turn, ('battle', report)))
     renown.battle(g, attacker, defender, killed_away, killed_home,
                   power(g, defender), power(g, attacker), at_planet=p is not None)
-    renown.experience(home, active, sum(Planet(g, p).fire) if p is not None else 0.0)
+    renown.experience(home, active, sum(Planet(g, p).fire) if p is not None else 0.0,
+                      home_scored=killed_away > 0, away_scored=killed_home > 0)
     for u in home + away:
         if u.hp <= 1e-9:
             movement.remove_ship(g, u.ship)
@@ -260,19 +287,43 @@ def fight(g, p, friends, foes, passive=()):
         invade(g, p, landing)
 
 
+def _report(g, p, home, away, planet):
+    """A battle report as the fight begins; losses are added after it."""
+    sides = {}
+    for u in home + away:
+        side = sides.setdefault(u.ship.owner, {'firepower': [0.0, 0.0, 0.0], 'ship_hp': [0.0, 0.0],
+                                               'ships': 0, 'destroyed': 0})
+        for i in range(3):
+            side['firepower'][i] += u.fire[i]
+        side['ship_hp'][1 if u.heavy else 0] += u.hp
+        side['ships'] += 1
+    if p is not None:
+        side = sides.setdefault(p.owner, {'firepower': [0.0, 0.0, 0.0], 'ship_hp': [0.0, 0.0],
+                                          'ships': 0, 'destroyed': 0})
+        side['firepower'][0] += planet.fire[0] if planet.hp > 0 else 0
+        side['firepower'][1] += planet.fire[1] if planet.hp > 0 else 0
+    return {'planet': p.oid if p is not None else None, 'sides': sides,
+            'planet_hp': planet.hp, 'defence_damage': 0}
+
+
 BIO_BOMBS = 4                   # module id
 BIO_KILLS = 20                  # soldiers or citizens a bomb set kills a turn
 BIO_BLIGHT = 5                  # space a set makes uninhabitable
 BIO_REPUTATION = 0.1            # lost per set dropped
 BIO_SHELTER = (2, 3)            # 1 in 2 in a bunker, 1 in 3 in a fortress is killed
+BIO_PENALTY_CAP = 100           # the standing penalty's ceiling, a pair's KNPL +26
+BIO_PENALTY_DECAY = 1           # a tick; 2 under a galaxy option the simulator does not read
 
 
 def bio_bomb(g, p, ships):
     """The manual's bio-bombing, after conventional bombing: each set kills 20,
     soldiers first, those sheltered in bunkers and fortresses less often; it
-    blights 5 space, costs the bomber 0.1 reputation, and turns the victim's
-    former people on the bomber's planets 1 loyalty point against it. No
-    capture has shown one."""
+    blights 5 space, costs the bomber 0.1 reputation, and adds the sets to
+    the bomber's standing penalty toward the planet's owner (KNPL +26, capped
+    at 100), which takes loyalty off every planet the bomber holds that it took
+    from that owner, taken later too. Facilities that no longer fit the space
+    left are destroyed, one of a random type at a time, as the client's
+    resolution (0x004F6DE0) does. No capture has shown a bombing."""
     for s in ships:
         o = s.order
         if o is None or o.kind != movement.BIO_BOMB or not o.runs or s.orbit != p.oid:
@@ -299,10 +350,11 @@ def bio_bomb(g, p, ships):
         if kills > 0:
             p.citizens = p.citizens[min(len(p.citizens), kills):]
         p.blight += BIO_BLIGHT * sets
+        # Facilities that no longer fit the usable space are destroyed.
+        economy.lose_facilities(g, p)
         g.civs[s.owner].reputation -= BIO_REPUTATION * sets
-        for q in g.planets.values():
-            if q.owner == s.owner and q.prior_owner == p.owner:
-                q.loyalty = max(0.0, q.loyalty - sets)
+        pair = (s.owner, p.owner)
+        g.biobombed[pair] = min(BIO_PENALTY_CAP, g.biobombed.get(pair, 0) + sets)
         o.runs -= 1
         if not o.runs:
             s.order = None
@@ -372,6 +424,7 @@ def invade(g, p, ships):
     landing = [(s, x) for s in ships for x in troops_aboard(g, s)]
     if not landing:
         return
+    told = g.civs.get(ships[0].owner)
     attack = ground_side([x for _s, x in landing], 0, 0, g.civs.get(ships[0].owner))
     defend = ground_side(p.military_xp or [0.0] * len(p.military),
                          p.facilities.get(BUNKER, 0), p.facilities.get(FORTRESS, 0),
@@ -388,6 +441,9 @@ def invade(g, p, ships):
     survivors = [x + a_gain for (_s, x), (h, _f) in zip(landing, attack) if h > 0]
     held = [x + d_gain for x, (h, _f) in zip(sorted(p.military_xp or [0.0] * len(p.military),
                                                     reverse=True), defend) if h > 0]
+    if told is not None:
+        told.news.append((g.turn, ('landing', {'planet': p.oid, 'landed': len(landing),
+                                               'taken': not held and bool(survivors)})))
     if held or not survivors:
         p.military, p.military_xp = [(economy.MILITARY, p.owner)] * len(held), held
         return
@@ -397,11 +453,13 @@ def invade(g, p, ships):
         p.facilities.pop(kind, None)
     economy.conquered(g, p, owner)
     p.owner = owner
-    p.citizens = [(job, owner) for job, _w in p.citizens]
     p.military = [(economy.MILITARY, owner)] * len(survivors)
     p.military_xp = survivors
     p.production = st.Production('WLTH')
     p.recruit = 0
+    economy.refresh_loyalty(g, p)
+    # The new owner's space bonus may leave facilities that no longer fit.
+    economy.lose_facilities(g, p)
 
 
 def alive(units):

@@ -32,6 +32,11 @@ What it enforces:
   * a guest is refused every galaxy route where the document says
     `guests: refuse`
   * a guest's seats move only to an account, on both tokens
+  * a scan is asked only for the caller's own civ on the turn being played,
+    and read, delivered or cancelled only by that civ; only the referee
+    answers one
+  * a past turn is replayed only as the caller's own civ's view, never the
+    turn itself, and not from before the turn that civ was seated
   * a coat of arms is uploaded only by an account seated on the galaxy, as a
     small PNG, and up to `ARMS_PER_UID` of them; it is shown to its owner at
     once and to anyone else only once the operator approves it
@@ -92,6 +97,9 @@ MAX_BYTES = int(os.environ.get('CS_RELAY_MAX_BYTES', str(1024 * 1024)))
 
 # Ceiling on a join request body (a name, a build string and two numbers).
 MAX_JOIN_BYTES = int(os.environ.get('CS_RELAY_MAX_JOIN_BYTES', '4096'))
+
+# The longest `DOSC` payload: a count, every target and the type.
+MAX_SCAN_BYTES = 8 + 4 * turn_store.MAX_SCAN_TARGETS
 
 # Longest build string a join request may carry; read by the minimum-build gate.
 MAX_BUILD_CHARS = 64
@@ -298,7 +306,12 @@ def catalog():
 
 
 def catalog_rows() -> list:
-    """Every galaxy, with the fields `/state` serves plus `id` and `name`."""
+    """Every galaxy, with the fields `/state` serves plus `id`, `name` and how
+    many join requests are waiting.
+
+    The count names nobody; `_own_join` is still the only route that reads a
+    request.
+    """
     rows = []
     for snap in catalog().stream():
         doc = snap.to_dict() or {}
@@ -306,6 +319,7 @@ def catalog_rows() -> list:
                if k in doc and k not in PRIVATE_FIELDS}
         row['id'] = snap.id
         row['name'] = doc.get('name') or snap.id
+        row[turn_store.JOINING_KEY] = firebase_store.count_joins(snap.reference)
         rows.append(row)
     return sorted(rows, key=lambda r: r['id'])
 
@@ -383,6 +397,24 @@ def forget_doc(store) -> None:
 def seat_of(doc: dict, uid: str):
     """The civ this uid plays, or None when it holds no seat."""
     return (doc.get('seats') or {}).get(uid)
+
+
+def unheld_civ(doc: dict, civ: str, turn: int):
+    """`civ` when a seatless caller may read its view of `turn`, else None.
+
+    Only under `seat_claim: 'first-use'`, where a player is seatless until its
+    first submission takes the civ it names, and only for a roster civ nobody
+    holds whose view the turn names. A roster civ without a view is served the
+    whole turn, so it is never served this way. Reading it claims nothing.
+    """
+    if not civ or (doc.get('seat_claim') or '') != 'first-use':
+        return None
+    if civ not in (doc.get('civs') or ()):
+        return None
+    if civ in (doc.get('seats') or {}).values():
+        return None
+    named = (doc.get(turn_store.VIEWS_KEY) or {}).get(str(int(turn))) or ()
+    return civ if civ in named else None
 
 
 def reclaimed_refusal(store, doc: dict, civ: str) -> Refused:
@@ -570,6 +602,28 @@ def _may_submit(store, doc, uid, turn, civ):
     if turn != current:
         raise Refused(409, f'{store.galaxy} is playing turn {current}, '
                            f'not turn {turn}')
+
+
+def _ask_scan(store, doc, uid, turn, civ, body):
+    """File a scan the client sent. Checked as a submission is, since a scan
+    is played on the same turn by the same seat."""
+    if len(body) > MAX_SCAN_BYTES:
+        raise Refused(413, f'a scan request is at most {MAX_SCAN_BYTES} bytes')
+    _may_submit(store, doc, uid, turn, civ)
+    try:
+        kind, targets = turn_store.parse_scan_request(body)
+    except ValueError as exc:
+        raise Refused(400, str(exc))
+    return _json({'id': store.ask_scan(civ, turn, kind, targets)})
+
+
+def _own_scan(store, doc, uid, scan_id):
+    """The caller's own scan. Another civ's reads as missing."""
+    rec = store.scan(scan_id) if turn_store.scan_id_ok(scan_id) else None
+    civ = seat_of(doc, uid)
+    if rec is None or civ is None or rec.get('civ') != civ:
+        raise Refused(404, 'no scan of yours is filed under that id')
+    return rec
 
 
 def _upload_ticket(turn, civ):
@@ -1157,8 +1211,10 @@ REFEREE_ONLY = ('only the referee publishes a turn, and it does not come '
 
 
 def _route(method: str, path: str, headers: dict, body: bytes):
-    # A query is dropped: only referee routes carry one, and those are refused.
-    path = (path or '').split('?', 1)[0]
+    # A query is dropped, save the civ a seatless caller names on `/turn`.
+    # Every other route that carries one is a referee route, and refused.
+    path, _, query = (path or '').partition('?')
+    asked = (urllib.parse.parse_qs(query).get('civ') or [None])[0]
     parts = [p for p in path.split('/') if p]
     if not parts:
         # The galaxy listing. Signed in like every other route.
@@ -1202,9 +1258,15 @@ def _route(method: str, path: str, headers: dict, body: bytes):
                     raise Refused(404, f'no turn {turn}')
             # Which copy is `turn_store.served_copy`'s answer for this seat:
             # its own view, the turn when the views do not name a roster civ,
-            # or the view with every civ's news withheld.
+            # or the view with every civ's news withheld. A seatless caller
+            # under first-use is served the unheld civ it names, checked on a
+            # fresh read so a seat taken inside the hold is not served.
+            civ = seat_of(doc, uid)
+            if civ is None and unheld_civ(doc, asked, turn):
+                doc = galaxy_doc(store)
+                civ = seat_of(doc, uid) or unheld_civ(doc, asked, turn)
             try:
-                copy = turn_store.served_copy(doc, turn, seat_of(doc, uid))
+                copy = turn_store.served_copy(doc, turn, civ)
             except turn_store.NotServed:
                 raise Refused(403, f'turn {turn} is not served to this sign-in; '
                                    f'the current turn is {doc.get("turn")}')
@@ -1212,6 +1274,21 @@ def _route(method: str, path: str, headers: dict, body: bytes):
                 return _redirect(signed_url(store, store.view_object(copy, turn),
                                             'GET'))
             return _redirect(signed_url(store, store.turn_object(turn), 'GET'))
+        if len(parts) == 2 and parts[0] == 'replay':
+            turn = _turn_number(parts[1])
+            doc = galaxy_doc(store)
+            guest_or_refuse(doc, claims)
+            civ = seat_of(doc, uid)
+            if civ is None:
+                raise Refused(403, f'the replay of {store.galaxy} is served '
+                                   f'only to a seat in it')
+            problem = turn_store.replay_problem(doc, civ, turn)
+            if problem:
+                raise Refused(403, problem)
+            if not store.has_kept_view(civ, turn):
+                raise Refused(404, f'turn {turn} is not kept for {civ}')
+            return _redirect(signed_url(store, store.view_object(civ, turn),
+                                        'GET'))
         if len(parts) == 2 and parts[0] == 'submissions':
             # The store answers the current turn from the document already
             # read; see `FirebaseTurnStore.submitted_civs`.
@@ -1271,6 +1348,9 @@ def _route(method: str, path: str, headers: dict, body: bytes):
                 raise Refused(404, 'nothing has been decided about a join '
                                    'request of yours here')
             return _json(answer)
+        if len(parts) == 2 and parts[0] == 'scan':
+            return _json(turn_store.scan_to_json(
+                _own_scan(store, doc, uid, parts[1])))
         if parts and parts[0] == 'joins':
             # What is waiting on a galaxy is the worker's question
             # (`turn_server.py` answers it on a LAN). Here it would tell a
@@ -1280,13 +1360,25 @@ def _route(method: str, path: str, headers: dict, body: bytes):
                                'caller only about its own request')
 
     if method == 'POST':
-        if parts == ['join'] or parts[:1] == ['submission'] \
+        if parts == ['join'] or parts[:1] in (['submission'], ['scan']) \
                 or parts[:2] == ['commit', 'submission']:
             verified_or_refuse(claims)
         if parts == ['join']:
             return _lodge_join(store, doc, uid, body)
         if parts == ['arms']:
             return _take_arms(store, doc, claims, body)
+        if len(parts) == 3 and parts[0] == 'scan' \
+                and turn_store.scan_id_ok(parts[1]):
+            if parts[2] not in (turn_store.SCAN_DELIVERED,
+                                turn_store.SCAN_CANCELLED):
+                raise Refused(403, 'a scan is answered by the worker, and the '
+                                   'answer does not come through here')
+            _own_scan(store, doc, uid, parts[1])
+            return _json(turn_store.scan_to_json(
+                store.move_scan(parts[1], parts[2])))
+        if len(parts) == 3 and parts[0] == 'scan':
+            return _ask_scan(store, doc, uid, _turn_number(parts[1]), parts[2],
+                             body)
         if parts and parts[0] in ('join', 'joins'):
             raise Refused(403, 'a join request is answered by the worker at a '
                                'turn boundary, and it does not come through '

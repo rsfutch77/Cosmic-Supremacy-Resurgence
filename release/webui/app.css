@@ -96,7 +96,7 @@ main { flex: 1; min-width: 0; padding: 10px 8px; display: flex; flex-direction: 
 
 /* Column widths follow launcher.GALAXY_COLUMNS: the name stretches, the rest
    are as wide as their heading or longest cell needs, then the action button. */
-.grid { display: grid; grid-template-columns: minmax(0,1fr) 66px 44px 160px 56px 112px 78px; align-items: center; }
+.grid { display: grid; grid-template-columns: minmax(0,1fr) 66px 44px 160px 56px 112px 148px; align-items: center; }
 .colhead > div.sorted { color: #ffffff; }
 .colhead { background: #5a7381; color: #eef3f6; font-weight: bold; font-size: 11px; }
 .colhead > div { padding: 4px 8px; border-right: 1px solid #435a68; cursor: pointer; }
@@ -105,6 +105,7 @@ main { flex: 1; min-width: 0; padding: 10px 8px; display: flex; flex-direction: 
 .grow:nth-child(even) { background: #222c36; }
 .grow:hover { background: #34475a; }
 .grow > div { padding: 0 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.grow > div.gacts { display: flex; gap: 4px; }
 
 .logbox { flex: 1; min-height: 0; overflow-y: auto; margin: 0; padding: 6px 8px; background: #0a1018; border: 1px solid #435a68;
           font-family: Consolas, "Lucida Console", monospace; font-size: 11px; line-height: 15px; color: #9fb4c6; white-space: pre; user-select: text; }

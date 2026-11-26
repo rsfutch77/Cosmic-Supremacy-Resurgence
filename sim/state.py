@@ -26,6 +26,32 @@ class Design:
             for pid in self.parts.get(cat, ()):
                 yield cat, table[pid]
 
+    def _sums(self):
+        """The parts' totals, worked out once: a design's parts never change."""
+        got = self.__dict__.get('_cached')
+        if got is None:
+            fp, res = [0, 0, 0], [0] * len(tables.RESOURCES)
+            got = {'units': 0, 'shield': 0, 'thrust': 0, 'space_used': 0, 'space': 0,
+                   'cost': 0, 'upkeep': 0}
+            for c, p in self._all():
+                got['units'] += p.units
+                got['cost'] += p.cost
+                got['upkeep'] += p.upkeep
+                res = [a + b for a, b in zip(res, p.resources)]
+                if c == 'shields':
+                    got['shield'] += p.stat
+                elif c == 'weapons':
+                    fp = [a + b for a, b in zip(fp, p.fp)]
+                elif c == 'engines':
+                    got['thrust'] += p.stat
+                if c == 'chassis':
+                    got['space'] += p.space
+                else:
+                    got['space_used'] += p.space
+            got['firepower'], got['resources'] = tuple(fp), tuple(res)
+            self.__dict__['_cached'] = got
+        return got
+
     @property
     def chassis(self):
         ids = self.parts.get('chassis') or [None]
@@ -37,12 +63,12 @@ class Design:
 
     @property
     def units(self):
-        return sum(p.units for _c, p in self._all())
+        return self._sums()['units']
 
     @property
     def shield(self):
         """Shield strength in percent of units."""
-        return sum(p.stat for c, p in self._all() if c == 'shields')
+        return self._sums()['shield']
 
     @property
     def hitpoints(self):
@@ -52,38 +78,31 @@ class Design:
     @property
     def firepower(self):
         """(vs light ships, vs heavy ships, vs planets), before rank."""
-        fp = [0, 0, 0]
-        for c, p in self._all():
-            if c == 'weapons':
-                fp = [a + b for a, b in zip(fp, p.fp)]
-        return tuple(fp)
+        return self._sums()['firepower']
 
     @property
     def thrust(self):
-        return sum(p.stat for c, p in self._all() if c == 'engines')
+        return self._sums()['thrust']
 
     @property
     def space_used(self):
-        return sum(p.space for c, p in self._all() if c != 'chassis')
+        return self._sums()['space_used']
 
     @property
     def space(self):
-        return sum(p.space for c, p in self._all() if c == 'chassis')
+        return self._sums()['space']
 
     @property
     def cost(self):
-        return sum(p.cost for _c, p in self._all())
+        return self._sums()['cost']
 
     @property
     def upkeep(self):
-        return sum(p.upkeep for _c, p in self._all())
+        return self._sums()['upkeep']
 
     @property
     def resources(self):
-        out = [0] * len(tables.RESOURCES)
-        for _c, p in self._all():
-            out = [a + b for a, b in zip(out, p.resources)]
-        return tuple(out)
+        return self._sums()['resources']
 
 
 @dataclass
@@ -146,7 +165,7 @@ class Planet:
     rates: tuple = None             # PLPR+4..+6, food, production and science per worker
     ore: int = None                 # the ship resource it mines, tables.RESOURCES index
     ore_rate: int = None            # ship resource per miner
-    citizens: list = field(default_factory=list)    # [(job, owner)]
+    citizens: list = field(default_factory=list)    # [(job, origin, turn arrived)]
     military: list = field(default_factory=list)    # [(job, owner)]
     military_xp: list = field(default_factory=list)  # experience, one per soldier
     facilities: dict = field(default_factory=dict)  # type -> count
@@ -168,10 +187,14 @@ class Planet:
     blight: int = 0                 # space bio-bombs have made uninhabitable
     defence_damage: float = 0.0     # bombed off the defence while attackers stay in orbit
 
+    def loyal(self):
+        """Loyalty as the planet feels it, the bio-bomb penalty included."""
+        return self.loyalty
+
     def jobs(self):
         out = {}
-        for job, _owner in self.citizens:
-            out[job] = out.get(job, 0) + 1
+        for c in self.citizens:
+            out[c[0]] = out.get(c[0], 0) + 1
         return out
 
 
@@ -231,6 +254,9 @@ class Galaxy:
     fought: set = field(default_factory=set)    # (civ, enemy) past civ's first scoring battle
     system_planets: dict = field(default_factory=dict)  # sun id -> planet ids in SOLA order
     player: int = 0                 # the civ the client plays as when it loads the save, GLOB
+    homes: dict = field(default_factory=dict)  # civ -> homeworld, for scoring; filled by sim/galaxies.py
+    score_terms: dict = field(default_factory=dict)  # civ -> score's state terms as the tick began
+    biobombed: dict = field(default_factory=dict)  # (bomber, victim) -> standing bomb sets, KNPL +26
 
     def civ_planets(self, civ):
         return [p for p in self.planets.values() if p.owner == civ]

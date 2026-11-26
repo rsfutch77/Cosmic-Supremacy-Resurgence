@@ -9,8 +9,8 @@ crews every ship to its seats (a trooper lands six), and on `attack_turn`
 declares war and sends the fleet at the enemy's most populous planet, timing
 each ship's departure so they arrive together.
 
-It is a probe for the reward, not an opponent to train against for long:
-docs/Fast_Sim_Plan.md asks whether the civ with the higher dominance wins.
+It is a probe for the reward, not an opponent to train against for long: it
+asks whether the civ with the higher dominance wins.
 """
 import math
 

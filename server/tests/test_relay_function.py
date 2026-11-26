@@ -161,7 +161,9 @@ class RelayHandler(BaseHTTPRequestHandler):
     def _run(self):
         length = int(self.headers.get('Content-Length') or 0)
         body = self.rfile.read(length) if length else b''
-        path = urllib.parse.urlparse(self.path).path
+        # The query goes too, as `main.py` passes it.
+        url = urllib.parse.urlparse(self.path)
+        path = url.path + (f'?{url.query}' if url.query else '')
         status, headers, out = relay.handle(
             self.command, path, dict(self.headers), body)
         self.send_response(status)
@@ -233,6 +235,7 @@ def main():
         run_catalog(referee, galaxy, root, token_a, token_c)
         run_guests()
         run_views(referee, galaxy, token_a, token_b)
+        run_first_use_views(referee, galaxy, base, token_a)
     finally:
         httpd.shutdown()
         httpd.server_close()
@@ -607,6 +610,75 @@ def run(referee, galaxy, base, player_a, player_b, player_c, anonymous, ids):
               os.environ['STORAGE_EMULATOR_HOST'].rstrip('/')), True)
 
     run_joins(referee, galaxy, call, ids)
+    run_scans(referee, call, ids, player_a)
+
+
+def run_scans(referee, call, ids, player_a):
+    """Scans through the relay: asked by a seat for its own civ, answered by
+    the referee alone, delivered or cancelled by the civ that asked.
+
+    Each check reads back through the referee's store.
+    """
+    _uid_a, token_a = ids['a']
+    _uid_b, token_b = ids['b']
+    turn = referee.current()[0]
+
+    def waiting():
+        return [r['id'] for r in referee.scans_waiting()]
+
+    print('a scan is asked by a seat for its own civ')
+    sid = player_a.ask_scan('DemoPlayer', turn, 0, [384])
+    rec = referee.scan(sid)
+    check('the launcher files a scan', waiting(), [sid])
+    check('as the request the client sent',
+          (rec['civ'], rec['turn'], rec['type'], rec['targets'], rec['state']),
+          ('DemoPlayer', turn, 0, [384], 'asked'))
+    request = turn_store.scan_request(0, [384])
+    check('a scan for another civ is refused',
+          call('POST', f'/scan/{turn}/Neighbor', token_a, request)[0], 403)
+    check('a scan for a turn not being played is refused',
+          call('POST', f'/scan/{turn - 1}/DemoPlayer', token_a, request)[0],
+          409)
+    check('a request that does not read as one is refused',
+          call('POST', f'/scan/{turn}/DemoPlayer', token_a, b'\x01\0\0\0')[0],
+          400)
+    check('a request past the size cap is refused',
+          call('POST', f'/scan/{turn}/DemoPlayer', token_a,
+               b'\0' * (relay.MAX_SCAN_BYTES + 1))[0], 413)
+    check('and none of them filed anything', waiting(), [sid])
+
+    print('a scan is read and moved only by the civ that asked')
+    check('the asker reads it back', player_a.scan(sid)['state'], 'asked')
+    check('another seat reads it as missing',
+          call('GET', f'/scan/{sid}', token_b)[0], 404)
+    check('a player may not answer it',
+          call('POST', f'/scan/{sid}/answered', token_a)[0], 403)
+    check('another seat may not cancel it',
+          call('POST', f'/scan/{sid}/cancelled', token_b)[0], 404)
+    check('and it is still waiting', waiting(), [sid])
+    referee.move_scan(sid, turn_store.SCAN_ANSWERED, answer=b'\x01\x02')
+    check('the referee\'s answer reaches the asker as bytes',
+          (player_a.scan(sid)['state'], player_a.scan(sid)['answer']),
+          ('answered', b'\x01\x02'))
+    check('the asker marks it delivered',
+          player_a.move_scan(sid, 'delivered')['state'], 'delivered')
+    check('and the referee counts it delivered on this turn',
+          [r['id'] for r in referee.delivered_scans(turn, 'DemoPlayer')],
+          [sid])
+    check('a delivered scan is not cancelled after',
+          player_a.move_scan(sid, 'cancelled')['state'], 'delivered')
+
+    print('a scan given up on is never charged')
+    other = player_a.ask_scan('DemoPlayer', turn, 2, [677, 678])
+    check('the asker cancels it while it waits',
+          player_a.move_scan(other, 'cancelled')['state'], 'cancelled')
+    late = referee.move_scan(other, turn_store.SCAN_ANSWERED, answer=b'late')
+    check('an answer that comes after leaves it cancelled', late['state'],
+          'cancelled')
+    check('and only the delivered scan counts',
+          [r['id'] for r in referee.delivered_scans(turn)], [sid])
+    check('a path that is not a scan id is missing',
+          call('GET', '/scan/not-a-scan', token_a)[0], 404)
 
 
 def run_views(referee, galaxy, token_a, token_b):
@@ -647,11 +719,80 @@ def run_views(referee, galaxy, token_a, token_b):
     check('a current turn published with no views sends every seat to the turn',
           (code, referee.turn_object(turn + 1) in where), (302, True))
     referee.publish(turn + 2, make_blob(turn + 2))
-    check('the publish after that deletes them',
+    check('the publish after that keeps them for the replay',
           (referee._has(referee.view_object('DemoPlayer', turn)),
-           referee._has(referee.view_object(public, turn))), (False, False))
+           referee._has(referee.view_object(public, turn))), (True, True))
+    code, _where = location(token_a, turn)
+    check('but the turn route no longer serves them', code, 403)
     code, _where = location(token_a, turn + 1)
     check('and an earlier turn with no views is not served whole', code, 403)
+
+
+def run_first_use_views(referee, galaxy, base, token_a):
+    """A first-use player reads the unheld civ it names before it claims it."""
+    def location(token, turn, civ=None):
+        q = f'?civ={urllib.parse.quote(civ)}' if civ else ''
+        code, headers, _body = relay.handle(
+            'GET', f'/{galaxy}/turn/{turn}{q}',
+            {'Authorization': f'Bearer {token}'}, b'')
+        return code, urllib.parse.unquote(headers.get('Location', ''))
+
+    print('a first-use player is served the civ it names before claiming it')
+    public = turn_store.PUBLIC_VIEW
+    doc = referee.doc.get().to_dict()
+    # Fourth has a view and nobody holds it; Fifth is on the roster with none.
+    referee.doc.set({'seat_claim': 'first-use',
+                     'civs': list(doc.get('civs') or []) + ['Fourth', 'Fifth']},
+                    merge=True)
+    turn = referee.state()['turn'] + 1
+    fourth = make_blob(turn, filler=b'f')
+    referee.publish(turn, make_blob(turn),
+                    views={'DemoPlayer': make_blob(turn, filler=b'v'),
+                           'Fourth': fourth,
+                           public: make_blob(turn, filler=b'p')})
+    uid_e, token_e = sign_up()
+    code, where = location(token_e, turn, 'Fourth')
+    check('a seatless sign-in naming an unheld civ is sent to its view',
+          (code, referee.view_object('Fourth', turn) in where), (302, True))
+    player_e = HttpTurnStore(base, token=lambda: token_e)
+    check('the launcher\'s served_turn gets that view\'s bytes',
+          player_e.served_turn('Fourth', turn), fourth)
+    check('and the read claims nothing',
+          uid_e in (referee.doc.get().to_dict().get('seats') or {}), False)
+    code, where = location(token_e, turn)
+    check('naming no civ is still the view without news',
+          (code, referee.view_object(public, turn) in where), (302, True))
+    code, where = location(token_e, turn, 'DemoPlayer')
+    check('naming a held civ is the view without news',
+          (code, referee.view_object(public, turn) in where), (302, True))
+    code, where = location(token_e, turn, 'Nobody')
+    check('naming a civ off the roster is the view without news',
+          (code, referee.view_object(public, turn) in where), (302, True))
+    code, where = location(token_e, turn, 'Fifth')
+    check('naming a roster civ with no view is the view without news, not the '
+          'whole turn', (code, referee.view_object(public, turn) in where),
+          (302, True))
+    code, where = location(token_a, turn, 'Fourth')
+    check('a seated caller naming another civ is sent to its own',
+          (code, referee.view_object('DemoPlayer', turn) in where), (302, True))
+
+    # A seat taken while this instance holds the document is not served.
+    location(token_e, turn, 'Fourth')
+    uid_f, token_f = sign_up()
+    referee.doc.set({'seats': {uid_f: 'Fourth'}}, merge=True)
+    _uid, token_g = sign_up()
+    code, where = location(token_g, turn, 'Fourth')
+    check('once Fourth is claimed, another sign-in naming it is not sent to it',
+          (code, referee.view_object(public, turn) in where), (302, True))
+    code, where = location(token_f, turn, 'Fourth')
+    check('while the sign-in that claimed it is',
+          (code, referee.view_object('Fourth', turn) in where), (302, True))
+
+    referee.doc.set({'seat_claim': '', 'seats': {uid_f: None}}, merge=True)
+    relay.forget_doc(referee)
+    code, where = location(token_e, turn, 'Fourth')
+    check('with first-use off, naming an unheld civ is the view without news',
+          (code, referee.view_object(public, turn) in where), (302, True))
 
 
 def run_catalog(referee, galaxy, root, token_a, token_c):
@@ -694,6 +835,10 @@ def run_catalog(referee, galaxy, root, token_a, token_c):
           directory.galaxy(galaxy, player='Nobody').joined, False)
     check('players is how many civs the galaxy has',
           g.players, len(referee.state()['civs']))
+    check('joining is how many requests are waiting',
+          g.joining, len(referee.join_requests()))
+    check('and the listing row says the same without naming anyone',
+          row.get(turn_store.JOINING_KEY), len(referee.join_requests()))
     check('the row names a store back through this same relay',
           g.store, f'{root}/{galaxy}')
     # The store a row names is one the player can open.

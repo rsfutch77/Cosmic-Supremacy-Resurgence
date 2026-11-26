@@ -469,9 +469,46 @@ def inspect_source(module) -> str:
     return inspect.getsource(module)
 
 
+def run_reseat(store, label):
+    """An early seating's republish of the current turn, on a store that has
+    one. Runs after the sequence, since the HTTP store has none."""
+    print(f'{label}: reseat')
+    turn = store.current()[0]
+    before = store.state()
+    old = store.turn_blob(turn)
+    subs = store.submissions(turn)
+    again = make_blob(turn, b'*')
+    check(f'{label}: a turn nothing replaced keeps no copies',
+          store.earlier_copies(turn), [])
+    check(f'{label}: the first reseat keeps the replaced copy as copy 1',
+          store.reseat(turn, again, views={'DemoPlayer': MINE}), 1)
+    after = store.state()
+    check(f'{label}: reseat keeps the turn, deadline, length and roster',
+          [after[k] for k in ('turn', 'deadline', 'turn_seconds', 'civs')],
+          [before[k] for k in ('turn', 'deadline', 'turn_seconds', 'civs')])
+    check(f'{label}: the turn is the new blob', store.turn_blob(turn), again)
+    check(f'{label}: and the state carries its hash',
+          after['hash'], canonical.canonical_hash(again))
+    check(f'{label}: the replaced copy comes back as it was',
+          store.earlier_copies(turn), [(1, old)])
+    check(f'{label}: the submissions stay', store.submissions(turn), subs)
+    check(f'{label}: the view it was given is served',
+          store.view_blob('DemoPlayer', turn), MINE)
+    third = make_blob(turn, b'+')
+    check(f'{label}: a second reseat keeps copy 2',
+          store.reseat(turn, third), 2)
+    check(f'{label}: the copies come back oldest first',
+          store.earlier_copies(turn), [(1, old), (2, again)])
+    check(f'{label}: a turn that is not current is refused',
+          raises(store.reseat, turn - 1, old), 'ValueError')
+
+
 def run_directory(tmp):
     root = os.path.join(tmp, 'galaxy_dir')
-    return run_sequence(TurnStore(root), 'directory')
+    store = TurnStore(root)
+    summary = run_sequence(store, 'directory')
+    run_reseat(store, 'directory')
+    return summary
 
 
 def run_http(tmp):
@@ -645,7 +682,9 @@ def run_firebase(spec, keep=False):
     store = open_store(spec)
     print(f'firebase: {store!r}')
     try:
-        return run_sequence(store, 'firebase')
+        summary = run_sequence(store, 'firebase')
+        run_reseat(store, 'firebase')
+        return summary
     finally:
         if keep:
             print(f'  kept {spec}')

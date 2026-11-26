@@ -16,7 +16,8 @@ to a record the reader `0x5332E0` and writer `0x532F20` walk member by member.
         +12   u32  the stance: 0 neutral, 1 war, 2 cease-fire, 3 peace,
                    4 alliance                            (key `stance`)
         +16   u8   1 on the side that declared the war   (key `declared`)
-        +17   u16  set during the first tick of a war    (key `w17`)
+        +17   u16  battles this civ has started against the civ since
+                   the war began                         (key `w17`)
         +19   u8   1 once the significant battle has been fought; no
                    reputation is gained or lost for attacking again
                                                          (key `battled`)
@@ -55,8 +56,10 @@ lists it per civ. `leader_known` is set at `0x54EF99` and refuses a second
 "name of the Empire Leader" message. The tick (`0x5344B0`) takes `cooldown`
 and `biobombed` down by 1, or 2 under the galaxy option it reads.
 
-`w17` has no writer reachable through the relation getters: the client sets
-it somewhere else in the war's first tick.
+The battle (`0x51ED50`) adds 1 to `w17` on the attacker's record of the
+defender as it starts (`0x534CB0`, from `0x51EE49`). In the client `w17` is
+the `u16` at the getter's +0x0A and `battled` the byte at +9; the save writes
+them in the other order. No reader is known besides the save.
 """
 import struct
 

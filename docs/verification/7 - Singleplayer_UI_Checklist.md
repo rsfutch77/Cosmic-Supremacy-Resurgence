@@ -122,7 +122,7 @@ should agree with what the rest of the UI says.
 | F6 | Fleet handling | Select two ships, form a fleet, expand it with the [+] | The fleet appears as one row, expands to show its ships, and can be renamed |
 | F7  | Ship design screen | Open it | Every design is listed, including the three seeded ones, with cost, resources, crew and firepower filled in |
 | F8  | Create a design | Build a new design from components you have researched | The designer accepts it, it appears in the list, and it appears in the planet production menu |
-| F9  | Design without a scanner | Try to save a design with no scanner fitted | The UI should not let you, or should warn. Note what happens either way, this one has crashed the game before |
+| F9  | Design without a scanner | Create a design, click the minus sign beside its scanner, then press OK | A new design starts with a scanner. The designer keeps it or refuses the design. The client closes on any design with no scanner, so note whether the minus sign takes it off and whether the client stays up. The merge refuses such a design either way |
 | F10 | Deactivate a design | Untick the Active box | The design disappears from the production menu but stays in the list |
 
 ## G. Research
