@@ -4,6 +4,7 @@ test_patches.py: site-wide patches with a check of their own
     python site\\tests\\test_patches.py
 """
 import os
+import re
 import sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -118,6 +119,14 @@ def main():
            'value="Back to top" onclick="window.scrollTo(0, 0)" title="Back to top" /></a>&nbsp;')
     check('the back-to-top button becomes one link',
           patches.plain_back_to_top(top), patches.BACK_TO_TOP + '&nbsp;')
+    art = ('<img src="/wiki/_media/manual/karei-s-art.jpg" alt="" border="0" width="640" height="480" '
+           'class="resizeImage" />')
+    sized = patches.size_front_art(art)
+    check('the front page art offers three sizes', len(re.findall(r'\.jpg \d+w', sized)), 3)
+    check('the front page art keeps its drawn size', 'width="640" height="480" class="resizeImage"' in sized)
+    check('the art elsewhere keeps its full size',
+          patches.size_front_art('<img src="/wiki/_media/manual/karei-s-art.jpg" class="media" />'),
+          '<img src="/wiki/_media/manual/karei-s-art.jpg" class="media" />')
     print(f'\n{len(PASS)} passed, {len(FAIL)} failed')
     return 1 if FAIL else 0
 

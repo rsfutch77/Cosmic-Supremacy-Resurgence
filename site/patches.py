@@ -588,6 +588,19 @@ def plain_back_to_top(html):
     return _BACK_TO_TOP_RE.sub(BACK_TO_TOP, html)
 
 
+# The front page's art is 1448 px wide, drawn at 640. Each screen fetches the
+# copy its width needs (overrides/wiki/_media/manual/karei-s-art-*.jpg).
+_ART = '/wiki/_media/manual/karei-s-art'
+_FRONT_ART = f'<img src="{_ART}.jpg" alt="" border="0" width="640" height="480"'
+FRONT_ART = (f'<img src="{_ART}-640.jpg" srcset="{_ART}-640.jpg 640w, {_ART}-960.jpg 960w, '
+             f'{_ART}-1280.jpg 1280w" sizes="(max-width: 989px) 100vw, 640px" alt="" border="0" '
+             f'width="640" height="480"')
+
+
+def size_front_art(html):
+    return html.replace(_FRONT_ART, FRONT_ART)
+
+
 PATCHES = [
     ("remove the Live Chat tab", remove_live_chat),
     ("point the Forum tab at the Facebook group", repoint_forum_tab),
@@ -613,6 +626,7 @@ PATCHES = [
     ("give the score tables column headings", label_score_tables),
     ("mark the galaxy history grid as layout", mark_galaxy_grid),
     ("replace the wiki's back-to-top button with a link", plain_back_to_top),
+    ("serve the front page's art at the size drawn", size_front_art),
     ("fit the page to the screen", fit_the_screen),
     ("link the accessibility stylesheet", link_access_css),
 ]
