@@ -2891,3 +2891,18 @@ with `set_blob_player.py` to answer. Every capture's `waronly` bytes read `01 00
   player version would build that film from a galaxy's archived turns. Decide where players open
   it (the launcher, the website or the client), and that a player sees only what their own civ
   saw on each turn. Done when a player in the sandbox opens its history and steps through it.
+
+- [ ] **Players can play from a phone.** The mobile screens are designed and approved in the
+  Claude Design canvas "CS Mobile Interface" (https://claude.ai/artifact/Kg5qZ1kk8v2ZQajjynfxwL),
+  built from a player's Google Doc of map ideas
+  (https://docs.google.com/document/d/1K9KHhRJnC11vemcYsoaibCAAEjM2TNDJY9XBGLBOOL0). It holds a
+  landscape galaxy map shared by ten screens: the main window pages, the planet and ship menus,
+  the hold-for-info card, Move Near, Radar with its range kept on the map, Map Options and
+  Territory. The look is the client's own art taken from the exe's PNG, TEXTURES and bitmap
+  resources: the map buttons, tag pill, brackets, markers, planet textures, command icons,
+  header bar, buttons, tickboxes and slider. Zoom, center, info and menu buttons are new, drawn
+  on the client's blank help button. Labels use the client's wording, and orders a ship cannot
+  give are greyed, as in the client. A build still needs a bundled font close to Tahoma, and the
+  icons need sharper versions for phone screens. The scripts that cut the art are not in the
+  repo; the canvas keeps the finished images. Done when a player in the sandbox gives a turn's
+  orders from a phone.
