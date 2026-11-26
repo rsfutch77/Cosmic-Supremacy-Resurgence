@@ -560,10 +560,29 @@ the played arm one of its four founding farmers. The rest follows: the next citi
 turns 119, 130, 143 and 160 loaded and 120, 132, 148 and 170 played, the food store reads 2,554
 against 1,040, and the credits differ by 110. So the played client carries state into that
 battle that its fork blob does not hold.
-- [ ] **What the played client knows at the fork that the blob does not.** Next step: load
-  `war_fork.dat`, tick once with the double that `0x00522EF0` formats read live, and compare it
-  with the same read in a client that played up to turn 110. Done when the field
-  behind the 11% is named and either saved or shown to be rebuilt the same way on load.
+- [x] **What the played client knows at the fork that the blob does not.** It is the C
+  runtime's `rand()` state: `_holdrand`, at `+0x14` of the per-thread block (`_tiddata`,
+  `0x214` bytes, the thread id at `+0` and `-1` at `+4`) of the worker thread that runs the
+  tick. Combat rolls it (`0x004DD590`, from the turn step `0x004DF690`), and the percent is
+  the battle record's planetary defense before and after (`+0x28`, `+0x60`; the record is
+  found in the map at `0x0085785C`), computed at `0x0052233A` and formatted at
+  `0x00522EF0`. The blob does not hold it. A load does not seed it: the client's one `srand`
+  (`timeGetTime()`, `0x004D0737`) is on the "creating a dummy galaxy" path only, so every
+  fresh load reaches the same state, `0x2CD60A1E`, before its first tick (four processes,
+  25 November 2026). The played client has spent 70 turns of rolls by the fork instead.
+  Ticking `war_fork.dat` through the referee's own steps gives 12% (1 Citizen Killed) as
+  loaded, 11% with no citizen killed when `0x12345678` is written over the state first, and
+  12% (1 Citizen Killed) with `0x0BADF00D`. So the referee, which restarts the client for
+  every tick, is reproducible from the blob, and a galaxy played through many boundaries in
+  one session (`duel.py`) is not. The test read and wrote the state from outside the process
+  between the load and the boundary, finding the block by a search of the heap; the script
+  was a one-off and is not in the repo.
+- [ ] **The referee's dice start from the same state every turn.** Every tick runs in a
+  fresh client from `0x2CD60A1E`, so each turn's battles draw the same opening run of the
+  `rand()` sequence, where the original server's ran on. Decide whether the referee writes a
+  per-turn seed (from the galaxy and the turn, so a rerun still reproduces) over `_holdrand`
+  before it advances, and if so, find the tick thread's block from the client rather than by
+  a memory search.
 
 #### The original client's online path (November 2026)
 
