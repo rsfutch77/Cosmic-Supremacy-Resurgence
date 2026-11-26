@@ -256,9 +256,9 @@ O = {
 R = [
     ('R1', 'Core Web Vitals, web.dev "Web Vitals" (Google, updated 31 Oct 2024)',
      'At the 75th percentile of page loads, Largest Contentful Paint is 2.5 s or less, Interaction to Next Paint 200 ms or less, and Cumulative Layout Shift 0.1 or less.',
-     ["[x] Measured with Lighthouse 13.6.0 on the live site (25 November 2026), lab figures only: Google holds no field data for the site, and PageSpeed Insights refuses requests without a key. Largest Contentful Paint, mobile / desktop: home 3.8 s / 0.9 s, download 1.9 s / 2.0 s, the long manual page (`wiki/manual/ship-components`) 1.8 s / 0.4 s. Cumulative Layout Shift 0.001 or less and Total Blocking Time 50 ms or less on every run.",
-      "[x] Layout shift is not a problem: it reads 0.001 or less, unsized images notwithstanding.",
-      "The home page on a throttled phone paints its largest element in 3.8 s, over 2.5 s. The scripts and style sheets its head loads before anything renders (`prototype.js`, `premium.js`, three style sheets) are the likely cause.",
+     ["[x] Measured with Lighthouse 13.6.0 on the live site (25 November 2026, after the front page art fix), lab figures only: Google holds no field data for the site, and PageSpeed Insights refuses requests without a key. Largest Contentful Paint, mobile / desktop: home 2.1 s / 0.4 s (median of eight mobile runs, one outlier at 4.5 s on a slow image fetch), download 1.0 s / 0.4 s, the long manual page (`wiki/manual/ship-components`) 1.8 s / 0.4 s. Cumulative Layout Shift 0.016 or less and Total Blocking Time 90 ms or less on every run.",
+      "[x] Layout shift is not a problem: it reads 0.016 or less, unsized images notwithstanding.",
+      "[x] The home page on a throttled phone painted its largest element, the header's background, in 3.8 s. The cause was the front page art, 380 KB at 1448 px drawn at 640, taking the bandwidth the header needed; first paint was already 1.0 s, so the head's scripts were not it. The art now comes in 640, 960 and 1280 px copies chosen by screen width (`patches.size_front_art`), and the home page paints in 2.1 s. Preloading the header image made no difference.",
       "The 75th percentile needs field data, which Google gathers only once enough Chrome users visit; read Search Console's Core Web Vitals report when it has some."]),
     ('R2', 'Lighthouse v13 (Google), default configuration',
      'The automated audits for performance, accessibility, best practices and SEO run against the site and their failures are triaged.',
