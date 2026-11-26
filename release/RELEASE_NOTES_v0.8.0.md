@@ -13,9 +13,10 @@ with you into the next turn. While the answer is on its way the launcher shows
 a small window. If it takes too long, **Retry** cancels the scan so you can
 run it again, and a cancelled scan is never charged.
 
-**Watch the replay.** The game's replay screen now plays back the turns of a
-multiplayer galaxy. In a galaxy that was already running, it starts with the
-turns played just before this update.
+**Watch the replay.** Once a multiplayer galaxy has ended, the game's replay
+screen plays back its turns. In a galaxy that was already running, it starts
+with the turns played just before this update. (v0.8.0 offered the replay on
+running galaxies too; v0.8.1 fixes that.)
 
 **You see what the original server showed you.** Rivals' treaties, idle
 admirals, unused ship designs, scan reports and votes are no longer sent to
