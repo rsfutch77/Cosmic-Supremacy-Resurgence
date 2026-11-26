@@ -173,6 +173,8 @@ def main():
         store.publish(182, blob, views={c: v for c, v in published.items()
                                         if c != 'BadGuy'})
         store.publish(183, blob, views=published)
+        # The replay opens only once the galaxy has ended.
+        store.close()
         run_endpoint(store, held)
     print(f'\n{len(PASS)} passed, {len(FAIL)} failed')
     return 1 if FAIL else 0

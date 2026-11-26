@@ -2342,8 +2342,9 @@ ENDED = "ended"
 RECLAIMED = "reclaimed"
 ACTION_TEXT = {PLAY: "Play", VIEW: "View", REASON: "Review",
                ENDED: "Review", RECLAIMED: "Review"}
-# Rows of galaxies the player still has a seat in, which carry Replay.
-REPLAY_ROWS = (PLAY, ENDED)
+# Rows of ended galaxies the player had a seat in, which carry Replay. A
+# galaxy still running has none: the relay serves the replay only once it ends.
+REPLAY_ROWS = (ENDED,)
 
 # The status column orders by how far along a galaxy is, not alphabetically.
 STATUS_ORDER = (OPEN, FORMING, CLOSED)
