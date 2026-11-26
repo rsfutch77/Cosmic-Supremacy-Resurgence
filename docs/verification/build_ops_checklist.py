@@ -94,27 +94,27 @@ FB.update({
 })
 
 # The Update Framework: attacks on software update
-UPDATER = 'The launcher will update itself (Reconstruction Report section 14). Until it does, the player downloads a new zip from the release page.'
+UPDATER = 'The launcher updates itself (`release/updater.py`); a player can also download the zip from the release page.'
 TUF = {
-    'TUF-1': ('apply', UPDATER, ['The download page publishes the SHA-256 of each zip and explains how to check it (Website_Checklist R8).', 'Signed builds (M3) make a replaced file detectable by Windows itself.', 'The updater installs only a build signed by the project\'s identity (SS-5) whose SHA-256 matches the one the release publishes.']),
-    'TUF-2': ('apply', 'The launcher downloads turns and notes from the relay and Storage, and releases from the release page.', ['The launcher caps the size of a turn, note or answer it will read, and stops reading past it.', 'The updater stops a download that runs past the size the release lists.']),
-    'TUF-3': ('apply', UPDATER, ['An update is one signed zip. The updater fetches no dependencies or plug-ins, at update time or at run time.']),
-    'TUF-4': ('apply', UPDATER, ['The updater remembers only a version it read from a verified build, so an inflated number in the release listing cannot block later updates.']),
-    'TUF-5': ('apply', 'The analogue here is turns: a launcher served the same old turn must notice.', ['Multiplayer_Checklist M8: a turn the launcher could not refresh is labelled with its age.', 'An update check that could not reach the release page says so, rather than "up to date".']),
+    'TUF-1': ('done', UPDATER, ['[x] The download page publishes the SHA-256 of each zip and explains how to check it (Website_Checklist R8).', '[x] Signed builds (M3) make a replaced file detectable by Windows itself.', "[x] The updater installs only a build signed by the project's identity (SS-5) whose SHA-256 matches the one the release publishes. It also needs the SHA-256 in the release notes to match the asset's digest, so the notes must carry it before `gh release create`."]),
+    'TUF-2': ('apply', 'The launcher downloads turns and notes from the relay and Storage, and releases from the release page.', ['The launcher caps the size of a turn, note or answer it will read, and stops reading past it. Open: `HttpTurnStore._get` and the relay calls in `launcher.py` read whole answers; only the news, its picture and the release listing are capped.', '[x] The updater stops a download that runs past the size the release lists (`updater.download`, and no zip over `MAX_ZIP`).']),
+    'TUF-3': ('done', UPDATER, ['[x] An update is one signed zip. The updater fetches no dependencies or plug-ins, at update time or at run time.']),
+    'TUF-4': ('done', UPDATER, ["[x] The updater remembers only a version it read from a verified build, so an inflated number in the release listing cannot block later updates. It keeps no version at all: each check compares the listing with the running build, and installs only if the staged build's own stamp is newer."]),
+    'TUF-5': ('apply', 'The analogue here is turns: a launcher served the same old turn must notice.', ['Multiplayer_Checklist M8: a turn the launcher could not refresh is labelled with its age.', '[x] An update check that could not reach the release page says so, rather than "up to date" (`test_updater`).']),
     'TUF-6': NA('No mirrors. One release page (GitHub) and one relay.'),
-    'TUF-7': ('apply', UPDATER, ['The version, the zip and its SHA-256 all come from one release, never combined across releases.']),
-    'TUF-8': ('apply', None, ['The update notice never points to a build older than the one running.', 'The updater never installs a build older than the one running.', 'A galaxy\'s `min_build` only rises.']),
-    'TUF-9': ('apply', None, ['The code-signing identity (M3) is the one key that vouches for every build. Keep it in a managed service (Azure Artifact Signing) behind an MFA-protected account, not as a file on the build PC.', 'The GitHub account that publishes releases has MFA.', 'The updater trusts the signing identity, not the download host, so a compromised GitHub account alone cannot ship a build the launcher installs.']),
-    'TUF-10': ('apply', None, ['The update notice and the updater use one hard-coded release page, never a URL taken from the relay or a galaxy.']),
+    'TUF-7': ('done', UPDATER, ["[x] The version, the zip and its SHA-256 all come from one release, never combined across releases. The zip must be offered under that release's tag."]),
+    'TUF-8': ('done', None, ['[x] The update notice never points to a build older than the one running (`updater.is_newer`).', "[x] The updater never installs a build older than the one running. It checks the staged build's own stamp, not the listing.", "[x] A galaxy's `min_build` only rises. `galaxy_tool.set_min_build` refuses a lower one."]),
+    'TUF-9': ('apply', None, ['The code-signing identity (M3) is the one key that vouches for every build. Keep it in a managed service (Azure Artifact Signing) behind an MFA-protected account, not as a file on the build PC. The key is in Azure Artifact Signing, with no file on the build PC; MFA on the Azure account is for Robert to confirm.', 'The GitHub account that publishes releases has MFA.', '[x] The updater trusts the signing identity, not the download host, so a compromised GitHub account alone cannot ship a build the launcher installs.']),
+    'TUF-10': ('done', None, ['[x] The update notice and the updater use one hard-coded release page, never a URL taken from the relay or a galaxy (`updater.FEED`, `launcher.UPDATE_URL`).']),
 }
 
 # Microsoft: minimising SmartScreen warnings
 SS = {
     'SS-1': ('deviation', 'Not listing in the Microsoft Store (decided 8 October 2026). SmartScreen reputation comes from signing every release with one identity (SS-2, SS-5). Without a storefront there is no IARC rating, since IARC is reached only through a participating store; the age floor (PRIV-1) is stated by the project instead.', []),
-    'SS-2': ('apply', None, ['Sign the launcher and the client on every release. Unsigned, Smart App Control can block the client outright (seen in Windows Sandbox, 5 October 2026).']),
-    'SS-3': ('apply', None, ['Release order: build, sign, then zip, then compute the SHA-256. Nothing is patched after signing; the client\'s binary patches happen before.']),
-    'SS-4': ('apply', None, ['The launcher behaves like an ordinary program: no bundled extras, no autostart, no elevation, nothing written outside its folder (REL-1).', 'The updater keeps to the same rules: no elevation, nothing written outside the launcher\'s folder.']),
-    'SS-5': ('apply', None, ['One signing identity for every release; record it here once chosen.']),
+    'SS-2': ('done', None, ['[x] Sign the launcher and the client on every release. Unsigned, Smart App Control can block the client outright (seen in Windows Sandbox, 5 October 2026). v0.8.0: all five exes read back Valid, signed by CN=Robert Futch and timestamped (25 November 2026).']),
+    'SS-3': ('done', None, ["[x] Release order: build, sign, then zip, then compute the SHA-256. Nothing is patched after signing; the client's binary patches happen before. `build.ps1` patches the clients as it stages them, signs, then zips and hashes (v0.8.0 build log, 25 November 2026)."]),
+    'SS-4': ('apply', None, ["The launcher behaves like an ordinary program: no bundled extras, no autostart, no elevation, nothing written outside its folder (REL-1). No autostart and no elevation (REL-2). Two exceptions stand: the zip carries Microsoft's WebView2 bootstrapper, run only when the runtime is missing, and the client writes `HKCU\\Software\\CosmicSupremacy` (REL-1).", "[x] The updater keeps to the same rules: no elevation, nothing written outside the launcher's folder. It stages under `update\\` beside the launcher and never touches `data\\` (`release/updater.py`, `test_updater`)."]),
+    'SS-5': ('done', None, ['[x] One signing identity for every release; record it here once chosen. Azure Artifact Signing, subject `CN=Robert Futch, O=Robert Futch, L=Tucson, S=az, C=US`, pinned in `updater.SIGNER_SUBJECT` with its issuer and EKU.']),
     'SS-6': ('done', None, ['[x] The download page warns about the unrecognised publisher.', "[x] It also says to check that the publisher is Robert Futch before clicking Run anyway, and that Smart App Control need not be turned off (Website_Checklist R9)."]),
 }
 
@@ -240,17 +240,17 @@ OPS = [
 REL = [
     ('REL-1', 'The launcher installs and uninstalls cleanly: unzipping is installing, deleting the folder is uninstalling, and nothing is left behind.',
      'Windows Desktop App Certification Requirements v3.3 (Microsoft, 2014), requirement group 5 (clean, reversible install), paraphrased',
-     ['The download page says nothing is written outside the folder. Check it: where the identity file, logs, the client\'s files and any registry keys go.',
-      'If anything is written to `%APPDATA%` or the registry, the page and the uninstall note say so.']),
+     ["The download page says nothing is written outside the folder. Check it: where the identity file, logs, the client's files and any registry keys go. Checked 25 November 2026: the identity file and logs stay in `data\\`, but the client writes `HKCU\\Software\\CosmicSupremacy` (window positions and proxy settings), and `data\\` falls back to `%LOCALAPPDATA%\\CosmicSupremacyResurgence` when the folder is not writable.",
+      'If anything is written to `%APPDATA%` or the registry, the page and the uninstall note say so. Open: the page says only "To uninstall, delete the folder."']),
     ('REL-2', 'The launcher runs without administrator rights, does not start with Windows, and keeps user data where a standard user can write it.',
      'Windows Desktop App Certification Requirements v3.3, requirement groups 9 and 10, paraphrased',
-     ['The launcher and the client run as `asInvoker` (no elevation prompt).',
-      'Unzipping into `C:\\Program Files` fails for a standard user because the data folder is inside it: say so on the download page, or move user data to `%LOCALAPPDATA%`.',
-      'No autostart entry.']),
+     ['[x] The launcher and the client run as `asInvoker` (no elevation prompt). The release tests started every client unattended, and the click-through raised no prompt (25 November 2026).',
+      '[x] Unzipping into `C:\\Program Files` fails for a standard user because the data folder is inside it: say so on the download page, or move user data to `%LOCALAPPDATA%`. The launcher moves `data\\` to `%LOCALAPPDATA%\\CosmicSupremacyResurgence` when its folder is not writable.',
+      '[x] No autostart entry.']),
     ('REL-3', 'Every release is reproducible from the repository and documented: version, release notes, the zip, and its SHA-256 on the release page and the download page.',
      'Apache "Release Download Pages for Projects"; NIST SP 800-218 SSDF practice PS (protect the software)',
-     ['`release/build.ps1` builds from a clean checkout at a tagged commit.',
-      'The release notes name what changed for players.',
+     ['[x] `release/build.ps1` builds from a clean checkout at a tagged commit. v0.8.0 from a worktree at the tag, stamped `9ef557b` with no `+` (25 November 2026).',
+      '[x] The release notes name what changed for players (`release/RELEASE_NOTES_v0.8.0.md`).',
       'The download page and the release page agree (Website_Checklist R8).']),
     ('REL-4', 'Each release is checked against the antivirus engines players use, and false positives are reported to the vendor before the release is announced.',
      'Microsoft Security Intelligence file submission (software developer, expected "clean")',
@@ -263,8 +263,8 @@ REL = [
       'Security_Checklist items that name the launcher.']),
     ('REL-6', 'A signing option is chosen that the operator can actually enrol in.',
      'Microsoft Learn, "Code signing options for Windows app developers" (29 August 2026)',
-     ['Azure Artifact Signing (about $9.99 a month) accepts individuals in the USA and Canada only; check the operator\'s eligibility.',
-      'Record the choice in `docs/DEVELOPMENT.md` under Building a release.']),
+     ["[x] Azure Artifact Signing (about $9.99 a month) accepts individuals in the USA and Canada only; check the operator's eligibility. Robert is enrolled and has signed every release since v0.7.0.",
+      '[x] Record the choice in `docs/DEVELOPMENT.md` under Building a release (Release checklist step 3).']),
     ('REL-7', 'The live referee runs the released code. The sandbox runs a staged copy, so a release that is not restaged leaves the referee on the old merge rules.',
      'This project',
      ['The referee is restaged from the tag with `server\\sandbox\\stage.ps1` and restarted between turns (`docs/DEVELOPMENT.md`, Release checklist step 10).',
