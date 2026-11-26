@@ -104,7 +104,7 @@ TUF = {
     'TUF-6': NA('No mirrors. One release page (GitHub) and one relay.'),
     'TUF-7': ('done', UPDATER, ["[x] The version, the zip and its SHA-256 all come from one release, never combined across releases. The zip must be offered under that release's tag."]),
     'TUF-8': ('done', None, ['[x] The update notice never points to a build older than the one running (`updater.is_newer`).', "[x] The updater never installs a build older than the one running. It checks the staged build's own stamp, not the listing.", "[x] A galaxy's `min_build` only rises. `galaxy_tool.set_min_build` refuses a lower one."]),
-    'TUF-9': ('apply', None, ['The code-signing identity (M3) is the one key that vouches for every build. Keep it in a managed service (Azure Artifact Signing) behind an MFA-protected account, not as a file on the build PC. The key is in Azure Artifact Signing, with no file on the build PC; MFA on the Azure account is for Robert to confirm.', 'The GitHub account that publishes releases has MFA.', '[x] The updater trusts the signing identity, not the download host, so a compromised GitHub account alone cannot ship a build the launcher installs.']),
+    'TUF-9': ('done', None, ['[x] The code-signing identity (M3) is the one key that vouches for every build. Keep it in a managed service (Azure Artifact Signing) behind an MFA-protected account, not as a file on the build PC. The key is in Azure Artifact Signing, with no file on the build PC, and the Azure sign-in that signed v0.8.0 used MFA (its token lists `mfa`, 26 November 2026).', '[x] The GitHub account that publishes releases has MFA. Two-factor is on (Robert, 26 November 2026).', '[x] The updater trusts the signing identity, not the download host, so a compromised GitHub account alone cannot ship a build the launcher installs.']),
     'TUF-10': ('done', None, ['[x] The update notice and the updater use one hard-coded release page, never a URL taken from the relay or a galaxy (`updater.FEED`, `launcher.UPDATE_URL`).']),
 }
 
@@ -254,8 +254,9 @@ REL = [
       "[x] The download page and the release page agree (Website_Checklist R8). v0.8.0: the same zip, size and SHA-256 on both, and the release asset's digest matches (26 November 2026)."]),
     ('REL-4', 'Each release is checked against the antivirus engines players use, and false positives are reported to the vendor before the release is announced.',
      'Microsoft Security Intelligence file submission (software developer, expected "clean")',
-     ['Submit each release to Microsoft Defender.',
-      'Scan with a multi-engine scanner and record the result; report false positives to each vendor that flags it.']),
+     ["[x] Submit each release to Microsoft Defender. v0.8.0: the whole zip submitted as a software developer, as clean, on 26 November 2026; Microsoft's verdict was pending when recorded.",
+      '[x] Scan with a multi-engine scanner and record the result; report false positives to each vendor that flags it. v0.8.0 on VirusTotal, 26 November 2026: 0 of 44 engines flagged the zip, 22 timed out, and 7 could not read a zip. VirusTotal does not scan the files inside a zip this size, so the five exes were not scanned on their own.',
+      "Scan each exe on its own through VirusTotal's API, since the zip is too big for the site to scan the files inside it. Check whether the free public API's limits and terms fit a release run before scripting it."]),
     ('REL-5', 'Each release passes the verification checklists that cover what changed before it is published.',
      'This project',
      ['Singleplayer_UI_Checklist for the client and the launcher\'s single-player path.',
