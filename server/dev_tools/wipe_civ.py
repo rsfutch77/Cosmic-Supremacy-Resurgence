@@ -45,6 +45,7 @@ import save_parser as sp
 import inject_civ as icv
 import inject_design as idg
 import inject_ship as ish
+import merge_orders
 
 PLNT_OWNER_OFF = 16          # PLNT payload +16, the owning civ's object id
 
@@ -103,7 +104,9 @@ def uncolonise(blob, planet_id, template_plpr, log=print):
 
     Three edits, each re-reading the record since the one before moved its
     offsets: the `PLPR` is replaced, the name is emptied, and the owner is
-    zeroed last, so a partial failure leaves the planet visibly owned.
+    zeroed last, so a partial failure leaves the planet visibly owned. The
+    planet's governor link is cleared too: the engine closes when it runs a
+    governor on an unowned planet.
     """
     rec = next(p for p in icv.planet_records(blob) if p["id"] == planet_id)
     was_owner, was_name, was_ln = rec["owner"], rec["name"], rec["plpr_ln"]
@@ -120,7 +123,7 @@ def uncolonise(blob, planet_id, template_plpr, log=print):
     struct.pack_into("<I", buf, rec["payload"] + PLNT_OWNER_OFF, 0)
     log(f"  planet #{planet_id}: owner {was_owner} -> 0, name {was_name!r} -> "
         f"'', PLPR {was_ln} -> {len(template_plpr)} bytes")
-    return bytes(buf)
+    return merge_orders.set_governor_link(bytes(buf), planet_id, 0)
 
 
 def forget_civ(blob, oid, everyone=False, log=print):
@@ -347,6 +350,11 @@ def check(blob, name, planets, ships, log=print):
     kept = [f["id"] for f in fleet_records(blob) if civ and f["owner"] == civ["oid"]]
     if kept:
         log(f"  FAIL: fleet(s) {kept} are still in the blob")
+        ok = False
+    governed = merge_orders.governor_links(blob)
+    still_governed = [pid for pid in planets if governed.get(pid)]
+    if still_governed:
+        log(f"  FAIL: planet(s) {still_governed} still name a governor")
         ok = False
     blanks = {p["id"]: p for p in icv.planet_records(blob)}
     for pid in planets:

@@ -309,6 +309,40 @@ def main():
         walked += 1
     check('and every table still walks cleanly end to end', walked > 0, True)
 
+    print('\na governed planet is left with no governor')
+    import merge_orders
+    gov = 9999          # any id: the link is a plain u32 on the PLNT
+    governed = before
+    for pid in planets:
+        governed = merge_orders.set_governor_link(governed, pid, gov)
+    check('CONTROL: the victim planets name a governor',
+          [merge_orders.governor_links(governed)[p] for p in planets],
+          [gov] * len(planets))
+    out, _p, _s = wipe_civ.wipe(governed, VICTIM, log=lambda *a: None)
+    links = merge_orders.governor_links(out)
+    check('the wipe unlinks every one', [links[p] for p in planets],
+          [0] * len(planets))
+    check('and check() says the wipe holds',
+          wipe_civ.check(out, VICTIM, planets, ships, log=lambda *a: None))
+    check('check() fails a wiped planet that still names one',
+          wipe_civ.check(merge_orders.set_governor_link(out, planets[0], gov),
+                         VICTIM, planets, ships, log=lambda *a: None), False)
+
+    print('\nthe referee unlinks a governor from any unowned planet')
+    keeper = next(p['id'] for p in icv.planet_records(before)
+                  if p['owner'] and p['id'] not in planets)
+    free = next(p['id'] for p in icv.planet_records(before) if not p['owner'])
+    mixed = merge_orders.set_governor_link(before, keeper, gov)
+    mixed = merge_orders.set_governor_link(mixed, free, gov)
+    lines = []
+    fixed = merge_orders.ungovern_unowned(mixed, log=lines.append)
+    links = merge_orders.governor_links(fixed)
+    check('the unowned planet is unlinked', links[free], 0)
+    check('an owned planet keeps its governor', links[keeper], gov)
+    check('and the log names it', any(f'planet {free}' in ln for ln in lines))
+    check('a blob with nothing to repair comes back the same',
+          merge_orders.ungovern_unowned(before, log=lambda *a: None), before)
+
     print(f'\n{len(PASS)} passed, {len(FAIL)} failed')
     return 1 if FAIL else 0
 

@@ -3169,6 +3169,20 @@ def set_governor_link(blob, planet_oid, gov_oid):
     raise SystemExit(f'planet {planet_oid} not found')
 
 
+def ungovern_unowned(blob, log=print):
+    """The blob with no governor on a planet nobody owns.
+
+    The engine closes when it runs a governor on an unowned planet at the end
+    of a turn.
+    """
+    owner = {p['id']: p['owner'] for p in icv.planet_records(blob)}
+    for pid, gov in sorted(governor_links(blob).items()):
+        if gov and not owner.get(pid):
+            blob = set_governor_link(blob, pid, 0)
+            log(f"  planet {pid}: unowned, governor {gov} unlinked")
+    return blob
+
+
 def governor_orders(served, sub, civ_oid, served_planets, names):
     """(new, edited, deleted, links, refusals) for a civ's governors, judged
     against the state served.
