@@ -120,7 +120,7 @@ M = [
     ('Reporting and enforcement', [
         ('M19', 'Published community guidelines say what is not allowed (harassment, hate, cheating through modified clients, abuse of the operator) and what happens when it occurs.',
          'PEGI Online Safety Code provision 5 (community standards); Fair Play Alliance, "Creating and Maintaining Community Guidelines"',
-         ['A page on the site, linked from the launcher and the join notice.']),
+         ['[x] A page on the site, `/support_guidelines.php.html`, linked from the site\'s support tabs and from the join notice the launcher shows before every join (`server/beta_notice.txt`, in every release since v0.7.2). Live, checked 26 November 2026.']),
         ('M20', 'A player can report another player, a message, or a suspected cheat, and receives an acknowledgement.',
          'Xbox XR-018 test case 018-01 (reporting); PEGI provision 3 (reporting); Fair Play Alliance (acknowledge every report)',
          ['[x] A report route: a private message to an admin of the Cosmic Supremacy Facebook group, named on the guidelines and contact pages (Robert, 14 November 2026: the existing channels, nothing new).',
@@ -136,9 +136,9 @@ M = [
     ('Age, ratings and stated policies', [
         ('M23', 'The privacy policy and the age the game is meant for are stated before a player joins.',
          'PEGI Online Safety Code provisions 1 (privacy policy) and 2 (age-rated content); see the privacy checklist',
-         ['The join notice links the privacy page.',
+         ['[x] The join notice links the privacy page (`server/beta_notice.txt`, in every release since v0.7.2).',
           '[x] Age floor decided: 13 and up (8 October 2026).',
-          'State it in the join notice and on the site.']),
+          '[x] Stated in the join notice and on the terms and guidelines pages, live (checked 26 November 2026).']),
         ('M24', 'If the game ever carries advertising or sponsorship, it is identified as such.',
          'PEGI Online Safety Code provision 6 (advertising policy)',
          ['None today; record that.']),
