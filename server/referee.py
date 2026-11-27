@@ -40,6 +40,7 @@ sys.path.insert(0, os.path.join(HERE, "dev_tools"))
 import save_parser as sp
 import inject_civ as icv
 import merge_orders
+import battle_reports
 import canonical
 import abandonment
 import activity
@@ -495,7 +496,8 @@ def tick(blob: bytes, turns: int = 1, secs: int = 10, work_dir=None,
         got = turn_of(out)
         if got == want:
             log(f"  referee: turn {start} -> {got}, captured {len(out):,} bytes")
-            return out
+            # An ally given a shared battle report reads it as an outsider.
+            return battle_reports.for_outsiders(out, log=log)
         log(f"  referee: attempt {attempt} captured turn {got}, not {want}")
     raise SystemExit(f"refusing to publish: {TICK_ATTEMPTS} tick(s) of "
                      f"{turns} turn(s) did not end at turn {want}"
