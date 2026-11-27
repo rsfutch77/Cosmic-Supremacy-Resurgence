@@ -297,7 +297,7 @@ PRIV = [
       '[x] A way to ask for data or deletion that does not go through a public GitHub issue: a private message to an admin of the Facebook group, on the terms and contact pages (14 November 2026).']),
     ('PRIV-4', 'A player can ask for their data and its deletion, and the operator has a procedure that works with anonymous identities.',
      'ICO Children\'s code standard 15; ICO controllers checklist; FTC COPPA step 5',
-     ['The player gives their support code; the operator finds their seat, logs and join records.',
+     ['[x] The player gives their player code and presses Send Log, which arrives under their own sign-in and so shows the request is theirs; `server/dev_tools/data_request.py find --code` lists what the project holds for it: the Auth record, every galaxy field naming the uid, join requests and answers, logs and coats of arms, and names the civs whose name and messages are in past turns (`test_data_request.py`).',
       'What deletion means when the player\'s civ name and messages are inside every other player\'s copy of past turns: record the answer (likely, rename the civ in future turns and delete logs and records).']),
     ('PRIV-5', 'A retention schedule, applied automatically where possible.',
      'FTC COPPA step 6 (written retention and deletion policy); ICO data minimisation',
