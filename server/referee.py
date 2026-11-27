@@ -423,13 +423,15 @@ def simulate_every_civ(blob: bytes, log=print) -> bytes:
 
 
 def tick(blob: bytes, turns: int = 1, secs: int = 10, work_dir=None,
-         save_dir=None, log=print, check_save_path=True, scans=()) -> bytes:
+         save_dir=None, log=print, check_save_path=True, scans=(),
+         ungovern=True) -> bytes:
     """Advance the galaxy by `turns` turns and return the resulting blob.
 
     `save_dir` is the stub server's data directory, where the capture lands.
     The save path is checked before the client is launched, since the tick
     ends in a `SaveGame`. `scans`, [(civ, type, [target id])], are replayed
-    in the client before it advances (`replay_scans`).
+    in the client before it advances (`replay_scans`). `ungovern=False` skips
+    unlinking governors from unowned planets, for a test of a blob as it is.
 
     A capture is returned only at exactly the load turn plus `turns`. One past
     or short of it is ticked again from a fresh load, up to `TICK_ATTEMPTS`
@@ -446,7 +448,8 @@ def tick(blob: bytes, turns: int = 1, secs: int = 10, work_dir=None,
     # The engine writes back what it loads, so a ship repaired here is
     # readable by the merge from the next served turn on.
     blob = merge_orders.repair_donor_tails(blob, log=log)
-    blob = merge_orders.ungovern_unowned(blob, log=log)
+    if ungovern:
+        blob = merge_orders.ungovern_unowned(blob, log=log)
     blob = simulate_every_civ(blob, log=log)
     blob = stamp_for_a_holder(blob, log=log)
     work_dir = work_dir or os.path.join(HERE, "referee_work")

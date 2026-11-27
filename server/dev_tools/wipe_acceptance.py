@@ -6,8 +6,23 @@ wipe_acceptance.py: does a galaxy with a civ wiped out of it still play?
     python wipe_acceptance.py colonise --which wiped  --planet 138
     python wipe_acceptance.py colonise --which base   --planet 138
 
+    python wipe_acceptance.py prepare  --case governed
+    python wipe_acceptance.py ticks    --turns 3 --runs 1
+
 `game_cycle.launch` waits for a local civ with at least one planet, so
 `prepare` stamps every blob it writes for a civ that survives the wipe.
+
+`--case governed` wipes DemoPlayer out of
+`server/tests/fixtures/governors/g_switched.dat`, where its governor runs its
+homeworld, and stamps the blobs for BadGuy. The governor's record is first
+replaced by `CRASHING_GOVERNOR`, since the fixture's own rule runs harmlessly
+on an unowned planet and this one closes the client. A wipe that leaves the
+homeworld linked to it fails `ticks`; one that clears the link passes.
+`prepare` refuses the case if the victim governs no planet.
+
+`ticks` runs without the referee's own repair of governor links
+(`referee.tick(ungovern=False)`), so it tests the wipe and not the repair that
+covers for it. `--repair` puts the repair back.
 
 The runs, and what counts as a failure:
 
@@ -49,9 +64,23 @@ import inject_ship as ish
 import set_blob_player
 import wipe_civ
 import canonical
+import merge_orders
 
 WORK = os.path.join(SERVER, "wipe_work")
 DEFAULT_FIXTURE = os.path.join(SERVER, "galaxy_demo", "turns", "0011.b64")
+# fixture, the civ wiped, the civ the blobs are stamped for
+CASES = {
+    "governed": (os.path.join(SERVER, "tests", "fixtures", "governors",
+                              "g_switched.dat"), "DemoPlayer", "BadGuy"),
+}
+# A whole GVNR section, named "new", whose one rule is a production rule
+# (RLPR) with condition type 6. A planet left linked to it after its owner is
+# zeroed closes the client at end of turn; the fixture's own governors do not.
+# It is copied from the sandbox's turn 238 and holds no player's data.
+CRASHING_GOVERNOR = bytes.fromhex(
+    "47564e52410000006f01000003000000004756445430000004030000006e657701"
+    "000100000052554c450100000401524c50521200000000000000434f4e44060000"
+    "04000100000000")
 COLONISE = 3                  # SHCO order type; 1 is a move
 
 
@@ -84,11 +113,44 @@ def write(name, blob):
     log(f"  wrote {name} ({len(blob):,} bytes, turn {turn_of(blob)})")
 
 
-def prepare(fixture, civ, stamp=None):
+def governed_planets(blob, civ):
+    """The planets `civ` owns that name a governor."""
+    oid = next(o["oid"] for o in icv.owner_records(blob) if o["name"] == civ)
+    links = merge_orders.governor_links(blob)
+    return [p["id"] for p in icv.planet_records(blob)
+            if p["owner"] == oid and links.get(p["id"])]
+
+
+def with_crashing_governor(blob, civ):
+    """`blob` with the civ's one governor given `CRASHING_GOVERNOR`'s record,
+    keeping its object id and the count of planets it governs."""
+    oid = next(o["oid"] for o in icv.owner_records(blob) if o["name"] == civ)
+    govs = merge_orders.governors_of(blob, oid) or []
+    if len(govs) != 1:
+        raise SystemExit(f"{civ!r} holds {len(govs)} governor(s); the governed "
+                         f"case replaces exactly one")
+    gid, record = govs[0]
+    count = struct.unpack_from("<I", record, 8 + merge_orders.GVNR_GOVERNS_AT)[0]
+    swapped = merge_orders.with_governed(
+        merge_orders.with_governor_id(CRASHING_GOVERNOR, gid), count)
+    log(f"  governor {gid}: record replaced by the crashing governor's "
+        f"({len(swapped)} bytes), still governing {count}")
+    return merge_orders.set_governors(blob, oid, [swapped])
+
+
+def prepare(fixture, civ, stamp=None, need_governed=False,
+            crashing_governor=False):
     """Write base.dat and wiped.dat, both stamped for a surviving civ."""
     blob = sp.load_any(fixture)
     log(f"{os.path.basename(fixture)}: {len(blob):,} bytes, turn {turn_of(blob)}")
     icv.describe(blob, log=log)
+    if crashing_governor:
+        blob = with_crashing_governor(blob, civ)
+    governed = governed_planets(blob, civ)
+    log(f"\n{civ!r} governs planet(s) {governed or 'none'}")
+    if need_governed and not governed:
+        raise SystemExit(f"{civ!r} governs no planet here, so this is not the "
+                         f"governed case")
 
     survivors = [o["name"] for o in icv.owner_records(blob) if o["name"] != civ]
     if not survivors:
@@ -131,13 +193,17 @@ def load_check(which, timeout=180):
     return snap.turn
 
 
-def tick_run(which, turns, label, secs=10):
-    """One referee tick of N turns from a cold launch. Returns the result."""
+def tick_run(which, turns, label, secs=10, repair=False):
+    """One referee tick of N turns from a cold launch. Returns the result.
+
+    Without `repair` the referee leaves governor links as the blob has them.
+    """
     import referee
     blob = load(f"{which}.dat")
     start = turn_of(blob)
-    log(f"\n=== tick {which} {turns} turn(s), run {label} ===")
-    out = referee.tick(blob, turns=turns, secs=secs, log=log)
+    log(f"\n=== tick {which} {turns} turn(s), run {label}, referee repair "
+        f"{'on' if repair else 'off'} ===")
+    out = referee.tick(blob, turns=turns, secs=secs, log=log, ungovern=repair)
     got = turn_of(out)
     h = canonical.canonical_hash(out)
     log(f"  turn {start} -> {got}, {len(out):,} bytes, canonical {h[:16]}")
@@ -234,6 +300,12 @@ def colonise_run(which, civ, planet_id, turns, secs=10):
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[1])
     ap.add_argument("step", choices=["prepare", "load", "ticks", "colonise"])
+    ap.add_argument("--case", choices=sorted(CASES),
+                    help="a named fixture, victim and stamp; overrides "
+                         "--fixture, --civ and --stamp")
+    ap.add_argument("--repair", action="store_true",
+                    help="ticks: let the referee unlink governors from "
+                         "unowned planets first, as it does live")
     ap.add_argument("--fixture", default=DEFAULT_FIXTURE)
     ap.add_argument("--civ", default="Neighbor", help="the civ to wipe")
     ap.add_argument("--stamp", default=None,
@@ -251,7 +323,13 @@ def main():
     a = ap.parse_args()
 
     if a.step == "prepare":
-        prepare(a.fixture, a.civ, stamp=a.stamp)
+        if a.case:
+            fixture, civ, stamp = CASES[a.case]
+            governed = a.case == "governed"
+            prepare(fixture, civ, stamp=stamp, need_governed=governed,
+                    crashing_governor=governed)
+        else:
+            prepare(a.fixture, a.civ, stamp=a.stamp)
         return 0
 
     if a.step == "load":
@@ -259,7 +337,8 @@ def main():
         return 0
 
     if a.step == "ticks":
-        results = [tick_run(a.which, a.turns, str(i + 1), secs=a.secs)
+        results = [tick_run(a.which, a.turns, str(i + 1), secs=a.secs,
+                            repair=a.repair)
                    for i in range(a.runs)]
         hashes = {h for _b, _t, h in results}
         log(f"\n=== {a.runs} run(s) of {a.turns} turns on {a.which}.dat ===")
