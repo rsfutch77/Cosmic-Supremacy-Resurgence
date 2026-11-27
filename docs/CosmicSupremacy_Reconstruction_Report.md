@@ -3729,9 +3729,11 @@ with `set_blob_player.py` to answer. Every capture's `waronly` bytes read `01 00
   limitations"). The original's Sandbox earned no Fame, Unranked galaxies earned a player's
   first points, and Ranked galaxies needed Fame to enter (§3, Galaxy Types). Ranked galaxies
   and team galaxies stay for later. Find how the original awarded Fame from the manual and the
-  archived site before encoding it. Done when Galaxy One is marked Unranked, the sandbox earns
-  none, the Fame its players earn is kept per account and served to the client, and the known
-  limitation is gone.
+  archived site before encoding it. Only a Sandbox galaxy wipes a player who stops playing; a
+  regular galaxy never does (Robert, 26 November 2026), and Galaxy One's reclaim threshold is
+  what holds that until the type exists. Done when Galaxy One is marked Unranked, the sandbox
+  earns none, the Fame its players earn is kept per account and served to the client,
+  `abandonment` reclaims only in a Sandbox galaxy, and the known limitation is gone.
 
 - [ ] **The operator is told when a galaxy's players vote to end it** (Robert, 26 November
   2026). The operator page counts the votes and marks a majority, but nothing reaches the
