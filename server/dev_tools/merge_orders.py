@@ -4773,10 +4773,18 @@ def message_orders(served, sub, civ_oid, names):
     return orders, refusals
 
 
-def take_messages(blob, civ_oid, orders, turn, names):
+def take_messages(blob, civ_oid, orders, turn, names, blocks=None):
     """(blob, refusals, log lines) with a civ's news orders applied to the
-    galaxy being built."""
+    galaxy being built.
+
+    `blocks` is `{civ name: {sender civ name}}`. A recipient who blocks the
+    sender is not given the message; the sender keeps its copy and is not
+    told, and only the log line says so.
+    """
     refusals, lines = [], []
+    sender = names.get(civ_oid)
+    blocked_by = {c for c, senders in (blocks or {}).items()
+                  if sender in senders}
     for index, flags in orders['flags']:
         blob = news.set_flags(blob, civ_oid, index, flags)
         lines.append(f"news item {index}: "
@@ -4813,7 +4821,10 @@ def take_messages(blob, civ_oid, orders, turn, names):
         body_id, next_id = news.intern(next_id, strings, body)
         to_id, next_id = news.intern(next_id, strings, sent)
         blob = news.write_table(blob, next_id, strings)
+        refused_by = [c for c in m['to'] if names.get(c) in blocked_by]
         for civ in m['to']:
+            if civ in refused_by:
+                continue
             blob = news.append_item(blob, civ, news.build_item({
                 'type': news.RECEIVED, 'flags': 0, 'turn': turn,
                 'title': b'', 'body': b'', 'title_id': from_id,
@@ -4829,6 +4840,10 @@ def take_messages(blob, civ_oid, orders, turn, names):
             'ids': m['to'], 'position': NO_POSITION}))
         lines.append(f"{label} to "
                      f"{', '.join(str(names.get(c, c)) for c in m['to'])}")
+        if refused_by:
+            lines.append(f"{label} not delivered to "
+                         f"{', '.join(str(names.get(c, c)) for c in refused_by)}"
+                         f", who block {sender}")
     for index, item in orders.get('notes_edited', ()):
         blob = news.replace_item(blob, civ_oid, index, news.build_item(item))
         lines.append(f"note {index} edited")
@@ -5148,7 +5163,7 @@ def _ship_crew_index(blob):
 
 
 def merge(blob, submissions, log=print, notes=None, arms=None, scans=None,
-          served=None):
+          served=None, blocks=None):
     """submissions: [(civ_name, submitted_blob)]. Returns the merged blob.
 
     `notes` is an optional `{civ: [reason]}` that every refusal is recorded in
@@ -5156,7 +5171,9 @@ def merge(blob, submissions, log=print, notes=None, arms=None, scans=None,
     `player_turn.follow` can print it into the launcher's log. `arms` is an
     optional `{civ: {coat-of-arms id}}` of the uploads each player may choose;
     without it only no arms is carried. `scans` is an optional `{civ: count}`
-    of the reports the referee answered each civ this turn.
+    of the reports the referee answered each civ this turn. `blocks` is an
+    optional `{civ: {sender civ}}`: a message from a sender is not delivered
+    to a civ that blocks it.
 
     `served` is the copy of the turn these submissions were served, when it is
     not `blob`: an earlier copy of an opening turn that has since seated more
@@ -5836,7 +5853,7 @@ def merge(blob, submissions, log=print, notes=None, arms=None, scans=None,
             for why in refusals:
                 drop(why)
             blob, refusals, lines = take_messages(
-                blob, mine, orders, icv.turn_of(served), names)
+                blob, mine, orders, icv.turn_of(served), names, blocks=blocks)
             for why in refusals:
                 drop(why)
             for line in lines:

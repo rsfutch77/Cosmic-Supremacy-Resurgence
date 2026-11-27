@@ -223,6 +223,8 @@ def test_reclaim(tmp):
     root = os.path.join(tmp, 'reclaim')
     store = build(root, 6, {t: ['DemoPlayer'] for t in range(1, 7)})
     abandonment.set_thresholds(store, warn=2, reclaim=5)
+    store.update_state({turn_store.BLOCKS_KEY: {
+        VICTIM: ['DemoPlayer'], 'DemoPlayer': [VICTIM, 'Elsewhere']}})
     blob = store.turn_blob(6)
 
     before = [p['id'] for p in icv.planet_records(blob)
@@ -243,6 +245,8 @@ def test_reclaim(tmp):
           and rec['missed'] == 5)
     check('the player is left a note saying so',
           any('wiped' in line for line in store.note(VICTIM, 6)))
+    check('the reclaimed civ is gone from the blocks on both sides',
+          turn_store.blocks_of(store.state()), {'DemoPlayer': {'Elsewhere'}})
     check('the surviving civ is untouched',
           next(o['name'] for o in icv.owner_records(out)
                if o['name'] == 'DemoPlayer'), 'DemoPlayer')

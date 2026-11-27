@@ -101,6 +101,10 @@ WARN_KEY, RECLAIM_KEY = 'warn_after_misses', 'reclaim_after_misses'
 # Kept for the referee only, never served.
 COPIES_KEY = 'copies'
 
+# Whose messages each civ refuses, as `{civ: [sender civ, ...]}`; an empty list
+# blocks nobody. Written by `block_tool.py`, read by the referee, never served.
+BLOCKS_KEY = 'blocks'
+
 # How a joiner's homeworld is placed, one of `inject_civ.PLACEMENTS`; absent is
 # `farthest`. Read by `joins.apply`, written by `galaxy_tool.py placement`.
 PLACEMENT_KEY = 'placement'
@@ -342,6 +346,43 @@ def reclaimed_of(state, civ: str = None):
     if not isinstance(taken, dict):
         return None if civ else {}
     return taken.get(civ) if civ else dict(taken)
+
+
+def blocks_of(state) -> dict:
+    """`{civ: set of sender civs}` for every civ that blocks someone.
+
+    Anything malformed blocks nothing, so a bad field can only let a message
+    through, never stop a turn.
+    """
+    raw = (state or {}).get(BLOCKS_KEY) or {}
+    if not isinstance(raw, dict):
+        return {}
+    out = {}
+    for civ, senders in raw.items():
+        if isinstance(senders, (list, tuple)):
+            got = {s for s in senders if isinstance(s, str) and s != civ}
+            if got:
+                out[civ] = got
+    return out
+
+
+def blocks_without(state, civ: str) -> dict:
+    """The `BLOCKS_KEY` field with `civ` gone from it, both as a blocker and
+    as a sender, for a seat that is taken back.
+
+    A blocker's entry becomes an empty list rather than going, since a
+    Firestore merge write cannot drop a key.
+    """
+    raw = (state or {}).get(BLOCKS_KEY) or {}
+    if not isinstance(raw, dict):
+        return {}
+    out = {}
+    for blocker, senders in raw.items():
+        keep = [] if blocker == civ else [
+            s for s in (senders if isinstance(senders, (list, tuple)) else [])
+            if s != civ]
+        out[blocker] = keep
+    return out
 
 
 # A join is a request the launcher lodges; the worker (`server/joins.py`)

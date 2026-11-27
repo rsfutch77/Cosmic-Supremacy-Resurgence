@@ -110,7 +110,8 @@ PREFIX = os.environ.get('CS_RELAY_PREFIX', firebase_store.PREFIX)
 
 # Galaxy document fields this door never serves. `joined` holds uids, which
 # would expose the uid-to-civ mapping that `seats` is kept out of `/state` for.
-PRIVATE_FIELDS = (turn_store.JOINED_KEY,)
+# `blocks` would tell a player who has blocked them.
+PRIVATE_FIELDS = (turn_store.JOINED_KEY, turn_store.BLOCKS_KEY)
 
 # How long a warm instance serves `/state`, `/submissions` and `/turn` from a
 # galaxy document it has already read (see `hold_for`). Routes that check a

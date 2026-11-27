@@ -125,7 +125,9 @@ class Handler(BaseHTTPRequestHandler):
             if parts == ['state']:
                 if not STORE.exists():
                     return self._fail(404, 'no galaxy in this store')
-                return self._json(STORE.state())
+                # Who blocks whom is the referee's alone.
+                return self._json({k: v for k, v in STORE.state().items()
+                                   if k != turn_store.BLOCKS_KEY})
             if len(parts) == 2 and parts[0] == 'turn':
                 n = int(parts[1])
                 if not STORE.has_turn(n):

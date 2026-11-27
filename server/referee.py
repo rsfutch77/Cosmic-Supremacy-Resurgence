@@ -161,7 +161,7 @@ def replays(recs) -> list:
 
 
 def apply_orders(blob: bytes, submissions, log=print, notes=None,
-                 arms=None, scans=None, served=None) -> bytes:
+                 arms=None, scans=None, served=None, blocks=None) -> bytes:
     """Take each player's orders out of the state they returned.
 
     submissions: [(civ_name, submitted_blob)]. Only changes on objects the
@@ -175,6 +175,8 @@ def apply_orders(blob: bytes, submissions, log=print, notes=None,
     `served` is an optional `{civ: blob}` naming the earlier copy of an opening
     turn a civ was served (`earlier_served`). A civ it leaves out was served
     `blob`. Each submission is judged against its own copy.
+    `blocks` is an optional `{civ: {sender civ}}` whose messages that civ is
+    not given (`turn_store.blocks_of`).
 
     Each submitting civ is marked active for the tick, so its Inactivity
     penalty does not grow.
@@ -197,7 +199,7 @@ def apply_orders(blob: bytes, submissions, log=print, notes=None,
         for copy, subs in groups:
             merged = merge_orders.merge(merged, subs, log=log, notes=notes,
                                         arms=arms, scans=scan_counts(scans),
-                                        served=copy)
+                                        served=copy, blocks=blocks)
         blob = with_scan_reports(merged, scans, log=log)
         blob = activity.mark_present(blob, [civ for civ, _sub in submissions],
                                      log=log)
@@ -603,11 +605,12 @@ def resolve_turn(store: TurnStore, save_dir=None, log=print) -> int:
     log(f"  referee: closing turn {turn} with {len(taken)} submission(s)"
         + (f", {len(refused)} dropped" if refused else ""))
     arms = arms_of(store, [civ for civ, _sub in taken], log=log)
+    blocks = turn_store.blocks_of(store.state())
     scans = delivered_scans(store, turn)
     if scans:
         log(f"  referee: {len(scans)} scan(s) delivered this turn")
     merged = apply_orders(blob, taken, log=log, notes=notes, arms=arms,
-                          scans=scans, served=served)
+                          scans=scans, served=served, blocks=blocks)
 
     # Refusal notes are written before the tick, appended to any note the turn
     # already holds (such as a welcome note).
@@ -675,6 +678,8 @@ def resolve_turn(store: TurnStore, save_dir=None, log=print) -> int:
                           if civ in dict(taken)},
         # The coats of arms each civ could choose, for `verify_turn`.
         "arms": arms,
+        # Whose messages each civ refused, for `verify_turn`.
+        "blocks": {civ: sorted(s) for civ, s in blocks.items()},
         # The scans delivered and replayed, for `verify_turn`.
         "scans": [r['id'] for r in scans],
         # The civs whose end-galaxy vote stands in the published turn, for
@@ -738,6 +743,7 @@ def verify_turn(store: TurnStore, turn: int, recompute: bool = True,
     taken = [(civ, subs[civ]) for civ in sorted(rec.get("hash_submissions", {}))]
     log(f"  verify: recomputing turn {turn} with {len(taken)} submission(s)")
     arms = {civ: set(ids) for civ, ids in (rec.get("arms") or {}).items()}
+    blocks = {civ: set(s) for civ, s in (rec.get("blocks") or {}).items()}
     scans = delivered_scans(store, turn)
     if [r['id'] for r in scans] != rec.get("scans", []):
         log(f"  verify: turn {turn}'s delivered scans are not the ones that "
@@ -752,7 +758,7 @@ def verify_turn(store: TurnStore, turn: int, recompute: bool = True,
             return False
         served[civ] = copies[n]
     merged = apply_orders(blob, taken, log=log, arms=arms, scans=scans,
-                          served=served)
+                          served=served, blocks=blocks)
     again = tick(merged, turns=1, save_dir=save_dir, log=log,
                  scans=replays(scans))
     got = canonical.canonical_hash(again, version)

@@ -233,7 +233,12 @@ def reclaim(store, civ: str, blob: bytes, turn: int, missed: int, log=print):
     roster = [c for c in store.civs() if c != civ]
     taken = store.reclaimed() or {}
     taken[civ] = {'turn': int(turn), 'missed': int(missed), 'at': time.time()}
-    store.update_state({'civs': roster, turn_store.RECLAIMED_KEY: taken})
+    fields = {'civs': roster, turn_store.RECLAIMED_KEY: taken}
+    # A newcomer given this name neither inherits its blocks nor is blocked.
+    state = store.state()
+    if turn_store.BLOCKS_KEY in state:
+        fields[turn_store.BLOCKS_KEY] = turn_store.blocks_without(state, civ)
+    store.update_state(fields)
     _append_note(store, civ, turn, reclaim_note(civ, missed, turn), log=log)
     log(f'  abandonment: reclaimed {civ} after {missed} missed turns, '
         f'{len(planets)} planet(s) freed and {len(ships)} ship(s) deleted')

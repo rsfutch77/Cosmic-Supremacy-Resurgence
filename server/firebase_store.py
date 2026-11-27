@@ -70,7 +70,7 @@ STATE_FIELDS = ('turn', 'deadline', 'turn_seconds', 'civs', 'hash',
                 turn_store.RECLAIMED_KEY, turn_store.JOINED_KEY,
                 turn_store.MIN_BUILD_KEY, turn_store.WARN_KEY,
                 turn_store.RECLAIM_KEY, turn_store.BOTS_KEY,
-                turn_store.PLACEMENT_KEY)
+                turn_store.PLACEMENT_KEY, turn_store.BLOCKS_KEY)
 
 # Who has submitted, as `{"<turn>": [civ, ...]}` on the galaxy document. Keyed
 # by turn so a commit racing a publish lands under its own turn; `publish`
