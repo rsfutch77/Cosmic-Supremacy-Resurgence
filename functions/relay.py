@@ -15,6 +15,7 @@ served back from here with a 304 to a launcher that already holds it.
 
 What it enforces:
   * the caller holds a verified Firebase ID token, or nothing is answered
+    but `/_health`, which says only whether each open galaxy's turn is overdue
   * an email and password sign-in joins and submits only once its address
     is verified
   * a caller writes only its own submission, resolved through the seat map
@@ -139,6 +140,11 @@ GUESTS_REFUSED = 'this galaxy is played by account only; log in to play'
 # A guest's seats move to the account the same install logged in to.
 GUEST_ROUTE = '_guest'
 MAX_GUEST_BYTES = 8192
+
+# An uptime check polls this route with no token, so the operator hears of a
+# stalled galaxy without looking (Operations_Checklist OPS-4). It answers 503
+# once an open galaxy's turn is overdue by more than one turn length.
+HEALTH_ROUTE = '_health'
 REBOUND_KEY = 'seats_rebound'       # each seat's last move, as `seat_tool.py` writes it
 
 _STORES = {}
@@ -356,6 +362,45 @@ def listing() -> list:
                  [hold_for(r, LISTING_SECONDS) for r in rows])
     _LISTING = (_now(), window, rows) if window > 0 else None
     return rows
+
+
+def overdue(rows, now: float = None) -> list:
+    """The open galaxies in `rows` whose turn is overdue by more than one turn
+    length, each as its id, turn and seconds past the deadline.
+
+    A closed galaxy has ended and is never late. A row with no deadline or no
+    turn length cannot be judged and is passed over.
+    """
+    now = time.time() if now is None else now
+    late = []
+    for r in rows:
+        if r.get(turn_store.STATUS_KEY) == turn_store.CLOSED:
+            continue
+        deadline, length = r.get('deadline'), r.get('turn_seconds')
+        if deadline is None or not length:
+            continue
+        past = now - float(deadline)
+        if past > float(length):
+            late.append({'id': r.get('id'), 'turn': r.get('turn'),
+                         'overdue_seconds': int(past)})
+    return late
+
+
+def health(galaxy: str = None):
+    """200 while every open galaxy's turn is on time, else 503 naming the late
+    ones. With `galaxy`, that galaxy alone, and 404 if there is no such galaxy.
+
+    It says only what `/state` already tells any guest: the turn and whether
+    the deadline has long passed.
+    """
+    rows = listing()
+    if galaxy is not None:
+        rows = [r for r in rows if r.get('id') == galaxy]
+        if not rows:
+            raise Refused(404, f'no galaxy {galaxy}')
+    late = overdue(rows)
+    return _json({'galaxies': len(rows), 'overdue': late},
+                 503 if late else 200)
 
 
 def galaxy_doc(store) -> dict:
@@ -1222,6 +1267,11 @@ def _route(method: str, path: str, headers: dict, body: bytes):
             verify(bearer(headers))
             return _json({'galaxies': listing()})
         raise Refused(404, 'the galaxy is the first part of the path')
+    if parts[0] == HEALTH_ROUTE:
+        # The one route answered without a token.
+        if method in ('GET', 'HEAD') and len(parts) <= 2:
+            return health(parts[1] if len(parts) == 2 else None)
+        raise Refused(404, 'the health check is a GET here')
     if parts[0] == LOG_ROUTE:
         # About no galaxy, and signed in like every other route.
         uid = verify(bearer(headers))
