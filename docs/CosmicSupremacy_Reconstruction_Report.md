@@ -984,7 +984,7 @@ Two things follow:
   Planting needed care: the engine moves a ship from the position its `ROUT` holds, not its
   header, so editing only the header does not move it. During the countdown the route is the
   ship's position three times over.
-- [ ] **An order's target is not judged.** The merge takes any target an order names. The client
+- [x] **An order's target is not judged.** The merge takes any target an order names. The client
   offers Colonize only on an unowned planet, Conquer and Bio-Bombing only on another civ's planet,
   Scout only on a system. Whether the engine drops an order whose target is wrong, as it does for
   Create Wormhole, is not measured: no fixture holds a colonise, conquer or bio-bomb order. Done
@@ -3723,3 +3723,30 @@ with `set_blob_player.py` to answer. Every capture's `waronly` bytes read `01 00
   icons need sharper versions for phone screens. `mobile/build_art.py` cuts every image the
   canvas uses from the client exe. Done when a player in the sandbox gives a turn's
   orders from a phone.
+
+- [ ] **Galaxy One is the first Unranked galaxy, and Fame starts with it** (Robert, 26 November
+  2026). Today the server answers every Fame request with 0 (Singleplayer UI Checklist, "Known
+  limitations"). The original's Sandbox earned no Fame, Unranked galaxies earned a player's
+  first points, and Ranked galaxies needed Fame to enter (§3, Galaxy Types). Ranked galaxies
+  and team galaxies stay for later. Find how the original awarded Fame from the manual and the
+  archived site before encoding it. Done when Galaxy One is marked Unranked, the sandbox earns
+  none, the Fame its players earn is kept per account and served to the client, and the known
+  limitation is gone.
+
+- [ ] **The operator is told when a galaxy's players vote to end it** (Robert, 26 November
+  2026). The operator page counts the votes and marks a majority, but nothing reaches the
+  operator unless they look. Ending a galaxy is never automatic: the operator decides. Done when
+  a vote that reaches a majority of a galaxy's seated civs sends the operator a notice outside
+  the operator page, once per majority, and no code path ends a galaxy on the votes.
+
+- [ ] **The bots answer treaties.** BadGuy and the bot civs answer no treaty or message
+  (Singleplayer UI Checklist, section K). A fair trade is hard to judge, so a bot refuses any
+  treaty that trades credits, resources, planets or technology, and accepts an alliance or
+  shared line of sight (Robert, 26 November 2026). The bot answers through the client's own
+  Diplomacy screen, as its other actions do (`client/dev_tools/ai_player/STRATEGY.md` §3).
+  Done when a bot in Single Player and a bot in the sandbox each accept an alliance and a
+  line-of-sight treaty and refuse a trade, and section K's note says what the bots answer.
+
+- [ ] **A coat of arms cannot be changed after the empire is named.** A known issue in the
+  v0.7.2 to v0.8.1 release notes. Done when a player can pick new arms in a galaxy where their
+  empire is already named, and the next turn shows them to other players once approved.
