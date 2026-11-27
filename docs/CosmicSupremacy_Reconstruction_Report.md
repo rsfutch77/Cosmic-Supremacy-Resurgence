@@ -577,12 +577,28 @@ battle that its fork blob does not hold.
   one session (`duel.py`) is not. The test read and wrote the state from outside the process
   between the load and the boundary, finding the block by a search of the heap; the script
   was a one-off and is not in the repo.
-- [ ] **The referee's dice start from the same state every turn.** Every tick runs in a
+- [x] **The referee's dice start from the same state every turn.** Every tick runs in a
   fresh client from `0x2CD60A1E`, so each turn's battles draw the same opening run of the
   `rand()` sequence, where the original server's ran on. Decide whether the referee writes a
   per-turn seed (from the galaxy and the turn, so a rerun still reproduces) over `_holdrand`
   before it advances, and if so, find the tick thread's block from the client rather than by
-  a memory search.
+  a memory search. **Fixed** (27 November 2026; seeded per turn, Robert, 26 November). The
+  client's runtime is Visual C++ 2005's: each thread's block is in a fiber-local slot (index
+  at `0x81C138`, the `FlsGetValue` pointer behind the TLS index at `0x81C13C`), and its
+  initialiser `_initptd` (`0x67A65F`) sets `+0x14` to 1 and `+0x70` to 1. Reading the slot from
+  outside means walking Windows' own FLS records, which change between builds, so
+  `client/dev_tools/rand_state.py` finds the blocks on the heap by that initialiser's layout,
+  keyed on the client's own thread ids: the thread id, -1, a pointer at `+0x5C` (`ptmbcinfo`,
+  a heap copy once the game sets its code page) and 1 at `+0x70`, outside the exe's image,
+  where two globals also hold a thread id and -1. A fresh load of `cs3` has three such blocks
+  in two launches out of two: one at `0x2CD60A1E`, the thread that runs the turn, and two at 1.
+  The referee seeds all of them after replaying the turn's scans, which stay unseeded as they
+  were answered, and before the turn advances. The seed is the first four bytes of a SHA-256
+  over the turn and the merged galaxy's canonical hash, so a rerun reproduces it and no player
+  can, holding only a fogged view and their own orders. The archive keeps it as `rand_seed`,
+  None when the client's state was not found and the turn ticked unseeded with a warning, and
+  `verify_turn` ticks again with it (`test_dice_seed.py`). On the client, `cs2` ticked with
+  seed A twice gave the same canonical hash, with seed B another and unseeded a third.
 
 #### The original client's online path (November 2026)
 

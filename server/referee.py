@@ -423,9 +423,38 @@ def simulate_every_civ(blob: bytes, log=print) -> bytes:
     return mmg.fix_owner_ids(blob, log=lambda m: log(f"  referee:{m}"))
 
 
+def turn_seed(blob: bytes) -> int:
+    """The `rand()` seed for ticking this blob: from its turn and its
+    canonical hash, so a rerun of the same merge draws the same dice and no
+    player, who sees only a fogged view and their own orders, can work it out
+    beforehand."""
+    import hashlib
+    h = hashlib.sha256(b'cs-rand\0' + str(turn_of(blob)).encode() + b'\0'
+                       + canonical.canonical_hash(blob).encode())
+    return struct.unpack('<I', h.digest()[:4])[0]
+
+
+def seed_dice(seed: int, log=print):
+    """Write `seed` as the running client's `rand()` state. Returns the seed,
+    or None when no state was found or the write failed."""
+    import rand_state
+    try:
+        found = rand_state.seed(seed)
+    except (OSError, SystemExit) as exc:
+        log(f"  referee: WARNING the rand state was not seeded ({exc}); "
+            f"this turn's dice start as a fresh load's")
+        return None
+    if not found:
+        log("  referee: WARNING no rand state found in the client; this "
+            "turn's dice start as a fresh load's")
+        return None
+    log(f"  referee: dice seeded {seed:#010x} in {len(found)} thread(s)")
+    return seed
+
+
 def tick(blob: bytes, turns: int = 1, secs: int = 10, work_dir=None,
          save_dir=None, log=print, check_save_path=True, scans=(),
-         ungovern=True) -> bytes:
+         ungovern=True, seed=None, applied=None) -> bytes:
     """Advance the galaxy by `turns` turns and return the resulting blob.
 
     `save_dir` is the stub server's data directory, where the capture lands.
@@ -433,6 +462,13 @@ def tick(blob: bytes, turns: int = 1, secs: int = 10, work_dir=None,
     ends in a `SaveGame`. `scans`, [(civ, type, [target id])], are replayed
     in the client before it advances (`replay_scans`). `ungovern=False` skips
     unlinking governors from unowned planets, for a test of a blob as it is.
+
+    `seed` is written over every client thread's `rand()` state after the
+    scans are replayed, so the turn's dice differ from turn to turn
+    (`rand_state.seed`). The scans are replayed unseeded, as they were
+    answered. When no state is found the turn ticks unseeded and says so.
+    `applied`, a dict, gets `seed` set to the seed the captured tick ran
+    with, or None.
 
     A capture is returned only at exactly the load turn plus `turns`. One past
     or short of it is ticked again from a fresh load, up to `TICK_ATTEMPTS`
@@ -471,6 +507,9 @@ def tick(blob: bytes, turns: int = 1, secs: int = 10, work_dir=None,
         start = snap.turn
         want = start + turns
         replay_scans(snap, list(scans), log=log)
+        used = seed_dice(seed, log=log) if seed is not None else None
+        if applied is not None:
+            applied['seed'] = used
         log(f"  referee: galaxy up at turn {start}, advancing {turns}")
 
         # The referee runs from a checkout, so sys.executable is a real
@@ -637,8 +676,9 @@ def resolve_turn(store: TurnStore, save_dir=None, log=print) -> int:
         if not holds_a_planet(merged):
             return hold_empty(store, turn, early, log=log)
 
+    dice = {}
     nxt = tick(merged, turns=1, save_dir=save_dir, log=log,
-               scans=replays(scans))
+               scans=replays(scans), seed=turn_seed(merged), applied=dice)
     new_turn = turn_of(nxt)
     if new_turn <= turn:
         log(f"  referee: WARNING the tick produced turn {new_turn}, "
@@ -688,6 +728,9 @@ def resolve_turn(store: TurnStore, save_dir=None, log=print) -> int:
         "blocks": {civ: sorted(s) for civ, s in blocks.items()},
         # The scans delivered and replayed, for `verify_turn`.
         "scans": [r['id'] for r in scans],
+        # The rand() seed the tick ran with, None when it ran unseeded, for
+        # `verify_turn`.
+        "rand_seed": dice.get('seed'),
         # The civs whose end-galaxy vote stands in the published turn, for
         # the operator page.
         "end_votes": sorted(c for c, v in merge_orders.end_votes(nxt).items()
@@ -765,8 +808,9 @@ def verify_turn(store: TurnStore, turn: int, recompute: bool = True,
         served[civ] = copies[n]
     merged = apply_orders(blob, taken, log=log, arms=arms, scans=scans,
                           served=served, blocks=blocks)
+    # The dice as the turn drew them; a turn closed before seeding has none.
     again = tick(merged, turns=1, save_dir=save_dir, log=log,
-                 scans=replays(scans))
+                 scans=replays(scans), seed=rec.get("rand_seed"))
     got = canonical.canonical_hash(again, version)
     same = got == rec["hash_out"]
     log(f"  verify: recomputation {'agrees' if same else 'DISAGREES'} "
