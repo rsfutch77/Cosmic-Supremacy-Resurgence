@@ -100,7 +100,7 @@ the release's `data\` when the launcher sets it:
 
 | What | Where |
 |------|-------|
-| Save blobs | `saves\`, a `.b64` and a `.json` sidecar per save, listed in `saves\index.json` |
+| Save blobs | `saves\`, a `.b64`, `.body` and `.json` per save, listed in `saves\index.json`; with `CS_KEEP_CAPTURES` set (the launcher keeps 50) only that many of the newest stay, plus every file a slot names |
 | Governor library | `governors\`, a `<id>.b64` per saved governor, listed in `governors\index.json` |
 | Request log | `cs_server.log` |
 | Civ names | `civs.json`, per userid |
