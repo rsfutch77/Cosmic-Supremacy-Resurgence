@@ -515,8 +515,45 @@ check("without claiming anything is on its way",
 st = inspect.getsource(L.Launcher._mp_state)
 check("a finished turn closes the window of sending",
       "mp_turn_open = False" in st, True)
-check("and serving a turn opens it again",
+check("and playing a turn opens it again",
       "mp_turn_open = True" in st, True)
+
+# The player pressed Send Turn and closed the game without touching it again.
+# The last capture is what the store holds, and the closed game can take no
+# newer one, so nothing is on its way.
+sent = _Close(turn_open=True)
+sent.mp_capture = (L.SENT, time.time() - 120)
+L.Launcher._watch_mp_client(sent, False)
+check("a turn already sent is not reported as sending", sent.mp_sending, False)
+check("the log says it is already sent",
+      any("already sent" in m for m in sent.said), True)
+check("and the readout says the orders are in", sent.mp_note, "orders sent")
+
+held = _Close(turn_open=True)
+held.mp_capture = (L.HELD, time.time())
+L.Launcher._watch_mp_client(held, False)
+check("a capture not yet in the store is still sent", held.mp_sending, True)
+
+print()
+print("a game closed while it loads")
+app = bare(mp_store=Store(turn=14, left=930.0), mp_thread=Thread(alive=True))
+app._mp_state("playing", turn=13, civ="DemoPlayer", seconds_left=5)
+app._mp_state("waiting", turn=13, civ="DemoPlayer")
+app._mp_state("serving", turn=14, civ="DemoPlayer")
+app._watch_mp_client(True)
+app._watch_mp_client(False)
+check("a game gone before its turn starts has nothing to send",
+      app.mp_sending, False)
+
+# Sending already on screen when the serve gives up, as a launcher from
+# before this fix showed it.
+app.mp_sending = True
+app._mp_state("serve_failed", turn=14, civ="DemoPlayer",
+              error="client did not become readable within 180s")
+check("a serve that fails ends any sending", app.mp_sending, False)
+app._refresh_turn()
+check("and the readout stops saying it",
+      app.view.turn_label, lambda t: "sending" not in t)
 
 print()
 print("quitting while a turn is still being sent")

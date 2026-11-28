@@ -437,6 +437,11 @@ def referee_share(holder: dict, speaks_protocol: bool, configured=None):
     return os.path.normpath(saves)
 
 
+# Captures the server keeps in data\saves, about four minutes of play at one
+# capture every five seconds. Every save slot's file is kept as well.
+KEEP_CAPTURES = 50
+
+
 def start_server(host: str, port: int, data_dir: str, galaxy_dir: str, sink):
     """
     Import cs_server and serve it on daemon threads. Returns (servers, logfile).
@@ -447,6 +452,7 @@ def start_server(host: str, port: int, data_dir: str, galaxy_dir: str, sink):
     os.environ["CS_DATA_DIR"] = data_dir
     os.environ["CS_GALAXY_DIR"] = galaxy_dir
     os.environ["CSPORT"] = str(port)
+    os.environ["CS_KEEP_CAPTURES"] = str(KEEP_CAPTURES)
 
     if "cs_server" in sys.modules:
         raise RuntimeError("cs_server was imported before its environment was set")
@@ -5088,9 +5094,9 @@ class Launcher:
             if playing:
                 self.msgs.put(("__mp_played__", playing["id"], turn))
         elif kind in ("waiting", "overtaken", "lost", "done",
-                      "stopped", "failed"):
-            # The turn is over, however it ended, so nothing is still on its
-            # way.
+                      "stopped", "failed", "serve_failed"):
+            # The turn is over, however it ended, or its game never came up,
+            # so nothing is still on its way.
             self.mp_sending = False
             # Closing the window after this must not report the turn as
             # still sending (see `_watch_mp_client`).
@@ -5100,11 +5106,14 @@ class Launcher:
             # turn closes, so the orders are still on their way.
             self.mp_sending = True
             self.mp_retry_outage = facts.get("outage")
-        if kind in ("serving", "playing", "reopening"):
+        if kind == "playing":
+            # Captures start once the game is up. A game closed while it
+            # loads has nothing to send.
             self.mp_turn_open = True
         if kind == "serving":
             # A new turn: nothing of it has been captured yet.
             self.mp_capture = None
+            self.mp_turn_open = False
 
         self.mp_note = {
             "serving": "starting your turn",
@@ -6118,7 +6127,14 @@ class Launcher:
             self.mp_client_gone = True
             # The last capture and submission run on the worker thread;
             # sending is shown until the loop reports the turn finished.
-            if self.mp_turn_open:
+            # A last capture the store already holds is not sent again, and
+            # the closed game can take no newer one.
+            capture = getattr(self, "mp_capture", None)
+            if self.mp_turn_open and capture and capture[0] == SENT:
+                self.mp_note = "orders sent"
+                self.say("multiplayer: the game has closed, your turn is "
+                         "already sent")
+            elif self.mp_turn_open:
                 self.mp_sending = True
                 self.say("multiplayer: the game has closed, sending your turn")
             else:

@@ -211,13 +211,20 @@ def collect(name="player", save_dir=None, log=print, announce=True) -> str:
     if rc != 0:
         log(out)
         raise SystemExit("SaveGame did not report success")
-    fresh = [os.path.join(save_dir, f) for f in os.listdir(save_dir)
-             if f.endswith(".b64")
-             and os.path.getmtime(os.path.join(save_dir, f)) >= before]
+    fresh = []
+    for f in os.listdir(save_dir):
+        if not f.endswith(".b64"):
+            continue
+        try:
+            at = os.path.getmtime(os.path.join(save_dir, f))
+        except OSError:
+            continue        # pruned since the listing (`cs_server.KEEP_CAPTURES`)
+        if at >= before:
+            fresh.append((at, os.path.join(save_dir, f)))
     if not fresh:
         raise SystemExit(f"SaveGame succeeded but no capture appeared in "
                          f"{save_dir}; is the launcher's server running?")
-    path = max(fresh, key=os.path.getmtime)
+    path = max(fresh)[1]
     if announce:
         log(f"  captured {os.path.basename(path)}")
     return path

@@ -18,7 +18,9 @@ import http.server
 import urllib.parse
 import datetime
 import os
+import re
 import sys
+import threading
 
 PORT = int(os.environ.get('CSPORT', 8888))
 
@@ -172,6 +174,16 @@ def _set_civ(userid: str, **fields):
 SAVE_DIR    = os.path.join(DATA_DIR, 'saves')
 INJECT_BLOB = os.path.join(DATA_DIR, 'loadgame_blob.b64')
 
+# How many captures saves/ keeps, newest first, besides every file a save slot
+# names. Unset or 0 keeps them all. The launcher sets it.
+try:
+    KEEP_CAPTURES = max(0, int(os.environ.get('CS_KEEP_CAPTURES') or 0))
+except ValueError:
+    KEEP_CAPTURES = 0
+
+# A capture is these three files, sharing a base name.
+CAPTURE_RE = re.compile(r'^(save_(\d+)_.+)\.(b64|body|json)$')
+
 
 def _raw_data_field(raw_body: str) -> 'str | None':
     """
@@ -196,7 +208,7 @@ def _persist_save(gameid: str, gamename: str, turn: str, version: str,
                   data_str: str, raw_body: str = '') -> str:
     os.makedirs(SAVE_DIR, exist_ok=True)
     stamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
-    seq   = len([n for n in os.listdir(SAVE_DIR) if n.endswith('.b64')])
+    seq   = _next_seq(os.listdir(SAVE_DIR))
     base  = f'save_{seq:03d}_{stamp}_g{gameid}_t{turn}'
     path  = os.path.join(SAVE_DIR, base + '.b64')
 
@@ -217,6 +229,68 @@ def _persist_save(gameid: str, gamename: str, turn: str, version: str,
                     'used': 'raw' if raw_data is not None else 'parsed',
                     'received': stamp}, f, indent=2)
     return os.path.basename(path)
+
+
+def _next_seq(names) -> int:
+    """One past the highest capture number in `names`. Numbers are never
+    reused, so a pruned folder cannot hand out a name it already holds."""
+    seqs = [int(m.group(2)) for m in map(CAPTURE_RE.match, names) if m]
+    return max(seqs) + 1 if seqs else 0
+
+
+def captures_to_prune(names, keep: int, slots) -> list:
+    """The file names to delete so `keep` captures remain, newest by number.
+
+    `slots` holds the .b64 names save slots point to; their captures always
+    stay. Files that are not captures are never named.
+    """
+    groups = {}
+    for name in names:
+        m = CAPTURE_RE.match(name)
+        if m:
+            groups.setdefault(m.group(1), (int(m.group(2)), []))[1].append(name)
+    held = {os.path.splitext(s)[0] for s in slots}
+    ranked = sorted(groups, key=lambda b: (groups[b][0], b), reverse=True)
+    doomed = []
+    for base in ranked[keep:]:
+        if base not in held:
+            doomed.extend(groups[base][1])
+    return sorted(doomed)
+
+
+_prune_lock = threading.Lock()
+
+
+def _prune_captures():
+    """Delete captures past KEEP_CAPTURES. Runs off the request thread, since
+    a folder that grew for months takes a while the first time."""
+    if not _prune_lock.acquire(blocking=False):
+        return                      # one already running covers this save
+    try:
+        slots = [e.get('file', '') for e in _read_index().values()
+                 if isinstance(e, dict)]
+        doomed = captures_to_prune(os.listdir(SAVE_DIR), KEEP_CAPTURES, slots)
+        gone = 0
+        for name in doomed:
+            try:
+                os.remove(os.path.join(SAVE_DIR, name))
+                gone += 1
+            except OSError:
+                pass                # in use or already gone; the next pass retries
+        # A routine pass removes one capture, three files, and says nothing.
+        if gone > 3:
+            log(f'  -> pruned {gone} capture file(s), keeping the newest '
+                f'{KEEP_CAPTURES} capture(s) and every saved slot')
+    except OSError as exc:
+        log(f'  !! could not prune captures: {exc}')
+    finally:
+        _prune_lock.release()
+
+
+def _prune_soon():
+    if KEEP_CAPTURES:
+        threading.Thread(target=_prune_captures, daemon=True,
+                         name='prune-captures').start()
 
 
 def _load_injection_blob() -> 'str | None':
@@ -518,6 +592,7 @@ def handle_action(action: str, params: dict, raw_body: str = '') -> tuple[int, s
         _write_index(idx)
         log(f'  -> savegame: slot {gameid} name={gamename!r} turn={turn} '
             f'version={version} data={len(data_str)} chars -> {path}')
+        _prune_soon()
         return 200, 'text/plain', 'DONE'
 
     if action == 'savegamelist':
